@@ -41,8 +41,8 @@ forces reasoning off. Providers lacking token controls retain client
 byte/deadline guards without a server billing guarantee.
 
 The [compaction manual](../compaction.md) owns evidence selection, generation,
-and continuation recovery. The [memory manual](../memory.md) owns journal capture,
-digest processing, and consolidation configuration.
+and continuation recovery. The [journal manual](../memory-journal.md) owns journal capture
+and digest processing; the [review contract](../memory-review.md) owns consolidation configuration.
 
 ## Rationale and consequences
 

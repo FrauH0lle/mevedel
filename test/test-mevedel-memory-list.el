@@ -10,6 +10,13 @@
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
 (require 'mevedel-memory-list)
+(require 'mevedel-memory-notes)
+(require 'mevedel-memory-scope)
+(require 'mevedel-models)
+(require 'mevedel-workspace-identity)
+(require 'mevedel-memory-list-test-support
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name)) "mevedel-memory-list-test-support"))
 (require 'mevedel-report-test-support
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name))
@@ -20,6 +27,83 @@
 (require 'mevedel-view)
 (require 'mevedel-system)
 
+(mevedel-deftest mevedel-memory-list--terminal-p
+    (:doc "decided and completed rows are terminal; undecided and unreadable rows are not")
+  (should (equal ,expected (and (mevedel-memory-list--terminal-p (list :status ,status)) t)))
+  (status expected)
+  'applied t 'rejected t 'reversed t 'completed t
+  'pending nil 'stale nil 'unavailable nil 'recovery-required nil)
+
+(mevedel-deftest mevedel-memory-list--details
+    (:vars* ((root (file-name-as-directory (file-truename (make-temp-file "memory-note-report-" t))))
+             (workspace (mevedel-workspace--create :root root))
+             (context (list :workspace workspace))
+             (memory (file-name-concat root "memory"))
+             (shared (file-name-concat root ".mevedel" "shared"))
+             (mevedel-memory-dirs (list memory))
+             (mevedel-journal-cleanup--inhibit-scheduling t)
+             claim accepted pass)
+     :quiet t
+     :after-each ((when claim (mevedel-journal-claim-settle claim 'cancelled ""))
+                  (delete-directory root t)))
+  (progn
+    (mevedel-workspace-identity-ensure root)
+    (make-directory memory t)
+    (write-region "" nil (file-name-concat memory "MEMORY.md") nil 'silent)
+    (make-directory (file-name-concat shared "empty") t)
+    (dolist (name '("note.md" "attachment.txt"))
+      (write-region "Temporary material.\n" nil (file-name-concat shared name) nil 'silent))
+    (dolist (name '("note.md" "attachment.txt" "empty"))
+      (set-file-times (file-name-concat shared name) (seconds-to-time (- (float-time) (* 15 86400)))))
+    (let* ((scope (mevedel-memory-scope-capture workspace))
+           (root-id (caar (plist-get scope :roots)))
+           (notes (mevedel-memory-notes-capture workspace nil)))
+      (should (= 1 (plist-get notes :notes)))
+      (push (plist-get notes :root) (plist-get scope :roots))
+      (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
+      (let* ((prepared (mevedel-memory-store-prepare workspace claim scope nil ""))
+             (reply (format (concat "## Promote\n````proposal\nroot: %S\nfile: \"guide.md\"\n"
+                                    "type: \"project\"\ntitle: \"Guide\"\nhook: \"Context\"\n"
+                                    "reason: \"Qualifying guide\"\nevidence: []\n---\nDurable guide.\n````\n"
+                                    "## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n"
+                                    "## No action\n- none") root-id)))
+        (setq accepted (mevedel-memory-store-accept workspace prepared reply nil "test:model" nil
+                                                   '("work://shared/note.md"))
+              pass (plist-get prepared :id))))
+    (cl-labels ((report (proposal)
+                  (mevedel-memory-list--details
+                   (list :kind 'proposal :pass pass :id (plist-get proposal :id) :status 'pending) context))
+                (decision-text (proposal)
+                  (let* ((details (report proposal))
+                         (section (seq-find (lambda (section) (eq 'decision (plist-get section :id)))
+                                            (plist-get details :sections))))
+                    (mevedel-report-test-text (list :title "Decision" :sections (list section))))))
+      ,test))
+  (test)
+  :doc "internal note disposal omits model Reason from the rendered report but retains current and decision diagnostics"
+  (let* ((proposal (seq-find (lambda (proposal) (plist-get proposal :note)) (plist-get accepted :proposals)))
+         (text (decision-text proposal)))
+    (should proposal)
+    (should-not (plist-member proposal :reason))
+    (should-not (plist-member proposal :disposition))
+    (should-not (string-search "Reason" text))
+    (should-not (string-search "nil" text))
+    (should (string-search "Current check" text))
+    (should (string-search "Ready to apply" text))
+    (should (string-search "Pending" text))
+    (mevedel-memory-decision-reject workspace pass (plist-get proposal :id) :reason "Manual refusal")
+    (should (string-search "Manual refusal" (decision-text proposal))))
+  :doc "ordinary memory and generated attachment and directory housekeeping retain their genuine rendered reasons"
+  (should (= 4 (length (plist-get accepted :proposals))))
+  (dolist (proposal (plist-get accepted :proposals))
+    (unless (plist-get proposal :note)
+      (should (stringp (plist-get proposal :reason)))
+      (let ((text (decision-text proposal)))
+        (should (string-search "Reason" text))
+        (should (string-search (plist-get proposal :reason) text))
+        (should (string-search "Current check" text))
+        (should (string-search "Pending" text))))))
+
 (mevedel-deftest mevedel-memory-list-open
     (:vars* ((root (make-temp-file "mevedel-memory-cockpit-" t))
              (memory (file-name-concat root "memory"))
@@ -27,11 +111,14 @@
              (session (mevedel-session-create "memory-test" workspace))
              (data (generate-new-buffer " *memory-test-data*"))
              (view (generate-new-buffer " *memory-test-view*"))
-             (mevedel-memory-dirs (list memory)) context claim id)
+             (mevedel-memory-dirs (list memory))
+             (mevedel-memory-decision--inhibit-recovery nil) context claim id)
+     :quiet t
      :after-each ((when claim (mevedel-journal-claim-settle claim 'cancelled ""))
                   (when-let* ((buffer (get-buffer "*mevedel memory*"))) (kill-buffer buffer))
                   (when (buffer-live-p view) (kill-buffer view))
                   (when (buffer-live-p data) (kill-buffer data))
+                  (mevedel-memory-decision-stop-recovery)
                   (delete-directory root t)))
   (progn
     (make-directory memory)
@@ -52,7 +139,23 @@
            (accepted (mevedel-memory-store-accept workspace prepared reply nil "test:model" nil)))
       (setq id (plist-get (car (plist-get accepted :proposals)) :id))
       (mevedel-memory-store-publish workspace (plist-get prepared :id)))
-    ,test)
+    (cl-labels ((await-display ()
+                  ;; Recovery may correctly wait on a running pass. Display
+                  ;; readiness must not depend on that owner's completion.
+                  (with-timeout (15 (ert-fail "Committed memory display did not become ready"))
+                    (while (or mevedel-memory-list--job (not mevedel-memory-list--snapshot))
+                      (accept-process-output nil .01)))
+                  (should-not mevedel-memory-list--error))
+                (open-for-inspection ()
+                  ;; Inspection needs rows; commands must retain native
+                  ;; nonblocking open so their owners can finish or cancel.
+                  (let ((buffer (mevedel-memory-list-open context)))
+                    (mevedel-test-memory-list-await buffer)
+                    ;; Without earlier counts the table opens on Memories and
+                    ;; only signals candidates; these cases inspect proposals.
+                    (with-current-buffer buffer (mevedel-memory-list-candidates))
+                    buffer)))
+      ,test))
   (test)
   :doc "the main cockpit reports pending and recovery counts from an observation without disturbing a draft"
   (let ((draft "> quoted\nsecond line") intent)
@@ -68,9 +171,9 @@
            (scope (plist-get (plist-get accepted :prepared) :scope))
            (proposal (car (plist-get accepted :proposals))))
       (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
-      (mevedel-memory-write-call
+      (mevedel-memory-write--call
        scope (plist-get proposal :root)
-       (lambda (target) (setq intent (mevedel-memory-write-prepare workspace claim target accepted proposal))))
+       (lambda (target) (setq intent (mevedel-memory-write--prepare workspace claim target accepted proposal))))
       (mevedel-journal-claim-settle claim 'cancelled ""))
     (should (= 1 (plist-get (mevedel-workspace-memory-observation workspace) :pending)))
     (setf (plist-get (mevedel-workspace-memory-observation workspace) :at) 0)
@@ -91,7 +194,7 @@
   :doc "shows captured evidence and applies a proposal without disturbing a composer draft"
   (let ((draft "> quoted\nsecond line"))
     (with-current-buffer view (mevedel-view-test--insert-composer-draft draft 4))
-    (with-current-buffer (save-window-excursion (mevedel-memory-list-open context))
+    (with-current-buffer (save-window-excursion (open-for-inspection))
       (should (derived-mode-p 'tabulated-list-mode))
       (mevedel-cockpit-goto-id id)
       (should (eq 'pending (plist-get (mevedel-cockpit-surface-selected) :status)))
@@ -115,6 +218,7 @@
 			 (when (get-buffer "*mevedel memory proposal*")
 			   (kill-buffer "*mevedel memory proposal*"))))
       (mevedel-memory-list-accept)
+      (mevedel-test-memory-list-await)
       (should-not (mevedel-cockpit-surface-items))
       (should (eq 'candidates mevedel-memory-list--view))
       (mevedel-memory-list-history)
@@ -124,6 +228,7 @@
              (decision (car (plist-get details :sections))))
         (should-not (string-search "Current check" (plist-get decision :body))))
       (mevedel-memory-list-reverse)
+      (mevedel-test-memory-list-await)
       (should (eq 'reversed (plist-get (mevedel-cockpit-surface-selected) :status)))
       (mevedel-cockpit-surface-refresh))
     (with-current-buffer view
@@ -149,9 +254,10 @@
            (new-id (plist-get (car (plist-get accepted :proposals)) :id)))
       (mevedel-memory-store-publish workspace (plist-get prepared :id))
       (with-current-buffer view (mevedel-view-test--insert-composer-draft draft 4))
-      (with-current-buffer (save-window-excursion (mevedel-memory-list-open context))
+      (with-current-buffer (save-window-excursion (open-for-inspection))
         (should (= 2 (length (mevedel-cockpit-surface-items))))
         (mevedel-memory-list-accept-all)
+        (mevedel-test-memory-list-await)
         (should-not (mevedel-cockpit-surface-items))
         (mevedel-memory-list-history)
         (dolist (proposal-id (list id new-id))
@@ -193,22 +299,62 @@
           (should (string-search "Ready to apply" (plist-get decision :body)))
           (should (string-search " Manual heading" (plist-get diff :body)))
           (should-not (string-search "-# Manual heading" (plist-get diff :body)))))))
+  :doc "display snapshots cannot authorize an acceptance after an index edit"
+  (with-current-buffer (save-window-excursion (open-for-inspection))
+    (mevedel-cockpit-goto-id id)
+    (should-not (plist-member (mevedel-cockpit-surface-selected) :accepted))
+    (write-region "- [Topic](topic.md) - Foreign edit\n" nil (file-name-concat memory "MEMORY.md") nil 'silent)
+    (mevedel-memory-list-accept)
+    (mevedel-test-memory-list-await)
+    (mevedel-cockpit-goto-id id)
+    (should (eq 'stale (plist-get (mevedel-cockpit-surface-selected) :status)))
+    (should (equal "Original topic.\n" (mevedel-session-control-fs-read-file (file-name-concat memory "topic.md")))))
+  :doc "inspection and acceptance reauthenticate private bytes after a display snapshot"
+  (with-current-buffer (save-window-excursion (open-for-inspection))
+    (mevedel-cockpit-goto-id id)
+    (let* ((row (mevedel-cockpit-surface-selected))
+           (file (file-name-concat (mevedel-memory-store--directory workspace (plist-get row :pass)) "accepted.el")))
+      (write-region "Corrupted acceptance.\n" nil file nil 'silent)
+      (should-error (mevedel-memory-list--details row context))
+      (should-error (mevedel-memory-list-accept))
+      (mevedel-test-memory-list-await)
+      (should (equal "Original topic.\n" (mevedel-session-control-fs-read-file (file-name-concat memory "topic.md"))))))
+  :doc "report refresh reauthenticates current status independently of the table snapshot"
+  (save-window-excursion
+    (unwind-protect
+        (with-current-buffer (open-for-inspection)
+          (mevedel-cockpit-goto-id id)
+          (let ((pass (plist-get (mevedel-cockpit-surface-selected) :pass)))
+            (mevedel-cockpit-surface-details)
+            (mevedel-memory-decision-reject workspace pass id :reason "Later rejection")
+            (with-current-buffer "*mevedel memory proposal*"
+              (mevedel-report-refresh)
+              (mevedel-report-select-section 'decision)
+              (should (string-search "rejected" (buffer-string)))
+              (should (string-search "Later rejection" (buffer-string))))))
+      (when (get-buffer "*mevedel memory proposal*") (kill-buffer "*mevedel memory proposal*"))))
   :doc "stored memories can be deleted with their index entry and restored from History"
   (save-window-excursion
-    (with-current-buffer (mevedel-memory-list-open context)
+    (with-current-buffer (open-for-inspection)
       (call-interactively (key-binding (kbd "2")))
       (should (eq 'memories mevedel-memory-list--view))
+      (mevedel-test-memory-list-await-memories)
       (should (= 1 (length (mevedel-cockpit-surface-items))))
       (goto-char (point-min))
       (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
         (call-interactively (key-binding (kbd "d"))))
+      (mevedel-test-memory-list-await)
       (should-not (file-exists-p (file-name-concat memory "topic.md")))
       (should-not (string-search "topic.md" (mevedel-session-control-fs-read-file (file-name-concat memory "MEMORY.md"))))
       (should-not (mevedel-cockpit-surface-items))
       (call-interactively (key-binding (kbd "3")))
+      ;; Deletion refreshed Memories only; History loads on demand.
+      (mevedel-test-memory-list-await)
       (goto-char (point-min))
-      (should (equal "user" (plist-get (plist-get (plist-get (mevedel-cockpit-surface-selected) :accepted) :review) :model)))
+      (should (equal "user" (plist-get (plist-get (mevedel-memory-store-accepted
+                                                  workspace (plist-get (mevedel-cockpit-surface-selected) :pass)) :review) :model)))
       (call-interactively (key-binding (kbd "u")))
+      (mevedel-test-memory-list-await)
       (should (equal "Original topic.\n" (mevedel-session-control-fs-read-file (file-name-concat memory "topic.md"))))
       (should (equal "- [Topic](topic.md) - Original\n" (mevedel-session-control-fs-read-file (file-name-concat memory "MEMORY.md"))))))
   :doc "manual unindexed memories are visible, inspectable, and open as their actual files"
@@ -216,8 +362,9 @@
     (write-region "---\nname: Manual lesson\ntype: feedback\n---\n\nKeep this exact body.\n" nil file nil 'silent)
     (save-window-excursion
       (unwind-protect
-          (with-current-buffer (mevedel-memory-list-open context)
+          (with-current-buffer (open-for-inspection)
             (call-interactively (key-binding (kbd "2")))
+            (mevedel-test-memory-list-await-memories)
             (let ((row (seq-find (lambda (item) (equal file (plist-get item :target))) (mevedel-cockpit-surface-items))))
               (should (equal "Manual lesson" (plist-get row :title)))
               (should (equal "feedback" (plist-get row :type)))
@@ -225,7 +372,7 @@
               (should (equal tab-line-format '(:eval (mevedel-cockpit-surface-header-line))))
               (let* ((header (mevedel-cockpit-surface-header-line))
                      (map (get-text-property 0 'local-map header)))
-                (should (string-prefix-p "Candidates | Memories | History" header))
+                (should (string-match-p "\\`Candidates\\(?: ([0-9]+)\\)? | Memories | History" header))
                 (should (commandp (lookup-key map [tab-line mouse-1]))))
               (mevedel-cockpit-goto-id (plist-get row :id))
               (mevedel-cockpit-surface-details)
@@ -238,8 +385,9 @@
         (when (get-buffer "*mevedel memory proposal*") (kill-buffer "*mevedel memory proposal*")))))
   :doc "declining deletion preserves the memory, index, and selected view"
   (save-window-excursion
-    (with-current-buffer (mevedel-memory-list-open context)
+    (with-current-buffer (open-for-inspection)
       (mevedel-memory-list-memories)
+      (mevedel-test-memory-list-await-memories)
       (goto-char (point-min))
       (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) nil)))
         (mevedel-memory-list-delete))
@@ -249,8 +397,9 @@
                      (mevedel-session-control-fs-read-file (file-name-concat memory "MEMORY.md"))))))
   :doc "deletion refuses a changed index and leaves the topic and foreign edit intact"
   (save-window-excursion
-    (with-current-buffer (mevedel-memory-list-open context)
+    (with-current-buffer (open-for-inspection)
       (mevedel-memory-list-memories)
+      (mevedel-test-memory-list-await-memories)
       (goto-char (point-min))
       (let ((capture (symbol-function 'mevedel-memory-scope-capture)))
         (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
@@ -270,8 +419,9 @@
     (make-symbolic-link memory link)
     (let ((mevedel-memory-dirs (list link)))
       (save-window-excursion
-        (with-current-buffer (mevedel-memory-list-open context)
+        (with-current-buffer (open-for-inspection)
           (mevedel-memory-list-memories)
+          (mevedel-test-memory-list-await-memories)
           (goto-char (point-min))
           (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
                     ((symbol-function 'mevedel-memory-scope-capture)
@@ -291,7 +441,7 @@
       (mevedel-memory-store-publish workspace (plist-get prepared :id))
       (save-window-excursion
         (unwind-protect
-            (with-current-buffer (mevedel-memory-list-open context)
+            (with-current-buffer (open-for-inspection)
               (mevedel-memory-list-history)
               (mevedel-cockpit-goto-id (plist-get prepared :id))
               (mevedel-cockpit-surface-details)
@@ -301,8 +451,11 @@
           (when (get-buffer "*mevedel memory proposal*") (kill-buffer "*mevedel memory proposal*"))))))
   :doc "rejects the selected proposal with a retained reason and no target writes"
   (with-current-buffer (save-window-excursion (with-current-buffer view (mevedel-menu-open 'memory)))
+    (mevedel-test-memory-list-await)
+    (mevedel-memory-list-candidates)
     (mevedel-cockpit-goto-id id)
     (mevedel-memory-list-reject "This is already documented.")
+    (mevedel-test-memory-list-await)
     (should-not (mevedel-cockpit-surface-items))
     (mevedel-memory-list-history)
     (mevedel-cockpit-goto-id id)
@@ -313,7 +466,7 @@
   :doc "another active pass does not prevent read-only inspection or lose its ownership"
   (progn
     (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
-    (with-current-buffer (save-window-excursion (mevedel-memory-list-open context))
+    (with-current-buffer (save-window-excursion (open-for-inspection))
       (mevedel-cockpit-goto-id id)
       (should (eq 'pending (plist-get (mevedel-cockpit-surface-selected) :status)))
       (should-error (mevedel-memory-list-accept)))
@@ -323,7 +476,7 @@
   (let* ((entry (seq-find (lambda (entry) (eq (plist-get entry :kind) 'consolidation)) (mevedel-journal-store-entries root)))
          (path (file-name-concat (mevedel-journal-store-directory root) (plist-get entry :file))))
     (write-region "Damaged public review.\n" nil path nil 'silent)
-    (with-current-buffer (save-window-excursion (mevedel-memory-list-open context))
+    (with-current-buffer (save-window-excursion (open-for-inspection))
       (mevedel-cockpit-goto-id id)
       (should (equal id (plist-get (mevedel-cockpit-surface-selected) :id)))
 		     (should (string-search "Updated topic." (mevedel-report-test-text (mevedel-memory-list--details (mevedel-cockpit-surface-selected) context))))
@@ -347,7 +500,7 @@
          (proposal (car (plist-get accepted :proposals))))
     (mevedel-memory-store-publish workspace (plist-get prepared :id))
     (delete-file (file-name-concat (mevedel-journal-store-directory root) (plist-get digest :file)))
-    (with-current-buffer (save-window-excursion (mevedel-memory-list-open context))
+    (with-current-buffer (save-window-excursion (open-for-inspection))
       (mevedel-cockpit-goto-id (plist-get proposal :id))
 		     (let ((details (mevedel-report-test-text (mevedel-memory-list--details (mevedel-cockpit-surface-selected) context))))
         (should (string-search "Observed: Frozen lesson." details))
@@ -375,7 +528,37 @@
             (with-timeout (15 (ert-fail "Consolidation preparation did not finish"))
               (while (not (plist-get state :request)) (accept-process-output nil .01)))
             (should (equal "maintenance" (plist-get (plist-get state :prepared) :focus)))
-            (with-current-buffer (plist-get (plist-get state :request) :buffer) (should-not mevedel--session)))
+            (with-current-buffer (plist-get (plist-get state :request) :buffer) (should-not mevedel--session))
+            (with-current-buffer "*mevedel memory*"
+              (await-display)
+              (mevedel-memory-list-candidates)
+              (mevedel-cockpit-goto-id id)
+              (should (eq 'pending (plist-get (mevedel-cockpit-surface-selected) :status)))
+              (should-not (plist-member (mevedel-cockpit-surface-selected) :accepted))
+              (should (string-search "recovery pending" (mevedel-memory-list--header nil context)))
+              (should (eq #'mevedel-memory-list-kill (key-binding "k")))
+              (should (eq #'mevedel-memory-list-running (key-binding "v")))
+              (let ((snapshot mevedel-memory-list--snapshot)
+                    (watcher mevedel-memory-list--recovery))
+                (should watcher)
+                ;; Bound only the display watch, never the active native owner.
+                (plist-put watcher :expires 0)
+                (mevedel-memory-list--observe-recovery (current-buffer) watcher)
+                (should (eq snapshot mevedel-memory-list--snapshot))
+                (should-not mevedel-memory-list--recovery)
+                (should-not (memq (plist-get watcher :timer) timer-list))
+                (should (string-search "Recovery observation timed out" (mevedel-memory-list--header nil context)))
+                (let ((warning mevedel-memory-list--recovery-warning))
+                  (should (stringp warning))
+                  (call-interactively (key-binding "g"))
+                  (await-display)
+                  (should (equal warning mevedel-memory-list--recovery-warning))
+                  (should (string-search "completion not observed" (mevedel-memory-list--header nil context)))
+                  (mevedel-cockpit-goto-id id)
+                  (should (eq 'pending (plist-get (mevedel-cockpit-surface-selected) :status)))))
+              (should (mevedel-memory-decision-recovering-p workspace))
+              (should (eq state (mevedel-memory-pass-running workspace)))
+              (should (mevedel-journal-claim-owned-p (plist-get state :claim)))))
           (mevedel-test--with-captured-diagnostics nil
             (funcall provider "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## No action\n- No changes." (gptel-fsm-info request))
             (gptel--fsm-transition request 'DONE)
@@ -407,7 +590,7 @@
 		       (kill-buffer "*mevedel running consolidation*"))))
   :doc "foreign client roots remain visible but private details and writes are unavailable"
   (cl-letf (((symbol-function 'mevedel-workspace-identity-client) (lambda () (make-string 64 ?f))))
-    (with-current-buffer (save-window-excursion (mevedel-memory-list-open context))
+    (with-current-buffer (save-window-excursion (open-for-inspection))
       (mevedel-cockpit-goto-id id)
       (should (eq 'unavailable (plist-get (mevedel-cockpit-surface-selected) :status)))
 		     (should-error (mevedel-report-test-text (mevedel-memory-list--details (mevedel-cockpit-surface-selected) context)))

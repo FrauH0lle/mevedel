@@ -167,7 +167,15 @@ is reading or typing in.")
 
 
 (defun mevedel-view-interaction-initialize ()
-  "Initialize interaction descriptor state in the current view buffer."
+  "Initialize interaction descriptor state in the current view buffer.
+Overlays outlive the buffer-local registries that a mode change resets,
+so release any interaction overlay left by an earlier setup of this
+buffer; its retained-agent blocker would otherwise never be released."
+  (save-restriction
+    (widen)
+    (dolist (overlay (overlays-in (point-min) (point-max)))
+      (when (overlay-get overlay 'mevedel-view-interaction-id)
+        (mevedel-view--interaction-delete-overlay overlay))))
   (setq-local mevedel-view--interaction-descriptors
               (make-hash-table :test #'equal))
   (setq-local mevedel-view--interaction-overlays
@@ -728,7 +736,9 @@ VISITS preserves explicit visitors captured before a full view reset."
             (when-let* ((after (plist-get (cdr pair) :after-render)))
               (funcall after)))
           (mevedel-view--interaction-sync-focus pairs visits)))
-      (mevedel-view--render-request-progress))))
+      ;; Request progress exists only once the stream module has loaded.
+      (when (fboundp 'mevedel-view--render-request-progress)
+        (mevedel-view--render-request-progress)))))
 
 ;; Rebuilds, prompt settlement, and queue settlement all close interactions
 ;; here, so this is the one place that sees the last blocker go.  The offered

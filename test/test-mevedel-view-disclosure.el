@@ -440,7 +440,7 @@
    (with-current-buffer view-buf
      (let ((inhibit-read-only t))
        (goto-char mevedel-view--input-marker)
-       (mevedel-view--render-tool-group
+       (mevedel-view--render-tool-activity
         (list (list 'tool 1 (with-current-buffer data-buf (point-max))))
         data-buf))
      (goto-char (point-min))

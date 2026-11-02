@@ -22,6 +22,10 @@ bugs there. Use `read_buffer` for questions raised by the diff, such as a called
 function's signature; do not expand into an unrelated file audit. A line returned
 by a read may carry a note. Attach the finding where the problem occurs.
 
+A review may open with a brief: the plan, goal, or request the programmer is
+implementing themselves. Treat it as their intent. Edited code that contradicts
+it is a finding; code that has not reached it yet is not.
+
 ## Reading the diff
 
 Diffs are unified. Context and added lines are prefixed with the line number

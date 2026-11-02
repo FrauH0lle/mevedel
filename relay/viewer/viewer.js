@@ -322,7 +322,8 @@
      notice: flashNotice});
   const uploads = window.mevedelFilesView.uploader({send});
   const files = window.mevedelFilesView.create(
-    {send, el, notice: flashNotice, uploads, openFile: artifacts.openFile, href: destinationURL});
+    {send, el, notice: flashNotice, uploads, openFile: artifacts.openFile,
+     downloadFile: artifacts.download, href: destinationURL});
   // The workspace artifact store: the room's Project artifacts sheet and
   // the lobby's Artifacts tab; one is active at a time.
   const storeSheet = document.getElementById('store-sheet');
@@ -953,6 +954,9 @@
       const chip = event.target && typeof event.target.closest === 'function'
         ? event.target.closest('.dirchip[data-scope]') : null;
       if (chip) selectFilter(chip.dataset.scope);
+      const fork = event.target && typeof event.target.closest === 'function'
+        ? event.target.closest('.forkbtn[data-fork-point]') : null;
+      if (fork) sessions.fork(fork.dataset.forkPoint);
     });
   }
 
@@ -1662,6 +1666,7 @@
   } else {
     state.fragment = rawFragment;
     state.owner = Boolean(credentials.ownerToken);
+    document.body.toggleAttribute('data-owner-link', state.owner);
     state.writable = Boolean(credentials.writeToken);
     try { sessionStorage.setItem('mevedel-tab-share', rawFragment); }
     catch (_error) { /* storage unavailable */ }

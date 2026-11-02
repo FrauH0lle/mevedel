@@ -113,7 +113,8 @@
         mevedel-buddy--running-automatic nil
         mevedel-buddy--request-buffer nil
         mevedel-buddy--timeout-timer nil)
-  (mevedel-buddy-clear-changes))
+  (mevedel-buddy-clear-changes)
+  (clrhash mevedel-buddy--briefs))
 
 (defun mevedel-test--buddy-all-changes ()
   "Return every recorded change across scopes, most recent first."
@@ -208,6 +209,25 @@
             (setq default-directory project-b)
             (should-not (equal scope-a (mevedel-buddy--scope-key)))
             (should-not (mevedel-buddy--changes-for-scope scope-a))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-buddy-directory-scope-key
+  (:after-each (mevedel-test--buddy-cleanup))
+  ,test
+  (test)
+  :doc "a session directory and a source buffer in one project share a key"
+  (let* ((root (make-temp-file "mevedel-buddy-dirkey-" t))
+         (project (mevedel-test--buddy-project root "project"))
+         (nested (file-name-concat project "lisp"))
+         (buffer (mevedel-test--buddy-buffer "buddy-dirkey.el" "alpha\n")))
+    (unwind-protect
+        (progn
+          (make-directory nested)
+          (with-current-buffer buffer
+            (setq default-directory (file-name-as-directory nested))
+            (should (equal (mevedel-buddy--scope-key)
+                           (mevedel-buddy-directory-scope-key project))))
+          (should-not (mevedel-buddy-directory-scope-key root)))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-buddy--record-change
@@ -1067,7 +1087,58 @@
     (should (= 0 ordinary-aborts))
     (should (= 1 buddy-aborts))
     (should (assq 'ordinary gptel--request-alist))
-    (should-not (buffer-live-p request-buffer))))
+    (should-not (buffer-live-p request-buffer)))
+
+  :doc "a scope's brief precedes the payload and never gains note markers"
+  (let* ((source (mevedel-test--buddy-buffer "buddy-brief.el" "alpha\n"))
+         (payload (concat "=== Buffer: buddy-brief.el  Mode: x  Scope: s"
+                          "  Cursor: line 1 ===\n     1  alpha"))
+         prompt marked)
+    (mevedel-buddy-set-brief
+     "scope" "the current plan"
+     "=== Buffer: buddy-brief.el  Mode: x\n     7  not a buffer line")
+    (with-current-buffer source
+      (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+                 (lambda (&rest _) '(:backend mock :model mock)))
+                ((symbol-function 'mevedel-buddy-note-capture-markers)
+                 (lambda (lines) (setq marked lines)))
+                ((symbol-function 'mevedel-buddy-note-serialize)
+                 (lambda () ""))
+                ((symbol-function 'mevedel-buddy-note-tools)
+                 (lambda (_) nil))
+                ((symbol-function 'mevedel-buddy--telemetry) #'ignore)
+                ((symbol-function 'mevedel-buddy--workspace) #'ignore)
+                ((symbol-function 'mevedel-system-build-prompt)
+                 (lambda (&rest _) "system"))
+                ((symbol-function 'gptel-request)
+                 (lambda (text &rest _) (setq prompt text))))
+        (mevedel-buddy--request
+         "scope" 'buddy-guide payload '("buddy-brief.el") nil nil)))
+    (should (equal '(("buddy-brief.el" 1)) marked))
+    (should (string-prefix-p
+             "=== Brief: what the programmer is building, from the current plan"
+             prompt))
+    (should (string-suffix-p (concat "=== End of brief ===\n\n" payload)
+                             prompt))))
+
+(mevedel-deftest mevedel-buddy--brief-section
+  (:after-each (clrhash mevedel-buddy--briefs))
+  ,test
+  (test)
+  :doc "a scope without a brief adds nothing to its requests"
+  (should (equal "" (mevedel-buddy--brief-section "scope")))
+  :doc "a long brief is cut to the limit and says so"
+  (let ((mevedel-buddy--brief-limit 5))
+    (mevedel-buddy-set-brief "scope" "the session's Goal" "  abcdefgh  ")
+    (should (equal (concat "=== Brief: what the programmer is building, from"
+                           " the session's Goal in their mevedel session ===\n"
+                           "abcde\n[brief truncated]\n=== End of brief ===\n\n")
+                   (mevedel-buddy--brief-section "scope"))))
+  :doc "a nil text removes the brief"
+  (progn
+    (mevedel-buddy-set-brief "scope" "the /buddy request" "x")
+    (mevedel-buddy-set-brief "scope" nil nil)
+    (should (equal "" (mevedel-buddy--brief-section "scope")))))
 
 (mevedel-deftest mevedel-buddy--current-generation-p
   (:after-each (mevedel-test--buddy-cleanup))

@@ -53,6 +53,16 @@
 ;; `mevedel-chat'
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
 
+;; `mevedel-compact'
+(defvar mevedel-compact-auto)
+(defvar mevedel--compact-auto-disabled)
+
+;; `mevedel-compact-run'
+(defvar mevedel-compact-run-failure-count)
+
+;; `mevedel-engine'
+(declare-function mevedel-engine-external-p "mevedel-engine" (backend))
+
 ;; `mevedel-execution'
 (declare-function mevedel-execution-teardown-session
                   "mevedel-execution" (session))
@@ -169,6 +179,8 @@
                   "mevedel-view-agent" (&optional event))
 
 ;; `mevedel-view-composer'
+(declare-function mevedel-view--assert-live-tip
+                  "mevedel-view-composer" (&optional allow-armed-fork))
 (declare-function mevedel-view--effective-permission-mode
                   "mevedel-view-composer" ())
 (declare-function mevedel-view--input-marker-position
@@ -187,7 +199,7 @@
 (declare-function mevedel-view-abort "mevedel-view-composer" ())
 (declare-function mevedel-view-composer-initialize
                   "mevedel-view-composer" ())
-(defvar mevedel-view--composer-keymap-overlay)
+(defvar mevedel-view--composer-display-overlay)
 (defvar mevedel-view--composer-scope)
 (defvar mevedel-view--input-marker)
 
@@ -784,6 +796,15 @@ the editable composer body.
   ;; Copying a rendered table yields its canonical pipe Markdown.
   (setq-local filter-buffer-substring-function
               #'mevedel-view--buffer-substring-filter)
+  ;; Panel text yanked into the composer becomes the user's draft, not zone
+  ;; text that a later zone redraw would delete as stale or an interaction
+  ;; card that a window on the draft would be taken to visit.
+  (setq-local yank-excluded-properties
+              (if (eq yank-excluded-properties t)
+                  t
+                (append mevedel-view-zone-owned-properties
+                        '(mevedel-view-interaction-id)
+                        yank-excluded-properties)))
   ;; Keep the composer where it is: when it reaches the window bottom,
   ;; scroll one line instead of recentering (which jumped about half a
   ;; window when a status row appeared or the draft grew by a line).
@@ -839,6 +860,7 @@ view.  When `:preserve-data-view-buffer' is non-nil, leave DATA-BUF's
 existing `mevedel--view-buffer' binding untouched.  A
 `:side-conversation-p' view omits durable input history, and
 `:transcript-start' hides inherited model context from projection."
+  (require 'mevedel-compact)
   (require 'mevedel-models)
   (require 'mevedel-tools)
   (require 'mevedel-view-composer)
@@ -847,8 +869,8 @@ existing `mevedel--view-buffer' binding untouched.  A
   (require 'mevedel-view-interaction)
   (require 'mevedel-view-render)
   (with-current-buffer view-buf
-    (when (overlayp mevedel-view--composer-keymap-overlay)
-      (delete-overlay mevedel-view--composer-keymap-overlay))
+    (when (overlayp mevedel-view--composer-display-overlay)
+      (delete-overlay mevedel-view--composer-display-overlay))
     (mevedel-view-mode)
     (mevedel-surface--enforce-ephemeral)
     (setq-local mevedel-view--side-conversation-p
@@ -905,8 +927,10 @@ existing `mevedel--view-buffer' binding untouched.  A
     ;; A transcript has no line numbers worth counting, and they cost four
     ;; columns of a directive frame that is already narrow.
     (setq-local display-line-numbers nil)
+    ;; Agent transcript views supply their own status strip but share the
+    ;; pinned prompt row.
+    (setq header-line-format '(:eval (mevedel-view--sticky-prompt-line)))
     (unless mevedel-view--agent-transcript-p
-      (setq header-line-format '(:eval (mevedel-view--sticky-prompt-line)))
       (setq-local tab-line-format
                   '(:eval (mevedel-view--status-strip)))))
   (unless (plist-get options :preserve-data-view-buffer)
@@ -1078,6 +1102,29 @@ Kills the associated view buffer."
   (when-let* ((vb mevedel--view-buffer)
               (_ (buffer-live-p vb)))
     (kill-buffer vb)))
+
+(defun mevedel-view-toggle-auto-compaction (&optional event)
+  "Toggle automatic compaction for this chat, or the chat clicked in EVENT.
+Only future local compaction admission changes; an ongoing compaction is
+not cancelled.  Native providers manage their own automatic compaction."
+  (interactive (list (when (mouse-event-p last-input-event) last-input-event)))
+  (with-current-buffer (if event (window-buffer (posn-window (event-start event)))
+                         (current-buffer))
+    (mevedel-view--assert-live-tip)
+    (when mevedel-view--side-conversation-p
+      (user-error "Side conversations do not compact"))
+    (unless (buffer-live-p mevedel--data-buffer)
+      (user-error "No live chat buffer"))
+    (with-current-buffer mevedel--data-buffer
+      (when (mevedel-engine-external-p gptel-backend)
+        (user-error "Automatic compaction is managed by the provider"))
+      (setq-local mevedel-compact-auto
+                  (not (and mevedel-compact-auto
+                            (not mevedel--compact-auto-disabled))))
+      (when mevedel-compact-auto
+        (setq mevedel--compact-auto-disabled nil
+              mevedel-compact-run-failure-count 0)))
+    (force-mode-line-update)))
 
 (defun mevedel-view--status-strip-button (label area help)
   "Return clickable status strip LABEL for cockpit AREA with HELP."
@@ -1304,26 +1351,43 @@ Metadata lives on rendered prompt headers, not in the model transcript."
           (goto-char position)
           (recenter 0))))))
 
+(defun mevedel-view--click-pinned-prompt (event)
+  "Reveal the pinned prompt clicked in EVENT.
+The clicked header-line text names its target, so one map serves every
+preview and the header line allocates no keymap per redisplay."
+  (interactive "e")
+  (let* ((posn (event-start event))
+         (object (posn-string posn))
+         (target (and object
+                      (get-text-property (cdr object) 'mevedel-view-pinned-target
+                                         (car object)))))
+    (cond
+     ((null target))
+     ((car target)
+      (mevedel-view-segments-jump-to-prompt
+       (car target) (cdr target) (posn-window posn)))
+     (t (mevedel-view--jump-to-pinned-prompt (cdr target) event)))))
+
+(defvar mevedel-view--pinned-prompt-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [header-line mouse-1] #'mevedel-view--click-pinned-prompt)
+    map)
+  "Header-line map shared by every pinned prompt preview.")
+
 (defun mevedel-view--pinned-prompt-button (preview position width &optional archive)
   "Return a clickable PREVIEW at POSITION fitted to WIDTH columns.
 When ARCHIVE is non-nil, POSITION is a source position in that segment."
   (if (<= width 0)
       ""
-    (let ((map (make-sparse-keymap)))
-      (define-key map [header-line mouse-1]
-                  (lambda (event)
-                    (interactive "e")
-                    (if archive
-                        (mevedel-view-segments-jump-to-prompt
-                         archive position (posn-window (event-start event)))
-                      (mevedel-view--jump-to-pinned-prompt position event))))
+    (let ((text (truncate-string-to-width preview width 0 nil "…")))
       (propertize
-       (replace-regexp-in-string
-        "%" "%%"
-        (truncate-string-to-width preview width 0 nil "…") t t)
+       (if (string-search "%" text)
+           (replace-regexp-in-string "%" "%%" text t t)
+         text)
        'face 'link 'mouse-face 'highlight
        'help-echo "Jump to this prompt"
-       'local-map map))))
+       'mevedel-view-pinned-target (cons archive position)
+       'local-map mevedel-view--pinned-prompt-map))))
 
 (defun mevedel-view--prompt-on-screen-p (window)
   "Return non-nil when a prompt header below WINDOW's start is on screen.
@@ -1435,6 +1499,15 @@ when one of them changes."
            (goal-status (and goal (mevedel-goal-status goal)))
            (goal-turns (and goal (mevedel-goal-turns-run goal)))
            (preset-name (and session (mevedel-session-preset-name session)))
+           (compaction
+            (and session (not mevedel-view--side-conversation-p)
+                 (cond
+                  ((mevedel-engine-external-p
+                    (buffer-local-value 'gptel-backend data-buffer)) 'provider)
+                  ((and (buffer-local-value 'mevedel-compact-auto data-buffer)
+                        (not (buffer-local-value
+                              'mevedel--compact-auto-disabled data-buffer))) 'on)
+                  (t 'off))))
            (tool-count (mevedel-tools-active-count data-buffer))
            (width (mevedel-view--status-strip-width))
            (cache-key
@@ -1444,7 +1517,7 @@ when one of them changes."
                     (plist-get mevedel-view--composer-scope :directive-id)
                     (plist-get mevedel-view--composer-scope :action)
                     state model (and goal t) goal-status goal-turns
-                    preset-name tool-count width
+                    preset-name compaction tool-count width
                     (display-graphic-p) (selected-window))))
       (if (equal cache-key mevedel-view--status-strip-cache-key)
           mevedel-view--status-strip-cache-value
@@ -1475,6 +1548,17 @@ when one of them changes."
                                    '(foreign expired lost contested))
                              (propertize (format "lease %s" lease-state)
                                          'face 'warning))
+                        (when compaction
+                          (if (eq compaction 'provider)
+                              (propertize "compact provider" 'face 'shadow
+                                          'help-echo "Automatic compaction is managed by the provider")
+                            (let ((map (make-sparse-keymap)))
+                              (define-key map [tab-line mouse-1]
+                                          #'mevedel-view-toggle-auto-compaction)
+                              (propertize
+                               (format "compact %s" compaction)
+                               'face 'link 'mouse-face 'highlight 'local-map map
+                               'help-echo "Toggle automatic compaction for this open session"))))
                         (mevedel-view--status-strip-button
                          mode 'mode "Open mode cockpit")
                         (and scope

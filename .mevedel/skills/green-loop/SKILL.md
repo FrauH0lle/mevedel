@@ -4,7 +4,7 @@ description: "Run a bounded validation loop for current changes: tests, compile/
 argument-hint: "What change should be validated?"
 context: inline
 allowed-tools:
-  - "Bash(npx @emacs-eask/cli test ert test/test-*)"
+  - "Bash(python3 test/run_tests.py*)"
   - "Bash(npx @emacs-eask/cli compile)"
   - "Bash(npx @emacs-eask/cli clean elc)"
   - "Bash(git diff*)"
@@ -31,10 +31,14 @@ Each round:
 
 1. Identify the changed files and the intended behavior.
 2. Run the most focused relevant validation first.
-   - Prefer matching ERT files when the changed module has one.
+   - Prefer matching ERT files when the changed module has one:
+     `python3 test/run_tests.py FILES`.
    - Run `npx @emacs-eask/cli compile` for shared or cross-module Elisp changes.
-   - Use broader `npx @emacs-eask/cli test ert test/test-*.el` only when the change
-     warrants it.
+   - Before committing, run the affected tier,
+     `python3 test/run_tests.py --affected`; it selects the full suite itself
+     when the change needs it. Run the full suite only before merging a branch,
+     as [the development guide](../../../docs/development.md#checks-before-committing)
+     prescribes.
 3. Run a reviewer for code-review findings when there are non-trivial diffs.
 4. Run a verifier for adversarial validation. Treat `VERDICT: FAIL` as blocking.
 5. Fix only actionable issues that are in scope for the requested change. Make

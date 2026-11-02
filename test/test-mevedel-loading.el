@@ -64,7 +64,7 @@ A child that outlives two minutes is killed and fails the test."
             (dolist (entry (list root compiled))
               (dolist (scenario '(commands stop-shares installation request-progress
                                   artifacts gptel chat chat-in-directory tools renderers
-                                  live-execution claude lobby room discuss implement
+                                  live-execution claude native-btw lobby room discuss implement
                                   directive-preview-implement directive-preview-discuss
                                   directive-answer))
                 (run entry scenario))
@@ -77,6 +77,21 @@ A child that outlives two minutes is killed and fails the test."
               (make-directory state)))
         (delete-directory compiled t)
         (delete-directory state t)))))
+
+(ert-deftest mevedel-loading/deferred-tables ()
+  "Deferred table cases initialize their view without earlier composer cases."
+  (pcase-let ((`(,status ,output)
+               (mevedel-loading--emacs
+                `(progn
+                   (setq load-path ',load-path)
+                   (load ,(file-name-concat
+                           (file-name-directory (locate-library "mevedel"))
+                           "test/test-mevedel-view-table-deferred.el") nil t)
+                   (ert-run-tests-batch-and-exit
+                    "^mevedel-view-table-rerender/deferred/test@")))))
+    (ert-info (output)
+      (should (equal 0 status))
+      (should (string-match-p "5 results as expected, 0 unexpected" output)))))
 
 (provide 'test-mevedel-loading)
 ;;; test-mevedel-loading.el ends here

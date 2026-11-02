@@ -13,6 +13,7 @@
 (require 'cl-lib)
 (require 'ert)
 (require 'mevedel-session-persistence)
+(require 'mevedel-session-control-fs)
 (require 'mevedel-session-durability)
 (require 'mevedel-session-recovery)
 (require 'mevedel-session-transfer)
@@ -140,15 +141,33 @@ run while it is pending."
   (test)
   :doc "renews through the asynchronous carrier from an observation"
   (test-mevedel-durability-async--with-lease (root session)
-    (let ((before (plist-get (mevedel-session-lease session) :expires-at)))
+    (let ((before (plist-get (mevedel-session-lease session) :expires-at))
+          (decode (symbol-function 'mevedel-session-control-fs--program-value))
+          readings)
       (setf (mevedel-session-lease session)
             (mevedel-session-durability--strip-assumption
              (mevedel-session-lease session)))
-      (sleep-for 1.1)
-      (should (equal '(t nil)
-                     (test-mevedel-durability-async--call
-                      #'mevedel-session-durability--update-owned-lease-async
-                      session '(active publishing) 'active 90)))
+      ;; Keep the real target programs and decoding, advancing only their
+      ;; whole-second clock readings while the async continuation is pending.
+      (cl-letf (((symbol-function 'mevedel-session-control-fs--program-value)
+                 (lambda (operation payload)
+                   (let ((value (funcall decode operation payload)))
+                     (if (eq (plist-get operation :op) 'target-time)
+                         (progn
+                           ;; Only the required observation builds the new
+                           ;; lease; an optional commit refresh may be later.
+                           (unless (plist-get operation :optional)
+                             (push value readings))
+                           (+ value 2))
+                       value)))))
+        (should (equal '(t nil)
+                       (test-mevedel-durability-async--call
+                        #'mevedel-session-durability--update-owned-lease-async
+                        session '(active publishing) 'active 90))))
+      (should readings)
+      (should (= 1 (length readings)))
+      (should (= (plist-get (mevedel-session-lease session) :expires-at)
+                 (+ (car readings) 2 90)))
       (should (eq 'owned (plist-get (mevedel-session-lease session) :state)))
       (should (> (plist-get (mevedel-session-lease session) :expires-at)
                  before))

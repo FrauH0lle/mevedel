@@ -824,6 +824,144 @@ function testCompletionRendering() {
   assert.equal(openedArtifact, artifact);
 }
 
+// A request's closing summary is a quiet rule: no speaker, rail glyph, scope
+// chip or tool card. Its host-formatted details disclose natively and keep
+// their open state across rebuilds; it never joins an activity group.
+function testRequestSummaryRendering() {
+  const window = {};
+  const document = {createElement: tag => new Element(tag)};
+  const context = {window, document};
+  installMarkdown(context, Element);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/renderer.js', 'utf8'), context);
+  const renderer = window.mevedelTranscriptRenderer;
+  const label = '── Worked for 2m 37s · Thu 29 Oct 14:32 ';
+  const details = 'Started: Thu 29 Oct 2026 14:29:43 +0000\nFinished: Thu 29 Oct 2026 14:32:20 +0000\nActive work: 2m 37s';
+  const record = {id: 'summary-1', kind: 'request-summary', text: label, details,
+    directive: 'dir-1', activity: {id: 'tool-1', summary: 'Read 1 file', status: 'completed'}};
+  const chips = [];
+  const turn = renderer.renderRecord(record, scope => { chips.push(scope); return {label: 'Dir'}; });
+  assert.equal(turn.dataset.role, 'summary');
+  assert.equal(turn.dataset.recordId, 'summary-1');
+  assert.equal(turn.activity, undefined, 'a closing summary never joins an activity group');
+  assert.equal(findByClass(turn, 'glyph'), null);
+  assert.equal(findByClass(turn, 'who'), null);
+  assert.equal(findByClass(turn, 'tool'), null);
+  assert.deepEqual(chips, []);
+  const disclosure = findByClass(turn, 'request-summary');
+  assert.equal(disclosure.tagName, 'details');
+  assert.equal(disclosure.open, false);
+  const summary = disclosure.children[0];
+  assert.equal(summary.tagName, 'summary');
+  assert.equal(textOf(summary), label);
+  assert.equal(summary.attributes.title, details, 'hover shows the full details');
+  assert.equal(textOf(findByClass(disclosure, 'request-summary-details')), details);
+
+  disclosure.open = true;
+  const rebuilt = renderer.renderRecord({...record}, null, null, turn);
+  assert.equal(findByClass(rebuilt, 'request-summary').open, true,
+               'an opened summary stays open across a rebuild');
+
+  const untimed = renderer.renderRecord({id: 'summary-2', kind: 'request-summary',
+    text: '── Worked for 12s '});
+  const quiet = findByClass(untimed, 'request-summary');
+  assert.equal(quiet.tagName, 'div', 'no disclosure without details');
+  assert.equal(textOf(quiet), '── Worked for 12s ');
+  assert.equal(quiet.attributes.title, undefined);
+  assert.equal(untimed.disclosures.size, 0);
+
+  // The next assistant turn starts afresh rather than continuing the rule.
+  const transcript = new Element('main');
+  transcript.append(
+    renderer.renderRecord({id: 'a1', kind: 'assistant', text: 'Done.'}),
+    untimed,
+    renderer.renderRecord({id: 'a2', kind: 'assistant', text: 'Next.'}));
+  renderer.markContinuations(transcript);
+  assert.deepEqual(transcript.children.map(node => node.className),
+                   ['turn ai', 'turn summary', 'turn ai']);
+}
+
+function testThinkingRendering() {
+  const nodes = Object.fromEntries(['history', 'agent-panel', 'agent-transcript'].map(
+    id => [id, new Element('div')]));
+  const window = {getSelection: () => null};
+  const document = {createElement: tag => new Element(tag), getElementById: id => nodes[id]};
+  const context = {window, document, setInterval() {}, clearInterval() {}};
+  installMarkdown(context, Element);
+  for (const file of ['renderer', 'viewer-agent', 'viewer-history']) {
+    vm.runInNewContext(fs.readFileSync(`relay/viewer/${file}.js`, 'utf8'), context);
+  }
+  const renderer = window.mevedelTranscriptRenderer;
+  const record = {id: 'thinking-1', kind: 'thinking', revision: 1, text: '**Consider** the options.',
+    activity: {id: 'tools', summary: 'Read 2 files', status: 'completed'}};
+  let turn = renderer.renderRecord(record);
+  let fold = turn.disclosures.get('thinking');
+  assert.ok(fold, 'thinking renders a registered disclosure, not a tool');
+  assert.equal(fold.tagName, 'details');
+  assert.equal(fold.open, true, 'thinking starts expanded');
+  assert.equal(textOf(fold.children[0]), 'Thinking');
+  assert.match(textOf(findByClass(fold, 'prose')), /Consider the options\./);
+  assert.equal(findByClass(turn, 'tool'), null);
+  assert.equal(findByClass(turn, 'who'), null);
+  assert.equal(turn.activity, undefined, 'thinking never joins tool activity');
+  for (const open of [false, true]) {
+    fold.open = open;
+    turn = renderer.renderRecord({...record, revision: 2, text: 'Updated reasoning.'}, null, null, turn);
+    fold = turn.disclosures.get('thinking');
+    assert.equal(fold.open, open, 'both explicit disclosure choices survive rebuilds');
+    assert.match(textOf(fold), /Updated reasoning\./);
+  }
+  const ledger = new Element('div');
+  const tool = id => renderer.renderRecord({id, kind: 'tool', name: 'Read',
+    activity: {...record.activity, id}});
+  ledger.append(tool('t1'), turn, tool('t2'));
+  renderer.groupActivity(ledger);
+  assert.equal(ledger.children.length, 3);
+  assert.equal(ledger.children[1], turn, 'thinking stays between, not inside, tool groups');
+
+  // The shared agent renderer preserves choices when a fresh poll rebuilds records.
+  const sent = [];
+  const el = (tag, cls, text) => {
+    const node = new Element(tag); node.className = cls || ''; node.textContent = text || ''; return node;
+  };
+  const send = frame => { sent.push(frame); return true; };
+  const agent = window.mevedelAgentView.create({send, el});
+  agent.open({path: '/root/worker'});
+  let streamed = record;
+  const reply = () => agent.handle({reqId: sent.at(-1).reqId, final: true, records: [streamed]});
+  reply();
+  assert.equal(nodes['agent-transcript'].children[0].disclosures.get('thinking').open, true);
+  for (const open of [false, true]) {
+    nodes['agent-transcript'].children[0].disclosures.get('thinking').open = open;
+    streamed = {...streamed, text: `${streamed.text} Next chunk.`, revision: streamed.revision + 1};
+    agent.show([{path: '/root/worker', status: 'running'}]);
+    reply();
+    assert.equal(nodes['agent-transcript'].children[0].disclosures.get('thinking').open, open);
+    assert.match(textOf(nodes['agent-transcript']), /Next chunk\./);
+  }
+
+  // Loaded archives retain their record nodes across index refreshes and reconnects.
+  const history = window.mevedelHistoryView.create({send, el, renderRecord: renderer.renderRecord,
+    onArtifacts() {}});
+  const index = {t: 'history-index', currentSegment: 2, final: true, records: [
+    {kind: 'chat', number: 1, title: 'Chat', firstSegment: 1, lastSegment: 2}]};
+  history.connection(true);
+  history.handle(index);
+  const segment = findByClass(nodes.history, 'history-segment');
+  segment.open = true;
+  segment.dispatch('toggle');
+  history.handle({t: 'history', reqId: sent.at(-1).reqId, segment: 1, final: true, records: [record]});
+  const archived = findByClass(nodes.history, 'thinking');
+  assert.equal(archived.open, true);
+  for (const open of [false, true]) {
+    archived.open = open;
+    history.connection(false);
+    history.connection(true);
+    history.handle(index);
+    assert.equal(findByClass(nodes.history, 'thinking'), archived);
+    assert.equal(archived.open, open);
+  }
+}
+
 function testComposerShortcut() {
   for (const [platform, hint] of [['Linux', 'Ctrl+Enter'], ['MacIntel', '⌘+Enter']]) {
     const window = {};
@@ -868,6 +1006,8 @@ async function main() {
   testComposerShortcut();
   await testWaitFor();
   testCompletionRendering();
+  testRequestSummaryRendering();
+  testThinkingRendering();
   await runNotificationTests();
   await testItemConversations();
   await testEditingAvailability();
@@ -2197,6 +2337,29 @@ async function main() {
   assert.equal(nodes.invites.children.length, 2);
   assert.equal(JSON.parse(storage.get('mevedel-rooms')).length, 3);
 
+  // Owner link: a settled response carries its fork point, and Fork from
+  // here asks the host for a Conversation Fork. The page marks the owner
+  // tier so the control shows only there; the host rechecks it anyway.
+  assert.equal('data-owner-link' in document.body.attributes, true);
+  await deliver({t: 'record', record: {id: 'forkable', kind: 'assistant', revision: 0,
+                                       text: 'Settled answer.', forkPoint: 'fp-1'}});
+  const forkButton = findByClass(findByRecordId(nodes.transcript, 'forkable'), 'forkbtn');
+  assert.ok(forkButton, 'fork control');
+  assert.equal(forkButton.dataset.forkPoint, 'fp-1');
+  const forkBefore = first.sent.length;
+  nodes.transcript.dispatch('click', {target: {closest: selector =>
+    (selector.startsWith('.forkbtn') ? forkButton : null)}});
+  await waitFor(() => first.sent.length === forkBefore + 1, 'sealed fork request');
+  assert.deepEqual(await unseal(key, first.sent[forkBefore]),
+                   {t: 'fork', reqId: 3, forkPoint: 'fp-1'});
+  assert.match(textOf(nodes.invites), /Fork · waiting for the host/);
+  // The fork settles through the new-session reply, as its own room.
+  await deliver({t: 'new-session', reqId: 3, ok: true, name: 'forked-id',
+                 link: `http://127.0.0.1:1/#forked.${thirdSecret}`});
+  assert.match(textOf(nodes.invites), /forked-id · open/);
+  // A record without a fork point, such as a streaming answer, offers none.
+  assert.equal(findByClass(findByRecordId(nodes.transcript, 'assistant'), 'forkbtn'), null);
+
   // Inviting hands on this room's own link, at the holder's tier or any
   // below it -- an owner link can offer all three, and never a fourth.
   nodes['invite-button'].dispatch('click');
@@ -2649,12 +2812,22 @@ async function main() {
   let skillTurn = findByRecordId(nodes.transcript, 'parity-call');
   skillTurn.disclosures.get('root').open = true;
   skillTurn.disclosures.get('root/attachment:base').open = true;
+  const thinkingRecord = {id: 'live-thinking', kind: 'thinking', revision: 1, text: 'Checking options.'};
+  await deliverTo(sockets[1], {t: 'record', record: thinkingRecord});
+  const thinkingFold = () => findByRecordId(nodes.transcript, thinkingRecord.id).disclosures.get('thinking');
+  assert.equal(thinkingFold().open, true);
+  for (const open of [false, true]) {
+    thinkingFold().open = open;
+    await deliverTo(sockets[1], {t: 'record', record: {...thinkingRecord, revision: open ? 3 : 2}});
+    assert.equal(thinkingFold().open, open, 'live updates preserve thinking disclosure choices');
+  }
+  thinkingFold().open = false;
   await deliverTo(sockets[1], {t: 'record', record: {...skillRecord, revision: 2}});
   skillTurn = findByRecordId(nodes.transcript, 'parity-call');
   assert.equal(skillTurn.disclosures.get('root/attachment:base').open, true);
   assert.equal(nodes.transcript.children.filter(turn => turn.dataset.recordId === 'parity-call').length, 1);
   const reconnectSent = sockets[1].sent.length;
-  await deliverTo(sockets[1], {t: 'welcome', proto: 3, readOnly: false, recordCount: 1});
+  await deliverTo(sockets[1], {t: 'welcome', proto: 3, readOnly: false, recordCount: 2});
   await waitFor(() => sockets[1].sent.length > reconnectSent, 'reconnected shared item catalog');
   const reconnectedCatalog = await unseal(key, sockets[1].sent[reconnectSent]);
   assert.equal(reconnectedCatalog.t, 'editing');
@@ -2666,11 +2839,13 @@ async function main() {
   const reconnectedStatus = await unseal(key, sockets[1].sent[reconnectSent + 1]);
   await deliverTo(sockets[1], {t: 'editing', reqId: reconnectedStatus.reqId, offset: 0,
                              total: statusReply.length, data: statusReply});
-  await deliverTo(sockets[1], {t: 'snapshot-chunk', final: true, records: [skillRecord]});
+  await deliverTo(sockets[1], {t: 'snapshot-chunk', final: true, records: [skillRecord, thinkingRecord]});
+  assert.equal(thinkingFold().open, false, 'reconnect snapshots preserve collapsed thinking');
   skillTurn = findByRecordId(nodes.transcript, 'parity-call');
   assert.equal(skillTurn.disclosures.get('root').open, true);
   assert.equal(skillTurn.disclosures.get('root/attachment:base').open, true);
   assert.equal(nodes['composer-input'].value, '> Draft\nKeep this text');
+  await deliverTo(sockets[1], {t: 'remove', ids: [thinkingRecord.id]});
 
   // Approval is a row-local fact, independent of lifecycle status. It survives
   // settlement and redraw without changing disclosure choices or the draft.

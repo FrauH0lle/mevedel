@@ -112,7 +112,123 @@
        (list :patch patch)))
     (should result)
     (should (equal "alpha\nnew\nomega\n"
-                   (mevedel-test--read-file update-path)))))
+                   (mevedel-test--read-file update-path))))
+
+  :doc "A long-line fragment identifies its file line without applying earlier operations"
+  (let* ((fragment "- [ ] T-049 Add the fixture country")
+         (original (concat "heading\n" fragment " " (make-string 260 ?x) "\nnext\n")))
+    (with-temp-file update-path (insert original))
+    (with-current-buffer buffer
+      (mevedel-tool-patch-handler
+       (lambda (value) (setq result value))
+       (list :patch
+             (string-join
+              (list "*** Begin Patch"
+                    "*** Add File: nested/new.txt" "+created"
+                    "*** Update File: delete.txt" "@@" "-delete me" "+changed"
+                    "*** Update File: update.txt" "@@"
+                    (concat "-" fragment) "+replacement"
+                    "*** End Patch")
+              "\n"))))
+    (should (eq 'error (plist-get result :status)))
+    (let ((text (plist-get result :result)))
+      (should (string-match-p "operation 3.*hunk 1.*patch line 9" text))
+      (should (string-match-p "removal line.*prefix of file line 2" text))
+      (should (string-match-p "whole lines" text))
+      (should (string-match-p "Read.*update.txt.*offset.*2" text)))
+    (should-not (file-exists-p added-path))
+    (should (equal "delete me\n" (mevedel-test--read-file delete-path)))
+    (should (equal original (mevedel-test--read-file update-path))))
+
+  :doc "Context and removal fragments distinguish prefix, suffix and middle substrings"
+  (let* ((line (concat "task prefix " (make-string 260 ?x) " middle marker task suffix"))
+         (original (concat "heading\n" line "\nold\n")))
+    (with-temp-file update-path (insert original))
+    (dolist (case '(("task prefix" "prefix")
+                    ("task suffix" "suffix")
+                    ("middle marker" "middle substring")))
+      (dolist (context-p '(nil t))
+        (with-current-buffer buffer
+          (mevedel-tool-patch-handler
+           (lambda (value) (setq result value))
+           (list :patch
+                 (format
+                  "*** Begin Patch\n*** Update File: update.txt\n@@\n%s%s%s\n+new\n*** End Patch"
+                  (if context-p " " "-") (car case)
+                  (if context-p "\n-old" "")))))
+        (should (eq 'error (plist-get result :status)))
+        (should (string-match-p
+                 (format "%s line.*%s of file line 2"
+                         (if context-p "context" "removal") (cadr case))
+                 (plist-get result :result)))
+        (should (equal original (mevedel-test--read-file update-path))))))
+
+  :doc "Multiple candidates, sequence failures and absent anchors do not guess a file line"
+  (dolist (case '(("prefix shared\nother shared\n" "@@\n-shared\n+new")
+                  ("first\nsecond\n" "@@\n-second\n-first\n+new")
+                  ("needle trailing\n" "@@ absent\n-needle\n+new")
+                  ("needle trailing\nanchor\n" "@@ anchor\n-needle\n+new")
+                  ("anchor\nprefix needle suffix\n"
+                   "@@\n-anchor\n+other\n@@ anchor\n-needle\n+new" 6)
+                  ("anchor\nprefix needle suffix\nanchor\nold\n"
+                   "@@ 1\n-anchor\n+other\n@@ anchor\n-needle\n+new" 6)
+                  ("anchor\nprefix needle suffix\nold\n"
+                   "@@ 3\n-old\n+needle\n@@ anchor\n-needle\n-prefix needle suffix\n+new" 6)
+                  ("needle\nother\n"
+                   "@@\n-needle\n+different\n@@\n-needle\n+new" 6)
+                  ("needle  \nother\n"
+                   "@@\n-needle\n+different\n@@\n-needle\n+new" 6)
+                  ("first\nsecond\n" "@@\n-missing\n+new")
+                  ("first\nsecond\n" "@@\n \n-second\n+new")))
+    (with-temp-file update-path (insert (car case)))
+    (with-current-buffer buffer
+      (mevedel-tool-patch-handler
+       (lambda (value) (setq result value))
+       (list :patch
+             (format "*** Begin Patch\n*** Update File: update.txt\n%s\n*** End Patch"
+                     (cadr case)))))
+    (should (eq 'error (plist-get result :status)))
+    (should (string-match-p
+             (format "patch line %d.*does not match" (or (nth 2 case) 3))
+             (plist-get result :result)))
+    (should-not (string-match-p "file line\\|Read(" (plist-get result :result)))
+    (should (equal (car case) (mevedel-test--read-file update-path))))
+
+  :doc "Escaped excerpts stay bounded even when an unmatched line is very long"
+  (let ((fragment (concat "quoted \\\"\t" (make-string 400 ?\"))))
+    (with-temp-file update-path (insert fragment " trailing\n"))
+    (with-current-buffer buffer
+      (mevedel-tool-patch-handler
+       (lambda (value) (setq result value))
+       (list :patch
+             (format "*** Begin Patch\n*** Update File: update.txt\n@@\n-%s\n+new\n*** End Patch"
+                     fragment))))
+    (let ((text (plist-get result :result)))
+      (should (eq 'error (plist-get result :status)))
+      (should (< (length text) 700))
+      (should (string-match-p (regexp-quote "\\11") text))
+      (should-not (string-match-p "[\t\n]" text))
+      (should (string-match-p "prefix of file line 1" text))))
+
+  :doc "File hints use baseline coordinates after an earlier hunk adds lines"
+  (dolist (anchor '(nil "anchor"))
+    (let ((original (concat "alpha\n" (and anchor "anchor\n")
+                            "prefix target suffix\n")))
+      (with-temp-file update-path (insert original))
+      (with-current-buffer buffer
+        (mevedel-tool-patch-handler
+         (lambda (value) (setq result value))
+         (list :patch
+               (string-join
+                (list "*** Begin Patch" "*** Update File: update.txt"
+                      "@@" "-alpha" "+alpha" "+extra" "+extra"
+                      (if anchor "@@ anchor" "@@")
+                      "-target" "+new" "*** End Patch") "\n"))))
+      (should (eq 'error (plist-get result :status)))
+      (should (string-match-p
+               (format "hunk 2.*patch line 8.*file line %d" (if anchor 3 2))
+               (plist-get result :result)))
+      (should (equal original (mevedel-test--read-file update-path))))))
 
 (mevedel-deftest mevedel-tool-patch-resource-handler
   (:vars* ((root (file-name-as-directory
@@ -154,7 +270,27 @@
                      (mevedel-test--read-file local-path)))
       (should (string-match-p "work://notes/new.txt"
                               (plist-get result :result)))
-      (should (= 0 (hash-table-count (mevedel-session-touched-files session)))))))
+      (should (= 0 (hash-table-count (mevedel-session-touched-files session))))))
+
+  :doc "Mismatch hints name the authored resource without its private backing directory"
+  (progn
+    (with-current-buffer buffer
+      (setq-local default-directory root
+                  mevedel--workspace workspace
+                  mevedel--session session)
+      (mevedel-tool-patch-handler
+       (lambda (value) (setq result value))
+       (list :patch patch))
+      (mevedel-tool-patch-handler
+       (lambda (value) (setq result value))
+       '(:patch "*** Begin Patch\n*** Update File: work://notes/new.txt\n@@\n-creat\n+new\n*** End Patch")))
+    (should (eq 'error (plist-get result :status)))
+    (let ((text (plist-get result :result)))
+      (should (string-match-p "operation 1.*hunk 1.*patch line 3" text))
+      (should (string-match-p "prefix of file line 1" text))
+      (should (string-match-p "Read(file_path=\"work://notes/new.txt\"" text))
+      (should-not (string-match-p (regexp-quote root) text))
+      (should-not (string-match-p (regexp-quote (mevedel-session-save-path session)) text)))))
 
 (mevedel-deftest mevedel-tool-patch-mixed-move-locality
   (:doc "Tracks only the ordinary operand of mixed local moves")

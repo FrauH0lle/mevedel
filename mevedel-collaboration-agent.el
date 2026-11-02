@@ -57,11 +57,15 @@
                   (data-buffer &optional completion-buffer completions cache own-path))
 (declare-function mevedel-collaboration--forwarded-execution
                   "mevedel-collaboration-projection" (segment &optional events))
+(declare-function mevedel-collaboration--reuse-record-ids
+                  "mevedel-collaboration-projection" (old new))
 (declare-function mevedel-collaboration--truncate-bytes
                   "mevedel-collaboration-projection" (string limit))
 (autoload 'mevedel-collaboration--canonical-records
   "mevedel-collaboration-projection")
 (autoload 'mevedel-collaboration--forwarded-execution
+  "mevedel-collaboration-projection")
+(autoload 'mevedel-collaboration--reuse-record-ids
   "mevedel-collaboration-projection")
 (autoload 'mevedel-collaboration--truncate-bytes
   "mevedel-collaboration-projection")
@@ -295,6 +299,10 @@ Retain full artifact lookup metadata in GUEST, not on the wire."
   (let* ((req-id (plist-get frame :reqId))
          (path (plist-get frame :path))
          (segment (plist-get frame :segment))
+         (scope (list path segment))
+         (previous (plist-get guest :agent-projection))
+         (records (mevedel-collaboration--reuse-record-ids
+                   (and (equal scope (car previous)) (cdr previous)) records))
          (transport (plist-get room :transport))
          (chunks (mevedel-collaboration--snapshot-chunks
                   records (mevedel-collaboration--agent-frame-overhead req-id path segment)))
@@ -302,6 +310,13 @@ Retain full artifact lookup metadata in GUEST, not on the wire."
                               (mapconcat #'identity (apply #'append chunks) "\n")))
          (meta (append (list :t "agent" :reqId req-id :path path :digest digest)
                        (when segment (list :segment segment)))))
+    ;; A guest polls one agent transcript at a time.  Retain only identities,
+    ;; not another copy of its text, results or artifact lookup authority.
+    (plist-put guest :agent-projection
+               (cons scope (mapcar (lambda (record)
+                                     (list :id (plist-get record :id)
+                                           :kind (plist-get record :kind)))
+                                   records)))
     (plist-put guest :agent-artifacts
                (cl-remove-if-not (lambda (record) (plist-get record :artifact)) records))
     (if (equal digest (plist-get frame :known))

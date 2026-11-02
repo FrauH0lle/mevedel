@@ -17,6 +17,7 @@
 (require 'mevedel-memory-reference)
 (require 'mevedel-models)
 (require 'mevedel-reminders)
+(require 'mevedel-telemetry-usage)
 
 ;; `mevedel-auth'
 (declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
@@ -60,6 +61,27 @@ Captured when the request starts; must be a positive integer."
   :type 'natnum
   :group 'mevedel)
 
+(defun mevedel-memory-review--reference-groups (references)
+  "Group REFERENCES by topic, scope and check time without losing observations.
+The durable review retains individual rows.  Only the provider input shares
+repeated metadata, leaving each token and its result explicit."
+  (let ((groups (make-hash-table :test #'equal)) order)
+    (dolist (reference references)
+      (let* ((key (mapcar (lambda (field) (plist-get reference field))
+                          '(:topic :scope :checked)))
+             (group (gethash key groups)))
+        (unless group
+          (setq group (list :topic (nth 0 key) :scope (nth 1 key)
+                            :checked (nth 2 key) :checks nil))
+          (puthash key group groups)
+          (push group order))
+        (push (list :token (plist-get reference :token)
+                    :result (plist-get reference :result))
+              (plist-get group :checks))))
+    (mapcar (lambda (group)
+              (plist-put group :checks (vconcat (nreverse (plist-get group :checks)))))
+            (nreverse order))))
+
 (defun mevedel-memory-review--input (scope entries documents references focus rejections omitted
                                            &optional notes omitted-notes)
   "Encode admitted SCOPE, ENTRIES, DOCUMENTS, and REFERENCES as untrusted input.
@@ -77,7 +99,9 @@ counts captured notes left for a later review."
                  (list :id (car row) :kind (symbol-name (plist-get root :kind))
                        :label (or (plist-get root :label) "Captured root")
                        :complete_names (if (plist-get root :complete) t :json-false)
-                       :admitted_files (vconcat (plist-get root :files))
+                       :admitted_files (vconcat (if (eq (plist-get root :kind) 'notes)
+                                                    (mapcar (lambda (note) (plist-get note :path)) notes)
+                                                  (plist-get root :files)))
                        :existing_names (vconcat (plist-get root :existing)))))
              (plist-get scope :roots)))
     :digests (vconcat (mapcar (lambda (entry)
@@ -88,11 +112,11 @@ counts captured notes left for a later review."
                               (list :id (plist-get note :id) :path (plist-get note :path)
                                     :modified (plist-get note :modified)
                                     :cited_by_memory (if (plist-get note :cited) t :json-false)
-                                    :sequential_summary (if (plist-get note :chunked) t :json-false)
                                     :body (plist-get note :body)))
                             notes))
     :omitted_notes (or omitted-notes 0)
-    :reference_checks (vconcat (plist-get references :references))
+    :reference_checks (vconcat (mevedel-memory-review--reference-groups
+                               (plist-get references :references)))
     :reference_omissions (vconcat (plist-get references :omissions))
     :omitted_digests omitted
     :document_guidance "Other admitted snapshots remain available through Read. Only fully supplied digests can enter this review's coverage."))
@@ -104,27 +128,59 @@ counts captured notes left for a later review."
    "" (gptel--json-encode (plist-get (gptel-fsm-info fsm) :data))))
 
 (cl-defun mevedel-memory-review-request
-    (scope entries callback &key focus rejections memory-only (currentp (lambda () t)))
+    (scope entries callback &key focus rejections memory-only workspace pass-id activep (currentp (lambda () t)))
   "Review SCOPE and ENTRIES, delivering the settled result to CALLBACK.
 FOCUS, REJECTIONS, MEMORY-ONLY and CURRENTP control the bounded review.
-An oversized shared note is summarized alone in sequential chunks first."
-  (if (cl-some (lambda (note) (plist-get note :chunked)) (mevedel-memory-notes-documents scope))
-      (mevedel-memory-notes-review
-       #'mevedel-memory-review--request scope
-       (lambda (result) (funcall callback (plist-put result :omitted-digests (length entries))))
-       :focus focus :rejections rejections :currentp currentp)
-    (mevedel-memory-review--request scope entries callback
-                                    :focus focus :rejections rejections :memory-only memory-only :currentp currentp)))
+An oversized shared note is summarized alone in sequential chunks first.
+WORKSPACE and PASS-ID enable correlated native provider-call telemetry and
+per-review provider totals, including chunk summaries.  External engines do
+not expose native dispatch boundaries, so their totals remain unavailable.
+ACTIVEP is a non-IO lifecycle check after telemetry appends; it defaults to
+CURRENTP without a separate check."
+  (let* ((totals (when (and workspace pass-id mevedel-telemetry-enabled)
+                   (list :provider-duration-ms 0 :provider-call-count 0)))
+         (context (when totals
+                    (mevedel-telemetry-usage-install)
+                    (list :mevedel-telemetry-workspace workspace
+                          :mevedel-telemetry-pass-id pass-id
+                          :mevedel-telemetry-workload 'memory
+                          :mevedel-telemetry-currentp (or activep currentp)
+                          :mevedel-telemetry-observer
+                          (lambda (stage props)
+                            (if (eq stage 'start)
+                                (cl-incf (plist-get totals :provider-call-count))
+                              (cl-incf (plist-get totals :provider-duration-ms)
+                                       (or (plist-get props :duration-ms) 0)))))))
+         (deliver (lambda (result)
+                    (funcall callback (append result (when (> (or (plist-get totals :provider-call-count) 0) 0)
+                                                       (copy-sequence totals))))))
+         (handle
+          (if (cl-some (lambda (note) (plist-get note :chunked)) (mevedel-memory-notes-documents scope))
+              (mevedel-memory-notes-review
+               #'mevedel-memory-review--request scope
+               (lambda (result) (funcall deliver (plist-put result :omitted-digests (length entries))))
+               :focus focus :rejections rejections :currentp currentp :telemetry-context context)
+            (mevedel-memory-review--request scope entries deliver
+                                            :focus focus :rejections rejections :memory-only memory-only
+                                            :currentp currentp :telemetry-context context)))
+         (usage (plist-get handle :usage)))
+    (plist-put handle :usage
+               (lambda ()
+                 (append (when usage (funcall usage))
+                         (when (> (or (plist-get totals :provider-call-count) 0) 0)
+                           (copy-sequence totals)))))))
 
 (cl-defun mevedel-memory-review--request
-    (scope entries callback &key focus rejections memory-only (currentp (lambda () t)))
+    (scope entries callback &key focus rejections memory-only telemetry-context (currentp (lambda () t)))
   "Run a bounded read-only review of captured SCOPE and candidate ENTRIES.
 CALLBACK receives :outcome success/error/aborted and the admitted :entries,
 :scope, :references, model :policy, and usage.  Success also carries the exact
-:reply, parsed :proposals, and :no-action.  It never writes coverage
+:reply, parsed memory/instruction :proposals, and :no-action.
+It never writes coverage
 or proposals.
 
-CURRENTP checks the consumer's current ownership generation.  MEMORY-ONLY
+CURRENTP checks the consumer's current ownership generation.  TELEMETRY-CONTEXT
+supplies internal workspace provider-call correlation.  MEMORY-ONLY
 permits an explicitly requested empty digest batch.  FOCUS and REJECTIONS
 are optional bounded text.  Return a plist with :buffer for inspection,
 an idempotent :cancel function, and a :usage function returning a snapshot
@@ -144,8 +200,9 @@ its exact provider payload and per-step token usage are not exposed.
 Complete shared working notes captured in SCOPE are admitted like digests:
 one of each kind is reserved when both fit, then the remaining items oldest
 first while the request fits.  The callback reports the admitted note IDs as
-:notes and the captured notes left for later as :omitted-notes; the reply must
-dispose of every admitted note."
+:notes and the captured notes left for later as :omitted-notes.
+The accepting store disposes of admitted notes after a successful review;
+malformed memory changes and unrecoverable reply structure reject the reply."
   (let* ((buffer (generate-new-buffer " *mevedel-memory-review*"))
          (caller (current-buffer))
          (stream gptel-stream)
@@ -184,15 +241,23 @@ dispose of every admitted note."
            (if (string-empty-p output) 0
              (mevedel-context-summary--estimated-tokens "" output)))
          (snapshot ()
-           (append (list :output-bytes (string-bytes output)
+           (let ((note-ids (seq-take
+                            (cl-loop for note in admitted-notes
+                                     for id = (plist-get note :id)
+                                     when (<= (string-bytes id) 256) collect (copy-sequence id))
+                            32)))
+            (append (list :output-bytes (string-bytes output)
                          :output-estimated-tokens (estimated)
                          :result-bytes reply-bytes
                          :reasoning-bytes reasoning-bytes :reply-bytes reply-total-bytes
                          :tool-call-bytes tool-call-bytes
                          :tool-call-count (if investigation (mevedel-memory-investigation-calls investigation) 0)
+                         :investigation (and investigation (mevedel-memory-investigation-summary investigation))
+                         :investigation-notes note-ids
+                         :investigation-notes-omitted (- (length admitted-notes) (length note-ids))
                          :rounds completed-rounds
                          :budget-kind budget-kind :output-limit output-limit)
-                   (copy-sequence usage)))
+                    (copy-sequence usage))))
          (check-limit (kind value limit)
            (when (> value limit)
              (setq budget-kind kind output-limit limit)
@@ -323,7 +388,7 @@ dispose of every admitted note."
                    (ensure-live)
                    (record-usage (gptel-fsm-info fsm) t)
                    (dolist (call (plist-get (gptel-fsm-info fsm) :tool-use))
-                     (unless (member (plist-get call :name) '("Read" "Glob" "Grep"))
+                     (unless (member (plist-get call :name) '("Read" "Glob" "Grep" "Git"))
                        (error "Unavailable review tool: %s" (plist-get call :name))))
                    ;; gptel exposes executable arguments here, not raw JSON
                    ;; spelling or argument fragments still in flight.
@@ -336,22 +401,25 @@ dispose of every admitted note."
                (error (finish 'error (error-message-string err))))))
          (complete-info (info)
            (unless settled
-             (condition-case err
-                 (progn
-                   (ensure-live)
-                   (record-usage info t)
-                   (check-output)
-                   (let ((reply (apply #'concat (nreverse chunks))))
+             (let (reply)
+               (condition-case err
+                   (progn
+                     (ensure-live)
+                     (record-usage info t)
+                     (check-output)
+                     (setq reply (apply #'concat (nreverse chunks)))
                      (check-limit 'proposal-bytes (string-bytes reply) mevedel-memory-proposal--max-bytes)
                      (finish 'success nil
                              (append (mevedel-memory-proposal-parse
                                       reply (plist-get scope :roots)
-                                      (mapcar (lambda (entry) (plist-get entry :id)) admitted)
-                                      (let ((index (mevedel-memory-notes-index scope)))
-                                        (mapcar (lambda (note) (assoc (plist-get note :id) index))
-                                                admitted-notes)))
-                                     (list :reply reply)))))
-               (error (finish 'error (error-message-string err))))))
+                                      (append (mapcar (lambda (entry) (plist-get entry :id)) admitted)
+                                              (mapcar (lambda (note) (plist-get note :id)) admitted-notes)))
+                                     (list :reply reply))))
+                 ;; A rejected complete reply is diagnostic evidence for the
+                 ;; consumer; it never becomes proposals.
+                 (error (finish 'error (error-message-string err)
+                                (and reply (<= (string-bytes reply) mevedel-memory-proposal--max-bytes)
+                                     (list :rejected-reply reply))))))))
          (done-handler (fsm) (complete-info (gptel-fsm-info fsm)))
          (external-provider (response info)
            (pcase response
@@ -515,7 +583,7 @@ dispose of every admitted note."
                     (when (and settled cancel-engine) (funcall cancel-engine)))
                 (progn (mevedel-auth-assert-ready gptel-backend)
                        (gptel-request input :buffer buffer :system system :stream stream :transforms nil
-				      :fsm (machine) :callback #'provider)))))
+				      :context telemetry-context :fsm (machine) :callback #'provider)))))
         (error (finish 'error (error-message-string err))))
       (list :buffer buffer :cancel (lambda () (finish 'aborted))
             :report (lambda ()

@@ -9,6 +9,7 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+(require 'mevedel-activity-group)
 (require 'mevedel-execution-transcript)
 (require 'mevedel-plan)
 (require 'mevedel-view-fontify)
@@ -192,6 +193,8 @@
                   "mevedel-transcript" (kind limit))
 (declare-function mevedel-transcript--org-tool-block-parts
 		  "mevedel-transcript" (start end))
+(declare-function mevedel-transcript--overlay-range
+                  "mevedel-transcript" (segments segment))
 (declare-function mevedel-transcript--skip-leading-properties-drawer
 		  "mevedel-transcript" (pos))
 (declare-function mevedel-transcript--skip-leading-summary-block
@@ -255,6 +258,7 @@
 (defvar mevedel-view--display-map)
 (defvar mevedel-view--interaction-marker)
 (defvar mevedel-view--status-marker)
+(defvar mevedel-view--transcript-start)
 
 ;; `mevedel-view-agent'
 (declare-function mevedel-view--insert-attribution
@@ -267,13 +271,8 @@
 (defvar mevedel-view--agent-path)
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view--call-preserving-input-text
-                  "mevedel-view-composer" (thunk))
-(declare-function mevedel-view--call-preserving-user-view-state
+(declare-function mevedel-view-call-preserving-user-view-state
                   "mevedel-view-composer" (thunk &optional region))
-(declare-function mevedel-view--call-preserving-window-state
-                  "mevedel-view-composer"
-                  (thunk &optional positions-preserved region))
 (declare-function mevedel-view--call-with-render-boundaries-advancing
                   "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--ensure-interactive-chat-view
@@ -1296,12 +1295,6 @@ buffer's font-lock refontification cycles."
 ;;
 ;;; Rendering state and agent helpers
 
-(defmacro mevedel-view-render--preserving-window-state (&rest body)
-  "Execute BODY while preserving point and window positions."
-  (declare (indent 0) (debug t))
-  `(mevedel-view--call-preserving-window-state
-    (lambda () ,@body)))
-
 (defun mevedel-view--running-agent-transcript-buffer-p ()
   "Return non-nil when the current buffer is a live agent transcript."
   (let ((inv mevedel--agent-invocation))
@@ -2226,41 +2219,18 @@ Execution outcome remains independent of lifecycle and disclosure state."
           (setq line (concat line "  " hint)))
         (let* ((count (plist-get rendering :pending-count))
                (pending-failed (plist-get rendering :pending-failed))
-               (settled-failed (plist-get rendering :failed-count))
-               (failed (and (or pending-failed settled-failed)
-                            (+ (or pending-failed 0) (or settled-failed 0)))))
+               (failures (plist-get rendering :failure-label)))
           (cond
            ((or count pending-failed)
             (mevedel-view--running-header
-             line count (plist-get rendering :pending-virtual) failed
-             (plist-get rendering :failed-names)))
+             line count (plist-get rendering :pending-virtual) failures))
            ;; A settled group keeps the count its running form showed, so
            ;; settling neither unfolds nor reshapes it.
-           (settled-failed
+           (failures
             (concat line
                     (propertize " · " 'font-lock-face 'mevedel-view-tool-metadata)
-                    (propertize (mevedel-view--failed-label
-                                 settled-failed
-                                 (plist-get rendering :failed-names))
-                                'font-lock-face 'error)))
+                    (propertize failures 'font-lock-face 'error)))
            (t line)))))))
-
-(defconst mevedel-view--failed-names-width 30
-  "Most columns a folded group spends naming its failed tools.")
-
-(defun mevedel-view--failed-label (count names)
-  "Return `N failed' for COUNT failures, naming the failed tools in NAMES.
-NAMES are shown once each, in order, and end in `…' past
-`mevedel-view--failed-names-width' columns, so the folded row can still
-say which call failed without growing past one line."
-  (let ((label (format "%d failed" count))
-        (names (delete-dups (copy-sequence (delq nil names)))))
-    (if (not names)
-        label
-      (concat label ": "
-              (truncate-string-to-width
-               (string-join names ", ") mevedel-view--failed-names-width
-               nil nil "…")))))
 
 (defun mevedel-view--sandbox-summary-line (summary)
   "Return the durable disclosure line for material sandbox SUMMARY.
@@ -3361,7 +3331,7 @@ The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
           (setq rendering
                 (plist-put (copy-sequence rendering)
                            :initially-collapsed-p collapsed)))
-        (mevedel-view--call-preserving-user-view-state
+        (mevedel-view-call-preserving-user-view-state
          (lambda ()
            (mevedel-view--call-with-render-boundaries-advancing
             (lambda ()
@@ -3710,10 +3680,12 @@ Cached globally; see `mevedel-view--scaffolding-only-cache'."
      (buffer-substring seg-start seg-end))))
 
 (defun mevedel-view--delete-request-summaries (data-buf start end)
-  "Delete request-summary render-data blocks in DATA-BUF START..END."
+  "Delete request-summary render-data blocks in DATA-BUF START..END.
+Return the last deleted summary, so settlement can preserve its timing."
   (with-current-buffer data-buf
     (save-excursion
       (let ((case-fold-search nil)
+            summary
             (limit (copy-marker (or end (point-max)) t)))
         (goto-char (or start (point-min)))
         (unwind-protect
@@ -3726,16 +3698,18 @@ Cached globally; see `mevedel-view--scaffolding-only-cache'."
                            (not (plist-member (caddr block) :mevedel-tool-use-id))
                            (mevedel-tool-render-data-trusted-range-p
                             open (cadr block)))
+                  (setq summary (caddr block))
                   (delete-region (car block) (cadr block))
                   (goto-char (car block)))))
-          (set-marker limit nil))))))
+          (set-marker limit nil))
+        summary))))
 
-(defun mevedel-view--request-summary-elapsed-seconds (data-buf)
-  "Return elapsed seconds for DATA-BUF's current request, or nil."
+(defun mevedel-view--request-summary-elapsed-seconds (data-buf &optional now)
+  "Return active seconds for DATA-BUF's current request at NOW, or nil."
   (when-let* (((buffer-live-p data-buf))
               (request
                (buffer-local-value 'mevedel--current-request data-buf)))
-    (mevedel-request-active-elapsed-seconds request)))
+    (mevedel-request-active-elapsed-seconds request now)))
 
 (defun mevedel-view--append-request-summary
     (data-buf search-start &optional extra)
@@ -3743,21 +3717,27 @@ Cached globally; see `mevedel-view--scaffolding-only-cache'."
 SEARCH-START bounds duplicate detection to the current response tail.
 EXTRA is additional request metadata to persist.
 Return the new data-buffer end position."
-  (when-let* ((elapsed (mevedel-view--request-summary-elapsed-seconds
-                        data-buf)))
+  (when-let* ((now (current-time))
+              (elapsed (mevedel-view--request-summary-elapsed-seconds
+                        data-buf now)))
     (with-current-buffer data-buf
-      (let ((tail-start (or search-start (point-min))))
-        (mevedel-view--delete-request-summaries
-         data-buf tail-start (point-max))
+      (let* ((tail-start (or search-start (point-min)))
+             (started (float-time
+                       (mevedel-request-started-at mevedel--current-request)))
+             (previous (mevedel-view--delete-request-summaries
+                        data-buf tail-start (point-max)))
+             (summary
+              (if (equal started (plist-get previous :started-at))
+                  (copy-sequence previous)
+                (list :kind 'request-summary :elapsed-seconds elapsed
+                      :started-at started :finished-at (float-time now)))))
+        (while extra
+          (setq summary (plist-put summary (pop extra) (pop extra))))
         (save-excursion
           (goto-char (point-max))
           (unless (bolp) (insert "\n"))
           (insert
-           (mevedel-tool-render-data-format
-            (append
-             (list :kind 'request-summary
-                   :elapsed-seconds elapsed)
-             extra))))))
+           (mevedel-tool-render-data-format summary)))))
     (with-current-buffer data-buf
       (point-max))))
 
@@ -3990,11 +3970,11 @@ once its call settles."
                               (selected-frame))))
     text))
 
-(defun mevedel-view--running-header (line count &optional virtual failed names)
+(defun mevedel-view--running-header (line count &optional virtual failures)
   "Return group header LINE marked running with COUNT calls in flight.
 The settled marker gives way to the running one, and `· N running'
-follows the summary; FAILED failed calls add `· N failed' naming the tools
-in NAMES, since a folded group cannot show their rows.  With no call left
+follows the summary; the FAILURES label follows it, since a folded group
+cannot show the failed rows.  With no call left
 running, a failure takes the `×' marker.  Unless VIRTUAL, the replaced
 marker is kept on the new one so a stopped turn can restore it in place."
   (let ((marker (if count
@@ -4014,9 +3994,8 @@ marker is kept on the new one so a stopped turn can restore it in place."
                          (propertize (format "%d running" count)
                                      'font-lock-face 'mevedel-view-tool-metadata)
                          'pending-run)))
-              (when failed
-                (concat sep (propertize (mevedel-view--failed-label failed names)
-                                        'font-lock-face 'error))))
+              (when failures
+                (concat sep (propertize failures 'font-lock-face 'error))))
       'mevedel-view-pending-tool-live t))))
 
 (defun mevedel-view--pending-children (entries)
@@ -4047,13 +4026,16 @@ then, shown finished instead of running."
                 entries)))
     (and (> count 0) count)))
 
-(defun mevedel-view--pending-failed-names (entries)
-  "Return the tool names of in-flight ENTRIES that finished failed."
-  (delq nil (mapcar (lambda (entry)
-                      (and (memq (mevedel-view--pending-entry-settled-p entry)
-                                 '(error failed denied blocked))
-                           (or (nth 1 entry) "Tool")))
-                    entries)))
+(defun mevedel-view--pending-activity-entry (entry)
+  "Return the activity-group entry for in-flight tool ENTRY.
+It runs until it settles; one that finished before its result landed takes
+its outcome, so its count does not change when the row does."
+  (let ((settled (mevedel-view--pending-entry-settled-p entry)))
+    (list :role 'member :kind 'tool :name (or (nth 1 entry) "Tool")
+          :status (cond ((memq settled '(error failed denied blocked)) 'failed)
+                        (settled 'completed)
+                        (t 'running))
+          :pending entry)))
 
 (defun mevedel-view--insert-pending-tool-row (entry)
   "Insert the row for in-flight tool ENTRY.
@@ -4096,36 +4078,37 @@ will once settled; otherwise each call gets its own running row.  When a
 reader is on one of their rows, the group is drawn open beneath its
 header, so that row stays on screen."
   (mevedel-view--ensure-blank-line-after-response)
-  (if (and (> mevedel-view-tool-group-collapse-threshold 0)
-           (> (length entries) mevedel-view-tool-group-collapse-threshold))
-      (let* ((start (point))
-             (data-buf (mevedel-view-segments-display-buffer))
-             (data-end (and (buffer-live-p data-buf)
-                            (with-current-buffer data-buf (point-max))))
-             (open (or (mevedel-view-render--reader-on-member-p nil entries)
-                       (and data-end
-                            (eq (car mevedel-view-render--pending-reader-group)
-                                mevedel-view--data-turn-start)
-                            (eql (cadr mevedel-view-render--pending-reader-group)
-                                 data-end)))))
-        (when (and open data-end)
-          (setq mevedel-view-render--pending-reader-group
-                (list mevedel-view--data-turn-start data-end)))
-        (mevedel-view--insert-summary-region
-         (mevedel-view--rendering-header-line
-          (list :header (mevedel-view--tool-group-header
-                         (mevedel-view--pending-children entries))
-                :vtype 'tool-group
-                :pending-count (mevedel-view--pending-running-count entries)
-                :pending-failed (mevedel-view--pending-failed-count entries)
-                :failed-names (mevedel-view--pending-failed-names entries)
-                :pending-virtual t))
-         '(mevedel-view-type tool-pending
-           mevedel-view-pending-tool-live t))
-        (mevedel-view--apply-rendering-indent start (point))
-        (when open
-          (mapc #'mevedel-view--insert-pending-tool-row entries)))
-    (mapc #'mevedel-view--insert-pending-tool-row entries)))
+  (let ((group (car (mevedel-activity-group-partition
+                     (mapcar #'mevedel-view--pending-activity-entry entries)
+                     mevedel-view-tool-group-collapse-threshold))))
+    (if (plist-get group :group)
+	(let* ((start (point))
+               (data-buf (mevedel-view-segments-display-buffer))
+               (data-end (and (buffer-live-p data-buf)
+                              (with-current-buffer data-buf (point-max))))
+               (open (or (mevedel-view-render--reader-on-member-p nil entries)
+			 (and data-end
+                              (eq (car mevedel-view-render--pending-reader-group)
+                                  mevedel-view--data-turn-start)
+                              (eql (cadr mevedel-view-render--pending-reader-group)
+                                   data-end)))))
+          (when (and open data-end)
+            (setq mevedel-view-render--pending-reader-group
+                  (list mevedel-view--data-turn-start data-end)))
+          (mevedel-view--insert-summary-region
+           (mevedel-view--rendering-header-line
+            (list :header (plist-get group :summary)
+                  :vtype 'tool-group
+                  :pending-count (mevedel-view--pending-running-count entries)
+                  :pending-failed (mevedel-view--pending-failed-count entries)
+                  :failure-label (plist-get group :failure-label)
+                  :pending-virtual t))
+           '(mevedel-view-type tool-pending
+			       mevedel-view-pending-tool-live t))
+          (mevedel-view--apply-rendering-indent start (point))
+          (when open
+            (mapc #'mevedel-view--insert-pending-tool-row entries)))
+      (mapc #'mevedel-view--insert-pending-tool-row entries))))
 
 (defun mevedel-view--retire-pending-decorations (start end)
   "Remove in-flight tool decorations between START and END.
@@ -4299,13 +4282,21 @@ the render so user toggles survive streaming ticks."
          (data-to
           (or end
               (with-current-buffer data-buf (point-max))))
+         (transcript-start mevedel-view--transcript-start)
          (segments (when (and data-from data-to)
                      (with-current-buffer data-buf
-                       (if retained-p
-                           (save-restriction
-                             (narrow-to-region data-from data-to)
-                             (mevedel-transcript-segments
-                              (point-min) (point-max)))
+                       (save-restriction
+                         ;; Segmentation may expand to the preceding property
+                         ;; boundary.  In a side conversation that run can
+                         ;; include inherited reminders, even when DATA-FROM
+                         ;; already follows the newly submitted prompt.
+                         (when (and (markerp transcript-start)
+                                    (eq (marker-buffer transcript-start) data-buf))
+                           (narrow-to-region
+                            (max (point-min) (marker-position transcript-start))
+                            (point-max)))
+                         (when retained-p
+                           (narrow-to-region data-from data-to))
                          (mevedel-transcript-segments data-from data-to)))))
          (segments (if settle-p
                        segments
@@ -4353,8 +4344,7 @@ the render so user toggles survive streaming ticks."
      :turn-detail (mevedel-view--debug-turn-summary turns data-buf)
      :pending pending
      :state (mevedel-view--debug-state data-buf data-from data-to))
-    (mevedel-view-render--preserving-window-state
-     (mevedel-view--call-preserving-input-text
+    (mevedel-view-call-preserving-user-view-state
       (lambda ()
         ;; rebuild region stops at status-marker (top of zone
         ;; 2) rather than input-marker, so any future status- or
@@ -4481,7 +4471,8 @@ the render so user toggles survive streaming ticks."
                                     (min (or (mevedel-view-stream-in-flight-turn-start-position)
                                              render-start)
                                          render-start)
-                                    (point) data-buf)))
+                                    (point) data-buf))
+                          (rows-start (point)))
                       (when interim
                         (mevedel-view--insert-assistant-header
                          nil '(mevedel-view-pending-tool-live t)))
@@ -4492,7 +4483,10 @@ the render so user toggles survive streaming ticks."
                         (insert (propertize "\n" 'mevedel-view-pending-tool-live t)
                                 (propertize "\n"
                                             'font-lock-face 'mevedel-view-turn-rule
-                                            'mevedel-view-pending-tool-live t)))))))
+                                            'mevedel-view-pending-tool-live t)))
+                      ;; Rows outside a turn miss its read-only pass.
+                      (mevedel-view-render-add-display-properties
+                       rows-start (point) 'tool-pending)))))
               (mevedel-view--ensure-request-progress data-buf))
             (mevedel-view--debug-log
              'incremental-after-insert
@@ -4556,7 +4550,7 @@ the render so user toggles survive streaming ticks."
             (mevedel-view--render-agent-status)
             (mevedel-view--interaction-rebuild)
             (when (fboundp 'mevedel-directive-frame-refresh-filter)
-              (mevedel-directive-frame-refresh-filter))))))))))
+              (mevedel-directive-frame-refresh-filter)))))))))
 
 (defvar-local mevedel-view-render--owner nil
   "Non-nil while this view has an active projection writer.")
@@ -6231,9 +6225,30 @@ Merge fragments of one reasoning block into an expanded disclosure."
 
 (defun mevedel-view--request-summary-line (render-data)
   "Return the visible request summary line for RENDER-DATA."
-  (let ((elapsed (plist-get render-data :elapsed-seconds)))
+  (let ((elapsed (plist-get render-data :elapsed-seconds))
+        (finished (plist-get render-data :finished-at))
+        (system-time-locale "C"))
     (when (numberp elapsed)
-      (format "── Worked for %s " (mevedel--duration-label elapsed)))))
+      (concat
+       (format "── Worked for %s" (mevedel--duration-label elapsed))
+       (when (numberp finished)
+         (concat " · "
+                 (propertize
+                  (format-time-string "%a %d %b %H:%M" finished)
+                  'help-echo (mevedel-view--request-summary-details render-data))))
+       " "))))
+
+(defun mevedel-view--request-summary-details (render-data)
+  "Return full timing details for RENDER-DATA, or nil without timestamps."
+  (let ((started (plist-get render-data :started-at))
+        (finished (plist-get render-data :finished-at))
+        (elapsed (plist-get render-data :elapsed-seconds))
+        (system-time-locale "C"))
+    (when (and (numberp started) (numberp finished) (numberp elapsed))
+      (format "Started: %s\nFinished: %s\nActive work: %s"
+              (format-time-string "%a %d %b %Y %H:%M:%S %z" started)
+              (format-time-string "%a %d %b %Y %H:%M:%S %z" finished)
+              (mevedel--duration-label elapsed)))))
 
 (defun mevedel-view--render-request-summary-segment (seg data-buf)
   "Render request-summary SEG from DATA-BUF as the assistant turn's closing rule.
@@ -6496,7 +6511,12 @@ there, and still renders as its own line when no group absorbs it."
    entries))
 
 (defun mevedel-view--tool-activity-entries (segments data-buf)
-  "Return ordered tool and mailbox entries for SEGMENTS in DATA-BUF."
+  "Return ordered tool, audit and mailbox entries for SEGMENTS in DATA-BUF.
+Rows the renderer hides and this transcript's own completion mail have no
+entry, so they neither join nor split activity.  Adjacent visible rows with
+equal `:coalesce-key' values become one entry counting the combined calls,
+with every call's hook audits in source order.  Execution breadcrumbs
+become entries of their own."
   (let (out)
     (dolist (seg (mevedel-view--merge-tool-hook-audit-segments segments data-buf))
       (when-let* ((entry
@@ -6507,101 +6527,147 @@ there, and still renders as its own line when no group absorbs it."
                       (when (mevedel-view--hook-audit-only-segment-p
                              data-buf (cadr seg) (caddr seg))
                         (mevedel-view--tool-segment-entry seg data-buf))))))
-        (push entry out)))
+        (let* ((rendering (plist-get entry :rendering))
+               (key (plist-get rendering :coalesce-key))
+               (previous (car out)))
+          (if (and key previous
+                   (equal key (plist-get (plist-get previous :rendering)
+                                         :coalesce-key)))
+              (setcar out
+                      (plist-put
+                       (plist-put entry :rendering
+                                  (plist-put
+                                   (copy-sequence rendering) :hook-audits
+                                   (append (plist-get (plist-get previous :rendering)
+                                                      :hook-audits)
+                                           (plist-get rendering :hook-audits))))
+                       :count (1+ (plist-get previous :count))))
+            (push entry out)))))
     (mevedel-view--split-completion-entries (nreverse out))))
 
-(defun mevedel-view--tool-activity-groupable-p (entries &optional pending)
-  "Return non-nil when activity ENTRIES may fold into one group.
-PENDING in-flight calls count toward the threshold, as they will once
-settled."
-  (let ((tool-entries
-         (cl-remove-if-not
-          (lambda (entry) (eq (plist-get entry :kind) 'tool))
-          entries)))
-    (and (not (seq-some (lambda (entry)
-                         (or (eq (plist-get entry :kind) 'hook-audit)
-                             (plist-get entry :notice-p)))
-                       entries))
-         (> mevedel-view-tool-group-collapse-threshold 0)
-         (> (+ (length tool-entries) (length pending))
-            mevedel-view-tool-group-collapse-threshold)
-         (cl-every
-          (lambda (entry)
-            (and (null (plist-get (plist-get entry :rendering)
-                                  :coalesce-key))
-                 (mevedel-view--tool-group-entry-p entry)))
-          tool-entries))))
+(defun mevedel-view--activity-group-entry (entry)
+  "Return the activity-group entry for view activity ENTRY.
+Tool rows that demand individual presentation, coalescing rows, notices
+and standalone audits are boundaries."
+  (pcase (plist-get entry :kind)
+    ('tool
+     (let ((rendering (plist-get entry :rendering)))
+       (list :role (if (and (null (plist-get rendering :coalesce-key))
+                            (mevedel-view--tool-group-entry-p entry))
+                       'member
+                     'boundary)
+             :kind 'tool
+             :name (or (plist-get rendering :group-tool)
+                       (plist-get (plist-get entry :group-child) :tool)
+                       "Tool")
+             :status (pcase (mevedel-view--rendering-status rendering)
+                       ('error 'failed)
+                       ('warning 'warning)
+                       ('running 'running)
+                       (_ 'completed))
+             :view entry)))
+    ('completion
+     (let ((record (plist-get (plist-get (plist-get entry :group-child) :rendering)
+                              :completion-record)))
+       (list :role 'member :kind 'completion
+             :completion (cons (list (plist-get record :execution-id)
+                                     (plist-get record :owner))
+                               (downcase (mevedel-view-audit-breadcrumb-status record)))
+             :view entry)))
+    ('mailbox
+     (list :role (if (plist-get entry :notice-p) 'boundary 'member)
+           :kind 'message :view entry))
+    (_ (list :role 'boundary :view entry))))
+
+(defun mevedel-view--render-activity-entry (entry data-buf)
+  "Insert view activity ENTRY from DATA-BUF as its own row.
+Return `rendered' or `fallback' for a tool row, nil otherwise."
+  (let ((rendering (plist-get entry :rendering))
+        (count (plist-get entry :count)))
+    (when (and rendering (> count 1))
+      (setq rendering
+            (plist-put (copy-sequence rendering) :header
+                       (format "%s ×%d" (plist-get rendering :header) count))))
+    (pcase (plist-get entry :kind)
+      ('completion
+       (let ((record (plist-get (plist-get (plist-get entry :group-child) :rendering)
+                                :completion-record)))
+         (mevedel-view--insert-hook-audit-block record (plist-get record :source)))
+       nil)
+      ('hook-audit
+       (dolist (record (plist-get entry :hook-audits))
+         (mevedel-view--insert-hook-audit-block record (plist-get record :source))))
+      ('mailbox
+       (when-let* ((child (mevedel-view--tool-group-child entry data-buf 0)))
+         (mevedel-view--insert-child-call-block
+          child (plist-get child :source) 'derive ""))
+       nil)
+      (_
+       (if rendering
+           (progn
+             (mevedel-view--insert-rendered-tool rendering (plist-get entry :source))
+             'rendered)
+         (when-let* ((summary (mevedel-view--tool-one-liner
+                               data-buf (plist-get entry :start) (plist-get entry :end))))
+           (let ((source (plist-get entry :source))
+                 (ins-start (point)))
+             (mevedel-view--insert-summary-region
+              (mevedel-view--summary-with-face summary 'mevedel-view-tool-summary)
+              `(mevedel-view-type tool-summary
+                mevedel-view-collapsed t
+                mevedel-view-source ,source
+                mevedel-view-source-key
+                ,(mevedel-view-disclosure-state-key source 'tool-summary)))
+             (mevedel-view--decorate-markdown-in-range ins-start (point)))
+           'fallback))))))
 
 (defun mevedel-view--render-tool-activity (segments data-buf &optional pending)
   "Render activity SEGMENTS from DATA-BUF in source order.
-Special tool rows split otherwise groupable tool runs.  Keep
-this activity mutable as one live unit until a response or other turn
-boundary arrives, so later tool calls can join the same group.
-PENDING in-flight tool entries join the trailing tool run, or follow the
-activity when it ends in something they cannot join."
+`mevedel-activity-group-partition' decides which runs fold into an activity
+group; other rows render individually, each tool call as its own
+collapsible entry.  Keep this activity mutable as one live unit until a
+response or other turn boundary arrives, so later tool calls can join the
+same group.  PENDING in-flight tool entries join the trailing run as
+running calls, or follow the activity when it ends in something they
+cannot join."
   (let ((unit-start (point))
         (mevedel-view--activity-entry-cache
-         (or mevedel-view--activity-entry-cache (make-hash-table :test #'equal))))
-    (cl-labels
-        ((render-run (segments &optional pending)
-           (if (cl-every
-                (lambda (seg)
-                  (mevedel-view--tool-activity-tool-segment-p seg data-buf))
-                segments)
-               (mevedel-view--render-tool-group segments data-buf pending)
-             (let ((entries (mevedel-view--tool-activity-entries segments data-buf)))
-               (if (mevedel-view--tool-activity-groupable-p entries pending)
-                   (progn
-                     (mevedel-view--ensure-blank-line-after-response)
-                     (mevedel-view--insert-tool-group entries data-buf pending))
-                 (let (tool-group)
-                   (dolist (seg segments)
-                     (if (mevedel-view--tool-activity-tool-segment-p seg data-buf)
-                         (push seg tool-group)
-                       (when tool-group
-                         (mevedel-view--render-tool-group
-                          (nreverse tool-group) data-buf)
-                         (setq tool-group nil))
-                       (when (eq (car seg) 'mailbox)
-                         (when-let* ((entry (mevedel-view--mailbox-activity-entry
-                                             seg data-buf))
-                                     (child (mevedel-view--tool-group-child
-                                             entry data-buf 0)))
-                           (mevedel-view--insert-child-call-block
-                            child (plist-get child :source) 'derive "")))))
-                   (when tool-group
-                     (mevedel-view--render-tool-group
-                      (nreverse tool-group) data-buf pending)
-                     (setq pending nil))
-                   (when pending
-                     (mevedel-view--insert-pending-run pending))))))))
-      (if (cl-every
-           (lambda (seg)
-             (mevedel-view--tool-activity-tool-segment-p seg data-buf))
-           segments)
-          (render-run segments pending)
-        (let (run special-run)
-          (dolist (seg (mevedel-view--merge-tool-hook-audit-segments
-                        segments data-buf))
-            (let* ((entry (pcase (car seg)
-                            ('tool (mevedel-view--tool-segment-entry seg data-buf))
-                            ('mailbox (mevedel-view--mailbox-activity-entry seg data-buf))))
-                   (special (and entry
-                                 (or (plist-get entry :notice-p)
-                                     (and (eq (car seg) 'tool)
-                                 (or (plist-get (plist-get entry :rendering)
-                                                :coalesce-key)
-                                     (not (mevedel-view--tool-group-entry-p
-                                           entry))))))))
-              ;; This transcript's own completion delivery renders nothing,
-              ;; so it must not split the activity run around it either.
-              (unless (and (eq (car seg) 'mailbox) (null entry))
-                (when (and run (not (eq (and special t) special-run)))
-                  (render-run (nreverse run))
-                  (setq run nil))
-                (setq special-run (and special t))
-                (push seg run))))
-          (when run (render-run (nreverse run) pending)))))
+         (or mevedel-view--activity-entry-cache (make-hash-table :test #'equal)))
+        (start-time (float-time))
+        (rendered 0)
+        (fallbacks 0)
+        ;; Spacing after prose is decided once per activity, not per row.
+        (spaced nil))
+    (dolist (item (mevedel-activity-group-partition
+                   (nconc (mapcar #'mevedel-view--activity-group-entry
+                                  (mevedel-view--tool-activity-entries segments data-buf))
+                          (mapcar #'mevedel-view--pending-activity-entry pending))
+                   mevedel-view-tool-group-collapse-threshold))
+      (unless (or spaced
+                  (memq (plist-get (plist-get item :view) :kind)
+                        '(completion hook-audit mailbox)))
+        (mevedel-view--ensure-blank-line-after-response)
+        (setq spaced t))
+      (cond
+       ((plist-get item :pending)
+        (mevedel-view--insert-pending-tool-row (plist-get item :pending)))
+       ((not (plist-get item :group))
+        (pcase (mevedel-view--render-activity-entry (plist-get item :view) data-buf)
+          ('rendered (cl-incf rendered))
+          ('fallback (cl-incf fallbacks))))
+       ((cl-some (lambda (entry) (plist-get entry :view)) (plist-get item :entries))
+        (mevedel-view--insert-tool-group item data-buf)
+        (cl-incf rendered))
+       (t
+        (mevedel-view--insert-pending-run
+         (mapcar (lambda (entry) (plist-get entry :pending))
+                 (plist-get item :entries))))))
+    (mevedel-view--debug-log
+     'render-tool-activity
+     :segments (length segments)
+     :rendered rendered
+     :fallbacks fallbacks
+     :elapsed (- (float-time) start-time))
     (mevedel-view--mark-live-render-unit
      unit-start (cadr (car segments)))))
 
@@ -6735,6 +6801,8 @@ is inserted beside the header.  CONTINUATION-P suppresses that header."
              (push seg request-summary-group))
             ('mailbox
              (flush-thinking)
+             ;; Leading non-tool entries stay standalone, as they do in
+             ;; `mevedel-activity-group-partition' for the browser adapter.
              (if tool-group
                  (push seg tool-group)
                (let ((text (mevedel-view--user-turn-text (list seg) data-buf))
@@ -6762,6 +6830,8 @@ is inserted beside the header.  CONTINUATION-P suppresses that header."
                     (mevedel-view--hook-audit-only-segment-p
                      data-buf (cadr seg) (caddr seg))
                     (not tool-group))
+               ;; This includes leading completion breadcrumbs: only a tool
+               ;; starts a run in `mevedel-activity-group-partition'.
                (flush-thinking)
                (let* ((source (mevedel-view-disclosure-source-range
                                data-buf (cadr seg) (caddr seg)))
@@ -6853,92 +6923,6 @@ is inserted beside the header.  CONTINUATION-P suppresses that header."
        (t
         (push seg out))))))
 
-(defconst mevedel-view--tool-group-verbs
-  '(("Grep" "searched %d pattern" "searched %d patterns")
-    ("Glob" "matched %d glob" "matched %d globs")
-    ("Read" "read %d file" "read %d files")
-    ("Bash" "ran %d command" "ran %d commands")
-    ("Eval" "evaluated %d form" "evaluated %d forms")
-    ("WebFetch" "fetched %d page" "fetched %d pages")
-    ("WebSearch" "ran %d web search" "ran %d web searches"))
-  "Verb phrases for grouped tool run summaries, per tool name.
-Each entry is (NAME SINGULAR PLURAL) with a `%d' count slot.  Tools
-without an entry -- MCP tools included -- fall back to \"NAME xN\".")
-
-(defun mevedel-view--group-child-completion (child)
-  "Return the execution completion grouped CHILD presents, or nil."
-  (when (eq (plist-get child :kind) 'completion)
-    (plist-get (plist-get child :rendering) :completion-record)))
-
-(defun mevedel-view--group-completions (children)
-  "Return the distinct origin execution completions among grouped CHILDREN."
-  (let (records)
-    (dolist (child children (nreverse records))
-      (when-let* ((record (mevedel-view--group-child-completion child))
-                  ((not (cl-find-if
-                         (lambda (prior)
-                           (and (equal (plist-get prior :execution-id)
-                                       (plist-get record :execution-id))
-                                (equal (plist-get prior :owner)
-                                       (plist-get record :owner))))
-                         records))))
-        (push record records)))))
-
-(defun mevedel-view--completion-summary-parts (records)
-  "Return group summary phrases counting completion RECORDS by outcome."
-  (let (counts parts)
-    (dolist (record records)
-      (cl-incf (alist-get (downcase (mevedel-view-audit-breadcrumb-status record))
-                          counts 0 nil #'equal)))
-    (dolist (status '("completed" "failed" "stopped" "timed out") (nreverse parts))
-      (when-let* ((count (alist-get status counts nil nil #'equal)))
-        (push (if parts
-                  (format "%d %s" count status)
-                (format "%d command%s %s" count (if (= count 1) "" "s") status))
-              parts)))))
-
-(defun mevedel-view--tool-group-header (children &optional completions)
-  "Return the one-line activity summary for grouped CHILDREN.
-COMPLETIONS are the distinct execution completions among them."
-  (let (names counts (message-count 0))
-    (dolist (child children)
-      (cond
-       ((mevedel-view--group-child-completion child))
-       ((eq (plist-get child :kind) 'mailbox) (cl-incf message-count))
-       (t
-        (let ((name (or (plist-get child :tool) "Tool")))
-          (unless (member name names)
-            (push name names))
-          (cl-incf (alist-get name counts 0 nil #'equal))))))
-    (setq names (nreverse names))
-    (let* ((parts
-            (append
-             (mapcar
-              (lambda (name)
-                (let ((count (alist-get name counts 0 nil #'equal))
-                      (verb (assoc name mevedel-view--tool-group-verbs)))
-                  (cond
-                   (verb
-                    (format (if (= count 1) (nth 1 verb) (nth 2 verb))
-                            count))
-                   ((= count 1) name)
-                   (t (format "%s ×%d" name count)))))
-              names)
-             (mevedel-view--completion-summary-parts completions)
-             (when (> message-count 0)
-               (list (format (if (= message-count 1)
-                                 "received %d message"
-                               "received %d messages")
-                             message-count)))))
-           (summary (string-join parts ", ")))
-      ;; Capitalize only a verb phrase; a leading tool name keeps its
-      ;; own casing.
-      (if (and (not (string-empty-p summary))
-               (assoc (car names) mevedel-view--tool-group-verbs))
-          (concat (upcase (substring summary 0 1))
-                  (substring summary 1))
-        summary))))
-
 (defun mevedel-view--tool-group-child (entry data-buf index &optional summary-only)
   "Return the nested-call plist for activity ENTRY in DATA-BUF, or nil.
 INDEX discriminates the row's disclosure key from its siblings.  A
@@ -6977,44 +6961,49 @@ here; its row shows the call as running until the result is published."
                            (plist-get entry :end)))
             child)))
 
-(defun mevedel-view--tool-group-rendering
-    (entries data-buf &optional summary-only pending)
-  "Return the grouped rendering for activity ENTRIES in DATA-BUF, or nil.
-The result reuses the compound-tool row machinery: each tool or delivery
-is a `:child-calls' entry with its own disclosure
-state.  A newly formed group keeps an already open child visible.
-SUMMARY-ONLY omits cached tool bodies; recompute before expanding children.
-PENDING in-flight tool entries count into the summary as running calls
-and follow the settled children."
-  (let* ((settled
+(defun mevedel-view--tool-group-rendering (group data-buf &optional summary-only)
+  "Return the rendering of activity GROUP from DATA-BUF, or nil.
+GROUP comes from `mevedel-activity-group-partition'.  The result reuses the
+compound-tool row machinery: each tool or delivery is a `:child-calls'
+entry with its own disclosure state, and in-flight calls follow the
+settled children as running rows.  A newly formed group keeps an already
+open child visible.  SUMMARY-ONLY omits cached tool bodies; recompute
+before expanding children."
+  (let* ((entries (plist-get group :entries))
+         (pending (delq nil (mapcar (lambda (entry) (plist-get entry :pending))
+                                    entries)))
+         (settled
           (let ((index 0)
                 out)
             (dolist (entry entries (nreverse out))
-              (when-let* ((child (mevedel-view--tool-group-child
-                                  entry data-buf index summary-only)))
-                (push child out))
-              (cl-incf index))))
+              (when-let* ((view (plist-get entry :view)))
+                (when-let* ((child (mevedel-view--tool-group-child
+                                    view data-buf index summary-only)))
+                  (push child out))
+                (cl-incf index)))))
          (children (append settled (mevedel-view--pending-children pending))))
     (when children
-      (let ((completions (mevedel-view--group-completions children))
-            (reader-p (mevedel-view-render--reader-on-member-p settled pending)))
-      (list :header (mevedel-view--tool-group-header children completions)
-            :execution-completions completions
+      (let ((reader-p (mevedel-view-render--reader-on-member-p settled pending))
+            completions)
+        (dolist (entry entries)
+          (when-let* ((completion (plist-get entry :completion))
+                      ((not (assoc (car completion) completions))))
+            (push (cons (car completion)
+                        (plist-get (plist-get (plist-get (plist-get entry :view)
+                                                         :group-child)
+                                              :rendering)
+                                   :completion-record))
+                  completions)))
+      (list :header (plist-get group :summary)
+            :execution-completions (nreverse (mapcar #'cdr completions))
             :vtype 'tool-group
             :expandable-p t
             :child-calls children
             :pending-count (mevedel-view--pending-running-count pending)
             :pending-failed (mevedel-view--pending-failed-count pending)
-            :failed-count (mevedel-view--group-failed-count entries)
-            :failed-names (append (mevedel-view--group-failed-names entries)
-                                  (mevedel-view--pending-failed-names pending))
-            :status (let ((statuses
-                           (mapcar (lambda (entry)
-                                     (mevedel-view--rendering-status
-                                      (plist-get entry :rendering)))
-                                   entries)))
-                      (cond ((memq 'error statuses) 'error)
-                            ((memq 'warning statuses) 'warning)))
+            :failure-label (plist-get group :failure-label)
+            :status (cond ((> (plist-get group :failed) 0) 'error)
+                          ((plist-get group :warning) 'warning))
             :reader-open reader-p
             ;; A new group must not hide a row the reader already opened or
             ;; is on.  An explicit fold of the group itself still takes
@@ -7041,40 +7030,15 @@ narrowest window showing the view."
                     (apply #'min (mapcar #'window-body-width windows))
                   (window-body-width)))
          (count (plist-get rendering :pending-count))
-         (failed (+ (or (plist-get rendering :pending-failed) 0)
-                    (or (plist-get rendering :failed-count) 0)))
+         (failures (plist-get rendering :failure-label))
          (suffix (concat (and count (format " · %d running" count))
-                         (and (> failed 0)
-                              (concat " · " (mevedel-view--failed-label
-                                            failed
-                                            (plist-get rendering :failed-names))))))
+                         (and failures (concat " · " failures))))
          ;; The marker column, a line prefix for nested rows, and the
          ;; last column, which would wrap the line in a terminal.
          (available (max 10 (- width 4 2 1 (string-width suffix)))))
     (if (> (string-width header) available)
         (truncate-string-to-width header available nil nil "…")
       header)))
-
-(defun mevedel-view--group-failed-count (entries)
-  "Return how many settled activity ENTRIES failed, or nil for none."
-  (let ((count (cl-count-if
-                (lambda (entry)
-                  (and (eq (plist-get entry :kind) 'tool)
-                       (eq (mevedel-view--rendering-status
-                            (plist-get entry :rendering))
-                           'error)))
-                entries)))
-    (and (> count 0) count)))
-
-(defun mevedel-view--group-failed-names (entries)
-  "Return the tool names of settled activity ENTRIES that failed.
-Use the name each rendering carries for grouping, never reparsing a call."
-  (delq nil (mapcar (lambda (entry)
-                      (let ((rendering (plist-get entry :rendering)))
-                        (and (eq (plist-get entry :kind) 'tool)
-                             (eq (mevedel-view--rendering-status rendering) 'error)
-                             (or (plist-get rendering :group-tool) "Tool"))))
-                    entries)))
 
 (defun mevedel-view-render--reader-members ()
   "Return the tool rows under this view's point and its window points."
@@ -7134,15 +7098,19 @@ run, so re-segmenting a folded run also returns the segment that begins
 where the run ended.  That row was never part of the group: keeping it
 summarizes the following response, mailbox, or prompt as one more
 delivery."
-  (let ((entries
-         (with-current-buffer data-buf
-           (save-restriction
-             (widen)
-             (mevedel-view--tool-activity-entries
-              (cl-remove-if (lambda (seg) (>= (cadr seg) end))
-                            (mevedel-transcript-segments start end))
-              data-buf)))))
-    (mevedel-view--tool-group-rendering entries data-buf)))
+  (let* ((entries
+          (with-current-buffer data-buf
+            (save-restriction
+              (widen)
+              (mevedel-view--tool-activity-entries
+               (cl-remove-if (lambda (seg) (>= (cadr seg) end))
+                             (mevedel-transcript-segments start end))
+               data-buf))))
+         (group (seq-find
+                 (lambda (item) (plist-get item :group))
+                 (mevedel-activity-group-partition
+                  (mapcar #'mevedel-view--activity-group-entry entries) nil))))
+    (and group (mevedel-view--tool-group-rendering group data-buf))))
 
 (defun mevedel-view--tool-group-entry-p (entry)
   "Return non-nil when ENTRY may fold into a grouped activity row.
@@ -7167,21 +7135,22 @@ or its result is published."
          (not (and (plist-member rendering :initially-collapsed-p)
                    (not (plist-get rendering :initially-collapsed-p))))))))
 
-(defun mevedel-view--insert-tool-group (entries data-buf &optional pending)
-  "Insert grouped activity ENTRIES as one expandable row for DATA-BUF.
-PENDING in-flight tool entries join the group as running calls.
-Return non-nil when the group row was inserted."
+(defun mevedel-view--insert-tool-group (group data-buf)
+  "Insert activity GROUP as one expandable row for DATA-BUF.
+GROUP comes from `mevedel-activity-group-partition'; its in-flight calls
+join as running rows.  Return non-nil when the group row was inserted."
   ;; A split breadcrumb entry follows its call but ends inside the call's
   ;; segment, so the last entry need not reach the group's end.  Collapse
   ;; removes only rows contained in this range.
-  (let* ((group-start (apply #'min (mapcar (lambda (entry)
+  (let* ((entries (delq nil (mapcar (lambda (entry) (plist-get entry :view))
+                                    (plist-get group :entries))))
+         (group-start (apply #'min (mapcar (lambda (entry)
                                              (plist-get entry :start))
                                            entries)))
          (group-end (apply #'max (mapcar (lambda (entry)
                                            (plist-get entry :end))
                                          entries)))
-         (rendering (mevedel-view--tool-group-rendering
-                     entries data-buf t pending))
+         (rendering (mevedel-view--tool-group-rendering group data-buf t))
          (source (and rendering
                       (mevedel-view-disclosure-source-range
                        data-buf group-start group-end))))
@@ -7200,156 +7169,9 @@ Return non-nil when the group row was inserted."
         (when (and (plist-get rendering :reader-open)
                    (not (mevedel-view-disclosure-state-entry source 'tool-group)))
           (mevedel-view-disclosure-record-state source 'tool-group nil))
-        (setq rendering (mevedel-view--tool-group-rendering
-                         entries data-buf nil pending)))
+        (setq rendering (mevedel-view--tool-group-rendering group data-buf)))
       (mevedel-view--insert-rendered-tool rendering source)
       t)))
-
-(defun mevedel-view--render-tool-group (tool-segments data-buf &optional pending)
-  "Render consecutive TOOL-SEGMENTS from DATA-BUF.
-Each tool call gets its own collapsible entry.  A registered
-`:renderer' is invoked when the segment carries a render-data
-side-channel, falling back to the default one-liner otherwise.
-Adjacent visible renderings with equal `:coalesce-key' values keep
-only the final row and show the number of combined calls.  Hook audits
-from every combined call remain in source order.  Runs of more than
-`mevedel-view-tool-group-collapse-threshold' plain rows fold into one
-grouped activity row that expands into compound-tool nested rows.
-PENDING in-flight tool entries extend the trailing run, counting toward
-its threshold, or start a run of their own after a row that cannot fold."
-  (let* ((unit-start (point))
-         (unit-source (cadr (car tool-segments)))
-         (tool-segments
-          (mevedel-view--merge-tool-hook-audit-segments
-           tool-segments data-buf))
-         (entries
-          (mevedel-view--split-completion-entries
-          (let (out)
-            (dolist (seg tool-segments (nreverse out))
-              (when-let* ((entry (mevedel-view--tool-segment-entry
-                                  seg data-buf)))
-                (let* ((rendering (plist-get entry :rendering))
-                       (key (plist-get rendering :coalesce-key))
-                       (previous (car out)))
-                    (if (and key
-                             previous
-                             (equal
-                              key
-                              (plist-get
-                               (plist-get previous :rendering)
-                               :coalesce-key)))
-                        (progn
-                          (setq rendering
-                                (plist-put
-                                 (copy-sequence rendering)
-                                 :hook-audits
-                                 (append
-                                  (plist-get
-                                   (plist-get previous :rendering)
-                                   :hook-audits)
-                                  (plist-get rendering :hook-audits))))
-                          (setq entry
-                                (plist-put
-                                 (plist-put entry :rendering rendering)
-                                 :count
-                                 (1+ (plist-get previous :count))))
-                          (setcar out entry))
-                      (push entry out))))))))
-        (start-time (float-time))
-        ;; Spacing after prose is decided once per run, not per row.
-        (spaced nil)
-        (rendered 0)
-        (fallbacks 0))
-    (unwind-protect
-        (cl-flet*
-            ((insert-entry
-               (entry)
-               (let* ((seg-start (plist-get entry :start))
-                      (seg-end (plist-get entry :end))
-                      (source (plist-get entry :source))
-                      (count (plist-get entry :count))
-                      (rendering (plist-get entry :rendering)))
-                 (when (and rendering (> count 1))
-                   (setq rendering
-                         (plist-put
-                          (copy-sequence rendering)
-                          :header
-                          (format "%s ×%d"
-                                  (plist-get rendering :header)
-                                  count))))
-                 (cond
-                  ((eq (plist-get entry :kind) 'completion)
-                   (let ((record (plist-get
-                                  (plist-get (plist-get entry :group-child)
-                                             :rendering)
-                                  :completion-record)))
-                     (mevedel-view--insert-hook-audit-block
-                      record (plist-get record :source))))
-                  ((eq (plist-get entry :kind) 'hook-audit)
-                   (dolist (record (plist-get entry :hook-audits))
-                     (mevedel-view--insert-hook-audit-block
-                      record (plist-get record :source))))
-                  (rendering
-                   (unless spaced
-                     (mevedel-view--ensure-blank-line-after-response)
-                     (setq spaced t))
-                   (cl-incf rendered)
-                   (mevedel-view--insert-rendered-tool rendering source))
-                  (t
-                   (when-let* ((summary (mevedel-view--tool-one-liner
-                                         data-buf seg-start seg-end)))
-                     (unless spaced
-                       (mevedel-view--ensure-blank-line-after-response)
-                       (setq spaced t))
-                     (cl-incf fallbacks)
-                     (let ((ins-start (point)))
-                       (mevedel-view--insert-summary-region
-                        (mevedel-view--summary-with-face
-                         summary 'mevedel-view-tool-summary)
-                        `(mevedel-view-type tool-summary
-                          mevedel-view-collapsed t
-                          mevedel-view-source ,source
-                          mevedel-view-source-key
-                          ,(mevedel-view-disclosure-state-key
-                            source 'tool-summary)))
-                       (mevedel-view--decorate-markdown-in-range
-                        ins-start (point))))))))
-             (flush-run
-               (run &optional pending)
-               (let* ((run-entries (nreverse run))
-                      (total (+ (length run-entries) (length pending))))
-                 (if (and (> mevedel-view-tool-group-collapse-threshold 0)
-                          run-entries
-                          (> total mevedel-view-tool-group-collapse-threshold)
-                          (progn
-                            (unless spaced
-                              (mevedel-view--ensure-blank-line-after-response)
-                              (setq spaced t))
-                            (mevedel-view--insert-tool-group
-                             run-entries data-buf pending)))
-                     (cl-incf rendered (length run-entries))
-                   (mapc #'insert-entry run-entries)
-                   (when pending
-                     (if run-entries
-                         (mapc #'mevedel-view--insert-pending-tool-row pending)
-                       (mevedel-view--insert-pending-run pending)))))))
-          (let (run)
-            (dolist (entry entries)
-              (if (mevedel-view--tool-group-entry-p entry)
-                  (push entry run)
-                (when run
-                  (flush-run run)
-                  (setq run nil))
-                (insert-entry entry)))
-            (when (or run pending)
-              (flush-run run pending))))
-      (mevedel-view--debug-log
-       'render-tool-group
-       :segments (length tool-segments)
-       :rendered rendered
-       :fallbacks fallbacks
-       :elapsed (- (float-time) start-time)))
-    (mevedel-view--mark-live-render-unit unit-start unit-source)))
 
 (defun mevedel-view--tool-readable-start (raw)
   "Return the reader offset of the tool call in RAW.
@@ -8551,12 +8373,42 @@ Call after restoring properties.  This does not mutate the view."
           (unless summary-source
             (setq summary-source (cons scan-start after-summary)))
           (setq scan-start after-summary)))
+      ;; Agents keep their task anchor ahead of the summary.  Discover it only
+      ;; during full-history preparation, never on the streaming/grouping path.
+      (when (and (not summary-source)
+                 (buffer-local-value 'mevedel-view--agent-transcript-p view-buf))
+        (save-excursion
+          ;; Walk producer-owned runs, not task text.  gptel persists ignored
+          ;; wrappers in GPTEL_BOUNDS.  The role tag alone grants no ownership.
+          (let ((position scan-start))
+            (while (and (not summary-source) (< position (point-max)))
+              (when (eq (get-text-property position 'gptel) 'ignore)
+                (goto-char position)
+                (when (looking-at "#\\+begin_summary mevedel-role=compaction-summary[ \t]*$")
+                  (let ((end (mevedel-transcript--skip-leading-summary-block position)))
+                    (when (> end position)
+                      (setq summary-source (cons position end))))))
+              (setq position (next-single-property-change
+                              position 'gptel nil (point-max)))))))
       (let ((summary-audits
              (and summary-source
                   (mevedel-view--summary-hook-audits
                    data-buf (car summary-source) (cdr summary-source)))))
         (list :start scan-start :end (point-max)
               :summary-source summary-source :summary-audits summary-audits)))))
+
+(defun mevedel-view-render--without-summary (segments summary-source)
+  "Return SEGMENTS without the skipped SUMMARY-SOURCE range.
+Leading root summaries are already outside the scan.  An agent summary can
+overlap prompt or whitespace segments; retain their portions on either side."
+  (if (or (not summary-source) (not segments)
+          (<= (cdr summary-source) (cadar segments)))
+      segments
+    (cl-remove-if
+     (lambda (segment) (eq (car segment) 'compaction-summary))
+     (mevedel-transcript--overlay-range
+      segments (list 'compaction-summary
+                     (car summary-source) (cdr summary-source))))))
 
 (defun mevedel-view-render--plan-finish
     (plan turns data-buf session-data-buf agent-transcript-p)
@@ -8594,7 +8446,10 @@ headerless agent history.  Return source limits, turns, summary and variants."
         (narrow-to-region (plist-get plan :start) (plist-get plan :end))
         (mevedel-view-render--plan-finish
          plan (mevedel-view--group-transcript-turns
-               (mevedel-transcript-segments (point-min) (point-max)) data-buf)
+               (mevedel-view-render--without-summary
+                (mevedel-transcript-segments (point-min) (point-max))
+                (plist-get plan :summary-source))
+               data-buf)
          data-buf session-data-buf agent-transcript-p)))))
 
 (defun mevedel-view-render--plan-fontify-step (job)
@@ -8740,10 +8595,17 @@ remains intact; no unclassified placeholder can acquire a wrong prompt."
       ('filter
        (let ((rest (plist-get job :remaining))
              (filtered (plist-get job :filtered-rev))
+             (summary-source (plist-get (plist-get job :plan) :summary-source))
              (count 0))
          (while (and rest (< count 24))
            (unless (mevedel-view--directive-boundary-segment-p (car rest) data)
-             (push (car rest) filtered))
+             (if (and summary-source
+                      (< (cadar rest) (cdr summary-source))
+                      (> (caddar rest) (car summary-source)))
+                 (dolist (segment (mevedel-view-render--without-summary
+                                   (list (car rest)) summary-source))
+                   (push segment filtered))
+               (push (car rest) filtered)))
            (setq rest (cdr rest) count (1+ count)))
          (let ((remaining (if rest rest (reverse filtered))))
            (let ((inhibit-quit t))
@@ -9002,7 +8864,7 @@ non-nil on success; nil leaves the old rendering in place."
     (unwind-protect
         (condition-case err
             (progn
-              (mevedel-view--call-preserving-user-view-state
+              (mevedel-view-call-preserving-user-view-state
                (lambda ()
                  (atomic-change-group
                    (mevedel-view-render--batch-turn
@@ -9161,7 +9023,7 @@ to DATA's tail, schedule a full projection instead."
                    (condition-case err
                        (let ((mevedel-view-render--prepared-responses
                               (plist-get job :fontified)))
-                         (mevedel-view--call-preserving-user-view-state
+                         (mevedel-view-call-preserving-user-view-state
                           (lambda ()
                             (atomic-change-group
                               (mevedel-view-render--batch-turn
@@ -9269,7 +9131,7 @@ Until the complete plan is ready, keep the previous view in place."
         (clrhash (plist-get job :tool-cache)))
       (unwind-protect
           (progn
-            (mevedel-view--call-preserving-user-view-state
+            (mevedel-view-call-preserving-user-view-state
              (lambda ()
                (atomic-change-group
                  (let ((inhibit-read-only t))
@@ -9474,8 +9336,7 @@ view chrome."
     (mevedel-view-prepare-cancel))
   (mevedel-view-render-cancel-batch)
   (atomic-change-group
-    (mevedel-view-render--preserving-window-state
-     (mevedel-view--call-preserving-input-text
+    (mevedel-view-call-preserving-user-view-state
       (lambda ()
       (let* ((mevedel-view--tool-cache-used (make-hash-table :test #'equal))
              (mevedel-transcript--tool-block-index (make-hash-table :test #'eq))
@@ -9548,7 +9409,7 @@ view chrome."
               (mevedel-view--full-rerender-finish
                data-buf live-data-buf rendering historical-p start-time)
             (mevedel-view--sweep-tool-rendering-cache
-             mevedel-view--tool-cache-used)))))))))
+             mevedel-view--tool-cache-used))))))))
 
 ;;
 ;;; Optimistic user turn rendering

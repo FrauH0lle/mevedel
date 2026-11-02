@@ -85,6 +85,9 @@ reads.
 
 Hook integration sits around this chain:
 
+Unexpected analyzer or checker errors stop the pipeline as errors, without
+running `PermissionRequest` or `PermissionDenied`; they are not policy denials.
+
 - `PreToolUse` runs before the chain. A hook `deny` is final. A hook
   `ask` can tighten an allow into a prompt in Ask or Edits. A hook `allow` can only skip
   a prompt when the normal resolver would have returned `ask`; explicit
@@ -224,13 +227,39 @@ that execution level. Qualified and ordinary explicit denies remain final.
 matching Bash or batch-Eval allow rule. The profile records the additive child
 authority approved with that operation; it is not a workload classifier.
 Single-segment Bash approvals may use the recognized safe command pattern.
-Compound commands keep generalized operation rules for their segments but
-store the profile against the complete compound command, preventing one
-segment from inheriting another segment's capability.
+Compound commands keep generalized operation rules for their segments and
+remember the profile against the complete compound command. A later compound
+command also receives the union of its segments' direct profiles when every
+command segment that is not read-only is allowed by a direct rule. A segment no
+direct rule allows prevents that union, so it never inherits another segment's
+capability; `cd DIR && npx ...` receives the `npx` rule's profile, while
+`npx ... && rm -rf build` receives none.
+
+A Bash allow pattern's `*`, `?`, and trailing `:*` stand for ordinary
+arguments only. They never cover an unquoted `;`, `|`, `&` (other than
+redirections such as `2>&1`), newline, parenthesis, or a backtick or `$(`, even
+inside double quotes. `npx @emacs-eask/cli *` therefore matches
+`npx @emacs-eask/cli eval '(load "x")'` but not
+`npx @emacs-eask/cli test $(rm -rf build)`. Syntax written literally in a
+pattern still matches itself, so `make -j$(nproc) *` authorizes that form.
+This applies wherever an allow rule grants something: the Ask decision,
+execution profiles, and full-escalation rules. Deny and ask patterns keep
+matching any text, because over-matching there only restricts.
+
+Before Bash rules match, leading `NAME=value` assignments are removed from
+each command segment when `NAME` is a safe environment variable and the value
+is plain text. The built-in list covers locale, terminal, color and similar
+variables that cannot load code or choose another executable
+(`mevedel-permission-rules-builtin-safe-env-vars`); permission stores add
+names through `:safe-env-vars`. Classification uses the same stripped command,
+so `LANG=C cat file` is read-only. Other assignments, and values containing
+expansions, keep the command complex. Explicit denies, Plan, and protected-path
+checks still see the command as written.
 Filesystem entries are `(:path PATH :access read-or-write [:recursive t])`
-grants. `PATH` is either absolute or home-relative with `~`/`~/`; stored
-home-relative paths expand in the execution target. Grant paths are literal —
-`*`, `**`, and `?` carry no glob meaning; `:recursive t` extends an entry from
+grants. `PATH` is absolute or home-relative with `~`/`~/`; the workspace
+permission file also accepts workspace-relative exact paths as described below.
+Stored home-relative paths expand in the execution target. Grant paths are
+literal — `*`, `**`, and `?` carry no glob meaning; `:recursive t` extends an entry from
 the exact path to the directory and all its descendants, present and future.
 Project and session stores
 encode exact paths and absolute path rules without a client-specific TRAMP
@@ -241,8 +270,9 @@ access for matching executions. They need no companion `:resource-grants` entry
 and do not grant native tools or unrelated commands access. Independent resource
 grants remain sufficient for explicitly requested access, but are not
 automatically attached to every child. Multiple matching profiles
-are unioned, with write dominating read for the same path and scope; exact and
-recursive entries on the same path stay distinct. Only session, persistent,
+are unioned, with write dominating read for the same path, scope, and origin;
+exact and recursive entries on the same path stay distinct, as do bounded
+workspace-relative and ordinary absolute entries. Only session, persistent,
 and defcustom rules can contribute a reusable profile. Invocation- and
 request-scoped delegated rules may still authorize ordinary operations but
 never broaden the child sandbox.
@@ -255,7 +285,8 @@ never broaden the child sandbox.
 and validation. These directory boundaries cover future artifact ids and missing
 bookkeeping files too. Authored files under `.mevedel/artifacts/ID/` stay writable,
 including file creation and atomic replacement. Before a confined launch, missing
-protected state directories and their parents are created; only the protected
+protected state directories and their parents are created only in the primary
+workspace root, never in writable memory or additional roots; only the protected
 leaf is mounted read-only. Missing-directory creation and mode changes run
 through pinned target-side parents using the writable roots' captured canonical
 spellings, so an ancestor replacement during preparation cannot redirect them.
@@ -272,6 +303,31 @@ a trailing `/**`, policy covers both the directory and its descendants. On a
 remote session, leading `~` uses the target user's probed home; a
 client-absolute custom pattern stays in the client path domain and therefore
 does not become a remote protection rule.
+Protection is matched against every spelling that reaches the file: the
+path as given, its `/:`-unquoted form, a leading `//` collapsed to `/`, and,
+for a local path, its canonical target through symlinks (with a missing tail
+kept). A workspace symlink into `~/.ssh` is therefore as protected as
+`~/.ssh` itself. Filesystem grants refuse `/:`-quoted paths outright.
+
+Read and ApplyPatch, including resource-backed reads and writes, open the
+authorized canonical path through `scripts/mevedel-pin.py`. It walks the path
+from the root with `O_NOFOLLOW`, refuses any symlink component and holds a
+descriptor that Emacs reads or writes through, so a directory a confined
+process swaps for a symlink after authorization, or a dangling link it
+resolves later, refuses the operation instead of reaching a protected tree.
+The helper also performs every write itself, without reopening anything by
+name: it creates missing parent directories with `mkdirat`, creates a
+temporary file with `O_CREAT|O_EXCL|O_NOFOLLOW`, writes and `fchmod`s that
+descriptor, and renames it over the target within the pinned directory.
+Emacs encodes the content and sends the bytes. A symlink planted at the
+temporary name therefore cannot receive the content or mode, and a planted
+final symlink is replaced instead of followed. Deletion uses `unlinkat` in the
+pinned directory. One helper serves
+each execution target; the first use costs about 11 ms locally and each later
+pin about 0.1 ms. Grep, Glob and media converters run under the same
+confinement as the commands that could swap paths, where protected trees are
+masked by their canonical paths. Canonicalization cannot see hardlinks to a
+protected file that the user created earlier.
 String-only entries are invalid by design. Glob discovery walks the
 workspace, memory, and additional writable roots before every launch; the
 execution target's temporary directory is excluded as a discovery root. A
@@ -294,13 +350,19 @@ can finish after request cancellation so an aborted turn still has a review
 patch. They retain request identity, owner liveness, target and policy checks;
 replacement requests or changed authority still refuse their pending launch.
 A failed or truncated native scan refuses preparation; it does not discard missing protection.
-A pattern below `**/.mevedel/`, mevedel's own state directory, which exists
-only at a workspace root, protects in the Bash sandbox the whole directory its
-literal part names, at each discovery root and without a walk:
+A pattern below `**/.mevedel/`, mevedel's own state directory, protects in the
+Bash sandbox the whole directory its literal part names, without a walk:
 `**/.mevedel/artifacts/.state/**` is one mount however many artifacts there
 are. A literal file pattern protects the file. Native
 tool checks match the pattern itself, at any depth; a `.mevedel` nested deeper
 in a root is covered by native tool checks only.
+Existing Git directories are still discovered under every writable discovery
+root, but a missing root-level `.git` mount target is created only at the primary
+workspace root, independently of the command's working subdirectory. Existing
+protected state in secondary workspace roots remains read-only too, but missing
+state is not planted there. The primary confinement root is the first writable
+root: the workspace for managed commands, private scratch for helpers.
+Preparing the default sandbox leaves memory roots unchanged.
 Other patterns and targets retain the Lisp walker. Canonical target checks and
 final confinement validation remain unchanged.
 
@@ -342,11 +404,13 @@ to independent grants. Independent selections remain unchanged. The `g` extent
 selector preserves each path's remembering scope.
 The current invocation always receives the complete approved request.
 `.mevedel/permissions.el` stores a plist containing both `:rules` and
-`:resource-grants`. It lives with the project on its execution target and stores
+`:resource-grants`, and optionally `:safe-env-vars`, a list of environment
+variable names (see [Rule format](#rule-format)). It lives with the project on
+its execution target and stores
 target-native paths, so reopening the same workspace through an equivalent
-TRAMP alias reuses its authority. Paths under the target's home directory are
-written abbreviated as `~/...` and expanded against the current target at
-load, so the file can be committed and shared between machines whose home
+TRAMP alias reuses its authority. Ordinary absolute paths under the target's
+home directory are written abbreviated as `~/...` and expanded against the
+current target at load, so the file can be committed and shared between machines whose home
 directories differ. A target-incarnation change never rewrites this file; only
 session filesystem grants, including paths embedded in command profiles, are
 revoked. Command and network approvals survive; invalidated frozen filesystem
@@ -358,13 +422,66 @@ to the session's execution target:
 | Local | `mevedel-user-dir/permissions.el` (default `~/.mevedel/permissions.el`) | `PROJECT/.mevedel/permissions.el` |
 | TRAMP | Target user's `~/.mevedel/permissions.el` | Target's `PROJECT/.mevedel/permissions.el` |
 
-Both stores contribute `:rules` and `:resource-grants`. Global and project
+Both stores contribute `:rules`, `:resource-grants`, and `:safe-env-vars`; the
+safe variable names of both stores are combined. Global and project
 rules share the persistent rule bucket and its ordinary matching precedence;
 explicit denies still win. Resource grants are additive, retaining their read
 or write access and exact or recursive extent. Paths in either store refer to
 the execution target, including `~` and filesystem requirements in command
 profiles. Durable files use native paths, without client-specific TRAMP prefixes.
 Local `mevedel-user-dir` customization does not relocate remote stores.
+
+### Workspace-relative exact grants
+
+Only the workspace permission file accepts relative exact grant paths, in both
+independent `:resource-grants` and command-profile `:file-system` entries. Bare
+`.git` and explicit `./.git` name the same workspace entry; `.` or `./` names
+the workspace root. Empty paths, any `..` component, and foreign target or
+resource-address prefixes are invalid. These are literal paths, not globs;
+optional `:recursive t` retains its ordinary directory-tree extent. Global and
+session exact-path syntax, absolute and home-relative grants, and tool `:path`
+glob rules are unchanged.
+
+Loading captures the store-owning workspace's canonical, target-qualified root
+and the relative spelling in a private runtime `:workspace-origin` record. The
+base is neither `.mevedel/` nor the current agent or child working directory.
+The workspace root itself is canonicalized; no symlink component below that
+captured root is permitted for relative authority, even if the link currently
+points inside the workspace. Missing paths remain bounded by the same root and
+component checks. Authority is checked for usability before pure permission
+matching, rather than treating a lexical prefix as proof of containment.
+Filesystem ineligibility does not make a syntactically valid store malformed:
+unusable entries remain available for editing and revocation, and unrelated
+rules (including denies) remain effective.
+
+Only origin-marked grants are written back as `./…` (`./` for the root).
+Existing absolute and home-relative entries are not inferred to be relative
+merely because they happen to lie inside the workspace. The private origin
+record is never written into a permission file or durable session authority;
+resume reloads it from the workspace store. Bounded and ordinary absolute
+grants remain distinct through deduplication, profile union, remembering,
+promotion, revocation, and cockpit selection. Promoting a bounded entry does
+not silently remove its bound or convert it into ordinary session authority.
+Workspace remembering does not create redundant bounded session copies;
+immediate queued rechecks see the updated persistent store.
+
+Coverage retains origin as well as access and extent. When a covering relative
+grant authorizes a requested path, the effective launch grant receives that
+bound instead of keeping an unrestricted copy of the request. Frozen authority
+snapshots retain the origin record. A child or fork using another worktree as
+cwd does not re-anchor grants from the source workspace store. Linked-worktree
+metadata outside the captured root needs separately authorized access; `./.git`
+does not grant its external Git directory or `commondir` target.
+
+Native consumption rechecks the authorized canonical path. This retains the
+existing native-operation concurrency boundary: it is not an OS-wide atomic
+guarantee against a concurrent filesystem replacement between checking and
+use. Confined launch rechecks the bound before canonical-path and inode capture,
+then uses the existing descriptor-pinned launch validation for later replacement.
+Relative grants do not introduce a second sandbox launcher or weaken its
+replacement checks.
+
+### Store validation and refresh
 
 A remote session does not inherit the client's global file, even if its target
 global file is missing or unavailable. Global authority is read at runtime,
@@ -374,8 +491,11 @@ fails closed before any linked target is changed.
 
 Global and project stores are validated when a fresh, resumed, or forked
 session initializes. Invalid files contribute no authority and produce one
-actionable warning per file version. Persistent permission changes refuse to
-overwrite an invalid file; fix it to the current
+actionable warning per file version. A malformed grant rejects the whole file,
+not just that entry. Grant diagnostics identify the store scope, rule/tool (or
+independent resource-grant section), grant index, rejected path, and reason, so
+the offending authority can be repaired without guessing. Persistent permission
+changes refuse to overwrite an invalid file; fix it to the current
 `(:rules (...) :resource-grants (...))` shape first. Missing files are valid
 empty stores.
 
@@ -401,16 +521,20 @@ writes. An exact grant does not cover siblings or descendants; a grant carrying
 `:recursive t` covers the directory and everything beneath it, present and
 future. Prompts and the cockpit label every grant `(exact)` or `(recursive)`,
 and a remembered execution profile's row lists its child grants after the
-pattern. Neither kind
-adds workspace roots or authorizes Bash/Eval code. Revoking the grant restores
-the underlying
-workspace/protected-path restriction unless another entry still grants access.
-Session-side paths use the same target-native codec as persistent authority;
-resume reloads the target's global and project stores. Invocation-only authority is consumed
-by the approved call and is not stored.
+pattern. Workspace-relative entries retain their origin in cockpit identity,
+so revoking one cannot accidentally remove an ordinary absolute entry at the
+same resolved path. Resource grants neither add workspace roots nor authorize
+Bash/Eval code. Revoking the grant restores the underlying workspace/protected-path
+restriction unless another entry still grants access. Session-side absolute and
+home-relative paths use the same target-native codec as persistent authority;
+relative syntax remains workspace-store-only. Resume reloads the target's
+global and project stores. Invocation-only authority is consumed by the approved
+call and is not stored.
 
 The permissions cockpit shows `session`, `workspace`, and `global` entries,
-including their backing store in the details. Refresh reads current stores.
+including their backing store in the details. Each stored safe environment
+variable is a removable `safe-env` row; the built-in variables share one
+read-only `built-in` row. Refresh reads current stores.
 Revoking a global entry edits the target user's global file and affects every
 project using it; revoking a workspace entry edits only that project's file.
 Identical entries in different scopes remain separate and independently
@@ -470,9 +594,11 @@ tasks, Goals, skills, introspection tools, deferred tools, and arbitrary
 MCP tool schemas are absent.
 
 The side freezes session, workspace-persistent, global-rule, protected-path,
-sandbox, and additional-root authority at creation; later configuration changes
-cannot broaden or narrow it. Mutation approval warns when the parent request is
-still active because both requests affect the same workspace. The side owns a
+sandbox, and additional-root authority at creation, including relative grants'
+runtime origins; later configuration changes cannot broaden or narrow it.
+Freezing authority does not waive relative-path containment and usability checks.
+Mutation approval warns when the parent request is still active because both
+requests affect the same workspace. The side owns a
 separate permission queue and execution state, while allowlisted redacted audit
 events are attributed to `/btw` and written through the durable parent session.
 Side prompts, command text, paths, patch contents, results, and justifications
@@ -862,6 +988,119 @@ Edits and changes only network isolation for that invocation. Full Access alread
 has unrestricted network and filesystem access. The namespace and mount boundary
 is inherited by descendants.
 
+Local confinement also masks the ssh-agent socket named by `SSH_AUTH_SOCK` and
+unsets the variable: a socket on a read-only mount still accepts connections,
+so an inherited agent would let confined code sign with the user's keys. Git
+over SSH instead uses a fetch-only broker (`scripts/mevedel-git-ssh.py`), started
+only for a command that names `git` in a local repository with SSH fetch
+remotes. Confined Git reaches it through `GIT_SSH_COMMAND` and a socket in a
+per-command owner-only directory under the tool-server socket root; that root is
+masked and only the command's own directory is bound back. The broker passes
+Git's stdio descriptors to the host's ssh and allows only `git-upload-pack` and
+`git-upload-archive` for the fetch remotes' destinations, read before the command
+starts. Those remotes come only from the primary root's own `.git` entry:
+Git must discover that same repository from the root and from the working
+directory, so a nested `.git` directory or pointer file below the root gets no
+broker. The entry must not be a symlink. A `.git` directory is refused when the
+root sits inside another Git work tree, where it may itself be a plant; a
+linked worktree's pointer file must be linked back from its administrative
+directory. Resolved metadata outside every writable root is accepted, but an
+earlier command may still have written it under a grant. The broker trusts
+the session root's repository as it is found on disk when the session
+starts, so a repository prepared by an earlier session rooted at a parent
+directory is trusted like any repository the user opens. A `.git` write grant
+likewise lets a command change the remotes,
+`insteadOf` rules and hooks that later brokers and host Git trust. ssh runs
+without connection sharing, and teardown stops the broker with its ssh
+children. The
+[execution manual](tools/execution.md#git-over-ssh) gives the model contract.
+
+Confinement also hides per-user runtime directories, because their sockets act
+with the user's full authority outside the sandbox and a read-only mount does
+not stop a connection. `/run/user` on the execution target, and locally an
+`XDG_RUNTIME_DIR` outside it, are replaced by an empty private tmpfs. This
+hides the session D-Bus (whose systemd manager would run `systemd-run --user`
+commands on the host), the systemd user manager, gpg-agent and its ssh socket,
+the GNOME keyring and KWallet, an Emacs server, PipeWire and PulseAudio,
+accessibility, portal and podman sockets, and the X authority cookie stored
+there. Inside, the runtime directory is writable, private and discarded on
+exit. Writable roots beneath it, the Git SSH broker directory and, locally,
+the Wayland socket named by `WAYLAND_DISPLAY` are bound back on top of the
+tmpfs, so graphical checks keep their display. The compositor therefore
+remains reachable, and its own protocol policy governs what a client may do.
+Grant mounts follow the mask, so a filesystem grant at, below or above a
+masked directory (for example `/run/user/UID`, its `gnupg/` or `/run`) would
+bring the sockets back; confined preparation refuses such a grant, and only
+a full escalation reaches those services. `/tmp/.X11-unix` and `/tmp/.ICE-unix`
+are also replaced by empty tmpfs mounts: an X server accepts input injection
+and the ICE session manager controls the desktop session.
+
+Masking hides paths, but the temporary directory must stay shared, because
+commands, native tools and batch Eval exchange files through it, and other
+programs put sockets there and under `/run`. A local confined command
+therefore starts through `scripts/mevedel-landlock.py`, which applies a
+Landlock ruleset before the command and its descendants run. It handles only
+`LANDLOCK_ACCESS_FS_RESOLVE_UNIX` (Landlock ABI 9): connecting to, or sending
+a datagram to, a pathname Unix socket created outside the command fails with
+`EACCES` unless the socket lies beneath an allowed path:
+
+- the Git SSH broker's per-command directory and the Wayland socket bound
+  back into the runtime directory, the sockets mevedel provides. The MCP
+  socket root needs no entry: it is masked, and only the broker directory is
+  bound back beneath it;
+- writable roots other than shared temporary space: the session's temporary
+  directory, `/tmp`, and any root containing them are excluded;
+- paths of explicitly approved write grants, except a grant at or above shared
+  temporary space: a write grant on `/tmp` (however spelled or reached through
+  a link) would otherwise reopen every host socket there, while a grant on
+  `/tmp/build` still allows that directory. Connecting requires write
+  permission on a socket, so a read grant does not reopen one.
+
+The ruleset also sets `LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET`, so an abstract
+socket created outside the command, such as Xwayland's, stays unreachable even
+with a network grant. Sockets the command or its descendants create remain
+reachable to them. No other filesystem or network access is handled; the
+mounts above remain the filesystem boundary. The system D-Bus, systemd's local
+SSH and Varlink manager sockets, a Codex app-server control socket under
+`/tmp/codex-daemon-UID/`, and Qt single-instance or login-manager sockets in
+`/tmp` are therefore unreachable.
+
+Sockets in writable workspace roots remain a reachable class: one a host
+program created there, such as Git's fsmonitor daemon socket inside the
+protected read-only `.git` directory or a project-local database socket, and
+one an earlier confined command left listening. Landlock rules only add
+access, so a protected subtree cannot be carved out of a root's rule; doing
+so would mean listing every sibling instead of the root, which misses entries
+created later. Read-only protection of `.git` stops writes, not connections.
+
+The `abi` probe on the host and the launcher inside confinement run `python3`
+on the script in mevedel's source directory, like the Git SSH broker and the
+execution spool worker. When the workspace is a writable mevedel checkout, a
+confined edit to one of these scripts runs as host code at the next probe or
+launch; this development setup is outside the boundary.
+
+The Bubblewrap probe also asks the local kernel for its Landlock ABI with
+`landlock_create_ruleset`'s version query, through the same script. When
+`python3` is missing, Landlock is disabled, or the ABI is older than 9, the
+command runs without the launcher: host sockets the mounts expose remain
+reachable, and the execution facts record `host-sockets: reachable` with the
+reason, shown in the status line as `host sockets: reachable (REASON)`. A
+remote target always takes this fallback. A launcher that cannot apply its
+ruleset exits with status 125 before the command's start marker, so the launch
+fails rather than running unrestricted.
+
+A remote target's `XDG_RUNTIME_DIR` outside `/run/user` is not masked.
+
+An explicitly approved write grant for a character or block device mounts
+only that device node with device access enabled. Its source is opened and
+identity-checked before mounting; the mounted node is checked again and its
+source descriptor closed before the command starts. Ordinary file and directory
+mounts keep `nodev`; a recursive directory grant does not enable its devices. Device
+authority includes writes and ioctls, whose effects are not confined to a
+filesystem mount. Read-only device grants are refused: a read-only mount
+cannot enforce read-only device operations. No device is exposed automatically
+when a graphical child needs a render node.
+
 Native tools pass already-authorized input and search paths to the launcher as
 read-only mounts and pass only their generated-artifact directories as writable
 roots. Each invocation also gets a private writable scratch directory, which is
@@ -872,8 +1111,10 @@ code; they do not add model-facing escalation arguments or another permission
 prompt. Live Emacs operations, long-lived language servers, hooks, and
 user-triggered Git, clipboard, and UI helpers are not external tool helpers.
 
-An exact filesystem grant may name a symlink. The launcher opens the granted
-path but mounts its canonical target, leaving the requested command and symlink
+An ordinary absolute or home-relative exact filesystem grant may name a
+symlink; workspace-relative authority rejects symlink components below its
+captured canonical root. The launcher opens the granted path but mounts its
+canonical target, leaving the requested command and symlink
 chain unchanged while avoiding Bubblewrap mounts onto symlink entries. Before
 Bubblewrap starts, the target-side launcher compares the device/inode identity
 of each already-open descriptor with the identity captured during grant
@@ -941,6 +1182,8 @@ changing any unrequested confinement boundary.
 
 Protected linked-worktree `.git` pointers resolve both the worktree metadata
 directory and its `commondir` target. Both retain the applicable protection.
+Workspace-relative grants cannot follow a pointer into metadata outside their
+captured root; those locations need separate authority.
 Failed confined results identify the discovered shared metadata location for
 objects and refs; this is repository-layout information, not a diagnosis
 inferred from stderr or an automatic grant. A new explicit invocation can
@@ -954,6 +1197,14 @@ child launch. It never applies to live Eval. A capability not present in a
 matching approved profile is not inferred from failures or earlier commands:
 the model must make a new explicit invocation with the missing capability and
 justification. A started process is never replayed.
+
+A failed confined compound Bash call can explain a segment-only filesystem
+profile that was not attached. The bounded hint uses launch-time direct usable
+allow rules, excludes capabilities already covered by effective authority, and
+requires a same-line filesystem denial mentioning that profile's path. It is
+matching information, not proof of the failure's cause. Separate calls can
+match their own profiles; otherwise a fresh explicit, justified invocation is
+needed. The hint grants nothing, changes no matching, and never prompts or retries.
 
 In Ask, before Bash executes, identified literal resources are resolved against
 the working directory. Resources outside the allowed roots require a covering
@@ -1006,6 +1257,10 @@ Signals, timeouts, and ordinary command failures are returned once and never
 replayed. `required` refuses an unavailable backend, while `off` selects direct
 execution deliberately. Direct execution reports `filesystem: unrestricted`
 and `network: unrestricted`; refused attempts report unavailable boundaries.
+With confinement off, Grep, Glob and Read's media converters (pdfinfo,
+pdftoppm, ImageMagick) are not protected against a path component swapped
+for a symlink after authorization, because they open paths by name; direct
+execution already grants the user's host authority.
 A pre-marker failure retains its launcher error, diagnostics, or exit code.
 The next independent invocation reprobes the backend, so a transient launch
 failure does not disable confinement permanently. Bash and batch-Eval results append their active
@@ -1136,7 +1391,9 @@ not this shared authority. The pipeline captures its conversation directory for
 file tools and execution; Bash resource analysis uses that captured directory
 even when the root session has a different cwd. Path rules match the resolved
 absolute target with their existing glob semantics; a directory selection does
-not rewrite or re-anchor shared rules. Sandbox writable roots are still derived
+not rewrite or re-anchor shared rules. Workspace-relative persistent grants
+remain anchored to their store-owning workspace, not that conversation cwd.
+Sandbox writable roots are still derived
 from session policy, never enlarged merely because an external Git worktree was
 selected. Native operations outside allowed roots need ordinary resource
 authority. Confined execution additionally retains the requirement that cwd
@@ -1195,7 +1452,8 @@ an interactive decision, `full-auto`, or a deliberately authored direct-user
 pattern.
 
 A portable project-local store that authorizes the Eask CLI, network access,
-and writes within npm's cache directory is:
+and writes within npm's cache directory, also when a command starts with a
+`CHECK_BASE=...` assignment, is:
 
 ```elisp
 (:rules
@@ -1203,8 +1461,26 @@ and writes within npm's cache directory is:
    :network t
    :file-system ((:path "~/.npm" :access write :recursive t))
    :action allow))
- :resource-grants nil)
+ :resource-grants nil
+ :safe-env-vars ("CHECK_BASE"))
 ```
+
+For workspace-relative authority, the workspace store can instead contain:
+
+```elisp
+(:rules
+ (("Bash" :pattern "git add *"
+   :file-system ((:path "./.git" :access write :recursive t))
+   :action allow))
+ :resource-grants ((:path "./notes.txt" :access read)))
+```
+
+The profile grants this command access to the checkout's `.git` tree; it does
+not independently authorize native writes. The separate read grant covers only
+`notes.txt`. Both paths bind to the workspace owning this file, even when the
+requesting agent works elsewhere. For a linked worktree, external metadata
+needs separate grants; `./.git` alone is insufficient. Neither entry can be
+copied as relative syntax into a global or session store.
 
 A `:recursive t` entry grants a whole directory tree — here read access to
 the system Emacs installation for one Bash command. Its profile exposes the

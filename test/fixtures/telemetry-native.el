@@ -46,10 +46,13 @@
                      (error (push err errors))))))
           ;; Only the worker can run during these yields.  Its wait must
           ;; leave the child's status notification for the main thread.
-          (let ((deadline (+ (float-time) 0.2)))
-            (while (< (float-time) deadline) (thread-yield)))
+          (let ((deadline (+ (float-time) 5)))
+            (while (and (process-live-p process) (< (float-time) deadline))
+              (thread-yield)))
+          (should-not (process-live-p process))
           (should-not calls)
-          (accept-process-output process 0.01)
+          (with-timeout (5 (ert-fail "Main-thread sentinel delivery stalled"))
+            (while (not calls) (accept-process-output process 0.01)))
           (should calls)
           (should-not errors)
           (should (cl-every (lambda (thread) (eq thread main-thread)) calls))
@@ -77,7 +80,7 @@
             (unwind-protect
                 (progn
                   (setq mevedel-telemetry-enabled nil)
-                  (let ((deadline (+ (float-time) 1)))
+                  (let ((deadline (+ (float-time) 5)))
                     (while (and (thread-live-p worker) (< (float-time) deadline))
                       (sleep-for 0.01)))
                   (should-not (thread-live-p worker))
@@ -89,7 +92,7 @@
           (setf (plist-get (alist-get session mevedel-telemetry--lag-windows) :until)
                 (- (float-time) 1))
           (let ((worker mevedel-telemetry--lag-thread)
-                (deadline (+ (float-time) 1)))
+                (deadline (+ (float-time) 5)))
             (while (and (thread-live-p worker) (< (float-time) deadline))
               (sleep-for 0.01))
             (should-not (thread-live-p worker))
@@ -101,7 +104,7 @@
                          (push (apply #'format format-string args) notices))))
               (mevedel-telemetry--lag-request session 'request-start "quit")
               (let ((worker mevedel-telemetry--lag-thread)
-                    (deadline (+ (float-time) 1)))
+                    (deadline (+ (float-time) 5)))
                 (sleep-for 0.02)
                 (thread-signal worker 'quit nil)
                 (while (and (thread-live-p worker) (< (float-time) deadline))

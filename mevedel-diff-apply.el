@@ -5,8 +5,8 @@
 ;; `mevedel-diff-apply-buffer' resolves unified diff hunks with Emacs, stages
 ;; each file's final text, and commits every touched path through ApplyPatch's
 ;; shared rollback transaction.  Visited buffers are synchronized with
-;; `replace-region-contents', so normal instruction edit hooks own overlay and
-;; directive lifecycle updates.
+;; changed line runs, so instruction hooks map complete replacements without
+;; absorbing unchanged hunk context or relying on minimal character edits.
 
 ;;; Code:
 

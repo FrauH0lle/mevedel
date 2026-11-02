@@ -450,6 +450,64 @@ immediately."
           (setf (mevedel-acp-checked connection) t)))
       connection)))
 
+(defun mevedel-acp-session-operation (launch operation session-id complete)
+  "Run native session OPERATION from LAUNCH on SESSION-ID, calling COMPLETE.
+OPERATION is `fork' or `delete'.  COMPLETE receives an outcome plist with
+:status and either :session-id or :message.  Fork requires advertised fork,
+resume and delete capabilities and rejects an empty or unchanged identity.
+This short-lived connection never resumes or prompts either conversation."
+  (unless (and (memq operation '(fork delete))
+               (stringp session-id) (not (string-empty-p session-id)))
+    (error "Invalid native session operation"))
+  (let ((launch (copy-sequence launch)) done)
+    (setq launch (plist-put launch :initialize-only t)
+          launch (plist-put launch :normalize-outcome nil))
+    (cl-labels
+        ((deliver (outcome)
+           (unless done
+             (setq done t)
+             (funcall complete outcome))))
+      (mevedel-acp-open
+       launch
+       (lambda (connection)
+         (let ((capabilities (alist-get 'sessionCapabilities
+                                       (mevedel-acp-capabilities connection))))
+           (dolist (capability (if (eq operation 'fork) '(fork resume delete) '(delete)))
+             (unless (assq capability capabilities)
+               (user-error "Agent lacks session %s capability; /btw needs fork, resume and delete" capability))))
+         (let ((turn
+                (list :event #'ignore
+                      :complete
+                      (lambda (outcome)
+                        (mevedel-acp-close connection)
+                        (deliver outcome)))))
+           (setf (mevedel-acp-active connection) turn
+                 (mevedel-acp-state connection) 'controlling
+                 (mevedel-acp-timer connection)
+                 (mevedel-transport-run-at-time
+                  mevedel-acp--control-timeout
+                  (lambda ()
+                    (when (eq turn (mevedel-acp-active connection))
+                      (mevedel-acp--fail connection "Native session operation timed out")))))
+           (mevedel-acp--send
+            connection
+            (if (eq operation 'fork)
+                (acp-make-session-fork-request
+                 :session-id session-id :cwd (plist-get launch :cwd)
+                 :mcp-servers [] :meta (plist-get launch :meta))
+              (acp-make-session-delete-request :session-id session-id))
+            (lambda (response)
+              (let ((id (alist-get 'sessionId response)))
+                (mevedel-acp--finish
+                 connection turn
+                 (if (and (eq operation 'fork)
+                          (not (and (stringp id) (not (string-empty-p id))
+                                    (not (equal id session-id)))))
+                     '(:status error :message "Agent returned an invalid fork identity")
+                   (list :status 'success :session-id (if (eq operation 'fork) id session-id)))))))))
+       (lambda (message &optional _code)
+         (deliver (list :status 'error :message message)))))))
+
 (defun mevedel-acp-prompt (connection content event complete)
   "Send CONTENT on idle CONNECTION, streaming to EVENT and settling COMPLETE.
 CONTENT is a vector of ACP content-block alists.  EVENT receives session-owned

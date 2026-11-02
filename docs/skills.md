@@ -211,7 +211,8 @@ review and opens the proposals cockpit. `M-x mevedel-remember` does the same;
 a prefix argument asks for focus. In manual mode, proposals wait for explicit
 decisions through the captured-state application checks. The table provides
 full body/diff/evidence inspection, accept/reject, and checked recovery or
-reversal. See [memory](memory.md).
+reversal. See the [review contract and cockpit](memory-review.md) and
+[application and recovery](memory-recovery.md).
 
 Raw skill names come from frontmatter `name` when valid, otherwise the
 containing directory name. Raw names must match `[a-z0-9-]+`; visible
@@ -335,6 +336,8 @@ Plugin management:
   installs under `~/.mevedel/plugins/` or `~/.agents/plugins/`.
   If the update changes an enabled plugin's executable hook surface, the
   update result reports that hook consent is pending.
+  mevedel never updates plugins by itself and does not check for upstream
+  changes; updating is always this explicit command or the cockpit action.
 - `/plugin remove NAME` and `/plugin uninstall NAME` delete a
   global managed installed plugin. If the current workspace activation
   points at that source, mevedel clears that activation. Workspace plugin
@@ -690,7 +693,10 @@ dispatch uses the shared agent runtime rather than a skill-specific recursion
 or scheduling limit. Model-side inline Skill invocation does not change the
 root request model policy; forked skills and retained agents resolve their own
 workloads. `ListSkills` mirrors the active, enabled,
-model-invocable roster and can query dormant path-scoped skills.
+model-invocable roster and can query dormant path-scoped skills. A query also
+names matching enabled user-only skills on a separate marked line, without
+descriptions, so the model can point the user at `$NAME` instead of concluding
+the skill is missing; `Skill` still rejects them.
 
 ## Review and Verify Commands
 
@@ -966,4 +972,4 @@ permissions and review. It does not expire files by age or reorganize folders.
 It is an explicit, conservative cleanup within a conversation. Automatic
 cleanup belongs to memory consolidation, which extracts lasting knowledge from
 quiet shared files and prefers deleting them afterwards; see
-[Shared working-note lifecycle](memory.md#shared-working-note-lifecycle).
+[Shared working-note lifecycle](memory-notes.md#shared-working-note-lifecycle).

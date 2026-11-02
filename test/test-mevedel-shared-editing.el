@@ -232,9 +232,9 @@
          (let ((timer-list nil))
            (mevedel-shared-editing-call
             workspace '(:action "list") (lambda (value) (setq reply value))))))
-      (let ((deadline (+ (float-time) 1)))
-        (while (and (not reply) (< (float-time) deadline))
-          (accept-process-output nil 0.01)))
+      ;; Survival across the temporary timer list is independent of helper
+      ;; startup and transport scheduling latency.
+      (mevedel-test--await 10 "deferred shared-editing reply" reply)
       (should (equal reply '(:result [])))))
 
   :doc "Exporting a historical document previews its saved content without a lease or mutation"
@@ -416,10 +416,10 @@
         (mevedel-shared-editing-call
          workspace '(:action "rename" :id "board" :title "Lost" :actor "Alice" :opId "two")
          (lambda (reply) (push reply replies)))
-        (let ((deadline (+ (float-time) 1)))
-          (while (< (float-time) deadline)
-            (accept-process-output nil 0.05))))
+        (mevedel-test--await 10 "runtime stop settles" replies))
       (should (equal '((:error "Helper exited")) replies))
+      (should-not (plist-get runtime :active))
+      (should-not (plist-get runtime :queue))
       (should-not (process-live-p (plist-get runtime :process)))
       (should (equal "Plan" (plist-get (mevedel-shared-editing--read workspace "board")
                                        :title)))))

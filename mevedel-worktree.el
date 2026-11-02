@@ -104,8 +104,8 @@ is opened; output is retained in `*mevedel worktree setup*'."
 (autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 
 ;; `mevedel-menu'
-(declare-function mevedel-menu "mevedel-menu" ())
-(autoload 'mevedel-menu "mevedel-menu" nil t)
+(declare-function mevedel-menu--setup "mevedel-menu" (prefix &optional scope))
+(autoload 'mevedel-menu--setup "mevedel-menu")
 
 ;; `mevedel-resource'
 (declare-function mevedel-resource-within-root-p
@@ -596,7 +596,7 @@ The complete repository state lives in the worktree info panel."
                :body (concat "c  Create a linked worktree session\n"
                              "l  List Git worktrees\ng  Refresh status\n"
                              "i  Show full repository status\n?  Show this help\n"
-                             "q  Back to the main session cockpit\n"))
+                             "q  Close, or return to the invoking menu\n"))
          (list :id 'list :title "List keys"
                :body (mevedel-cockpit-surface-key-help-text mevedel-worktree-list--surface)))))
 
@@ -606,10 +606,10 @@ The complete repository state lives in the worktree info panel."
   (mevedel-cockpit-show-help mevedel-worktree-help-buffer-name (mevedel-worktree--help-report)))
 
 (defun mevedel-worktree-status-back ()
-  "Return from worktree status to the main session cockpit."
+  "Close worktree status, returning to its invoking menu if any."
   (interactive)
-  (with-current-buffer (mevedel-worktree-status--data-buffer)
-    (mevedel-menu)))
+  (when-let* ((return (plist-get (transient-scope) :parent-menu)))
+    (funcall return)))
 
 (transient-define-prefix mevedel-worktree-status ()
   "Transient worktree status cockpit."
@@ -623,12 +623,19 @@ The complete repository state lives in the worktree info panel."
     :pad-keys t
     ("i" "Worktree details" mevedel-worktree-status-details)
     ("?" "Help" mevedel-worktree-status-help)
-    ("q" "Back" mevedel-worktree-status-back)]])
+    ("q" "Back" mevedel-worktree-status-back)]]
+  (interactive)
+  (mevedel-worktree-status-open))
 
 (defun mevedel-worktree-status-open ()
   "Open the transient worktree status cockpit."
   (interactive)
-  (transient-setup 'mevedel-worktree-status))
+  (mevedel-menu--setup
+   'mevedel-worktree-status
+   (list :parent-menu
+         (if (eq transient-current-command 'mevedel-worktree-status)
+             (plist-get (transient-scope) :parent-menu)
+           (mevedel-cockpit-menu-return-function)))))
 
 (defun mevedel-worktree-list--context ()
   "Return the current worktree list context."
@@ -890,7 +897,7 @@ When FORCE is non-nil, pass `--force' to `git worktree remove'."
   (mevedel-worktree-status-help))
 
 (defun mevedel-worktree-list-quit ()
-  "Quit the worktree list and return to the main session cockpit."
+  "Close the worktree list and restore the invoking layout."
   (interactive)
   (mevedel-cockpit-quit "worktree list"))
 

@@ -9,7 +9,7 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'cl-lib))
+(require 'cl-lib)
 (require 'mevedel-journal-cleanup)
 (require 'mevedel-memory-scope)
 
@@ -24,10 +24,10 @@
 (autoload 'mevedel-memory-notes-index "mevedel-memory-notes")
 (autoload 'mevedel-memory-notes-root "mevedel-memory-notes")
 
-(defconst mevedel-memory-store--max-bytes (* 5 1024 1024)
+(defconst mevedel-memory-store--max-bytes (* 16 1024 1024)
   "Maximum private immutable pass or write record bytes.
-A 512 KiB shared note appears twice in a write intent, with up to fourfold
-byte-string escaping.  The remaining MiB holds metadata and after-state.")
+Captured note preimages and checked write records may contain repeated byte
+strings with up to fourfold escaping, plus decoded content and metadata.")
 
 (defun mevedel-memory-store--directory (workspace id)
   "Return WORKSPACE's private pass directory for ID."
@@ -57,11 +57,15 @@ remain recoverable if an operation fails after committing its publication."
         (funcall function claim)
       (mevedel-journal-claim-settle claim 'completed ""))))
 
-(defun mevedel-memory-store--read-lisp (path)
+(defun mevedel-memory-store--read-lisp (path &optional observation)
   "Read the bounded private Lisp record at PATH as (DATA . TEXT).
 DATA is nil when TEXT is oversized, unreadable, or followed by anything but
-whitespace; callers validate DATA's shape and signal their own errors."
-  (let* ((text (mevedel-session-control-fs-read-file path 'utf-8-unix (1+ mevedel-memory-store--max-bytes)))
+whitespace; callers validate DATA's shape and signal their own errors.
+OBSERVATION may supply PATH's pinned read from this operation's bounded batch."
+  (when (and observation (not (equal path (plist-get observation :path))))
+    (error "Memory record observation addresses another path"))
+  (let* ((text (if observation (mevedel-session-control-fs-program-value observation)
+                 (mevedel-session-control-fs-read-file path 'utf-8-unix (1+ mevedel-memory-store--max-bytes))))
          (read-eval nil) (read-circle nil)
          (parsed (and (<= (string-bytes text) mevedel-memory-store--max-bytes)
                       (ignore-errors (read-from-string text)))))
@@ -88,14 +92,15 @@ whitespace; callers validate DATA's shape and signal their own errors."
     (error "Invalid memory evidence identity"))
   (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "evidence-pins" digest (concat id ".pin")))
 
-(defun mevedel-memory-store-read (workspace id)
+(defun mevedel-memory-store-read (workspace id &optional observation evidence)
   "Read WORKSPACE's immutable prepared pass ID, including its private scope.
 This internal storage interface grants no right to display original memory
-bodies; inspection must use the original authority checks on the returned scope."
+bodies; inspection must use the original authority checks on the returned scope.
+OBSERVATION and EVIDENCE may supply this operation's prepared and claim reads."
   (when (mevedel-journal-cleanup-pass-retired-p (mevedel-workspace-root workspace) id)
     (error "Memory pass has expired"))
   (let* ((record (mevedel-memory-store--read-lisp
-                  (file-name-concat (mevedel-memory-store--directory workspace id) "prepared.el")))
+                  (file-name-concat (mevedel-memory-store--directory workspace id) "prepared.el") observation))
          (data (car record)) (text (cdr record))
          (claim (and (proper-list-p data) (plist-get data :claim)))
          (entries (plist-get data :entries)))
@@ -119,7 +124,7 @@ bodies; inspection must use the original authority checks on the returned scope.
                                   (<= (string-bytes (plist-get entry :body)) mevedel-context-summary--digest-max-bytes))) entries))
       (error "Invalid prepared memory pass"))
     (let ((token (append (list :directory (mevedel-memory-store--claim-directory workspace)) claim)))
-      (unless (equal claim (mevedel-journal-claim--read (mevedel-journal-claim--path token nil) nil))
+      (unless (equal claim (mevedel-journal-claim--read (mevedel-journal-claim--path token nil) nil evidence))
         (error "Prepared pass does not match its ownership record"))
       (plist-put data :claim token))
     (append data (list :hash (secure-hash 'sha256 text)))))
@@ -170,7 +175,8 @@ No coverage is consumed."
 
 (defun mevedel-memory-store-release (workspace id)
   "Release only WORKSPACE pass ID's pins after a fenced unsuccessful outcome.
-Repeated release is harmless. Live and accepted passes retain their evidence."
+Repeated release is harmless. Live and accepted passes retain their evidence.
+Return the number of pins released."
   (mevedel-memory-store--mutation
    workspace
    (lambda (mutation)
@@ -182,21 +188,24 @@ Repeated release is harmless. Live and accepted passes retain their evidence."
 
 (defun mevedel-memory-store--release-pins (workspace prepared keep mutation)
   "Release PREPARED's pins in WORKSPACE except digest IDs in KEEP.
-MUTATION holds journal ownership; the caller has proved release eligibility."
-  (dolist (entry (plist-get prepared :entries))
-    (unless (member (plist-get entry :id) keep)
-      (let ((pin (mevedel-memory-store--pin workspace (plist-get prepared :id) (plist-get entry :id))))
-        (condition-case nil
-            (progn
-              (unless (equal (plist-get prepared :hash) (mevedel-session-control-fs-read-file pin 'utf-8-unix 65))
-                (error "Memory evidence pin changed"))
-              (mevedel-memory-store--assert-owned mutation)
-              (mevedel-session-control-fs-delete-file pin))
-          (mevedel-session-control-fs-absent nil))))))
+MUTATION holds journal ownership; the caller has proved release eligibility.
+Return the number of pins released; already absent pins are not counted."
+  (let ((released 0))
+    (dolist (entry (plist-get prepared :entries) released)
+      (unless (member (plist-get entry :id) keep)
+        (let ((pin (mevedel-memory-store--pin workspace (plist-get prepared :id) (plist-get entry :id))))
+          (condition-case nil
+              (progn
+                (unless (equal (plist-get prepared :hash) (mevedel-session-control-fs-read-file pin 'utf-8-unix 65))
+                  (error "Memory evidence pin changed"))
+                (mevedel-memory-store--assert-owned mutation)
+                (mevedel-session-control-fs-delete-file pin)
+                (cl-incf released))
+            (mevedel-session-control-fs-absent nil)))))))
 
 (defun mevedel-memory-store--proposal (scope id proposal)
   "Bind PROPOSAL to pass ID, original SCOPE targets, and complete before-state.
-A condensed note also records the hash of its resulting version."
+Identity includes the original targets and exact captured before-state."
   (let* ((root (cdr (assoc (plist-get proposal :root) (plist-get scope :roots))))
          (action (plist-get proposal :action))
          (files (delete-dups
@@ -205,76 +214,109 @@ A condensed note also records the hash of its resulting version."
                            (list "MEMORY.md")))))
          (before (mapcar (lambda (file) (cons file (mevedel-memory-scope-before scope (plist-get proposal :root) file)))
                          (sort files #'string<)))
-         (proposal (if (eq action 'note-condense)
-                       (append proposal
-                               (list :result (secure-hash
-                                              'sha256 (mevedel-memory-proposal-condensed-bytes
-                                                       (plist-get proposal :body)))))
-                     proposal))
          (identity (list id (plist-get root :dir) (plist-get root :client) (plist-get root :target)
                          proposal before)))
     (append proposal (list :id (secure-hash 'sha256 (mevedel-memory-store--print identity)) :before before))))
 
-(defun mevedel-memory-store-accepted (workspace id)
+(defun mevedel-memory-store--admitted-notes-p (scope notes)
+  "Return non-nil when NOTES uniquely name captured note IDs in SCOPE.
+An empty input is valid even when the scope captured notes not supplied to
+the review.  Only the producer's admitted roster establishes disposal targets."
+  (and (proper-list-p notes)
+       (= (length notes) (length (delete-dups (copy-sequence notes))))
+       (or (null notes)
+           (let ((index (mevedel-memory-notes-index scope)))
+             (cl-every (lambda (id) (and (stringp id) (assoc id index))) notes)))))
+
+(defun mevedel-memory-store-accepted (workspace id &optional batch)
   "Return the fenced accepted bundle for WORKSPACE pass ID, or nil.
 Verify its exact bytes against the claim outcome before reading its private
-proposal data. Return the immutable prepared record under :prepared and the
-authenticated accepted bytes' hash under :hash."
-  (let* ((prepared (mevedel-memory-store-read workspace id))
-         (outcome (mevedel-journal-claim-outcome (plist-get prepared :claim))))
+proposal data.  The required :admitted-notes records actual review input IDs,
+independently of memory proposal contents.  Return the immutable prepared
+record under :prepared and the authenticated accepted bytes' hash under :hash.
+BATCH requests bounded pinned reads for this pass alone."
+  (let* ((directory (mevedel-memory-store--directory workspace id))
+         (reads (when batch
+                  (mevedel-session-control-fs-run-program
+                   (mapcar (lambda (name)
+                             (list :op 'read :path (file-name-concat directory name)
+                                   :optional t :coding 'utf-8-unix :max-bytes (1+ mevedel-memory-store--max-bytes)))
+                           '("prepared.el" "accepted.el")))))
+         (claim (when batch
+                  (append (list :directory (mevedel-memory-store--claim-directory workspace))
+                          (plist-get (car (mevedel-memory-store--read-lisp
+                                           (file-name-concat directory "prepared.el") (car reads))) :claim))))
+         (evidence (when batch
+                     (mevedel-session-control-fs-run-program
+                      (list (list :op 'read :path (mevedel-journal-claim--path claim nil))
+                            (list :op 'read :path (mevedel-journal-claim--path claim t) :optional t)))))
+         (prepared (mevedel-memory-store-read workspace id (car reads) (car evidence)))
+         (outcome (mevedel-journal-claim-outcome (plist-get prepared :claim) (cadr evidence))))
     (when (eq (plist-get outcome :status) 'completed)
       (let* ((record (mevedel-memory-store--read-lisp
-                      (file-name-concat (mevedel-memory-store--directory workspace id) "accepted.el")))
+                      (file-name-concat directory "accepted.el") (cadr reads)))
              (text (cdr record)))
         (unless (equal (secure-hash 'sha256 text) (plist-get outcome :payload))
           (error "Accepted memory bundle changed"))
         (let* ((data (car record))
                (review (plist-get data :review)))
-          (unless (and (proper-list-p data) (= (length data) 8)
-                       (cl-every (lambda (key) (plist-member data key)) '(:prepared-hash :review :proposals :no-action))
+          (unless (and (proper-list-p data) (= (length data) 10)
+                       (cl-every (lambda (key) (plist-member data key))
+                                 '(:prepared-hash :review :proposals :no-action :admitted-notes))
                        (equal (plist-get prepared :hash) (plist-get data :prepared-hash))
+                       (mevedel-memory-store--admitted-notes-p
+                        (plist-get prepared :scope) (plist-get data :admitted-notes))
                        (equal id (plist-get review :pass-id))
                        (equal (plist-get review :workspace) (plist-get (plist-get prepared :scope) :workspace))
                        (equal (plist-get review :proposals)
                               (mapcar (lambda (proposal) (plist-get proposal :id)) (plist-get data :proposals))))
-            (error "Invalid accepted memory bundle"))
+            (error "Invalid accepted memory bundle for pass %s" id))
           (mevedel-journal-store--validate-metadata review 'consolidation)
           (append data (list :prepared prepared :hash (plist-get outcome :payload))))))))
 
-(defun mevedel-memory-store-accept (workspace prepared reply entries model references &optional notes)
+(defun mevedel-memory-store-accept (workspace prepared reply entries model references
+                                              &optional notes)
   "Accept validated REPLY for WORKSPACE's PREPARED pass before public coverage.
 ENTRIES are the complete admitted subset; MODEL is its exact provider label and
 REFERENCES are bounded dated observations. Retain original target before-state.
-NOTES lists the admitted shared working note IDs.  A nil REPLY accepts a
-housekeeping-only pass, which admitted no digests or notes for inference.
+NOTES lists only the shared working note IDs actually supplied to the review,
+not all captured notes or IDs inferred from model output.  A nil REPLY accepts
+a housekeeping-only pass, which admitted no digests or notes for inference.
 The immutable claim outcome accepts the bundle hash, allowing later recovery."
   (let ((scope (plist-get prepared :scope)))
+    (unless (mevedel-memory-store--admitted-notes-p scope notes)
+      (error "Admitted note IDs are duplicated or outside the prepared scope"))
     (when (and (null reply) (or entries notes))
       (error "Admitted evidence requires a validated review reply"))
     (mevedel-memory-store-accept-proposals
      workspace prepared
      (if reply
          (mevedel-memory-proposal-parse
-          reply (plist-get scope :roots) (mapcar (lambda (entry) (plist-get entry :id)) entries)
-          (seq-filter (lambda (row) (member (car row) notes)) (mevedel-memory-notes-index scope)))
+          reply (plist-get scope :roots)
+          (append (mapcar (lambda (entry) (plist-get entry :id)) entries) notes))
        (list :proposals nil :no-action "- Shared-folder housekeeping only."))
-     entries model references)))
+     entries model references notes)))
 
 (defun mevedel-memory-store--note-p (proposal)
   "Return non-nil when PROPOSAL disposes of a shared working file."
   (mevedel-memory-proposal-note-action-p (plist-get proposal :action)))
 
-(defun mevedel-memory-store-accept-proposals (workspace prepared parsed entries producer references)
+(defun mevedel-memory-store-accept-proposals (workspace prepared parsed entries producer references
+                                                     &optional admitted-notes)
   "Accept trusted PARSED proposals for WORKSPACE's PREPARED pass.
 ENTRIES and REFERENCES retain the same evidence contract as model replies.
 PRODUCER is the provider label, or `user' for an explicit cockpit action.
+ADMITTED-NOTES is the exact list of note IDs supplied to the model review;
+structured user actions and housekeeping supply nil.  Every admitted note gets
+an internal deletion proposal after this successful review.  Never infer
+admission from the captured roster or model proposals in PARSED.
 Callers validate model text before this boundary; direct user actions construct
 structured changes from fresh captured snapshots without synthetic model text.
 Housekeeping for the scope's captured attachments and empty folders is added
 here, after every extraction.  Each note disposal records the extractions
-citing its note as :requires, so it cannot apply before them.  Deleting a
-note that memory or instructions cite, without any extraction citing it, is
-accepted as keep instead, so a citation never silently breaks."
+citing its note as :requires, so it cannot apply before them.  Application
+must additionally recheck the complete current memory and instruction scope
+for remaining citations before deleting a note."
   (let* ((id (plist-get prepared :id))
          (claim (plist-get prepared :claim))
          (scope (plist-get prepared :scope))
@@ -282,6 +324,10 @@ accepted as keep instead, so a citation never silently breaks."
     (mevedel-memory-store--assert-owned claim)
     (unless (equal prepared (mevedel-memory-store-read workspace id))
       (error "Prepared memory evidence changed"))
+    (unless (mevedel-memory-store--admitted-notes-p scope admitted-notes)
+      (error "Admitted note IDs are duplicated or outside the prepared scope"))
+    (when (seq-some #'mevedel-memory-store--note-p (plist-get parsed :proposals))
+      (error "Parsed memory proposals cannot dispose of shared notes"))
     (unless (or entries (null (plist-get prepared :entries)))
       (error "A selected digest batch must admit a complete digest"))
     (dolist (entry entries)
@@ -296,7 +342,18 @@ accepted as keep instead, so a citation never silently breaks."
                         (mevedel-memory-store--pin workspace id (plist-get entry :id)) 'utf-8-unix 65))
           (error "Accepted digest evidence is not retained"))))
     (let* ((proposals
-            (let* ((parsed (append (plist-get parsed :proposals) (mevedel-memory-notes-housekeeping scope)))
+            (let* ((parsed
+                    (append
+                     (plist-get parsed :proposals)
+                     (let ((index (mevedel-memory-notes-index scope)))
+                       (mapcar
+                        (lambda (id)
+                          (let ((note (assoc id index)))
+                            (list :action 'note-delete :root (cadr note) :file (cddr note) :note id
+                                  :type "note" :title (cddr note) :hook ""
+                                  :evidence (list id) :body "")))
+                        admitted-notes))
+                     (mevedel-memory-notes-housekeeping scope)))
                    (extractions (mapcar (lambda (proposal) (mevedel-memory-store--proposal scope id proposal))
                                         (seq-remove #'mevedel-memory-store--note-p parsed))))
               ;; Note disposals depend on every extraction that cites them.
@@ -309,20 +366,7 @@ accepted as keep instead, so a citation never silently breaks."
                                                    (lambda (extraction)
                                                      (member (plist-get proposal :note)
                                                              (plist-get extraction :evidence)))
-                                                   extractions))))
-                                       (cited (plist-get (cdr (assoc (plist-get proposal :file)
-                                                                     (plist-get (cdr (mevedel-memory-notes-root scope))
-                                                                                :notes)))
-                                                         :cited)))
-                                  ;; The citation is the note's continuing use until the
-                                  ;; citing memory changes in the same review.
-                                  (when (and cited (null requires) (eq (plist-get proposal :action) 'note-delete))
-                                    (setq proposal
-                                          (plist-put (plist-put (copy-sequence proposal) :action 'note-keep)
-                                                     :reason (concat "Kept: a memory topic or instruction file cites "
-                                                                     "this note, and no update in this review "
-                                                                     "replaces that citation. Reviewer: "
-                                                                     (plist-get proposal :reason)))))
+                                                   extractions)))))
                                   (mevedel-memory-store--proposal scope id (append proposal (list :requires requires)))))
                               (seq-filter #'mevedel-memory-store--note-p parsed)))))
            (review (list :pass-id id :workspace (plist-get scope :workspace)
@@ -333,7 +377,8 @@ accepted as keep instead, so a citation never silently breaks."
                          :references references))
            (_ (mevedel-journal-store--validate-metadata review 'consolidation))
            (data (list :prepared-hash (plist-get prepared :hash) :review review
-                       :proposals proposals :no-action (plist-get parsed :no-action)))
+                       :proposals proposals :no-action (plist-get parsed :no-action)
+                       :admitted-notes admitted-notes))
            (text (mevedel-memory-store--print data))
            (path (file-name-concat (mevedel-memory-store--directory workspace id) "accepted.el")))
       (mevedel-memory-store--assert-owned claim)
@@ -342,6 +387,36 @@ accepted as keep instead, so a citation never silently breaks."
       (when (mevedel-journal-claim-settle claim 'completed (secure-hash 'sha256 text))
         (mevedel-memory-store-accepted workspace id)))))
 
+(defun mevedel-memory-store--publish-owned (workspace accepted mutation)
+  "Publish ACCEPTED's review in WORKSPACE under journal MUTATION ownership.
+ACCEPTED must be authenticated under MUTATION.  Verify retained evidence when
+the review is absent, publish it and release spare pins.  Pending proposals
+keep their admitted evidence; a no-action pass releases it."
+  (let* ((prepared (plist-get accepted :prepared))
+         (id (plist-get prepared :id))
+         (review (plist-get accepted :review))
+         (root (mevedel-workspace-root workspace))
+         (journal (mevedel-journal-store-directory root))
+         (path (file-name-concat journal (mevedel-journal-store--filename review 'consolidation))))
+    (mevedel-journal-cleanup-recover journal)
+    (unless (mevedel-session-control-fs-path-exists-p path)
+      (dolist (entry (plist-get prepared :entries))
+        (when (member (plist-get entry :id) (plist-get review :digests))
+          (unless (and (equal (plist-get prepared :hash)
+                              (mevedel-session-control-fs-read-file
+                               (mevedel-memory-store--pin workspace id (plist-get entry :id)) 'utf-8-unix 65))
+                       (equal (plist-get entry :sha256)
+                              (secure-hash 'sha256
+                                           (plist-get (mevedel-journal-store-read root (plist-get entry :file)) :text))))
+            (error "Accepted review evidence is unavailable")))))
+    (mevedel-memory-store--assert-owned mutation)
+    (let ((published (mevedel-journal-store-publish-review root review)))
+      (setf (mevedel-workspace-journal-observation workspace) nil)
+      (mevedel-memory-store--release-pins workspace prepared
+                                         (and (plist-get accepted :proposals) (plist-get review :digests)) mutation)
+      (mevedel-journal-cleanup-schedule workspace t)
+      published)))
+
 (defun mevedel-memory-store-publish (workspace id)
   "Recoverably publish WORKSPACE pass ID's accepted review and release spare pins.
 The accepted private proposal bundle must already exist. Pending proposals keep
@@ -349,51 +424,63 @@ their admitted evidence; a no-action pass releases it after public publication."
   (mevedel-memory-store--mutation
    workspace
    (lambda (mutation)
-     (let* ((accepted (or (mevedel-memory-store-accepted workspace id)
-                          (error "Memory pass has no accepted result")))
-            (prepared (plist-get accepted :prepared))
-            (review (plist-get accepted :review))
-            (root (mevedel-workspace-root workspace))
-            (journal (mevedel-journal-store-directory root))
-            (path (file-name-concat journal (mevedel-journal-store--filename review 'consolidation))))
-       (mevedel-journal-cleanup-recover journal)
-       (unless (mevedel-session-control-fs-path-exists-p path)
-         (dolist (entry (plist-get prepared :entries))
-           (when (member (plist-get entry :id) (plist-get review :digests))
-             (unless (and (equal (plist-get prepared :hash)
-                                 (mevedel-session-control-fs-read-file
-                                  (mevedel-memory-store--pin workspace id (plist-get entry :id)) 'utf-8-unix 65))
-                          (equal (plist-get entry :sha256)
-                                 (secure-hash 'sha256
-                                              (plist-get (mevedel-journal-store-read root (plist-get entry :file)) :text))))
-               (error "Accepted review evidence is unavailable")))))
-       (mevedel-memory-store--assert-owned mutation)
-       (let ((published (mevedel-journal-store-publish-review root review)))
-         (setf (mevedel-workspace-journal-observation workspace) nil)
-         (mevedel-memory-store--release-pins workspace prepared
-                                            (and (plist-get accepted :proposals) (plist-get review :digests)) mutation)
-         (mevedel-journal-cleanup-schedule workspace t)
-         published)))))
+     (mevedel-memory-store--publish-owned
+      workspace (or (mevedel-memory-store-accepted workspace id t)
+                    (error "Memory pass has no accepted result"))
+      mutation))))
 
 (defun mevedel-memory-store-recover (workspace)
   "Recover settled pass publications and evidence releases in WORKSPACE.
 Call after acquiring a successor pass claim, so all older attempts are fenced.
 Live preparations are left alone. Unreadable accepted state fails closed rather
-than letting a new selection silently ignore its unpublished review coverage."
-  (dolist (directory
-           (mevedel-session-control-fs-list-directory
-            (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "passes") mevedel-journal-store-id-regexp))
-    ;; A crash after creating the directory but before preparation retains no
-    ;; evidence pins: the immutable prepared file always precedes pin writes.
-    (when (and (not (mevedel-journal-cleanup-pass-retired-p
-                     (mevedel-workspace-root workspace) (file-name-nondirectory (directory-file-name directory))))
-               (mevedel-session-control-fs-path-exists-p (file-name-concat directory "prepared.el")))
-      (let* ((id (file-name-nondirectory (directory-file-name directory)))
-             (prepared (mevedel-memory-store-read workspace id))
-             (outcome (mevedel-journal-claim-outcome (plist-get prepared :claim))))
-        (pcase (plist-get outcome :status)
-          ('completed (mevedel-memory-store-publish workspace id))
-          ((or 'failed 'cancelled 'expired) (mevedel-memory-store-release workspace id)))))))
+than letting a new selection silently ignore its unpublished review coverage.
+Authenticate every completed bundle, but avoid a publication transaction when
+the public bytes already match and no spare evidence pins remain.
+Return non-nil when recovery changed committed journal state: finished an
+expiry, published, or released evidence pins."
+  (let ((published (make-hash-table :test #'equal)) changed)
+    ;; Publication used to do this once per completed pass.  Recover accepted
+    ;; expiry before observing retirement or taking the no-op publication path.
+    (when (> (mevedel-memory-store--mutation
+              workspace
+              (lambda (mutation)
+                (mevedel-memory-store--assert-owned mutation)
+                (mevedel-journal-cleanup-recover
+                 (mevedel-journal-store-directory (mevedel-workspace-root workspace)))))
+             0)
+      (setq changed t))
+    (dolist (entry (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
+      (puthash (plist-get entry :file) (plist-get entry :text) published))
+    (dolist (directory
+             (mevedel-session-control-fs-list-directory
+              (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "passes") mevedel-journal-store-id-regexp))
+      ;; A crash after creating the directory but before preparation retains no
+      ;; evidence pins: the immutable prepared file always precedes pin writes.
+      (when (and (not (mevedel-journal-cleanup-pass-retired-p
+                       (mevedel-workspace-root workspace) (file-name-nondirectory (directory-file-name directory))))
+                 (mevedel-session-control-fs-path-exists-p (file-name-concat directory "prepared.el")))
+        (let* ((id (file-name-nondirectory (directory-file-name directory)))
+               (prepared (mevedel-memory-store-read workspace id))
+               (outcome (mevedel-journal-claim-outcome (plist-get prepared :claim))))
+          (pcase (plist-get outcome :status)
+            ('completed
+             (let* ((accepted (mevedel-memory-store-accepted workspace id))
+                    (prepared (plist-get accepted :prepared))
+                    (review (plist-get accepted :review))
+                    (file (mevedel-journal-store--filename review 'consolidation))
+                    (text (mevedel-journal-store--encode review nil 'consolidation))
+                    (keep (and (plist-get accepted :proposals) (plist-get review :digests))))
+               (when (or (not (equal text (gethash file published)))
+                         (seq-some (lambda (entry)
+                                     (and (not (member (plist-get entry :id) keep))
+                                          (mevedel-session-control-fs-path-exists-p
+                                           (mevedel-memory-store--pin workspace id (plist-get entry :id)))))
+                                   (plist-get prepared :entries)))
+                 (mevedel-memory-store-publish workspace id)
+                 (setq changed t))))
+            ((or 'failed 'cancelled 'expired)
+             (when (> (mevedel-memory-store-release workspace id) 0) (setq changed t)))))))
+    changed))
 
 (provide 'mevedel-memory-store)
 ;;; mevedel-memory-store.el ends here

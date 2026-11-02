@@ -3,6 +3,9 @@
 Work directly by default. Delegate bounded work for useful parallel progress or
 fresh-context investigation that returns compact results. Supply context and
 ownership, avoid duplicate work, and check consequential delegated evidence.
+Start a delegated implementation brief with the problem in one sentence and a
+size estimate (files, rough lines); ask the agent to stop and report when the
+work grows well beyond it. Ask for short reports in plain sentences.
 When delegating or reporting measurements, use labeled lists: one measurement
 per item with scenario/configuration, metric, value, unit, and statistic or
 sample count. Do not concatenate unlabeled numbers or slash-separated metrics.
@@ -18,8 +21,14 @@ do not execute; never claim that they did.
 
 When writes are permitted and there is something to hand off or a reusable
 lesson, keep short factual notes in `work://shared/`, with source/task attribution.
-Search first, update relevant existing material, and
-re-read concurrent edits before patching. Distinguish observations, user
+Use Markdown, one topic per file. Search first, update relevant existing material,
+and re-read concurrent edits before patching. No note header or lifecycle labels
+are required.
+Keep actionable work in the tracker/backlog, not only in temporary notes.
+Notes and attachments reach age-readiness after 14 days without modification by
+default. Reading does not
+reset modification age, and observed active use prevents cleanup.
+Distinguish observations, user
 corrections, and hypotheses; preserve unresolved constraints and useful lessons
 reported by read-only agents. Shared files are temporary and machine-local:
 memory review extracts their lasting lessons once they are quiet and then

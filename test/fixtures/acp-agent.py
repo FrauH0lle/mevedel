@@ -7,6 +7,7 @@ import sys
 import subprocess
 import time
 import traceback
+from pathlib import Path
 
 
 def reply(request_id, result):
@@ -40,6 +41,21 @@ def compact():
             "sessionId": session_id, "update": update}}), flush=True)
 
 
+def reply_marker(prefix, stage):
+    with open(prefix + "-" + stage, "w", encoding="utf-8") as marker:
+        marker.write(stage)
+
+
+def await_reply_release(prefix, timeout=10):
+    """Let Emacs enter the pending reply before closing its real peer."""
+    reply_marker(prefix, "entered")
+    deadline = time.monotonic() + timeout
+    while not os.path.exists(prefix + "-release"):
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Reply release marker unavailable")
+        time.sleep(0.001)
+
+
 session_id = "fixture-session"
 pending = None
 mcp_servers = []
@@ -54,10 +70,13 @@ tool_batches = []
 hook_acknowledgement = True
 after_hook_tool = None
 prompt_acknowledgement = True
+prompt_receipt_release = None
+prompt_receipt_marker = None
 compact_before_batch = None
 compact_acknowledgement = True
 crash_after_tool = False
 drop_bridge = False
+reply_barrier = None
 late_announcement = False
 hook_timeout = None
 suppress_response_on_stop = False
@@ -74,6 +93,15 @@ session_info = {}
 config_behavior = None
 applied = {}
 inspection = None
+history_root = os.getenv("MEVEDEL_ACP_TEST_HISTORY")
+
+
+def wait_gate(name):
+    gate = os.getenv(name)
+    if gate:
+        Path(gate + ".ready").touch()
+        while not Path(gate).exists():
+            time.sleep(0.01)
 
 
 def sdk_messages(batches, index):
@@ -89,13 +117,36 @@ for line in sys.stdin:
     try:
         method = message.get("method")
         params = message.get("params", {})
+        if trace := os.getenv("MEVEDEL_ACP_TEST_TRACE"):
+            with open(trace, "a", encoding="utf-8") as log:
+                log.write(json.dumps(message) + "\n")
         if method == "initialize":
             client_compaction = isinstance(params.get("clientCapabilities", {}).get("session", {}).get("compaction"), dict)
+            capabilities = {"resume": {}}
+            if history_root:
+                capabilities.update({"fork": {}, "delete": {}})
+                capabilities.pop(os.getenv("MEVEDEL_ACP_TEST_MISSING_CAP"), None)
             reply(request_id, {"protocolVersion": 1, "agentCapabilities": {
                 "loadSession": True, "promptCapabilities": {"image": not os.getenv("MEVEDEL_ACP_TEST_NO_IMAGES")},
-                "sessionCapabilities": {"resume": {}}}})
+                "sessionCapabilities": capabilities}})
+        elif method == "session/fork":
+            source = Path(history_root, params["sessionId"] + ".json")
+            fork_id = os.getenv("MEVEDEL_ACP_TEST_FORK_ID", "fixture-fork")
+            if fork_id and fork_id != params["sessionId"]:
+                Path(history_root, fork_id + ".json").write_bytes(source.read_bytes())
+            wait_gate("MEVEDEL_ACP_TEST_FORK_GATE")
+            reply(request_id, {"sessionId": fork_id})
+        elif method == "session/delete":
+            if Path(history_root, "delete-fails").exists():
+                print(json.dumps({"jsonrpc": "2.0", "id": request_id,
+                                  "error": {"code": -32000, "message": "Fixture deletion failed"}}), flush=True)
+                continue
+            Path(history_root, params["sessionId"] + ".json").unlink(missing_ok=True)
+            reply(request_id, {})
         elif method in ("session/new", "session/resume", "session/load"):
             session_id = params.get("_meta", {}).get("fixtureSessionId", "fixture-session")
+            if history_root and params.get("sessionId"):
+                session_id = params["sessionId"]
             if params.get("sessionId", session_id) != session_id:
                 print(json.dumps({"jsonrpc": "2.0", "id": request_id,
                                   "error": {"code": -32000, "message": "Missing history"}}), flush=True)
@@ -120,6 +171,7 @@ for line in sys.stdin:
                 # The CLI loses only its MCP server after sending a call; the
                 # prompt still ends with the CLI's own outcome.
                 drop_bridge = params.get("_meta", {}).get("dropBridge", False)
+                reply_barrier = params.get("_meta", {}).get("replyBarrier")
                 # A native hook killed at its timeout: no reply, no receipt.
                 hook_timeout = params.get("_meta", {}).get("hookTimeout")
                 suppress_response_on_stop = params.get("_meta", {}).get("suppressResponseOnStop", False)
@@ -127,6 +179,8 @@ for line in sys.stdin:
                 compact_before_batch = params.get("_meta", {}).get("compactBeforeBatch")
                 compact_acknowledgement = params.get("_meta", {}).get("compactAcknowledgement", hook_acknowledgement)
                 prompt_acknowledgement = params.get("_meta", {}).get("promptAcknowledgement", True)
+                prompt_receipt_release = params.get("_meta", {}).get("promptReceiptRelease")
+                prompt_receipt_marker = params.get("_meta", {}).get("promptReceiptMarker")
                 compaction_events = params.get("_meta", {}).get("compactionEvents", [])
                 compaction_before_batch = params.get("_meta", {}).get("compactionBeforeBatch")
                 late_announcement = params.get("_meta", {}).get("lateAnnouncement", False)
@@ -162,6 +216,25 @@ for line in sys.stdin:
                 applied[params["configId"]] = params["value"]
             reply(request_id, session_info)
         elif method == "session/prompt":
+            if history_root:
+                history_path = Path(history_root, session_id + ".json")
+                history = json.loads(history_path.read_text())
+                prompt = params["prompt"][0]["text"]
+                history.append(prompt)
+                history_path.write_text(json.dumps(history))
+                if prompt == "wait":
+                    pending = request_id
+                    continue
+                if prompt == "crash":
+                    os._exit(7)
+                if prompt == "fail":
+                    print(json.dumps({"jsonrpc": "2.0", "id": request_id,
+                                      "error": {"code": -32000, "message": "Fixture prompt failed"}}), flush=True)
+                    continue
+                if not tool_batches and not compaction_events:
+                    chunk("History: " + " | ".join(history))
+                    reply(request_id, {"stopReason": "end_turn"})
+                    continue
             if inspection:
                 with open(inspection["promptLog"], "a", encoding="utf-8") as log:
                     log.write(json.dumps(params) + "\n")
@@ -242,8 +315,15 @@ for line in sys.stdin:
                 if prompt_acknowledgement == "late":
                     # Written while the test keeps Emacs from reading, so the
                     # receipt races a tool call the test reads first.
-                    time.sleep(0.2)
+                    assert prompt_receipt_release and prompt_receipt_marker
+                    deadline = time.monotonic() + 10
+                    while not os.path.exists(prompt_receipt_release):
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("Receipt release marker unavailable")
+                        time.sleep(0.01)
                     print(json.dumps(receipt), flush=True)
+                    with open(prompt_receipt_marker, "w", encoding="utf-8") as marker:
+                        marker.write("written")
             elif prompt == "wait-silent":
                 pending = request_id
             elif prompt.startswith("refresh-race"):
@@ -317,9 +397,14 @@ for line in sys.stdin:
                             if drop_bridge:
                                 bridge.stdin.write(json.dumps(request) + "\n")
                                 bridge.stdin.flush()
-                                time.sleep(0.2)
+                                if reply_barrier:
+                                    await_reply_release(reply_barrier + "-tool")
+                                else:
+                                    time.sleep(0.2)
                                 bridge.kill()
                                 bridge.wait(timeout=5)
+                                if reply_barrier:
+                                    reply_marker(reply_barrier + "-tool", "closed")
                                 stopped = True
                                 break
                             if late_announcement:
@@ -341,16 +426,28 @@ for line in sys.stdin:
                             break
                         sdk_messages(sdk_after_batches, batch_index)
                         if hook_command and batch:
-                            if hook_timeout:
+                            if hook_timeout or reply_barrier:
                                 hook = subprocess.Popen(hook_command, shell=True, text=True,
                                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                                         stderr=subprocess.PIPE, start_new_session=True)
                                 try:
-                                    hook.communicate(json.dumps({"hook_event_name": "PostToolBatch"}),
-                                                     timeout=hook_timeout)
+                                    if reply_barrier:
+                                        hook.stdin.write(json.dumps({"hook_event_name": "PostToolBatch"}))
+                                        hook.stdin.close()
+                                        hook.stdin = None
+                                        prefix = reply_barrier + "-hook-" + str(batch_index + 1)
+                                        await_reply_release(prefix)
+                                    else:
+                                        hook.communicate(json.dumps({"hook_event_name": "PostToolBatch"}),
+                                                         timeout=hook_timeout)
                                 except subprocess.TimeoutExpired:
-                                    os.killpg(hook.pid, signal.SIGKILL)
+                                    pass
+                                finally:
+                                    if hook.poll() is None:
+                                        os.killpg(hook.pid, signal.SIGKILL)
                                     hook.communicate()
+                                if reply_barrier:
+                                    reply_marker(prefix, "closed")
                                 # The CLI treats a failed hook as advisory and continues.
                                 continue
                             output = subprocess.run(hook_command, shell=True, check=True,
@@ -432,6 +529,7 @@ for line in sys.stdin:
                 reply(request_id, prompt_response)
                 reply(request_id, prompt_response)
         elif method == "session/cancel" and pending is not None:
+            wait_gate("MEVEDEL_ACP_TEST_CANCEL_GATE")
             reply(pending, cancel_response)
             pending = None
     except Exception:

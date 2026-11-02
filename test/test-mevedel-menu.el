@@ -1801,7 +1801,13 @@
           (should (string-search "a chooses any share"
                                  (mevedel-menu--share-active-description)))
           (mevedel-menu--share-choose)
-          (should (equal (list 'mevedel-menu--share-item recorded) scoped))
+          (should (eq 'mevedel-menu--share-item (car scoped)))
+          (dolist (key '(:kind :label :directory))
+            (should (equal (plist-get recorded key)
+                           (plist-get (cadr scoped) key))))
+          (should (eq view-buf
+                      (plist-get (plist-get (cadr scoped) :mevedel-context)
+                                 :origin-buffer)))
           (setq entries nil)
           (should-error (mevedel-menu--share-choose) :type 'user-error))))))
 
@@ -1915,6 +1921,129 @@
                        t)))
             (mevedel-menu--share-lobby-rotate))
           (should (eq data-buf rotated)))))))
+
+(defun mevedel-menu-test--window-layout ()
+  "Return window topology, buffers and selection for the selected frame."
+  (list (window-tree)
+        (mapcar (lambda (window)
+                  (list window (window-buffer window) (window-edges window)))
+                (window-list nil 'no-minibuf))
+        (selected-window)))
+
+(mevedel-deftest mevedel-menu--setup (:quiet t)
+  ,test
+  (test)
+
+  :doc "command-loop menu, cockpit return and final quit restore the layout"
+  (mevedel-menu-test--with-buffers
+    (save-window-excursion
+      (let ((original-global-map (current-global-map))
+            (global-map (copy-keymap (current-global-map)))
+            (transient-show-popup t))
+        (unwind-protect
+            (progn
+              (delete-other-windows)
+              (switch-to-buffer view-buf)
+              (with-current-buffer data-buf (setq-local gptel-tools nil))
+              (set-window-buffer (split-window-right) data-buf)
+              (define-key global-map (kbd "<f12>") #'mevedel-menu)
+              (use-global-map global-map)
+              (let ((before (mevedel-menu-test--window-layout)))
+                (execute-kbd-macro (kbd "<f12>"))
+                (ert-info ("after opening menu") (should transient--prefix))
+                (should (eq (oref transient--prefix command) 'mevedel-menu--top))
+                (execute-kbd-macro (kbd "t"))
+                (should (derived-mode-p 'mevedel-tools-list-mode))
+                (execute-kbd-macro (kbd "q"))
+                (ert-info ("after quitting cockpit") (should transient--prefix))
+                (should (eq (oref transient--prefix command) 'mevedel-menu--top))
+                (execute-kbd-macro (kbd "C-g"))
+                (should-not transient--prefix)
+                (should (equal before (mevedel-menu-test--window-layout)))))
+          (transient--emergency-exit)
+          (use-global-map original-global-map)
+          (when (get-buffer mevedel-tools-list-buffer-name)
+            (kill-buffer mevedel-tools-list-buffer-name))))))
+
+  :doc "menu dismissal preserves data and view buffers even with same-window rules"
+  (mevedel-menu-test--with-buffers
+    (save-window-excursion
+      (let ((original-global-map (current-global-map))
+            (global-map (copy-keymap (current-global-map)))
+            (transient-show-popup t)
+            (transient-display-buffer-action '(display-buffer-same-window)))
+        (unwind-protect
+            (progn
+              (delete-other-windows)
+              (switch-to-buffer data-buf)
+              (display-buffer-in-side-window
+               view-buf '((side . bottom) (slot . 0) (window-height . 5)))
+              (define-key global-map (kbd "<f12>") #'mevedel-menu)
+              (use-global-map global-map)
+              (let ((before (mevedel-menu-test--window-layout)))
+                (execute-kbd-macro (kbd "<f12> C-g"))
+                (should-not transient--prefix)
+                (should (equal before (mevedel-menu-test--window-layout)))))
+          (transient--emergency-exit)
+          (use-global-map original-global-map)))))
+
+  :doc "user side-window rules and slot limits cannot consume existing windows"
+  (mevedel-menu-test--with-buffers
+    (save-window-excursion
+      (let ((original-global-map (current-global-map))
+            (map (copy-keymap (current-global-map)))
+            (transient-show-popup t)
+            (display-buffer-alist
+             '(("\\` \\*transient\\*" (display-buffer-in-side-window)
+                (side . bottom) (slot . 0))))
+            (window-sides-slots '(nil nil nil 1)))
+        (unwind-protect
+            (progn
+              (delete-other-windows)
+              (switch-to-buffer data-buf)
+              (display-buffer-in-side-window
+               view-buf '((side . bottom) (slot . 0) (window-height . 5)))
+              (define-key map (kbd "<f12>") #'mevedel-menu)
+              (use-global-map map)
+              (let ((before (mevedel-menu-test--window-layout)))
+                (execute-kbd-macro (kbd "<f12> C-g"))
+                (should-not transient--prefix)
+                (should (equal before (mevedel-menu-test--window-layout)))))
+          (transient--emergency-exit)
+          (use-global-map original-global-map)))))
+
+  :doc "worktree status and its report return only along their explicit menu path"
+  (mevedel-menu-test--with-buffers
+    (save-window-excursion
+      (let ((original-global-map (current-global-map))
+            (map (copy-keymap (current-global-map)))
+            (transient-show-popup t))
+        (unwind-protect
+            (progn
+              (delete-other-windows)
+              (switch-to-buffer view-buf)
+              (define-key map (kbd "<f12>") #'mevedel-menu)
+              (define-key map (kbd "<f11>") #'mevedel-worktree-status-open)
+              (use-global-map map)
+              (let ((before (mevedel-menu-test--window-layout)))
+                (execute-kbd-macro (kbd "<f11>"))
+                (should (eq (oref transient--prefix command) 'mevedel-worktree-status))
+                (execute-kbd-macro (kbd "q"))
+                (should-not transient--prefix)
+                (should (equal before (mevedel-menu-test--window-layout)))
+                (execute-kbd-macro (kbd "<f12> w i"))
+                (should (derived-mode-p 'mevedel-report-mode))
+                (execute-kbd-macro (kbd "q"))
+                (should (eq (oref transient--prefix command) 'mevedel-worktree-status))
+                (execute-kbd-macro (kbd "q"))
+                (should (eq (oref transient--prefix command) 'mevedel-menu--top))
+                (execute-kbd-macro (kbd "C-g"))
+                (should-not transient--prefix)
+                (should (equal before (mevedel-menu-test--window-layout)))))
+          (transient--emergency-exit)
+          (use-global-map original-global-map)
+          (when (get-buffer mevedel-worktree-details-buffer-name)
+            (kill-buffer mevedel-worktree-details-buffer-name)))))))
 
 (provide 'test-mevedel-menu)
 

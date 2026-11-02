@@ -782,7 +782,8 @@
                         "Test:test-model"
                         (mevedel-session-reasoning-effort source) 'high
                         (mevedel-session-pending-steering source)
-				       '((:id 1 :category steering :input "steer"))
+                                       '((:id 1 :category steering :input "steer"
+                                          :request-id "in-flight"))
                         (mevedel-session-pending-follow-ups source)
 				       '((:id 2 :category follow-up :input "later"))
                         (mevedel-session-pending-input-next-id source) 3

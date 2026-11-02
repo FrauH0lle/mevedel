@@ -10,7 +10,7 @@ const {navigation, nativeActivations} = require('./collaboration-viewer-content-
 const plain = value => JSON.parse(JSON.stringify(value));
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-const ids = ['lobby-files', 'files-path', 'files-list', 'files-status',
+const ids = ['lobby', 'lobby-files', 'files-path', 'files-list', 'files-status',
              'files-upload', 'files-input'];
 
 function fakeFile(name, size) {
@@ -21,14 +21,16 @@ function fakeFile(name, size) {
   };
 }
 
-function build({confirmed = true, sendOk = true} = {}) {
+function build({confirmed = true, sendOk = true, downloadFile = async () => {}} = {}) {
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
-  const document = {getElementById: id => nodes[id], createElement: tag => new Element(tag)};
+  const document = new Element('document');
+  document.getElementById = id => nodes[id];
+  document.createElement = tag => new Element(tag);
   let dropTray = null;
   const window = {
     confirm: () => confirmed,
     mevedelTranscriptRenderer: {formatBytes: bytes => `${bytes} B`},
-    mevedelAttachments: {bind: (tray, {target}) => { dropTray = {tray, target}; }},
+    mevedelAttachments: {bind: (tray, {target, enabled}) => { dropTray = {tray, target, enabled}; }},
   };
   const timers = [];
   const context = {window, document, console, btoa, Uint8Array, String, Promise,
@@ -44,10 +46,10 @@ function build({confirmed = true, sendOk = true} = {}) {
     send, setTimer: context.setTimeout, clearTimer: context.clearTimeout});
   const files = window.mevedelFilesView.create({
     send, el: (tag, className, text) => element(document, tag, className, text),
-    notice: text => notices.push(text), uploads, openFile: path => opened.push(path), href,
+    notice: text => notices.push(text), uploads, openFile: path => opened.push(path), downloadFile, href,
   });
   return {files, uploads, nodes, sent, notices, opened, timers, window,
-          drop: () => dropTray, api: window.mevedelFilesView};
+          document, drop: () => dropTray, api: window.mevedelFilesView};
 }
 
 const rootListing = reqId => ({
@@ -69,7 +71,7 @@ const rootListing = reqId => ({
   assert.match(textOf(rows[0]), /docs\//);
   // A folder row has no remove control; a file row does.
   assert.equal(rows[0].children.length, 1);
-  assert.match(textOf(rows[1]), /notes\.md12 BRemove/);
+  assert.match(textOf(rows[1]), /notes\.md12 BDownloadRemove/);
   assert.equal(nodes['files-status'].hidden, true);
   // Opening a folder asks for it; opening a file hands its path on.
   rows[0].children[0].dispatch('click');
@@ -137,7 +139,61 @@ const rootListing = reqId => ({
   assert.equal(sent.length, 2);
 }
 
+// A missed file drop does not navigate away. Text drags and hidden Files
+// leave other pages' drag-and-drop behavior alone.
+{
+  const {document, nodes} = build();
+  for (const type of ['dragover', 'drop']) {
+    let prevented = false;
+    const event = {dataTransfer: {types: ['Files']}, preventDefault: () => { prevented = true; }};
+    document.dispatch(type, event);
+    assert.equal(prevented, true);
+    prevented = false;
+    document.dispatch(type, {...event, dataTransfer: {types: ['text/plain']}});
+    assert.equal(prevented, false);
+    nodes['lobby-files'].hidden = true;
+    document.dispatch(type, event);
+    assert.equal(prevented, false);
+    nodes['lobby-files'].hidden = false;
+    nodes.lobby.hidden = true;
+    document.dispatch(type, event);
+    assert.equal(prevented, false);
+    nodes.lobby.hidden = false;
+  }
+}
+
 (async () => {
+  // Downloads use the row's project path, stay busy until settled, and
+  // surface refusals without opening the preview or removing the file.
+  {
+    let finish;
+    const paths = [];
+    const {files, nodes, sent, notices, opened} = build({downloadFile: path => {
+      paths.push(path);
+      return new Promise((resolve, reject) => { finish = {resolve, reject}; });
+    }});
+    files.show();
+    files.listed({t: 'files', reqId: 1, dir: 'docs',
+                  entries: [{name: 'notes.md', kind: 'file', size: 12}]});
+    const button = nodes['files-list'].children[0].children.at(-2);
+    assert.equal(button.attributes['aria-label'], 'Download notes.md');
+    button.dispatch('click');
+    assert.deepEqual(paths, ['docs/notes.md']);
+    assert.equal(button.disabled, true);
+    assert.equal(button.textContent, 'Downloading…');
+    finish.resolve();
+    await tick();
+    assert.equal(button.disabled, false);
+    assert.equal(button.textContent, 'Download');
+    button.dispatch('click');
+    finish.reject(new Error('No longer listed'));
+    await tick();
+    assert.deepEqual(notices, ['No longer listed']);
+    assert.equal(button.disabled, false);
+    assert.deepEqual(opened, []);
+    assert.equal(sent.length, 1);
+  }
+
   // Uploads go in acknowledged chunks: the next is sent only after the
   // host took the previous one, and the first announces the file.
   {
@@ -186,7 +242,11 @@ const rootListing = reqId => ({
     const {files, nodes, sent, notices, uploads, drop} = build();
     files.show();
     files.listed({t: 'files', reqId: 1, dir: 'docs', entries: [], omitted: 0});
-    assert.equal(drop().target, nodes['lobby-files']);
+    assert.equal(drop().target, nodes.lobby);
+    assert.equal(drop().enabled(), true);
+    nodes['lobby-files'].hidden = true;
+    assert.equal(drop().enabled(), false);
+    nodes['lobby-files'].hidden = false;
     nodes['files-input'].files = [fakeFile('one.txt', 2)];
     nodes['files-input'].dispatch('change');
     await tick();
@@ -194,9 +254,11 @@ const rootListing = reqId => ({
     assert.equal(frame.t, 'file-upload');
     assert.equal(frame.dir, 'docs');
     assert.equal(nodes['files-upload'].disabled, true);
+    drop().tray.add([fakeFile('wait.txt', 1)]);
+    assert.match(notices.at(-1), /already in progress/);
     uploads.handle({t: 'file-upload', reqId: frame.reqId, ok: true, path: 'docs/one.txt'});
     await tick();
-    assert.deepEqual(notices, ['docs/one.txt added.']);
+    assert.equal(notices.at(-1), 'docs/one.txt added.');
     assert.equal(nodes['files-upload'].disabled, false);
     assert.deepEqual(plain(sent.at(-1)), {t: 'files', reqId: 2, dir: 'docs'});
     drop().tray.add([fakeFile('two.txt', 1)]);

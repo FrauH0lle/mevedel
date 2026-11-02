@@ -397,6 +397,27 @@
 		 ,test
 		 (test)
 
+  :doc "new conversation buffers are hidden from buffer lists"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-agent-hidden-" t)))
+         (workspace (mevedel-workspace--create :type 'project :id root :root root :name "hidden"))
+         (session (mevedel-session-create "main" workspace root))
+         (parent (generate-new-buffer " *agent-hidden-root*"))
+         (child (mevedel-agent-invocation--create
+                 :agent-id "default--a1b2c3d4e5" :path "/root/child"))
+         child-buffer)
+    (unwind-protect
+        (progn
+          (with-current-buffer parent
+            (setq-local mevedel--session session mevedel--workspace workspace))
+          (setq child-buffer (mevedel-agent-conversation-open child parent))
+          (should (equal " *mevedel-agent-a1b2c3d4*" (buffer-name child-buffer)))
+          (should-not (member child-buffer
+                              (mapcar #'get-buffer
+                                      (internal-complete-buffer "" nil t)))))
+      (dolist (buffer (list child-buffer parent))
+        (when (buffer-live-p buffer) (kill-buffer buffer)))
+      (delete-directory root t)))
+
   :doc "children and grandchildren execute in the session directory, not the checkout root"
   (let* ((root (file-name-as-directory (make-temp-file "mevedel-agent-tree-cwd-" t)))
          (worktree (file-name-as-directory (file-name-concat root "worktree")))

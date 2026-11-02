@@ -10,6 +10,10 @@
 (eval-when-compile (require 'cl-lib))
 (require 'mevedel-memory-decision)
 
+;; `mevedel-memory-cycle'
+(declare-function mevedel-memory-cycle-pins-pass-p "mevedel-memory-cycle" (workspace pass))
+(autoload 'mevedel-memory-cycle-pins-pass-p "mevedel-memory-cycle")
+
 (defun mevedel-memory-cleanup--file (workspace file expected)
   "Capture private FILE in WORKSPACE when its bytes match EXPECTED hash.
 FILE is relative to the private journal state directory."
@@ -24,50 +28,15 @@ FILE is relative to the private journal state directory."
   "Capture terminal ACCEPTED pass history in WORKSPACE from public ENTRIES.
 Every decision must be published, every proposal terminal, and every
 write resolved without a target marker. Signal when dependencies remain."
-  (let* ((pass (plist-get (plist-get accepted :prepared) :id))
-         (resolved-at (float-time (date-to-time (plist-get (plist-get accepted :review) :created))))
-         (latest (make-hash-table :test #'equal))
-         (passes (make-hash-table :test #'equal))
-         (decisions (make-hash-table :test #'equal))
-         history private related)
-    (puthash pass accepted passes)
-    (dolist (entry entries)
-      (when (and (eq (plist-get entry :kind) 'decision) (equal pass (plist-get entry :pass-id)))
-        (setq resolved-at (max resolved-at (float-time (date-to-time (plist-get entry :created)))))
-        (let* ((record (mevedel-memory-decision--published workspace entry passes))
-               (claim (plist-get record :claim))
-               (proposal (plist-get entry :proposal-id))
-               (old (gethash proposal latest)))
-          (when (> (plist-get claim :generation) (or (car old) 0))
-            (puthash proposal (cons (plist-get claim :generation) (plist-get entry :status)) latest))
-          (push entry history)
-          (push (list :id (plist-get entry :decision-id) :file (plist-get entry :file)
-                      :sha256 (secure-hash 'sha256 (plist-get entry :text))) related)
-          (puthash (plist-get entry :decision-id) t decisions)
-          ;; The reader already proved these exact bytes against acceptance.
-          ;; The expiry transaction checks them again immediately before deletion.
-          (push (list :file (format "decisions/%s.el" (plist-get entry :decision-id))
-                      :sha256 (plist-get record :hash)) private))))
-    (unless (cl-every (lambda (proposal) (mevedel-memory-decision-terminal-status-p (cdr (gethash (plist-get proposal :id) latest))))
-                     (plist-get accepted :proposals))
-      (error "Memory proposal is unresolved"))
-    (dolist (path (mevedel-session-control-fs-list-directory (mevedel-memory-decision--directory workspace) mevedel-memory-write-intent-file-regexp))
-      (when-let* (((not (gethash (file-name-base path) decisions)))
-                  (record (mevedel-memory-decision--record workspace path))
-                  (metadata (plist-get record :metadata))
-                  ((equal pass (plist-get metadata :pass-id))))
-        (error "Memory decision publication is unresolved")))
-    (dolist (row (mevedel-memory-write-list workspace))
-      (let ((intent (plist-get row :intent)))
-        (when (or (not intent) (equal pass (plist-get intent :pass)))
-          (when (or (plist-get row :error) (plist-get row :marked)
-                    (not (seq-some (lambda (entry)
-                                     (and (equal (plist-get row :hash) (plist-get entry :state-hash))
-                                          (mevedel-memory-decision-resolved-write-status-p (plist-get entry :status)))) history)))
-            (error "Memory write recovery is unresolved"))
-          (push (mevedel-memory-cleanup--file workspace (format "writes/%s.el" (plist-get row :id)) (plist-get row :hash)) private))))
-    (list :private (nreverse private) :related (vconcat (nreverse related))
-          :expires (+ resolved-at (* mevedel-memory-history-max-age-days 86400)))))
+  (let ((history (mevedel-memory-decision-retention workspace accepted entries)))
+    (list :private (mapcar (lambda (file)
+                             ;; Write intents are recaptured byte-exactly here.
+                             (if (string-prefix-p "writes/" (plist-get file :file))
+                                 (mevedel-memory-cleanup--file workspace (plist-get file :file) (plist-get file :sha256))
+                               file))
+                           (plist-get history :private))
+          :related (vconcat (plist-get history :related))
+          :expires (+ (plist-get history :resolved-at) (* mevedel-memory-history-max-age-days 86400)))))
 
 (defun mevedel-memory-cleanup-entry (workspace entry entries)
   "Return an expiry group for an unreferenced completed review ENTRY.
@@ -86,6 +55,8 @@ dependencies; this function never deletes or publishes state."
                  (_ (when (> (+ created (* mevedel-memory-history-max-age-days 86400))
                              (mevedel-session-control-fs-target-time (mevedel-workspace-root workspace)))
                       (error "Memory history is still recent")))
+                 (_ (when (mevedel-memory-cycle-pins-pass-p workspace id)
+                      (error "Note cycle has not reconciled its accepted admission")))
                  (accepted (mevedel-memory-store-accepted workspace id))
                  (review (plist-get accepted :review))
                  (prepared (plist-get accepted :prepared)))
@@ -101,6 +72,7 @@ dependencies; this function never deletes or publishes state."
                   (error "Memory history is still recent"))
                 (list :kind "consolidation" :id id :file (plist-get entry :file)
                     :scope (if (string-empty-p (plist-get review :focus)) "general" "focused")
+                    :journal-bearing (if (plist-get review :digests) t :false)
                     :sha256 (secure-hash 'sha256 (plist-get entry :text))
                     :related (plist-get history :related)
                     :private

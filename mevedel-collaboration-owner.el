@@ -3,7 +3,8 @@
 ;;; Commentary:
 
 ;; Owns the browser owner-link authorities: changing permission mode and
-;; creating isolated sessions for authenticated writable guests.
+;; creating isolated sessions for authenticated writable guests, including
+;; Conversation Forks of the shared session.
 
 ;;; Code:
 
@@ -95,6 +96,11 @@
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-sanitize
                   "mevedel-session-artifacts" (name))
+
+;; `mevedel-session-fork'
+(declare-function mevedel-session-fork-create
+                  "mevedel-session-fork" (buffer target type))
+(autoload 'mevedel-session-fork-create "mevedel-session-fork")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
@@ -410,6 +416,135 @@ its first prompt like one started in Emacs without a name."
              room peer guest request-id name prompt images model effort)
           (mevedel-collaboration--ask-host-new-session
            room peer guest request-id name prompt images model effort)))))))
+
+(defvar mevedel-collaboration--max-fork-outcomes 32
+  "Settled fork outcomes kept per admitted connection for retries.")
+
+(defun mevedel-collaboration--fork-ledger (room peer)
+  "Return PEER's fork ledger in ROOM, creating it when absent.
+The ledger is a plist with `:outcomes', an alist from request id to
+`pending' or the reply keys that settled it, newest first, and
+`:forgotten', the highest request id dropped from that bounded alist.
+ROOM keys it by PEER rather than storing
+it on the guest plist, which a repeated hello replaces; the guest
+lifecycle drops it when PEER leaves or the relay connection goes down,
+so it lasts exactly as long as the admitted connection."
+  (let ((ledgers (or (plist-get room :fork-ledgers)
+                     (let ((table (make-hash-table :test #'eql)))
+                       (plist-put room :fork-ledgers table)
+                       table))))
+    (or (gethash peer ledgers)
+        (puthash peer (list :forgotten -1 :outcomes nil) ledgers))))
+
+(defun mevedel-collaboration--fork-settle (room peer ledger request-id keys)
+  "Record KEYS as REQUEST-ID's outcome in LEDGER and send them to PEER in ROOM.
+KEYS are the `new-session' reply fields, starting with `:name'."
+  (let ((outcomes (plist-get ledger :outcomes)))
+    (setf (alist-get request-id outcomes) keys)
+    (when (> (length outcomes) mevedel-collaboration--max-fork-outcomes)
+      (dolist (dropped (nthcdr mevedel-collaboration--max-fork-outcomes outcomes))
+        (plist-put ledger :forgotten
+                   (max (car dropped) (plist-get ledger :forgotten))))
+      (setq outcomes (seq-take outcomes mevedel-collaboration--max-fork-outcomes)))
+    (plist-put ledger :outcomes outcomes))
+  (apply #'mevedel-collaboration--new-session-reply
+         room peer request-id (plist-get keys :name) keys))
+
+(defun mevedel-collaboration--create-fork (data-buffer fork-point)
+  "Fork the session in DATA-BUFFER at FORK-POINT and start the child's room.
+Return (NEW-ROOM NAME FAILURE).  The child buffer is owned here: when
+its room does not start, its live buffer, view and lock are discarded,
+while the published fork stays saved for the host to open."
+  (let (child-buffer child new-room failure)
+    (condition-case err
+        (setq child-buffer (mevedel-session-fork-create
+                            data-buffer (list :fork-point-id fork-point)
+                            'conversation))
+      (error (setq failure (format "Fork could not be created: %s"
+                                   (error-message-string err)))))
+    (when child-buffer
+      (setq child (buffer-local-value 'mevedel--session child-buffer))
+      (unwind-protect
+          (condition-case err
+              (setq new-room (mevedel-collaboration--start child child-buffer))
+            (error (setq failure (error-message-string err))))
+        (if new-room
+            ;; Like a session created for a guest, the host sees it open.
+            (ignore-errors (mevedel--display-chat-buffer child-buffer))
+          (mevedel-chat-discard-buffers child-buffer t)
+          (setq failure
+                (format "Fork saved as session %s, but its room could not start: %s.  Open it in Emacs with M-x mevedel"
+                        (mevedel-session-session-id child)
+                        (or failure "the room did not start"))))))
+    (list new-room (and child (mevedel-session-name child)) failure)))
+
+(defun mevedel-collaboration--handle-fork (room peer frame)
+  "Fork ROOM's session at FRAME's fork point for owner PEER.
+
+This is the browser's Conversation Fork: a new session whose transcript
+ends at the assistant response that carries FRAME's `forkPoint', in the
+same working directory, with the source session left unchanged.  It is
+an owner-link authority, like creating a session outright, because the
+child copies the session's configuration and history.  The fork shares
+the `new-session' reply, so the requester's waiting notice settles with
+an owner link to the child's room; other owners are offered it too.
+
+Each request id forks at most once per admitted connection.  A retry of
+a settled request receives its recorded outcome again and a retry while
+it runs is ignored.  The ledger keeps a bounded number of outcomes, so
+an id at or below the highest one it has dropped may be a repeat it no
+longer remembers: that is refused as stale rather than performed.
+
+A fork that published but whose room could not start stays a saved
+session: discarding it would lose the only copy of a state the
+requester asked to keep.  The refusal names it and how to open it."
+  (when-let* ((guest (mevedel-collaboration--owner room peer))
+              (request-id (plist-get frame :reqId))
+              ((mevedel-collaboration--request-id-p request-id)))
+    (let* ((ledger (mevedel-collaboration--fork-ledger room peer))
+           (known (assq request-id (plist-get ledger :outcomes))))
+      (cond
+       ((eq (cdr known) 'pending) nil)
+       (known
+        (apply #'mevedel-collaboration--new-session-reply
+               room peer request-id (plist-get (cdr known) :name) (cdr known)))
+       ((<= request-id (plist-get ledger :forgotten))
+        (mevedel-collaboration--new-session-reply
+         room peer request-id nil :ok :json-false
+         :message "This fork request is stale and was not repeated"))
+       (t
+        (plist-put ledger :outcomes
+                   (cons (cons request-id 'pending)
+                         (plist-get ledger :outcomes)))
+        (let ((fork-point (mevedel-collaboration--guest-text
+                           (plist-get frame :forkPoint)))
+              (data-buffer (mevedel-collaboration--room-data-buffer room))
+              keys)
+          (unwind-protect
+              (setq
+               keys
+               (if (not (and fork-point data-buffer (plist-get room :session)))
+                   (list :name nil :ok :json-false
+                         :message "Choose a settled assistant response to fork")
+                 (pcase-let ((`(,new-room ,name ,failure)
+                              (mevedel-collaboration--create-fork
+                               data-buffer fork-point)))
+                   (if (not new-room)
+                       (list :name name :ok :json-false :message failure)
+                     (ignore-errors
+                       (mevedel-collaboration--offer-room-to-owners
+                        room peer name (plist-get new-room :link-owner)))
+                     (message "mevedel: session forked as %s by owner %s"
+                              name (plist-get guest :name))
+                     (list :name name :ok t
+                           :link (mevedel-collaboration--guest-link
+                                  new-room guest))))))
+            ;; A non-local exit still settles the id, so its retry is
+            ;; answered rather than ignored forever.
+            (mevedel-collaboration--fork-settle
+             room peer ledger request-id
+             (or keys (list :name nil :ok :json-false
+                            :message "The fork was interrupted"))))))))))
 
 (provide 'mevedel-collaboration-owner)
 ;;; mevedel-collaboration-owner.el ends here

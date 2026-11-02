@@ -18,8 +18,9 @@
 (require 'mevedel-tool-fs-search)
 
 (defun test-mevedel-spool--wait (predicate)
-  "Wait boundedly until PREDICATE succeeds."
-  (let ((deadline (+ (float-time) 10)))
+  "Wait boundedly until PREDICATE succeeds.
+The bound detects hangs only; tool calls take seconds under full-suite load."
+  (let ((deadline (+ (float-time) 60)))
     (while (and (not (funcall predicate)) (< (float-time) deadline))
       (accept-process-output nil 0.01))
     (should (funcall predicate))))

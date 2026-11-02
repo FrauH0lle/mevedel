@@ -13,6 +13,32 @@
 (require 'mevedel-view-render)
 (require 'mevedel-view-table)
 
+(mevedel-deftest mevedel-view-table-unload-function ()
+  ,test
+  (test)
+  :doc "cold loading installs font observers and unloading removes all of them"
+  (with-temp-buffer
+    (let ((status
+           (call-process
+            (expand-file-name invocation-name invocation-directory)
+            nil t nil "--batch" "-Q" "--eval"
+            (prin1-to-string
+             `(progn
+                (setq load-path ',load-path)
+                (require 'mevedel-view-table)
+                (let ((setters mevedel-view-table--font-setters))
+                  (dolist (setter setters)
+                    (unless (advice-member-p #'mevedel-view-table--fonts-changed setter)
+                      (error "Missing font observer: %s" setter)))
+                  (unload-feature 'mevedel-view-table t)
+                  (dolist (setter setters)
+                    (when (advice-member-p 'mevedel-view-table--fonts-changed setter)
+                      (error "Leaked font observer: %s" setter)))
+                  (set-face-attribute 'default nil :weight 'normal)))))))
+      (ert-info ((buffer-string))
+        (should (equal 0 status))
+        (should (equal "" (buffer-string)))))))
+
 (mevedel-deftest mevedel-view-table--allocate-widths
   (:doc "Indivisible glyph floors survive even an impossibly narrow target.")
   ;; Three 11-pixel units are needed for a 24-pixel emoji.  Shrinking

@@ -16,6 +16,10 @@
 ;; Diff lines carry current buffer line numbers, because the model
 ;; answers with line numbers.  Removed lines are labelled instead of
 ;; numbered so they are never mistaken for a place a note can go.
+;;
+;; A scope may also hold a brief, set by `/buddy' from a session: what
+;; the programmer is building.  It is prefixed to every request in the
+;; scope and, like everything else here, lives only in memory.
 
 ;;; Code:
 
@@ -174,6 +178,12 @@ file, and `default-directory' used to derive the key.")
 
 (put 'mevedel-buddy--scope-cache 'permanent-local t)
 
+(defun mevedel-buddy-directory-scope-key (directory)
+  "Return the project scope key for DIRECTORY, or nil outside a project.
+Source buffers and sessions in one project derive the same key here."
+  (let ((default-directory (file-name-as-directory directory)))
+    (cdr (ignore-errors (mevedel-workspace--project-workspace)))))
+
 (defun mevedel-buddy--scope-key ()
   "Return the current buffer's scope key.
 
@@ -194,8 +204,7 @@ project is its own scope."
           (when reschedule
             (mevedel-buddy--schedule))))
       (let ((scope-key
-             (or (cdr (ignore-errors
-                        (mevedel-workspace--project-workspace)))
+             (or (mevedel-buddy-directory-scope-key default-directory)
                  (concat "buffer:" (buffer-name)))))
         (setq mevedel-buddy--scope-cache (cons identity scope-key))
         scope-key))))
@@ -488,6 +497,34 @@ are grouped per buffer and each group becomes one section."
 ;;
 ;;; Review requests
 
+(defconst mevedel-buddy--brief-limit 12000
+  "Most characters of a brief sent with each request.
+Every automatic review pays for the brief again, so it stays bounded.")
+
+(defvar mevedel-buddy--briefs (make-hash-table :test #'equal)
+  "Hash table mapping scope keys to (SOURCE . TEXT) briefs.
+SOURCE is a short phrase naming where TEXT came from.")
+
+(defun mevedel-buddy-set-brief (scope-key source text)
+  "Give SCOPE-KEY the brief TEXT, described as coming from SOURCE.
+A nil TEXT removes the scope's brief.  Briefs live in memory only."
+  (if text
+      (puthash scope-key (cons source text) mevedel-buddy--briefs)
+    (remhash scope-key mevedel-buddy--briefs)))
+
+(defun mevedel-buddy--brief-section (scope-key)
+  "Return SCOPE-KEY's brief formatted for a request, or the empty string."
+  (if-let* ((brief (gethash scope-key mevedel-buddy--briefs)))
+      (let ((text (string-trim (cdr brief))))
+        (when (> (length text) mevedel-buddy--brief-limit)
+          (setq text (concat (substring text 0 mevedel-buddy--brief-limit)
+                             "\n[brief truncated]")))
+        (format (concat "=== Brief: what the programmer is building, from %s"
+                        " in their mevedel session ===\n%s\n"
+                        "=== End of brief ===\n\n")
+                (car brief) text))
+    ""))
+
 (defvar mevedel-buddy--running nil
   "Scope key of the review currently in flight, or nil.")
 
@@ -665,6 +702,7 @@ started by the idle timer, which an explicit request may preempt."
         (settled nil)
         (generation (cl-incf mevedel-buddy--generation))
         (source (current-buffer))
+        (brief (mevedel-buddy--brief-section scope-key))
         (request-buffer (generate-new-buffer " *mevedel-buddy-request*")))
     (unless (plist-get policy :model)
       (kill-buffer request-buffer)
@@ -729,7 +767,7 @@ started by the idle timer, which an explicit request may preempt."
                               generation))))
               (if (mevedel-engine-external-p gptel-backend)
                   (mevedel-claude-code-request-workload
-                   (concat payload (mevedel-buddy-note-serialize))
+                   (concat brief payload (mevedel-buddy-note-serialize))
                    system gptel-tools
                    (lambda (response _info)
                      (when (memq response '(t nil abort)) (finish (eq response t))))
@@ -744,7 +782,7 @@ started by the idle timer, which an explicit request may preempt."
                      nil))
                 (progn (mevedel-auth-assert-ready gptel-backend)
                        (gptel-request
-			(concat payload (mevedel-buddy-note-serialize))
+			(concat brief payload (mevedel-buddy-note-serialize))
 			:buffer request-buffer
 			:fsm (mevedel-buddy--request-fsm #'finish)
 			;; Follow the user's streaming setting rather than forcing it

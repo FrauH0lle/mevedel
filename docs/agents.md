@@ -219,6 +219,9 @@ or erroring callback cannot leave the recipient stuck waiting or remove a new
 wait started by the callback. The triggering mail remains queued until ordinary
 conversation delivery acknowledges it; another WaitAgent observes that mail
 immediately even when the previous callback failed.
+Cancelling an individual tool call (including MCP timeout or disconnect) also
+releases that call's wait, timer and waiting activity, without cancelling the
+surrounding turn or a later wait.
 `InterruptAgent` aborts one retained non-root agent's current turn by canonical
 path, returns its previous activity, and leaves its identity, conversation,
 mailbox, descendants, and future follow-up capability intact.
@@ -456,8 +459,9 @@ PATH` from the canonical event.
 
 ## Inter-agent messaging (SendMessage)
 
-`SendMessage(target, message)` resolves canonical or relative retained paths
-tree-wide. An idle non-root recipient starts a turn with the message as its
+`SendMessage(message, target?)` defaults to the caller's immediate spawn parent;
+root has no parent and must supply a target. Explicit targets resolve canonical
+or relative retained paths tree-wide. An idle non-root recipient starts a turn with the message as its
 task. For an active recipient, or at capacity, it queues one canonical `MAIL`
 record containing type, sender path, recipient path, and payload. Agent mail to
 `/root` can wake the idle root; self-mail never starts a turn.
@@ -699,7 +703,9 @@ changes a conversation buffer.
 
 Persisted agents may compact older history immediately before a continuation
 request.  The canonical transcript path remains stable, the original task and
-recent tail remain visible, and later compactions update the existing anchored
+recent tail remain visible. The latest direct follow-up task or immediate-parent
+MAIL is also carried verbatim, independently of the generated summary; peer mail
+and inherited context do not replace it. Later compactions update the existing anchored
 summary instead of stacking summaries.  Each rewrite first creates the next
 numbered `compact-NNNN` sibling as a recovery artifact.  Those siblings are not
 agent handles or sidecar entries; they belong only to the original session and

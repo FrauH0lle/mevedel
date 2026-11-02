@@ -24,6 +24,7 @@
 (require 'mevedel-transport)
 (require 'mevedel-tool-patch)
 (require 'mevedel-plan-mode)
+(require 'mevedel-reminders)
 (require 'mevedel-patch-review)
 (require 'mevedel-tools)
 (require 'mevedel-view)
@@ -455,6 +456,9 @@ cover, so the permission step's warning about it is captured here."
 		   (should (equal "/tmp/probe/x"
 				  (mevedel-pipeline--normalize-path-value
 				   "$MEVEDEL_TEST_ROOT/x"))))
+		 :doc "collapses a doubled leading slash that Emacs would keep"
+		 (should (equal "/home/user/.ssh/id"
+				(mevedel-pipeline--normalize-path-value "//home/user/.ssh/id")))
 		 :doc "expands a relative path against `default-directory'"
 		 (let ((default-directory "/tmp/root/"))
 		   (should (equal "/tmp/root/a/b"
@@ -508,7 +512,18 @@ cover, so the permission step's warning about it is captured here."
 			  (equal expected
 				 (mevedel-pipeline--canonicalize-path-value path))))
 		     (delete-directory root t)
-		     (delete-directory outside t))))
+		     (delete-directory outside t)))
+		 :doc "a symlink to a doubled-slash target canonicalizes to one leading slash"
+		 (let* ((root (file-name-as-directory
+			       (file-truename (make-temp-file "mevedel-canonical-slash-" t))))
+			(link (file-name-concat root "linked")))
+		   (unwind-protect
+		       (progn
+			 (make-symbolic-link (concat "/" root) link)
+			 (should (equal (concat root "file.txt")
+					(mevedel-pipeline--canonicalize-path-value
+					 (file-name-concat link "file.txt")))))
+		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-pipeline-canonical-path ()
 		 ,test
@@ -577,7 +592,7 @@ cover, so the permission step's warning about it is captured here."
 		   (mevedel-pipeline--step-normalize-paths
 		    ctx (lambda (c) (setq updated c)) #'ignore)
 		   (should (eq args (plist-get updated :args))))
-		 :doc "precomputes the canonical path of a read-access argument only"
+		 :doc "canonicalizes an ordinary `path-or-resource' symlink and maps read access only"
 		 (let* ((root (file-name-as-directory
 		               (make-temp-file "mevedel-normalize-read-" t)))
 		        (target (file-name-concat root "target.png"))
@@ -595,7 +610,10 @@ cover, so the permission step's warning about it is captured here."
 		                         :args (list (if access (append spec '(:access read)) spec)))
 		                  :args (list :source link))
 		            (lambda (c) (setq updated c)) #'ignore)
-		           (should (equal (and access (list (cons link (file-truename target))))
+		           (should (equal (file-truename target)
+		                          (plist-get (plist-get updated :args) :source)))
+		           (should (equal (and access (list (cons (file-truename target)
+		                                                  (file-truename target))))
 		                          (plist-get updated :canonical-path-map)))))
 		     (delete-directory root t)))
 		 :doc "uses the session target before authorization"

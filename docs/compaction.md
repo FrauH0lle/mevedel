@@ -79,6 +79,15 @@ automatic gates:
 - the pre-send prompt transform for ordinary user requests.
 - the continuation WAIT gate before tool-result follow-up requests.
 
+Click **compact on/off** in the chat's top status strip to toggle these
+automatic gates for the open session. This overrides `mevedel-compact-auto`
+locally, not its global default or another chat's setting. Closing and reopening
+the session restores the configured default. Re-enabling also clears the
+repeated-failure latch. The toggle neither runs a compaction immediately nor
+cancels one already in progress; manual `/compact` remains available.
+Claude instead shows the non-interactive **compact provider** label: its native
+compaction is provider-managed, and this control does not disable it.
+
 During auto-compaction the view reuses the request progress row and
 changes its status to `Compacting...`. When compaction completes, the
 original request continues and the spinner returns to `Thinking...`.
@@ -309,6 +318,14 @@ and `"auto"` as `:trigger`.  Model-visible `PreCompact` additions retain their
 ignored audit record beside the summary.
 
 For a persisted agent, the original `* Agent Task:` block remains verbatim.
+The latest direct follow-up task or delivered MAIL from its immediate parent
+also survives verbatim outside the generated summary. The harness selects it
+from canonical transcript spans after the agent's own task marker, not from
+inherited context, peer mail, quoted control text, or a queued-mail wake prompt.
+If the preserved tail or pending text already contains it, no extra copy is
+inserted. This survives repeated compaction and transcript restoration without
+another persisted state field. Native child compaction uses the same local
+transcript preservation; Claude still owns its external history and summary.
 Only older agent-owned history is summarized; parent goal state, session-wide
 skill history, and touched-file reminders are excluded.  Before rewriting,
 mevedel synchronously saves the full live transcript and copies it to the next
@@ -595,6 +612,16 @@ separator in its place, while the summary remains model-visible for
 future requests. Expanded tool rows surviving in the preserved tail
 remain expanded after the view rebuild; rows archived with the old segment
 do not transfer their disclosure state into the successor.
+Agent compaction rewrites the agent's conversation buffer in place, so its
+completion also rebuilds every open transcript view of that agent and
+re-anchors live streaming to the preserved tail. A view left on its old
+projection would otherwise treat the rewritten buffer as the in-flight turn.
+Agent inspection shows the same compacted-conversation separator, retaining
+the task anchor and hiding the model-visible summary in both live and saved
+transcripts. Summary discovery runs only during full-history preparation;
+ordinary streaming does not rescan history for it.
+Only producer-owned ignored wrappers establish an agent summary's ownership;
+literal tagged summary examples in task text remain visible.
 
 Continuation after compaction resets gptel's stream insertion state at the end
 of the new transcript. Response, reasoning, and tool output therefore follow

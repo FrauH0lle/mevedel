@@ -61,7 +61,10 @@ Key features:
 ## Requirements
 
 - A Linux host.  Portable session storage needs procfs, GNU `stat`, and
-  `bash`, and refuses to run anywhere else; CI covers Linux only.
+  `bash`, and refuses to run anywhere else; CI covers Linux only.  On a
+  remote target, optional compression makes each storage round trip cheaper
+  when `gzip` is available both locally and on the target; otherwise the
+  program script travels inline.
 - Emacs version 31.1 or higher
 - [gptel](https://github.com/karthink/gptel) 0.9.9.6 or higher
 - [acp.el](https://github.com/xenodium/acp.el) 0.15.2 or higher for external agent connections
@@ -73,6 +76,9 @@ Key features:
   directory listings
 - [Bubblewrap](https://github.com/containers/bubblewrap) on Linux for Bash and
   batch Eval child confinement
+- Python 3 for safely opening and writing authorized file-tool paths
+- Optional: a kernel with Landlock ABI 9 or newer, to keep
+  confined commands away from host Unix sockets outside the workspace
 - Optional: [mcp.el](https://github.com/lizqwerscott/mcp.el) for `@mcp` mentions
 - Optional: Poppler (`pdftoppm`) for rendering selected PDF pages with `Read`
 - Optional: Node 22.4 or newer on the Emacs host for
@@ -80,10 +86,10 @@ Key features:
 - Optional: ImageMagick (`magick` or `convert`) for image/PDF resize and
   compression options in `Read`
 
-Remote Linux targets require `rg`, `bash`, and `setsid`.  Git is required only
-for Git-backed workflows, Bubblewrap follows the configured sandbox mode, and
-media converters remain optional.  Mevedel probes these capabilities but does
-not install target dependencies.
+Remote Linux targets require `rg`, `bash`, `setsid`, and `python3`.  Git is
+required only for Git-backed workflows, Bubblewrap follows the configured
+sandbox mode, and media converters remain optional.  Mevedel probes these
+capabilities but does not install target dependencies.
 
 On a remote workspace, another package doing remote I/O from a process
 sentinel can interrupt a mevedel command mid-conversation; TRAMP then refuses
@@ -259,6 +265,13 @@ All instructions, references or directives, are highlighted in the buffer via an
 overlay. The overlay contains an action menu which can be toggled via
 `mevedel-ov-dispatch-key` and grants access to common operations.
 
+Selections starting at the beginning of a line and ending at its end (or the
+beginning of the next line) remain whole-line instructions while you edit.
+Intersecting edits expand the instruction to cover replacement text; inserting
+whole lines immediately above or below does not include those lines. Deleting
+part of the selection shrinks it, and joining across an edge includes the
+joined line. Character selections retain their character boundaries.
+
 Deleting all source text covered by a directive leaves a compact, zero-width
 detached row at that position. Its request, attempts, discussions, state, and
 actions remain available. If the file disappears, the workspace record remains
@@ -268,34 +281,101 @@ current details of their topmost parent rather than owning separate activity;
 if the parent detaches, prompts and submissions still consume those durable
 details after their source presentations disappear.
 
+Ordinary undo and redo restore source presentations after complete deletion,
+including references and detached directives, without rewinding directive
+history. Emacs selective undo (`undo-in-region`) does not replay these custom
+overlay undo records, so it only restores text.
+
+Typing over a complete instruction with `delete-selection-mode` preserves its
+identity and covers the replacement text. A full deletion remains pending until
+the current command finishes: inserting at the deletion point in that command
+recovers the instruction, while leaving it empty removes a reference or detaches
+a directive. Line selections stay line selections. Separate noninteractive
+delete/insert calls need a single replacement notification or an explicit held
+replacement scope; unrelated later commands do not resurrect deleted instructions.
+Replacing only an instruction's first or last covered line keeps the replacement
+alongside its surviving lines; unrelated adjacent insertions still stay outside.
+Replacing a whole parent and its nested instructions recovers only the outermost
+span: nested directive details/history remain on the parent without source
+presentations, and nested references are removed. Undo restores the nested
+instructions too.
+
 ![Directive Overlay](.assets/images/ov-actions-menu.png)
-
-> [!NOTE]
-> A note for [evil](https://github.com/emacs-evil/evil) users:
-
-If you want to customize the dispatch keybind such that it uses a key only in
-`normal-mode`, you will need to add something like this to your config:
-
-``` emacs-lisp
-;; Unbind default key
-(setopt mevedel-ov-dispatch-key nil)
-;; Use RET in normal mode to open the overlay menu
-;; See https://github.com/emacs-evil/evil/issues/1477
-(dolist (map mevedel--actions-maps)
-  (define-key (symbol-value map)
-              [return]
-              `(menu-item "" mevedel--ov-actions-dispatch
-                :filter ,(lambda (cmd) (when (evil-normal-state-p) cmd))))
-  (define-key (symbol-value map)
-              "RET"
-              `(menu-item "" mevedel--ov-actions-dispatch
-                :filter ,(lambda (cmd) (when (evil-normal-state-p) cmd)))))
-```
 
 | Custom Variable                      | Variable Description                                                      |
 |--------------------------------------|---------------------------------------------------------------------------|
 | `mevedel-ov-dispatch-key`            | Keybind to open overlay actions.                                          |
 | `mevedel-instructions-truncated-max` | Maximum display length for truncated directive text.                      |
+
+### Evil
+
+[Evil](https://github.com/emacs-evil/evil) integration is optional and never
+enabled by loading mevedel or `mevedel-evil.el`. Install and enable Evil yourself,
+then opt in once (repeated calls are safe):
+
+```emacs-lisp
+(mevedel-evil-setup)
+```
+
+Setup requires Evil at call time and reports a clear error if it is missing.
+Evil is not a runtime dependency, and evil-collection is not required. The
+integration follows its special-buffer conventions: the session view, read-only
+tables, and reports start in normal state; editable `mevedel-surface-mode`
+buffers start in insert state. Directive/prompt minibuffers retain your configured
+minibuffer state (Emacs state by default). Use `i` or `a` to type in the composer
+and Escape to return to normal-state navigation. In the session view,
+normal-state `RET` activates a row, `TAB` toggles it, `n`/`p` navigate displays,
+`t` opens the transcript, and `q` closes agent inspection. Ordinary Evil
+`h j k l`, `gg`, and `G` remain navigation.
+
+The composer retains its Emacs control and history keys in both normal and insert
+states, including `C-c C-c` (save a pending-input edit), `C-c RET` (send or steer),
+`C-c TAB` (follow-up),
+`C-c C-w` (retract), `C-c C-r` (resume), `C-c C-e` (Pending Inputs),
+`C-c C-u` (clear), and `M-p`/`M-n`/`M-r` (input history). On a pending summary
+row, normal-state `RET` inspects the entry (`RET` on the manage row opens
+Pending Inputs) and `d` drops the selected entry.
+Source instruction overlays gain normal-only `RET` for their action menu;
+insert-state Return still inserts a newline. Existing control bindings remain.
+
+All nine cockpit tables use normal-state `q` to quit, `gr` to refresh,
+`?` for help, and `RET` for details (Pending Inputs edits instead).
+Their existing action letters remain available, including `d`/`u`/`x` deletion
+marks in Pending Inputs. The following conflicts move explicitly rather than
+shadowing Evil navigation:
+
+| Surface | Normal-state key | Action (original key) |
+| --- | --- | --- |
+| All cockpit tables and reports | `gr` | Refresh (`g`) |
+| Plugins | `H` | Toggle plugin hooks (`h`) |
+| Memory | `J` | Inspect journal jobs (`j`) |
+| Memory | `K` | Kill consolidation (`k`) |
+| Background work | `K` | Stop execution or interrupt agent (`k`) |
+| Tools | `gG` | Open gptel menu (`G`) |
+
+Generated cockpit key help uses these normal-state keys. Some existing header
+and interaction-card prose still shows vanilla keys; the same conflict mapping
+applies there (`g` actions use `gr`, and `h`/`j`/`k`/`l` actions use uppercase).
+
+Other table action keys intentionally override normal-state editing commands
+only in those read-only tables. In source buffers, invoke the ordinary
+`mevedel-create-reference`, `mevedel-create-directive`, and
+`mevedel-delete-instructions` commands from visual state using your own bindings
+or `M-x`: `V` creates an explicit line span, `v` an explicit character span.
+Block selections are rejected rather than silently flattened. Commands leave
+visual state cleanly; vanilla Emacs region commands keep their existing behavior.
+
+Evil change operators keep a fully deleted instruction pending across the
+following insert session (or replace session for `R`), so `cc`, `c`, `s`, and
+visual changes can replace it without losing its identity or directive history.
+Leaving the session without
+inserted text performs a full deletion. `cc`/`S` themselves insert a placeholder
+newline: it counts as replacement text, including for character spans, and can
+keep a blank instruction even if you type nothing. Normal deletion such as `dd`
+resolves at command end. The integration leaves your undo backend and
+`evil-want-fine-undo` setting
+unchanged; ordinary source undo/redo restores presentations without rewinding
+directive activity. Selective region undo remains text-only.
 
 ### Workspaces
 
@@ -329,7 +409,9 @@ memory roots, the configured plans directory, and manually configured roots.
 | `mevedel-create-directive`        | Create or resize a directive instruction at point or within a region. |
 | `mevedel-convert-instructions`    | Convert instructions between reference and directive type at point or within a region. |
 | `mevedel-delete-instructions`     | Remove instructions either at point or within the selected region.    |
-| `mevedel-delete-all-instructions` | Delete all mevedel instructions across all buffers.                   |
+| `mevedel-delete-all-instructions` | Confirm deletion of references and visible directives in the current workspace. |
+| `mevedel-delete-all-references`   | Confirm deletion of references in the current workspace; keep directives. |
+| `mevedel-delete-all-directives`   | Confirm deletion of visible directives and their subdirectives; keep references. |
 | `mevedel`                         | Start or switch to a chat session; prefix arg prompts for directory/session. |
 | `mevedel-in-directory`            | Start or switch to a chat session rooted in a workspace subdirectory. |
 | `mevedel-init`                    | Bootstrap or refresh project instruction files.                       |
@@ -337,6 +419,15 @@ memory roots, the configured plans directory, and manually configured roots.
 | `mevedel-process-directives`      | Batch initial implementations in source order (region, point, or buffer). |
 | `mevedel-abort`                   | Abort any active request in the current buffer.                       |
 | `mevedel-version`                 | Show (or insert with prefix arg) the current mevedel version.         |
+
+Bulk deletion includes all buffers in the current workspace, not other
+workspaces. Buffers without a workspace share one global instruction bucket;
+invoking a bulk command there affects that shared bucket. When deleting
+directives (including with `mevedel-delete-all-instructions`), a separate prompt
+offers to include Source-missing records, defaulting to no (RET). Archived
+directives remain intact, and directives with activity must be archived rather
+than deleted. Counts include visible subdirectives and any selected Source-missing
+records; records without a source presentation do not add to the buffer count.
 
 | Custom Variable               | Variable Description                                             |
 |-------------------------------|------------------------------------------------------------------|
@@ -400,9 +491,30 @@ the raw data buffer for persistence and gptel state. mevedel data buffers are
 kept linear: `gptel-org-branching-context` is set buffer-locally to `nil`, so Org
 headings in transcripts do not change the request context.
 
-`Shift-TAB` cycles the session permission mode from the input prompt. If you
-submit while a request is running, the prompt is queued for the next turn and can
-be edited or cleared before it is drained. Dropping a local file into the view
+`M-x mevedel-menu` opens the session controls from either paired buffer.
+Cockpit tables and information panels are temporary: `q` restores the window
+layout and buffers from before they opened, without undoing buffer switches,
+window changes, or navigation made elsewhere while they were open. A table
+opened from the menu returns to that menu; a direct command or key, such as
+`C-c C-e` for Pending Inputs, returns directly to its caller. Dismiss the
+transient itself with `C-g`.
+The explicit Data view action still switches between the rendered view and
+authoritative transcript; ordinary menu and cockpit navigation never exposes
+the internal data buffer as a side effect.
+
+`Shift-TAB` cycles the session permission mode from the input prompt. During a
+running root turn, `C-c RET` sends steering at its next interaction boundary;
+`C-c TAB` queues a separate follow-up turn. `C-c C-w` retracts the newest pending
+entry into an empty composer, including its mentions and attachment grants,
+without opening a cockpit or pausing delivery. `d` or `DEL` on a pending summary
+row drops that entry directly. Entries already being dispatched cannot be
+retracted or deleted. `C-c C-u` still clears the draft.
+
+After interrupting a turn, `C-c C-r` resumes leftover steering as one new user
+message, in order, then queued follow-ups drain normally. The same key clears
+the pending-input failure hold after a genuine failure; it explicitly retries
+retained input. Resume requires an idle session and an empty composer. Dropping
+a local file into the view
 inserts an `@file` mention and grants a one-shot exact-file `Read` permission for
 the next send.
 
@@ -410,6 +522,9 @@ the next send.
 |--------------------------------------|----------------------------------------------------------|
 | `mevedel-view-send`                  | Send the current view input to the backing data buffer.  |
 | `mevedel-view-abort`                 | Abort the active request from the view buffer.           |
+| `mevedel-view-retract-pending`       | Withdraw the newest pending entry into an empty composer (`C-c C-w`). |
+| `mevedel-view-resume-pending`        | Resume leftover steering in one turn, then queued follow-ups (`C-c C-r`). |
+| `mevedel-pending-inputs-drop-at-point` | Delete the pending summary row under point (`d` / `DEL`), without opening the cockpit. |
 | `mevedel-view-toggle-section`        | Expand or collapse the section or turn at point.         |
 | `mevedel-view-arm-conversation-fork` | Arm a Conversation Fork at the assistant turn at point.  |
 | `mevedel-view-arm-worktree-fork`     | Arm a Worktree Fork at the assistant turn at point.      |
@@ -721,10 +836,24 @@ the patch before applying it.
 - `mevedel-toggle-tasks`
 - `mevedel-buddy-mode` / `mevedel-buddy-global-mode` /
   `mevedel-buddy-review` / `mevedel-buddy-guide`
+- `/buddy` / `/buddy BRIEF` / `/buddy off`
 - `mevedel-buddy-dismiss-note` / `mevedel-buddy-dismiss-notes` /
   `mevedel-buddy-abort`
 - `mevedel-retry-plan-implementation`
 
+The chat's top **compact on/off** control toggles automatic compaction for
+that open session without moving the cursor or changing other chats. It does
+not cancel compaction already running; `/compact` remains available for manual
+compaction. Reopening a session restores the configured default. Claude shows
+**compact provider** instead, because its native compaction is provider-managed.
+
+Use `/btw [QUESTION]` for an independent, multi-turn aside with the current
+context. On Claude Code, finish the parent turn first: mevedel forks the native
+history rather than copying the visible transcript. The adapter must advertise
+session fork, resume and delete; otherwise the command explains the refusal.
+Close the side with `C-c C-z`. Closing, aborting or failing a native side deletes
+its fork without changing the parent; after an abort or failure, open a new side.
+Other gptel backends still allow `/btw` during streaming and follow-ups after abort.
 
 ## Tools & Agents
 
@@ -983,7 +1112,10 @@ host rejects only a fresh `/proc` mount, Mevedel retains filesystem, process,
 and network confinement while using the host `/proc` view and discloses that
 fact as `proc: host`. The confined profile exposes the host read-only, reopens
 allowed roots writable, uses the session working directory, and gives
-descendants fresh process and network namespaces. `best-effort` selects direct
+descendants fresh process and network namespaces. On kernels with Landlock ABI
+9, local commands also cannot connect to host Unix sockets outside writable
+roots and explicit write grants; elsewhere results disclose `host sockets:
+reachable`. `best-effort` selects direct
 execution when the initial confinement probe is unavailable and reports
 unrestricted filesystem and network access; `required` refuses instead; `off`
 runs directly with the same unrestricted disclosure. Once confined preparation
@@ -1258,8 +1390,8 @@ User skill invocations may block chat input while asynchronous preparation or an
 awaited fork completes.
 
 Built-in local slash commands include `/help`, `/clear`, `/tokens`, `/usage`, `/model`,
-`/compact`, `/btw`, `/mode`, `/edits`, `/goal`, `/init`, `/prompt`, `/review`,
-and `/verify`.
+`/compact`, `/btw`, `/buddy`, `/mode`, `/edits`, `/goal`, `/init`, `/prompt`,
+`/review`, and `/verify`.
 `/usage` (or `U Usage` in the session cockpit) opens account-wide
 subscription quotas for the session's Codex OAuth or Claude Code backend.
 The read-only report fetches on opening and on `g`; `q` cancels any pending
@@ -1312,6 +1444,7 @@ from gptel's API-reported token usage when available.
 | `mevedel-buddy-global-mode` | Enable Buddy in every buffer whose mode is tracked. |
 | `mevedel-buddy-review` | Review recent edits now, without waiting for the idle timer. |
 | `mevedel-buddy-guide` | Ask what to build in this region, rather than what went wrong. |
+| `/buddy` | Implement it yourself: feed this session's plan, Goal, or latest exchange to Buddy and turn Buddy on. `/buddy BRIEF` states the brief; `/buddy off` stops. |
 | `mevedel-buddy-dismiss-note` | Dismiss the Buddy note at point. |
 | `mevedel-buddy-dismiss-notes` | Dismiss every Buddy note in this buffer. |
 
@@ -1348,12 +1481,12 @@ frontmatter that classifies them as user, feedback, project, or reference
 memories. The native `/remember [focus]` command reviews journal evidence and
 memory, then presents proposals for cleanup or promotion in the memory cockpit.
 Use `/remember drain`, `M-x mevedel-remember-drain`, or `D` in that cockpit to
-review a backlog in successive bounded batches; `k` stops it. Auto mode catches
-up at later idle opportunities, capped by
-`mevedel-memory-consolidation-max-batches-per-day` (default 8 general batches per
-rolling 24 hours). Each batch is a separate normal-sized request, so catch-up
-can cost up to eight such requests per day instead of one; explicit drain is
-uncapped.
+review a backlog in successive bounded batches; `k` stops it. Automatic review
+admits one daily finite cohort of age-ready shared-note versions and services it
+in bounded batches. Later arrivals and changed versions wait for the next cohort.
+Explicit review or drain can bypass daily timing, not capture or mutation safety.
+Propose mode leaves decisions for approval; auto applies memory extraction before
+permanently deleting the exact reviewed notes through checked decisions.
 Memory roots are independent of session sidecars. See the [memory guide](docs/memory.md)
 for automatic review modes, proposal decisions, and journal recovery.
 
@@ -1433,7 +1566,8 @@ The maintained detail docs live in [`docs/`](docs/):
   rewind, fork, locking, and cleanup.
 - [`docs/compaction.md`](docs/compaction.md) — manual and automatic compaction,
   summaries, and segment rotation.
-- [`docs/memory.md`](docs/memory.md) — memory layout and durable-memory rules.
+- [`docs/memory.md`](docs/memory.md) — overview of the curated-memory, review,
+  application/recovery, shared-note and journal contracts.
 - [`docs/buddy.md`](docs/buddy.md) — unasked review of recent edits, the
   guidance command, and note lifecycle.
 - [`docs/reminders.md`](docs/reminders.md) — system-reminder injection.

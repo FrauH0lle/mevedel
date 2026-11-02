@@ -19,6 +19,187 @@ content stay in private control storage. Public text alone cannot prove acceptan
 or decide a proposal. Source identities, original root/target/client authority,
 exact bytes, and accepted hashes remain binding through recovery.
 
+Recovery authenticates decision metadata in batches of eight, then groups the
+bounded metadata by pass; every decision and write intent still undergoes
+authentication. Each pass group shares its authenticated bundle and matching
+coordinator proof with the write reader. Publication discards all pending
+metadata and bundle observations. The read-only cockpit collector reuses its freshly
+authenticated write intents when the identity, intent hash and source-bundle
+hash match the decision; these observations never authorize a later action.
+Pending automatic selection refreshes its public observation
+and discards proofs after applying a proposal. Completed pass recovery still
+authenticates every bundle and recovers accepted expiry under mutation ownership,
+but avoids republication when exact public bytes match and no spare pins remain.
+These operation-local observations do not survive a new application claim.
+An explicit serial request by one actor and origin may retain only its clean
+recovery predecessor's exact claim/outcome identity, never those authenticated
+content observations. The decision owner exposes four verbs (apply, reject,
+reverse, recover-write) over one executor; callers carry an opaque continuation,
+not claims, write intents, or child replies. The accepted bundle is authenticated
+once per continuously owned phase, never across acceptance settlement, a new
+claim or a child handoff. Write-adjacent ownership, deadline, bytes, mode,
+cancellation, reference and live-buffer checks remain fresh.
+
+Local automatic application uses one parent-owned fixed-deadline workspace
+claim per proposal. The first maintenance worker performs publication/store
+recovery. A clean operation may establish an ephemeral recovery predecessor for
+the same explicit serial request, including synchronous callers. Its next claim
+must be exactly the following generation,
+with both predecessor records freshly verified alongside the new claim's exact
+identity, latest generation, absence of outcome and unexpired deadline in one
+pinned program. Only that continuity proof omits repeated history recovery;
+the next proposal, current status and target authorization are still read anew.
+The child discovers the selected proposal's previous public decision and all
+required extraction decisions under that claim; the editor checks the exact
+dependency roster and freshly authenticates each selection's private acceptance
+evidence, never treating a child observation as write authority. Dependency
+discovery moved with status discovery because scanning public history per
+required extraction reintroduced history-dependent editor transaction cost.
+Intervening consolidation claims, context changes, failures, holds, cancellation,
+expired/failed outcomes or incomplete accounting discard continuity. Both early
+and prepared late holds discard it. Separate commands and deferred retries begin
+with recovery; there is no client-wide last-good-recovery cache. Pending discovery
+remains at the original tail of the sequence; its read-only child independently authenticates the same
+continuity proof before omitting recovery. Unsupported targets retain native
+recovery when no continuity proof exists. The editor freshly checks the current
+operation and ownership before acquiring
+target ownership and committing with live-buffer protections. Pending selection
+authenticates current status and omits every already-decided proposal, retaining
+undecided extractions and their waiting dependencies. It returns identities only,
+and each later operation reauthenticates its proposal
+and status. Supported local automatic transactions start after one second of
+editor idleness, checking pending input before each proposal and again on return
+from recovery. Activity returns the identity to the queue after fencing and
+releasing that operation; no live claim or accepted/target proof waits on idle,
+and no deadline is extended. Undecided disk proposals remain discoverable after
+cancellation or exit. Explicit application and unsupported/remote fallback are
+unchanged. Fresh citation rereads batch at most eight paths per original root
+without crossing capture, inventory or final editor-check boundaries. Sequential
+callbacks yield between proposals, keeping the pass
+registered through application completion rather than reporting the queue entry
+as completion. Scheduled recovery also discovers marked or unavailable write
+identities in the child, sharing the write reader's pass grouping. Only identities
+cross back, bounded to 65,536 within an 8 MiB reply; overflow and child failure
+fail visibly rather than becoming empty or truncated selection. The discovery
+listing is the cutoff; later arrivals wait for another recovery. Scheduled
+marked-write reconciliation uses the same owned recovery prelude, but its fresh
+authority, marker and live state classification remain in the editor.
+Original-target ownership never crosses the child in this design. Automatic
+local decisions are accepted durably in the editor, and resolved write markers
+retire under its still-owned target claim. A targeted child reauthenticates only
+the exact accepted decision identity/hash and performs publication and the pass
+settlement/pin-release check, rather than running full recovery again. The
+operation remains registered through publication; acceptance alone, failed
+marker retirement or interrupted publication cannot establish continuity.
+Confirmed newly written-file accounting survives publication failure or
+cancellation, and accepted unpublished decisions remain recoverable.
+Synchronous decisions use the same accept, retire, then publish order. Publication
+reauthenticates the decision identity/hash and bundle under one mutation claim,
+checks exact pass-review bytes, and republishes an absent or damaged projection.
+Repair of existing text verifies the observed hash and the unsettled mutation
+claim/deadline under the same target lock as settlement. Public terminal entries
+can refuse pin release but cannot prove it; every terminal decision still needs
+private authentication. Read-only inspection copies mutable leaves and grants no
+authority for a later action.
+
+Automatic note forward writes recheck that no open session uses the note, cancellation
+and unsaved buffers at their mutation boundary; checked rollback keeps its
+separate ownership proof. The final note-use check is local and follows all
+yielding ownership/root and buffer checks. An earlier admission check cannot
+protect a reader admitted during that IO; a late hold uses checked abandonment.
+Reentrant replies cannot enter an executing continuation. Reply identity, origin
+binding and freshly read workspace identity fence delayed continuations.
+Cancellation fences the child before stopping it; an executing editor transaction
+retains its fixed, unrenewed workspace claim until unwind so checked rollback
+remains possible. Expiry or takeover still prevents rollback and retains evidence.
+Allowed or delivered quit during setup, continuation or cleanup remains visible
+cancellation and prevents subsequent application. Interrupted mutation finishes
+checked rollback
+before cancellation delivery. Only local child launch/registration and the pure
+parent handle handoff defer pending quit; request IO stays interruptible, and the
+parent receives the handle before exact-token fencing and retirement.
+Inherited outer quit inhibition and its pending flag remain unchanged.
+Cleanup failure cannot strand the operation registry or suppress its callback.
+Settlement failure is reported even after a successful idempotent retry; if no
+fence is established, the original deadline performs terminal retirement only
+after authoritative settlement/expiry proof. Continued IO failure stays visible
+and does not authorize these lifecycle paths to delete an unfenced child.
+A nil settlement is not proof:
+release requires an accepted outcome or fresh authentication of that token's
+durable outcome. A fresh target-clock expiry observation may elect expiry for
+the original token, never renew or replace its authority. Scheduled publication
+recovery uses the same proof before child deletion and live-write scheduling.
+Generic maintenance-process teardown may still force-stop children without
+storage settlement; that separate boundary leaves durable evidence for recovery.
+All maintenance children, including the read-only cockpit display scan, use one
+launcher with a closed operation table. Each operation names its owner feature,
+public child entry and reply bound; requests carry frozen data, never a callable
+or load path. Launch failure signals without a callback. Successful completion
+is delivered once through idle transport (with a timer fallback if transport is
+disabled or cancelled), never in the sentinel or before launch returns.
+Explicit launcher cancellation drops live or queued replies. Unsolicited signals
+and nonzero exits deliver an error once, allowing owners to retire failed jobs;
+process status alone cannot establish cancellation intent. Display cancellation
+neither fences nor settles a mutation claim. Mechanical locality checks belong
+to the launcher;
+domain admission and the intentionally different editor-side alternatives stay
+with owners. This removes duplicate process/codec lifecycle code without adding
+an in-editor adapter or changing storage authority.
+Automatic admission reads the
+live origin's policy rather than an incidental timer buffer's policy.
+Deferred retries retain and freshly validate their original buffer, session,
+workspace and identity context, including live policy at forward write boundaries.
+Invalid context or explicit cancellation preserves pending decisions without
+retrying from another actor; cancel also removes deferred work between passes.
+Deferred application retries yield priority to a registered explicit drain,
+including its waiting gaps, rather than starting a competing local owner. The
+drain waits when local work is already running. After potentially reentrant
+busy and identity IO, retry admission rechecks its exact registration and the
+running/drain tables without intervening IO before retiring itself and registering
+application work. An old callback's error teardown cannot remove a successor.
+This addresses the local overlap that can make a drain encounter `Memory
+consolidation is already running`; a forced ordering reproduces that mechanism,
+not the precise ordering of the observed live interruption.
+Scheduled publication recovery likewise retains its original callback and
+origin/workspace/root/canonical-key context while yielding with a bounded,
+nonzero delay to a registered pass/drain or admitted local cleanup. A drain waits
+for already-admitted decision work, including claim-acquisition handoff, but not
+queued recovery or its pre-admission freshness checks. Counting those checks as
+admission would make recovery and drain mutually defer. Exact-owner checks after
+IO prevent cancellation or a changed root/key from admitting replacement work;
+teardown cannot erase a successor. This addresses a separately reproduced local
+claim collision yielding `Memory consolidation is busy`, without identifying the
+original live claimant or suppressing foreign contention and storage failures.
+Foreign native claim contention still declines the unadmitted opportunity;
+callbacks signify successful recovery or absent state, not attempted admission.
+Later maintenance may offer again, without a local foreign-contention retry loop.
+Publication recovery is not proposal application and does not inherit its
+auto-mode or live-session admission requirements.
+Unsupported workers use native recovery through the same guarded executor.
+Scheduled cleanup yields priority to this client's registered memory pass,
+explicit drain and owned asynchronous decision/recovery work, including gaps
+between sequential proposal claims. Forced cleanup remains queued rather than
+competing for mutation ownership during application. An exact-job observation
+distinguishes actual local cleanup admission from queued timers or transport
+callbacks; active cleanup postpones new automatic/drain admission and refuses
+explicit review before its claim, without a synchronous editor wait. Neither
+observation grants authority or replaces the existing cross-client claims.
+This closes the publication-triggered cleanup/application race that could accept
+a review but leave its first proposal pending with `Journal mutation is busy`.
+Held admission and ordinary cancellation have distinct non-error callbacks;
+timeouts, protocol, authentication, IO and cleanup failures stay errors.
+Cancellation preserves an authenticated result and its written-file accounting
+before stopping later proposals. A cancelled coordinator outcome proves fencing,
+not the cause of termination.
+Worker eligibility uses fresh authenticated retained-root metadata, not only
+current configuration. Remote or uncertain historical state routes to native
+editor recovery under the same claim, preserving accepted-expiry recovery and
+original remote authority without returning accepted proofs. This conservative
+preflight adds an all-history read and can increase total work.
+Manual/unsupported remote operations remain synchronous. Remaining editor-side
+intent, commit and finalization IO can still block; this is not an asynchronous
+filesystem transaction or a guarantee of imperceptible background processing.
+
 Successful completed-turn saves freeze one immutable evidence bundle and pin its
 source before marking it ready. Compaction, clear, session-end, or idle sealing
 admits digest work without capturing incomplete responses. Idle sealing ends a
@@ -85,19 +266,85 @@ in the editor. Live-buffer artifact cleanup also remains there because its
 retention proof includes active buffers and gptel context. Worker failure leaves
 fenced claims and retained evidence, rather than inferring completion.
 
-The main session menu only renders cached memory observations, explicitly marking missing
-or old counts. Opening or refreshing the Memory table collects current evidence.
+The main session menu only renders cached memory observations, marking missing
+or old counts. The Memory table requests checked workspace recovery and observes
+its pending, dispatching and active owner without replacing callbacks or acquiring
+authority. Initial collection does not wait for recovery: a display-only local
+child collects committed evidence with existing
+validators and returns detached metadata, not accepted bundles or write proofs.
+Current-job, context, session, root, fresh workspace identity, client and
+configuration checks reject stale replies. Closing the display retires its own
+work, not recovery's owner. Candidates and History reuse snapshots and collect
+history only when shown; Memories inventories independently, never waits for
+history, and scans it in the background only while candidate counts are
+unknown, to label the Candidates tab. The table never switches views by
+itself. The topic inventory
+is display metadata, not a transaction snapshot: an attribute listing validates
+cached titles, and changed files are read by batched asynchronous pinned programs
+after display. Refresh and completed actions request new observations;
+empty views distinguish pending data, completed emptiness and scan failure with
+static presentation-only notices, not synthetic rows or action targets. The header
+labels committed snapshots and pending recovery. Recovery that changed committed
+state starts a fresh scan while the bounded display observer is active; a no-op
+recovery keeps the scan and counts. Its 180-second expiry
+retires only display observation, retaining rows and any scan with an explicit
+incomplete-recovery warning separate from scan errors. `g` refreshes committed
+data without clearing that limitation; reopening renews the observer.
+Details and mutations freshly authenticate existing evidence. Command return
+and full-data readiness differ. Background printing can restore buffer point
+while leaving a nonselected window on another row. The memory surface retains
+each displayed window's per-tab row identity across loading gaps and restores
+its window point without selecting it, preserving independent selections and
+the active composer. Authenticated remote display scopes and topic directory
+listing can still block. Invalid local bundles stay unavailable in the child;
+they cannot supply target paths. Display collection now classifies locality
+while authenticating one pass at a time, reusing only scan-local proofs and
+batching metadata IO. This replaces the uncertain-display fallback introduced
+in 61fd2f60: real retained-history scans spent most of their time repeating
+pinned programs, and invalid bundles moved that work onto the editor thread.
+Target-sensitive recovery retains its conservative uncertain-scope preflight.
+Explicit inspection and decision commands retain synchronous authentication and
+processing; display responsiveness does not establish nonblocking manual actions.
 
-Explicit backlog drain coordinates successive bounded general reviews through
-the same claim and settlement owner; it yields between batches and waits while
-a workspace turn is active. Auto mode offers a remaining ready backlog at the
-next idle opportunity instead of waiting another day, subject to a rolling
-24-hour cap (eight successful general reviews by default, including explicit
-ones). Published and retired timestamps enforce admission under ownership;
-explicit drain bypasses the automatic cap. This replaces one-batch-per-interval
-catch-up: a roughly 250-note ready backlog otherwise took weeks at sixteen
-notes per daily review. Request bounds stay unchanged rather than making one
-oversized request. The cap limits admissions, not provider billing.
+The shared-note review-cadence, finite-cohort and explicit-drain text is
+superseded by [ADR 0128, One daily review, bounded batches](0128-extract-memory-and-expire-working-notes.md#one-daily-review-bounded-batches).
+The implementation-specific ownership and recovery boundaries remain below.
+
+`mevedel-memory-cycle.el` owns the private metadata-only
+`.mevedel/state/shared-notes/cycle.el` record per actual workspace journal, bound
+to the workspace identity, physical shared root and target. It is not a
+directory/target-tuple store or a cross-alias mapping. A directory or target
+identity change while the cycle is active or unreconciled fails visibly closed;
+finishing or resolving it needs the original namespace and authority. A
+completed, reconciled cycle may freeze the current namespace at its next due
+admission. Local-to-TRAMP takeover and alias equivalence are not proven by this
+design. The record includes admission, cohort/hash, attempts,
+deferred members, an original pass/claim reservation and active/complete/paused
+state. Admission persists the reservation before yielding capture, so failure
+before immutable preparation still leaves a fenced predecessor for recovery.
+Cleanup retains that predecessor even without a prepared record; its strict
+claim observation grants retention only, never write authority. Preparation
+failure without a returned bundle can adopt only its exact original reserved
+claim before fresh-owned reconciliation and pause. Attempt completion is
+authenticated against accepted passes and exact admitted notes; the cycle record
+is neither a second review ledger nor mutation authority. An admitted attempt
+is not proof of a checked deletion. A successful
+batch with no deletions cannot starve later cohort members. Recovery resumes
+without repeating completed attempts; failure, cancellation and application
+recovery requirements pause the current cycle. An explicit review or drain can
+resume it immediately. Automatic offers do not resume that paused cycle before
+admission plus 24 hours, but at the inclusive daily boundary can admit a new
+cohort that includes its still-eligible remaining versions. An active cycle
+retains its original cohort when resumed. Pausing grants no permanent exemption.
+Pre-admission contention preserves
+the opportunity, with nonzero busy retries and fresh owned admission.
+
+The independent journal-only minimum-hours, minimum-digests
+and sparse-digest policy remain. Only journal-bearing general reviews advance
+that review clock, including through retirement metadata; a note-only cycle
+does not postpone journal work. Accepted outcomes, confirmed application counts
+and diagnostics remain distinct. Request bounds do not grow, and finite
+batching makes no provider-cost, throughput or capacity claim.
 
 Application holds both workspace and original target-root claims. It persists
 complete private intent and a hash-only target marker before mutations. Curated
@@ -106,11 +353,28 @@ writes, rollback, claim settlement, and marker retirement share a target-side
 marker. Reconciliation compares exact before/after states; it does not infer a
 successful write from an unmarked intent. Reversal is a separate accepted intent
 and decision, preserving the original application as evidence.
-Scheduled and synchronous recovery fully inspect only records whose marker
-exists, plus any record this client has not yet read successfully; markers are
-observed afresh in one program per target. A record's marker path and pass
-retirement are immutable facts remembered per workspace object, never whether
-the marker exists.
+Settlement reports observed unchanged targets without inferring an interruption.
+A known admission hold or cancellation may abandon an exact prepared intent
+without deciding the proposal only after checked rollback and freshly proven
+complete before-state. Original authority, tokens and live buffers are checked
+before and after electing and authenticating the exact coordinator's cancelled
+empty-payload outcome on its original host. The still-owned target's locked
+program verifies its token, disk before-state and exact marker before deleting
+that marker alone. The immutable unmarked intent remains, with no accepted public
+decision. This immutable outcome is invocation-local evidence, not a cached proof
+or permission to run paths on another host. After, mixed or uncertain states
+retain normal accounted recovery; incomplete retirement failures stay visible.
+Local scheduled discovery reads retained writes in the child, not through
+editor-side cold singleton authentication or a warm bulk-marker probe.
+Synchronous/native recovery fully inspects only records whose marker exists,
+plus any record this client has not yet read successfully; marker observations
+are bounded to eight per program. A record's marker path and pass retirement
+are immutable facts remembered per workspace object, never whether the marker
+exists. Editor inspection of selected candidates yields between records. Only a
+marked candidate
+starts another owned recovery operation, which rereads its evidence; unmarked
+records do not repeat full publication recovery. Unreadable records report their
+diagnostic and remain inspectable without blocking independent work.
 
 Index freshness is checked per affected destination: the proposal's topic and
 merge sources must retain their captured entries or absence. Unrelated manual
@@ -118,7 +382,10 @@ edits and changes from other reviews are preserved without replaying write
 history. Application retains the complete current index snapshot as its expected
 before-state; exact file checks protect preparation through commit. Topics and
 instructions still require their original state, and reversal still requires
-the exact recorded after-state.
+the exact recorded after-state. An Instructions body is the complete desired
+file content, preserving unrelated guidance, rather than an appended fragment.
+Empty content clears an existing file or creates an admitted known-absent file
+with zero bytes. The exact captured applicable target set is unchanged.
 
 Private journal records live at `.mevedel/state/journal/`, alongside other
 generated workspace state; public journal entries stay at `.mevedel/journal/`.
@@ -160,30 +427,26 @@ hides expired entries before removing bytes, and deletes complete dependency
 groups. Later mutations finish accepted expiry before pinning new evidence.
 Curated memory is outside journal expiry. Public retrieval uses `memory://journal/`.
 
-Shared working files are not journal input. They are untracked, machine-local
-and temporary; general consolidation reviews quiet versions directly. Each
-admitted note receives one disposition (delete, keep, or condense) beside
-ordinary extraction proposals citing it, and a disposal applies only after
-those extractions are applied. Quiet attachments no surviving note references
-and quiet empty folders receive structured decisions without inference. Files
-that memory or instructions cite are not removed silently. Accepted reviews
-and decisions are the processing record. Note decisions reuse checked intents
-and reversal through a shared-notes target whose coordination stays outside
-the cleaned folder; the previous bytes are retained as content-addressed
-blobs for the ordinary history window, within a quota. Over-quota attachments
-instead retain a verified copy in local system trash before the locked original
-removal; trash unavailable on the original target means no removal. Undo from
-trash remains checked and depends on those bytes still existing. Oversized
-UTF-8 notes within a configured upper bound are reviewed alone in sequential
-chunks with a compact running summary, retaining whole-file before-state and
-invalidating that summary if the file changes. Attachment reference scanning
-streams large text rather than making size alone an incomplete scan.
-Auto mode applies them
-without prompts once no turn runs in the workspace.
+Shared files remain separate from journal input; their format, discovery and
+modification-age eligibility text is superseded by [ADR 0128, Note format and write
+boundary](0128-extract-memory-and-expire-working-notes.md#note-format-and-write-boundary),
+[Generated discovery](0128-extract-memory-and-expire-working-notes.md#generated-discovery)
+and [Eligibility, not completion proof](0128-extract-memory-and-expire-working-notes.md#eligibility-not-completion-proof).
 
-The [memory manual](../memory.md) owns configuration, limits, scheduling, proposal
-syntax, commands, inspection, and recovery procedures. Control-program mechanics
-remain in [ADR 0101](0101-carry-control-operations-as-one-pinned-program.md).
+The note extraction, dependency, citation-check and attachment-housekeeping text
+is superseded by [ADR 0128, Review contract: extract
+memory, then delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete).
+
+The shared-file disposal text, including removal of note undo, quota and trash,
+is superseded by [ADR 0128, Permanent disposal, not an undo store](0128-extract-memory-and-expire-working-notes.md#permanent-disposal-not-an-undo-store);
+the durable-memory transaction and recovery protocol above remains separate.
+
+The memory manual owns operational details: [review](../memory-review.md) covers
+configuration, limits, scheduling, proposal syntax, commands and inspection;
+[decisions and recovery](../memory-recovery.md) covers checked application and
+reversal; [journal](../memory-journal.md) covers capture and retention; and
+[shared working notes](../memory-notes.md) covers their lifecycle. Control-program
+mechanics remain in [ADR 0101](0101-carry-control-operations-as-one-pinned-program.md).
 
 ## Rationale, alternatives, and consequences
 
@@ -206,6 +469,159 @@ limit is not an erasure guarantee.
 
 ## Decision history
 
+### 2026-10-31: distinguish child cancellation from failure
+
+The shared maintenance launcher initially treated every process signal as
+cancellation. A real SIGTERM review probe showed that this suppressed the error
+callback and stranded the digest scheduler's worker registration, preventing
+later opportunities. Owners now explicitly cancel through the launcher after
+their existing exact-token fences. Cancellation drops live or queued replies;
+unsolicited signals use the same deferred, once-only error path as nonzero exits.
+The launcher and scheduler regressions exercise real children, including a new
+scheduling opportunity after failure or cancellation.
+
+### 2026-10-31: own proposal decisions and explicit serial continuity
+
+Previously the pass drove decision-private claims, child replies and predecessor
+records, while each synchronous application repeated workspace recovery and
+bundle authentication. The decision module now owns those mechanics behind
+four verbs. Continuity is explicit per serial request, not an automatic-only
+optimization or a client-wide recovery cache. Authentication is shared only
+within one owned phase; settlement and publication still separate authority.
+
+A matched compiled four-note probe at the previous implementation used 139,
+150, 153 and 185 control programs per serial apply. The transaction implementation
+used 83 for the first and 60 for each following apply (one sequence per build).
+Reject counts also decreased, from 85, 93, 94 and 116 to 54, 60, 61 and 62.
+These counts motivated removing repeated orchestration, not removing durable
+write records or fresh write guards. The regression bounds sequenced cost and
+checks linear marginal control-program cost across a synchronous multi-note
+drain. Separate timing and heartbeat measurements remain necessary: fewer
+programs do not imply nonblocking editor work.
+
+Publication now owns one mutation claim and validates exact review bytes rather
+than mere existence. A damaged projection exposed the immutable publisher's
+refusal to overwrite an existing record. Checked repair derives its bytes from
+the newly authenticated bundle, fences the mutation owner under the target lock,
+and refuses a second observed-byte change; pin release still requires all
+terminal decisions to authenticate. Both execution placements accept, retire,
+then publish. No user-facing approval, inspection or recovery feature is removed.
+
+### 2026-10-30: schedule local automatic application around editor activity
+
+After the history split, a single checked transaction still blocked for about
+0.6 seconds. A pinned-program composition probe saved about 25 ms by batching
+twelve citation rereads into two programs; launch amortization alone could not
+approach 50 ms. Rather than introduce a resumable transaction with many new
+validation boundaries, the user chose idle admission and pending-input checks
+between proposals, plus cheap phase-local batching. Transactions remain
+synchronous, so one may delay input; the batch no longer monopolizes active
+editing. A recovery reply received during activity settles its existing fixed
+claim before requeuing the identity, rather than holding or renewing ownership
+through an unbounded idle wait. Original-target ownership and all write, rollback,
+buffer, publication and recovery rules remain unchanged.
+
+### 2026-10-30: split application history bookkeeping from target mutation
+
+A compiled large-history replay attributed about 2.42 seconds of a 3.31-second
+single-proposal editor transaction to two complete public-journal scans:
+previous-decision discovery and post-publication settlement. Both depend on
+unrelated retained history, not the target write. Increasing synchronous read
+batches barely reduced the block and made individual control programs slower.
+
+Selected-decision discovery now runs in the existing owned recovery child;
+the editor retains fresh authentication of that selection and every target and
+live-buffer check. Previously the editor published before retiring a resolved
+marker. It now accepts the durable decision, retires the marker under its target
+claim, and waits for a targeted publication child that authenticates the exact
+decision hash. The accepted outcome already makes an unpublished decision
+recoverable. No clean predecessor is produced until marker retirement and
+publication both finish, so interruption cannot skip required recovery.
+The child does not repeat full recovery and never owns target mutation. The
+remaining editor intent/check/write/acceptance sequence is still synchronous;
+this change does not establish the approximately 50 ms responsiveness budget.
+
+### 2026-10-30: Move scheduled write discovery into the recovery child
+
+The earlier editor-side singleton scan repeated authentication 320 times on an
+80-pass retained history, sampling about 15,450 ms of blocked editor time.
+Its warm marker cache instead produced one roughly 234 ms block. Read-only
+discovery now shares pass proofs in the existing child and returns identities
+only; fresh editor-owned reconciliation, target claims and live-buffer protection
+remain unchanged. Native fallback bounds marker programs instead of retaining
+the unbounded cache probe. Discovery is an observation, not mutation authority.
+
+### 2026-10-29: Freeze one daily note cohort independently of journal cadence
+
+Progress-qualified catch-up could stall a roughly 250-note backlog on a held
+first batch, while fresh arrivals could extend a productive chain indefinitely;
+the larger cap bounded neither finite work nor cost. This scheduling contract is
+superseded by [ADR 0128, One daily review, bounded batches](0128-extract-memory-and-expire-working-notes.md#one-daily-review-bounded-batches),
+which separates attempted versions from confirmed deletion and journal cadence.
+
+### 2026-10-29: Extract knowledge and acknowledge deletion, not task resolution
+
+Loss guards had turned temporary notes into a task tracker and retained nearly
+every reviewed note. Semantic resolution and the interim delete-acknowledgement
+contract are superseded by [ADR 0128, Review contract: extract memory, then
+delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete),
+which retains extraction and citation checks without model-written dispositions.
+
+### 2026-10-29: Plain temporary files replace headers and undo
+
+Labels could be omitted and undo machinery was disproportionate for temporary
+files. Header and undo policy are superseded by [ADR 0128, Note format and write
+boundary](0128-extract-memory-and-expire-working-notes.md#note-format-and-write-boundary)
+and [Permanent disposal, not an undo store](0128-extract-memory-and-expire-working-notes.md#permanent-disposal-not-an-undo-store).
+
+### 2026-10-29: Metadata and modification age replace quiet-hour readiness
+
+Quiet-hour readiness gave idle handoffs too little margin, while retention
+timers and missing labels could preserve notes indefinitely. The split ages,
+metadata and reconsideration branches are superseded by [ADR 0128, Eligibility,
+not completion proof](0128-extract-memory-and-expire-working-notes.md#eligibility-not-completion-proof);
+local observed use remains a separate protection, not an age reset.
+
+### 2026-10-29: Catch-up follows fresh arrivals; identical condensation is retention
+
+The `42a3f1e9` rerun stranded fresh arrivals behind the old remainder gate and
+accepted an identical condensation that reset mtime and falsely suggested an
+interruption. Catch-up is superseded by [ADR 0128, One daily review, bounded
+batches](0128-extract-memory-and-expire-working-notes.md#one-daily-review-bounded-batches);
+condensation normalization is superseded by [Review contract: extract memory,
+then delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete).
+The unchanged-target diagnostic remains part of the transaction protocol above.
+
+### 2026-10-29: Preserve numeric paragraphs structurally instead of keeping whole notes
+
+Numeric-loss guards retained completed background, and generated preservation
+could be byte-identical while accepted or held proposals falsely earned write
+credit. Numeric condensation and its preservation counters are superseded by
+[ADR 0128, Review contract: extract memory, then delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete).
+Confirmed-write accounting and cancellation remain independent transaction facts.
+
+### 2026-10-28: Progress guards automatic catch-up; the cap is a ceiling
+
+The eight-batch cap from `2d2b0991` could be spent on reviews without effects;
+progress qualification and a later 48-batch ceiling tried to limit that waste.
+Both scheduling guards are superseded by [ADR 0128, One daily review, bounded
+batches](0128-extract-memory-and-expire-working-notes.md#one-daily-review-bounded-batches).
+Accepted proposals still do not establish writes, cost or service capacity.
+
+- **Display collection and retry admission gained separate ownership.** On
+  2026-10-27, an authentic four-pass, 32-note fixture spent seconds opening and
+  switching every Memory view because each repeated full history collection,
+  even Memories. Opening also ran synchronous checked recovery. Display-only
+  child observations replace command-side scans; mutations keep fresh native
+  authentication. Full-recovery verification then exposed complete recovery
+  children launched per unmarked write, missing a 45-second readiness bound.
+  Read-only per-record inspection now admits owned recovery only for marked
+  records. Separately, a real timer replay showed deferred auto work adopting
+  an unrelated buffer's policy; a late policy change could publish unavailable
+  for an untouched prepared write. Retained original context, typed outcomes
+  and checked before-state abandonment preserve pending work without weakening
+  original-target, rollback, recovery or accepted-outcome checks.
+
 - **Cleanup no longer feeds its own continuation.** On 2026-10-25, a laptop
   sustained roughly 10% total CPU while cleanup spawned about 1,060 processes
   per second. Read-only selection over its journal took nearly two minutes:
@@ -222,8 +638,10 @@ limit is not an erasure guarantee.
   limits. Scanning now streams with filename overlap. Useful oversized notes
   can receive bounded chunk review while very large copies remain explicitly
   blocked for manual splitting or relocation. Attachments above the undo quota
-  use verified system trash instead of permanent deletion or an unbounded blob
-  exception. Remote and unknown platform trash remains fail-closed.
+  initially used verified system trash to avoid unbounded blobs; that alternative
+  and the subsequent private-undo path are superseded as disproportionate for
+  temporary files by [ADR 0128, Permanent disposal, not an undo store](0128-extract-memory-and-expire-working-notes.md#permanent-disposal-not-an-undo-store).
+  Streaming and bounded oversized-note review remain useful.
 
 - **Shared files left the journal for a consolidation-owned lifecycle.**
   Capture read shared files before session files within one 32-KiB bound in
@@ -235,8 +653,9 @@ limit is not an erasure guarantee.
   had grown it to 57 MB over 66 commits, mostly lab output, although the user
   does not exchange shared files between machines. The user asked for notes
   to be extracted reliably and then removed, automatically and without prompts
-  in `auto`. Consolidation now reads complete note versions and records their
-  dispositions as decisions; session-local notes stay in capture.
+  in `auto`. The direct-review separation remains; its disposition contract is
+  superseded by [ADR 0128, Review contract: extract memory, then delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete).
+  Session-local notes stay in capture.
 
 - **Remote journal work ran one target program per check.** A September 23
   capture of a remote session found 117 control programs, about 12 s of
@@ -749,3 +1168,325 @@ turn. A replaced request, a dead or reassigned root, a changed save path, a
 pending publication, disabled journaling, a worker error and the deadline still
 report failure. The restart costs one more child preparation, only when this
 race occurs.
+
+### 2026-10-27: split automatic application recovery from editor mutation
+
+Native automatic application stalled the editor for minutes while repeatedly
+authenticating and republishing retained history. Operation-local authenticated
+observations and exact-publication checks removed redundant body reads and
+publication programs without retaining authority across attempts. Automatic local
+application now runs recovery in an owned child and yields between editor-side
+transactions; original-target ownership and live-buffer safeguards remain in the
+editor. This reduces contiguous editor work, not all commit blocking or total IO.
+
+An initial child split returned terminal historical proposal identities too.
+An isolated replay with 64 retained decisions and eight fresh applications
+spawned 73 recovery workers, including 64 that only skipped a decided proposal.
+Pending discovery now authenticates status before returning identities, matching
+the synchronous selector. A later editor attempt still authenticates its own
+current status; neither the selection nor the eligibility preflight returns
+reusable acceptance authority.
+
+### 2026-10-28: do not withhold committed display data behind recovery
+
+Initial history collection previously followed workspace recovery retirement.
+Recovery correctly yields to a registered consolidation drain, so opening the
+cockpit during a drain could leave Candidates and History blank for the whole
+drain. Imposed display-observer expiry also exposed a persistent scan-error gate
+despite no failed scan. Initial collection now reads committed display-only data
+independently, visibly distinguishing it from completed reconciliation. Recovery
+priority, callback ownership and action reauthentication are unchanged. Normal
+observed recovery completion still requests a fresh scan; display-observer expiry
+retains useful data and an explicit limitation instead of declaring recovery
+complete or preventing further read-only refreshes.
+
+### 2026-10-28: list stored memories without proposal history
+
+Listing stored memories reused the transaction snapshot primitive: one pinned
+helper program per topic, with hashing and a mode probe, then a full YAML parse.
+Opening the cockpit also waited for the complete history scan before choosing a
+view, and every recovery completion restarted that scan. On a copy of the real
+workspace (50 topics, 211 completed history rows; compiled, local), listing took
+0.46 s median and the history scan 21 s; over a same-host Podman TRAMP target the
+listing took 2.3 s. YAML parsing was 0.18 s of a cold listing. A no-op recovery
+(10.7 s) cancelled and restarted the in-flight scan.
+
+Memories now uses an attribute listing to reuse cached metadata and reads only
+changed files, batched and asynchronously; mevedel's own frontmatter form is read
+without YAML when it provably equals the YAML result. Measured afterwards: 2.8 ms
+for an unchanged local listing, 0.13 s cold; 0.033 s and 0.23 s over the TRAMP
+target. Prior counts choose the opening view; without them the table opens on
+Memories instead of waiting 15 s for the scan to choose. An automatic switch to
+Candidates when the scan found proposals was tried and rejected by the user as
+confusing; the Candidates tab label shows the count instead. Recovery reports
+whether it changed committed state through a
+presentation-only generation; only changes invalidate counts and rescan.
+Inspection, deletion and decisions still read fresh transaction-grade evidence.
+
+The collector groups retained writes by untrusted pass hints, then freshly reads
+and authenticates bounded batches, sharing the source proof within each pass.
+The read-only decision scan reuses those authenticated intents instead of
+authenticating every write twice. Batch failures keep affected identities visible
+as unavailable and leave independent batches inspectable. Paired claim/outcome
+reads and batched recovery grouping hints reduce helper invocations without
+retaining authorization proofs between operations.
+
+Measurements on the same copied real journal with compiled code:
+
+- Scenario: completed-history collector; metric: total latency; before: 21.03 s;
+  after: 11.78 s; statistic: median; samples: 3 per implementation. All 211 rows
+  remained present, with 210 applied and one rejected, and no errors.
+- Scenario: retained-write listing inside that collector; metric: latency;
+  before: 10.98 s; after: 5.23 s; statistic: median; samples: 3 per implementation.
+- Scenario: completed-history collector; metric: pinned helper programs per scan;
+  before: 4,485; after: 2,365; statistic: mean; samples: 3 per implementation.
+- Scenario: synchronous decision publication recovery; metric: latency;
+  before: 10.68 s; after: 9.84 s; statistic: single sample per implementation.
+
+These are component timings, not complete cockpit-readiness measurements. The
+Podman target shares the client host and does not measure physical SSH latency.
+
+### 2026-10-28: protect notes in use rather than pausing for every turn
+
+The workspace-wide turn gate (introduced with shared-note processing in
+`5fe59aee`, made boolean in `2b4eeefa`) stopped capture, drain admission and
+automatic note application whenever any conversation in the workspace ran or
+settled a turn. Several open sessions are the normal case, so the backlog barely
+moved: one 900-second native drain admitted nothing. The gate was also too weak
+in the other direction: an old handoff that an idle session had just read was
+not protected at all.
+
+The workspace-wide gate and shared quiet-period setting are superseded by
+[ADR 0128, Eligibility, not completion proof](0128-extract-memory-and-expire-working-notes.md#eligibility-not-completion-proof):
+exact-file local use protects a note independently of modification age, with
+shell reads, prior restarts and other clients remaining unobserved.
+
+### 2026-10-28: account for open items before deleting a note
+
+Audited reviews deleted unrecorded findings and acceptance limits, sometimes
+citing a read decision record that did not mention them. Open-item inventories
+and authenticated resolution quotes reduced unsupported deletion but also kept
+resolved negative controls; those semantic guards are superseded by [ADR 0128,
+Review contract: extract memory, then delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete).
+Read continuation offsets remain useful independently of note disposal.
+
+### 2026-10-28: reduce note admission and retained-history overhead
+
+A frozen real workspace copy contained 64 retained accepted passes and 247
+decisions. Its configured capture bound admitted sixteen notes, but the native
+review request admitted only five under its separate 32,000-token initial-input
+cap. Reference observations repeated the same topic identity, scope and check
+date for every token. Request-only grouping now shares those fields and retains
+each token/result observation; the durable review schema, indexes, instructions,
+input/output limits and oldest-first admission priorities are unchanged.
+
+Note capture now inventories sources before reading disposition history. It
+authenticates decision status only for paths present in that inventory; absent
+sources cannot be admitted or suppressed. All retained pass bundles are still
+authenticated, and a recreated source reenters the ordinary decision checks.
+
+Decision recovery now reads up to eight metadata records in one pinned program,
+then verifies their exact hashes alongside their coordinator claim/outcome reads
+in a second program. Only closed, bounded authenticated metadata survives for
+grouping, never raw record or proposal bodies. Each full decision still validates
+its source bundle and write intent. A matching intent can reuse that read's
+authenticated coordinator and source proof. A recovered write may have a newer
+decision coordinator than its original intent; that mismatch takes the original
+fresh authentication path. Publication invalidates every pending metadata and
+bundle observation, and no proof survives the operation or authorizes a later
+mutation. Regression tests change bytes between the initial read and hash proof,
+and change a later decision during publication; both fail closed.
+
+Measurements used fresh private copies, compiled package code, the same frozen
+installed dependencies and concrete Codex OAuth dry-run transport. The host
+filesystem was read-only and networking disabled. Baseline was `f7047e9a`;
+application retained native ownership, validators and the 24-hour quiet period.
+
+- Scenario native input admission, same sixteen-note candidate prefix; metric
+  admitted notes; baseline 5, updated 9; unit notes; one sample per build.
+- Scenario same input admission; metric reference projection size; baseline
+  56,258, updated 19,567; unit UTF-8 JSON bytes; one sample per build. All 200
+  dated observations survive, and MEMORY.md and AGENTS.md remain supplied.
+- Scenario retained-history note capture; metric wall time; baseline median
+  9.315, updated median 3.305; unit seconds; three samples per build.
+- Scenario same capture; metric control programs; baseline 2,056, updated 587;
+  unit programs; three samples per build.
+- Scenario same capture; metric relevant decision reads; baseline 216,
+  updated 7; unit reads; three samples per build. No present-path decision
+  is omitted.
+- Scenario accepted-decision recovery; metric wall time; baseline median
+  10.841, updated median 9.102; unit seconds; three samples per build.
+- Scenario same recovery; metric control programs; baseline 1,988,
+  updated 1,279; unit programs; three samples per build. All 247 decisions
+  remain authenticated.
+- Scenario actual checked application of one held note deletion; metric total
+  wall time; baseline 21.969, updated 20.189; unit seconds; one sample per build.
+  Both copies have the source absent, exact authenticated intent before-state,
+  and a retained undo blob matching the original bytes.
+
+The remaining application recovery still dominates that last sample. Its
+updated nested components are inclusive and must not be added together:
+
+- Scenario updated checked application; metric editor application-body wall
+  time; value 3.069; unit seconds; one sample.
+- Scenario same application; metric publication wall time;
+  value 1.389; unit seconds; one sample.
+- Scenario same application; metric write-marker retirement wall time;
+  value 0.031; unit seconds; one sample.
+
+These do not measure provider latency, graphical responsiveness, cost or
+sustained-drain throughput. No inference call was made for these measurements.
+
+Phase durations now accompany the existing terminal consolidation telemetry
+event, without adding one expensive workspace append per phase. Parent-local
+queue dwell, preparation, review-request, publication, application and retirement
+intervals remain distinct from child-local preparation recovery and nested
+application recovery round trips. Review-request time includes prompt packing,
+tools and chunk summaries, so it is not labelled provider time. Missing intervals
+remain unknown rather than zero; cancellation closes only started intervals.
+
+The acceptance instrumentation also reuses native provider-call transport
+observations for sessionless reviews and their chunk summaries, correlated by
+pass identity in workspace diagnostics. Terminal passes retain observed provider
+wall-time totals separately from review-request time. The existing shared lag
+heartbeat watches admitted memory passes through completion and its ordinary
+tail, without creating a session or another sampling timer. This closes timing
+and watching gaps, not a claim of sustained throughput, lower CPU, or graphical
+input latency; external engines still lack native provider-call boundaries.
+
+### 2026-10-28: accept unambiguous reply shapes instead of discarding reviews
+
+Three of five production reviews failed whole, including two with incomplete
+note disposition fields. The note-specific grammar and its real-review disposal
+results are superseded by [ADR 0128, Review contract: extract memory, then
+delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete),
+which removes model-written note output entirely.
+
+Ordinary memory/instruction proposals retain the applicable grammar fixes:
+empty-body blocks may omit the separator, a trailing `## No action` may be
+absent, and non-empty bodies still require their exact fence. Prose between
+blocks and unterminated non-empty bodies still reject the whole reply.
+Rejected replies are retained, newest eight, under
+`.mevedel/state/diagnostics/rejected-replies/`.
+
+### 2026-10-28: carry recovery continuity across adjacent application claims
+
+The first implementation deliberately recovered the full retained history for
+every automatic proposal. Production phase timing then attributed 269.910 seconds
+of one 306.220-second application phase to recovery round trips for eleven
+decisions, including older holds. Moving those scans to children had reduced
+editor blocking, but not that repeated work.
+
+Keeping a single decision claim for several writes would violate its immutable
+one-outcome contract. Instead, automatic application retains only the exact
+claim/outcome identity of its cleanly completed predecessor, within that job.
+Each next operation still acquires its own fixed 180-second claim. A pinned
+program must prove exact generation adjacency and authenticate both predecessor
+records alongside the new claim's current, unsettled, unexpired ownership. A
+new accepted pass, decision or write intent requires consolidation ownership;
+an intervening operation, including cleanup, therefore breaks this continuity.
+Public replay of already accepted immutable state does not mint a new decision;
+expiry replay likewise applies a manifest created under consolidation ownership.
+
+The predecessor is produced only after the operation's publication and marker
+retirement, when needed, and successful fencing, not merely a completed
+acceptance outcome.
+Errors, held/cancelled work, incomplete recovery and failed/expired outcomes
+cannot produce it. No proposal bodies, pass bundles, status observations or
+target proofs cross the claim boundary. The next operation still freshly reads
+its accepted proposal and current status, checks extraction requirements and
+original-root ownership, and rechecks snapshots, unsaved buffers, note-access
+protection and cancellation at the write boundary. Other workspaces can change a
+shared target without advancing this workspace's generation; these target
+checks remain mandatory. Deferred retries and separate jobs start recovery anew.
+
+Pending discovery stays after the current accepted proposals. Its read-only
+child receives only the predecessor's claim/outcome projection, independently
+authenticates continuity, and selects fresh pending identities; the parent owns
+the actor/context check. If continuity is absent, normal history recovery and
+historical-remote fallback remain unchanged. Missing or altered proof never
+authorizes the fast path.
+
+A matched compiled replay used identical private real history, eight newly
+constructed native fixture dispositions and two real older held proposals.
+It made no provider call, mounted the host read-only and disabled networking.
+Baseline was `081ffce9`; application source hashes match the measured candidate.
+
+- Scenario native ten-decision asynchronous job; metric application wall time;
+  baseline 272.426, updated 63.266; unit seconds; one sample per build.
+- Scenario same job; metric recovery round-trip time included in application;
+  baseline 240.930, updated 20.810; unit seconds; one sample per build.
+- Scenario same job; metric full recovery worker launches;
+  baseline 11, updated 1; unit workers; one sample per build.
+- Scenario same job; metric total maintenance worker launches;
+  baseline 11, updated 2; unit workers; one sample per build. The additional
+  updated worker performs only checked pending selection.
+- Scenario same job; metric applied decisions;
+  baseline 10, updated 10; unit decisions; one sample per build.
+- Scenario post-application audit; metric mutating decisions with source absence,
+  exact authenticated before-state and byte-matching retained undo blob;
+  baseline 10, updated 10; unit audited decisions; one sample per build.
+
+Fresh selected-decision and accepted-bundle read counts are unchanged; the saving
+is repeated all-history recovery, not reduced application authorization. This is
+one controlled workload, not a sustained-drain rate or a measurement of provider
+latency, editor responsiveness or live end-to-end throughput. Remaining
+application, pending discovery, preparation and provider work still contribute.
+The recovery round-trip field excludes the updated continuity checks and
+read-only selection; application wall time includes both, so the full phase is
+the matched measure of their net benefit.
+
+### 2026-10-28: name residual details that reviewers miss
+
+Condensation lost concrete editing costs and unexplained timing changes;
+quote checks missed findings the reviewer never listed, while a marker-line
+detector mostly flagged provenance. The residual-detail preservation contract
+is superseded by [ADR 0128, Review contract: extract memory, then delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete):
+temporary notes no longer carry the obligation to preserve open work.
+
+### 2026-10-28: let reviews read Git history
+
+Run14 kept five of seven notes after a review with no tool calls. Handoffs such
+as "root owns full-suite validation and fast-forward integration" are usually
+finished only in Git history, which the workspace-only tools could not read, so
+reviewers could never establish their resolution and kept them indefinitely.
+The user approved a bounded read-only Git tool. `log` searches commit messages,
+`show` prints a commit's message, changed files and whether the current HEAD
+contains it; the containment line names the commit so a quote cannot vouch for
+another one. Some Git quotes nevertheless described remaining handoffs rather
+than completion. Resolution quotes and note-disposition grammar are superseded
+by [ADR 0128, Review contract: extract memory, then delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete);
+the bounded Git tool remains available for material source-history claims.
+
+Ordinary proposal sections may appear in any order. Omitted action sections
+remain an error: treating them as empty let a reply truncated after its first
+section pass when no notes were admitted.
+
+### 2026-10-28: retire resolved items in chunk summaries
+
+Run17 retained a 118 KB note because early open items survived in its running
+summary after later chunks resolved them. The resolved-item inventory and its
+deletion criterion are superseded by [ADR 0128, Review contract: extract memory,
+then delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete);
+bounded chunk review now carries qualifying lessons, attribution and uncertainty.
+
+### 2026-10-28: summarize long notes as notes, not as journal digests
+
+Captured run20 summaries showed the cause of sparse chunked reviews: chunk
+summaries used the journal digest format, whose system prompt makes "nothing
+noteworthy" a successful outcome. For a 58 KB findings note the summary after
+its first chunk was Done/Learned/Surprised/Unfinished all `- none`; the final
+summary held three lessons and nothing open, although the note states that its
+installation timeout "remains unresolved". Run20 deleted the note. The
+open-item summary prescription is superseded by [ADR 0128, Review contract:
+extract memory, then delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete);
+the useful distinction remains that chunk summaries preserve potentially
+qualifying note evidence rather than applying the journal's selective digest
+filter before the final review.
+
+The new, heading-rich condensed bodies exposed a parser bug from the earlier
+reply-shape change: a body starting with a Markdown heading was taken for the
+next section, emptying the condensation. Headings now close only a header-only
+block without a separator. A JSON array value spread over several lines is
+joined until it parses. A shorter closing fence remains an error, as the
+existing contract requires.

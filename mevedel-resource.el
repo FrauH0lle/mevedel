@@ -18,6 +18,12 @@
 ;; `files'
 (defvar remote-file-name-inhibit-cache)
 
+;; `mevedel-utilities'
+(declare-function mevedel-collapse-leading-slashes "mevedel-utilities" (path))
+(autoload 'mevedel-collapse-leading-slashes "mevedel-utilities")
+(declare-function mevedel-file-truename "mevedel-utilities" (filename))
+(autoload 'mevedel-file-truename "mevedel-utilities")
+
 ;; `cl-lib'
 (declare-function cl-count-if "cl-lib" (predicate sequence &rest args))
 (declare-function cl-find-if "cl-lib" (predicate sequence &rest args))
@@ -155,6 +161,10 @@
 (autoload 'mevedel--transcript-org-mode "mevedel-utilities")
 (autoload 'mevedel-library-source-directory "mevedel-utilities")
 
+;; `mevedel-working-note-files'
+(declare-function mevedel-working-note-files-listing "mevedel-working-note-files" (directory address))
+(autoload 'mevedel-working-note-files-listing "mevedel-working-note-files")
+
 (defconst mevedel-resource-supported-schemes
   '(work artifact skill agent history memory mcp shared mevedel)
   "Closed set of resource address schemes understood by mevedel.")
@@ -275,11 +285,12 @@ base directory for relative values; malformed substitutions leave VALUE
 literal and are expanded in that same base directory."
   (if (or (not (stringp value)) (string-empty-p value))
       value
-    (expand-file-name
-     (condition-case nil
-         (substitute-in-file-name value)
-       (error value))
-     directory)))
+    (mevedel-collapse-leading-slashes
+     (expand-file-name
+      (condition-case nil
+          (substitute-in-file-name value)
+        (error value))
+      directory))))
 
 (defun mevedel-resource-encode-component (value)
   "Return VALUE encoded as one canonical RFC 3986 UTF-8 component."
@@ -822,7 +833,9 @@ or permission callback sees a target."
       (unless (mevedel-resource-within-root-p path root)
         (signal 'mevedel-resource-error
                 (list "Resource address escapes its owning root")))
-      path)))
+      ;; Canonical before authorization: handlers open it through a pin that
+      ;; refuses symlinks, so a legitimately linked root resolves here.
+      (mevedel-file-truename path))))
 
 (defun mevedel-resource--file-list (root &optional scheme)
   "Return regular files beneath ROOT in deterministic relative order.
@@ -1017,6 +1030,38 @@ also rejects symlink escapes."
 (defun mevedel-resource--shared-work-p (components)
   "Return non-nil when work COMPONENTS address the workspace's shared files."
   (equal (car components) mevedel-resource--shared-work-component))
+
+(defvar mevedel-resource--shared-accesses (make-hash-table :test #'equal)
+  "Session tool accesses to shared working files in this Emacs.
+Maps an expanded workspace root directory to a table from relative path to
+a weak-keyed table of SESSION to its latest access `float-time'.")
+
+(defun mevedel-resource--record-shared-access (workspace relative session)
+  "Record SESSION's tool access to shared RELATIVE in WORKSPACE.
+This is evidence of use for shared-note processing, not an authority."
+  (when-let* ((root (and workspace session (mevedel-workspace-root workspace))))
+    (let* ((key (file-name-as-directory (expand-file-name root)))
+           (paths (or (gethash key mevedel-resource--shared-accesses)
+                      (puthash key (make-hash-table :test #'equal)
+                               mevedel-resource--shared-accesses)))
+           (sessions (or (gethash relative paths)
+                         (puthash relative (make-hash-table :test #'eq :weakness 'key)
+                                  paths))))
+      (puthash session (float-time) sessions))))
+
+(defun mevedel-resource-shared-accesses (workspace)
+  "Return WORKSPACE's recorded shared-file accesses.
+Each element is (RELATIVE . ACCESSES), ACCESSES being (SESSION . TIME) rows."
+  (when-let* ((root (and workspace (mevedel-workspace-root workspace)))
+              (paths (gethash (file-name-as-directory (expand-file-name root))
+                              mevedel-resource--shared-accesses)))
+    (let (rows)
+      (maphash (lambda (relative sessions)
+                 (let (accesses)
+                   (maphash (lambda (session time) (push (cons session time) accesses)) sessions)
+                   (when accesses (push (cons relative accesses) rows))))
+               paths)
+      rows)))
 
 (defun mevedel-resource-session-work-p (address)
   "Return non-nil if ADDRESS names a session-owned work descendant."
@@ -1470,13 +1515,13 @@ the union index read, which already tolerates missing roots."
              (let ((files
                     (cl-loop for entry in roots
                              append
-                             (mapcar
-                              (lambda (file)
-                                (mevedel-resource--logical-address
-                                 'work (append (when (plist-get entry :address-prefix)
-                                                 '("shared"))
-                                               (split-string file "/" t))))
-                              (mevedel-resource--file-list (plist-get entry :path))))))
+                             (if (plist-get entry :address-prefix)
+                                 (list (mevedel-working-note-files-listing
+                                        (plist-get entry :path) mevedel-resource-shared-work-address))
+                               (mapcar
+                                (lambda (file)
+                                  (mevedel-resource--logical-address 'work (split-string file "/" t)))
+                                (mevedel-resource--file-list (plist-get entry :path)))))))
                (if files (string-join files "\n") empty))
            (list :resource-search-roots roots :empty-result empty))))
       ('artifact
@@ -1821,7 +1866,13 @@ errors before any content or handler is reached."
           (setq root owner
                 physical (mevedel-resource--safe-path owner relative)
                 logical-p (or (null components)
-                              (equal components '("shared"))))))
+                              (equal components '("shared")))))
+        ;; A named shared file touched by a session's tool is in use; folder
+        ;; listings and searches are not.  Sub-agents carry their parent session.
+        (when (and (mevedel-resource--shared-work-p components) (cdr components) physical
+                   (not (file-directory-p physical)))
+          (mevedel-resource--record-shared-access
+           workspace (string-join (cdr components) "/") session)))
        ((eq scheme 'artifact)
         (setq root (mevedel-resource--root scheme session)
               physical (and root

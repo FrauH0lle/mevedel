@@ -519,7 +519,7 @@ starts log it quietly to *Messages*."
    (mevedel-plugins-list--help-report)))
 
 (defun mevedel-plugins-list-quit ()
-  "Quit the plugin cockpit and return to the main session cockpit."
+  "Close the plugin cockpit and restore the invoking layout."
   (interactive)
   (mevedel-cockpit-quit "plugin cockpit"))
 

@@ -283,7 +283,7 @@
           (with-temp-buffer
             (setq-local mevedel--data-buffer data-buf)
             (mevedel-view-render-initialize)
-            (mevedel-view--render-tool-group segments data-buf)
+            (mevedel-view--render-tool-activity segments data-buf)
             (should (string-match-p "Deferred" (buffer-string)))))))))
 
 (ert-deftest mevedel-gptel-retry-dispatch/agent-result-and-accumulator ()

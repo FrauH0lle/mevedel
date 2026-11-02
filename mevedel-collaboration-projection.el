@@ -32,6 +32,9 @@
                   "mevedel-session-artifacts" (session live-buffer))
 (autoload 'mevedel-session-artifacts-read-transcript-segment "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-transcript-segments "mevedel-session-artifacts")
+(declare-function mevedel-session-artifacts-fork-point-spans
+                  "mevedel-session-artifacts" (buffer))
+(autoload 'mevedel-session-artifacts-fork-point-spans "mevedel-session-artifacts")
 
 ;; `mevedel-session-durability'
 (declare-function mevedel-session-durability-lease-owned-p
@@ -65,6 +68,8 @@
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--strip-hook-audit-blocks
                   "mevedel-transcript-audit" (text))
+(declare-function mevedel-transcript-audit-buffer-only-p
+                  "mevedel-transcript-audit" (start end))
 (declare-function mevedel-transcript-audit-buffer-spans
                   "mevedel-transcript-audit" (&optional type start end))
 (declare-function mevedel-transcript-audit-turn-attributions
@@ -76,32 +81,43 @@
 (declare-function mevedel--trim-tool-result "mevedel-utilities" (text))
 
 ;; `mevedel-view-render'
-(declare-function mevedel-view--failed-label
-                  "mevedel-view-render" (count names))
+(declare-function mevedel-view--blank-segment-p
+                  "mevedel-view-render" (data-buf seg-start seg-end))
+(declare-function mevedel-view--clean-reasoning-text
+                  "mevedel-view-render" (text))
 (declare-function mevedel-view--generic-tool-rendering
                   "mevedel-view-render" (name args result &optional collapsed-only render-data))
-(declare-function mevedel-view--group-completions
-                  "mevedel-view-render" (children))
 (declare-function mevedel-view--invoke-renderer
                   "mevedel-view-render" (tool render-data args result))
 (declare-function mevedel-view--mail-attribute
                   "mevedel-view-render" (open-tag attribute))
 (declare-function mevedel-view--rendering-status
                   "mevedel-view-render" (rendering &optional render-data))
+(declare-function mevedel-view--request-summary-details
+                  "mevedel-view-render" (render-data))
+(declare-function mevedel-view--request-summary-line
+                  "mevedel-view-render" (render-data))
+(declare-function mevedel-view--request-summary-render-data-from-text
+                  "mevedel-view-render" (text))
 (declare-function mevedel-view--sandbox-summary-line
                   "mevedel-view-render" (summary))
+(declare-function mevedel-view--scaffolding-only-p
+                  "mevedel-view-render" (data-buf seg-start seg-end))
 (declare-function mevedel-view--tool-call-parse
                   "mevedel-view-render" (data-buf start end &optional raw))
 (declare-function mevedel-view--tool-group-entry-p
                   "mevedel-view-render" (entry))
-(declare-function mevedel-view--tool-group-header
-                  "mevedel-view-render" (children &optional completions))
 (declare-function mevedel-view--user-turn-text
                   "mevedel-view-render" (segments data-buf))
 (declare-function mevedel-view--visible-response-text
                   "mevedel-view-render" (text))
 (defvar mevedel-view-tool-group-collapse-threshold)
 
+;; `mevedel-view-audit'
+(declare-function mevedel-view-audit-displayed-p "mevedel-view-audit" (record))
+(autoload 'mevedel-view-audit-displayed-p "mevedel-view-audit")
+
+(require 'mevedel-activity-group)
 (require 'mevedel-collaboration-artifact-projection)
 (require 'xml)
 (require 'mevedel-shared-conversation)
@@ -169,6 +185,39 @@ response span must never reach the wire as visible text."
     (unless (stringp visible)
       (error "Canonical user projection failed"))
     (string-trim visible)))
+
+(defun mevedel-collaboration--reasoning-context-p (segment &optional live)
+  "Return non-nil if SEGMENT is inside completed or live native thinking.
+The parser recognizes closed reasoning blocks.  While a block is open,
+gptel leaves its opener unpropertized and marks its body as ignored or as
+a response, depending on `gptel-include-reasoning'.  Require that producer
+property and an adjacent opener, not a marker quoted inside hidden data.
+LIVE means an earlier segment established an unfinished reasoning block.
+A native tool result can establish that context after an empty opener;
+it interrupts thinking without closing it and is still projected as a tool."
+  (or (eq (car segment) 'reasoning)
+      (and (memq (car segment) '(ignored response tool))
+           (or live
+               (save-excursion
+                 (goto-char (cadr segment))
+                 (skip-chars-forward " \t\r\n" (caddr segment))
+                 (or (and (bolp) (looking-at "#\\+begin_reasoning\\b")
+                          (<= (match-end 0) (caddr segment)))
+                     (progn
+                       (goto-char (cadr segment))
+                       (skip-chars-backward " \t\r\n")
+                       (beginning-of-line)
+                       (looking-at "[ \t]*#\\+begin_reasoning\\b[^\n]*$")))))
+           (if (eq (car segment) 'tool)
+               ;; Tool opener lines are unpropertized; its body carries
+               ;; gptel's producer identity.  Search property runs only.
+               (let ((position (cadr segment)) found)
+                 (while (and (< position (caddr segment)) (not found))
+                   (setq found (eq (car-safe (get-text-property position 'gptel)) 'tool)
+                         position (next-single-property-change
+                                   position 'gptel nil (caddr segment))))
+                 found)
+             (memq (get-text-property (cadr segment) 'gptel) '(ignore response))))))
 
 (defun mevedel-collaboration--record (id kind &rest fields)
   "Build a projection record with ID, KIND, and FIELDS."
@@ -241,10 +290,10 @@ An artifact record's `:artifact-path' stays host-side: guests address
 an artifact only by its record id, never by a filesystem path."
   (let (out)
     (dolist (key '(:id :kind :revision :text :name :status :summary :result
-                       :truncated :guest :directive :item :detail :diff
+                       :truncated :guest :directive :item :detail :details :diff
                        :artifact :title :store :size :missing :presentation :shared
                        :execution :description :number :firstSegment :lastSegment
-                       :sender :mailType :outcome :activity :toolUseId))
+                       :sender :mailType :outcome :activity :toolUseId :forkPoint))
       (when (plist-member record key)
         (push (cons (substring (symbol-name key) 1)
                     (plist-get record key))
@@ -810,6 +859,27 @@ the turn always begins before its own attribution block."
               (plist-put owner :shared shared))))))
     background))
 
+(defun mevedel-collaboration--attribute-fork-points (response-starts)
+  "Name each settled turn's fork point on its last assistant record.
+RESPONSE-STARTS is an ordered list of (SEGMENT-START . RECORD) for the
+current buffer's assistant records.  A fork-point audit closes the turn
+it follows, so it belongs to the last assistant record starting after
+the previous fork point and before it; a turn without one gets none.
+Both lists are in source order, so one pass pairs them."
+  (let ((floor 0))
+    (dolist (point (mevedel-session-artifacts-fork-point-spans
+                    (current-buffer)))
+      (let ((start (plist-get point :record-start))
+            (id (plist-get point :fork-point-id))
+            owner)
+        (while (and response-starts (< (caar response-starts) start))
+          (when (>= (caar response-starts) floor)
+            (setq owner (cdar response-starts)))
+          (setq response-starts (cdr response-starts)))
+        (when (and owner (stringp id))
+          (plist-put owner :forkPoint id))
+        (setq floor start)))))
+
 (defun mevedel-collaboration--execution-ids-in-buffer (buffer ids)
   "Add trusted execution identities in BUFFER to hash table IDS."
   (with-current-buffer buffer
@@ -1076,6 +1146,57 @@ mailboxes are not guest completion records."
                       :exitCode (unless (memq termination '(signaled interrupted))
                                   (plist-get facts :exit-code))))))
 
+(defun mevedel-collaboration--request-summary (text)
+  "Return the projected (FAILURE LINE DETAILS) of request-summary TEXT, or nil.
+FAILURE is the failed-request notice, LINE the host's closing line without
+text properties, and DETAILS its timing tooltip; each may be nil.  Nothing
+else from the saved summary, such as raw error data, is carried."
+  (when-let* ((summary (mevedel-view--request-summary-render-data-from-text text))
+              (value (list (and (eq (plist-get summary :outcome) 'error)
+                                (concat "Assistant request failed. "
+                                        (or (plist-get summary :message)
+                                            "Retry from the host or send a follow-up.")))
+                           (when-let* ((line (mevedel-view--request-summary-line
+                                              summary)))
+                             (substring-no-properties line))
+                           (mevedel-view--request-summary-details summary)))
+              ((or (car value) (cadr value))))
+    value))
+
+(defun mevedel-collaboration--request-summary-key (value)
+  "Return the occurrence key of projected request-summary VALUE.
+A failure keeps its failure-text key so its record identity does not depend
+on the timing footer that follows it."
+  (cond ((car value) (list "failure" (car value)))
+        (value (list "request-summary" (cdr value)))))
+
+(defun mevedel-collaboration--request-summary-records (value occurrence)
+  "Return the failure and closing-line records for VALUE at OCCURRENCE.
+The closing line of a failure derives its identity from the failure record,
+which is already unique, so it stays stable with it."
+  (pcase-let* ((`(,failure ,line ,details) value)
+               (failed (and failure
+                            (mevedel-collaboration--record
+                             (mevedel-collaboration--stable-record-id
+                              "failure" failure occurrence)
+                             "assistant" :revision 0 :status "failed"
+                             :text (mevedel-collaboration--truncate-bytes
+                                    failure 2000)))))
+    (delq nil
+          (list failed
+                (and line
+                     (apply #'mevedel-collaboration--record
+                            (if failed
+                                (mevedel-collaboration--stable-record-id
+                                 "request-summary"
+                                 (concat (plist-get failed :id) "\0" line))
+                              (mevedel-collaboration--stable-record-id
+                               "request-summary"
+                               (concat line "\0" (or details ""))
+                               occurrence))
+                            "request-summary" :revision 0 :text line
+                            (and details (list :details details))))))))
+
 (defun mevedel-collaboration--canonical-records
     (data-buffer &optional completion-buffer completions cache own-path)
   "Return allowlisted records reconstructed from DATA-BUFFER.
@@ -1126,9 +1247,19 @@ owner; omitted means the root transcript."
              (prior-executions (and completions
                                     (gethash :prior-executions completions)))
              (prior-ready (and completions t))
-             records user-starts (occurrences (make-hash-table :test #'equal)))
+             records user-starts response-starts live-reasoning
+             ;; Track audit attachment before splitting breadcrumbs out of their
+             ;; source tool.  Deferred summaries never replace either pointer.
+             activity-tool activity-record activity-scope
+             (occurrences (make-hash-table :test #'equal)))
         (cl-labels
-            ((add-execution (completion scope)
+            ((enter-activity-scope (scope)
+               (unless (equal scope activity-scope)
+                 (setq activity-scope scope
+                       activity-tool nil
+                       activity-record nil)))
+             (add-execution (completion scope &optional role)
+               (enter-activity-scope scope)
                (when-let* ((owner (plist-get completion :owner))
                            (id (plist-get completion :execution-id))
                            ((stringp owner)) ((stringp id))
@@ -1160,7 +1291,13 @@ owner; omitted means the root transcript."
                            ((not (and prior-executions
                                       (gethash key prior-executions)))))
                  (puthash key t forwarded-executions)
-                 (push (mevedel-collaboration--scoped record scope) records)))
+                 (push (mevedel-collaboration--scoped
+                        (if role (plist-put record :activity-role role) record)
+                        scope)
+                       records)
+                 ;; A breadcrumb retains ACTIVITY-TOOL as its source owner.
+                 ;; Mailbox callers clear that owner before adding a delivery.
+                 (setq activity-record (car records))))
              (project-segment (segment render-end compute-value occurrence-key
                                        compute-records)
                ;; Return (VALUE . RECORDS) for SEGMENT.  COMPUTE-VALUE reads
@@ -1217,23 +1354,48 @@ owner; omitted means the root transcript."
               (add-execution record
                              (mevedel-collaboration--scope-at
                               ranges items (plist-get span :start)))))
-          (let ((scope (mevedel-collaboration--scope-at
-                        ranges items (cadr segment)))
-                (start (cadr segment))
-                (end (caddr segment)))
+          (let* ((scope (mevedel-collaboration--scope-at
+                         ranges items (cadr segment)))
+                 (start (cadr segment))
+                 (end (caddr segment))
+                 (in-reasoning (mevedel-collaboration--reasoning-context-p
+                                segment live-reasoning))
+                 (type (if (and in-reasoning (not (eq (car segment) 'tool)))
+                           'reasoning
+                         (car segment))))
+            (enter-activity-scope scope)
             (cond
-             ((memq (car segment) '(user response))
-              (let* ((userp (eq (car segment) 'user))
-                     (kind (if userp "user" "assistant")))
+             ((eq (car segment) 'reasoning)
+              ;; Structural reasoning is already closed and classified by
+              ;; the parser, including spans on both sides of nested tools.
+              (setq live-reasoning nil))
+             (in-reasoning (setq live-reasoning t))
+             ((and live-reasoning (eq type 'user)
+                   (not (mevedel-view--blank-segment-p data-buffer start end)))
+              (setq live-reasoning nil)))
+            (cond
+             ((memq type '(user response reasoning))
+              (setq activity-tool nil)
+              (let* ((userp (eq type 'user))
+                     (kind (pcase type
+                             ('user "user")
+                             ('reasoning "thinking")
+                             (_ "assistant"))))
                 (dolist (record
                          (cdr (project-segment
-                               segment nil
+                               (list type start end) nil
                                (lambda ()
-                                 (cons (if userp
-                                           (mevedel-collaboration--clean-user
-                                            segment data-buffer)
-                                         (mevedel-collaboration--clean-response
-                                          (buffer-substring start end)))
+                                 (cons (pcase type
+                                         ('user
+                                          (mevedel-collaboration--clean-user
+                                           segment data-buffer))
+                                         ('reasoning
+                                          (string-trim
+                                           (mevedel-view--clean-reasoning-text
+                                            (buffer-substring start end))))
+                                         (_
+                                          (mevedel-collaboration--clean-response
+                                           (buffer-substring start end))))
                                        (cons start end)))
                                (lambda (text)
                                  (unless (string-empty-p text) (list kind text)))
@@ -1250,32 +1412,47 @@ owner; omitted means the root transcript."
                   (push (mevedel-collaboration--scoped
                          (copy-sequence record) scope)
                         records)
+                  (setq activity-record (car records))
                   (when userp
-                    (push (cons start (car records)) user-starts)))))
+                    (push (cons start (car records)) user-starts))
+                  (when (eq type 'response)
+                    (push (cons start (car records)) response-starts)))))
              ((memq (car segment) '(ignored render-data))
-              (dolist (record
-                       (cdr (project-segment
-                             segment nil
-                             (lambda ()
-                               (let ((summary (cdr (mevedel-tool-render-data-extract
-                                                    (buffer-substring start end)))))
-                                 (cons (and (eq (plist-get summary :kind) 'request-summary)
-                                            (eq (plist-get summary :outcome) 'error)
-                                            (concat "Assistant request failed. "
-                                                    (or (plist-get summary :message)
-                                                        "Retry from the host or send a follow-up.")))
-                                       (cons start end))))
-                             (lambda (text) (and text (list "failure" text)))
-                             (lambda (text occurrence)
-                               (when text
-                                 (list (mevedel-collaboration--record
-                                        (mevedel-collaboration--stable-record-id
-                                         "failure" text occurrence)
-                                        "assistant" :revision 0 :status "failed"
-                                        :text (mevedel-collaboration--truncate-bytes
-                                               text 2000))))))))
-                (push (copy-sequence record) records)))
+              (let ((summary (project-segment
+                              segment nil
+                              (lambda ()
+                                (cons (mevedel-collaboration--request-summary
+                                       (buffer-substring start end))
+                                      (cons start end)))
+                              #'mevedel-collaboration--request-summary-key
+                              #'mevedel-collaboration--request-summary-records)))
+                (dolist (record (cdr summary))
+                  ;; The view shows request summaries after the activity they
+                  ;; close, so they neither join nor split it.
+                  (push (mevedel-collaboration--scoped
+                         (plist-put (copy-sequence record)
+                                    :activity-role 'transparent)
+                         scope)
+                        records))
+                ;; Substantive ignored text ends source attachment, unlike audit
+                ;; side channels, deferred summaries and tool metadata/glue.
+                (when (and (eq (car segment) 'ignored)
+                           (not (car summary))
+                           (not (mevedel-transcript-audit-buffer-only-p start end))
+                           (not (mevedel-view--scaffolding-only-p data-buffer start end)))
+                  (setq activity-tool nil))
+                ;; Use the source owner, not the latest projected record: splitting
+                ;; a completion out of a tool cannot hide that tool from an audit.
+                (when-let* (((eq (car segment) 'ignored))
+                            ((mevedel-collaboration--activity-separator-p start end))
+                            (previous (or activity-tool activity-record)))
+                  (plist-put previous
+                             (if activity-tool :activity-role :activity-break-after)
+                             (if activity-tool 'boundary t)))))
              ((eq (car segment) 'mailbox)
+              ;; Even hidden or deduplicated mail is a source boundary: the
+              ;; view cannot merge its following audit into the preceding tool.
+              (setq activity-tool nil)
               (when-let* ((completion
                            (car (project-segment
                                  segment nil
@@ -1295,7 +1472,8 @@ owner; omitted means the root transcript."
                                   (mevedel-collaboration--stable-record-id
                                    "agent-notice" (prin1-to-string completion) occurrence)
                                   "agent-notice" :revision 0 (cddr completion))
-                           scope) records)))
+                           scope) records)
+                    (setq activity-record (car records))))
                  ((eq (plist-get completion :type) 'monitor-event)
                     (let* ((text (plist-get completion :text))
                            (key (list "monitor-event" completion))
@@ -1309,9 +1487,16 @@ owner; omitted means the root transcript."
                               :text (mevedel-collaboration--truncate-bytes text 2000)
                               :description (plist-get completion :description))
                              scope)
-                            records)))
-                 (t (add-execution completion scope)))))
+                            records)
+                      (setq activity-record (car records))))
+                 ;; The transcript's own completion mail renders nothing in
+                 ;; the view; its breadcrumb is the completion line.
+                 (t (add-execution
+                     completion scope
+                     (and (equal (plist-get completion :owner) own-path)
+                          'transparent))))))
              ((eq (car segment) 'tool)
+              (setq activity-tool nil)
               (let ((render-end (gethash end following-render-data)))
                 (dolist (record
                          (cdr (project-segment
@@ -1333,7 +1518,9 @@ owner; omitted means the root transcript."
                                   render-end completions)))))
                   (push (mevedel-collaboration--scoped
                          (copy-sequence record) scope)
-                        records)))))))
+                        records)
+                  (setq activity-tool (or activity-tool (car records))
+                        activity-record (car records))))))))
         (dolist (span breadcrumbs)
           (add-execution (plist-get span :record)
                          (mevedel-collaboration--scope-at
@@ -1341,6 +1528,7 @@ owner; omitted means the root transcript."
         (let ((background
                (mevedel-collaboration--attribute-guest-prompts (nreverse user-starts))))
           (setq records (cl-delete-if (lambda (record) (memq record background)) records)))
+        (mevedel-collaboration--attribute-fork-points (nreverse response-starts))
         (when cache
           ;; Projection does not edit the transcript; if anything did, the
           ;; retained sources describe no single state, so start over.
@@ -1353,69 +1541,91 @@ owner; omitted means the root transcript."
                   (if current entries (make-hash-table :test #'equal)))))
         (mevedel-collaboration--activity-records (nreverse records)))))))
 
+(defun mevedel-collaboration--activity-separator-p (start end)
+  "Return non-nil when START..END holds only audits and one is displayed.
+Execution breadcrumbs are activity members, and directive boundaries end
+their turn's scope, so neither separates activity."
+  (and (mevedel-transcript-audit-buffer-only-p start end)
+       (cl-some (lambda (span)
+                  (let ((record (plist-get span :record)))
+                    (and (not (memq (plist-get record :type)
+                                    '(execution-breadcrumb directive-turn-boundary)))
+                         (mevedel-view-audit-displayed-p record))))
+                (mevedel-transcript-audit-buffer-spans nil start end))))
+
+(defun mevedel-collaboration--activity-entries (record)
+  "Return the activity-group entries for projected RECORD.
+A pending call without a presentation yet runs as a groupable tool.  Host
+tags from the segment pass decide merged audits, separators and
+transparent rows."
+  (let* ((kind (plist-get record :kind))
+         (role (plist-get record :activity-role))
+         (entry
+          (pcase kind
+            ("tool"
+             (let ((presentation (plist-get record :presentation)))
+               (list :role (cond (role)
+                                 ((plist-get record :artifact) 'boundary)
+                                 ((null presentation)
+                                  (if (plist-get record :pending) 'member 'boundary))
+                                 ((eq t (plist-get presentation :groupable)) 'member)
+                                 (t 'boundary))
+                     :kind 'tool
+                     :name (or (plist-get presentation :name) (plist-get record :name))
+                     :status (pcase (plist-get record :status)
+                               ((or "failed" "denied") 'failed)
+                               ("running" 'running)
+                               ("warning" 'warning)
+                               (_ 'completed)))))
+            ("agent-notice"
+             (list :role (if (equal (plist-get record :mailType) "message")
+                             'member 'boundary)
+                   :kind 'message))
+            ("execution"
+             (let ((facts (plist-get record :execution)))
+               (if (equal (plist-get facts :owner) (plist-get facts :ownPath))
+                   (list :role (or role 'member) :kind 'completion
+                         :completion
+                         (cons (list (plist-get facts :id) (plist-get facts :owner))
+                               (pcase (plist-get record :status)
+                                 ("completed" "completed")
+                                 ("cancelled" "stopped")
+                                 ("timed-out" "timed out")
+                                 (_ "failed"))))
+                 (list :role 'boundary))))
+            (_ (list :role (or role 'boundary))))))
+    (cons (nconc entry (list :id (plist-get record :id) :record record
+                             :scope (list (plist-get record :directive)
+                                          (plist-get record :item))))
+          (and (plist-get record :activity-break-after)
+               (list (list :role 'boundary))))))
+
 (defun mevedel-collaboration--activity-records (records)
-  "Annotate plain activity runs in RECORDS with native-derived summaries.
-Keep each original record and ID independently addressable; the browser owns
-only grouping disclosures.  Scope changes and background notices split runs."
-  (let (run scope)
-    (cl-labels
-        ((child (record)
-           (pcase (plist-get record :kind)
-             ("agent-notice" '(:kind mailbox))
-             ("execution"
-              (let ((facts (plist-get record :execution)))
-                (list :kind 'completion :rendering
-                      (list :completion-record
-                            (list :execution-id (plist-get facts :id)
-                                  :owner (plist-get facts :owner)
-                                  :facts (list :outcome (if (equal (plist-get record :status) "completed")
-                                                           'success 'failure)
-                                               :termination (pcase (plist-get record :status)
-                                                              ("cancelled" 'stopped)
-                                                              ("timed-out" 'timeout))))))))
-             (_ (list :tool (plist-get (plist-get record :presentation) :name)))))
-         (finish ()
-           (when (> (cl-count "tool" run :key (lambda (r) (plist-get r :kind)) :test #'equal)
-                    (max 0 mevedel-view-tool-group-collapse-threshold))
-             (when (> mevedel-view-tool-group-collapse-threshold 0)
-               (let* ((ordered (reverse run))
-                      (tools (cl-remove-if-not (lambda (r) (equal (plist-get r :kind) "tool")) ordered))
-                      (failed (cl-remove-if-not (lambda (r) (equal (plist-get r :status) "failed")) tools))
-                      (running (cl-count "running" tools :key (lambda (r) (plist-get r :status)) :test #'equal))
-                      (names (mapcar (lambda (r) (plist-get (plist-get r :presentation) :name)) failed))
-                      (children (mapcar #'child ordered))
-                      (activity
-                       (list :id (plist-get (car ordered) :id)
-                             :summary (mevedel-collaboration--truncate-bytes
-                                       (mevedel-view--tool-group-header
-                                        children (mevedel-view--group-completions children)) 600)
-                             :running running
-                             :failures (and failed (mevedel-view--failed-label (length failed) names))
-                             :status (cond ((> running 0) "running") (failed "failed")
-                                           ((cl-find "warning" tools :key (lambda (r) (plist-get r :status)) :test #'equal) "warning")
-                                           (t "completed")))))
-                 (dolist (record ordered)
-                   (if (plist-member record :activity)
-                       (setf (plist-get record :activity) activity)
-                     (nconc record (list :activity activity)))))))
-           (setq run nil)))
-      (dolist (record records)
-        (when (plist-member record :activity)
-          (setf (plist-get record :activity) nil))
-        (let* ((kind (plist-get record :kind))
-               (next-scope (list (plist-get record :directive) (plist-get record :item)))
-               (groupable (or (and (equal kind "tool") (not (plist-get record :artifact))
-                                   (eq t (plist-get (plist-get record :presentation) :groupable)))
-                              (and (equal kind "agent-notice")
-                                   (equal (plist-get record :mailType) "message"))
-                              (and (equal kind "execution")
-                                   (let ((facts (plist-get record :execution)))
-                                     (equal (plist-get facts :owner) (plist-get facts :ownPath)))))))
-          (when (or (not groupable) (not (equal scope next-scope))) (finish))
-          (setq scope next-scope)
-          (when groupable (push record run))))
-      (finish))
-    records))
+  "Annotate the activity groups among RECORDS with their summaries.
+Keep each original record and ID independently addressable; the browser
+owns only grouping disclosures.  `mevedel-activity-group-partition' decides
+the groups, as it does for the Emacs view: non-tool entries before a run's
+first tool retain their standalone presentation."
+  (dolist (record records)
+    (when (plist-member record :activity)
+      (setf (plist-get record :activity) nil)))
+  (dolist (item (mevedel-activity-group-partition
+                 (mapcan #'mevedel-collaboration--activity-entries records)
+                 (max 0 mevedel-view-tool-group-collapse-threshold)))
+    (when (plist-get item :group)
+      (let ((activity
+             (list :id (car (plist-get item :ids))
+                   :summary (mevedel-collaboration--truncate-bytes
+                             (plist-get item :summary) 600)
+                   :running (plist-get item :running)
+                   :failures (plist-get item :failure-label)
+                   :status (symbol-name (plist-get item :status)))))
+        (dolist (entry (plist-get item :entries))
+          (let ((record (plist-get entry :record)))
+            (if (plist-member record :activity)
+                (setf (plist-get record :activity) activity)
+              (nconc record (list :activity activity))))))))
+  records)
 
 (defun mevedel-collaboration--tool-records (records)
   "Return the tool records in RECORDS, preserving their order."

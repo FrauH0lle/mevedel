@@ -3,6 +3,47 @@
 
 (() => {
   const MAX_BASE64 = 24 * 1024 * 1024;
+  const TRANSFER_TIMEOUT_MS = 30000;
+
+  // Panel previews and direct downloads consume the same bounded transfer.
+  function receive(transfer, frame) {
+    if (typeof frame.error === 'string') throw new Error(frame.error);
+    if (!transfer.staging) return null;
+    if (!transfer.meta) {
+      transfer.meta = {
+        name: typeof frame.name === 'string' ? frame.name : null,
+        mime: typeof frame.mime === 'string' ? frame.mime : 'application/octet-stream',
+        size: typeof frame.size === 'number' ? frame.size : 0,
+      };
+    }
+    if (typeof frame.data === 'string') {
+      transfer.staging.push(frame.data);
+      transfer.collected = (transfer.collected || 0) + frame.data.length;
+    }
+    if (transfer.collected > MAX_BASE64) {
+      throw new Error('Too large for this viewer; open it on the host.');
+    }
+    if (frame.final !== true) return null;
+    let binary;
+    try { binary = atob(transfer.staging.join('')); }
+    catch (_error) { throw new Error('The transfer was corrupted; try again.'); }
+    transfer.staging = null;
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+    return bytes;
+  }
+
+  function saveBytes(bytes, mime, filename) {
+    const url = URL.createObjectURL(new Blob([bytes], {type: mime}));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename.split('/').pop();
+    link.click();
+    // Let the browser start reading before releasing the URL, independently
+    // of the preview panel's lifetime.
+    setTimeout(() => URL.revokeObjectURL(url), TRANSFER_TIMEOUT_MS);
+  }
+
   const CSP = '<meta http-equiv="Content-Security-Policy" '
     + 'content="default-src \'none\'; style-src \'unsafe-inline\'; '
     + 'img-src data: blob:; media-src data: blob:; font-src data:; '
@@ -56,6 +97,7 @@
     const view = {id: null, name: null, filename: null, store: null, kind: 'artifact', record: null, reqId: 0,
                   staging: null, meta: null, bytes: null, urls: [], frames: []};
     let requestSequence = 0;
+    const downloads = new Map();
     let theme = null;
     const discussionKit = window.mevedelArtifactDiscussions;
     const side = document.getElementById('artifact-side');
@@ -166,6 +208,7 @@
       view.kind = kind;
       view.reqId = ++requestSequence;
       view.staging = [];
+      view.collected = 0;
       if (title) title.textContent = view.name;
       if (metaEl) metaEl.textContent = 'Loading…';
       note('Loading…');
@@ -199,6 +242,31 @@
     function openFile(path) {
       if (!panel || typeof path !== 'string') return;
       fetch('file', path, path, {t: 'file-get', path});
+    }
+
+    // Fetch without opening or replacing the preview. Sharing its request
+    // sequence keeps interleaved file replies with their intended consumer.
+    function downloadPath(path) {
+      const reqId = ++requestSequence;
+      return new Promise((resolve, reject) => {
+        const transfer = {staging: [], collected: 0, filename: path};
+        transfer.finish = error => {
+          if (!downloads.delete(reqId)) return;
+          clearTimeout(transfer.timer);
+          if (error) reject(error);
+          else resolve();
+        };
+        transfer.touch = () => {
+          clearTimeout(transfer.timer);
+          transfer.timer = setTimeout(() => transfer.finish(
+            new Error('The host did not finish the download.')), TRANSFER_TIMEOUT_MS);
+        };
+        downloads.set(reqId, transfer);
+        transfer.touch();
+        send({t: 'file-get', reqId, path}).then(ok => {
+          if (!ok) transfer.finish(new Error('Connection lost; the download stopped.'));
+        }).catch(error => transfer.finish(error));
+      });
     }
 
     // The open page, as {artifact: RECORD} or {file: PATH}, or null.
@@ -246,42 +314,27 @@
     }
 
     function handle(frame) {
+      const transfer = downloads.get(frame.reqId);
+      if (transfer) {
+        try {
+          const bytes = receive(transfer, frame);
+          if (bytes) {
+            saveBytes(bytes, transfer.meta.mime, transfer.filename);
+            transfer.finish();
+          } else transfer.touch();
+        } catch (error) { transfer.finish(error); }
+        return;
+      }
       if (!view.id || frame.reqId !== view.reqId) return;
-      if (typeof frame.error === 'string') {
+      let bytes;
+      try { bytes = receive(view, frame); }
+      catch (error) {
         view.staging = null;
         if (metaEl) metaEl.textContent = '';
-        note(frame.error);
+        note(error.message);
         return;
       }
-      if (!view.staging) return;
-      if (!view.meta) {
-        view.meta = {
-          name: typeof frame.name === 'string' ? frame.name : null,
-          mime: typeof frame.mime === 'string' ? frame.mime
-            : 'application/octet-stream',
-          size: typeof frame.size === 'number' ? frame.size : 0,
-        };
-      }
-      if (typeof frame.data === 'string') view.staging.push(frame.data);
-      const collected = view.staging.reduce((sum, part) => sum + part.length, 0);
-      if (collected > MAX_BASE64) {
-        view.staging = null;
-        note('Too large for this viewer; open it on the host.');
-        return;
-      }
-      if (frame.final === true) {
-        const encoded = view.staging.join('');
-        view.staging = null;
-        let binary;
-        try { binary = atob(encoded); }
-        catch (_error) {
-          note('The transfer was corrupted; try again.');
-          return;
-        }
-        const bytes = new Uint8Array(binary.length);
-        for (let index = 0; index < binary.length; index++) {
-          bytes[index] = binary.charCodeAt(index);
-        }
+      if (bytes) {
         view.bytes = bytes;
         if (view.record && view.meta.name) {
           view.filename = view.meta.name;
@@ -292,9 +345,9 @@
           view.record.artifact = view.filename;
         }
         renderContent();
-      } else if (metaEl && view.meta.size > 0) {
+      } else if (view.staging && metaEl && view.meta.size > 0) {
         const percent = Math.min(
-          99, Math.round((collected * 0.75 * 100) / view.meta.size));
+          99, Math.round((view.collected * 0.75 * 100) / view.meta.size));
         metaEl.textContent = `Loading… ${percent}%`;
       }
     }
@@ -316,13 +369,7 @@
 
     function downloadFile() {
       if (!view.bytes || !view.meta) return;
-      const url = URL.createObjectURL(new Blob(
-        [view.bytes], {type: view.meta.mime || 'application/octet-stream'}));
-      view.urls.push(url);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = view.filename.split('/').pop();
-      if (typeof link.click === 'function') link.click();
+      saveBytes(view.bytes, view.meta.mime, view.filename);
     }
 
     // The room's cards, and the store artifacts attached to its session:
@@ -437,7 +484,7 @@
       return discussions.discuss(`artifact:${store}`, text, images);
     }
 
-    return Object.freeze({open, openFile, render, attachedRows, handle, handleDelete, close,
+    return Object.freeze({open, openFile, download: downloadPath, render, attachedRows, handle, handleDelete, close,
                           describe,
                           page: () => (panel && !panel.hidden ? view.store : null),
                           setTheme, queue, handleDiscussion, storedDiscussions, discuss, activity});

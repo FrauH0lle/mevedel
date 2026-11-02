@@ -20,7 +20,7 @@
 (mevedel-deftest mevedel-test-runner-dispatch ()
   ,test
   (test)
-  :doc "discovery writes the full inventory without executing a test"
+  :doc "discovery writes the full inventory and defining files without executing a test"
   (let* ((process-environment (copy-sequence process-environment))
          (output (make-temp-file "mevedel-test-discovery-")))
     (unwind-protect
@@ -35,13 +35,23 @@
                   (when (ert-select-tests selector t)
                     (error "Discovery ran tests"))
                   'no-tests))))
-          (should
-           (equal
-            (mapcar (lambda (test) (symbol-name (ert-test-name test)))
-                    (ert-select-tests t t))
-            (with-temp-buffer
-              (insert-file-contents output)
-              (json-parse-buffer :array-type 'list)))))
+          (let ((discovered (with-temp-buffer
+                              (insert-file-contents output)
+                              (json-parse-buffer :object-type 'plist
+                                                 :array-type 'list))))
+            (should (equal (mapcar (lambda (test) (symbol-name (ert-test-name test)))
+                                   (ert-select-tests t t))
+                           (plist-get discovered :inventory)))
+            (should (equal (mapcar (lambda (test) (or (ert-test-file-name test) ""))
+                                   (ert-select-tests t t))
+                           (plist-get discovered :files)))
+            ;; This very case is defined in this file.
+            (should (string-suffix-p
+                     "test-mevedel-test-runner.el"
+                     (nth (cl-position "mevedel-test-runner-dispatch/test@1"
+                                       (plist-get discovered :inventory)
+                                       :test #'equal)
+                          (plist-get discovered :files))))))
       (delete-file output)))
 
   :doc "rejects changed or invalid assignments and retains unexpected failures"

@@ -422,6 +422,57 @@ temporary one."
                  (when (listp renderer) (setq renderer (cdr (assq 'success renderer))))
                  (should (plist-get (funcall renderer (car row) (cadr row) "hello" (caddr row))
                                     :header)))))
+            ('native-btw
+             (mevedel-install)
+             (setq gptel-backend (mevedel-claude-code-register) gptel-model 'sonnet)
+             (mevedel)
+             (let* ((parent (mevedel-test-loading--session))
+                    (parent-file (file-name-concat root "fixture-session.json"))
+                    (fork-file (file-name-concat root "fixture-fork.json"))
+                    side)
+               (setenv "MEVEDEL_ACP_TEST_HISTORY" root)
+               (with-temp-file parent-file (insert "[\"cold native history\"]"))
+               (should-not (featurep 'mevedel-claude-code-btw))
+               ;; Replace only the paid executable at its real loading boundary.
+               (autoload 'mevedel-claude-code-launch "mevedel-claude-code")
+               (advice-add
+                'mevedel-claude-code-launch :override
+                (lambda (_system mcp _model _effort &optional id &rest _)
+                  (list :command (executable-find "python3")
+                        :args (list (file-name-concat mevedel-test-loading--root
+                                                     "test/fixtures/acp-agent.py"))
+                        :cwd root :session-id id :mcp-servers mcp)))
+               (with-current-buffer parent
+                 (goto-char (point-max))
+                 (insert "*** Accepted parent prompt\n"
+                         (propertize "Visible parent answer\n" 'gptel 'response))
+                 ;; Expand the struct setter only after the cold entry loaded it.
+                 (eval '(setf (mevedel-session-external-conversations mevedel--session)
+                              (list (list "root" :engine 'claude-code :id "fixture-session"
+                                          :host (system-name) :directory mevedel-claude-code-directory
+                                          :state 'ready))) t))
+               (with-current-buffer (buffer-local-value 'mevedel--view-buffer parent)
+                 (goto-char (mevedel-view--input-start))
+                 (insert "/btw")
+                 (mevedel-view-send))
+               (mevedel-test-loading--await
+                (lambda ()
+                  (setq side (buffer-local-value 'mevedel-side-conversation--side-buffer parent))
+                  (and (buffer-live-p side)
+                       (buffer-live-p (buffer-local-value 'mevedel--view-buffer side)))))
+               (with-current-buffer (buffer-local-value 'mevedel--view-buffer side)
+                 (goto-char (mevedel-view--input-start))
+                 (insert "cold side question")
+                 (mevedel-view-send))
+               (mevedel-test-loading--await (lambda () (not (mevedel-turn-busy-p side))))
+               (with-current-buffer (buffer-local-value 'mevedel--view-buffer side)
+                 (should (string-search "cold native history" (buffer-string)))
+                 (mevedel-side-conversation-close))
+               (mevedel-test-loading--await (lambda () (not mevedel-claude-code-btw--forks)))
+               (should-not (file-exists-p fork-file))
+               (should (equal "[\"cold native history\"]"
+                              (with-temp-buffer
+                                (insert-file-contents parent-file) (buffer-string))))))
             ('claude
              (let* ((backend (mevedel-claude-code-register))
                     (gptel-backend backend) (gptel-model 'sonnet)

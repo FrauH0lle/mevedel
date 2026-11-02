@@ -151,6 +151,41 @@
       (should (equal 'heuristic (plist-get analysis :parser)))
       (should (equal '("./README.md") (plist-get analysis :resources)))
       (should (consp (plist-get analysis :reasons)))))
+  :doc "Unicode heredoc bodies retain conservative authority and source text"
+  (dolist (source '("cat <<'EOF'\n\u2192 & coproc $(sleep 1 &)\nEOF\nprintf done"
+                    "cat <<EOF\n\u2192 & coproc\nEOF\nprintf done"
+                    "cat <<'\u03bb'\n\u2192\n\u03bb\nprintf done"))
+    (let ((original (copy-sequence source))
+          (analysis (mevedel-bash-analysis-analyze source)))
+      (should (eq 'complex (plist-get analysis :class)))
+      (should-not (plist-get analysis :background-p))
+      (should (equal original source))))
+  :doc "Unicode substitutions preserve nesting, background detection and source text"
+  (dolist (case '(("echo \"$(printf '\u2192')\"" nil)
+                  ("echo \"$(echo \"$(printf '\u2192')\")\"" nil)
+                  ("echo `printf '\u2192'`" nil)
+                  ("echo \"$(printf '\u2192' &)\"" t)
+                  ("echo \"$(echo \"$(printf '\u2192' &)\")\"" t)
+                  ("cat <<EOF\n\u2192 $(printf '\u03bb' &)\nEOF" t)
+                  ("cat <<'EOF'\n\u2192\nEOF\nprintf '\u03bb' &" t)))
+    (let* ((source (copy-sequence (car case)))
+           (analysis (mevedel-bash-analysis-analyze source)))
+      (should (eq 'complex (plist-get analysis :class)))
+      (should (eq (cadr case) (plist-get analysis :background-p)))
+      (should (equal (car case) source))))
+  :doc "large Unicode payloads and ordinary arguments remain immutable"
+  (let* ((payload (make-string 16384 ?\u2192))
+         (source (concat "cat <<'EOF'\n" payload " & coproc\nEOF\nprintf done"))
+         (original (copy-sequence source))
+         (analysis (mevedel-bash-analysis-analyze source)))
+    (should (eq 'complex (plist-get analysis :class)))
+    (should-not (plist-get analysis :background-p))
+    (should (equal original source))
+    (let* ((argument "echo '\u2192\u03bb' out")
+           (plain (mevedel-bash-analysis-analyze argument)))
+      (should (eq 'read-only (plist-get plain :class)))
+      (should (equal '(("echo" "\u2192\u03bb" "out")) (plist-get plain :commands)))
+      (should (equal "echo '\u2192\u03bb' out" argument))))
   :doc "bare directory resources:
 `mevedel-bash-analysis-analyze' preserves current and parent directory operands"
   (cl-letf (((symbol-function 'treesit-language-available-p)

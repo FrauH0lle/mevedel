@@ -104,7 +104,7 @@
            (progn
              (setq process (mevedel-journal-worker-start
                             workspace 'digest-prepare
-                            (lambda (value) (setq result value completed t)))
+                            nil (lambda (value) (setq result value completed t)))
                    timer (run-at-time 0 nil (lambda () (setq tick t))))
              (let ((until (+ (float-time) 15)))
                (while (and (not completed) (< (float-time) until)) (accept-process-output nil .01)))

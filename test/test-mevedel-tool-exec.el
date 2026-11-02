@@ -1261,6 +1261,7 @@ A synchronous result must come with exactly one matching acknowledgement."
       (should (string-search "does not prove a namespace cause" text))
       (should (string-search "`ssh -G`" text))
       (should (string-search "grants do not change UID mapping" text))
+      (should (string-search "fetch-only transport" text))
       (should (string-search "`require_escalated`" text))
       (should (string-search "invocation-only approval" text))
       (should (string-search "no retry is automatic" text))

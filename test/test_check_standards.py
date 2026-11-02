@@ -196,6 +196,174 @@ class StandardsTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             standards.run(self.root, 'does-not-exist')
 
+    def test_duplicate_ert_names(self):
+        def source(name, body):
+            return library(name).replace(f"(provide '{name})", body + f"\n(provide '{name})")
+        self.write('test/test-one.el', source('test-one',
+                   '(ert-deftest shared () (should t))'))
+        self.write('test/test-two.el', source('test-two',
+                   '; (ert-deftest comment () nil)\n'
+                   '"(ert-deftest text () nil)"\n'
+                   "'(ert-deftest quoted () nil)\n"
+                   '(ert-deftest shared () (should t))'))
+        _, errors = self.check(1)
+        self.assertIn('duplicate ERT test name shared', errors)
+        self.assertIn('first defined at test/test-one.el:', errors)
+        self.write('test/test-two.el', source('test-two',
+                   '(ert-deftest distinct () (should t))'))
+        self.check(0)
+
+    def test_generated_test_names_collide_with_literal_names(self):
+        self.write('test/test-one.el', library('test-one').replace(
+            "(provide 'test-one)",
+            '(mevedel-deftest example () ,test (test) :doc "One" (should t) '
+            ':doc "Two" (should t))'))
+        self.write('test/test-two.el', library('test-two').replace(
+            "(provide 'test-two)", '(ert-deftest example/test@2 () (should t))'))
+        errors = standards.test_integrity_errors(self.root, standards.inventory(self.root))
+        self.assertEqual(len(errors), 1)
+        self.assertIn('duplicate ERT test name example/test@2', errors[0])
+        self.write('test/test-two.el', library('test-two').replace(
+            "(provide 'test-two)", '(mevedel-deftest example () ,test (test) (should t))'))
+        self.assertEqual(standards.test_integrity_errors(
+            self.root, standards.inventory(self.root)), [])
+
+    def test_tracked_tests_require_tracked_fixtures(self):
+        self.write('test/test-fixture.el', library('test-fixture').replace(
+            "(provide 'test-fixture)",
+            '(defconst test-fixture-path (file-name-concat "test" "fixtures" "helper.c"))'))
+        self.commit()
+        self.write('test/fixtures/helper.c', 'int main(void) { return 0; }\n')
+        _, errors = self.check(1)
+        self.assertIn('untracked test fixture test/fixtures/helper.c', errors)
+        self.git('add', 'test/fixtures/helper.c')
+        self.check(0)
+        (self.root / 'test/fixtures/helper.c').unlink()
+        _, errors = self.check(1)
+        self.assertIn('missing test fixture test/fixtures/helper.c', errors)
+
+    def test_unrelated_basename_is_not_a_fixture_reference(self):
+        self.write('test/test-fixture.el', library('test-fixture').replace(
+            "(provide 'test-fixture)",
+            '(file-name-extension "other.c")\n'
+            '(file-name-concat temporary-file-directory "other.c")\n'
+            '(let ((root "fixtures"))\n'
+            '  (let ((root temporary-file-directory)) (file-name-concat root "other.c")))'))
+        self.commit()
+        self.write('test/fixtures/other.c', 'int main(void) { return 0; }\n')
+        self.assertEqual(standards.test_integrity_errors(
+            self.root, standards.inventory(self.root)), [])
+
+    def test_fixture_directory_bindings_keep_nested_path_context(self):
+        self.write('test/test-fixture.el', library('test-fixture').replace(
+            "(provide 'test-fixture)",
+            '(let* ((root (file-name-concat "test" "fixtures"))\n'
+            '       (nested (file-name-concat root "nested")))\n'
+            '  (expand-file-name "helper.py" nested))'))
+        self.commit()
+        self.write('test/fixtures/nested/helper.py', 'print("fixture")\n')
+        self.write('test/fixtures/other/helper.py', 'print("unrelated")\n')
+        errors = standards.test_integrity_errors(self.root, standards.inventory(self.root))
+        self.assertEqual(len(errors), 1)
+        self.assertIn('untracked test fixture test/fixtures/nested/helper.py', errors[0])
+
+    def test_expand_file_name_parent_can_leave_fixture_directory(self):
+        self.write('test/test-fixture.el', library('test-fixture').replace(
+            "(provide 'test-fixture)",
+            '(expand-file-name "../helpers.el" "test/fixtures/")'))
+        self.commit()
+        self.assertEqual(standards.test_integrity_errors(
+            self.root, standards.inventory(self.root)), [])
+
+    def test_expand_file_name_absolute_name_replaces_fixture_directory(self):
+        for base in ('"test/fixtures/"',
+                     '(file-name-concat "test" "fixtures" "missing-base")'):
+            with self.subTest(base=base):
+                self.write('test/test-fixture.el', library('test-fixture').replace(
+                    "(provide 'test-fixture)",
+                    f'(expand-file-name "/tmp/example.c" {base})'))
+                self.commit()
+                self.assertEqual(standards.test_integrity_errors(
+                    self.root, standards.inventory(self.root)), [])
+
+    def test_expand_file_name_normalizes_paths_that_stay_in_fixtures(self):
+        self.write('test/test-fixture.el', library('test-fixture').replace(
+            "(provide 'test-fixture)",
+            '(expand-file-name ".././helper.py" "test/fixtures/nested/")'))
+        self.commit()
+        self.write('test/fixtures/helper.py', 'print("fixture")\n')
+        errors = standards.test_integrity_errors(self.root, standards.inventory(self.root))
+        self.assertEqual(len(errors), 1)
+        self.assertIn('untracked test fixture test/fixtures/helper.py', errors[0])
+        self.git('add', 'test/fixtures/helper.py')
+        self.assertEqual(standards.test_integrity_errors(
+            self.root, standards.inventory(self.root)), [])
+
+    def test_literal_fixture_paths_are_normalized_before_classification(self):
+        self.write('test/test-fixture.el', library('test-fixture').replace(
+            "(provide 'test-fixture)",
+            '["test/fixtures/../helpers.el" "test/fixtures/nested/.././helper.py"]'))
+        self.commit()
+        self.write('test/fixtures/helper.py', 'print("fixture")\n')
+        errors = standards.test_integrity_errors(self.root, standards.inventory(self.root))
+        self.assertEqual(len(errors), 1)
+        self.assertIn('untracked test fixture test/fixtures/helper.py', errors[0])
+        self.git('add', 'test/fixtures/helper.py')
+        self.assertEqual(standards.test_integrity_errors(
+            self.root, standards.inventory(self.root)), [])
+
+    def test_ignored_fixture_and_directory_variable(self):
+        self.write('test/test-fixture.el', library('test-fixture').replace(
+            "(provide 'test-fixture)",
+            '(defconst test-fixture-root "fixtures")\n'
+            '(defconst test-fixture-path (file-name-concat test-fixture-root "helper.py"))'))
+        self.write('.gitignore', 'test/fixtures/\n')
+        self.commit()
+        self.write('test/fixtures/helper.py', 'print("fixture")\n')
+        errors = standards.test_integrity_errors(self.root, standards.inventory(self.root))
+        self.assertEqual(len(errors), 1)
+        self.assertIn('untracked test fixture test/fixtures/helper.py', errors[0])
+
+    def test_inventory_never_evaluates_sources(self):
+        sentinel = self.root / 'must-not-exist'
+        data = standards.test_inventory(self.root, [('test/test-demo.el',
+                f'(write-region "bad" nil "{sentinel}")\n'
+                '(mevedel-deftest single () (should t))\n'
+                '(mevedel-deftest many () (should ,value) (value) t :doc "Two" nil)')])
+        self.assertFalse(sentinel.exists())
+        self.assertEqual([test['name'] for test in data['test/test-demo.el']['tests']],
+                         ['single/test', 'many/test@1', 'many/test@2'])
+
+    def test_nested_fixture_split_arguments_and_vector_literals(self):
+        self.write('test/test-fixture.el', library('test-fixture').replace(
+            "(provide 'test-fixture)",
+            '(defconst test-fixture-path (file-name-concat "fixtures" "nested" "helper.py"))\n'
+            '(defconst test-fixture-args ["test/fixtures/another.py"])'))
+        self.commit()
+        self.write('test/fixtures/nested/helper.py', 'print("fixture")\n')
+        errors = standards.test_integrity_errors(self.root, standards.inventory(self.root))
+        self.assertEqual(len(errors), 2)
+        self.assertTrue(any('untracked test fixture test/fixtures/nested/helper.py' in error
+                            for error in errors))
+        self.assertTrue(any('untracked test fixture test/fixtures/another.py' in error
+                            for error in errors))
+
+    def test_same_file_duplicates_and_empty_templates(self):
+        data = standards.test_inventory(self.root, [('test/test-demo.el',
+                '(mevedel-deftest empty ())\n'
+                '(ert-deftest shared () (should t))\n'
+                '(ert-deftest shared () (should t))\n'
+                '["fixture.py" (ert-deftest vector-data () nil)]')])
+        self.assertEqual([test['name'] for test in data['test/test-demo.el']['tests']],
+                         ['shared', 'shared'])
+        self.assertEqual(data['test/test-demo.el']['strings'][0]['value'], 'fixture.py')
+        self.write('test/test-demo.el', library('test-demo').replace(
+            "(provide 'test-demo)", '(ert-deftest same () (should t))\n'
+            '(ert-deftest same () (should t))'))
+        errors = standards.test_integrity_errors(self.root, standards.inventory(self.root))
+        self.assertEqual(len(errors), 1)
+        self.assertIn('duplicate ERT test name same', errors[0])
+
     def stub_source(self, body, requires=''):
         return library('test-demo').replace(
             '(defun test-demo-value (value)\n  "Return VALUE."\n  value)',

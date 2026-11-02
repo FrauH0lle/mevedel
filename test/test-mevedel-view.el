@@ -15,6 +15,8 @@
           "helpers"))
 (require 'mevedel-agent-control)
 (require 'mevedel-agents)
+(require 'mevedel-claude-code-backend)
+(require 'mevedel-compact)
 (require 'mevedel-execution)
 (require 'mevedel-execution-target)
 (require 'mevedel-background-list)
@@ -76,7 +78,8 @@
         (backward-char 2)
         (should (get-text-property (point) 'read-only))
         (should (button-at (point)))
-        (call-interactively (key-binding (kbd "RET")))
+        (let ((last-command-event ?\r))
+          (call-interactively (key-binding (kbd "RET"))))
         (should-not (mevedel-session-recovery-issues session))
         (should-not (string-search "Agent failed" (buffer-string)))
         (should (equal "> first line\nsecond line" (mevedel-view--input-text))))
@@ -995,6 +998,7 @@
   (dolist (width '(-10 0))
     (should (equal "" (mevedel-view--pinned-prompt-button
                        "Long prompt that must yield to controls" 4 width))))
+
   (save-window-excursion
     (mevedel-view-test--with-buffers
       (mevedel-view-test--insert-data data-buf "Very long prompt\n" nil)
@@ -1011,7 +1015,27 @@
             (should (string-match-p "ask · idle" header))
             (should-not (string-match-p "Very long prompt" header))
             (should (string-search "Very long prompt"
-                                   (mevedel-view--sticky-prompt-line)))))))))
+                                   (mevedel-view--sticky-prompt-line))))))))
+
+  :doc "previews share one map and route clicks by the clicked text's target"
+  (let* ((archived (mevedel-view--pinned-prompt-button "Archived prompt" 42 30 3))
+         (local (mevedel-view--pinned-prompt-button "Local prompt" 7 30))
+         (line (concat (propertize "Prompt  " 'face 'shadow) archived))
+         (window (selected-window))
+         calls)
+    (should (eq (get-text-property 0 'local-map archived)
+                (get-text-property 0 'local-map local)))
+    (cl-letf (((symbol-function 'mevedel-view-segments-jump-to-prompt)
+               (lambda (&rest args) (push args calls))))
+      (let ((command (lookup-key (get-text-property 0 'local-map archived)
+                                 [header-line mouse-1])))
+        (funcall command (list 'mouse-1 (list window 'header-line '(10 . 0) 0
+                                              (cons line 10))))
+        (should (equal (list (list 3 42 window)) calls))
+        ;; The label carries no target.
+        (funcall command (list 'mouse-1 (list window 'header-line '(1 . 0) 0
+                                              (cons line 1))))
+        (should (= 1 (length calls)))))))
 
 (mevedel-deftest mevedel-view--jump-to-pinned-prompt ()
   ,test
@@ -1105,6 +1129,85 @@
                            (with-current-buffer view-buf
                              (mevedel-view--input-text))))))))))
 
+(mevedel-deftest mevedel-view-toggle-auto-compaction ()
+  ,test
+  (test)
+  :doc "rendered toggle changes admission without touching the draft or another window"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (let* ((root (make-temp-file "mevedel-toggle-" t))
+             (session (mevedel-session--create
+                       :name "toggle" :save-path root :current-segment 1))
+             (left (selected-window))
+             (right (split-window-right)))
+        (unwind-protect
+            (progn
+              (with-current-buffer data-buf
+                (setq-local mevedel--session session
+                            buffer-file-name
+                            (mevedel-session-artifacts-segment-path root 1)
+                            mevedel-compact-auto t)
+                (should (mevedel--compact-auto-eligible-p)))
+              (set-window-buffer left data-buf)
+              (set-window-buffer right view-buf)
+              (with-current-buffer view-buf
+                (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+                (let* ((before (buffer-string))
+                       (position (point))
+                       (start (window-start right))
+                       (line (mevedel-view--status-strip))
+                       (index (string-search "compact on" line))
+                       (command (and index (lookup-key
+                                            (get-text-property index 'local-map line)
+                                            [tab-line mouse-1])))
+                       (event (list 'mouse-1
+                                    (list right 'tab-line '(10 . 0) 0))))
+                  (should index)
+                  (should (commandp command))
+                  (should (eq line (mevedel-view--status-strip)))
+                  (with-current-buffer data-buf (funcall command event))
+                  (should (eq left (selected-window)))
+                  (should (equal before (buffer-string)))
+                  (should (= position (point)))
+                  (should (= start (window-start right)))
+                  (should (string-search "compact off" (mevedel-view--status-strip)))
+                  (with-current-buffer data-buf
+                    (should-not (mevedel--compact-auto-eligible-p)))
+                  (funcall command event)
+                  (should (string-search "compact on" (mevedel-view--status-strip)))
+                  (with-current-buffer data-buf
+                    (should (mevedel--compact-auto-eligible-p)))
+                  (with-temp-buffer (should mevedel-compact-auto)))))
+          (with-current-buffer data-buf
+            (setq buffer-file-name nil mevedel--session nil))
+          (delete-directory root t)))))
+
+  :doc "explicit re-enable clears the failure latch but preserves the global default"
+  (let ((mevedel-compact-auto nil))
+    (mevedel-view-test--with-buffers
+      (with-current-buffer data-buf
+        (setq-local mevedel--session (mevedel-session--create :name "toggle")
+                    mevedel--compact-auto-disabled t
+                    mevedel-compact-run-failure-count 3))
+      (with-current-buffer view-buf
+        (should (string-search "compact off" (mevedel-view--status-strip)))
+        (mevedel-view-toggle-auto-compaction)
+        (should (string-search "compact on" (mevedel-view--status-strip))))
+    (should-not mevedel-compact-auto)))
+
+  :doc "provider-managed compaction has no clickable control and refuses direct toggling"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (setq-local mevedel--session (mevedel-session--create :name "native")
+                  gptel-backend (mevedel-claude-code--make-backend :name "Claude")))
+    (with-current-buffer view-buf
+      (let* ((line (mevedel-view--status-strip))
+             (index (string-search "compact provider" line)))
+        (should index)
+        (should-not (get-text-property index 'local-map line))
+        (should (string-search "provider" (get-text-property index 'help-echo line)))
+        (should-error (mevedel-view-toggle-auto-compaction) :type 'user-error)))))
+
 (mevedel-deftest mevedel-view--status-strip ()
   ,test
   (test)
@@ -1133,7 +1236,7 @@
         (goto-char (point-min))
         (search-forward "answer")
         (set-window-start nil (line-beginning-position) t)
-        (dolist (width '(35 50 80))
+        (dolist (width '(48 63 93))
           (cl-letf (((symbol-function 'mevedel-view--status-strip-width)
                      (lambda () width)))
             (let ((line (mevedel-view--status-strip)))
@@ -1141,7 +1244,7 @@
               (should (string-match-p
                        (regexp-quote "ask · idle · model none · 0 tools")
                        line))
-              (if (= width 35)
+              (if (= width 48)
                   (should-not (string-search "S" line))
                 (should (string-match-p "\\`S+…" line))
                 (should (text-property-any
@@ -1171,7 +1274,9 @@
             (setq-local gptel-model 'gpt-5.5)
             (setq-local gptel-tools '(read edit)))
           (with-current-buffer view-buf
-            (let ((line (mevedel-view--status-strip)))
+            (let ((line (cl-letf (((symbol-function 'mevedel-view--status-strip-width)
+                                  (lambda () 120)))
+                          (mevedel-view--status-strip))))
               (should (string-prefix-p "main  " line))
               (should (string-match-p
                        (regexp-quote

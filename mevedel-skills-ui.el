@@ -31,6 +31,10 @@
                   "mevedel-background-list" (&optional context))
 (autoload 'mevedel-background-list-open "mevedel-background-list" nil t)
 
+;; `mevedel-buddy-feed'
+(declare-function mevedel-buddy-feed-slash-command "mevedel-buddy-feed" (args))
+(autoload 'mevedel-buddy-feed-slash-command "mevedel-buddy-feed")
+
 ;; `mevedel-chat'
 (defvar mevedel--dispatching)
 (declare-function mevedel--dispatch-request "mevedel-chat" (model-input local-send &optional native-input))
@@ -355,6 +359,7 @@
     ("remember" . " [command] optional focus or drain; review workspace memory")
     ("goal" . " [command] objective | budget N|none | edit OBJECTIVE | pause | resume [steering] | clear")
     ("plan" . " [command] optional prompt; enter Plan mode")
+    ("buddy" . " [command] optional brief | off; let Buddy guide your own implementation")
     ("prompt" . " [command] no args; inspect the effective prompt and tools")
     ("mode" . " [command] ask | edits | full-auto")
     ("skills" . " [command] list | help NAME | enable NAME | disable NAME")
@@ -739,7 +744,7 @@ Routes through the lifecycle-aware permission transition path."
    (mevedel-skills-list--help-report)))
 
 (defun mevedel-skills-list-quit ()
-  "Quit the skills cockpit and return to the main session cockpit."
+  "Close the skills cockpit and restore the invoking layout."
   (interactive)
   (mevedel-cockpit-quit "skills cockpit"))
 
@@ -870,6 +875,7 @@ Routes through the lifecycle-aware permission transition path."
     ("remember" . mevedel-cmd--remember)
     ("goal"    . mevedel-cmd--goal)
     ("plan"    . mevedel-cmd--plan)
+    ("buddy"   . mevedel-buddy-feed-slash-command)
     ("prompt"  . mevedel-cmd--prompt)
     ("mode"    . mevedel-cmd--mode)
     ("skills"  . mevedel-cmd--skills)
@@ -1211,6 +1217,7 @@ index of the argument being completed."
       ("plugin" (mevedel-skills--plugin-command-argument-candidates
                  args arg-index))
       ("worktree" (and (zerop arg-index) '("status" "create")))
+      ("buddy" (and (zerop arg-index) '("off")))
       ((or "review" "verify")
        (and (zerop arg-index)
             (mapcar #'car mevedel-skills--validation-target-command-candidates)))

@@ -10,8 +10,9 @@
 (package-file "mevedel.el")
 (files :defaults
        '("native" "native/*.c" "native/*.eld")
-       '("scripts" "scripts/mevedel-mcp-stdio.py")
-       '("scripts/mevedel-execution-spool.py")
+       '("scripts" "scripts/mevedel-mcp-stdio.py"
+         "scripts/mevedel-execution-spool.py" "scripts/mevedel-git-ssh.py"
+         "scripts/mevedel-landlock.py" "scripts/mevedel-pin.py")
        '("agents" "agents/*.md")
        '("prompts/context-summary" "prompts/context-summary/*.md")
        '("prompts/goals" "prompts/goals/*.md")
@@ -56,6 +57,7 @@
 (depends-on "qrencode")
 
 (development
+ (depends-on "evil")
  (depends-on "mcp"))
 
 (defun mevedel-eask--isolate-test-home ()

@@ -13,17 +13,19 @@
 (require 'mevedel-journal-cleanup)
 (require 'mevedel-memory-pass)
 
-(mevedel-deftest mevedel-journal-worker-supported-p ()
+(mevedel-deftest mevedel-journal-worker-local-p ()
   ,test
   (test)
   :doc "only local Linux owners dispatch children"
   (let ((workspace (mevedel-workspace--create :root "/tmp/")))
     (let ((system-type 'gnu/linux))
-      (should (mevedel-journal-worker-supported-p workspace))
+      (should (mevedel-journal-worker-local-p workspace))
+      (should (mevedel-journal-worker-local-p workspace '("/tmp/one" "/tmp/two")))
+      (should-not (mevedel-journal-worker-local-p workspace '("/tmp/one" "/ssh:host:/tmp/two")))
       (let ((mevedel-journal-worker--child-p t))
-        (should-not (mevedel-journal-worker-supported-p workspace)))
+        (should-not (mevedel-journal-worker-local-p workspace)))
       (setf (mevedel-workspace-root workspace) "/ssh:host:/tmp/")
-      (should-not (mevedel-journal-worker-supported-p workspace)))))
+      (should-not (mevedel-journal-worker-local-p workspace)))))
 
 (mevedel-deftest mevedel-journal-worker-start ()
   ,test
@@ -38,7 +40,7 @@
             process timer result tick)
        (unwind-protect
            (progn
-             (setq process (mevedel-journal-worker-start workspace 'recovery (lambda (value) (setq result value)))
+             (setq process (mevedel-journal-worker-start workspace 'recovery nil (lambda (value) (setq result value)))
                    timer (run-at-time 0 nil (lambda () (setq tick t))))
              (let ((until (+ (float-time) 15)))
                (while (and (not result) (< (float-time) until))
@@ -85,7 +87,7 @@
             process result)
        (unwind-protect
            (progn
-             (setq process (mevedel-journal-worker-start workspace 'cleanup (lambda (value) (setq result value)) t))
+             (setq process (mevedel-journal-worker-start workspace 'cleanup (list :force t) (lambda (value) (setq result value))))
              (let ((until (+ (float-time) 15)))
                (while (and (not result) (< (float-time) until))
                  (accept-process-output nil .01)))
@@ -112,11 +114,7 @@
           (setq process
                 (mevedel-journal-worker-start
                  workspace 'recovery
-                 (lambda (value)
-                   (setq result value)
-                   (should mevedel-journal-process--inhibit-scheduling)
-                   (should mevedel-journal-cleanup--inhibit-scheduling)
-                   (should mevedel-memory-pass--inhibit-scheduling))))
+                 nil (lambda (value) (setq result value))))
           (setq directory (file-name-directory
                            (nth 1 (read (car (last (process-command process)))))))
           (should (file-directory-p directory))
@@ -125,7 +123,7 @@
           (should-not (file-exists-p directory))
           (should-not (process-live-p process))
           (should-not mevedel-journal-worker--processes)
-          (should (plist-get result :error)))
+          (should-not result))
       (when (and process (process-live-p process)) (delete-process process))
       (delete-directory root t))))
 

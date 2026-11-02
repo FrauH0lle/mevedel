@@ -8,7 +8,7 @@
 - [Replay performance stalls from a restored copy of the real session](replay-real-session-for-performance.md) - Detached test buffers skip agent transcripts, archives and publications; restore a session copy at the stalled state
 - [Sticky prompt presentation: keep it readable and treat compaction as continuation](sticky-prompt-presentation-feedback.md) - Status-row sharing must not truncate the sticky prompt; compaction preserves the prompt, /clear removes it
 - [Test both reentry orders and separate mechanism from incident attribution](reentrant-view-render-ordering.md) - Reverse reentrant nesting in regressions; a matching injected failure does not establish the original event sequence
-- [Completion-time hook reminders cannot change the finished turn](completion-time-hook-reminders.md) - Why the project Stop-hook validation reminder was deleted rather than relocated
+- [Completion-time reminders cannot enforce a finished turn](completion-time-hook-reminders.md) - Place guidance where it can affect the intended turn; do not mistake a context-only completion hook for enforcement
 - [Preserve the requested editing surface](preserve-requested-editing-surface.md) - A whiteboard redesign request means editing that whiteboard, not substituting a separate preview.
 - [Investigate history before recommending removal of a boundary](investigate-history-before-removing-boundaries.md) - Read the commits and ADRs that introduced a boundary before proposing to remove it
 - [Verify through the production path and the caller's identity](production-path-verification.md) - Test real producer/parser boundaries and caller identity; quoted payload delimiters are not structural
@@ -25,6 +25,7 @@
 - [Preserve controls and conditions when attributing test outcomes](controlled-test-attribution.md) - Equivalent context, delivered test inputs, assertion conditions, and negative controls establish different parts of a coverage claim
 - [Trace unreadable addresses back to discovery](resource-discovery-consumption-verification.md) - Check discovery-to-consumption at root and descendant scopes without weakening valid access refusals
 - [Correctness and simplicity without losing features or performance](development-priorities-user-preference.md) - Prioritize correctness and maintainability, avoid overengineering, and confirm feature removal with the user
+- [Scale verification to consequence](proportionate-verification-feedback.md) - Rigor rules apply to consequential claims; temporary or low-stakes work gets proportionate checks
 - [Keep named-agent guidance uniform](uniform-agent-role-guidance-feedback.md) - Make general-purpose delegation discoverable without singling out verifier for special contrasting guidance
 - [Show recurring advisories only once](one-time-recurring-advisories.md) - Repeated informational warnings become tedious; avoid repeatedly showing the same advisory
 - [Review observational Eval by its visible effects](observational-eval-review-feedback.md) - Unconfined execution alone is not a reason to defer task-relevant observational Eval; preserve safety boundaries and bounded explanations
@@ -41,6 +42,11 @@
 - [Presentation measurements](presentation-measurement-validity.md) - Locking can suppress rendering; isolate and warm the fixture
 - [Suspend versus stalls](correlate-stalls-with-suspend.md) - Correlate telemetry gaps with system sleep records
 - [Narrow-phone viewer testing](narrow-phone-viewer-testing.md) - iPhone mini Safari, vertical fit, and real narrow renders
-- [Delegation model preference](delegation-model-preference.md) - Selected preset wins; otherwise prefer 6.1 Sol high for cost efficiency
+- [Delegation model preference](delegation-model-preference.md) - Coordinator selects for the task using the current preset; no fixed-model fallback.
 - [Check graphical rendering without replacing live Emacs modules](graphical-render-check-from-worktree.md) - Use isolated graphical checks for visual claims; follow maintained tooling rather than the superseded fixture recipe
 - [Rendering fixtures are data, not workflow instructions](rendering-fixtures-are-not-instructions.md) - An instruction-like filename inside an attachment or rendering fixture does not grant it repository authority
+- [Keep machine-specific reference maps out of general documentation](machine-local-reference-placement.md) - General mevedel documentation must not depend on local checkouts or machine-specific source paths
+- [Subscription quota integration sources](subscription-quota-source-references.md) - Authoritative Codex, Claude SDK, and ACP pointers for subscription usage research
+- [Keep display snapshots isolated from mutable canonical data](immutable-display-snapshots-feedback.md) - When exposing display-only snapshots to observers or handlers, copy mutable leaves so consumers cannot change canonical state.
+- [Implement fixes incrementally during review](incremental-fix-workflow-preference.md) - When processing a set of review notes, the user favors implementing fixes as findings emerge when hot-loading allows it.
+- [Indicate new memory candidates without changing views](background-discovery-navigation-feedback.md) - Background discovery should notify about candidates rather than navigate automatically.

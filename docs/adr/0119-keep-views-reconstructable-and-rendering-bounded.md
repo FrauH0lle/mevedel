@@ -108,6 +108,13 @@ block and whitespace rules. A single user-text part needs no joining copy.
 Grouping also skips the unused scaffolding cleanup of a confirmed audit-only
 segment; its audit verdict already determines attachment and preceding-type
 preservation. Other ignored segments still require scaffolding classification.
+The Emacs view and browser projection normalize their decoded activity and share
+`mevedel-activity-group-partition` in `mevedel-activity-group.el` for run
+boundaries, grouping thresholds, summaries, and running/failure/warning facts.
+Only a tool starts a run; leading messages and completion breadcrumbs remain
+standalone, including after a boundary or scope change.
+Audit attachment follows the source tool, not the order of projected completion
+and summary rows.
 A tool/delivery activity run remains mutable until its surrounding
 transcript boundary closes it; substantive reasoning is a standalone,
 initially expanded disclosure and closes the preceding tool run. An individual completed call can still join a
@@ -293,6 +300,18 @@ Emacs's whole-frame redraws to it, and keeps GLib dispatch on the main thread,
 where the GL context is current. It refuses executables whose imports it cannot
 account for. The October 2026 entry below records why it lives in mevedel.
 
+The headless presentation test separates pending compositor configuration from
+unchanged-content idle measurement. Its test-only module locates the fixture's
+existing GTK frame and verifies its Wayland socket peer against the private
+compositor before queuing configuration or synchronizing that same connection.
+The trace must show the synchronization callback completing before idle; the full
+idle phase still permits no outgoing requests. Pending input must neither shorten
+the 500-ms sample nor turn it into a busy loop. This protocol barrier does not
+establish focus or visual completion, and adds no shipped synchronization API.
+The nested compositor and daemon also omit inherited session-bus and D-Bus
+activation addresses/type, preserving the caller's environment while avoiding
+host application integration, as the isolated graphical checker does.
+
 Eligible Linux PGTK/Wayland views optionally use independent native surfaces.
 The animation module supplies timed, styled samples; a small C module owns
 bounded buffers, GLib scheduling, Pango drawing and Wayland presentation without
@@ -353,7 +372,11 @@ Projection ownership also inhibits redisplay through queued work. Disclosure
 expansion rolls back failed replacement. Reader preservation includes both
 selection endpoints, neighboring managed zones, and table cells across wrapping.
 Views defer table formatting until visible and idle, processing one complete
-table per callback. Interactive visibility reuses Emacs's current window boundary,
+table per callback. Redraws reinsert raw table source, so a table once laid out
+returned to raw Markdown after every full, settle or disclosure render until the
+next idle pass. A bounded per-view layout cache now reapplies a known layout
+during the redraw; only first layouts are deferred, keeping transcript opening
+as fast as before. Interactive visibility reuses Emacs's current window boundary,
 including variable-height rows; changed display state requests recomputation.
 Semantic marker relocation replaces whole-table text diffing. Restored expanded
 audit disclosures use their ordinary toggle renderer, preserving the single
@@ -450,6 +473,73 @@ Observers must not change execution or steal focus; a failed projection warns
 and retains the last good display where possible.
 
 ## Decision history
+
+### October 31, 2026: one activity-group rule for both surfaces
+
+The Emacs view and browser projection had separate grouping rules, with the
+browser borrowing private view summary helpers. An agreement test on unchanged
+code reproduced seven divergences rather than merely assuming the duplication
+was harmful. Both surfaces now normalize their decoded entries and call
+`mevedel-activity-group-partition`; the pure module owns partitioning and summary
+facts, while each surface retains rendering and disclosure state.
+
+The shared rule resolves the divergent cases:
+
+- A tool carrying a displayed audit stays individually presented in both
+  surfaces; previously only Emacs kept it out of a group.
+- A standalone audit splits a run, rather than vetoing the whole mixed run in
+  Emacs or being ignored by the browser.
+- The transcript owner's own completion mail is transparent, not an additional
+  browser completion; the original tool's breadcrumb owns that presentation.
+- A breadcrumb merged into a tool is normalized before classification, so it
+  no longer makes that tool special in an Emacs run containing mail.
+- Request summaries, including failed-request summaries, are transparent rather
+  than splitting browser runs. Successful empty-input polls are transparent too:
+  neither joins nor splits the run.
+- Coalescing rows are boundaries, including expandable rows that previously
+  joined Emacs tool runs.
+- Pending browser records join as running tools and count toward the same
+  threshold, instead of remaining ungrouped.
+
+Follow-up review reproduced another pre-existing disagreement: after assistant
+prose, a leading completion breadcrumb joined the browser's next tool group but
+stayed standalone in Emacs. Leading mail had the same defect. Preserve the
+standalone presentation by making the shared partitioner start runs only at a
+tool. Messages and completions can join only after that tool; a boundary or scope
+change resets the rule. Agreement cases now cover leading breadcrumb, mail and
+audit combinations, and partition tests cover the boundary/scope reset and
+rebuilding with `nil`.
+
+Re-review also found that a deferred request summary could shield the preceding
+tool from a displayed audit in the browser. Looking past projected summary rows
+fixed that case, but another seed exposed the same failure when a completion
+breadcrumb intervened too. Projected row order cannot recover the source
+attachment after the breadcrumb has been split out of its tool.
+
+Resolve audit ownership while scanning source segments instead. A breadcrumb
+retains its originating tool; deferred summaries and their failure rows replace
+neither that owner nor the last effective activity row. Mail, prose, substantive
+reasoning and scope changes end tool attachment, including hidden or deduplicated
+own-completion mail. A displayed audit marks its source tool as an individual
+presentation boundary, or splits after the last activity row when no tool owns
+it. This matches Emacs's merge-before-split ordering without another record-kind
+skip or a surface-specific grouping exception.
+
+The shared running fact includes settled transcript tools whose background work
+is still running; the Emacs header animates only calls still in flight. These
+are distinct presentation needs, not different partition rules. A threshold of
+`nil` means "group any run with a tool" and is used only to rebuild an existing
+group, not as the normal collapse threshold; zero disables grouping.
+
+The compiled 40-turn fixture against `a54df292`, with 15 samples per version,
+recorded:
+
+- Full rerender time: median 54.8 -> 46.2 ms.
+- Full rerender allocation: median 300,789 -> 220,767 conses.
+
+These are batch render measurements, not graphical presentation latency. The
+decision removes duplicated policy and the demonstrated disagreement without
+adding a second transcript model.
 
 ### October 24, 2026: interrupt pure preparation, not publication
 
@@ -981,6 +1071,13 @@ including during streaming and in archived views. Empty reasoning does not
 create a card or partition tools. This replaces reasoning's earlier membership
 in grouped activity; tool and delivery grouping and bounded live-tail rendering
 remain unchanged.
+
+The browser projection follows the same rule. It emits bounded `thinking`
+records using the native reasoning cleaner, including gptel's unfinished
+streaming bodies. The shared browser renderer opens them independently of tool
+activity and retains explicit disclosure choices across updates and reconnects.
+Previously the browser projector omitted reasoning segments entirely, so no
+browser control could reveal them.
 
 ### September 2026: streaming groups and managed boundaries
 

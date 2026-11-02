@@ -328,7 +328,7 @@
       (let ((response-start (point)))
         (insert visible-answer)
         (put-text-property response-start (point) 'gptel 'response))
-      (dolist (block '("#+begin_reasoning\nreason secret\n#+end_reasoning\n"
+      (dolist (block '("#+begin_reasoning\nVisible thinking\n#+end_reasoning\n"
                        "<system-reminder>\nreminder secret\n</system-reminder>\n"
                        "<hook-context>\nhook secret\n</hook-context>\n"
                        "<!-- mevedel-render-data -->\n(:kind media :path \"/secret.png\")\n<!-- /mevedel-render-data -->\n"
@@ -347,15 +347,18 @@
         (put-text-property tool-start (point) 'gptel '(tool . "visible-tool")))
       (let* ((records (mevedel-collaboration--canonical-records (current-buffer)))
              (payload (mapcar #'mevedel-collaboration--json-record records)))
-        (should (= 3 (length records)))
+        (should (equal '("user" "assistant" "thinking" "tool")
+                       (mapcar (lambda (record) (plist-get record :kind)) records)))
         (should (equal (string-trim visible-user)
                        (cdr (assoc "text" (car payload)))))
         (should (equal (string-trim visible-answer)
                        (cdr (assoc "text" (cadr payload)))))
+        (should (equal "Visible thinking"
+                       (cdr (assoc "text" (nth 2 payload)))))
         (should (equal "Visible tool result"
-                       (cdr (assoc "result" (nth 2 payload)))))
+                       (cdr (assoc "result" (nth 3 payload)))))
         (let ((json (json-encode payload)))
-          (dolist (hidden '("reason secret" "reminder secret" "hook secret"
+          (dolist (hidden '("reminder secret" "hook secret"
                             "/secret.png" "unknown secret"
                             "Unknown kind payload"))
             (should-not (string-match-p (regexp-quote hidden) json))))))))
@@ -683,6 +686,56 @@
         (should (= 2 (cdr (assoc "revision" (car sent)))))
         (should (equal "First second" (cdr (assoc "text" (car sent)))))))))
 
+(mevedel-deftest mevedel-collaboration--attribute-fork-points
+  (:doc "names each settled turn's fork point on its last assistant record")
+  (with-temp-buffer
+    (let (segments)
+      (cl-flet ((add (type text)
+                  (let ((start (point)))
+                    (insert text)
+                    (push (list type start (1- (point))) segments)))
+                (fork (id)
+                  (insert (mevedel--format-hook-audit-record
+                           (list :type 'fork-point :fork-point-id id)))))
+        (add 'user "first prompt\n")
+        (add 'response "early answer\n")
+        (add 'response "settled answer\n")
+        (fork "fork-1")
+        ;; A turn without a response gets no fork point of its own; the
+        ;; earlier turn's answer must not take this one's.
+        (add 'user "second prompt\n")
+        (fork "fork-2")
+        ;; A turn that has not settled has no fork point yet.
+        (add 'user "third prompt\n")
+        (add 'response "streaming answer\n"))
+      (setq segments (nreverse segments))
+      (cl-letf (((symbol-function 'mevedel-transcript-segments)
+                 (lambda (_start _end) segments))
+                ((symbol-function 'mevedel-view--user-turn-text)
+                 (lambda (turn-segments buffer)
+                   (let ((segment (car turn-segments)))
+                     (string-trim (with-current-buffer buffer
+                                    (buffer-substring (cadr segment)
+                                                      (caddr segment)))))))
+                ((symbol-function 'mevedel-view--visible-response-text)
+                 #'string-trim))
+        (let* ((records (mevedel-collaboration--canonical-records
+                         (current-buffer)))
+               (answers (cl-remove-if-not
+                         (lambda (record)
+                           (equal "assistant" (plist-get record :kind)))
+                         records)))
+          (should (equal '("early answer" "settled answer" "streaming answer")
+                         (mapcar (lambda (record) (plist-get record :text))
+                                 answers)))
+          (should (equal '(nil "fork-1" nil)
+                         (mapcar (lambda (record) (plist-get record :forkPoint))
+                                 answers)))
+          (should (equal "fork-1"
+                         (cdr (assoc "forkPoint"
+                                     (mevedel-collaboration--json-record
+                                      (nth 1 answers)))))))))))
+
 (mevedel-deftest mevedel-collaboration--attribute-guest-prompts
   (:doc "attributes each guest record to the nearest preceding user turn")
   (with-temp-buffer
@@ -738,7 +791,9 @@
              '(:kind request-summary :elapsed-seconds 1 :outcome error
                :message "Provider unavailable" :error-data (:secret "not projected"))))
     (let ((records (mevedel-collaboration--canonical-records (current-buffer))))
-      (should (= (length records) 1))
+      ;; The failure notice is followed by the turn's closing line.
+      (should (equal (mapcar (lambda (record) (plist-get record :kind)) records)
+                     '("assistant" "request-summary")))
       (should (equal (plist-get (car records) :status) "failed"))
       (should (equal (plist-get (car records) :text)
                      "Assistant request failed. Provider unavailable"))

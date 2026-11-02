@@ -19,6 +19,19 @@
 ;;
 ;;; Grant resolution
 
+(mevedel-deftest mevedel-sandbox--target-stat ()
+  ,test
+  (test)
+  :doc "target facts: regular files and devices retain identity and mode from one stat"
+  (let ((file (make-temp-file "mevedel-sandbox-stat-")))
+    (unwind-protect
+        (let ((facts (mevedel-sandbox--target-stat file)))
+          (should (string-match-p "\\`[0-9]+:[0-9]+\\'" (plist-get facts :identity)))
+          (should-not (plist-get facts :device-p)))
+      (delete-file file)))
+  (when (eq system-type 'gnu/linux)
+    (should (plist-get (mevedel-sandbox--target-stat "/dev/zero") :device-p))))
+
 (mevedel-deftest mevedel-sandbox--symlink-chain ()
   ,test
   (test)
@@ -94,7 +107,24 @@
           (should (= 1 (length (mevedel-sandbox--resolve-filesystem-permissions
                                (list `(:path ,git :access write :recursive t)
                                      `(:path ,file :access write)))))))
-      (delete-directory root t))))
+      (delete-directory root t)))
+  :doc "device grants: exact writes retain the device type; reads refuse rather than imply device writes"
+  (skip-unless (eq system-type 'gnu/linux))
+  (let ((grant (car (mevedel-sandbox--resolve-filesystem-permissions
+                     '((:path "/dev/zero" :access write))))))
+    (should (plist-get grant :device-p))
+    (should (eq 'write (plist-get grant :access)))
+    (should-error
+     (mevedel-sandbox--resolve-filesystem-permissions
+      '((:path "/dev/zero" :access read)))
+     :type 'mevedel-sandbox-policy-error))
+  :doc "device authority: a parent tree cannot subsume an exact device mount"
+  (skip-unless (eq system-type 'gnu/linux))
+  (let ((resolved (mevedel-sandbox--resolve-filesystem-permissions
+                   '((:path "/dev" :access write :recursive t)
+                     (:path "/dev/zero" :access write)))))
+    (should (= 2 (length resolved)))
+    (should (plist-get (cadr resolved) :device-p))))
 
 (mevedel-deftest mevedel-sandbox--grant-paths ()
   ,test
@@ -125,6 +155,15 @@
     (mevedel-sandbox--additional-filesystem-mounts
      '((:path "/target/a" :source-path "/source/a" :access read)
        (:path "/target/b" :source-path "/source/b" :access write))
+     20)))
+  :doc "device mounts: only approved device nodes bypass nodev, using the verified descriptor"
+  (should
+   (equal
+    '("--dev-bind" "/proc/self/fd/20" "/dev/approved"
+      "--bind-fd" "21" "/dev/tree")
+    (mevedel-sandbox--additional-filesystem-mounts
+     '((:path "/dev/approved" :access write :device-p t)
+       (:path "/dev/tree" :access write :recursive t))
      20))))
 
 (mevedel-deftest mevedel-sandbox--fd-backed-command ()
@@ -145,7 +184,7 @@
 `mevedel-sandbox--fd-backed-command' opens and verifies the target identity"
   (let* ((source (make-temp-file "mevedel-sandbox-fd-source-"))
          (grant (list :source-path source
-                      :identity (mevedel-sandbox--target-identity source)))
+                      :identity (plist-get (mevedel-sandbox--target-stat source) :identity)))
          (wrapped
           (mevedel-sandbox--fd-backed-command
            '("printf" "ok") (list grant))))
@@ -181,7 +220,7 @@ the target-side identity check rejects a replaced exact grant"
           (make-symbolic-link "original" link)
           (setq grant (list :source-path link
                             :identity
-                            (mevedel-sandbox--target-identity original))
+                            (plist-get (mevedel-sandbox--target-stat original) :identity))
                 wrapped
                 (mevedel-sandbox--fd-backed-command
                  `("sh" "-c"
@@ -217,7 +256,7 @@ the verified descriptor is available to the child process"
           (with-temp-file source (insert "granted"))
           (setq grant (list :source-path source
                             :identity
-                            (mevedel-sandbox--target-identity source))
+                            (plist-get (mevedel-sandbox--target-stat source) :identity))
                 wrapped
                 (mevedel-sandbox--fd-backed-command
                  '("sh" "-c" "cat /proc/self/fd/10")
@@ -233,7 +272,7 @@ the verified descriptor is available to the child process"
           (make-symbolic-link "source" link)
           (setq grant (list :source-path link
                             :identity
-                            (mevedel-sandbox--target-identity source))
+                            (plist-get (mevedel-sandbox--target-stat source) :identity))
                 wrapped
                 (mevedel-sandbox--fd-backed-command
                  '("sh" "-c" "cat /proc/self/fd/10")
@@ -255,7 +294,7 @@ the verified descriptor is available to the child process"
 exact-grant preparation refuses when the target cannot inspect descriptors"
   (let* ((source (make-temp-file "mevedel-sandbox-fd-stat-"))
          (grant (list :source-path source
-                      :identity (mevedel-sandbox--target-identity source))))
+                      :identity (plist-get (mevedel-sandbox--target-stat source) :identity))))
     (unwind-protect
         (cl-letf (((symbol-function 'executable-find)
                    (lambda (name &rest _arguments)
@@ -265,6 +304,39 @@ exact-grant preparation refuses when the target cannot inspect descriptors"
             '("true") (list grant))
            :type 'mevedel-sandbox-policy-error))
       (delete-file source))))
+
+(mevedel-deftest mevedel-sandbox--device-grant-command ()
+  ,test
+  (test)
+  :doc "ordinary grants: leave the inner command unchanged"
+  (let ((command '("true")))
+    (should (eq command (mevedel-sandbox--device-grant-command
+                        command '((:path "/ordinary" :access write))
+                        default-directory))))
+  :doc "mounted identity: reject replacement and close the device source descriptor"
+  (skip-unless (eq system-type 'gnu/linux))
+  (let* ((facts (mevedel-sandbox--target-stat "/dev/zero"))
+         (grant (list :path "/dev/zero" :device-p t
+                      :identity (plist-get facts :identity)))
+         (output (generate-new-buffer " *mevedel-device-command-test*")))
+    (unwind-protect
+        (dolist (identity (list (plist-get facts :identity) "0:0"))
+          (setf (plist-get grant :identity) identity)
+          (with-current-buffer output (erase-buffer))
+          (let* ((inner (mevedel-sandbox--device-grant-command
+                         (list "sh" "-c" mevedel-sandbox--marker-script "test" "marker"
+                               "sh" "-c" "test ! -e /proc/self/fd/10 && printf payload")
+                         (list grant) default-directory))
+                 (status (apply #'call-process "bash" nil output nil
+                                "-p" "-c" "exec 10</dev/zero; exec \"$@\"" "test-device" inner)))
+            (should (= (if (equal identity "0:0") 125 0) status))
+            (with-current-buffer output
+              (if (equal identity "0:0")
+                  (progn
+                    (should (string-match-p "exact filesystem grant changed" (buffer-string)))
+                    (should-not (string-match-p "marker\\|payload" (buffer-string))))
+                (should (equal "marker\npayload" (buffer-string)))))))
+      (kill-buffer output))))
 
 (mevedel-deftest mevedel-sandbox--mount-plan ()
   ,test
@@ -319,6 +391,15 @@ exact-grant preparation refuses when the target cannot inspect descriptors"
      '((:path "/meta" :mode inaccessible :directory-p t)
        (:path "/meta/child" :mode inaccessible :directory-p t))
      '((:source-path "/meta" :path "/meta" :access write :recursive t)))))
+  :doc "device order: mount the device after a covering tree in either request order"
+  (let ((device '(:path "/dev/zero" :access write :device-p t))
+        (tree '(:path "/dev" :access write :recursive t)))
+    (dolist (grants (list (list device tree) (list tree device)))
+      (let ((plan (mevedel-sandbox--mount-plan nil grants)))
+        (should (equal (list tree device) (plist-get plan :grants)))
+        (should (equal '("--bind-fd" "10" "/dev"
+                         "--dev-bind" "/proc/self/fd/11" "/dev/zero")
+                       (plist-get plan :arguments))))))
   :doc "read grant on a masked directory:
 `mevedel-sandbox--mount-plan' drops the mask but keeps the read-only remount"
   (should

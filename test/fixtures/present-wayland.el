@@ -31,9 +31,28 @@
   "Mark the start of PHASE in the Wayland trace."
   (princ (format "MEVEDEL-PHASE %s\n" phase) #'external-debugging-output))
 
+(defun present-wayland--idle-window (seconds)
+  "Redisplay unchanged content for at least SECONDS, even when input is pending."
+  (let ((started (float-time))
+        (deadline (+ (float-time) seconds))
+        (cycles 0))
+    (while (< (float-time) deadline)
+      (setq cycles (1+ cycles))
+      (redisplay t)
+      (when (< (float-time) deadline)
+        (let ((slice (max 0.0 (min 0.05 (- deadline (float-time))))))
+          ;; `sit-for' returns immediately while input is pending.  Keep its
+          ;; normal event-aware wait, but guarantee the sample's wall-clock span
+          ;; when that happens without discarding the pending event.
+          (when (> slice 0)
+            (unless (sit-for slice t)
+              (sleep-for slice))))))
+    (cons (- (float-time) started) cycles)))
+
 (defun present-wayland--scenario (display)
   "Exercise cheaper presentation on DISPLAY."
   (blink-cursor-mode -1)
+  (module-load (getenv "MEVEDEL_NATIVE_SYNC_MODULE"))
   (let ((frame (make-frame-on-display
                 display '((width . 80) (height . 20) (menu-bar-lines . 0)
                           (tool-bar-lines . 0) (vertical-scroll-bars . nil)))))
@@ -69,10 +88,36 @@
     (insert "x")
     (redisplay t)
     (present-wayland--wait 0.5)
+    (present-wayland--mark "settle")
+    (let ((frame-id (frame-parameter frame 'window-id)))
+      (present-wayland--mark "wrong-target")
+      (present-wayland--note
+       :wrong-target-rejected
+       (not (mevedel-test-wayland-sync frame-id
+                                       "mevedel-intentionally-wrong-target")))
+      (present-wayland--mark "queue-configure")
+      (unless (mevedel-test-wayland-queue-configure frame-id display)
+        (error "Could not queue configure on the fixture frame"))
+      (present-wayland--mark "sync")
+      (let ((sync-result (mevedel-test-wayland-sync frame-id display)))
+        (unless (eq sync-result t)
+          (error "Fixture frame display is not the expected Wayland display: %S"
+                 sync-result))))
+    (present-wayland--note :sync-completed t)
     (present-wayland--mark "idle")
-    (dotimes (_ 10)
-      (redisplay t)
-      (sit-for 0.05 t))
+    (let ((unread-command-events
+           (if (getenv "MEVEDEL_NATIVE_PENDING_INPUT")
+               (cons ?a unread-command-events)
+             unread-command-events)))
+      (present-wayland--note :idle-pending-input (input-pending-p))
+      (let ((cpu-start (get-internal-run-time)))
+        (let ((sample (present-wayland--idle-window 0.5)))
+          (present-wayland--note :idle-duration (car sample))
+          (present-wayland--note :idle-cycles (cdr sample)))
+        (present-wayland--note :idle-cpu-duration
+                               (float-time
+                                (time-subtract (get-internal-run-time) cpu-start))))
+      (present-wayland--note :idle-pending-after (input-pending-p)))
     (present-wayland--mark "bell")
     ;; The bell draws on a copy of the frame's surface, recording no damage.
     (let ((visible-bell t)) (ding))

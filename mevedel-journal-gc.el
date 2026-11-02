@@ -11,6 +11,10 @@
 (require 'mevedel-memory-store)
 (require 'mevedel-memory-write)
 
+;; `mevedel-memory-cycle'
+(declare-function mevedel-memory-cycle-inflight-claim "mevedel-memory-cycle" (workspace))
+(autoload 'mevedel-memory-cycle-inflight-claim "mevedel-memory-cycle")
+
 (defun mevedel-journal-gc--empty (directory)
   "Remove DIRECTORY only if empty, returning non-nil on success."
   (eq 'ok (plist-get (car (mevedel-session-control-fs-run-program
@@ -97,11 +101,16 @@ Return the number of removed preparations, at most LIMIT per opportunity."
           (cl-incf removed))))
     removed))
 
-(iter-defun mevedel-journal-gc--references (root)
-  "Yield while collecting claim generations referenced by ROOT records.
+(iter-defun mevedel-journal-gc--references (workspace)
+  "Yield while collecting claim generations referenced by WORKSPACE records.
 Read all remaining records, including partially retired groups.  Refuse broken
 references instead of guessing that their claim can be removed."
-  (let (files protected)
+  (let ((root (mevedel-journal-store-directory (mevedel-workspace-root workspace)))
+        files protected)
+    ;; Admission reserves its token before immutable preparation can exist.
+    ;; That single slot must survive ordinary coordination GC after a crash.
+    (when-let* ((claim (mevedel-memory-cycle-inflight-claim workspace)))
+      (push (plist-get claim :generation) protected))
     (dolist (directory (mevedel-session-control-fs-list-directory
                         (file-name-concat (mevedel-journal-store-state-directory root) "passes") mevedel-journal-store-id-regexp))
       (iter-yield nil)
@@ -133,7 +142,7 @@ content groups across all directories in one batch."
          (groups (plist-get manifests :removed))
          (groups (+ groups (iter-yield-from (mevedel-journal-gc--passes workspace mutation now (- 50 groups)))))
          (removed groups)
-         (references (iter-yield-from (mevedel-journal-gc--references root)))
+         (references (iter-yield-from (mevedel-journal-gc--references workspace)))
          (remaining 200)
          (directories (list (cons (mevedel-journal-store-claim-directory root 'mutation) (plist-get manifests :protected))
                             (cons (mevedel-journal-store-claim-directory root 'digest-run) nil)

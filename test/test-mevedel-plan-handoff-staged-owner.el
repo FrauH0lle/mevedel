@@ -22,7 +22,10 @@
   (progn
     (dolist (stage '(close insertion))
       (dolist (kind '(plain skill))
+        ;; Staged input exclusion is independent of publication.  Keep the
+        ;; close/plain project control and all source-backed skill variants.
         (mevedel-handoff-owner-test--with-target
+            :file-workspace (not (and (eq stage 'close) (eq kind 'plain)))
           (setf (plist-get selection :execution) 'direct)
           (let* ((view (generate-new-buffer " *staged-owner-view*"))
                  (skills-root (file-name-concat root ".mevedel" "skills"))

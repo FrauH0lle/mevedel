@@ -7,6 +7,7 @@
 (require 'mevedel)
 (require 'mevedel-diff-apply)
 (require 'mevedel-structs)
+(require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -177,6 +178,30 @@ Use WORKSPACE-ROOT as its root when non-nil."
    (mevedel-workspace-clear-registry))
   ,test
   (test)
+
+  :doc "keeps a whole-line reference at bol when a diff rewrites its prefix"
+  (let* ((file (make-temp-file "mevedel-overlay-prefix-" nil ".txt"
+                               "before\nProvision old\nafter\n"))
+         (buffer (find-file-noselect file))
+         (reference (mevedel-test--overlay-on-text
+                     buffer "Provision old\n" 'reference))
+         (diff (mevedel-test--create-diff-buffer
+                "above\nbefore\n# Provision new\nafter\nbelow\n" buffer)))
+    (unwind-protect
+        (progn
+          (mevedel-test--apply-diff diff file)
+          (should (equal "# Provision new\n"
+                         (mevedel-test--overlay-text reference)))
+          (with-current-buffer buffer
+            (goto-char (overlay-start reference))
+            (should (bolp)))
+          (should (string-match-p "REFERENCE"
+                                  (substring-no-properties
+                                   (overlay-get reference 'before-string)))))
+      (kill-buffer diff)
+      (with-current-buffer buffer (set-buffer-modified-p nil))
+      (kill-buffer buffer)
+      (delete-file file)))
 
   ;; MUST-WORK USER CASE.  This fixture is a real change a user made in an
   ;; R/Shiny module: three renamed `renderUI' outputs across separate hunks,

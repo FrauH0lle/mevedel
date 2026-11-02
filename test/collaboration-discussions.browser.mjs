@@ -541,8 +541,12 @@ test('the whole artifact keeps its answers apart and a draft through streaming',
       {id: 'u2', kind: 'user', shared: {kind: 'artifact', itemId: 'artifact:schema.html',
         discussionId: 'general', questionId: 'q2', messageId}},
       {id: 'a2', kind: 'assistant', text: 'THIS ARTIFACT ANSWER'},
+      {id: 's2', kind: 'request-summary', text: '── Worked for 2m 37s · Thu 29 Oct 14:32 ',
+       details: 'Started: Thu 29 Oct 2026 14:29:43 +0000\nFinished: Thu 29 Oct 2026 14:32:20 +0000\nActive work: 2m 37s'},
     ]), posted.messageId);
     assert.match(await page.textContent(`${fresh} .ds-answers`), /THIS ARTIFACT ANSWER/);
+    assert.equal(await page.textContent(`${fresh} .ds-answers [data-record-id="s2"] .request-summary > summary`),
+                 '── Worked for 2m 37s · Thu 29 Oct 14:32 ', 'the request closes beneath its answer');
     assert.equal(await page.inputValue(`${fresh} .ds-input`), '> draft\nsecond line');
     assert.equal(await page.isChecked(`${fresh} .ds-choice input`), false);
     assert.equal(await page.evaluate(() => document.activeElement.matches('.ds-input')), true);
@@ -575,6 +579,10 @@ test('an answer to a discussion not on screen marks it, never takes the reader a
     await page.waitForSelector('#artifact-side .ds-item[data-discussion-id="two"]');
     assert.equal(await page.$$eval('#artifact-side .ds-item.unread', nodes => nodes.length), 0,
                  'history loaded with the artifact marks nothing');
+    await page.evaluate(records => window.controller.records(records),
+                        [...history, {id: 's0', kind: 'request-summary', text: '── Worked for 12s '}]);
+    assert.equal(await page.$$eval('#artifact-side .ds-item.unread', nodes => nodes.length), 0,
+                 'a closing rule alone is not an answer');
     await page.click('#artifact-side .ds-item[data-discussion-id="two"]');
     await page.fill(`${fresh} .ds-input`, 'Typing here');
     await page.evaluate(records => window.controller.records(records),

@@ -12,6 +12,36 @@ back to the client's file. The permissions cockpit identifies each source and
 revokes entries in that source. Approval prompts continue remembering only
 session or workspace authority.
 
+Workspace-store exact grants may also use bare or `./` relative paths in
+`:resource-grants` and command-profile `:file-system` entries. `.` and `./`
+name the workspace root. Loading binds each relative entry to the store-owning
+workspace's canonical, target-qualified root, not `.mevedel/` or an agent's cwd.
+A private runtime `:workspace-origin` record retains that root and relative
+spelling. Only origin-marked entries serialize as `./…`; existing absolute and
+home-relative intent is preserved. Global and session exact-path syntax and
+tool `:path` glob matching are unchanged.
+
+Relative authority rejects empty paths, every `..` component, foreign target or
+resource prefixes, and symlink components below the captured canonical root.
+Changing an agent or fork's cwd to another worktree does not re-anchor authority
+loaded from the source store. Linked-worktree Git metadata outside that root
+requires separate grants. Frozen authority retains the origin; permission
+files and durable session authority never serialize the private record. Resume
+reloads workspace-derived authority rather than restoring an unbounded session
+copy.
+
+Containment is checked before pure permission matching and again at native
+consumption against the authorized canonical path. Native operations retain
+their existing concurrency boundary, not a new OS-wide atomic guarantee
+against replacement between check and use. Confined launch rechecks before
+canonical-path and inode capture, then relies on existing descriptor-pinned
+validation for later replacement. A filesystem change can make a relative
+grant unusable without invalidating its configuration or unrelated denies;
+editing and revoking that entry remain possible. Invalid permission files contribute no
+authority: one malformed grant rejects the whole file, with a warning naming
+scope, rule/tool or resource-grant section, grant index, rejected path, and
+reason, once per file version.
+
 ## Decision history
 
 Global permission rules originally came from the client-local user directory,
@@ -24,3 +54,18 @@ the user's expectation that a remote machine supplies its own permissions and
 keeps path and configuration ownership in the same domain. Existing client
 rules are not copied to remote hosts; previously ignored global grants become
 effective on the machine owning their store.
+
+### Bind portable workspace grants to their source
+
+In October 2026, project-local grants needed to survive checkout relocation
+without rewriting absolute paths. Resolving relative text against the active
+agent cwd would instead let a child working in another worktree redirect the
+source store's authority. Expanding it once to an ordinary absolute grant would
+also lose its containment restriction during coverage, freezing, or launch.
+
+Workspace-relative entries therefore retain a runtime origin through every
+authority consumer. The workspace root is canonicalized, but symlinks below it
+are refused rather than followed, so relative intent cannot authorize an
+external target. This is an explicit workspace-store extension, not a change to
+global/session paths or glob rules. Precise whole-file diagnostics make invalid
+entries repairable without partially accepting a malformed authority store.

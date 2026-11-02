@@ -86,9 +86,18 @@
   (:doc "shares one host wakeup and dispatches all due callbacks once")
   (let ((mevedel--coalesced-timers nil)
         (mevedel--coalesced-timer nil)
+        (now (seconds-to-time 100.25))
         first second calls)
     (unwind-protect
-        (progn
+        ;; Dispatch/rearm semantics, not elapsed wall time: an OS stall can
+        ;; cross the next integral second, or exhaust a batch's 25 ms budget.
+        (cl-letf* ((next (symbol-function 'timer-next-integral-multiple-of-time))
+                   (less (symbol-function 'time-less-p))
+                   ((symbol-function 'current-time) (lambda () now))
+                   ((symbol-function 'time-less-p)
+                    (lambda (a b) (funcall less (or a now) (or b now))))
+                   ((symbol-function 'timer-next-integral-multiple-of-time)
+                    (lambda (time period) (funcall next (or time now) period))))
           (setq first (mevedel--run-periodic-timer 1 (lambda () (push 'first calls)))
                 second (mevedel--run-periodic-timer 1 (lambda () (push 'second calls))))
           (dolist (timer (list first second))
@@ -98,12 +107,18 @@
           (should-not (memq second timer-list))
           (should (mevedel--ui-timer-pending-p first))
           (should (memq mevedel--coalesced-timer (default-toplevel-value 'timer-list)))
-          (timer-set-time first (time-subtract nil 1) 1)
-          (timer-set-time second (time-subtract nil 1) 1)
+          (timer-set-time first (time-subtract now 1) 1)
+          (timer-set-time second (time-subtract now 1) 1)
           (mevedel--coalesced-timer-tick)
           (should (equal '(first second) calls))
-          (should (time-less-p nil (timer--time first)))
-          (should (time-less-p nil (timer--time second))))
+          (dolist (timer (list first second))
+            (should (time-equal-p (seconds-to-time 101) (timer--time timer))))
+          ;; A later tick skips missed periods instead of catching up.
+          (setq now (seconds-to-time 103.25) calls nil)
+          (mevedel--coalesced-timer-tick)
+          (should (equal '(first second) calls))
+          (dolist (timer (list first second))
+            (should (time-equal-p (seconds-to-time 104) (timer--time timer)))))
       (mevedel--ui-timer-cancel first)
       (mevedel--ui-timer-cancel second))
     (should-not mevedel--coalesced-timer)))
@@ -188,15 +203,22 @@
                        (push 'member log)
                        (let ((until (time-add nil 0.03)))
                          (while (time-less-p nil until))))
-                second (mevedel--run-periodic-timer 1 busy)
-                first (mevedel--run-periodic-timer 1 busy))
+                second (mevedel--run-periodic-timer
+                        1 (lambda ()
+                            (mevedel--ui-timer-cancel second)
+                            (funcall busy)))
+                first (mevedel--run-periodic-timer
+                       1 (lambda ()
+                           (mevedel--ui-timer-cancel first)
+                           (funcall busy))))
           (timer-set-time first (time-subtract nil 2) 1)
           (timer-set-time second (time-subtract nil 2) 1)
           (mevedel--coalesced-timer-arm)
           ;; Ripe, but sorted after the host timer in this timer pass.
           (setq ordinary (run-at-time (time-subtract nil 1) nil
                                       (lambda () (push 'ordinary log))))
-          (let ((deadline (time-add nil 1)))
+          ;; Only callback ordering is measured; delivery has a watchdog.
+          (let ((deadline (time-add nil 5)))
             (while (and (< (length log) 3) (time-less-p nil deadline))
               (accept-process-output nil 0.05)))
           (should (equal '(member ordinary member) (reverse log))))
@@ -210,19 +232,22 @@
         (process (make-process :name "mevedel-coalesced-wait"
                                :command '("cat") :noquery t
                                :connection-type 'pipe))
-        (waiter-calls 0) sibling-ran waiter sibling)
+        (waiter-calls 0) (sibling-calls 0) sibling-ran waiter sibling)
     (unwind-protect
         (progn
           ;; Members run newest first; the waiter goes ahead of its sibling.
           (setq sibling (mevedel--run-periodic-timer
-                         1 (lambda () (setq sibling-ran t)))
+                         1 (lambda ()
+                             (cl-incf sibling-calls)
+                             (setq sibling-ran t)
+                             (mevedel--ui-timer-cancel sibling)))
                 waiter
                 (mevedel--run-periodic-timer
                  1 (lambda ()
                      (cl-incf waiter-calls)
                      ;; Due again during its own wait: must not re-enter.
                      (timer-set-time waiter (time-subtract nil 1) 1)
-                     (let ((deadline (time-add nil 1)))
+                     (let ((deadline (time-add nil 5)))
                        (while (and (not sibling-ran)
                                    (time-less-p nil deadline))
                          (accept-process-output process 0.01))))))
@@ -231,7 +256,8 @@
           (mevedel--coalesced-timer-tick)
           (should sibling-ran)
           (should (= 1 waiter-calls))
-          (should (time-less-p nil (timer--time sibling)))
+          (should (= 1 sibling-calls))
+          (should-not (mevedel--ui-timer-pending-p sibling))
           ;; The waiter is still due and the host timer is armed for it.
           (should (mevedel--ui-timer-pending-p mevedel--coalesced-timer))
           (should (equal (timer--time waiter)
@@ -256,7 +282,7 @@
                         1 (lambda ()
                             (cl-incf waiter-calls)
                             (timer-set-time waiter (time-subtract nil 1) 1)
-                            (let ((deadline (time-add nil 1)))
+                            (let ((deadline (time-add nil 5)))
                               (while (and (not sibling-ran)
                                           (time-less-p nil deadline))
                                 (sleep-for 0.01)))
@@ -265,7 +291,7 @@
           (timer-set-time waiter (time-subtract nil 2) 1)
           (timer-set-time sibling (time-subtract nil 1) 1)
           (mevedel--coalesced-timer-arm)
-          (let ((deadline (time-add nil 2)))
+          (let ((deadline (time-add nil 10)))
             (while (and (not finished) (time-less-p nil deadline))
               (sleep-for 0.01)))
           (should finished)
@@ -2078,6 +2104,20 @@ CAPTURE, when non-nil, is called with the stub's arguments."
                    (59.99 . "59s") (60 . "1m 00s") (185 . "3m 05s")
                    (3600 . "1h 00m") (3720 . "1h 02m")))
     (should (equal (mevedel--duration-label (car entry)) (cdr entry)))))
+
+(mevedel-deftest mevedel-collapse-leading-slashes ()
+  ,test
+  (test)
+  :doc "collapses only a leading slash run, keeping remote prefixes"
+  (should (equal "/run/user/1000" (mevedel-collapse-leading-slashes "//run/user/1000")))
+  (should (equal "/run" (mevedel-collapse-leading-slashes "///run")))
+  (should (equal "/a//b" (mevedel-collapse-leading-slashes "/a//b")))
+  (should (equal "/ssh:host:/run/user" (mevedel-collapse-leading-slashes "/ssh:host://run/user")))
+  (should (equal "/-::/run" (mevedel-collapse-leading-slashes "/-::/run")))
+  (should (equal "/-::/run/user/1000" (mevedel-collapse-leading-slashes "/-:://run/user/1000")))
+  (should (equal "/ssh::/run/user" (mevedel-collapse-leading-slashes "/ssh:://run/user")))
+  (should (equal "/" (mevedel-expand-file-name "//")))
+  (should (equal "/home/x" (mevedel-expand-file-name "//home/x"))))
 
 (provide 'test-mevedel-utilities)
 ;;; test-mevedel-utilities.el ends here

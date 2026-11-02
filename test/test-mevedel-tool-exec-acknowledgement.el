@@ -128,9 +128,11 @@
       (accept-process-output nil 0.02))))
 
 (defun test-mevedel-tool-exec-ack--with-busy-session (function)
-  "Call FUNCTION with a session whose real gate holds one earlier preparation.
-FUNCTION receives the session, a live root buffer, a second buffer and a
-log; the earlier preparation pushes `earlier' onto the log when it runs."
+  "Call FUNCTION with a session whose gate has a preparation in flight.
+One earlier preparation is queued behind it.  FUNCTION receives the session,
+a live root buffer, a second buffer and a log; the earlier preparation pushes
+`earlier' onto the log when it runs.  Clearing the in-flight token and
+scheduling opens the gate."
   (let* ((directory (make-temp-file "mevedel-tool-exec-ack-" t))
          (root (generate-new-buffer " *tool-exec-ack-root*"))
          (other (generate-new-buffer " *tool-exec-ack-other*"))
@@ -141,12 +143,14 @@ log; the earlier preparation pushes `earlier' onto the log when it runs."
     (unwind-protect
         (progn
           (mevedel-session-set-root-buffer session root)
-          (setf (mevedel-session-publication-preparations session)
+          (setf (mevedel-session-publication-preparation-token session) '(in-flight)
+                (mevedel-session-publication-preparations session)
                 (list (cons (lambda (_token) (push 'earlier log)) nil)))
           (funcall function session root other (lambda () log)
                    (lambda (entry) (push entry log))))
       (mevedel-agent-control--cancel-notifications session)
-      (setf (mevedel-session-publication-preparations session) nil)
+      (setf (mevedel-session-publication-preparation-token session) nil
+            (mevedel-session-publication-preparations session) nil)
       (kill-buffer root)
       (kill-buffer other)
       (delete-directory directory t))))
@@ -197,13 +201,16 @@ log; the earlier preparation pushes `earlier' onto the log when it runs."
        (should (equal '((ack t nil)) (reverse (funcall log))))
        (should (= 1 (length (mevedel-session-publication-preparations session))))
        (should (= 1 (length (mevedel-session-mail-notifications session))))
+       (setf (mevedel-session-publication-preparation-token session) nil)
        (mevedel-session-publication--schedule session)
        (test-mevedel-tool-exec-ack--wait
         (lambda () (cl-find-if (lambda (entry) (eq 'wake (car-safe entry)))
                                (funcall log))))
-       ;; No token or transaction crosses: the offer receives the session
-       ;; and the originating buffer only.
-       (should (equal (list '(ack t nil) 'earlier (list 'wake session root))
+       ;; The opened gate offers pending notifications before the next
+       ;; queued preparation, so a busy queue cannot starve the wake.  No
+       ;; token or transaction crosses: the offer receives the session and
+       ;; the originating buffer only.
+       (should (equal (list '(ack t nil) (list 'wake session root) 'earlier)
                       (reverse (funcall log))))
        (should-not (mevedel-session-mail-notifications session)))))
   :doc "offers for one buffer coalesce while offers for other buffers stay ordered"
@@ -216,11 +223,12 @@ log; the earlier preparation pushes `earlier' onto the log when it runs."
                    #'ignore session buffer t)
                   t nil))
        (should (= 2 (length (mevedel-session-mail-notifications session))))
+       (setf (mevedel-session-publication-preparation-token session) nil)
        (mevedel-session-publication--schedule session)
        (test-mevedel-tool-exec-ack--wait
         (lambda () (= 2 (cl-count-if (lambda (entry) (eq 'wake (car-safe entry)))
                                      (funcall log)))))
-       (should (equal (list 'earlier (list 'wake root) (list 'wake other))
+       (should (equal (list (list 'wake root) (list 'wake other) 'earlier)
                       (reverse (funcall log)))))))
   :doc "a session that began stopping before the gate opened is never woken"
   (test-mevedel-tool-exec-ack--with-busy-session
@@ -231,6 +239,7 @@ log; the earlier preparation pushes `earlier' onto the log when it runs."
                  #'ignore session root t)
                 t nil)
        (setf (mevedel-session-publication-stopping-p session) t)
+       (setf (mevedel-session-publication-preparation-token session) nil)
        (mevedel-session-publication--schedule session)
        (test-mevedel-tool-exec-ack--wait
         (lambda () (not (mevedel-session-publication-busy-p session))))

@@ -138,6 +138,15 @@
 (require 'mevedel-transcript-audit)
 (require 'mevedel-view-disclosure)
 
+(defun mevedel-view-audit-displayed-p (record)
+  "Return non-nil when hook audit RECORD has a row of its own in the view.
+Provider bookkeeping, fork points, execution archives and mailbox receipts
+stay hidden."
+  (not (memq (plist-get record :type)
+             '(fork-point provider-tool-batch-start provider-tool-batch
+               execution-archive execution-completion
+               mailbox-receipt))))
+
 (defun mevedel-view--hook-audit-records-from-text
     (text &optional type data-buf source-start)
   "Return hook audit records parsed from TEXT.
@@ -148,10 +157,7 @@ DATA-BUF and SOURCE-START attach each record's exact source range."
          (lambda (span)
            (let ((record (plist-get span :record)))
              (unless (and (null type)
-                          (memq (plist-get record :type)
-                                '(fork-point provider-tool-batch-start provider-tool-batch
-                                  execution-archive execution-completion
-                                  mailbox-receipt)))
+                          (not (mevedel-view-audit-displayed-p record)))
                (if (and (buffer-live-p data-buf) source-start)
                    (append
                     record

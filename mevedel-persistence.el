@@ -41,6 +41,9 @@
 (declare-function mevedel--restore-source-missing-directives
                   "mevedel-directive-source" (buffer))
 
+;; `mevedel-instruction-edit'
+(autoload 'mevedel-instruction-replace-buffer-contents "mevedel-instruction-edit")
+
 ;; `mevedel-overlay-ui'
 (declare-function mevedel--update-instruction-overlay
                   "mevedel-overlay-ui"
@@ -656,7 +659,7 @@ restoring overlays."
                       (with-temp-buffer
                         (insert original-content)
                         (restore-overlays (current-buffer) instructions t)
-                        (replace-region-contents (point-min) (point-max) new-buffer)
+                        (mevedel-instruction-replace-buffer-contents new-buffer)
                         (restore-overlays
                          buffer
                          (mevedel--instructions-in (point-min) (point-max))

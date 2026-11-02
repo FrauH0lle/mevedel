@@ -1683,6 +1683,8 @@ ARTIFACT-P selects whether its sidecar counts as committed."
           (should (equal (list first second) (nreverse checked)))
           (with-current-buffer child
             (should (equal second-fixed buffer-file-name))
+            ;; Visiting would otherwise rename it to the visible file name.
+            (should (equal " *agent-allocation-child*" (buffer-name)))
             (should-not (equal "poisoned cache" (buffer-string)))))
       (dolist (buffer (list child parent))
         (when (buffer-live-p buffer)

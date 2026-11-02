@@ -29,6 +29,9 @@
 (declare-function mevedel-acp-turn--close-reasoning "mevedel-acp-turn" (request))
 (autoload 'mevedel-acp-turn--close-reasoning "mevedel-acp-turn")
 
+;; `mevedel-directive-source'
+(autoload 'mevedel--instruction-initialize-overlay "mevedel-directive-source")
+
 ;; `mevedel-engine'
 (declare-function mevedel-engine-info "mevedel-engine" (owner))
 (declare-function mevedel-engine-owner "mevedel-engine" (request))
@@ -141,6 +144,34 @@ data, not resource descendants; it does not relax their containment checks."
                      (substring file 0 -1))))
     (file-name-directory
      (file-truename (if (and source (file-regular-p source)) source file)))))
+
+
+;;
+;;; Path spelling
+
+(defun mevedel-collapse-leading-slashes (path)
+  "Return PATH with a leading run of slashes in its local part as one.
+POSIX lets `//' name an implementation-defined root, so `expand-file-name'
+and `file-truename' keep it, but Linux resolves it as `/'.  Prefix-based
+path policy must compare one spelling, or `//run/user' escapes a check
+written for `/run/user'.  A remote PATH keeps its method prefix."
+  (if (not (stringp path))
+      path
+    ;; Split the authored spelling: `file-remote-p' returns the expanded
+    ;; prefix, whose length differs for shorthand such as `/-::'.
+    (let* ((local (file-local-name path))
+           (prefix (substring path 0 (- (length path) (length local)))))
+      (concat prefix (replace-regexp-in-string "\\`//+" "/" local t t)))))
+
+(defun mevedel-expand-file-name (name &optional directory)
+  "Return NAME expanded in DIRECTORY with a single leading slash.
+This is `expand-file-name' for paths that path policy compares."
+  (mevedel-collapse-leading-slashes (expand-file-name name directory)))
+
+(defun mevedel-file-truename (filename)
+  "Return FILENAME's `file-truename' with a single leading slash.
+A symlink whose target begins with `//' otherwise yields that spelling."
+  (mevedel-collapse-leading-slashes (file-truename filename)))
 
 ;;;###autoload
 (defun mevedel-version (&optional here message)
@@ -1283,13 +1314,19 @@ Preserve atomic mention bindings and live structural producer provenance."
 Clear inherited transcript properties while retaining mention bindings and
 structural provenance.  Return the start of INPUT, leaving point after its
 trailing newline.  The caller owns request admission and response markers."
-  (let ((start (point)))
-    (insert gptel-response-separator)
-    (unless (bolp) (insert "\n"))
-    (let ((body-start (point)))
-      (insert input "\n")
-      (mevedel--clear-user-turn-gptel-properties start (point))
-      body-start)))
+  ;; Insertion hooks can save a Goal mutation, rewriting the leading property
+  ;; drawer.  Both positions must follow those edits before clearing properties.
+  (let ((start (copy-marker (point))) body-start)
+    (unwind-protect
+        (progn
+          (insert gptel-response-separator)
+          (unless (bolp) (insert "\n"))
+          (setq body-start (copy-marker (point)))
+          (insert input "\n")
+          (mevedel--clear-user-turn-gptel-properties start (point))
+          (marker-position body-start))
+      (set-marker start nil)
+      (when body-start (set-marker body-start nil)))))
 
 (defconst mevedel--render-data-open "<!-- mevedel-render-data -->"
   "Opening delimiter for internal render-data side-channel blocks.")
@@ -1417,9 +1454,10 @@ STRING."
   "Helper function to restore an instruction overlay in BUFFER.
 
 Uses PROPERTIES, OVERLAY-START, and OVERLAY-END to recreate the overlay."
-  (let ((new-ov (make-overlay overlay-start overlay-end buffer)))
+  (let ((new-ov (make-overlay overlay-start overlay-end buffer t nil)))
     (cl-loop for (prop value) on properties by #'cddr
              do (overlay-put new-ov prop value))
+    (mevedel--instruction-initialize-overlay new-ov)
     new-ov))
 
 (defun mevedel--delimiting-markdown-backticks (string)

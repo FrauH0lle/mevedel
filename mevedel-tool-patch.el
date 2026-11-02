@@ -17,6 +17,7 @@
 (require 'mevedel-edit-diagnostics)
 (require 'mevedel-execution-target)
 (require 'mevedel-file-state)
+(require 'mevedel-pin)
 (require 'mevedel-resource)
 (require 'mevedel-utilities)
 
@@ -54,6 +55,9 @@
 ;; `mevedel-file-state'
 (declare-function mevedel-session-record-file-access
                   "mevedel-file-state" (session path kind &optional offset limit))
+
+;; `mevedel-instruction-edit'
+(autoload 'mevedel-instruction-replace-buffer-contents "mevedel-instruction-edit")
 
 ;; `mevedel-instruction-registry'
 (declare-function mevedel--instruction-alist-value
@@ -103,10 +107,6 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
-
-;; `mevedel-utilities'
-(declare-function mevedel--write-file-atomically
-                  "mevedel-utilities" (path content &optional coding mode))
 
 (defvar mevedel-tool-patch-prepared-proposal nil)
 
@@ -478,7 +478,13 @@ tolerated, and content lines are kept raw."
                  line-number)))))
     (unless operations
       (error "Invalid patch: At least one file operation is required"))
-    (list :patch normalized :root root :operations (nreverse operations))))
+    (setq operations (nreverse operations))
+    (cl-loop for operation in operations for operation-index from 1 do
+             (cl-loop for hunk in (plist-get operation :hunks)
+                      for hunk-index from 1 do
+                      (plist-put hunk :operation-index operation-index)
+                      (plist-put hunk :hunk-index hunk-index)))
+    (list :patch normalized :root root :operations operations)))
 
 (defun mevedel-tool-patch--read-file (path &optional with-coding)
   "Return text contents of regular file PATH.
@@ -488,7 +494,8 @@ When WITH-CODING is non-nil, return (CONTENTS . CODING-SYSTEM)."
   (when (file-directory-p path)
     (error "Cannot patch a directory: %s" path))
   (with-temp-buffer
-    (insert-file-contents path)
+    (mevedel-pin-with-file path
+      (mevedel-pin-insert-file-contents path))
     (let ((content (buffer-string)))
       (if with-coding
           (cons content last-coding-system-used)
@@ -597,8 +604,71 @@ IGNORE-EOF drops the end-of-file anchoring requirement of an
             (push start starts)))))
     (nreverse starts)))
 
+(defun mevedel-tool-patch--mismatch-detail (lines hunk path current-lines)
+  "Describe HUNK's mismatch in CURRENT-LINES using baseline LINES and PATH.
+Only exact substring evidence supplies a file-line hint.  A sequence or anchor
+failure must not suggest that a complete line is merely a fragment.
+CURRENT-LINES supplies anchor eligibility after earlier pending edits."
+  (let* ((normalized (make-hash-table :test #'equal))
+         (anchor (and (plist-get hunk :context)
+                      (mevedel-tool-patch--normalize-line
+                       (plist-get hunk :context))))
+         (anchor-position (and (null anchor) 0)))
+    (dolist (line current-lines)
+      (let ((folded (mevedel-tool-patch--normalize-line line)))
+        (puthash folded t normalized)))
+    (when anchor
+      (cl-loop for line in current-lines for number from 1
+               when (string-prefix-p
+                     anchor (mevedel-tool-patch--normalize-line line))
+               do (setq anchor-position number) and return nil))
+    (when anchor-position
+      (when-let* ((diff-line
+                   (cl-find-if
+                    (lambda (line)
+                      (and (memq (aref line 0) '(?\s ?-))
+                           (not (gethash
+                                 (mevedel-tool-patch--normalize-line
+                                  (substring line 1)) normalized))))
+                    (plist-get hunk :diff-lines))))
+        (let* ((text (substring diff-line 1))
+               (kind (if (eq (aref diff-line 0) ?-) "removal" "context"))
+               (print-escape-control-characters t)
+               (excerpt (prin1-to-string
+                         (if (> (length text) 120)
+                             (concat (substring text 0 120) "...")
+                           text)))
+               candidates)
+          (unless (string-empty-p text)
+            (cl-loop for line in lines for number from 1
+                     when (string-search text line)
+                     do (push (cons number line) candidates)
+                     until (> (length candidates) 1)))
+          (concat
+           (format "; %s line %s" kind excerpt)
+           (if (and (= (length candidates) 1)
+                    (not (equal (mevedel-tool-patch--normalize-line text)
+                                (mevedel-tool-patch--normalize-line
+                                 (cdar candidates))))
+                    (or (null anchor)
+                        (when-let* ((current-position
+                                     (cl-position-if
+                                      (lambda (line) (string-search text line))
+                                      current-lines)))
+                          (> (1+ current-position) anchor-position))))
+               (let* ((candidate (car candidates))
+                      (relation
+                       (cond ((string-prefix-p text (cdr candidate)) "a prefix")
+                             ((string-suffix-p text (cdr candidate)) "a suffix")
+                             (t "a middle substring"))))
+                 (format
+                  (concat " is only %s of file line %d. Context and removal lines"
+                          " must be whole lines; Read(file_path=%S, offset=%d, limit=1)")
+                  relation (car candidate) path (car candidate)))
+             " was not found as a whole line")))))))
+
 (defun mevedel-tool-patch--match-start
-    (lines hunk path &optional after line-offset)
+    (lines hunk path &optional after line-offset baseline-lines)
   "Return the unique start for HUNK in LINES from PATH.
 Matching passes decrease in strictness: exact, ignoring trailing
 whitespace, ignoring surrounding whitespace, then folding typographic
@@ -609,9 +679,10 @@ AFTER is non-nil, the candidates at or after that line index are
 preferred, since hunks arrive in file order; a remaining tie is then
 settled by HUNK's `:line-hint', the bare line number of a numeric `@@'
 anchor, which selects the nearest candidate.  LINE-OFFSET translates
-that baseline hint into the current LINES coordinates.  Neither step
-can empty the candidate set, so a stale hint never rejects a hunk on
-its own.  The winning pass label is recorded on HUNK as `:match-pass'
+that baseline hint into the current LINES coordinates.  BASELINE-LINES
+supplies original file coordinates for failure hints after earlier edits.
+Neither step can empty the candidate set, so a stale hint never rejects
+a hunk on its own.  The winning pass label is recorded on HUNK as `:match-pass'
 (nil for an exact match)."
   (let (starts pass)
     (cl-loop
@@ -638,14 +709,20 @@ its own.  The winning pass label is recorded on HUNK as `:match-pass'
         (when (= 1 (length nearest))
           (setq starts nearest))))
     (plist-put hunk :match-pass (and starts pass))
-    (let ((where (if-let* ((at-line (plist-get hunk :at-line)))
-                     (format " at line %d" at-line)
+    (let ((label (if-let* ((operation (plist-get hunk :operation-index)))
+                     (format "Patch operation %d, hunk %d" operation
+                             (plist-get hunk :hunk-index))
+                   "Patch hunk"))
+          (where (if-let* ((at-line (plist-get hunk :at-line)))
+                     (format " (patch line %d)" at-line)
                    "")))
       (pcase (length starts)
-        (0 (error "Patch hunk%s does not match %s" where path))
+        (0 (error "%s%s does not match %s%s" label where path
+                  (or (mevedel-tool-patch--mismatch-detail
+                       (or baseline-lines lines) hunk path lines) "")))
         (1 (car starts))
-        (_ (error "Patch hunk%s is ambiguous in %s; anchor it with @@ LINE or add context"
-                  where path))))))
+        (_ (error "%s%s is ambiguous in %s; anchor it with @@ LINE or add context"
+                  label where path))))))
 
 (defun mevedel-tool-patch--section-label (lines start)
   "Return a diff-style section label for a hunk at START in LINES.
@@ -708,14 +785,15 @@ The file's line-ending style is preserved: content containing CRLF
 line endings is written back with CRLF.  Deselected hunks still
 advance the order-disambiguation cursor when they match, so a later
 hunk that previewed cleanly stays unambiguous after a deselection."
-  (let ((eol (if (string-search "\r\n" content) "\r\n" "\n"))
-        (lines (mevedel-tool-patch--lines content))
-        (after 0)
-        (line-offset 0))
+  (let* ((eol (if (string-search "\r\n" content) "\r\n" "\n"))
+         (baseline-lines (mevedel-tool-patch--lines content))
+         (lines baseline-lines)
+         (after 0)
+         (line-offset 0))
     (dolist (hunk hunks)
       (if (plist-get hunk :selected)
           (let* ((start (mevedel-tool-patch--match-start
-                         lines hunk path after line-offset))
+                         lines hunk path after line-offset baseline-lines))
                  (old-count (length (plist-get hunk :old-lines)))
                  (replacement (mevedel-tool-patch--hunk-replacement
                                lines start hunk)))
@@ -910,7 +988,7 @@ Returns nil when the two contents hold the same lines."
                            (mevedel-tool-patch--read-file path t))
                           (updated
                            (mevedel-tool-patch-apply-hunks
-                            content hunks path)))
+                            content hunks (or (plist-get operation :rel-path) path))))
                (push (append (list :action 'write :path path)
                              (and (plist-get operation :resource-path-p)
                                   '(:resource-p t))
@@ -938,7 +1016,7 @@ Returns nil when the two contents hold the same lines."
                                     (if-let* ((hunks
                                                (plist-get operation :hunks)))
                                         (mevedel-tool-patch-apply-hunks
-                                         content hunks path)
+                                         content hunks (or (plist-get operation :rel-path) path))
                                       content)))
                                (list :mode (file-modes path)
                                      :content updated
@@ -959,14 +1037,18 @@ Returns nil when the two contents hold the same lines."
         :bytes (and (file-exists-p path)
                     (with-temp-buffer
                       (set-buffer-multibyte nil)
-                      (insert-file-contents-literally path)
+                      (mevedel-pin-with-file path
+                        (insert-file-contents-literally
+                         (mevedel-pin-open-path path)))
                       (buffer-string)))
         :mode (and (file-exists-p path) (file-modes path))))
 
 (defun mevedel-tool-patch--write-file (path content &optional mode literal-p)
   "Replace PATH with CONTENT and restore MODE when non-nil.
 When LITERAL-P is non-nil, write CONTENT as literal bytes."
-  (mevedel--write-file-atomically
+  ;; Through the pinned parent: a directory swapped for a symlink after
+  ;; authorization is refused rather than written through.
+  (mevedel-pin-write-file-atomically
    path content (and literal-p 'no-conversion) mode))
 
 (defun mevedel-tool-patch--same-snapshot-p (left right)
@@ -1000,7 +1082,7 @@ MUTATE, when supplied, performs each before/after snapshot replacement."
                   (if (plist-get snapshot :exists)
                     (mevedel-tool-patch--write-file
                      path (plist-get snapshot :bytes) (plist-get snapshot :mode) t)
-                    (delete-file path))))
+                    (mevedel-pin-delete-file path))))
             (error (push (cons path err) failures))))))))
 
 (defun mevedel-tool-patch-missing-parent-directories (path)
@@ -1011,6 +1093,12 @@ MUTATE, when supplied, performs each before/after snapshot replacement."
       (setq directory
             (file-name-directory (directory-file-name directory))))
     missing))
+
+(defun mevedel-tool-patch--visiting-base-buffer (path)
+  "Return PATH's visiting buffer normalized to its base buffer.
+Preserve `find-buffer-visiting' file identity and alias matching."
+  (when-let* ((buffer (find-buffer-visiting path)))
+    (or (buffer-base-buffer buffer) buffer)))
 
 (defun mevedel-tool-patch-commit (changes &optional currentp mutate)
   "Commit CHANGES as one filesystem and visited-buffer transaction.
@@ -1033,7 +1121,8 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
                             (cl-every #'funcall checks))))))
   (dolist (change changes)
     (when-let* (((eq (plist-get change :action) 'write))
-                (buffer (find-buffer-visiting (plist-get change :path)))
+                (buffer (mevedel-tool-patch--visiting-base-buffer
+                         (plist-get change :path)))
                 ((buffer-local-value 'buffer-read-only buffer)))
       (error "Buffer is read-only: %s" (buffer-name buffer))))
   (cl-labels
@@ -1136,7 +1225,7 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
             (delq nil
                   (mapcar
                    (lambda (change)
-                     (when-let* ((buffer (find-buffer-visiting
+                     (when-let* ((buffer (mevedel-tool-patch--visiting-base-buffer
                                           (plist-get change :path))))
                        (append (buffer-snapshot buffer)
                                (list :path (plist-get change :path)
@@ -1178,10 +1267,10 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
                         (default-file-modes))
                     literal-p)))
                 ('delete
-                 (delete-file (plist-get change :path))))))
+                 (mevedel-pin-delete-file (plist-get change :path))))))
             (dolist (change changes)
               (mevedel-tool-patch--assert-current currentp)
-              (when-let* ((buffer (find-buffer-visiting
+              (when-let* ((buffer (mevedel-tool-patch--visiting-base-buffer
                                    (plist-get change :path))))
                 (with-current-buffer buffer
                   (if (eq (plist-get change :action) 'delete)
@@ -1197,7 +1286,7 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
                               (with-current-buffer source
                                 (insert (plist-get change :content)))
                               (set-visited-file-modtime)
-                              (replace-region-contents (point-min) (point-max) source)
+                              (mevedel-instruction-replace-buffer-contents source)
                               (unless (equal (buffer-substring-no-properties (point-min) (point-max))
                                              (plist-get change :content))
                                 (error "Buffer changed during the transaction: %s" (plist-get change :path)))
@@ -1252,7 +1341,8 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
 (defun mevedel-tool-patch--assert-buffers-unmodified (changes)
   "Signal when a visited file in CHANGES has unsaved edits."
   (dolist (change changes)
-    (when-let* ((buffer (find-buffer-visiting (plist-get change :path)))
+    (when-let* ((buffer (mevedel-tool-patch--visiting-base-buffer
+                        (plist-get change :path)))
                 ((buffer-modified-p buffer)))
       (error "File has unsaved buffer changes: %s"
              (plist-get change :path)))))

@@ -82,7 +82,8 @@
     return Object.freeze({upload, handle});
   }
 
-  function create({send, el, notice, uploads, openFile, href, confirm = text => window.confirm(text)}) {
+  function create({send, el, notice, uploads, openFile, downloadFile, href, confirm = text => window.confirm(text)}) {
+    const lobby = document.getElementById('lobby');
     const section = document.getElementById('lobby-files');
     const crumbs = document.getElementById('files-path');
     const list = document.getElementById('files-list');
@@ -102,6 +103,7 @@
       status.hidden = !text;
     };
     const join = name => (dir ? `${dir}/${name}` : name);
+    const visible = () => !lobby.hidden && !section.hidden;
 
     function load(next = dir) {
       latest = ++sequence;
@@ -146,6 +148,20 @@
       window.mevedelNav.link(name, href({file: path}), () => openFile(path));
       item.append(name);
       if (typeof entry.size === 'number') item.append(el('span', 'lobby-meta', formatBytes(entry.size)));
+      const download = el('button', 'btn quiet', 'Download');
+      download.type = 'button';
+      download.setAttribute('aria-label', `Download ${entry.name}`);
+      download.addEventListener('click', async () => {
+        download.disabled = true;
+        download.textContent = 'Downloading…';
+        try { await downloadFile(path); }
+        catch (error) { notice(error.message); }
+        finally {
+          download.disabled = false;
+          download.textContent = 'Download';
+        }
+      });
+      item.append(download);
       const remove = el('button', 'btn quiet danger', 'Remove');
       remove.type = 'button';
       remove.setAttribute('aria-label', `Remove ${entry.name}`);
@@ -191,11 +207,15 @@
 
     // Another guest changed a folder; only the one on screen matters.
     function changed(frame) {
-      if (!section.hidden && frame.dir === dir) load();
+      if (visible() && frame.dir === dir) load();
     }
 
     async function uploadAll(files) {
-      if (busy || !files.length) return;
+      if (!files.length) return;
+      if (busy) {
+        notice('An upload is already in progress; wait before adding more files.');
+        return;
+      }
       busy = true;
       uploadButton.disabled = true;
       const target = dir;
@@ -225,8 +245,19 @@
       uploadAll([...picker.files]);
       picker.value = '';
     });
-    // Files dropped on the tree land in the folder it shows.
-    window.mevedelAttachments.bind({add: files => uploadAll(files)}, {target: section});
+    // Include the Upload button and the space around an empty tree. Other
+    // lobby tabs must not intercept drags or upload into a hidden folder.
+    window.mevedelAttachments.bind({add: files => uploadAll(files)}, {
+      target: lobby, enabled: visible,
+    });
+    // Missing the lobby must not navigate away from the room to a local file.
+    const preventFileNavigation = event => {
+      if (visible() && [...(event.dataTransfer?.types || [])].includes('Files')) {
+        event.preventDefault();
+      }
+    };
+    document.addEventListener('dragover', preventFileNavigation);
+    document.addEventListener('drop', preventFileNavigation);
 
     // The tree is fetched when first shown and refreshed with the lobby.
     return Object.freeze({show: () => load(), refresh: () => load(), listed, removed, changed});

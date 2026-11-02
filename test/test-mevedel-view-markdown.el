@@ -12,12 +12,53 @@
           "helpers"))
 (require 'mevedel-execution-target)
 (require 'mevedel-mentions)
+(require 'mevedel-collaboration)
+(require 'mevedel-resource)
 (require 'mevedel-session-persistence)
 (require 'mevedel-view)
+(require 'mevedel-view-agent)
 (require 'mevedel-view-markdown)
 (require 'mevedel-view-render)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
+
+(mevedel-deftest mevedel-view-markdown/cold-compile ()
+  ,test
+  (test)
+  :doc "compiles alone without preloaded session structs and uses publication data"
+  (let* ((root (file-name-directory (locate-library "mevedel-view-markdown")))
+         (directory (make-temp-file "mevedel-markdown-compile-" t))
+         (source (file-name-concat directory "mevedel-view-markdown.el")))
+    (unwind-protect
+        (progn
+          (copy-file (file-name-concat root "mevedel-view-markdown.el") source)
+          (with-temp-buffer
+            (let ((status
+                   (call-process
+                    (expand-file-name invocation-name invocation-directory)
+                    nil t nil "--batch" "-Q" "--eval"
+                    (prin1-to-string
+                     `(progn
+                        (setq load-path ',(cons directory load-path))
+                        (require 'bytecomp)
+                        (when (featurep 'mevedel-structs)
+                          (error "Session structs must start unloaded"))
+                        (let ((byte-compile-error-on-warn t)
+                              (byte-compile-verbose nil))
+                          (unless (byte-compile-file ,source)
+                            (error "Standalone Markdown compilation failed")))
+                        (load ,(concat source "c") nil t)
+                        (require 'mevedel-structs)
+                        (let ((session (mevedel-session--create
+                                        :publication
+                                        '(:artifacts (("known.txt" :size 1))))))
+                          (unless (and (mevedel-view--artifact-present-p session "known.txt")
+                                       (not (mevedel-view--artifact-present-p session "absent.txt")))
+                            (error "Compiled publication lookup failed"))))))))
+              (ert-info ((buffer-string))
+                (should (equal 0 status))
+                (should (equal "" (buffer-string)))))))
+      (delete-directory directory t))))
 
 (mevedel-deftest mevedel-view--resolve-path
   (:doc "`mevedel-view--resolve-path' resolves paths in the session target")

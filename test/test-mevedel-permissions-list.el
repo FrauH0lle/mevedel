@@ -93,11 +93,10 @@ Return the row's tabulated id."
     (setf (mevedel-session-resource-grants session)
           '((:path "/tmp/external" :access read)))
     (let ((items (mevedel-permissions-list--collect context)))
-      (should (equal '(operation network resource)
+      (should (equal '(operation network resource safe-env)
                      (mapcar (lambda (item) (plist-get item :kind)) items)))
-      (should (seq-every-p (lambda (item)
-                             (eq (plist-get item :scope) 'session))
-                           items))))
+      (should (equal '(session session session built-in)
+                     (mapcar (lambda (item) (plist-get item :scope)) items)))))
 
   :doc "shows an execution profile's remembered child grants after its pattern"
   (mevedel-permissions-list-test--with-buffers
@@ -115,9 +114,28 @@ Return the row's tabulated id."
     (mevedel-permission-persistence-save-resource-grant
      workspace "/tmp/workspace-external" 'write)
     (let ((items (mevedel-permissions-list--collect context)))
-      (should (equal '(session workspace)
+      (should (equal '(session workspace built-in)
                      (mapcar (lambda (item) (plist-get item :scope)) items)))
-      (should (equal 'write (plist-get (nth 1 items) :access))))))
+      (should (equal 'write (plist-get (nth 1 items) :access)))))
+
+  :doc "lists store safe variables singly and built-in ones in one row"
+  (mevedel-permissions-list-test--with-buffers
+    (mevedel-permission-persistence-write-store
+     (mevedel-permission-persistence-file workspace 'workspace)
+     '(:rules nil :resource-grants nil :safe-env-vars ("CHECK_BASE")))
+    (mevedel-permission-persistence-write-store
+     (mevedel-permission-persistence-file workspace 'global)
+     '(:rules nil :resource-grants nil :safe-env-vars ("TOOL_QUIET")))
+    (let ((rows (mapcar (lambda (item)
+                          (list (plist-get item :scope) (plist-get item :kind)
+                                (plist-get item :spec)))
+                        (mevedel-permissions-list--collect context))))
+      (should (member '(workspace safe-env "CHECK_BASE") rows))
+      (should (member '(global safe-env "TOOL_QUIET") rows))
+      (should (seq-find (lambda (row)
+                          (and (eq (car row) 'built-in)
+                               (string-match-p "\\bLANG\\b" (nth 2 row))))
+                        rows)))))
 
 (mevedel-deftest mevedel-permissions-list--header ()
   ,test
@@ -142,7 +160,8 @@ Return the row's tabulated id."
     (should (string-match-p
              "nothing remembered"
              (substring-no-properties
-              (mevedel-permissions-list--header nil context))))))
+              (mevedel-permissions-list--header
+               (mevedel-permissions-list--collect context) context))))))
 
 (mevedel-deftest mevedel-permissions-list-revoke ()
   ,test
@@ -157,7 +176,7 @@ Return the row's tabulated id."
       (mevedel-permission-persistence-write-store
        (mevedel-permission-persistence-file workspace 'workspace) store)
       (with-current-buffer (mevedel-permissions-list-test--open context)
-        (should (= 4 (length tabulated-list-entries)))
+        (should (= 5 (length tabulated-list-entries)))
         (dolist (kind '("operation" "resource"))
           (goto-char (point-min))
           (while (not (or (eobp)
@@ -173,7 +192,7 @@ Return the row's tabulated id."
                       (mevedel-permissions-list--details item context)))))
           (mevedel-test--with-captured-messages nil
             (mevedel-permissions-list-revoke)))
-        (should (= 2 (length tabulated-list-entries))))
+        (should (= 3 (length tabulated-list-entries))))
       (should (equal '(:rules nil :resource-grants nil)
                      (mevedel-permission-persistent-authority workspace 'global)))
       (should (equal store (mevedel-permission-persistent-authority
@@ -258,11 +277,40 @@ Return the row's tabulated id."
     (setf (mevedel-session-permission-rules session)
           '(("Bash" :pattern "npx test*" :action allow)))
     (with-current-buffer (mevedel-permissions-list-test--open context)
-      (should (= 1 (length tabulated-list-entries)))
+      (should (= 2 (length tabulated-list-entries)))
       (mevedel-permissions-list-test--row "operation")
       (mevedel-test--with-captured-messages nil
         (mevedel-permissions-list-revoke))
-      (should-not tabulated-list-entries)))
+      (should (= 1 (length tabulated-list-entries)))))
+
+  :doc "removes one stored safe variable and refuses to remove built-in ones"
+  (mevedel-permissions-list-test--with-buffers
+    (let ((rule '("Bash" :pattern "make" :action allow))
+          (file (mevedel-permission-persistence-file workspace 'workspace)))
+      (mevedel-permission-persistence-write-store
+       file `(:rules (,rule) :resource-grants nil
+              :safe-env-vars ("CHECK_BASE" "KEEP_ME")))
+      (with-current-buffer (mevedel-permissions-list-test--open context)
+        (goto-char (point-min))
+        (while (not (or (eobp)
+                        (equal "CHECK_BASE"
+                               (plist-get (mevedel-cockpit-surface-selected t)
+                                          :spec))))
+          (forward-line 1))
+        (should-not (eobp))
+        (mevedel-test--with-captured-messages nil
+          (mevedel-permissions-list-revoke))
+        (goto-char (point-min))
+        (while (not (or (eobp)
+                        (eq 'built-in
+                            (plist-get (mevedel-cockpit-surface-selected t)
+                                       :scope))))
+          (forward-line 1))
+        (should-not (eobp))
+        (should-error (mevedel-permissions-list-revoke) :type 'user-error))
+      (let ((authority (mevedel-permission-persistent-authority workspace 'workspace)))
+        (should (equal '("KEEP_ME") (plist-get authority :safe-env-vars)))
+        (should (equal (list rule) (plist-get authority :rules))))))
 
   :doc "labels exact and recursive grants and revokes exactly the selected scope"
   (mevedel-permissions-list-test--with-buffers
@@ -291,7 +339,7 @@ Return the row's tabulated id."
 		 (let ((text (mevedel-report-test-text (mevedel-permissions-list--help-report))))
 		   (should (string-match-p "Permissions help" text))
     (should (string-match-p "d +Revoke the selected authority" text))
-    (should (string-match-p "q +Back to the main session cockpit" text))
+    (should (string-match-p "q +Close and return to the previous layout" text))
     (dolist (needle '("operation" "network" "resource"
                       "session" "workspace" "global"))
       (should (string-match-p needle text)))))

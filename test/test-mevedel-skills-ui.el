@@ -1238,9 +1238,6 @@ spanning lines")))
     (mevedel-skills-test--cleanup-list)))
 
 (mevedel-deftest mevedel-skills-list-quit ()
-  ,test
-  (test)
-  :doc "kills the skills cockpit and reopens the main session cockpit"
   (let* ((user-dir (make-temp-file "mevedel-skills-quit-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
          (session (mevedel-skills-test--make-session))
@@ -1251,8 +1248,20 @@ spanning lines")))
     (unwind-protect
         (progn
           (setf (mevedel-session-skills session) (list skill))
-          (let ((buffer (mevedel-skills-test--open-list
-                         session view-buffer data-buffer)))
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session
+                        mevedel--view-buffer view-buffer))
+          (let* ((context
+                  (list :view-buffer view-buffer :data-buffer data-buffer
+                        :origin-buffer data-buffer :session session
+                        :workspace (mevedel-session-workspace session)
+                        :return-menu (lambda () (setq called-buffer (current-buffer)))))
+                 ;; A carried continuation alone is not enough: the opening
+                 ;; command must actually be running as a mevedel suffix.
+                 (buffer
+                  (let ((transient-current-command
+                         (and ,menu-origin 'mevedel-menu--top)))
+                    (mevedel-skills-list-open context))))
             (cl-letf (((symbol-function 'mevedel-menu)
                        (lambda ()
                          (interactive)
@@ -1260,9 +1269,14 @@ spanning lines")))
               (with-current-buffer buffer
                 (mevedel-skills-list-quit)))
             (should-not (buffer-live-p buffer))
-            (should (eq called-buffer data-buffer))))
+            (if ,menu-origin
+                (should (eq called-buffer data-buffer))
+              (should-not called-buffer))))
       (mevedel-skills-test--cleanup-list view-buffer data-buffer)
-      (delete-directory user-dir t))))
+      (delete-directory user-dir t)))
+  (menu-origin)
+  :doc "direct skills quit kills the table without reopening the menu" nil
+  :doc "menu-origin skills quit kills the table and invokes its continuation" t)
 
 (mevedel-deftest mevedel-skills--gptel-send-advice ()
   ,test

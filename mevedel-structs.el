@@ -262,7 +262,9 @@ workspace."
   publication-job ; transient acknowledged local publication owner
   publication-preparations ; transient FIFO of mutation preparation continuations
   publication-preparation-token ; transient explicit owner of the running preparation
+  publication-finishing-p ; transient notification/dispatch exclusion during job finalization
   publication-stopping-p ; teardown rejects new jobs and suppresses their wakes
+  mail-batch ; transient reversed background arrivals awaiting one gated commit
   mail-notifications ; transient FIFO of coalesced post-publication notifications
   mail-notification-timer ; transient single gate-idle notification retry timer
   mail-notification-delay ; transient bounded retry backoff in seconds

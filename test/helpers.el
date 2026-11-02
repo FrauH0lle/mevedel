@@ -243,6 +243,19 @@ TYPE and ARGS are passed through unchanged."
   `(with-timeout (,timeout (ert-fail ,message))
      (while (not ,condition) (accept-process-output nil 0.01))))
 
+(defmacro mevedel-test--with-idle-application (&rest body)
+  "Run BODY with two seconds of idle time and short one-shot callbacks.
+Replace `run-with-idle-timer' with `run-at-time' after 0.01 seconds,
+ignoring the requested delay and repeat interval.  This batch fixture
+emulates idle application; it does not verify real idle scheduling.
+Callers remain responsible for cancelling timers they leave pending."
+  (declare (indent 0) (debug t))
+  `(cl-letf (((symbol-function 'current-idle-time) (lambda () (seconds-to-time 2)))
+             ((symbol-function 'run-with-idle-timer)
+              (lambda (_delay _repeat function &rest args)
+                (apply #'run-at-time .01 nil function args))))
+     ,@body))
+
 (defvar mevedel-test--timestamp-offset 0
   "Seconds added to every timestamp mevedel formats inside a shifted clock.
 
@@ -434,6 +447,14 @@ target is gone, which is slow, noisy, and order dependent."
     (mevedel-view--release-markdown-fontify-buffer))
   (when (boundp 'mevedel-skills--frontmatter-cache)
     (clrhash mevedel-skills--frontmatter-cache))
+  ;; A probe a test cancels mid-flight caches a non-answer that only the next
+  ;; launch retries.  Later real-Bubblewrap cases read the cache directly and
+  ;; would silently skip, so drop non-answers as launches do; keep definitive
+  ;; results to avoid re-probing every case.
+  (when (bound-and-true-p mevedel-sandbox--probe-cache)
+    (setq mevedel-sandbox--probe-cache
+          (cl-remove-if (lambda (entry) (plist-get (cdr entry) :retry-on-execution))
+                        mevedel-sandbox--probe-cache)))
   ;; A paced stream starts the Emacs-wide pause guard on first use.
   (when (bound-and-true-p mevedel-transport--pause-guard)
     (delete-process mevedel-transport--pause-guard)
@@ -1498,12 +1519,15 @@ A daemon running longer than TIMEOUT seconds, 90 by default, fails the test.
 Return (OBSERVED EXIT-STATUS . TRACE), TRACE being the daemon's
 WAYLAND_DEBUG client log."
   (let* ((directory (make-temp-file "mevedel-wayland-" t))
-         (socket (format "mevedel-test-%d" (emacs-pid)))
+         ;; A terminated compositor may not have released its socket yet.
+         (socket (file-name-nondirectory directory))
          (result (file-name-concat directory "result.eld"))
          (trace (generate-new-buffer " *mevedel-test-wayland-trace*"))
          (kwin-log (generate-new-buffer " *mevedel-test-kwin*"))
          (process-environment (cl-remove-if (lambda (entry)
-                                              (string-match-p "\\`\\(WAYLAND_DISPLAY\\|DISPLAY\\)=" entry))
+                                              (string-match-p
+                                               "\\`\\(WAYLAND_DISPLAY\\|DISPLAY\\|DBUS_SESSION_BUS_ADDRESS\\|DBUS_STARTER_ADDRESS\\|DBUS_STARTER_BUS_TYPE\\)="
+                                               entry))
                                             process-environment))
          (kwin (make-process
                 :name "mevedel-test-kwin" :noquery t :connection-type 'pipe

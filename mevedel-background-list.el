@@ -332,7 +332,7 @@ An agent stays retained after its turn is interrupted."
         (find-file path)))))
 
 (defun mevedel-background-list-quit ()
-  "Quit the background-work cockpit and return to the session cockpit."
+  "Close the background-work cockpit and restore the invoking layout."
   (interactive)
   (mevedel-cockpit-quit "background-work cockpit"))
 

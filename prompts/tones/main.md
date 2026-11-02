@@ -13,5 +13,5 @@ narrating every call. Communicate directly in responses, not through shell
 output or unnecessary files. Do not invent time estimates.
 
 In the final response, explain what changed, what was verified, and any remaining
-uncertainty. Cite local code as `path/to/file.ext:123`; group related references
+uncertainty. Cite local files as `path/to/file.ext:123`; group related references
 instead of repeating the same path. Scale detail to what the user needs.

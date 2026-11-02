@@ -198,6 +198,8 @@
       (delete-directory root t)))
   :doc "emits throttled progress with tail, counters, and yielded id"
   (let* ((root (make-temp-file "mevedel-managed-progress-" t))
+         (middle (file-name-concat root "middle"))
+         (finish (file-name-concat root "finish"))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
          (default-progress-delay mevedel-execution-progress-delay)
@@ -214,13 +216,21 @@
           (setq initial
                 (test-mevedel-execution--start-managed
                  session root
-                 ;; Output after the first event brings the next one forward;
-                 ;; without it, a quiet command waits a whole second.
-                 '("sh" "-c" "printf start; sleep .4; printf mid; sleep .65; printf end")
+                 (list "sh" "-c"
+                       "printf start; while test ! -e \"$1\"; do sleep .01; done; printf mid; while test ! -e \"$2\"; do sleep .01; done; printf end"
+                       "progress" middle finish)
                  :tool-args '(:command "progress")
                  :tool-use-id "call-progress"
                  :data-buffer origin-buffer))
           (let ((id (plist-get (plist-get initial :facts) :execution-id)))
+            (test-mevedel-execution--wait
+             (lambda () (cl-find 'progress events
+                                 :key (lambda (event) (plist-get event :type)))))
+            ;; Release each chunk only after the preceding event arrived.
+            ;; The event spacing below still measures the real throttle.
+            (should-not (cl-find 'terminal events
+                                 :key (lambda (event) (plist-get event :type))))
+            (with-temp-file middle)
             (test-mevedel-execution--wait
              (lambda ()
                (>= (length (cl-remove-if-not
@@ -228,6 +238,7 @@
                               (eq (plist-get event :type) 'progress))
                             events))
                    2)))
+            (with-temp-file finish)
             (setq final (test-mevedel-execution--observe session id))
             (let ((progress (nreverse
                              (cl-remove-if-not
@@ -251,6 +262,7 @@
                 (should (equal id (plist-get facts :execution-id)))
                 (should (> (plist-get facts :output-bytes) 0))
                 (should (> (plist-get facts :output-lines) 0))))))
+      (mevedel-execution-teardown-session session)
       (delete-directory root t)))
   :doc "retains one oversized pre-yield artifact with a head-and-tail preview"
   (let* ((root (make-temp-file "mevedel-managed-oversized-" t))
@@ -311,17 +323,33 @@
            (mevedel-sandbox-mode 'off))
       (unwind-protect
           (dolist (tty '(nil t))
-            (let (initial final id)
+            (let ((ready (file-name-concat root (format "ready-%s" tty)))
+                  (finish (file-name-concat root (format "finish-%s" tty)))
+                  initial final id)
               (setq initial
                     (test-mevedel-execution--start-managed
                      session root
-                     '("python3" "-c"
-                       "import time; print('ready'); time.sleep(1); print('done')")
-                     :tty tty :yield-time-ms 100))
+                     (list "python3" "-c"
+                           "import pathlib,sys,time; print('ready'); pathlib.Path(sys.argv[1]).touch()\nwhile not pathlib.Path(sys.argv[2]).exists(): time.sleep(.001)\nprint('done')"
+                           ready finish)
+                     :tty tty :yield-time-ms 10))
               (setq id (plist-get (plist-get initial :facts) :execution-id))
+              (test-mevedel-execution--wait (lambda () (file-exists-p ready)))
+              (test-mevedel-execution--wait
+               (lambda ()
+                 (setf (plist-get initial :output)
+                       (concat (plist-get initial :output)
+                               (plist-get (test-mevedel-execution--observe
+                                           session id :wait-ms 0) :output)))
+                 ;; The file proves print ran even when pipe buffering keeps
+                 ;; stdout empty.  A PTY must actually deliver that line.
+                 (or (not tty)
+                     (string-match-p "ready" (plist-get initial :output)))))
               (if tty
                   (should (string-match-p "ready" (plist-get initial :output)))
                 (should (equal "" (plist-get initial :output))))
+              (should-not (string-match-p "done" (plist-get initial :output)))
+              (with-temp-file finish)
               (setq final (test-mevedel-execution--observe session id))
               (should (string-match-p "done" (plist-get final :output)))))
         (mevedel-execution-teardown-session session)
@@ -515,6 +543,7 @@
   (test)
   :doc "polls only unread output and rejects ordinary pipe input"
   (let* ((root (make-temp-file "mevedel-managed-observe-" t))
+         (finish (file-name-concat root "finish"))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
          (mevedel-execution-process--child-kill-delay 0.05)
@@ -524,9 +553,19 @@
           (setq initial
                 (test-mevedel-execution--start-managed
                  session root
-                 '("sh" "-c" "printf one; sleep 1; printf two")
-                 :yield-time-ms 250))
+                 (list "sh" "-c"
+                       "printf one; while test ! -e \"$1\"; do sleep .01; done; printf two"
+                       "observe" finish)
+                 :yield-time-ms 10))
           (setq id (plist-get (plist-get initial :facts) :execution-id))
+          (test-mevedel-execution--wait
+           (lambda ()
+             (unless (equal "one" (plist-get initial :output))
+               (setf (plist-get initial :output)
+                     (concat (plist-get initial :output)
+                             (plist-get (test-mevedel-execution--observe
+                                         session id :wait-ms 0) :output))))
+             (equal "one" (plist-get initial :output))))
           (should (equal "one" (plist-get initial :output)))
           (should-error
            (mevedel-execution-observe
@@ -536,6 +575,8 @@
                 (test-mevedel-execution--observe
                  session id :wait-ms 10))
           (should (equal "" (plist-get first :output)))
+          (should (eq 'running (plist-get (plist-get first :facts) :state)))
+          (with-temp-file finish)
           (setq final (test-mevedel-execution--observe session id))
           (should (equal "two" (plist-get final :output)))
           (should (plist-get final :claimed-final-p))
@@ -548,6 +589,7 @@
            (mevedel-execution-observe
             session "main" "exec-unknown" #'ignore)
            :type 'mevedel-execution-not-found))
+      (mevedel-execution-teardown-session session)
       (delete-directory root t)))
   :doc "writes repeated PTY input and returns only newly unread output"
   (progn
@@ -640,13 +682,22 @@
               (test-mevedel-execution--start-managed
                session root
                '("bash" "-lc"
-                 "trap 'printf \"interrupted\\n\"; exit 130' INT; while :; do printf 'heartbeat\\n'; sleep 1; done")
+                 "trap 'printf \"interrupted\\n\"; exit 130' INT; while :; do printf 'heartbeat\\n'; sleep .01; done")
                :tty tty))
              (id (plist-get (plist-get initial :facts) :execution-id))
              final)
         (unwind-protect
             (progn
-              (test-mevedel-execution--observe session id :wait-ms 1200)
+              (test-mevedel-execution--wait
+               (lambda ()
+                 (unless (string-match-p "heartbeat" (plist-get initial :output))
+                   (setf (plist-get initial :output)
+                         (concat (plist-get initial :output)
+                                 (plist-get (test-mevedel-execution--observe
+                                             session id :wait-ms 0) :output))))
+                 (string-match-p "heartbeat" (plist-get initial :output))))
+              (should (string-match-p "heartbeat" (plist-get initial :output)))
+              (should (eq 'running (plist-get (plist-get initial :facts) :state)))
               (setq final
                     (test-mevedel-execution--observe
                      session id :chars (string 3)))
@@ -655,28 +706,44 @@
                           (plist-get (plist-get final :facts) :termination)))
               (should (eq 'completed
                           (plist-get (plist-get final :facts) :state))))
+          (mevedel-execution-teardown-session session)
           (delete-directory root t)))))
   :doc "keeps trapped and late Ctrl-C exit status distinct from signals"
   (progn
     (skip-unless (not (eq system-type 'windows-nt)))
-    (dolist (command '(("sh" "-c"
-                        "trap 'exit 2' INT; printf ready; while :; do sleep 1; done")
-                       ("sh" "-c" "printf ready; sleep 1; exit 2")))
+    (dolist (late '(nil t))
       (let* ((root (make-temp-file "mevedel-managed-exit-two-" t))
+             (finish (file-name-concat root "finish"))
+             (command
+              (if late
+                  (list "sh" "-c"
+                        "printf ready; while test ! -e \"$1\"; do sleep .01; done; exit 2"
+                        "late-interrupt" finish)
+                '("sh" "-c"
+                  "trap 'exit 2' INT; printf ready; while :; do sleep .01; done")))
              (session (test-mevedel-execution--session root))
              (mevedel-sandbox-mode 'off)
              (initial
               (test-mevedel-execution--start-managed
-               session root command :yield-time-ms 250))
+               session root command :yield-time-ms 10))
              (id (plist-get (plist-get initial :facts) :execution-id))
              final)
         (unwind-protect
             (progn
+              (test-mevedel-execution--wait
+               (lambda ()
+                 (unless (string-match-p "ready" (plist-get initial :output))
+                   (setf (plist-get initial :output)
+                         (concat (plist-get initial :output)
+                                 (plist-get (test-mevedel-execution--observe
+                                             session id :wait-ms 0) :output))))
+                 (string-match-p "ready" (plist-get initial :output))))
+              (should (string-match-p "ready" (plist-get initial :output)))
+              (should (eq 'running (plist-get (plist-get initial :facts) :state)))
+              (when late (with-temp-file finish))
               (if id
                   (progn
-                    (when (string-match-p
-                           "printf ready; sleep 1; exit 2"
-                           (car (last command)))
+                    (when late
                       (test-mevedel-execution--wait
                        (lambda ()
                          (mevedel-execution--record-finished-p

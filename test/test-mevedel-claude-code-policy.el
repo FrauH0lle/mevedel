@@ -15,6 +15,7 @@
 		 '((nil "Claude Code:haiku") (t "Claude Code:haiku")
 		   (nil "API fixture:api-model")))
     (mevedel-engine-test--with-session
+     :file-workspace (or skill-p (string-prefix-p "API fixture:" selected))
      (mevedel-request-end)
      (let* ((view (generate-new-buffer " *claude-policy-composer*"))
 	    (gptel--known-backends nil)
@@ -83,6 +84,7 @@
 (mevedel-deftest mevedel-view-send/claude-unavailable-policy (:quiet t)
   (dolist (route '(session preset workload directive))
     (mevedel-engine-test--with-session
+      :file-workspace (not (eq route 'session))
       (mevedel-request-end)
 		    (setq-local mevedel-model-workloads nil)
       (let* ((gptel--known-backends nil)

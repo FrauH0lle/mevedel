@@ -64,7 +64,7 @@
                (push (list mode first second wrapped last (window-cursor-info)) alignment))
              ;; Sweep the right edge, including the natural wrap boundary.
              ;; Compare actual cursors, not overlay properties or columns.
-             (let* ((overlay mevedel-view--composer-keymap-overlay)
+             (let* ((overlay mevedel-view--composer-display-overlay)
                     (indent (overlay-get overlay 'line-prefix))
                     (width (- (window-body-width) (string-width indent))))
                (dolist (delta '(-3 -2 -1 0 1))

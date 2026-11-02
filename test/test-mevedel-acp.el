@@ -159,8 +159,14 @@
                  (lambda (_type text &rest _) (push text warnings))))
         (mevedel-acp-prompt connection [((type . "text") (text . "crash"))]
                             #'ignore (lambda (outcome) (push outcome outcomes)))
-        ;; Busy Emacs: the stderr text and the exit are both pending at once.
-        (let ((end (+ (float-time) 0.2))) (while (< (float-time) end)))
+        ;; Leave both stderr and exit pending without assuming child scheduling
+        ;; latency.  Yielding the Lisp lock does not dispatch main-thread I/O.
+        (let ((process (alist-get :process (mevedel-acp-client connection)))
+              (deadline (+ (float-time) 5)))
+          (while (and (process-live-p process) (< (float-time) deadline))
+            (thread-yield))
+          (should-not (process-live-p process)))
+        (should-not outcomes)
         (await (lambda () outcomes)))
       (should (= 1 (length outcomes)))
       (should (eq 'error (plist-get (car outcomes) :status)))

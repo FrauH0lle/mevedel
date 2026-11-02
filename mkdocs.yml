@@ -17,7 +17,13 @@ nav:
       - Patch review: preview.md
       - Buddy notes: buddy.md
       - Sessions and recovery: sessions.md
-      - Memory and journal: memory.md
+      - Memory and journal:
+          - Overview: memory.md
+          - Curated memory: memory-curated.md
+          - Review contract and cockpit: memory-review.md
+          - Decisions, application and recovery: memory-recovery.md
+          - Shared working-note lifecycle: memory-notes.md
+          - Journal capture and retention: memory-journal.md
       - Permissions and confinement: permissions.md
   - Architecture:
       - System architecture: architecture.md
