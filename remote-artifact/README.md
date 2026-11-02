@@ -72,7 +72,14 @@ Tools:
   reads `source`, a local PNG, JPEG, WebP or SVG file of at most 4.7 MB
   (relative paths resolve against the MCP server's working directory), and
   refuses anything else before contacting the origin. A view link's edit
-  fails with "This artifact link is view-only".
+  fails with "This artifact link is view-only". `insert` places a library
+  item (`item` as `LIBRARY/ITEM-ID`, at `x`,`y`) on a whiteboard.
+- `whiteboard_libraries(name, library?, preview?)`: the element libraries of
+  the user who shared a whiteboard (their own, installed and built-in) as a
+  listing of `LIBRARY/ITEM-ID` refs, or with `preview` the picture of one
+  library. Any link may browse; libraries cannot be changed through a link,
+  and document links get no libraries. Sharing a whiteboard exposes the
+  origin user's libraries.
 
 Edits are attributed at the origin as `Agent: NAME (remote)`, NAME being the
 display name given at attach (`--as`) or the default user, machine and

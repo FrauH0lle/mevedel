@@ -34,6 +34,8 @@
 (require 'mevedel-artifact-backend)
 (require 'mevedel-artifact-store)
 (require 'mevedel-collaboration)
+(require 'mevedel-resource)
+(require 'mevedel-shared-library)
 (require 'mevedel-workspace)
 
 ;; `mevedel-collaboration-guest'
@@ -190,7 +192,8 @@ LINES)) with the hash-prefixed lines, or (:error MESSAGE)."
   '(("patch" :changes)
     ("rename" :title)
     ("background" :background)
-    ("image" :data :x :y :width :alt :afterId))
+    ("image" :data :x :y :width :alt :afterId)
+    ("insert" :item :x :y))
   "SharedEdit actions an edit link may request, with the keys each passes on.
 Anything else a request carries is dropped; the origin adds the pinned
 id and the attribution itself.  An image arrives as `:data', the file's
@@ -212,6 +215,20 @@ stale edit returns the stale targets with their current lines."
                     (when-let* ((png (plist-get result :png)))
                       (list :png png)))))))
 
+(defun mevedel-collaboration-artifact-room--library-item (item)
+  "Return the `:library' and `:item' keys for library item reference ITEM.
+ITEM is LIBRARY/ITEM-ID, as `library' lists it; the library text is the
+origin user's, resolved here since the consumer cannot read it."
+  (let ((slash (and (stringp item) (string-search "/" item))))
+    (unless slash
+      (error "insert needs item as LIBRARY/ITEM-ID from the library listing"))
+    (let ((library (cl-find (substring item 0 slash) (mevedel-shared-library-libraries)
+                            :key (lambda (l) (plist-get l :name)) :test #'equal)))
+      (unless library
+        (error "No element library %s; list the libraries for installed ones"
+               (substring item 0 slash)))
+      (list :library (plist-get library :text) :item (substring item (1+ slash))))))
+
 (defun mevedel-collaboration-artifact-room--edit (room guest args authorize reply)
   "Run GUEST's SharedEdit action ARGS on ROOM's artifact.
 Only the keys `mevedel-collaboration-artifact-room--edit-keys' names
@@ -228,6 +245,11 @@ to no session."
     (dolist (key (cdr (assoc action mevedel-collaboration-artifact-room--edit-keys)))
       (when (plist-member args key)
         (setq request (plist-put request key (plist-get args key)))))
+    (when (equal action "insert")
+      (let ((resolved (mevedel-collaboration-artifact-room--library-item
+                       (plist-get args :item))))
+        (setq request (plist-put request :library (plist-get resolved :library))
+              request (plist-put request :item (plist-get resolved :item)))))
     (when (equal action "image")
       (let ((data (plist-get args :data)))
         (unless (and (stringp data) (not (string-empty-p data)))
@@ -265,6 +287,46 @@ With `:image' in ARGS, show that embedded image instead, as
                                         :mime (or (plist-get result :mime) "image/png")))))))
      authorize)))
 
+(defun mevedel-collaboration-artifact-room--library (room _guest args authorize reply)
+  "Show the origin user's whiteboard libraries to ROOM's guest, as `shared://library'.
+ARGS may name one `:library'; with `:part' \"sheet\" the reply is the
+picture of the library (or of all of them) as `:png' and `:mime', else
+the listing as `:text'.  Only reading is offered: the libraries are never
+changed.  AUTHORIZE and REPLY are as in
+`mevedel-collaboration-artifact-room--actions'."
+  (let* ((name (plist-get args :library))
+         (part (plist-get args :part))
+         (libraries (cl-remove-if-not
+                     (lambda (library) (or (null name) (equal name (plist-get library :name))))
+                     (mevedel-shared-library-libraries))))
+    (unless (or (null name) (stringp name))
+      (error "A library is named by a string"))
+    (unless (member part '(nil "list" "sheet"))
+      (error "The library part is list or sheet"))
+    (when (and name (null libraries))
+      (error "No element library %s; list the libraries for installed ones" name))
+    (mevedel-shared-editing-call
+     (plist-get room :workspace)
+     (list :action "library-view" :part (if (equal part "sheet") "sheet" "list")
+           :at (if name
+                   (concat "shared://library/" (mevedel-resource-encode-component name))
+                 "shared://library")
+           :libraries (vconcat (mapcar (lambda (library)
+                                         (list :name (plist-get library :name)
+                                               :text (plist-get library :text)))
+                                       libraries)))
+     (lambda (value)
+       (funcall reply
+                (if-let* ((failure (plist-get value :error)))
+                    (list :error failure)
+                  (let ((result (plist-get value :result)))
+                    (list :result
+                          (if (plist-get result :text)
+                              (list :text (plist-get result :text))
+                            (list :png (plist-get result :png)
+                                  :mime (or (plist-get result :mime) "image/png"))))))))
+     authorize)))
+
 (defconst mevedel-collaboration-artifact-room--actions
   '(("read" :kinds (whiteboard document)
      :run mevedel-collaboration-artifact-room--read)
@@ -277,6 +339,10 @@ With `:image' in ARGS, show that embedded image instead, as
     ("background" :kinds (whiteboard document) :write t
      :run mevedel-collaboration-artifact-room--edit)
     ("image" :kinds (whiteboard document) :write t
+     :run mevedel-collaboration-artifact-room--edit)
+    ("library" :kinds (whiteboard)
+     :run mevedel-collaboration-artifact-room--library)
+    ("insert" :kinds (whiteboard) :write t
      :run mevedel-collaboration-artifact-room--edit))
   "Editing actions an artifact link may request, by action name.
 Each entry is (ACTION . PROPERTIES):
