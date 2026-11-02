@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { main } from '../src/cli.mjs';
 import { callTool, tools } from '../src/tools.mjs';
+import { openRoom } from '../src/room.mjs';
 import { serve } from '../src/mcp.mjs';
 import { fixture, startFakeRoom } from './fake-room.mjs';
 import { sink, tempEnv } from './helpers.mjs';
@@ -76,6 +77,42 @@ test('tool errors are plain and actionable', async (t) => {
   const bad = await callTool('read_artifact', {}, { env });
   assert.ok(bad.isError);
   assert.match(bad.content[0].text, /name is required/);
+});
+
+test('a room with no host reports the origin unavailable', async (t) => {
+  const env = tempEnv(t);
+  await attach(env, (await room(t)).link());
+  // The relay is up but the room has no host: it closes the room at once.
+  const absent = await room(t, { mode: 'absent' });
+  const result = await callTool('read_artifact', { name: 'snt-pipeline' },
+    { env, connect: (entry) => openRoom(absent.link(), { name: 'tester', guestId: entry.guestId }) });
+  assert.ok(result.isError);
+  assert.equal(result.content[0].text, 'Origin unavailable (revoked, deleted, or offline)');
+});
+
+for (const [reason, message] of [
+  ['revoked', 'Origin unavailable: the host revoked this artifact link; ask them for a new one'],
+  ['artifact-deleted', 'Origin unavailable: the artifact was deleted at its origin'],
+  ['origin-stopped', 'Origin unavailable: the origin Emacs stopped; try again once it is back'],
+]) {
+  test(`an origin saying goodbye for ${reason} is reported as such`, async (t) => {
+    const env = tempEnv(t);
+    const origin = await room(t, { mode: 'goodbye', reason });
+    await attach(env, origin.link());
+    const result = await callTool('read_artifact', { name: 'snt-pipeline' }, { env });
+    assert.ok(result.isError);
+    assert.equal(result.content[0].text, message);
+  });
+}
+
+test('list_artifacts says why an origin that said goodbye is unavailable', async (t) => {
+  const env = tempEnv(t);
+  await attach(env, (await room(t)).link());
+  const result = await callTool('list_artifacts', {}, {
+    env, connect: async () => { throw new Error('Origin unavailable: the artifact was deleted at its origin'); },
+  });
+  assert.match(result.content[0].text,
+    /^snt-pipeline: .* origin unavailable: the artifact was deleted at its origin$/m);
 });
 
 test('the MCP server answers initialize, tools/list and tools/call over stdio', async (t) => {

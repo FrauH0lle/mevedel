@@ -86,10 +86,13 @@ function wsFrame(opcode, payload) {
  *   lobby     a lobby (a lobby listing instead of a welcome)
  *   mismatch  an origin speaking another protocol version
  *   absent    no origin: the relay closes the room with 4004
+ *   goodbye   an artifact room that ends itself when a request arrives:
+ *             it sends the goodbye fixture with REASON, then the relay
+ *             closes the room
  * BINDINGS override the fixtures' example values.
  * Return { url, link(tier), received, connections, close }.
  */
-export async function startFakeRoom({ mode = 'artifact', bindings = {}, readOnly } = {}) {
+export async function startFakeRoom({ mode = 'artifact', bindings = {}, readOnly, reason } = {}) {
   const roomId = b64url(randomBytes(16));
   const keyBytes = randomBytes(32);
   const writeToken = randomBytes(16);
@@ -181,6 +184,15 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, readOnly
         return;
       }
       if (frame.t === 'editing') {
+        if (mode === 'goodbye') {
+          for (const { from, frame: origin } of fixture('goodbye').frames) {
+            if (from === 'origin') await send(bind(origin, { ...examples('goodbye'), ...(reason ? { $REASON: reason } : {}) }));
+          }
+          // The host left: the relay says so unsealed and closes the room.
+          socket.write(wsFrame(1, Buffer.from('{"t":"room-closed"}')));
+          closeWith(1000);
+          return;
+        }
         const exchange = fixture('read');
         const values = examples('read');
         const request = exchange.frames.find((f) => f.from === 'consumer').frame;

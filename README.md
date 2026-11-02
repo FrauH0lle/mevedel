@@ -37,7 +37,10 @@ Tools:
   exactly as `shared://ID` shows it at the origin.
 
 When the origin is offline, or the link was revoked or the artifact deleted,
-tools fail with "Origin unavailable (revoked, deleted, or offline)".
+tools fail with "Origin unavailable (revoked, deleted, or offline)". An origin
+that ends the connection says why, and tools report it: the host revoked the
+link (ask for a new one), the artifact was deleted, or the origin Emacs
+stopped (try again once it is back).
 
 ## Licence
 
