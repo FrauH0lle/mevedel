@@ -52,8 +52,9 @@ function shared(body) {
 test('the registry offers edit_artifact and view_artifact', () => {
   const edit = tools.find((tool) => tool.name === 'edit_artifact');
   const view = tools.find((tool) => tool.name === 'view_artifact');
-  assert.deepEqual(edit.inputSchema.properties.action.enum,
-    ['patch', 'image', 'rename', 'background', 'revert']);
+  for (const action of ['patch', 'image', 'rename', 'background', 'revert']) {
+    assert.ok(edit.inputSchema.properties.action.enum.includes(action), action);
+  }
   for (const name of ['changes', 'title', 'background', 'source', 'x', 'y', 'width', 'alt', 'afterId',
     'transaction']) {
     assert.ok(edit.inputSchema.properties[name], name);

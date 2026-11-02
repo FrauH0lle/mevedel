@@ -68,14 +68,23 @@ Tools:
   embedded image (a board image by its `fileId`, a document image by the key
   its `src` shows).
 - `edit_artifact(name, action, ...)`: `patch`, `image`, `rename`,
-  `background` and `revert` with mevedel `SharedEdit`'s argument names and results: the
-  stored lines of what changed and, for a whiteboard, the picture. A stale
+  `background`, `insert` and `revert` with mevedel `SharedEdit`'s argument
+  names and results: the stored lines of what changed and, for a whiteboard,
+  the picture. A stale
   hash rejects the patch and returns its targets' current lines. `image`
   reads `source`, a local PNG, JPEG, WebP or SVG file of at most 4.7 MB
   (relative paths resolve against the MCP server's working directory), and
-  refuses anything else before contacting the origin. `revert` undoes the
-  contribution `transaction` names and is refused when its targets changed
-  since. A view link's edit fails with "This artifact link is view-only".
+  refuses anything else before contacting the origin. `insert` places a
+  library item (`item` as `LIBRARY/ITEM-ID`, at `x`,`y`) on a whiteboard.
+  `revert` undoes the contribution `transaction` names and is refused when
+  its targets changed since. A view link's edit fails with "This artifact
+  link is view-only".
+- `whiteboard_libraries(name, library?, preview?)`: the element libraries of
+  the user who shared a whiteboard (their own, installed and built-in) as a
+  listing of `LIBRARY/ITEM-ID` refs, or with `preview` the picture of one
+  library. Any link may browse; libraries cannot be changed through a link,
+  and document links get no libraries. Sharing a whiteboard exposes the
+  origin user's libraries.
 
 Edits are attributed at the origin as `Agent: NAME (remote)`, NAME being the
 display name given at attach (`--as`) or the default user, machine and
