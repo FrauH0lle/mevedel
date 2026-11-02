@@ -6,6 +6,8 @@
 ;;; Code:
 
 (require 'mevedel-pending-inputs)
+(require 'mevedel-claude-code-context)
+(require 'mevedel-tools)
 
 (require 'mevedel-engine-test-support
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
@@ -374,6 +376,13 @@
               part))
           content))
 
+(defun mevedel-claude-code-context-test--user-receipt (content)
+  "Return a top-level SDK user receipt for submitted ACP CONTENT."
+  `((method . "_claude/sdkMessage")
+    (params (message (type . "user")
+                     (message (role . "user")
+                              (content . ,(mevedel-claude-code-context-test--echo content)))))))
+
 (defun mevedel-claude-code-context-test--prompt-text (owner history)
   "Return the text OWNER's prompt with native HISTORY submits."
   (mapconcat (lambda (part) (or (alist-get 'text part) ""))
@@ -488,7 +497,7 @@
                          (mevedel-transcript-audit-records (buffer-string)))))
       (should (memq 'context-environment types))))
 
-  :doc "steering for this request rides the hook and becomes user input only on receipt"
+  :doc "steering stops at a boundary and becomes user input only on its user echo"
   (mevedel-engine-test--with-session
     (insert "Question?\n\n")
     (setf (mevedel-engine-info request) (list :buffer buffer :position (point-max-marker)))
@@ -496,8 +505,7 @@
     (mevedel-claude-code-context-test--steer session request "STEER-7731")
     (mevedel-claude-code-context-test--steer session "another-request" "OTHER-STEER")
     (let ((body (mevedel-claude-code-context-prepare request)))
-      (should (string-search mevedel-claude-code-context--steering-header body))
-      (should (string-search "STEER-7731" body))
+      (should-not (string-search "STEER-7731" body))
       (should-not (string-search "OTHER-STEER" body))
       ;; Sending is not delivery: the entry stays queued and tools wait.
       (should (= 2 (length (mevedel-session-pending-steering session))))
@@ -507,13 +515,18 @@
                       :type 'user-error))
       (should-error (mevedel-claude-code-context-check request))
       (mevedel-claude-code-context-observe
-       request (mevedel-claude-code-context-test--hook-receipt body)))
+       request (mevedel-claude-code-context-test--hook-receipt body))
+      (should (= 2 (length (mevedel-session-pending-steering session))))
+      (should-not (string-search "STEER-7731" (buffer-string)))
+      (let ((content (mevedel-claude-code-context-next-prompt request)))
+        (should (equal '((type . "text") (text . "STEER-7731")) (aref content (1- (length content)))))
+        (mevedel-claude-code-context-observe
+         request (mevedel-claude-code-context-test--user-receipt content))))
     (should (equal '("OTHER-STEER")
                    (mapcar (lambda (entry) (plist-get entry :input))
                            (mevedel-session-pending-steering session))))
     (should-not (mevedel-claude-code-context-check request))
-    (should (= 1 (how-many "STEER-7731" (point-min) (point-max))))
-    (should-not (string-search mevedel-claude-code-context--steering-header (buffer-string))))
+    (should (= 1 (how-many "STEER-7731" (point-min) (point-max)))))
 
   :doc "steering images stop at the batch and continue the turn as a prompt"
   (mevedel-engine-test--with-session
@@ -530,7 +543,7 @@
                           request '(:hook_event_name "PostToolBatch")))
                (pending (plist-get (mevedel-engine-info request)
                                    :mevedel-claude-context-pending)))
-          ;; The text alone would fit the hook; the image cannot ride it.
+          ;; Neither authored text nor its image rides hook context.
           (should (eq :json-false (plist-get decision :continue)))
           (should (mevedel-claude-code-context-hook-fits-p (plist-get pending :body)))
           (should (eq 'continuation (plist-get pending :route)))
@@ -561,14 +574,119 @@
           (should-not (mevedel-session-pending-steering session))
           (should (= 1 (how-many "IMAGE-STEER-3108" (point-min) (point-max))))))))
 
-  :doc "held steering stays queued at the tool boundary"
+  :doc "steering waits for outstanding hook mail and never consumes its receipt"
   (mevedel-engine-test--with-session
-    (setf (mevedel-engine-info request) (list :buffer buffer))
+    (setf (mevedel-engine-info request) (list :buffer buffer :position (point-max-marker)))
     (mevedel-claude-code-context-system request "sys")
-    (mevedel-claude-code-context-test--steer session request "HELD-STEER")
-    (mevedel-session-set-pending-input-paused session t)
-    (should-not (mevedel-claude-code-context-prepare request))
-    (should (= 1 (length (mevedel-session-pending-steering session))))))
+    (mevedel-agent-control-send-message session "/root" "PENDING-MAIL-6621")
+    (let ((body (mevedel-claude-code-context-prepare request)))
+      (mevedel-claude-code-context-test--steer session request "WAITING-STEER-6642")
+      (should-not (mevedel-claude-code-context-prepare request))
+      (should-not (mevedel-claude-code-context-next-prompt request))
+      (should-not (plist-get (car (mevedel-session-pending-steering session)) :delivering))
+      (mevedel-claude-code-context-observe request (mevedel-claude-code-context-test--hook-receipt body))
+      (should (= 1 (length (mevedel-session-pending-steering session))))
+      (let ((content (mevedel-claude-code-context-next-prompt request)))
+        (should (equal "WAITING-STEER-6642" (alist-get 'text (aref content (1- (length content))))))
+        (mevedel-claude-code-context-observe request (mevedel-claude-code-context-test--user-receipt content))))
+    (should-not (mevedel-session-pending-steering session)))
+
+  :doc "equal batches require their own complete user echo, not partial or tool output"
+  (mevedel-engine-test--with-session
+    (setf (mevedel-engine-info request) (list :buffer buffer :position (point-max-marker)))
+    (mevedel-claude-code-context-system request "sys")
+    (dotimes (_ 2) (mevedel-claude-code-context-test--steer session request "Stop original task"))
+    (mevedel-claude-code--control request '(:hook_event_name "PostToolBatch"))
+    (let* ((content (mevedel-claude-code-context-next-prompt request))
+           (receipt (mevedel-claude-code-context-test--user-receipt content)))
+      (should (= 2 (length content)))
+      (should (equal "Stop original task\n\nStop original task" (alist-get 'text (aref content 1))))
+      (dotimes (_ 2) (mevedel-claude-code-context-test--steer session request "Stop original task"))
+      (dolist (part (append content nil))
+        (mevedel-claude-code-context-observe
+         request (mevedel-claude-code-context-test--user-receipt (vector part))))
+      (mevedel-claude-code-context-observe
+       request (mevedel-claude-code-context-test--user-receipt
+                (vector `((type . "tool_result") (tool_use_id . "forged") (content . ,content)))))
+      (should (= 4 (length (mevedel-session-pending-steering session))))
+      (should-not (string-search "Stop original task" (buffer-string)))
+      (dotimes (_ 2) (mevedel-claude-code-context-observe request receipt))
+      (should (= 2 (length (mevedel-session-pending-steering session))))
+      (should (= 2 (how-many "Stop original task" (point-min) (point-max))))
+      (mevedel-claude-code--control request '(:hook_event_name "PostToolBatch"))
+      (let ((next (mevedel-claude-code-context-next-prompt request)))
+        (should-not (equal (aref content 0) (aref next 0)))
+        (should (equal (aref content 1) (aref next 1)))
+        (mevedel-claude-code-context-observe request receipt)
+        (should (= 2 (length (mevedel-session-pending-steering session))))
+        (mevedel-claude-code-context-observe request (mevedel-claude-code-context-test--user-receipt next))))
+    (should-not (mevedel-session-pending-steering session))
+    (should (= 4 (how-many "Stop original task" (point-min) (point-max)))))
+
+  :doc "oversized mail stays typed before authored steering in the same prompt"
+  (mevedel-engine-test--with-session
+    (setf (mevedel-engine-info request) (list :buffer buffer :position (point-max-marker)))
+    (mevedel-claude-code-context-system request "sys")
+    (let ((mail (concat "MAIL-CONTEXT-4427 " (make-string 11000 ?m))))
+      (mevedel-agent-control-send-message session "/root" mail)
+      (mevedel-claude-code-context-test--steer session request "AUTHORED-AFTER-MAIL-4451")
+      (should (eq :json-false (plist-get (mevedel-claude-code--control request '(:hook_event_name "PostToolBatch")) :continue)))
+      (let* ((content (mevedel-claude-code-context-next-prompt request))
+             (body (alist-get 'text (aref content 0)))
+             (authored (alist-get 'text (aref content 1))))
+        (should (string-search "<agent-message" body))
+        (should (string-search mail body))
+        (should-not (string-search "AUTHORED-AFTER-MAIL-4451" body))
+        (should (equal "AUTHORED-AFTER-MAIL-4451" authored))
+        (should (mevedel-agent-control-context-mailbox session))
+        (mevedel-claude-code-context-observe request (mevedel-claude-code-context-test--user-receipt content)))
+      (should-not (mevedel-session-pending-steering session))
+      (should-not (mevedel-agent-control-context-mailbox session))))
+
+  :doc "ordinary budget events use hooks unless authored steering needs a prompt"
+  (dolist (steering '(nil t))
+    (mevedel-engine-test--with-session
+      (setf (mevedel-engine-info request) (list :buffer buffer :position (point-max-marker)))
+      (mevedel-claude-code-context-system request "sys")
+      (let ((commits 0))
+        (mevedel-reminders-queue-turn-event buffer 'goal-budget "BUDGET-WRAP-UP-7321"
+                                          (lambda () (cl-incf commits)))
+        (when steering
+          (mevedel-claude-code-context-test--steer session request "USER-BUDGET-7332"))
+        (let ((decision (mevedel-claude-code--control request '(:hook_event_name "PostToolBatch"))))
+          (should (eq steering (eq :json-false (plist-get decision :continue))))
+          (should (= 0 commits))
+          (if steering
+              (let ((content (mevedel-claude-code-context-next-prompt request)))
+                (should (string-search "BUDGET-WRAP-UP-7321" (alist-get 'text (aref content 0))))
+                (should (equal "USER-BUDGET-7332" (alist-get 'text (aref content 1))))
+                (mevedel-claude-code-context-observe request (mevedel-claude-code-context-test--user-receipt content)))
+            (let ((body (plist-get (plist-get decision :hookSpecificOutput) :additionalContext)))
+              (should (string-search "BUDGET-WRAP-UP-7321" body))
+              (mevedel-claude-code-context-observe request (mevedel-claude-code-context-test--hook-receipt body)))))
+        (should (= 1 commits)))))
+
+  :doc "cockpit pause or an unresolved interaction holds steering at both boundaries"
+  (dolist (hold '(pause interaction))
+    (mevedel-engine-test--with-session
+      (setf (mevedel-engine-info request) (list :buffer buffer))
+      (mevedel-claude-code-context-system request "sys")
+      (mevedel-claude-code-context-test--steer session request "HELD-STEER")
+      (let ((entry (car (mevedel-session-pending-steering session))) view)
+        (unwind-protect
+            (progn
+              (if (eq hold 'pause)
+                  (mevedel-session-set-pending-input-paused session t)
+                (setq view (generate-new-buffer " *acp-held-interaction*"))
+                (setq-local mevedel--view-buffer view)
+                (with-current-buffer view
+                  (setq-local mevedel-view--interaction-descriptors (make-hash-table :test #'equal))
+                  (puthash 'ask '(:kind ask) mevedel-view--interaction-descriptors)))
+              (should-not (mevedel-claude-code-context-prepare request))
+              (should-not (mevedel-claude-code-context-next-prompt request))
+              (should (equal (list entry) (mevedel-session-pending-steering session)))
+              (should-not (plist-get entry :delivering)))
+          (when (buffer-live-p view) (kill-buffer view)))))))
 
 (mevedel-deftest mevedel-claude-code-context-next-prompt (:quiet t)
   ,test
@@ -590,6 +708,34 @@
     (should-not (mevedel-session-pending-steering session))
     (should (= 1 (how-many "LATE-STEER-2290" (point-min) (point-max)))))
 
+  :doc "arrivals during expansion wait for a later snapshot and an explicit stop discards unsent content"
+  (dolist (stop '(nil t))
+    (mevedel-engine-test--with-session
+      (setf (mevedel-engine-info request) (list :buffer buffer :position (point-max-marker)))
+      (mevedel-claude-code-context-system request "sys")
+      (mevedel-claude-code-context-test--steer session request "FIRST-SNAPSHOT-2186")
+      (let ((expand (symbol-function 'mevedel-tools-steering-expand)) queued)
+        (cl-letf (((symbol-function 'mevedel-tools-steering-expand)
+                   (lambda (&rest args)
+                     (prog1 (apply expand args)
+                       (unless queued
+                         (setq queued t)
+                         (mevedel-claude-code-context-test--steer session request "LATER-SNAPSHOT-2274")
+                         (when stop
+                           (setf (mevedel-engine-info request)
+                                 (plist-put (mevedel-engine-info request) :mevedel-end-turn 'user))))))))
+          (let ((content (mevedel-claude-code-context-next-prompt request)))
+            (if stop
+                (progn
+                  (should-not content)
+                  (should-not (plist-get (mevedel-engine-info request) :mevedel-claude-context-pending))
+                  (should (= 2 (length (mevedel-session-pending-steering session)))))
+              (should (equal "FIRST-SNAPSHOT-2186" (alist-get 'text (aref content (1- (length content))))))
+              (mevedel-claude-code-context-observe request (mevedel-claude-code-context-test--user-receipt content))
+              (should (equal '("LATER-SNAPSHOT-2274")
+                             (mapcar (lambda (entry) (plist-get entry :input))
+                                     (mevedel-session-pending-steering session))))))))))
+
   :doc "nothing continues a turn that already ends or has no steering"
   (mevedel-engine-test--with-session
     (setf (mevedel-engine-info request) (list :buffer buffer))
@@ -601,17 +747,18 @@
     (should-not (mevedel-claude-code-context-next-prompt request))
     (should (= 1 (length (mevedel-session-pending-steering session))))))
 
-(mevedel-deftest mevedel-claude-code-context--pending-images ()
+(mevedel-deftest mevedel-claude-code-context--prompt-parts ()
   ,test
   (test)
-  :doc "reads the images of the pending context delivery only"
-  (let ((owner (mevedel-request--create :id "images")))
-    (setf (mevedel-engine-info owner)
-          (list :mevedel-claude-context-pending '(:body "b" :images (image))
-                :mevedel-claude-restoration-pending '(:body "r" :images (other))))
-    (should (equal '(image) (mevedel-claude-code-context--pending-images owner)))
-    (setf (mevedel-engine-info owner) nil)
-    (should-not (mevedel-claude-code-context--pending-images owner))))
+  :doc "keeps authored text and images after typed context without a preamble"
+  (let ((image '((type . "image") (mimeType . "image/png") (data . "QUJD"))))
+    (should (equal (list '((type . "text") (text . "CONTEXT"))
+                        '((type . "text") (text . "Stop and do something else")) image)
+                   (mevedel-claude-code-context--prompt-parts
+                    (list :body "CONTEXT" :steering-text "Stop and do something else" :images (list image)))))
+    (should (equal '(((type . "text") (text . "CONTEXT")))
+                   (mevedel-claude-code-context--prompt-parts '(:body "CONTEXT"))))
+    (should-not (mevedel-claude-code-context--prompt-parts nil))))
 
 (mevedel-deftest mevedel-claude-code-context--echoed-images ()
   ,test
@@ -649,28 +796,6 @@
       (should-not (received (list text)))
       (should-not (received (list text sent resized)))
       (should-not (received (list '((type . "text") (text . "loo")) sent))))))
-
-(mevedel-deftest mevedel-claude-code-context--prompt-received-p ()
-  ,test
-  (test)
-  :doc "matches the exact body and at least the pending images among other parts"
-  (let* ((one '((type . "image") (mimeType . "image/png") (data . "T05F")))
-         (two '((type . "image") (mimeType . "image/png") (data . "VFdP")))
-         (user '((type . "image") (mimeType . "image/png") (data . "VVNFUg==")))
-         (resized '((type . "image") (mimeType . "image/jpeg") (data . "U01BTEw=")))
-         (text '((type . "text") (text . "BODY")))
-         (pending (list :body "BODY" :images (list one two))))
-    (cl-flet ((received (parts &optional (pending pending))
-                (mevedel-claude-code-context--prompt-received-p
-                 pending `((type . "user") (message (role . "user")
-                                                    (content . ,(mevedel-claude-code-context-test--echo
-                                                                 parts)))))))
-      (should (received (list text user one two)))
-      (should (received (list text one resized)))
-      (should-not (received (list text one)))
-      (should-not (received (list '((type . "text") (text . "BOD")) one two)))
-      ;; A text-only delivery may share its prompt with user images.
-      (should (received (list text user) '(:body "BODY"))))))
 
 (mevedel-deftest mevedel-claude-code-context-prompt (:quiet t)
   ,test

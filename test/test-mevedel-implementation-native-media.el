@@ -131,7 +131,7 @@
       (let ((prepared (mevedel-claude-code-context--steering request)))
         (should (equal (list `((type . "image") (mimeType . "image/png") (data . ,data)))
                        (plist-get prepared :images)))
-        (should (string-search "[file:" (plist-get prepared :body)))
+        (should (string-search "[file:" (plist-get prepared :text)))
         (should (= 1 (length (mevedel-session-pending-steering session))))
         (should (= 0 (hash-table-count (mevedel-session-mentions-shown session)))))
       ;; Ordinary gptel steering still inherits its ambient prompt model.

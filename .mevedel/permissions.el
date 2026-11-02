@@ -10,12 +10,6 @@
    ((:path "~/.npm" :access write :recursive t)
     (:path "~/.eask" :access write :recursive t))
    :action allow)
-  ("Bash" :pattern "git add:*" :file-system
-   ((:path "./.git" :access write :recursive t)) :action allow)
-  ("Bash" :pattern "git commit:*" :file-system
-   ((:path "./.git" :access write :recursive t)) :action allow)
-  ("Bash" :pattern "git worktree add:*" :file-system
-   ((:path "./.git" :access write :recursive t)) :action allow)
   ("Bash" :pattern "git diff:*" :action allow)
   ("Bash" :pattern "git status:*" :action allow)
   ("Bash" :pattern "git log:*" :action allow)

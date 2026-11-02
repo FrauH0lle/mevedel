@@ -1100,8 +1100,8 @@ Rebuilding the prompt is also chrome: undoing a draft never restores an older
 permission badge or prompt prefix inside the composer.
 
 Zone changes and re-renders preserve one active surface per window: point in a
-surviving visited interaction takes priority, then a visible composer with that
-window's caret in it, then the logical reading position. Clicking or moving into
+surviving visited interaction or status row takes priority, then a visible
+composer with that window's caret in it, then the logical reading position. Clicking or moving into
 history keeps the reading viewport even when the composer remains visible;
 another window editing the same composer keeps its independent composer anchor.
 Anchors use body-relative pixels and native display
@@ -1111,8 +1111,10 @@ height consistent before redisplay, even when header or tab-line heights change.
 Logical positions are restored before the pixel anchor. A surviving
 composer anchor retains intentional blank space. A lost or truncated logical
 window start instead permits filling the last page, even if anchoring exposes
-longer history lines and grows the character tail. Visiting windows repair only
-new blank pixels created below the buffer, retaining their prior blank area.
+longer history lines and grows the character tail. Interaction-card visits repair
+only new blank pixels created below the buffer, retaining their prior blank area.
+Status-row visits do not fill new blank space: collapsing details keeps the
+visited row still rather than scrolling the transcript to hold the composer.
 Surviving history readers keep their viewport through both growth and shrinkage
 below them. For other unanchored windows, a smaller character tail also permits
 clamping a start later than the last page backward; unchanged or growing tails
@@ -1142,10 +1144,10 @@ command switches buffers. Commandless mutations repair immediately despite a
 stale `this-command` value. History/snapshot replacement and sending a folded draft are
 single transactions, not independent insertion/deletion viewport states. Only
 an actual increase in blank pixels triggers backward traversal. Height-only
-window growth leaves transcript readers at their native reading viewport;
-for other windows it infers the old blank area from the height delta when the
-buffer and width are unchanged. Width changes and newly displayed buffers are
-not inferred. The first size change remembers the original height and viewport;
+window growth leaves transcript and status readers at their native reading
+viewport; only windows with point in the editable composer infer the old blank
+area from the height delta when the buffer and width are unchanged. Width changes
+and newly displayed buffers are not inferred. The first size change remembers the original height and viewport;
 returning to that height restores the viewport while the buffer and width are
 unchanged and nothing else moved it. Shrink-then-grow therefore exposes nothing
 new, grow-then-shrink undoes its repair, and only growth beyond both the
@@ -2940,12 +2942,14 @@ context that never becomes the chat buffer's `gptel-context`. Root `WaitAgent`
 uses the same steering path and wakes the wait at the next possible boundary
 rather than creating a mailbox message.
 
-A Claude Code turn takes steering the same way. It arrives with the next native
-tool batch, or as a further prompt of the same turn when the native prompt ends
-first. Steering with images stops the native prompt at its tool batch and
-continues the turn with a prompt carrying them. A native turn cannot wait at a held boundary, so steering still held by
-the cockpit or an unresolved interaction when it succeeds becomes the first
-follow-ups ([Sessions](sessions.md#native-context-delivery)).
+A Claude Code turn takes steering at the same boundaries. After the current
+native tool batch finishes, its prompt stops and the same turn sends an ordinary
+user prompt carrying the steering text and images. Steering is never delivered
+as hook context. If the native prompt ends first, steering becomes a further
+prompt of that same turn. Neither path interrupts a running tool or starts a new
+Mevedel turn. A native turn cannot wait at a held boundary, so steering still
+held by the cockpit or an unresolved interaction when it succeeds becomes the
+first follow-ups ([Sessions](sessions.md#native-context-delivery)).
 
 A plain send refused because the workflow is occupied names the occupying
 cause: a retained accepted-plan implementation hints

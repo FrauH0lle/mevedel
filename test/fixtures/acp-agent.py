@@ -270,6 +270,11 @@ for line in sys.stdin:
                     receipt["params"]["sessionId"] = "another-session"
                 elif prompt_acknowledgement == "mismatch":
                     receipt["params"]["message"]["message"]["content"] = [{"type": "text", "text": "truncated"}]
+                elif prompt_acknowledgement == "authored-mismatch":
+                    for block in reversed(receipt["params"]["message"]["message"]["content"]):
+                        if block["type"] == "text":
+                            block["text"] = "corrupted authored steering"
+                            break
                 elif prompt_acknowledgement == "nested":
                     receipt["params"]["message"]["parent_tool_use_id"] = "nested-agent"
                 elif prompt_acknowledgement == "image-resized":
@@ -282,11 +287,22 @@ for line in sys.stdin:
                     content = receipt["params"]["message"]["message"]["content"]
                     receipt["params"]["message"]["message"]["content"] = [
                         block for block in content if block["type"] != "image"]
+                elif prompt_acknowledgement == "image-one-missing":
+                    content = receipt["params"]["message"]["message"]["content"]
+                    index = max(i for i, block in enumerate(content) if block["type"] == "image")
+                    del content[index]
                 if prompt_acknowledgement != "late":
                     # Receipts and terminal replies are sent twice throughout:
                     # observation and settlement must be idempotent.
-                    print(json.dumps(receipt), flush=True)
-                    print(json.dumps(receipt), flush=True)
+                    if prompt_acknowledgement == "split":
+                        content = receipt["params"]["message"]["message"]["content"]
+                        index = max(i for i, block in enumerate(content) if block["type"] == "text")
+                        for group in (content[:index], content[index:]):
+                            receipt["params"]["message"]["message"]["content"] = group
+                            print(json.dumps(receipt), flush=True)
+                    else:
+                        print(json.dumps(receipt), flush=True)
+                        print(json.dumps(receipt), flush=True)
             if expected_image:
                 images = [block for block in params["prompt"] if block["type"] == "image"]
                 if images == [{"type": "image", "data": expected_image, "mimeType": "image/png"}]:

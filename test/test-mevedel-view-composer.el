@@ -686,7 +686,10 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                       (point))))
         (set-window-start window start t)
         (should (= blank (mevedel-view-composer-test--blank-rows window)))
-        (goto-char (if (eq case 'reader) start (point-max)))
+        (goto-char (pcase case
+                     ('reader start)
+                     ('status mevedel-view--status-marker)
+                     (_ (point-max))))
         (when (eq case 'reader)
           (should (memq window (mevedel-view--history-reader-windows)))
           (should (mevedel-view--window-shows-end-p window)))
@@ -815,6 +818,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   :doc "growth beyond the original height keeps that baseline" 13 'beyond
   :doc "nested shrinks retain the first blank-space baseline" 13 'nested
   :doc "a history reader with visible end keeps its start through unmatched growth" 13 'reader
+  :doc "a status visitor with visible end keeps its start through unmatched growth" 13 'status
   :doc "pending input retains the viewport until its resolved event is consumed" 13 'pending
   :doc "a growth/shrink round trip restores the viewport its repair moved" 13 'grow-shrink
   :doc "consecutive growth counts only space beyond the repaired height" 13 'grow-twice

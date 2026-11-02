@@ -57,9 +57,15 @@ blocks. The receipt correlation marker stays on the wire. The shared record
 preserves source types and lets the normal renderer place initial deliveries
 with the user prompt and later deliveries at their point in assistant activity.
 
-Root steering uses the same receipts. It rides the next tool-batch hook under a
-header that gives it user authority, or a further prompt when the native prompt
-ends first, and is consumed only on receipt. A native turn cannot park at a
+Root steering uses the native user-message receipt, never hook context. After
+the current tool batch finishes, its hook stops the native prompt and the same
+admitted turn submits an ordinary user prompt. Authored steering is a separate
+text part after typed context and mail, with no authority-restoration header or
+instruction to continue the old task ahead of new user intent. Initial lazy
+preparation and continuations use the same part assembly, including images.
+Receipt requires the exact submitted text parts and total image count in one
+top-level user echo. Steering also becomes a further prompt when the native
+prompt ends before another tool boundary. A native turn cannot park at a
 held boundary the way a gptel state machine waits, so steering still held when
 the turn succeeds becomes the first follow-ups.
 
@@ -289,8 +295,13 @@ through later compaction.
 - **Steering:** busy Claude input first became queued follow-ups, because the
   native loop offered no same-turn user input mevedel could observe. The
   receipt-backed tool-batch hook already delivered mail and turn events inside
-  the running turn, so steering now rides it and keeps HTTP's "next boundary,
-  never abort" contract. The adapter's own `_session/steering` request was
+  the running turn, so steering initially rode it under an authority-restoration
+  header. In the 2026-11-01 Background Job Load Test, Haiku received two real
+  user steering inputs as successful hook context but rejected them as
+  tool-output instructions. Delivery
+  now uses the existing stop-and-continuation mechanism for all steering, not
+  only images, preserving HTTP's "next boundary, never abort" contract with an
+  actual user message. The adapter's own `_session/steering` request remains
   rejected: it pre-empts the current generation, moves a running tool call to
   the background, and splits one turn into several results.
 

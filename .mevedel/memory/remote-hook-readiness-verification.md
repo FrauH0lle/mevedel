@@ -1,15 +1,22 @@
 ---
-name: "Remote hook readiness and stdin timing"
-description: "A stalled remote hook command is reproduced by imposing the suspected interleaving, not by raising its timeout; green replays diagnose nothing"
-type: project
+name: "Reproduce remote-hook timing before claiming a fix"
+description: "Green timing-dependent replays do not diagnose a stall; impose the suspected interleaving without weakening safeguards."
+type: feedback
 ---
 
-# Remote hook readiness and stdin timing
+# Reproduce remote-hook timing before claiming a fix
 
-A remote command hook can block the tool it guards when its stdin handshake stalls. Observed 2026-09-18: a `PreToolUse` hook configured with a 10-second timeout exceeded it and a `Read` never ran. Instrumented checks then passed with both the corrected and the previous handlers, and the final uninstrumented replay passed in the original order. Those passes neither diagnosed the stall nor established a fix. Treat a green replay of a timing-dependent remote failure as evidence in neither direction.
+**Observed 2026-09-18:** a remote `PreToolUse` hook configured with a 10-second timeout exceeded it, and the guarded Read never ran. Instrumented checks subsequently passed with both the corrected and previous handlers; the final uninstrumented replay also passed in the original order. Those passes neither diagnosed the stall nor established a fix.
 
-The failure was later reproduced by imposing a reachable write-coalescing schedule: coalescing the final TRAMP exec and JSON writes reproduced it without changing payload bytes or order, and a preceding-shell read-ahead lost stdin on exec. The committed remedy (`9739f7f`, `fix(hooks): Wait for remote readiness before sending stdin`) is a hook-owned readiness acknowledgment plus guarded exactly-once stdin delivery, retaining the existing timeout and cancellation ownership and keeping the payload on stdin rather than in process arguments. `docs/hooks.md` documents the resulting remote-startup acknowledgment; read that for the mechanism and use this note for the verification history and when to apply it.
+A later controlled reproduction imposed a reachable write-coalescing schedule: coalescing the final TRAMP exec and JSON writes reproduced the failure without changing payload bytes or order. A preceding-shell read-ahead lost stdin on exec.
 
-- Do not answer a stalled remote hook by raising the timeout, or by weakening or deleting the check that caught it. A larger timeout hides the stdin race rather than resolving it.
-- Keep a reproduced mechanism separate from the original occurrence. The coalescing schedule demonstrates one way the failure can happen; it is not retrospective proof of what caused the uninstrumented timeout.
-- Commit completion, a clean `git status`, and earlier combined-tree test success do not establish isolated-checkout validation or live-runtime deployment; those were not shown.
+**How to apply:**
+
+- For a timing-dependent remote-hook stall, impose the suspected interleaving and use a comparison that distinguishes the old and changed behavior. A passing replay that does not reach the failure schedule is not evidence that the race was fixed.
+- Do not answer the stalled hook by raising its timeout or weakening or deleting the check that caught it. In this investigation, a larger timeout would hide the stdin race rather than resolve it.
+- Keep a demonstrated mechanism separate from the original occurrence. The controlled schedule proved one way the failure could happen, not the historical event sequence of the uninstrumented timeout.
+- Keep repository validation, isolated-checkout validation, and live-runtime deployment distinct. A completed commit, clean working tree, or earlier combined-tree pass does not establish the other claims.
+
+**When to apply:** remote hook startup, stdin delivery, readiness handshakes, and similar investigations where timing determines whether the guarded operation proceeds. This is not a claim that every remote timeout has the same cause.
+
+Consult `docs/hooks.md` and the relevant source history for the maintained remote-startup mechanism, timeout ownership, and cancellation behavior rather than treating this historical reproduction as a current implementation recipe.

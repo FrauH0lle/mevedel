@@ -744,14 +744,16 @@ completion, a hook preview or an offloaded file never counts as delivery.
   and its selected images are sent once per native conversation and content
   hash; a changed selection or new conversation sends them again. A block is
   received only when the SDK's top-level user-message echo for that
-  conversation contains its exact text; images also need one echoed image each.
+  conversation contains every submitted text part exactly and the total number
+  of echoed images equals the submitted count. All required parts must be in
+  that same echo, including steering captured during initial preparation.
   Claude Code resizes and may re-encode an image beyond its dimension or size
   limits before echoing it, so an echoed image is matched by presence, not by
   bytes or MIME type. Text receipts alone do not establish image delivery.
 - **Tool-batch hook.** After each native tool batch, a `PostToolBatch` hook
   carries selected observations changed since the last accepted snapshot,
-  queued turn events, newly available direct children, the root turn's
-  deliverable steering and mail. It is received only by a successful SDK
+  queued turn events, newly available direct children and mail, but never
+  authored steering. It is received only by a successful SDK
   `hook_response` for that event whose output matches exactly. A receipt can trail the next tool boundary; that boundary leaves its
   updates queued.
 
@@ -771,21 +773,28 @@ a successful terminal response into an error.
 
 Root steering joins a delivery only while it is not held; a turn that ends at a
 boundary takes none. Each entry is expanded like an HTTP steering prompt and
-sent after a fixed header telling the model to treat it as direct user input,
-because hook context is not a user message. Receipt consumes the entry, commits
-its mention, skill and prompt-submission effects, and records its transcript
-text and hook audits as user input; the header stays on the wire. Steering left
-when a native prompt ends successfully, with no continuation pending, is sent as
-a further prompt in the same turn and received by its exact echo, so the turn
-settles once. Steering that carries images cannot ride hook text: it takes the
-continuation prompt below at its tool batch, with the images after the body
-text. Receipt then also requires at least one echoed image per steering image;
-the echo of the text alone delivers nothing.
+delivered through an ordinary native user prompt. At a tool boundary, even
+short text-only steering stops the native prompt and takes the continuation
+below, after the current batch has completed. Machine context and mail retain
+their typed wrappers in a separate text part before one authored steering part
+in FIFO order, followed by its images. There is no authority-restoration header
+or instruction to continue the old task ahead of a redirect or stop request.
+Only a complete top-level user echo of the submitted prompt consumes the entry,
+commits its mention, skill and prompt-submission effects, and records its
+transcript text and hook audits as user input. A successful stop-hook receipt
+cannot consume steering. Steering left when a native prompt ends successfully,
+with no continuation pending, becomes a further prompt in the same turn. The
+turn settles once; repeated identical steering still requires each delivery's
+unique marker. An outstanding hook receipt keeps its existing delivery slot;
+new steering waits for a later boundary or the normal follow-up conversion.
 
 Claude's inline hook output limit is 10,000 UTF-16 code units. A hook update
-beyond it, including a single mail message, or one carrying steering images,
-stops the native prompt at that boundary. The same admitted turn then sends a continuation prompt containing the
-complete captured body and requires its exact echo before more tools. Native
+beyond it, including a single mail message, or any delivery containing steering,
+stops the native prompt at that boundary. The same admitted turn then sends a
+continuation prompt containing the complete captured parts and requires their
+complete user echo before more tools. Concurrent restoration and context batches
+each require that same complete prompt, so unrelated images cannot substitute
+for an omitted steering image. Native
 compaction's `SessionStart` hook cannot stop the prompt, so while a continuation
 is pending a `PreToolUse` hook denies any attempted call and stops the prompt; a
 stop alone does not prevent the call. The conversation, MCP endpoint, transcript and per-turn call identities stay the
