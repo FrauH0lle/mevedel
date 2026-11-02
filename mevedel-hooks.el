@@ -1812,13 +1812,15 @@ record only that context was added, without duplicating the body."
 
 (defun mevedel-hooks--command-process-command (command remote)
   "Return the shell argv for hook COMMAND, accounting for REMOTE transport."
-  (if remote
-      (list "bash" "-c"
-            (concat "printf '\\000'; IFS= read -r mevedel_hook_input; "
-                    "printf '%s\\n' \"$mevedel_hook_input\" | "
-                    "bash -c \"$1\"")
-            "mevedel-hook" command)
-    (list shell-file-name shell-command-switch command)))
+  ;; Read the event before launching a command that may immediately close stdin.
+  (list "bash" "-c"
+        (concat (when remote "printf '\\000'; ")
+                "IFS= read -r mevedel_hook_input; "
+                "printf '%s\\n' \"$mevedel_hook_input\" | \"$@\"")
+        "mevedel-hook"
+        (if remote "bash" shell-file-name)
+        (if remote "-c" shell-command-switch)
+        command))
 
 (defun mevedel-hooks--run-command-handler
     (event handler event-plist session request callback)
