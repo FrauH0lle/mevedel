@@ -1,0 +1,28 @@
+{
+  "description": "An edit link reverts one contribution listed by read_artifact's history, naming it as SharedEdit's revert does. The origin answers as for a patch: the stored lines of what changed and, for a whiteboard, the picture. A revert whose targets changed since is refused like a stale patch.",
+  "tier": "edit",
+  "bindings": {
+    "$ID": "snt-pipeline",
+    "$TRANSACTION": "f472cbb9bf3b51a2e8716d54f700ae4ea068e995cb1003fc23d711955c16031b",
+    "$TEXT": "{\"id\":\"snt-pipeline\",\"kind\":\"whiteboard\",\"title\":\"SNT analysis pipeline\",\"revision\":4,\"address\":\"shared://snt-pipeline\",\"contribution\":\"0c5d1e64a3b8f2a9e7d6c5b4a3928170f6e5d4c3b2a19087f6e5d4c3b2a19087\",\"changed\":[]}",
+    "$PNG": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+  },
+  "frames": [
+    {
+      "from": "consumer",
+      "frame": {
+        "t": "editing",
+        "reqId": 1,
+        "body": { "action": "revert", "id": "$ID", "transaction": "$TRANSACTION" }
+      }
+    },
+    {
+      "from": "origin",
+      "frame": {
+        "t": "editing",
+        "reqId": 1,
+        "body": { "result": { "text": "$TEXT", "png": "$PNG" } }
+      }
+    }
+  ]
+}

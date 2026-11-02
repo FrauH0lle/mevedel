@@ -21,10 +21,15 @@
 ;; Every other frame type is dropped.  Editing requests go through
 ;; `mevedel-collaboration-artifact-room--actions', the allowlist of what
 ;; an artifact link may do, each pinned to the room's own artifact: read
-;; and view it, and with an edit link change it with `SharedEdit''s
-;; actions, attributed to the consumer as a remote agent.  Committed
-;; changes of the artifact, and of no other, reach its room as change
-;; events.
+;; and view it and its recent contributions, and with an edit link change
+;; it with `SharedEdit''s actions, revert included, attributed to the
+;; consumer as a remote agent.  Committed changes of the artifact, and of
+;; no other, reach its room as change events.
+;;
+;; Consumers never touch versions.  The room groups its writes into
+;; working stretches instead and records one version when a stretch
+;; ends.  Connected consumers are listed by name on the artifact's page
+;; for origin browsers, and are told no presence themselves.
 
 ;;; Code:
 
@@ -47,6 +52,10 @@
 
 ;; `mevedel-collaboration-projection'
 (defvar mevedel-collaboration--protocol-version)
+
+;; `mevedel-collaboration-presence'
+(declare-function mevedel-collaboration-presence-publish
+                  "mevedel-collaboration-presence" (room))
 
 ;; `mevedel-shared-editing'
 (declare-function mevedel-shared-editing-call "mevedel-shared-editing"
@@ -140,6 +149,44 @@ link's secret is the view link's followed by the write token."
 
 
 ;;
+;;; Working stretches
+
+(defvar mevedel-collaboration-artifact-room-version-idle 300
+  "Seconds without writes that end an artifact room's working stretch.
+A consumer has no turn the origin sees, so its writes are grouped into
+stretches instead: one version records each stretch's end.")
+
+(defun mevedel-collaboration-artifact-room-wrote (room)
+  "Note that a consumer of artifact ROOM changed its artifact.
+Call it after every committed write from the room, of any kind: a
+whiteboard or document edit, or an HTML file write.  The room's working
+stretch then lasts until it has written nothing for
+`mevedel-collaboration-artifact-room-version-idle' seconds, or its last
+consumer leaves, and records one version when it ends."
+  (when-let* ((timer (plist-get room :version-timer)))
+    (cancel-timer timer))
+  (plist-put room :version-timer
+             (run-at-time mevedel-collaboration-artifact-room-version-idle nil
+                          #'mevedel-collaboration-artifact-room--settle room)))
+
+(defun mevedel-collaboration-artifact-room--settle (room)
+  "End ROOM's working stretch, recording one version if it wrote.
+The version is the store's own: a whiteboard or document records its
+state, an HTML artifact its primary file, as after a local turn.  An
+artifact deleted meanwhile records nothing."
+  (when-let* ((timer (plist-get room :version-timer)))
+    (cancel-timer timer)
+    (plist-put room :version-timer nil)
+    (let ((workspace (plist-get room :workspace))
+          (id (plist-get room :artifact)))
+      (when (mevedel-artifact-store-meta workspace id)
+        (condition-case err
+            (mevedel-artifact-store-save-version workspace id)
+          (error (message "mevedel: no version of %s was saved: %s"
+                          id (error-message-string err))))))))
+
+
+;;
 ;;; Consumer frames
 
 (defun mevedel-collaboration-artifact-room--find (root id)
@@ -161,19 +208,27 @@ the workspace beyond it."
           :readOnly (if (plist-get guest :writable) :json-false t))))
 
 (defun mevedel-collaboration-artifact-room--hello (room peer frame)
-  "Admit PEER to ROOM from its hello FRAME and send it the welcome."
+  "Admit PEER to ROOM from its hello FRAME and send it the welcome.
+The consumer is on the artifact's page from then on, so origin browsers
+showing the artifact list it; whatever page FRAME reports is ignored."
   (when-let* ((guest (mevedel-collaboration--admit-hello room peer frame)))
+    (plist-put guest :viewing (plist-get room :artifact))
+    (plist-put guest :active t)
     (mevedel-collaboration--transport-send
      (plist-get room :transport) peer
-     (mevedel-collaboration-artifact-room--welcome room guest))))
+     (mevedel-collaboration-artifact-room--welcome room guest))
+    (mevedel-collaboration-presence-publish room)))
 
-(defun mevedel-collaboration-artifact-room--read (room _guest _args authorize reply)
+(defun mevedel-collaboration-artifact-room--read (room _guest args authorize reply)
   "Read ROOM's whiteboard or document as `shared://ID' shows it.
+With a true `:history' in ARGS, read its recent contributions instead,
+as `shared://ID/history' shows them, each with the id a revert names.
 AUTHORIZE must still permit the read; REPLY receives (:result (:text
-LINES)) with the hash-prefixed lines, or (:error MESSAGE)."
+TEXT)) or (:error MESSAGE)."
   (mevedel-shared-editing-call
    (plist-get room :workspace)
-   (list :action "view" :id (plist-get room :artifact) :part "overview")
+   (list :action "view" :id (plist-get room :artifact)
+         :part (if (eq t (plist-get args :history)) "history" "overview"))
    (lambda (value)
      (funcall reply
               (if-let* ((failure (plist-get value :error)))
@@ -189,11 +244,14 @@ LINES)) with the hash-prefixed lines, or (:error MESSAGE)."
   '(("patch" :changes)
     ("rename" :title)
     ("background" :background)
-    ("image" :data :x :y :width :alt :afterId))
+    ("image" :data :x :y :width :alt :afterId)
+    ("revert" :transaction))
   "SharedEdit actions an edit link may request, with the keys each passes on.
 Anything else a request carries is dropped; the origin adds the pinned
 id and the attribution itself.  An image arrives as `:data', the file's
-base64 content, since the origin cannot read the consumer's files.")
+base64 content, since the origin cannot read the consumer's files.  A
+revert names the contribution, from the history a read returns, as its
+`:transaction'; the helper refuses it when its targets changed since.")
 
 (defun mevedel-collaboration-artifact-room--edit-reply (value)
   "Return the consumer's reply to the editing helper's VALUE.
@@ -238,6 +296,8 @@ to no session."
     (mevedel-shared-editing-call
      (plist-get room :workspace) request
      (lambda (value)
+       (unless (plist-get value :error)
+         (mevedel-collaboration-artifact-room-wrote room))
        (funcall reply (mevedel-collaboration-artifact-room--edit-reply value)))
      authorize)))
 
@@ -276,6 +336,8 @@ With `:image' in ARGS, show that embedded image instead, as
     ("background" :kinds (whiteboard document) :write t
      :run mevedel-collaboration-artifact-room--edit)
     ("image" :kinds (whiteboard document) :write t
+     :run mevedel-collaboration-artifact-room--edit)
+    ("revert" :kinds (whiteboard document) :write t
      :run mevedel-collaboration-artifact-room--edit))
   "Editing actions an artifact link may request, by action name.
 Each entry is (ACTION . PROPERTIES):
@@ -354,12 +416,16 @@ whose links are meant to keep working."
                 (error-message-string err))))))
 
 (defun mevedel-collaboration-artifact-room--on-control (root id event peer)
-  "Forget PEER in the room of ROOT's artifact ID when EVENT says it left."
+  "Forget PEER in the room of ROOT's artifact ID when EVENT says it left.
+The last consumer leaving ends the room's working stretch."
   (when-let* ((room (mevedel-collaboration-artifact-room--find root id))
               ((eq event 'peer-left))
               ((gethash peer (plist-get room :guests))))
     (remhash peer (plist-get room :guests))
     (plist-put room :last-guest-departure (float-time))
+    (when (zerop (hash-table-count (plist-get room :guests)))
+      (mevedel-collaboration-artifact-room--settle room))
+    (mevedel-collaboration-presence-publish room)
     (mevedel-sleep-update)))
 
 (defun mevedel-collaboration-artifact-room--changed (workspace state _result)
@@ -384,12 +450,15 @@ a deletion is left to the room's own lifecycle."
 (defun mevedel-collaboration-artifact-room--on-state (root id state)
   "Track relay transport STATE for the room of ROOT's artifact ID.
 The relay collects the room with the host connection, so every
-consumer rejoins with a fresh hello after a drop."
+consumer rejoins with a fresh hello after a drop; the drop ends the
+room's working stretch."
   (when-let* ((room (mevedel-collaboration-artifact-room--find root id))
               ((eq state 'down))
               ((> (hash-table-count (plist-get room :guests)) 0)))
     (clrhash (plist-get room :guests))
     (plist-put room :last-guest-departure (float-time))
+    (mevedel-collaboration-artifact-room--settle room)
+    (mevedel-collaboration-presence-publish room)
     (mevedel-sleep-update)))
 
 
@@ -422,6 +491,7 @@ Only whiteboards and documents can be shared so far."
 Return the live room when one is already running."
   (require 'mevedel-collaboration-guest)
   (require 'mevedel-collaboration-editing)
+  (require 'mevedel-collaboration-presence)
   (require 'mevedel-collaboration-projection)
   (require 'mevedel-collaboration-transport)
   (unless (require 'websocket nil t)
@@ -475,15 +545,19 @@ Return the live room when one is already running."
 
 (defun mevedel-collaboration-artifact-room--stop (room reason)
   "Stop artifact ROOM for REASON, telling its connected consumers.
-Its credentials stay, so starting it again revives its links."
+Its credentials stay, so starting it again revives its links.  Its
+working stretch ends with the connections."
   (remhash (cons (plist-get room :directory) (plist-get room :artifact))
            mevedel-collaboration-artifact-room--rooms)
+  (mevedel-collaboration-artifact-room--settle room)
   (when-let* ((transport (plist-get room :transport)))
     (ignore-errors
       (when (> (hash-table-count (plist-get room :guests)) 0)
         (mevedel-collaboration--transport-send
          transport 0 (list :t "bye" :reason (format "%s" reason)))))
     (ignore-errors (mevedel-collaboration--transport-stop transport)))
+  ;; Out of the registry, its consumers leave the artifact's roster.
+  (ignore-errors (mevedel-collaboration-presence-publish room))
   (mevedel-sleep-update))
 
 (defun mevedel-collaboration-artifact-room-stop-all (reason)

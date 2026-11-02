@@ -52,11 +52,40 @@ function shared(body) {
 test('the registry offers edit_artifact and view_artifact', () => {
   const edit = tools.find((tool) => tool.name === 'edit_artifact');
   const view = tools.find((tool) => tool.name === 'view_artifact');
-  assert.deepEqual(edit.inputSchema.properties.action.enum, ['patch', 'image', 'rename', 'background']);
-  for (const name of ['changes', 'title', 'background', 'source', 'x', 'y', 'width', 'alt', 'afterId']) {
+  assert.deepEqual(edit.inputSchema.properties.action.enum,
+    ['patch', 'image', 'rename', 'background', 'revert']);
+  for (const name of ['changes', 'title', 'background', 'source', 'x', 'y', 'width', 'alt', 'afterId',
+    'transaction']) {
     assert.ok(edit.inputSchema.properties[name], name);
   }
   assert.deepEqual(view.inputSchema.required, ['name']);
+});
+
+test('edit_artifact reverts a contribution from the history with SharedEdit\'s argument', async (t) => {
+  const origin = await room(t);
+  const env = await attached(t, origin);
+  const { transaction } = request('revert');
+  const result = await callTool('edit_artifact', { name: 'snt-pipeline', action: 'revert', transaction },
+    { env });
+  assert.ok(!result.isError, result.content[0].text);
+  const { $TEXT, $PNG } = fixture('revert').bindings;
+  assert.deepEqual(result.content, [
+    { type: 'text', text: $TEXT },
+    { type: 'image', data: $PNG, mimeType: 'image/png' },
+  ]);
+  assert.deepEqual(origin.received.at(-1).body, request('revert'));
+});
+
+test('a refused revert reports the origin\'s reason', async (t) => {
+  const origin = await room(t, {
+    onEditing: (body) => (body.action === 'revert'
+      ? { error: 'Contribution is no longer available to revert' } : undefined),
+  });
+  const env = await attached(t, origin);
+  const result = await callTool('edit_artifact',
+    { name: 'snt-pipeline', action: 'revert', transaction: 'gone' }, { env });
+  assert.ok(result.isError);
+  assert.equal(result.content[0].text, 'Contribution is no longer available to revert');
 });
 
 test('edit_artifact patches with SharedEdit\'s arguments and returns its lines and picture', async (t) => {
