@@ -7,7 +7,6 @@
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { openEntry } from './connections.mjs';
-import { UNAVAILABLE } from './room.mjs';
 import { entry, readStore } from './store.mjs';
 
 const nameArgument = {
@@ -155,8 +154,9 @@ export const tools = [
           ({ title, kind } = room.welcome);
           room.close();
         } catch (error) {
-          reach = error.message === UNAVAILABLE ? `origin unavailable (revoked, deleted, or offline)`
-            : `origin unavailable: ${error.message}`;
+          // The generic error and the goodbyes already say so; others get the prefix.
+          reach = error.message.startsWith('Origin unavailable')
+            ? `o${error.message.slice(1)}` : `origin unavailable: ${error.message}`;
         }
         return `${name}: ${JSON.stringify(title)} ${kind}, ${tierOf(found.link)} link, ${reach}`;
       }));
