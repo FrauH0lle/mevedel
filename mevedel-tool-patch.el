@@ -1775,8 +1775,26 @@ the review just applied."
                   :notes (nreverse notes)
                   :files
                   (delq nil
-                        (mapcar #'mevedel-tool-patch--selected-file-data
+                        (mapcar (lambda (operation)
+                                  (when-let* ((data (mevedel-tool-patch--selected-file-data
+                                                     operation)))
+                                    (mevedel-tool-patch--remote-written-size data changes)))
                                 (plist-get proposal :operations))))))))
+
+(defun mevedel-tool-patch--remote-written-size (data changes)
+  "Return per-file DATA with the `:size' its remote write among CHANGES had.
+The origin stores the text it is sent as UTF-8, so the size is known
+here without asking it.  DATA for a local file is returned unchanged."
+  (let* ((path (or (plist-get data :move-path) (plist-get data :path)))
+         (change (cl-find-if (lambda (change)
+                               (and (plist-get change :remote)
+                                    (eq (plist-get change :action) 'write)
+                                    (equal path (plist-get change :path))))
+                             changes)))
+    (if change
+        (append data (list :size (string-bytes (encode-coding-string
+                                                (plist-get change :content) 'utf-8-unix))))
+      data)))
 
 (defun mevedel-tool-patch-hunk-counts (hunk)
   "Return (ADDED . DELETED) line counts for HUNK."

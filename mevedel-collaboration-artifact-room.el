@@ -851,7 +851,8 @@ nil while the artifact's directory is gone."
 The store announces a change of WORKSPACE, not which artifact changed,
 so each HTML room with connected consumers compares its files with what
 it saw last and sends a `changed' event naming its artifact when they
-differ.  Rooms of other artifacts hear nothing."
+differ, with that fingerprint as its revision.  Rooms of other artifacts
+hear nothing."
   (let ((root (mevedel-workspace-root workspace)))
     (maphash
      (lambda (key room)
@@ -865,7 +866,8 @@ differ.  Rooms of other artifacts hear nothing."
           room 0 "event"
           (list :event "changed" :id (plist-get room :artifact) :kind "html"
                 :title (plist-get (mevedel-artifact-store-meta workspace (plist-get room :artifact))
-                                  :title))
+                                  :title)
+                :revision fingerprint)
           t)))
      mevedel-collaboration-artifact-room--rooms)))
 

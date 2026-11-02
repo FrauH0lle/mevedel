@@ -110,6 +110,15 @@
 (autoload 'mevedel-collaboration-item-opener "mevedel-collaboration")
 (autoload 'mevedel-collaboration-open-shared-item "mevedel-collaboration")
 
+;; `mevedel-collaboration-artifact'
+(declare-function mevedel-collaboration-item-link
+                  "mevedel-collaboration-artifact" (link id &optional route))
+(autoload 'mevedel-collaboration-item-link "mevedel-collaboration-artifact")
+
+;; `mevedel-collaboration-lobby'
+(declare-function mevedel-collaboration-lobby--find
+                  "mevedel-collaboration-lobby" (workspace))
+
 ;; `mevedel-remote-artifact'
 (declare-function mevedel-remote-artifact-detach "mevedel-remote-artifact" (workspace alias))
 (autoload 'mevedel-remote-artifact-detach "mevedel-remote-artifact" nil t)
@@ -298,23 +307,34 @@ The local browser cannot read a remote target's filesystem."
       (find-file path)
     (browse-url-of-file path)))
 
+(defun mevedel-artifacts-list--open-remote-html (context item)
+  "Open remote HTML artifact ITEM in a browser viewer for CONTEXT.
+The session's room serves it; without a session, the workspace's running
+lobby does, since a room resolves store artifacts by its workspace."
+  (if-let* ((data (mevedel-cockpit-context-data-buffer context)))
+      (funcall (mevedel-collaboration-item-opener data) data (plist-get item :id) "artifact")
+    (let ((lobby (and (featurep 'mevedel-collaboration-lobby)
+                      (mevedel-collaboration-lobby--find
+                       (mevedel-artifacts-list--workspace context)))))
+      (unless lobby
+        (user-error "To view %s, start the project lobby (/collab lobby) or open Project artifacts from a session"
+                    (plist-get item :title)))
+      (browse-url (mevedel-collaboration-item-link
+                   (plist-get lobby :link-full) (plist-get item :id) "artifact")))))
+
 (defun mevedel-artifacts-list-open-browser ()
   "Open the selected artifact in a web browser.
 A whiteboard or document opens in its editor in the session's room, which
 is started after confirmation when the session is not shared.  Without a
 session it opens in the room of the item's own conversation.  A remote
-HTML artifact opens in the session room's viewer, which reads it from
-its origin."
+HTML artifact opens in the viewer of the session's room, or without a
+session the project lobby's; that room reads it from its origin."
   (interactive)
   (let ((context (mevedel-cockpit-surface-context))
         (selected (mevedel-cockpit-surface-selected)))
     (cond
      ((and (plist-get selected :remote) (eq (plist-get selected :kind) 'html))
-      (let ((data (or (mevedel-cockpit-context-data-buffer context)
-                      (user-error "Open Project artifacts from a session to view %s"
-                                  (plist-get selected :title)))))
-        (funcall (mevedel-collaboration-item-opener data)
-                 data (plist-get selected :id) "artifact")))
+      (mevedel-artifacts-list--open-remote-html context selected))
      ((plist-get (mevedel-artifacts-list--local-selected) :item)
       (let ((id (plist-get selected :item)))
         (mevedel-collaboration-open-shared-item

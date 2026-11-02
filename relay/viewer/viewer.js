@@ -1408,6 +1408,8 @@
       artifacts.storedDiscussions(frame);
     } else if (frame.t === 'store-artifacts') {
       activeStore().show(frame);
+      // An open artifact learns of its new revisions in the lobby too.
+      artifacts.storeRows(frame.artifacts);
       if (!lobby.active()) {
         storeArtifacts = new Map(activeStore().rows().map(row => [row.id, row]));
         artifacts.attachedRows(frame.artifacts);

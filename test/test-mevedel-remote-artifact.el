@@ -30,6 +30,7 @@
 (require 'mevedel-collaboration-artifact)
 (require 'mevedel-collaboration-artifact-projection)
 (require 'mevedel-collaboration-guest)
+(require 'mevedel-collaboration-lobby)
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-patch-review)
 (require 'mevedel-pipeline)
@@ -474,7 +475,13 @@ under its origin id."
        '(:event "changed" :id "snt-pipeline" :kind "whiteboard" :title "Renamed" :revision 7))
       (should (equal '((:id "pipeline" :kind "whiteboard" :title "Renamed" :revision 7)) heard))
       (should (equal '((:id "pipeline" :kind "whiteboard" :title "Renamed" :revision 7))
-                     (mevedel-artifact-backend-catalog workspace 'items))))))
+                     (mevedel-artifact-backend-catalog workspace 'items)))
+      ;; Browser listings carry it, so an open panel can offer a reload.
+      (should (equal 7 (plist-get (cl-find "pipeline" (mevedel-collaboration--store-rows
+                                                       (list :session session))
+                                           :key (lambda (row) (plist-get row :id))
+                                           :test #'equal)
+                                  :revision))))))
 
 (mevedel-deftest mevedel-remote-artifact--catalog
   (:doc "Project artifacts marks remote artifacts with origin and reachability, and detaches them"
@@ -972,6 +979,11 @@ EDIT maps the file's text to the text another writer leaves there."
             (should (equal "landing/site.css" (plist-get card :artifact)))
             (should (equal "landing" (plist-get card :store)))
             (should (equal "SNT analysis pipeline · site.css" (plist-get card :title)))
+            ;; Its size is that of the bytes the patch wrote, as on a local card.
+            (should (equal 20 (plist-get card :size)))
+            ;; Its revision is the origin's; none has been announced yet.
+            (should (plist-member card :artifactRevision))
+            (should-not (plist-get card :artifactRevision))
             (setf (plist-get room :records)
                   (list (append (list :id "tool-1" :kind "tool" :name "ApplyPatch") card))))
           (should (equal (list :name "landing/site.css" :mime "text/css"
@@ -983,10 +995,11 @@ EDIT maps the file's text to the text another writer leaves there."
           (should (plist-get (fetch 3 '(:reqId 4 :id "artifact:landing")) :error)))))))
 
 (mevedel-deftest mevedel-artifacts-list-open-browser/remote-html
-  (:doc "Project artifacts opens a remote HTML artifact in the session room's viewer"
+  (:doc "Project artifacts opens a remote HTML artifact in the session room's viewer, else the lobby's"
    :quiet t)
   (mevedel-remote-artifact-test--with-html
     (let ((view (generate-new-buffer " *remote-artifact-view*"))
+          (mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
           opened)
       (unwind-protect
           (cl-letf (((symbol-function 'mevedel-collaboration--room-for-buffer)
@@ -998,11 +1011,28 @@ EDIT maps the file's text to the text another writer leaves there."
                        :origin-buffer view :workspace workspace))
               (mevedel-cockpit-goto-id "landing")
               (mevedel-artifacts-list-open-browser)
-              (should (equal '("https://relay.example.org/?artifact=landing#room.full") opened))
+              (should (equal '("https://relay.example.org/#room.full?artifact=landing") opened))
               ;; It is still not a local file to visit.
               (should (string-search "lives at its origin"
                                      (cadr (should-error (mevedel-artifacts-list-visit)
-                                                         :type 'user-error))))))
+                                                         :type 'user-error)))))
+            (setq opened nil)
+            ;; Without a session and without a lobby, it says how to view it.
+            (with-current-buffer
+                (mevedel-artifacts-list-open (mevedel-cockpit-workspace-context workspace view))
+              (mevedel-cockpit-goto-id "landing")
+              (let ((message (cadr (should-error (mevedel-artifacts-list-open-browser)
+                                                 :type 'user-error))))
+                (should (string-search "lobby" message))
+                (should (string-search "session" message)))
+              (should-not opened)
+              ;; The workspace's running lobby serves it instead.
+              (puthash (mevedel-workspace-root workspace)
+                       '(:link-full "https://relay.example.org/#lobby.full")
+                       mevedel-collaboration-lobby--lobbies)
+              (mevedel-artifacts-list-open-browser)
+              (should (equal '("https://relay.example.org/#lobby.full?artifact=landing")
+                             opened))))
         (when-let* ((cockpit (get-buffer mevedel-artifacts-list-buffer-name)))
           (kill-buffer cockpit))
         (kill-buffer view)))))

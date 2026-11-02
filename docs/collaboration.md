@@ -963,9 +963,17 @@ path, Edits applies them as it applies `SharedEdit`, and Plan mode denies them.
 The browser viewer opens a remote HTML artifact from its store listing row
 (`artifact:ID`), and an `ApplyPatch` of one of its files projects a card;
 either fetch reads the file from the origin when a guest opens it, the primary
-file for the listing row. Versions of a remote artifact are not previewed.
-Project artifacts' `o` opens it in the session room's viewer
-(`?artifact=ID`).
+file for the listing row. The card's size is that of the bytes the patch
+wrote, known without asking the origin. Versions of a remote artifact are not
+previewed. Project artifacts' `o` opens it in the panel of the session room's
+viewer (`#ROOM?artifact=ID`); without a session, in the workspace's lobby when
+it runs, since a room resolves `artifact:ID` by its workspace. With neither,
+`o` says to start the lobby (`/collab lobby`) or open Project artifacts from a
+session. The origin's `changed` events carry a revision, for an HTML artifact
+the fingerprint of its files' names, sizes and times; its listing row and
+cards carry the latest one this Emacs heard, so an open panel can offer a
+[reload](#artifact-viewing). Events arrive while the bridge holds a connection
+to the origin, which it closes after 5 idle minutes.
 
 mevedel does not reimplement the relay transport: it runs the
 [remote-artifact package's](../remote-artifact/README.md#the-bridge-for-mevedel)
@@ -1727,6 +1735,22 @@ follows later toggles over `postMessage`, so an artifact themes off
 local `#section` links inside the artifact, including encoded section IDs,
 so they scroll within its sandbox rather than navigating to the room URL.
 This applies in both the panel and the separate artifact tab.
+
+An open panel keeps the bytes it fetched: store listings and card updates
+never reset its frame, which holds the reader's scroll position, in-frame
+drafts and discussion anchors. Each listing row carries a `revision`, and each
+card an `artifactRevision`: for a local artifact the size and modification
+time of its file, from the stat the listing or card already takes, so listing
+costs no more file reads; for a remote one the origin's last announced
+revision, null until it announces one. When a newer one arrives for the
+artifact open in the panel (a store artifact by its row, a card by itself,
+never a version), the header offers **Updated · Reload**, which folds into the
+`⋯` menu on narrow screens and marks it. Reload fetches the artifact again,
+keeping the old content until the new bytes arrive, and shows it where the
+reader was: the panel body's scroll offset, or for HTML the position the
+frame's prelude last reported, restored when the new frame loads. It waits out
+the host's one-second fetch window instead of being dropped; a refused or
+failed reload keeps the content and the offer.
 Markdown is parsed by locally bundled Marked and sanitized by DOMPurify
 before DOM insertion. It supports nested lists, links (including email
 autolinks), tables, and inline formatting on wrapped list lines. Single

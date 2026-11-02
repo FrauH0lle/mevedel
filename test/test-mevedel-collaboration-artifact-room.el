@@ -1102,9 +1102,13 @@ FUNCTION is a step of the editing queue: admission or commit."
             (mevedel-artifact-store-write-file workspace "landing" "site.css" "h1 {}" nil)
             (should (mevedel-relay-test--pump (lambda () (funcall events))))
             (accept-process-output nil 0.2)
-            (should (equal '(((event . "changed") (id . "landing") (kind . "html")
-                              (title . "Landing")))
-                           (funcall events))))
+            (should (= 1 (length (funcall events))))
+            ;; Its revision names the files' state, so consumers can tell it changed.
+            (let ((event (car (funcall events))))
+              (should (stringp (alist-get 'revision event)))
+              (should (equal '((event . "changed") (id . "landing") (kind . "html")
+                               (title . "Landing"))
+                             (assq-delete-all 'revision (copy-sequence event))))))
         (mevedel-artifact-room-test--close consumer)))))
 
 (mevedel-deftest mevedel-collaboration-artifact-room--roster

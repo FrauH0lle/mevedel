@@ -10,13 +10,14 @@ const {navigation, nativeActivations} = require('./collaboration-viewer-content-
 const ids = ['artifacts-box', 'artifacts-summary', 'artifacts',
              'artifact-panel', 'artifact-title', 'artifact-meta',
              'artifact-tab', 'artifact-download', 'artifact-delete', 'artifact-close',
-             'artifact-body', 'artifact-ask'];
+             'artifact-body', 'artifact-ask', 'artifact-reload'];
 const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
 nodes['artifacts-box'].hidden = true;
 nodes['artifact-panel'].hidden = true;
 nodes['artifact-tab'].hidden = true;
 nodes['artifact-download'].hidden = true;
 nodes['artifact-delete'].hidden = true;
+nodes['artifact-reload'].hidden = true;
 let confirmAnswer = true;
 const created = [];
 const blobs = [];
@@ -49,8 +50,10 @@ class TestBlob {
     this.parts = parts; this.type = options.type; blobs.push(this);
   }
 }
+const windowListeners = {};
 const window = {
   confirm: () => confirmAnswer,
+  addEventListener: (type, callback) => (windowListeners[type] ||= []).push(callback),
   mevedelTranscriptRenderer: {
     formatBytes: size => `${size} B`,
     renderMarkdown: text => element(document, 'article', 'prose', text),
@@ -370,6 +373,68 @@ sendOk = false;
 await assert.rejects(controller.download('offline.bin'), /Connection lost/);
 for (const [id, callback] of timers) { timers.delete(id); callback(); }
 assert.deepEqual([...revoked].sort(), [...created].sort(), 'all object URLs are released');
+sendOk = true;
+
+// A newer revision of the open artifact offers a reload. The panel keeps
+// its frame, with its scroll and drafts, until the user asks.
+const reload = nodes['artifact-reload'];
+const base64 = text => Buffer.from(text).toString('base64');
+const flush = () => { for (const [id, callback] of timers) { timers.delete(id); callback(); } };
+controller.storeRows([{id: 'live', revision: 'r1'}]);
+controller.open({id: 'artifact:live', store: 'live', artifact: 'live/index.html', title: 'Live'});
+controller.handle({reqId: sent.at(-1).reqId, mime: 'text/html', data: base64('<p>one'), final: true});
+const firstFrame = nodes['artifact-body'].children[0];
+assert.equal(reload.hidden, true);
+controller.storeRows([{id: 'live', revision: 'r1'}, {id: 'other', revision: 'x'}]);
+assert.equal(reload.hidden, true, 'an unchanged listing offers nothing');
+controller.storeRows([{id: 'live', revision: 'r2'}]);
+assert.equal(reload.hidden, false);
+assert.equal(nodes['artifact-body'].children[0], firstFrame, 'the frame is not reset');
+// The frame reports its scroll position; the reloaded frame returns to it.
+firstFrame.contentWindow = {postMessage() {}};
+windowListeners.message.forEach(listener => listener(
+  {source: firstFrame.contentWindow, data: {t: 'artifact-scroll', x: 0, y: 240}}));
+reload.dispatch('click');
+flush();
+assert.equal(reload.hidden, true);
+const reloadReq = sent.at(-1).reqId;
+assert.deepEqual({...sent.at(-1)}, {t: 'artifact-get', reqId: reloadReq, id: 'artifact:live'});
+assert.equal(nodes['artifact-body'].children[0], firstFrame, 'the old content stays while loading');
+controller.handle({reqId: reloadReq, mime: 'text/html', data: base64('<p>two'), final: true});
+assert.match(nodes['artifact-body'].children[0].srcdoc, /<p>two/);
+assert.match(nodes['artifact-body'].children[0].srcdoc, /scrollTo\(0,240\)/);
+assert.equal(controller.describe().artifact.id, 'artifact:live');
+// A refused reload keeps the content and the offer.
+controller.storeRows([{id: 'live', revision: 'r3'}]);
+reload.dispatch('click');
+flush();
+controller.handle({reqId: sent.at(-1).reqId, error: 'Please wait a moment, then open the artifact again'});
+assert.match(nodes['artifact-body'].children[0].srcdoc, /<p>two/);
+assert.equal(reload.hidden, false);
+assert.match(flashes.at(-1), /wait a moment/);
+controller.close();
+assert.equal(reload.hidden, true);
+// A card follows its own file's revision; a version never changes.
+controller.render([{id: 'card', artifact: 'live/notes.txt', store: 'live', artifactRevision: 'c1'}]);
+controller.open({id: 'card', artifact: 'live/notes.txt', store: 'live'});
+controller.handle({reqId: sent.at(-1).reqId, mime: 'text/plain', data: base64('notes'), final: true});
+controller.storeRows([{id: 'live', revision: 'r4'}]);
+assert.equal(reload.hidden, true, 'the primary file changing says nothing of this one');
+controller.render([{id: 'card', artifact: 'live/notes.txt', store: 'live', artifactRevision: 'c2'}]);
+assert.equal(reload.hidden, false);
+controller.open({id: 'artifact:live', store: 'live', artifact: 'live/index.html', version: 1});
+controller.handle({reqId: sent.at(-1).reqId, mime: 'text/html', data: base64('old'), final: true});
+controller.storeRows([{id: 'live', revision: 'r5'}]);
+assert.equal(reload.hidden, true);
+// A remote artifact without an announced change is null, then changes.
+controller.storeRows([{id: 'remote', revision: null}]);
+controller.open({id: 'artifact:remote', store: 'remote', artifact: 'remote/'});
+controller.handle({reqId: sent.at(-1).reqId, mime: 'text/html', data: base64('r'), final: true});
+controller.storeRows([{id: 'remote', revision: null}]);
+assert.equal(reload.hidden, true);
+controller.storeRows([{id: 'remote', revision: 'f1'}]);
+assert.equal(reload.hidden, false);
+controller.close();
 
 console.log('viewer artifact passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
