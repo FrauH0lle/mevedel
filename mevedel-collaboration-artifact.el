@@ -44,6 +44,7 @@
                   "mevedel-artifact-store" (workspace id &optional meta))
 (declare-function mevedel-artifact-store-restore-version
                   "mevedel-artifact-store" (workspace id n &optional session-id actor callback))
+(declare-function mevedel-artifact-store-shared-p "mevedel-artifact-store" (workspace id))
 (declare-function mevedel-artifact-store-version-path
                   "mevedel-artifact-store" (workspace id n))
 (declare-function mevedel-artifact-store-versions
@@ -61,6 +62,7 @@
 (autoload 'mevedel-artifact-store-meta "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-primary-path "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-restore-version "mevedel-artifact-store")
+(autoload 'mevedel-artifact-store-shared-p "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-version-path "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-versions "mevedel-artifact-store")
 
@@ -91,6 +93,12 @@
                   "mevedel-collaboration-artifact-projection" ())
 (declare-function mevedel-collaboration--artifacts-dir
                   "mevedel-collaboration-artifact-projection" (session))
+
+;; `mevedel-collaboration-artifact-room'
+(declare-function mevedel-collaboration-artifact-room-sharing
+                  "mevedel-collaboration-artifact-room" (workspace id operation))
+(autoload 'mevedel-collaboration-artifact-room-sharing
+  "mevedel-collaboration-artifact-room")
 
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--request-id-p
@@ -437,9 +445,14 @@ mutation can acknowledge.  Resolve rooms and read the store when publishing."
 (defun mevedel-collaboration--store-snapshot (workspace &optional count-attachments cached)
   "Read WORKSPACE's store once for a listing or notification fanout.
 COUNT-ATTACHMENTS includes lobby attachment counts.  CACHED uses the last
-session discovery for this decoration; live buffers always override it."
+session discovery for this decoration; live buffers always override it.
+The snapshot also records which artifacts are shared through links."
   (let ((artifacts (mevedel-artifact-backend-catalog workspace))
-        (counts (make-hash-table :test #'equal)))
+        (counts (make-hash-table :test #'equal))
+        shared)
+    (dolist (row artifacts)
+      (when (mevedel-artifact-store-shared-p workspace (plist-get row :id))
+        (push (plist-get row :id) shared)))
     (when (and artifacts count-attachments)
       (let ((sessions (make-hash-table :test #'equal)))
         (dolist (entry (mevedel-session-persistence-list-sessions workspace cached))
@@ -456,7 +469,7 @@ session discovery for this decoration; live buffers always override it."
                    (dolist (id (delete-dups (copy-sequence ids)))
                      (puthash id (1+ (gethash id counts 0)) counts)))
                  sessions)))
-    (list :artifacts artifacts :attached-counts counts)))
+    (list :artifacts artifacts :attached-counts counts :shared shared)))
 
 (defun mevedel-collaboration--store-rows (room &optional snapshot)
   "Return ROOM's workspace artifacts as guests receive them.
@@ -483,6 +496,8 @@ SNAPSHOT, when given, supplies the store observation shared across rooms."
                                  t :json-false)
                        :missing (if (plist-get row :missing) t :json-false)
                        :attached (if (member id attached) t :json-false)
+                       :shared (if (member id (plist-get snapshot :shared))
+                                   t :json-false)
                        :conversation (if (plist-get row :dedicated-session)
                                          t :json-false))
                  (unless session
@@ -522,11 +537,28 @@ A whiteboard or document opens straight in its editor there."
         (mevedel-collaboration-item-link link id)
       link)))
 
+(defconst mevedel-collaboration--sharing-operations
+  '(("share" . share) ("rotate" . rotate) ("revoke" . revoke))
+  "Browser names of the sharing operations an owner link may request.")
+
+(defun mevedel-collaboration--store-sharing (workspace id operation)
+  "Apply the browser's sharing OPERATION to WORKSPACE's artifact ID.
+Run the same host operation as the Emacs commands and return the reply
+fields: whether ID is now shared, and its view and edit links if so."
+  (let* ((operation (or (cdr (assoc operation mevedel-collaboration--sharing-operations))
+                        (error "Unknown sharing operation")))
+         (links (mevedel-collaboration-artifact-room-sharing workspace id operation)))
+    (append (list :id id :shared (if links t :json-false))
+            (when links
+              (list :linkView (plist-get links :link-view)
+                    :linkEdit (plist-get links :link-edit))))))
+
 (defun mevedel-collaboration--store-action (room guest frame)
   "Perform GUEST's store FRAME in ROOM and return the reply fields.
 An action that finishes later returns a function instead, to be called
 with a function receiving reply fields, including `:error' on failure.
-Signal an error for the guest when the action is refused."
+Signal an error for the guest when the action is refused.  Sharing is
+for the host and owner links only."
   (let* ((action (plist-get frame :action))
          (workspace (mevedel-collaboration--room-workspace room))
          (session (plist-get room :session))
@@ -535,6 +567,8 @@ Signal an error for the guest when the action is refused."
                 (and (mevedel-artifact-store-id-p id)
                      (mevedel-artifact-store-meta workspace id)))
       (error "No such artifact"))
+    (when (and (equal action "sharing") (not (plist-get guest :owner)))
+      (error "Only the host or an owner link can share artifacts"))
     (unless (or (equal action "versions")
                 ;; Opening an editor from the lobby needs its dedicated room.
                 ;; The returned bearer remains capped to the guest's tier.
@@ -612,6 +646,8 @@ Signal an error for the guest when the action is refused."
            (list :id id :link (mevedel-collaboration--store-conversation-link
                                guest workspace id))
          (inhibited-interaction (error "%s" mevedel-collaboration-needs-host-message))))
+      ("sharing"
+       (mevedel-collaboration--store-sharing workspace id (plist-get frame :operation)))
       (_ (error "Unknown artifact action")))))
 
 (defun mevedel-collaboration--handle-store-action (room peer frame)

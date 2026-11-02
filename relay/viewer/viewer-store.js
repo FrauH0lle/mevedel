@@ -5,16 +5,21 @@
   // LIST is the <ul> the rows render into and EMPTY the note shown when the
   // store has none. ROOM is true in a session's room, where artifacts can be
   // attached to the session; the lobby has no session of its own. NAVIGATE
-  // opens an artifact's conversation room in this tab.
+  // opens an artifact's conversation room in this tab. COPY puts a link on
+  // the clipboard.
   function create({send, el, list, empty, state, room = false, open, notice, href,
                    creation = null, navigate,
                    ask = (text, value) => window.prompt(text, value),
-                   confirm = text => window.confirm(text)}) {
+                   confirm = text => window.confirm(text),
+                   copy = text => window.navigator.clipboard.writeText(text)}) {
     let rows = [];
     let requestSequence = 0;
     const pending = new Map();
     const expanded = new Set();
     const versions = new Map();
+    // Artifact links an owner asked to see, by store id. Kept in this tab
+    // only, and dropped once their artifact is no longer shared.
+    const links = new Map();
     // How many browsers have each artifact open, by store id.
     let here = new Map();
 
@@ -31,7 +36,8 @@
     function act(action, id, fields = {}) {
       const reqId = ++requestSequence;
       const row = rows.find(candidate => candidate.id === id);
-      pending.set(reqId, {action, id, title: (row && row.title) || id});
+      pending.set(reqId, {action, id, title: (row && row.title) || id,
+                          operation: fields.operation});
       Promise.resolve(send({t: 'store-action', reqId, action, id, ...fields})).then(sent => {
         if (sent !== false) return;
         pending.delete(reqId);
@@ -67,6 +73,8 @@
 
     const KINDS = {html: 'HTML', markdown: 'Markdown', image: 'Image', file: 'File',
                    whiteboard: 'Whiteboard', document: 'Document'};
+    // Kinds the host can share through an artifact link.
+    const SHAREABLE = new Set(['whiteboard', 'document', 'html']);
 
     function renderVersions(row) {
       const holder = el('ol', 'store-versions');
@@ -90,6 +98,57 @@
         holder.append(item);
       });
       return holder;
+    }
+
+    function renderLinks(row) {
+      const holder = el('div', 'store-links');
+      const known = links.get(row.id);
+      for (const [label, tier, link] of [['View link', 'view', known.view],
+                                         ['Edit link', 'edit', known.edit]]) {
+        const line = el('div', 'store-link');
+        const field = el('input', 'store-link-field');
+        field.readOnly = true;
+        field.value = link;
+        field.setAttribute('aria-label', `${label} for ${row.title || row.id}`);
+        line.append(el('span', 'lobby-meta', label), field,
+                    button('Copy', `Copy the ${tier} link`, () => {
+                      Promise.resolve(copy(link)).then(
+                        () => notice(`Copied the ${tier} link.`),
+                        () => notice('Copying failed; select the link instead.'));
+                    }));
+        holder.append(line);
+      }
+      holder.append(button('Hide', 'Hide these links', () => {
+        links.delete(row.id);
+        render();
+      }));
+      return holder;
+    }
+
+    // The host and owner links share, rotate and revoke artifact links; the
+    // host refuses everyone else.
+    function sharing(row) {
+      if (!state.owner || row.missing === true || !SHAREABLE.has(row.kind)) return [];
+      const label = row.title || row.id;
+      if (row.shared !== true) {
+        return [['Share', 'Create a view and an edit link to this artifact alone',
+                 () => act('sharing', row.id, {operation: 'share'})]];
+      }
+      return [
+        ['Show links', 'Show the view and edit links to this artifact',
+         () => act('sharing', row.id, {operation: 'share'})],
+        ['Rotate links', 'Replace the links; the old ones stop working', () => {
+          if (confirm(`Replace the links to ${label}? Everyone using the old links `
+                      + 'loses access.')) {
+            act('sharing', row.id, {operation: 'rotate'});
+          }
+        }],
+        ['Revoke links', 'Stop sharing; every link holder loses access at once', () => {
+          if (confirm(`Stop sharing ${label}? Everyone using its links loses access.`)) {
+            act('sharing', row.id, {operation: 'revoke'});
+          }
+        }, true],
+      ];
     }
 
     // The row's secondary actions, behind one menu so a row stays one line.
@@ -121,6 +180,9 @@
           entries.push(['Conversation', 'Continue in this artifact\'s own session',
                         () => act('conversation', row.id)]);
         }
+      }
+      entries.push(...sharing(row));
+      if (state.writable) {
         entries.push(['Delete', 'Delete for everyone, with versions, discussions and conversation',
                       () => {
           if (confirm(`Delete ${row.title || row.id} for everyone, with its versions, `
@@ -186,12 +248,14 @@
         meta.push(window.mevedelLobbyView.age(row.modified));
       }
       if (here.get(row.id)) meta.push(`${here.get(row.id)} here`);
+      if (row.shared === true) meta.push('shared');
       if (room && row.attached === true) meta.push('in this session');
       if (!room && Number.isInteger(row.attachedSessions)) {
         meta.push(`${row.attachedSessions} session${row.attachedSessions === 1 ? '' : 's'}`);
       }
       main.append(el('span', 'lobby-meta', meta.filter(Boolean).join(' · ')));
       if (expanded.has(row.id)) main.append(renderVersions(row));
+      if (links.has(row.id)) main.append(renderLinks(row));
       item.append(main);
       if (row.missing !== true) {
         const title = `Open ${row.title || row.id}`;
@@ -252,6 +316,9 @@
         row => row && typeof row.id === 'string') : [];
       rows.sort((a, b) => (b.modified || 0) - (a.modified || 0));
       const now = new Map(rows.map(row => [row.id, `${row.versions}:${row.modified}`]));
+      for (const id of [...links.keys()]) {
+        if (!rows.some(row => row.id === id && row.shared === true)) links.delete(id);
+      }
       for (const id of [...expanded]) {
         if (!now.has(id)) {
           expanded.delete(id);
@@ -288,6 +355,18 @@
         notice(`Deleted ${request.title}.`);
       } else if (request.action === 'save-version') {
         notice(`Saved as version ${frame.n}.`);
+      } else if (request.action === 'sharing') {
+        if (frame.shared === true && typeof frame.linkView === 'string'
+            && typeof frame.linkEdit === 'string') {
+          links.set(request.id, {view: frame.linkView, edit: frame.linkEdit});
+          if (request.operation === 'rotate') {
+            notice(`New links for ${request.title}; the old ones no longer work.`);
+          }
+        } else {
+          links.delete(request.id);
+          notice(`Stopped sharing ${request.title}.`);
+        }
+        render();
       }
     }
 
