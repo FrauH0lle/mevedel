@@ -344,14 +344,20 @@ nothing of the workspace beyond them."
 (defun mevedel-collaboration-artifact-room--hello (room peer frame)
   "Admit PEER to ROOM from its hello FRAME and send it the welcome.
 The consumer is on the artifact's page from then on, so origin browsers
-showing the artifact list it; whatever page FRAME reports is ignored."
-  (when-let* ((guest (mevedel-collaboration--admit-hello room peer frame)))
-    (plist-put guest :viewing (plist-get room :artifact))
-    (plist-put guest :active t)
-    (mevedel-collaboration--transport-send
-     (plist-get room :transport) peer
-     (mevedel-collaboration-artifact-room--welcome room guest))
-    (mevedel-collaboration-presence-publish room)))
+showing the artifact list it; whatever page FRAME reports is ignored.
+The first consumer of an HTML room starts from its files as they are, so
+only later changes are announced."
+  (let ((first (zerop (hash-table-count (plist-get room :guests)))))
+    (when-let* ((guest (mevedel-collaboration--admit-hello room peer frame)))
+      (when (and first (eq 'html (plist-get room :artifact-kind)))
+        (plist-put room :files-fingerprint
+                   (mevedel-collaboration-artifact-room--files-fingerprint room)))
+      (plist-put guest :viewing (plist-get room :artifact))
+      (plist-put guest :active t)
+      (mevedel-collaboration--transport-send
+       (plist-get room :transport) peer
+       (mevedel-collaboration-artifact-room--welcome room guest))
+      (mevedel-collaboration-presence-publish room))))
 
 (defun mevedel-collaboration-artifact-room--read (room _guest args authorize reply)
   "Read ROOM's whiteboard or document as `shared://ID' shows it.
@@ -807,6 +813,48 @@ a deletion is left to the room's own lifecycle."
 
 (add-hook 'mevedel-artifact-backend-change-hook
           #'mevedel-collaboration-artifact-room--changed)
+
+(defun mevedel-collaboration-artifact-room--files-fingerprint (room)
+  "Return a fingerprint of the files of ROOM's HTML artifact.
+It changes when a file is added, removed, resized or modified, and is
+nil while the artifact's directory is gone."
+  (let ((directory (mevedel-artifact-store-artifact-directory
+                    (plist-get room :workspace) (plist-get room :artifact))))
+    (when (file-directory-p directory)
+      (secure-hash
+       'sha1
+       (prin1-to-string
+        (mapcar (lambda (path)
+                  (let ((attributes (file-attributes path)))
+                    (list path (file-attribute-size attributes)
+                          (file-attribute-modification-time attributes))))
+                (directory-files-recursively directory "")))))))
+
+(defun mevedel-collaboration-artifact-room--files-changed (workspace)
+  "Tell the consumers of WORKSPACE's HTML artifact rooms whose files changed.
+The store announces a change of WORKSPACE, not which artifact changed,
+so each HTML room with connected consumers compares its files with what
+it saw last and sends a `changed' event naming its artifact when they
+differ.  Rooms of other artifacts hear nothing."
+  (let ((root (mevedel-workspace-root workspace)))
+    (maphash
+     (lambda (key room)
+       (when-let* (((equal root (car key)))
+                   ((eq 'html (plist-get room :artifact-kind)))
+                   ((> (hash-table-count (plist-get room :guests)) 0))
+                   (fingerprint (mevedel-collaboration-artifact-room--files-fingerprint room))
+                   ((not (equal fingerprint (plist-get room :files-fingerprint)))))
+         (plist-put room :files-fingerprint fingerprint)
+         (mevedel-collaboration-editing--send
+          room 0 "event"
+          (list :event "changed" :id (plist-get room :artifact) :kind "html"
+                :title (plist-get (mevedel-artifact-store-meta workspace (plist-get room :artifact))
+                                  :title))
+          t)))
+     mevedel-collaboration-artifact-room--rooms)))
+
+(add-hook 'mevedel-artifact-store-changed-functions
+          #'mevedel-collaboration-artifact-room--files-changed)
 
 (defun mevedel-collaboration-artifact-room--on-state (root id state)
   "Track relay transport STATE for the room of ROOT's artifact ID.

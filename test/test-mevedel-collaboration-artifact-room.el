@@ -1048,6 +1048,34 @@ FUNCTION is a step of the editing queue: admission or commit."
                                             (assq-delete-all 'id (copy-sequence event)))))
                                    (funcall events))))
             (should (equal id (alist-get 'id (car (funcall events))))))
+        (mevedel-artifact-room-test--close consumer))))
+
+  :doc "tells an HTML room's consumers when its files change, and of no other artifact's"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (mevedel-artifact-room-test--site workspace "landing")
+    (mevedel-artifact-room-test--site workspace "other")
+    (let* ((links (mevedel-collaboration-artifact-room-share root "landing"))
+           (consumer (mevedel-artifact-room-test--joined state port links 'view))
+           (events (lambda ()
+                     (mapcar (lambda (frame)
+                               (mevedel-artifact-room-test--normal (alist-get 'body frame)))
+                             (cl-remove-if-not
+                              (lambda (frame) (equal "event" (alist-get 'reqId frame)))
+                              (mevedel-artifact-room-test--frames consumer))))))
+      (unwind-protect
+          (progn
+            ;; A store change that leaves this artifact's files alone says nothing.
+            (mevedel-artifact-store-write-file workspace "other" "index.html" "<p>other</p>"
+                                               mevedel-artifact-room-test--page-hash)
+            (accept-process-output nil 0.2)
+            (should-not (funcall events))
+            ;; A write at the origin, as its own ApplyPatch makes, reaches it.
+            (mevedel-artifact-store-write-file workspace "landing" "site.css" "h1 {}" nil)
+            (should (mevedel-relay-test--pump (lambda () (funcall events))))
+            (accept-process-output nil 0.2)
+            (should (equal '(((event . "changed") (id . "landing") (kind . "html")
+                              (title . "Landing")))
+                           (funcall events))))
         (mevedel-artifact-room-test--close consumer)))))
 
 (mevedel-deftest mevedel-collaboration-artifact-room--roster

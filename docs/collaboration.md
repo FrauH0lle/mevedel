@@ -853,8 +853,7 @@ artifact or creates another one.
 A committed file change fires the store's change notification
 (`mevedel-artifact-store-changed-functions`), so origin session rooms, the
 lobby and their viewers refresh their listings as after a local `ApplyPatch`.
-Consumers get no change event for files; the hash check tells them of a
-change.
+The room's consumers get a change event for it, as below.
 
 Consumers cannot list, save or restore versions; versions stay the origin's
 tool for larger damage. Instead the origin records one version per working
@@ -880,8 +879,11 @@ unanswered. Frames run with `inhibit-interaction`, as in the lobby.
 
 Every committed change of a whiteboard or document, whoever made it, reaches
 its room's consumers as `{t: "editing", reqId: "event", body: {event:
-"changed", id, kind, title, revision}}`. Changes of other artifacts never
-reach the room, and
+"changed", id, kind, title, revision}}`. A change of an HTML artifact's files,
+through a link or at the origin, reaches them the same way without a
+`revision`: on each store change notification, an HTML room with connected
+consumers compares its files' names, sizes and modification times with what it
+saw last. Changes of other artifacts never reach the room, and
 artifact rooms are not among the workspace rooms that receive store listings.
 
 While connected, a consumer is on its artifact's page in
