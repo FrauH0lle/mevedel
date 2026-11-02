@@ -71,6 +71,7 @@
 (autoload 'mevedel-claude-code-recover-history "mevedel-claude-code-session" nil t)
 (autoload 'mevedel-claude-code-setup "mevedel-claude-code" nil t)
 (autoload 'mevedel-clear-patch-buffer "mevedel-chat" nil t)
+(autoload 'mevedel-collaboration-share-artifact "mevedel-collaboration-artifact-room" nil t)
 (autoload 'mevedel-collaboration-status "mevedel-collaboration" nil t)
 (autoload 'mevedel-collaboration-stop "mevedel-collaboration" nil t)
 (autoload 'mevedel-collaboration-stop-all "mevedel-collaboration" nil t)
@@ -241,6 +242,11 @@
                   (workspace working-directory prompt-session
                              &optional directory-scoped))
 (defvar mevedel--view-buffer)
+
+;; `mevedel-collaboration-artifact-room'
+;; An Emacs daemon shares an artifact through emacsclient.
+(autoload 'mevedel-collaboration-artifact-room-share
+  "mevedel-collaboration-artifact-room")
 
 ;; `mevedel-collaboration-lobby'
 (declare-function mevedel-collaboration-lobby-restore

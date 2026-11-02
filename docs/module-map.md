@@ -158,6 +158,7 @@ Chat / view
   mevedel-collaboration-guest.el  untrusted guest protocol and input handling
   mevedel-collaboration-owner.el owner-link permission and session authorities
   mevedel-collaboration-lobby.el  per-workspace lobby: persistent link and restart, session list, open
+  mevedel-collaboration-artifact-room.el artifact rooms: one shared artifact behind persistent view/edit links
   mevedel-collaboration-agent.el  browser agent roster and transcript fetch
   mevedel-collaboration-background.el native-ordered work frames, scoped stop and source lookup
   mevedel-collaboration-goal.el   read-only durable Goal status and accounting
