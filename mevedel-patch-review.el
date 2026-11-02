@@ -67,7 +67,7 @@
 (declare-function mevedel-tool-patch-annotate-line-numbers
                   "mevedel-tool-patch" (proposal))
 (declare-function mevedel-tool-patch-apply
-                  "mevedel-tool-patch" (data-buffer changes continuation))
+                  "mevedel-tool-patch" (data-buffer changes continuation &optional fail))
 (declare-function mevedel-tool-patch-apply-hunks
                   "mevedel-tool-patch" (content hunks path))
 (declare-function mevedel-tool-patch-assert-baseline
@@ -88,6 +88,7 @@
                   "mevedel-tool-patch" (operation))
 (declare-function mevedel-tool-patch-physical-path
                   "mevedel-tool-patch" (operation))
+(declare-function mevedel-tool-patch--remote-p "mevedel-tool-patch" (path))
 (declare-function mevedel-tool-patch-planned-changes
                   "mevedel-tool-patch" (proposal))
 (declare-function mevedel-tool-patch-proposal-stats
@@ -816,6 +817,8 @@ On an Update file row this toggles every hunk in the file at once."
     (when (eq (plist-get operation :kind) 'add)
       (user-error "File is not created until the patch is applied"))
     (let ((path (mevedel-tool-patch-physical-path operation)))
+      (when (mevedel-tool-patch--remote-p path)
+        (user-error "%s lives at its artifact's origin; Read it at that address" path))
       (unless (file-exists-p path)
         (user-error "File does not exist: %s" path))
       (find-file-other-window path)
@@ -1290,49 +1293,53 @@ the edit moved the region it matches."
      session (mevedel-reminders-make-user-revised-patch summary))))
 
 (defun mevedel-patch-review--submit (proposal)
-  "Apply PROPOSAL's selected changes and settle its review."
-  (cond
-   ((memq (plist-get proposal :state) '(submitting settled)))
-   ((mevedel-side-conversation-mutation-warning-pending-p proposal)
-    (mevedel-patch-review--render proposal))
-   (t
-    (plist-put proposal :state 'submitting)
-    (condition-case err
-        (progn
-          (mevedel-tool-patch-assert-baseline proposal)
-          (let* ((changes (mevedel-tool-patch-planned-changes proposal))
-                 (feedback-p (> (plist-get
-                                 (mevedel-tool-patch-proposal-stats
-                                  proposal)
-                                 :comments)
-                                0))
-                 (result
-                  (if (or changes feedback-p)
-                      (mevedel-tool-patch-result proposal changes t)
-                    (list :result "Error: Patch rejected" :status 'error)))
-                 (overlay (plist-get proposal :overlay)))
-            (overlay-put overlay 'mevedel--remote
-                         '(:body "ApplyPatch is being applied."
-                           :body-kind "text"))
-            (mevedel-patch-review--render proposal)
-            (mevedel--prompt-announce overlay)
-            (when changes
-              (mevedel-patch-review--remind-of-revisions proposal))
-            (if changes
-                (mevedel-tool-patch-apply
-                 (plist-get proposal :data-buffer) changes
-                 (lambda () (mevedel--prompt--settle overlay result)))
-              (mevedel--prompt--settle overlay result))))
-      (error
-       (plist-put proposal :state nil)
-       (overlay-put (plist-get proposal :overlay) 'mevedel--remote
-                    (plist-get proposal :remote))
-       (plist-put proposal :conflict
-                  (mevedel-tool-patch-sanitize-error
-                   (error-message-string err) proposal))
-       (plist-put proposal :rollback-incomplete
-                  (eq (car err) 'mevedel-tool-patch-partial-rollback))
-       (mevedel-patch-review--render proposal))))))
+  "Apply PROPOSAL's selected changes and settle its review.
+A change that cannot be applied, now or when a remote artifact's origin
+refuses it later, leaves the review open with the conflict shown."
+  (cl-flet ((conflict (err)
+              (plist-put proposal :state nil)
+              (overlay-put (plist-get proposal :overlay) 'mevedel--remote
+                           (plist-get proposal :remote))
+              (plist-put proposal :conflict
+                         (mevedel-tool-patch-sanitize-error
+                          (error-message-string err) proposal))
+              (plist-put proposal :rollback-incomplete
+                         (eq (car err) 'mevedel-tool-patch-partial-rollback))
+              (mevedel-patch-review--render proposal)))
+    (cond
+     ((memq (plist-get proposal :state) '(submitting settled)))
+     ((mevedel-side-conversation-mutation-warning-pending-p proposal)
+      (mevedel-patch-review--render proposal))
+     (t
+      (plist-put proposal :state 'submitting)
+      (condition-case err
+          (progn
+            (mevedel-tool-patch-assert-baseline proposal)
+            (let* ((changes (mevedel-tool-patch-planned-changes proposal))
+                   (feedback-p (> (plist-get
+                                   (mevedel-tool-patch-proposal-stats
+                                    proposal)
+                                   :comments)
+                                  0))
+                   (result
+                    (if (or changes feedback-p)
+                        (mevedel-tool-patch-result proposal changes t)
+                      (list :result "Error: Patch rejected" :status 'error)))
+                   (overlay (plist-get proposal :overlay)))
+              (overlay-put overlay 'mevedel--remote
+                           '(:body "ApplyPatch is being applied."
+                             :body-kind "text"))
+              (mevedel-patch-review--render proposal)
+              (mevedel--prompt-announce overlay)
+              (when changes
+                (mevedel-patch-review--remind-of-revisions proposal))
+              (if changes
+                  (mevedel-tool-patch-apply
+                   (plist-get proposal :data-buffer) changes
+                   (lambda () (mevedel--prompt--settle overlay result))
+                   #'conflict)
+                (mevedel--prompt--settle overlay result))))
+        (error (conflict err)))))))
 
 (defun mevedel-patch-review-submit ()
   "Apply the selected patch changes in the review at point."

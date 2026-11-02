@@ -6,7 +6,10 @@ directories are not expressible. Re-propose rejected changes only when the
 user's feedback asks for a revision.
 
 - Paths are absolute or relative to the session working directory. Writable
-  resources are `work://` descendants and explicit memory file descendants.
+  resources are `work://` descendants, explicit memory file descendants, and a
+  remote HTML artifact's files at `shared://ID/files/PATH` (Read
+  `shared://ID/files` to list them). A patch of those files changes no other
+  file; it applies to their current content at the artifact's origin.
   Bare, root-only, and union addresses and other schemes are not patch targets.
   Keep authored addresses in patch markers.
 - Standalone or sticky Plan mode permits only session-owned `work://`

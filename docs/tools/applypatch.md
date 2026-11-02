@@ -113,3 +113,21 @@ A matching failure rejects the entire proposal **before applying any operation**
 Correct it and resend all operations still intended, or split the complete change
 into separate calls. Sending only the failing operation does not apply the other
 operations from the rejected proposal.
+
+## Remote artifact files
+
+A remote HTML artifact attached to the workspace keeps its files at its origin,
+in another mevedel. Its files are patched at `shared://ID/files/PATH`, PATH
+being relative to the artifact's directory; Read `shared://ID/files` to list
+them, with the primary file marked, and `shared://ID/files/PATH` to read one.
+They are never local paths, and one patch cannot change them together with
+other files.
+
+The patch applies to each file's current content at the origin, read when the
+patch is applied, and writes each result back only if the file is unchanged
+since that read. Add only creates a file; Delete and Move remove the file you
+read. When the origin reports that a file changed in the meantime, the patch is
+applied once more to the new content: hunks that still match land there, and
+hunks that no longer match fail as for a local file. A refusal leaves nothing
+applied; files already written by the patch are restored. The origin refuses a
+view-only link's writes and deleting the artifact's primary file.

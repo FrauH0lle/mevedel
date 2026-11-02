@@ -891,10 +891,11 @@ machine awake under the lobby's rule (`shared artifact active`).
 ### Remote artifacts in mevedel
 
 Another mevedel consumes an artifact link as a **remote artifact**: the
-whiteboard or document is listed with the workspace's own artifacts and
-agents use it through the same `shared://` addresses and `SharedEdit`, while
-every read and edit goes live to the origin. Nothing about it is written into
-the local artifact store and nothing is cached.
+whiteboard, document or HTML artifact is listed with the workspace's own
+artifacts and agents use it through the same `shared://` addresses,
+`SharedEdit` and `ApplyPatch`, while every read and edit goes live to the
+origin. Nothing about it is written into the local artifact store and nothing
+is cached.
 
 `M-x mevedel-remote-artifact-attach` reads the link without echo (it never
 enters a chat, `*Messages*` or the minibuffer history), connects once to read
@@ -907,7 +908,7 @@ mevedel-remote-artifact-detach` forgets it; the origin and other holders are
 unaffected. Links are kept per user, outside the project, in
 `mevedel-user-dir`'s `remote-artifacts.eld` (mode 0600), by workspace root;
 the artifact backend restores a workspace's attachments on its first lookup
-of that workspace. HTML artifacts cannot be attached yet.
+of that workspace.
 
 The remote adapter behind the
 [artifact-backend interface](shared-editing.md#durability-and-recovery) maps the local editing
@@ -920,6 +921,28 @@ contract and Grep's line mapping work unchanged. Discussions and element
 addresses (`/discussions`, `/elements/ID`) stay at the origin; deleting it
 here is refused (detach instead), and turn-settle versions are left to the
 origin's working-stretch versions.
+
+A remote HTML artifact's files have addresses of their own,
+`shared://ID/files/PATH`, never local paths: Read `shared://ID/files` lists
+them and `shared://ID/files/PATH` reads one (the room's `files` and `read`
+with `file`). `ApplyPatch` takes them as operands. It reads each file it
+updates, deletes or moves with its hash, applies the hunks to that content and
+sends the whole result as `write-file` with the hash it read; an added file
+or a move's destination is written without a hash, so it is only created, and
+a deletion is `delete-file` with the hash. A stale answer undoes the patch's
+earlier writes the same way, so nothing stays applied. Applied without review,
+the patch is then applied once more to the current content, where a hunk that
+no longer matches fails as for a local file. A reviewed patch shows the
+conflict and stays open. One patch cannot mix remote files with other files.
+Permission treats the operands as remote content: they contribute no local
+path, Edits applies them as it applies `SharedEdit`, and Plan mode denies them.
+
+The browser viewer opens a remote HTML artifact from its store listing row
+(`artifact:ID`), and an `ApplyPatch` of one of its files projects a card;
+either fetch reads the file from the origin when a guest opens it, the primary
+file for the listing row. Versions of a remote artifact are not previewed.
+Project artifacts' `o` opens it in the session room's viewer
+(`?artifact=ID`).
 
 mevedel does not reimplement the relay transport: it runs the
 [remote-artifact package's](../remote-artifact/README.md#the-bridge-for-mevedel)
@@ -940,9 +963,10 @@ An unreachable, revoked or deleted origin answers with the package's generic
 remote artifact's Link as `remote HOST, reachable` (or `unavailable`, or `not
 checked yet`), HOST being the relay's, and its details name the origin id and
 link tier; listing it checks a link not checked in the last minute in the
-background. Deleting it there detaches it, and opening, versions, duplicates
-and conversations are refused. Origin change events arriving while connected
-update its title and are announced through the backend's change events.
+background. Deleting it there detaches it; opening a remote whiteboard or
+document, versions, duplicates and conversations are refused. Origin change
+events arriving while connected update its title and are announced through the
+backend's change events.
 
 ## Project files
 

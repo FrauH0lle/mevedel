@@ -23,6 +23,9 @@
                   (workspace &optional detail))
 (autoload 'mevedel-artifact-backend-call "mevedel-artifact-backend")
 (autoload 'mevedel-artifact-backend-catalog "mevedel-artifact-backend")
+(declare-function mevedel-artifact-backend-registered-p "mevedel-artifact-backend"
+                  (workspace id))
+(autoload 'mevedel-artifact-backend-registered-p "mevedel-artifact-backend")
 
 ;; `mevedel-artifact-store'
 (declare-function mevedel-artifact-store-artifact-directory
@@ -185,6 +188,7 @@ for each one; a link that may only view must not keep the host busy.")
 
 (defconst mevedel-collaboration--artifact-mime-types
   '(("html" . "text/html") ("htm" . "text/html")
+    ("css" . "text/css") ("js" . "text/javascript")
     ("md" . "text/markdown") ("markdown" . "text/markdown")
     ("txt" . "text/plain") ("csv" . "text/csv")
     ("json" . "application/json")
@@ -213,15 +217,42 @@ for each one; a link that may only view must not keep the host busy.")
 (defun mevedel-collaboration--store-target (workspace id)
   "Return store artifact ID of WORKSPACE as an artifact record, or nil.
 The record names the artifact's primary file; it is marked missing when
-that file is gone."
-  (when-let* (((mevedel-artifact-store-id-p id))
-              (meta (mevedel-artifact-store-meta workspace id))
+that file is gone.  A remote artifact's record names no file: its origin
+serves the primary one."
+  (when (mevedel-artifact-store-id-p id)
+    (if-let* ((meta (mevedel-artifact-store-meta workspace id))
               (file (plist-get meta :file)))
-    (let ((path (mevedel-artifact-store-primary-path workspace id meta)))
-      (append (list :id (concat "artifact:" id) :store id
-                    :artifact (concat id "/" file) :artifact-path path)
-              (when (mevedel-artifact-store-item-p meta) (list :item t))
-              (unless (file-exists-p path) (list :missing t))))))
+        (let ((path (mevedel-artifact-store-primary-path workspace id meta)))
+          (append (list :id (concat "artifact:" id) :store id
+                        :artifact (concat id "/" file) :artifact-path path)
+                  (when (mevedel-artifact-store-item-p meta) (list :item t))
+                  (unless (file-exists-p path) (list :missing t))))
+      (when (mevedel-artifact-backend-registered-p workspace id)
+        (list :id (concat "artifact:" id) :store id :artifact (concat id "/"))))))
+
+(defun mevedel-collaboration--remote-artifact-get (room peer req-id record)
+  "Answer PEER's REQ-ID in ROOM with remote RECORD's file, from its origin.
+RECORD names the remote artifact as `:store' and the file after it in
+`:artifact'; without one the origin's primary file is sent."
+  (let* ((guest (mevedel-collaboration--guest room peer))
+         (id (plist-get record :store))
+         (file (string-remove-prefix (concat id "/") (plist-get record :artifact))))
+    (mevedel-artifact-backend-call
+     (mevedel-collaboration--room-workspace room)
+     (append (list :action "file" :id id)
+             (unless (string-empty-p file) (list :file file)))
+     (lambda (reply)
+       (when (eq guest (mevedel-collaboration--guest room peer))
+         (if-let* ((failure (plist-get reply :error)))
+             (mevedel-collaboration--artifact-refuse room peer req-id failure)
+           (let* ((result (plist-get reply :result))
+                  (name (concat id "/" (plist-get result :file))))
+             (mevedel-collaboration--artifact-send-content
+              room peer req-id (plist-put (copy-sequence record) :artifact name)
+              (mevedel-collaboration--artifact-mime name)
+              (if (stringp (plist-get result :text))
+                  (encode-coding-string (plist-get result :text) 'utf-8-unix)
+                (base64-decode-string (or (plist-get result :data) "")))))))))))
 
 (defun mevedel-collaboration--artifact-target (room guest id)
   "Return the artifact a frame's ID names for GUEST in ROOM, or nil.
@@ -278,31 +309,40 @@ without changing the live artifact."
                      (workspace (mevedel-collaboration--room-workspace room))
                      (version (plist-get frame :version))
                      (id (plist-get record :store))
+                     (remote (and id workspace
+                                  (mevedel-artifact-backend-registered-p workspace id)))
                      (path (if (plist-member frame :version)
                                (progn
                                  (unless (and id (natnump version))
                                    (error "No such version"))
+                                 (when remote
+                                   (error "Versions of a remote artifact stay at its origin"))
                                  (mevedel-artifact-store-version-path workspace id version))
                              (plist-get record :artifact-path)))
                      (dir (and workspace (mevedel-artifact-store-directory workspace))))
-                (unless (and dir path (mevedel-resource-within-root-p path dir)
-                             (or version (not (plist-get record :item))))
+                (unless (or remote
+                            (and dir path (mevedel-resource-within-root-p path dir)
+                                 (or version (not (plist-get record :item)))))
                   (error "This artifact is not published"))
-                (if (and version (plist-get record :item))
-                    (mevedel-artifact-backend-call
-                     workspace
-                     (list :action "export" :id id :version version
-                           :format (if (eq (plist-get (mevedel-artifact-store-meta
-                                                       workspace id) :kind) 'whiteboard)
-                                       "svg" "html"))
-                     (lambda (reply)
-                       (when (eq guest (mevedel-collaboration--guest room peer))
-                         (if-let* ((failure (plist-get reply :error)))
-                             (mevedel-collaboration--artifact-refuse room peer req-id failure)
-                           (let ((result (plist-get reply :result)))
-                             (mevedel-collaboration--artifact-send-content
-                              room peer req-id record (plist-get result :mime)
-                              (encode-coding-string (plist-get result :text) 'utf-8-unix)))))))
+                (cond
+                 (remote (mevedel-collaboration--remote-artifact-get
+                          room peer req-id record))
+                 ((and version (plist-get record :item))
+                  (mevedel-artifact-backend-call
+                   workspace
+                   (list :action "export" :id id :version version
+                         :format (if (eq (plist-get (mevedel-artifact-store-meta
+                                                     workspace id) :kind) 'whiteboard)
+                                     "svg" "html"))
+                   (lambda (reply)
+                     (when (eq guest (mevedel-collaboration--guest room peer))
+                       (if-let* ((failure (plist-get reply :error)))
+                           (mevedel-collaboration--artifact-refuse room peer req-id failure)
+                         (let ((result (plist-get reply :result)))
+                           (mevedel-collaboration--artifact-send-content
+                            room peer req-id record (plist-get result :mime)
+                            (encode-coding-string (plist-get result :text) 'utf-8-unix))))))))
+                 (t
                   (let ((content (condition-case nil
                                      (with-temp-buffer
                                        (set-buffer-multibyte nil)
@@ -313,7 +353,7 @@ without changing the live artifact."
                     (mevedel-collaboration--artifact-send-content
                      room peer req-id record
                      (mevedel-collaboration--artifact-mime (plist-get record :artifact))
-                     content))))
+                     content)))))
             (error (mevedel-collaboration--artifact-refuse
                     room peer req-id (error-message-string err)))))))))
 
@@ -520,10 +560,11 @@ sends the listing anyway."
      (plist-get room :transport) peer
      (mevedel-collaboration--store-frame room))))
 
-(defun mevedel-collaboration-item-link (link id)
-  "Return room LINK opening shared item ID directly in its editor tab."
+(defun mevedel-collaboration-item-link (link id &optional route)
+  "Return room LINK opening shared item ID directly in its editor tab.
+ROUTE \"artifact\" opens store artifact ID in the viewer's panel instead."
   (let ((hash (string-search "#" link)))
-    (concat (substring link 0 hash) "?shared=" (url-hexify-string id)
+    (concat (substring link 0 hash) "?" (or route "shared") "=" (url-hexify-string id)
             (substring link hash))))
 
 (defun mevedel-collaboration--store-conversation-link (guest workspace id)

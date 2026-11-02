@@ -24,7 +24,7 @@ are not filesystem paths.
 | `history://saved[/SESSION[/SEGMENT]]` | Yes | Yes | Yes | Filtered saved workspace conversations, including archives |
 | `memory://root` | Yes | Yes | Yes | Configured memory index/roots |
 | `memory://journal/` | Yes | Yes | Yes | Validated published workspace journal records |
-| `shared://` | Yes | No | Text views | Shared whiteboards and documents |
+| `shared://` | Yes | No | Text views | Shared whiteboards and documents; a remote HTML artifact's files |
 | `mevedel://` | Yes | Yes | Yes | Installed Markdown documentation |
 | `mcp://` | Yes | No | No | Connected servers' advertised resources |
 
@@ -47,9 +47,12 @@ search.
 belongs to the workspace and persists across sessions. Search before creating
 notes and update relevant existing files. Working-file descendants and explicit
 memory file descendants can be ApplyPatch targets subject to its permissions
-and Plan boundary. Bare, root-only, and memory union addresses are discovery
-surfaces, not patch targets. Journal records are dated evidence, not current
-instructions; they remain read-only. Private pending journal state is unavailable.
+and Plan boundary. So can a remote HTML artifact's files,
+`shared://ID/files/PATH`: Read `shared://ID/files` lists them and
+`shared://ID/files/PATH` reads one. Bare, root-only, and memory union addresses
+are discovery surfaces, not patch targets. Journal records are dated evidence,
+not current instructions; they remain read-only. Private pending journal state
+is unavailable.
 
 Read of `work://shared/` or a shared descendant directory generates bounded
 note rows; bare `work://` includes the same shared rows alongside session files.

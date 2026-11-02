@@ -45,7 +45,7 @@
 
 ;; `mevedel-collaboration-artifact'
 (declare-function mevedel-collaboration-item-link
-                  "mevedel-collaboration-artifact" (link id))
+                  "mevedel-collaboration-artifact" (link id &optional route))
 (autoload 'mevedel-collaboration-item-link "mevedel-collaboration-artifact")
 
 ;; `mevedel-collaboration-artifact-projection'
@@ -1226,8 +1226,9 @@ already, this asks now, with `/collab''s disclosure, to share the
 session the item will open in; nil DATA-BUFFER stands for a session that
 does not exist yet.  Declining signals `user-error'.
 
-The opener takes a data buffer and an item ID.  It opens the item in
-that buffer's room with the full-control link, as the host itself,
+The opener takes a data buffer, an item ID and optionally the viewer
+ROUTE of `mevedel-collaboration-item-link'.  It opens the item in that
+buffer's room with the full-control link, as the host itself,
 starting the room under the consent given here.  It never asks, so it
 may run later from a timer; a room that ended meanwhile without consent
 having been given is refused rather than reshared."
@@ -1238,7 +1239,7 @@ having been given is refused rather than reshared."
                       (mevedel-collaboration--room-for-buffer data-buffer))
            (mevedel-collaboration--confirm-share)
            t)))
-    (lambda (buffer id)
+    (lambda (buffer id &optional route)
       (let ((session (mevedel-collaboration--data-buffer-session buffer))
             (room (mevedel-collaboration--room-for-buffer buffer))
             started)
@@ -1248,7 +1249,7 @@ having been given is refused rather than reshared."
           (setq room (mevedel-collaboration--start session buffer)
                 started t))
         ;; The viewer opens `?shared=ID' directly as that item's editor tab.
-        (browse-url (mevedel-collaboration-item-link (plist-get room :link-full) id))
+        (browse-url (mevedel-collaboration-item-link (plist-get room :link-full) id route))
         (when started
           (message "mevedel: sharing %s; /collab stop ends the room"
                    (plist-get room :session-label)))))))

@@ -25,10 +25,17 @@
 (require 'mevedel-artifact-store)
 (require 'mevedel-artifacts-list)
 (require 'mevedel-cockpit)
+(require 'mevedel-collaboration)
+(require 'mevedel-collaboration-artifact)
+(require 'mevedel-collaboration-artifact-projection)
+(require 'mevedel-collaboration-guest)
+(require 'mevedel-collaboration-transport)
+(require 'mevedel-patch-review)
 (require 'mevedel-pipeline)
 (require 'mevedel-remote-artifact)
 (require 'mevedel-shared-editing)
 (require 'mevedel-tools)
+(require 'mevedel-view)
 (require 'mevedel-workspace)
 
 (defconst mevedel-remote-artifact-test--link
@@ -42,14 +49,61 @@
 (defun mevedel-remote-artifact-test--origin ()
   "Return a fake origin: a plist the fake bridge answers from.
 `:requests' collects every request, newest first; `:reachable',
-`:writable' and `:title' shape the answers."
+`:writable' and `:title' shape the answers.  An HTML origin (`:kind'
+\"html\") keeps its `:files' as an alist (FILE . TEXT) and names its
+`:primary' one."
   (list :requests nil :reachable t :writable t :title "SNT analysis pipeline"
-        :kind "whiteboard"))
+        :kind "whiteboard" :files nil :primary nil))
+
+(defun mevedel-remote-artifact-test--hash (text)
+  "Return the hash an origin gives the file content TEXT."
+  (secure-hash 'sha256 (encode-coding-string text 'utf-8-unix)))
+
+(defun mevedel-remote-artifact-test--file-answer (origin body)
+  "Return HTML ORIGIN's reply to the file request BODY, as an artifact room's."
+  (let* ((files (plist-get origin :files))
+         (primary (plist-get origin :primary))
+         (file (or (plist-get body :file) primary))
+         (current (cdr (assoc file files)))
+         (fields (lambda (text)
+                   (list :file file :hash (mevedel-remote-artifact-test--hash text)
+                         :bytes (string-bytes text) :text text)))
+         (stale (lambda ()
+                  (append (list :error (format "%s changed since it was read; redo the change on its current content" file)
+                                :code "stale")
+                          (if current (funcall fields current) (list :file file :hash nil))))))
+    (pcase (plist-get body :action)
+      ("read" (if current (list :result (funcall fields current))
+                (list :error (format "No file %s in this artifact" file))))
+      ("files" (list :result (list :primary primary
+                                   :files (vconcat (mapcar (lambda (cell)
+                                                             (list :file (car cell)
+                                                                   :bytes (string-bytes (cdr cell))))
+                                                           files)))))
+      ((guard (not (plist-get origin :writable))) (list :error "This artifact link is view-only"))
+      ("write-file"
+       (if (not (equal (plist-get body :hash)
+                       (and current (mevedel-remote-artifact-test--hash current))))
+           (funcall stale)
+         (setf (alist-get file (plist-get origin :files) nil nil #'equal) (plist-get body :text))
+         (list :result (list :file file :hash (mevedel-remote-artifact-test--hash (plist-get body :text))
+                             :bytes (string-bytes (plist-get body :text))
+                             :created (if current :json-false t)))))
+      ("delete-file"
+       (cond
+        ((equal file primary)
+         (list :error (format "%s is the artifact's primary file; an artifact link cannot delete it" file)))
+        ((not (and current (equal (plist-get body :hash) (mevedel-remote-artifact-test--hash current))))
+         (funcall stale))
+        (t (plist-put origin :files (assoc-delete-all file (copy-sequence files)))
+           (list :result (list :file file :deleted t))))))))
 
 (defun mevedel-remote-artifact-test--answer (origin body)
   "Return ORIGIN's reply to request BODY, as an artifact room gives it."
   (let ((action (plist-get body :action)))
     (pcase action
+      ((guard (equal "html" (plist-get origin :kind)))
+       (mevedel-remote-artifact-test--file-answer origin body))
       ("read" (list :result (list :text (if (plist-get body :history)
                                             "contribution c1 revision 2 Host"
                                           mevedel-remote-artifact-test--overview))))
@@ -458,6 +512,352 @@ under its origin id."
                                               'error)))))
         (mevedel-remote-artifact-stop)
         (when (process-live-p room) (delete-process room))))))
+
+(defmacro mevedel-remote-artifact-test--with-html (&rest body)
+  "Run BODY as `mevedel-remote-artifact-test--with-session' does, with an HTML origin.
+The origin's landing page is attached as \"landing\"; BODY also sees
+the local functions `patch', running an ApplyPatch of its operation
+lines, `file', the origin's current text of a file, and `sent', the
+body of the last request that reached the origin."
+  (declare (indent 0))
+  `(mevedel-remote-artifact-test--with-session
+     (plist-put origin :kind "html")
+     (plist-put origin :primary "index.html")
+     (plist-put origin :files (list (cons "index.html" "<!doctype html>\n<h1>Hello</h1>\n")
+                                    (cons "site.css" "h1 { color: red; }\n")))
+     (attach "landing")
+     (cl-labels ((patch (status &rest lines)
+                   (run "ApplyPatch"
+                        (list :patch (string-join (append '("*** Begin Patch") lines
+                                                          '("*** End Patch"))
+                                                  "\n"))
+                        status))
+                 (file (name) (cdr (assoc name (plist-get origin :files))))
+                 (sent () (plist-get (car (plist-get origin :requests)) :body)))
+       ,@body)))
+
+(mevedel-deftest mevedel-tool-patch-handler/remote-update
+  (:doc "ApplyPatch updates a remote HTML file: hunks apply to the fetched content, sent with its hash"
+   :quiet t)
+  (mevedel-remote-artifact-test--with-html
+    (let ((read-hash (mevedel-remote-artifact-test--hash (file "index.html"))))
+      (should (string-search
+               "Applied: shared://landing/files/index.html"
+               (text (patch 'success "*** Update File: shared://landing/files/index.html"
+                            "@@" "-<h1>Hello</h1>" "+<h1>Hi</h1>"))))
+      (should (equal "<!doctype html>\n<h1>Hi</h1>\n" (file "index.html")))
+      ;; The whole file went back with the hash it was read with, attributed
+      ;; to the agent.
+      (should (equal (list :action "write-file" :file "index.html" :hash read-hash
+                           :text "<!doctype html>\n<h1>Hi</h1>\n")
+                     (sent)))
+      (should (equal "tester@host /root" (plist-get (car (plist-get origin :requests)) :name))))
+    ;; Nothing reached the local store or the filesystem under the address.
+    (should-not (mevedel-artifact-store-ids workspace))
+    (should-not (file-exists-p (file-name-concat directory ".mevedel" "artifacts")))
+    (should-not (file-exists-p (file-name-concat directory "shared:")))))
+
+(mevedel-deftest mevedel-tool-editing-view/remote-files
+  (:doc "Read shows a remote HTML artifact's files and their content at shared://ALIAS/files"
+   :quiet t)
+  (mevedel-remote-artifact-test--with-html
+    (should (equal "<!doctype html>\n<h1>Hello</h1>\n"
+                   (string-trim-left
+                    (replace-regexp-in-string
+                     "^ *[0-9]+\t" ""
+                     (text (run "Read" '(:file_path "shared://landing/files/index.html")))))))
+    (should (equal '(:action "read" :file "index.html") (sent)))
+    (let ((listing (text (run "Read" '(:file_path "shared://landing/files")))))
+      (should (string-search "shared://landing/files/index.html" listing))
+      (should (string-search "shared://landing/files/site.css" listing))
+      (should (string-search "primary" listing)))
+    (should (equal '(:action "files") (sent)))
+    (should (string-search "No file missing.css"
+                           (text (run "Read" '(:file_path "shared://landing/files/missing.css")
+                                      'error))))))
+
+(defun mevedel-remote-artifact-test--edit-before-write (origin file edit &optional times)
+  "Make ORIGIN's FILE change by EDIT just before each of its next TIMES writes.
+EDIT maps the file's text to the text another writer leaves there."
+  (let ((transport mevedel-remote-artifact--transport)
+        (left (or times 1)))
+    (lambda (request callback)
+      (let ((body (plist-get request :body)))
+        (when (and (> left 0) (equal "write-file" (plist-get body :action))
+                   (equal file (plist-get body :file)))
+          (cl-decf left)
+          (setf (alist-get file (plist-get origin :files) nil nil #'equal)
+                (funcall edit (alist-get file (plist-get origin :files) nil nil #'equal)))))
+      (funcall transport request callback))))
+
+(mevedel-deftest mevedel-tool-patch-handler/remote-conflict
+  (:doc "A remote conflict fails like a hunk: nothing is written, the address is named"
+   :quiet t)
+  (mevedel-remote-artifact-test--with-html
+    ;; A hunk that does not match the fetched content fails as locally.
+    (should (string-match-p
+             "hunk 1 (patch line [0-9]+) does not match shared://landing/files/index.html"
+             (text (patch 'error "*** Update File: shared://landing/files/index.html"
+                          "@@" "-<h1>Bye</h1>" "+<h1>Hi</h1>"))))
+    (should-not (equal "write-file" (plist-get (sent) :action)))
+    ;; A change at the origin after the read: applied once more on the
+    ;; current content, the hunks still match and land there.
+    (let ((mevedel-remote-artifact--transport
+           (mevedel-remote-artifact-test--edit-before-write
+            origin "index.html" (lambda (text) (concat text "<p>Theirs</p>\n")))))
+      (patch 'success "*** Update File: shared://landing/files/index.html"
+             "@@" "-<h1>Hello</h1>" "+<h1>Hi</h1>"))
+    (should (equal "<!doctype html>\n<h1>Hi</h1>\n<p>Theirs</p>\n" (file "index.html")))
+    ;; When the other writer removed what the hunk changes, it fails as a
+    ;; hunk that does not match, and nothing is written.
+    (let ((mevedel-remote-artifact--transport
+           (mevedel-remote-artifact-test--edit-before-write
+            origin "index.html" (lambda (_) "<!doctype html>\n<p>Rewritten</p>\n"))))
+      (should (string-search "does not match shared://landing/files/index.html"
+                             (text (patch 'error "*** Update File: shared://landing/files/index.html"
+                                          "@@" "-<h1>Hi</h1>" "+<h1>Hey</h1>")))))
+    (should (equal "<!doctype html>\n<p>Rewritten</p>\n" (file "index.html")))
+    ;; A file that keeps changing is reported after the one retry.
+    (let ((mevedel-remote-artifact--transport
+           (mevedel-remote-artifact-test--edit-before-write
+            origin "index.html" (lambda (text) (concat text "<!-- again -->\n")) 2)))
+      (should (string-search "shared://landing/files/index.html changed at its origin since it was read; nothing was applied"
+                             (text (patch 'error "*** Update File: shared://landing/files/index.html"
+                                          "@@" "-<p>Rewritten</p>" "+<p>Mine</p>")))))
+    (should-not (string-search "Mine" (file "index.html")))))
+
+(mevedel-deftest mevedel-tool-patch-handler/remote-assets
+  (:doc "ApplyPatch creates, deletes and moves a remote HTML artifact's files, all or nothing"
+   :quiet t)
+  (mevedel-remote-artifact-test--with-html
+    ;; A new file is written without a hash, so it is only ever created.
+    (patch 'success "*** Add File: shared://landing/files/assets/logo.svg"
+           "+<svg xmlns=\"http://www.w3.org/2000/svg\"/>")
+    (should (equal '(:action "write-file" :file "assets/logo.svg"
+                             :text "<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n")
+                   (sent)))
+    (should (equal "<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n" (file "assets/logo.svg")))
+    (should (string-search "Cannot add existing file: shared://landing/files/site.css"
+                           (text (patch 'error "*** Add File: shared://landing/files/site.css"
+                                        "+p {}"))))
+    (should (equal "h1 { color: red; }\n" (file "site.css")))
+    ;; A move is a deletion with the read hash and a creation.
+    (patch 'success "*** Update File: shared://landing/files/site.css"
+           "*** Move to: shared://landing/files/assets/site.css"
+           "@@" "-h1 { color: red; }" "+h1 { color: blue; }")
+    (should-not (file "site.css"))
+    (should (equal "h1 { color: blue; }\n" (file "assets/site.css")))
+    ;; A deletion names the hash it was read with.
+    (let ((hash (mevedel-remote-artifact-test--hash (file "assets/logo.svg"))))
+      (patch 'success "*** Delete File: shared://landing/files/assets/logo.svg")
+      (should (equal (list :action "delete-file" :file "assets/logo.svg" :hash hash) (sent))))
+    (should-not (file "assets/logo.svg"))
+    ;; The origin keeps its primary file.
+    (should (string-search "primary file"
+                           (text (patch 'error "*** Delete File: shared://landing/files/index.html"))))
+    (should (file "index.html"))
+    ;; When a later file is refused, the files already written are restored.
+    (let ((mevedel-remote-artifact--transport
+           (mevedel-remote-artifact-test--edit-before-write
+            origin "assets/site.css" (lambda (text) (concat text "p { margin: 0; }\n")) 2)))
+      (should (string-search "assets/site.css changed at its origin"
+                             (text (patch 'error
+                                          "*** Update File: shared://landing/files/index.html"
+                                          "@@" "-<h1>Hello</h1>" "+<h1>Hi</h1>"
+                                          "*** Update File: shared://landing/files/assets/site.css"
+                                          "@@" "-h1 { color: blue; }" "+h1 { color: green; }")))))
+    (should (equal "<!doctype html>\n<h1>Hello</h1>\n" (file "index.html")))
+    (should-not (string-search "green" (file "assets/site.css")))
+    ;; A view-only link refuses every write.
+    (plist-put origin :writable nil)
+    (should (string-search "view-only"
+                           (text (patch 'error "*** Update File: shared://landing/files/index.html"
+                                        "@@" "-<h1>Hello</h1>" "+<h1>Hi</h1>"))))
+    (should-not (mevedel-artifact-store-ids workspace))))
+
+(mevedel-deftest mevedel-tool-patch-handler/remote-permission
+  (:doc "Permission treats a remote file address as remote content, never as a local file"
+   :quiet t)
+  (mevedel-remote-artifact-test--with-html
+    (let ((remote "*** Begin Patch\n*** Update File: shared://landing/files/index.html\n@@\n-<h1>Hello</h1>\n+<h1>Hi</h1>\n*** End Patch"))
+      (setf (mevedel-session-permission-mode session) 'edits)
+      ;; Local path rules do not reach it, even one naming the path the
+      ;; address would have as a local file; under Edits it is an edit of
+      ;; content, applied as SharedEdit's are, without asking.
+      (setf (mevedel-session-permission-rules session)
+            (list (list "ApplyPatch" :path (file-name-concat directory "shared:" "**")
+                        :action 'deny)))
+      (should (string-search
+               "Permission denied"
+               (text (run "ApplyPatch"
+                          (list :patch (format "*** Begin Patch\n*** Add File: %s\n+x\n*** End Patch"
+                                               (file-name-concat directory "shared:" "landing"
+                                                                 "files" "index.html")))
+                          'error))))
+      (run "ApplyPatch" (list :patch remote))
+      (should (equal "<!doctype html>\n<h1>Hi</h1>\n" (file "index.html")))
+      (setf (mevedel-session-permission-rules session) nil)
+      ;; Plan mode refuses it like any change outside session working files,
+      ;; before the patch reaches the origin.
+      (setf (mevedel-session-plan-mode session) t)
+      (let ((sent (length (plist-get origin :requests))))
+        (should (string-search "Permission denied"
+                               (text (run "ApplyPatch" (list :patch remote) 'error))))
+        (should (= sent (length (plist-get origin :requests)))))
+      (setf (mevedel-session-plan-mode session) nil)
+      ;; One patch cannot mix remote files with local ones.
+      (should (string-search "cannot change other files"
+                             (text (run "ApplyPatch"
+                                        (list :patch (concat "*** Begin Patch\n"
+                                                             "*** Add File: local.txt\n+x\n"
+                                                             "*** Delete File: shared://landing/files/site.css\n"
+                                                             "*** End Patch"))
+                                        'error))))
+      (should-not (file-exists-p (file-name-concat directory "local.txt")))
+      (should (file "site.css"))
+      ;; A local HTML artifact is patched at its path, not this address.
+      (should (string-search "shared://"
+                             (text (run "ApplyPatch"
+                                        (list :patch (concat "*** Begin Patch\n"
+                                                             "*** Add File: shared://local/files/a.html\n+x\n"
+                                                             "*** End Patch"))
+                                        'error)))))))
+
+(mevedel-deftest mevedel-patch-review-submit/remote
+  (:doc "A reviewed patch of a remote file is written when submitted; a conflict keeps the review open"
+   :quiet t)
+  (mevedel-remote-artifact-test--with-html
+    (mevedel-view-test--with-buffers
+      (let ((update "*** Begin Patch\n*** Update File: shared://landing/files/index.html\n@@\n-<h1>Hello</h1>\n+<h1>Hi</h1>\n*** End Patch")
+            result)
+        (cl-labels ((wait (predicate)
+                      (let ((deadline (+ (float-time) 5)))
+                        (while (and (not (funcall predicate)) (< (float-time) deadline))
+                          (accept-process-output nil 0.02))))
+                    (review-text ()
+                      (with-current-buffer view-buf
+                        (buffer-substring-no-properties (point-min) (point-max))))
+                    (review ()
+                      (setq result nil)
+                      (with-current-buffer data-buf
+                        (mevedel-tool-patch-handler (lambda (value) (setq result value))
+                                                    (list :patch update)))
+                      (wait (lambda () (string-search "ApplyPatch ·" (review-text)))))
+                    (submit ()
+                      (with-current-buffer view-buf
+                        (goto-char (point-min))
+                        (search-forward "ApplyPatch ·")
+                        (mevedel-patch-review-submit))))
+          (with-current-buffer data-buf
+            (setq-local default-directory (file-name-as-directory directory)
+                        mevedel--workspace workspace
+                        mevedel--session session))
+          (setf (mevedel-session-permission-mode session) 'ask)
+          ;; A conflict at submission keeps the review open and writes nothing.
+          (review)
+          (should (string-search "M shared://landing/files/index.html" (review-text)))
+          (setf (alist-get "index.html" (plist-get origin :files) nil nil #'equal)
+                "<!doctype html>\n<h1>Hello</h1>\n<p>Theirs</p>\n")
+          (submit)
+          (wait (lambda () (string-search "changed at its origin" (review-text))))
+          (should (string-search "changed at its origin" (review-text)))
+          (should-not result)
+          (should (equal "<!doctype html>\n<h1>Hello</h1>\n<p>Theirs</p>\n" (file "index.html")))
+          ;; A fresh review of the current content is written on submission.
+          (with-current-buffer view-buf
+            (goto-char (point-min))
+            (search-forward "ApplyPatch ·")
+            (mevedel-patch-review-reject))
+          (wait (lambda () result))
+          (review)
+          (submit)
+          (wait (lambda () result))
+          (should (string-search "Applied: shared://landing/files/index.html"
+                                 (plist-get result :result)))
+          (should (equal "<!doctype html>\n<h1>Hi</h1>\n<p>Theirs</p>\n" (file "index.html"))))))))
+
+(mevedel-deftest mevedel-collaboration--handle-artifact-get/remote
+  (:doc "The browser viewer opens a remote HTML artifact and its projected ApplyPatch cards from the origin"
+   :quiet t)
+  (mevedel-remote-artifact-test--with-html
+    (let* ((guests (make-hash-table :test #'eql))
+           (room (list :session session :guests guests :transport 'transport :records nil))
+           (sent nil))
+      (dotimes (peer 4)
+        (puthash peer (list :name (format "viewer %d" peer) :writable nil :ready t) guests))
+      (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                 (lambda (_transport peer frame) (push (cons peer frame) sent) t)))
+        (cl-labels ((fetch (peer frame)
+                      (setq sent nil)
+                      (mevedel-collaboration--handle-artifact-get room peer frame)
+                      (let ((deadline (+ (float-time) 5)))
+                        (while (and (not (cl-some (lambda (entry)
+                                                    (or (plist-get (cdr entry) :error)
+                                                        (eq t (plist-get (cdr entry) :final))))
+                                                  sent))
+                                    (< (float-time) deadline))
+                          (accept-process-output nil 0.02)))
+                      (let ((frames (mapcar #'cdr (reverse sent))))
+                        (if (plist-get (car frames) :error)
+                            (car frames)
+                          (list :name (plist-get (car frames) :name)
+                                :mime (plist-get (car frames) :mime)
+                                :content (decode-coding-string
+                                          (base64-decode-string
+                                           (mapconcat (lambda (frame) (plist-get frame :data))
+                                                      frames ""))
+                                          'utf-8))))))
+          ;; The store listing's remote row opens its primary file.
+          (should (equal (list :name "landing/index.html" :mime "text/html"
+                               :content "<!doctype html>\n<h1>Hello</h1>\n")
+                         (fetch 0 '(:reqId 1 :id "artifact:landing"))))
+          (should (equal '(:action "read") (sent)))
+          ;; Its versions stay at the origin.
+          (should (string-search "origin" (plist-get (fetch 1 '(:reqId 2 :id "artifact:landing"
+                                                                :version 1))
+                                                     :error)))
+          ;; An ApplyPatch of one of its files projects a card the viewer opens.
+          (let* ((render-data (plist-get (patch 'success "*** Update File: shared://landing/files/site.css"
+                                                "@@" "-h1 { color: red; }" "+h1 { color: blue; }")
+                                         :render-data))
+                 (card (car (mevedel-collaboration--artifact-fields render-data))))
+            (should (equal "landing/site.css" (plist-get card :artifact)))
+            (should (equal "landing" (plist-get card :store)))
+            (should (equal "SNT analysis pipeline · site.css" (plist-get card :title)))
+            (setf (plist-get room :records)
+                  (list (append (list :id "tool-1" :kind "tool" :name "ApplyPatch") card))))
+          (should (equal (list :name "landing/site.css" :mime "text/css"
+                               :content "h1 { color: blue; }\n")
+                         (fetch 2 '(:reqId 3 :id "tool-1"))))
+          (should (equal '(:action "read" :file "site.css") (sent)))
+          ;; Once detached, it is no longer published.
+          (mevedel-remote-artifact-detach workspace "landing")
+          (should (plist-get (fetch 3 '(:reqId 4 :id "artifact:landing")) :error)))))))
+
+(mevedel-deftest mevedel-artifacts-list-open-browser/remote-html
+  (:doc "Project artifacts opens a remote HTML artifact in the session room's viewer"
+   :quiet t)
+  (mevedel-remote-artifact-test--with-html
+    (let ((view (generate-new-buffer " *remote-artifact-view*"))
+          opened)
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-collaboration--room-for-buffer)
+                     (lambda (_buffer) '(:link-full "https://relay.example.org/#room.full")))
+                    ((symbol-function 'browse-url) (lambda (url &rest _) (push url opened))))
+            (with-current-buffer
+                (mevedel-artifacts-list-open
+                 (list :session session :view-buffer view :data-buffer buffer
+                       :origin-buffer view :workspace workspace))
+              (mevedel-cockpit-goto-id "landing")
+              (mevedel-artifacts-list-open-browser)
+              (should (equal '("https://relay.example.org/?artifact=landing#room.full") opened))
+              ;; It is still not a local file to visit.
+              (should (string-search "lives at its origin"
+                                     (cadr (should-error (mevedel-artifacts-list-visit)
+                                                         :type 'user-error))))))
+        (when-let* ((cockpit (get-buffer mevedel-artifacts-list-buffer-name)))
+          (kill-buffer cockpit))
+        (kill-buffer view)))))
 
 (provide 'test-mevedel-remote-artifact)
 ;;; test-mevedel-remote-artifact.el ends here

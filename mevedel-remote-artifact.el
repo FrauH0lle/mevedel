@@ -1,17 +1,17 @@
-;;; mevedel-remote-artifact.el --- Whiteboards and documents attached through an artifact link -*- lexical-binding: t -*-
+;;; mevedel-remote-artifact.el --- Artifacts attached through an artifact link -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
-;; A remote artifact is a whiteboard or document that lives in another
-;; mevedel's workspace, its origin, and is reached here through an artifact
-;; link the origin shared.  `mevedel-remote-artifact-attach' reads the link
-;; in the minibuffer, never the chat, and registers the artifact with the
-;; workspace under its origin id or a chosen name (its alias).  From then on
+;; A remote artifact is a whiteboard, document or HTML artifact that lives in
+;; another mevedel's workspace, its origin, and is reached here through an
+;; artifact link the origin shared.  `mevedel-remote-artifact-attach' reads
+;; the link in the minibuffer, never the chat, and registers the artifact with
+;; the workspace under its origin id or a chosen name (its alias).  From then on
 ;; it is served by the remote adapter behind `mevedel-artifact-backend': it
 ;; is listed in Project artifacts, attaches to sessions, and agents read and
-;; edit it with unchanged `shared://' addresses and SharedEdit.  Every read
-;; and edit goes live to the origin, which executes it; nothing about the
-;; artifact is written into the local store and nothing is cached.
+;; edit it with unchanged `shared://' addresses, SharedEdit and ApplyPatch.
+;; Every read and edit goes live to the origin, which executes it; nothing
+;; about the artifact is written into the local store and nothing is cached.
 ;;
 ;; The relay transport is not reimplemented here.  The remote-artifact
 ;; package (`remote-artifact/' in this repository) runs as one private
@@ -32,10 +32,11 @@
 ;; never receives its reply.  An unreachable origin makes the artifact
 ;; unavailable with the package's generic error.
 ;;
-;; Whiteboards and documents only: the origin vocabulary each local editing
-;; action maps to is `mevedel-remote-artifact--translate'; HTML file
-;; operations would add their actions there and their kinds to
-;; `mevedel-remote-artifact--kinds'.
+;; The origin vocabulary each local editing action maps to is
+;; `mevedel-remote-artifact--translate'.  An HTML artifact's files have
+;; their own actions there, which ApplyPatch uses for the addresses
+;; shared://ALIAS/files/PATH: read a file with its hash, list the files,
+;; and write or delete one only if its hash still matches.
 
 ;;; Code:
 
@@ -77,7 +78,7 @@ nil means USER@HOST.  An agent's edit is attributed at the origin to
                     "remote-artifact")
   "Directory of the remote-artifact package shipped with mevedel.")
 
-(defconst mevedel-remote-artifact--kinds '("whiteboard" "document")
+(defconst mevedel-remote-artifact--kinds '("whiteboard" "document" "html")
   "Origin artifact kinds that can be attached.")
 
 (defconst mevedel-remote-artifact--unavailable
@@ -375,11 +376,22 @@ attributes the edit to that agent."
 An image travels as `:data', its base64 content; an insert names its
 library item as LIBRARY/ITEM-ID, resolved by the origin.")
 
+(defconst mevedel-remote-artifact--file-actions
+  '(("file" "read" :file)
+    ("files" "files")
+    ("write-file" "write-file" :file :hash :text :data)
+    ("delete-file" "delete-file" :file :hash))
+  "HTML file actions, each with the origin action and the keys it sends.
+`file' reads one file, the primary one without `:file', with its
+`:hash'; `files' lists them.  A write or deletion names the `:hash' the
+file was read with, none to create it, and the origin refuses it as
+stale when the file changed since.  A key without a value is not sent.")
+
 (defun mevedel-remote-artifact--translate (alias args)
   "Return how local editing ARGS for the remote artifact ALIAS are served.
 Either (:answer REPLY), answered here, or (:body BODY :shape SHAPE): BODY
-is the origin request and SHAPE (`text', `search', `image' or `edit')
-how its reply maps back.  Signal what a remote artifact cannot do."
+is the origin request and SHAPE (`text', `search', `image', `edit' or
+`file') how its reply maps back.  Signal what a remote artifact cannot do."
   (let ((action (plist-get args :action)))
     (pcase action
       ("view"
@@ -397,6 +409,13 @@ how its reply maps back.  Signal what a remote artifact cannot do."
       ("version" (list :answer (list :result nil)))
       ("delete"
        (error "A remote artifact is deleted at its origin; detach it here instead"))
+      ((and (pred stringp) (let file-action (assoc action mevedel-remote-artifact--file-actions))
+            (guard file-action))
+       (let ((body (list :action (cadr file-action))))
+         (dolist (key (cddr file-action))
+           (when (plist-get args key)
+             (setq body (plist-put body key (plist-get args key)))))
+         (list :body body :shape 'file)))
       (_
        (if-let* ((keys (cdr (assoc action mevedel-remote-artifact--edit-keys))))
            (let ((body (list :action action)))
@@ -462,10 +481,17 @@ ALIAS, ENTRY and the local ARGS name the request; SHAPE is from
   (let ((result (plist-get reply :result)))
     (cond
      ((plist-get reply :error)
-      (if (equal (plist-get reply :code) "stale")
-          (list :error (plist-get reply :error) :code "stale"
-                :targets (plist-get reply :targets) :revision (plist-get reply :revision))
-        (list :error (plist-get reply :error))))
+      (cond
+       ((not (equal (plist-get reply :code) "stale")) (list :error (plist-get reply :error)))
+       ;; A file's refusal carries its current hash, and content when small.
+       ((eq shape 'file)
+        (append (list :error (plist-get reply :error) :code "stale")
+                (cl-loop for key in '(:file :hash :bytes :text :data)
+                         when (plist-member reply key)
+                         append (list key (plist-get reply key)))))
+       (t (list :error (plist-get reply :error) :code "stale"
+                :targets (plist-get reply :targets) :revision (plist-get reply :revision)))))
+     ((eq shape 'file) (list :result result))
      ((eq shape 'text) (list :result (list :text (plist-get result :text))))
      ((eq shape 'search)
       (list :result
