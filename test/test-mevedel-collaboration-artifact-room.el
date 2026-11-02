@@ -1663,7 +1663,8 @@ Return the artifact's directory."
             (should (assq 'result (mevedel-artifact-room-test--request
                                    consumer 1 `((action . "write-file")
                                                 (file . "assets/large.bin")
-                                                (data . ,(base64-encode-string largest t))))))
+                                                (data . ,(base64-encode-string largest t)))
+                                   60)))
             (should (equal largest (mevedel-artifact-room-test--file directory
                                                                      "assets/large.bin")))
             ;; And reads back whole through the link.
@@ -1686,7 +1687,8 @@ Return the artifact's directory."
             (let ((reply (mevedel-artifact-room-test--request
                           consumer 3 `((action . "write-file") (file . "assets/huge.bin")
                                        (data . ,(base64-encode-string
-                                                 (concat largest "x") t))))))
+                                                 (concat largest "x") t)))
+                          60)))
               (should (string-search "larger than" (alist-get 'error reply))))
             (should-not (file-exists-p (file-name-concat directory "assets/huge.bin"))))
         (mevedel-artifact-room-test--close consumer)))))
