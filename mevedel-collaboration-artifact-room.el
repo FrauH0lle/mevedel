@@ -42,8 +42,13 @@
 (require 'mevedel-artifact-store)
 (require 'mevedel-collaboration)
 (require 'mevedel-resource)
-(require 'mevedel-shared-library)
 (require 'mevedel-workspace)
+
+;; `mevedel-shared-library'
+;; Restoring shared artifacts at startup loads this file; the libraries
+;; load only when a consumer asks for them.
+(declare-function mevedel-shared-library-libraries "mevedel-shared-library" ())
+(autoload 'mevedel-shared-library-libraries "mevedel-shared-library")
 
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--admit-hello
@@ -394,9 +399,10 @@ With `:image' in ARGS, show that embedded image instead, as
      authorize)))
 
 (defun mevedel-collaboration-artifact-room--library (room _guest args authorize reply)
-  "Show the origin user's whiteboard libraries to ROOM's guest, as `shared://library'.
-ARGS may name one `:library'; with `:part' \"sheet\" the reply is the
-picture of the library (or of all of them) as `:png' and `:mime', else
+  "Show the origin user's whiteboard libraries as `shared://library' does.
+ROOM's guest gets them.  ARGS may name one `:library'; with `:part'
+\"sheet\" the reply is the picture of the library (or of all of them)
+as `:png' and `:mime', else
 the listing as `:text'.  Only reading is offered: the libraries are never
 changed.  AUTHORIZE and REPLY are as in
 `mevedel-collaboration-artifact-room--actions'."
