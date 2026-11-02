@@ -100,7 +100,7 @@
                  ;; took its items over: its remembered leases are stale.
                  (let ((workspace (mevedel-session-workspace editing-test-session))
                        (mevedel-session-durability--client-id (make-string 64 ?f)))
-                   (dolist (id (mevedel-shared-editing-ids workspace))
+                   (dolist (id (mapcar (lambda (item) (plist-get item :id)) (mevedel-shared-editing-list workspace)))
                      (let ((directory (mevedel-artifact-lease-directory workspace id)))
                        (unless (mevedel-artifact-lease--claim
                                 directory (mevedel-session-durability--lease-head directory)

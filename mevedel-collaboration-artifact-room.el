@@ -36,6 +36,7 @@
 (eval-when-compile
   (require 'cl-lib))
 
+(require 'mevedel-artifact-backend)
 (require 'mevedel-artifact-store)
 (require 'mevedel-collaboration)
 (require 'mevedel-resource)
@@ -511,7 +512,7 @@ a deletion is left to the room's own lifecycle."
            :title (plist-get state :title) :revision (plist-get state :revision))
      t)))
 
-(add-hook 'mevedel-shared-editing-change-hook
+(add-hook 'mevedel-artifact-backend-change-hook
           #'mevedel-collaboration-artifact-room--changed)
 
 (defun mevedel-collaboration-artifact-room--on-state (root id state)

@@ -56,12 +56,12 @@
 			   (should (eq 'success (plist-get reply :status)))
 			   (should (= 1 (length (mevedel-shared-editing-list workspace))))
 			   ;; The model's item is attached to its session.
-			   (should (equal (mevedel-shared-editing-ids workspace)
+			   (should (equal (mapcar (lambda (item) (plist-get item :id)) (mevedel-shared-editing-list workspace))
 					  (mevedel-session-attached-artifacts session)))
 			   (let (cancel
-				 (mevedel-shared-editing-change-hook nil))
+				 (mevedel-artifact-backend-change-hook nil))
 			     (setq reply nil calls 0
-				   mevedel-shared-editing-change-hook
+				   mevedel-artifact-backend-change-hook
 				   (list (lambda (&rest _) (funcall cancel) (mevedel-shared-editing-stop))))
 			     (setq cancel
 				   (mevedel-pipeline-run-tool-outcome

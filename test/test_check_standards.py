@@ -159,6 +159,15 @@ class StandardsTests(unittest.TestCase):
                 self.assertEqual({item['owner'] for item in current}, {'demo-second'})
                 self.assertEqual(standards.new_diagnostics(old, current), current)
 
+    def test_checkdoc_diagnostic_on_unnamed_form_belongs_to_file(self):
+        # A script without section markers gets its missing-Code diagnostic
+        # on its first form; an argument-less call there names no definition.
+        script = (';;; room.el --- Fixture script -*- lexical-binding: t; -*-\n'
+                  '(ignore)\n')
+        _, current = standards.checkdoc(self.root, [('room.el', script), ('room.el', script)])
+        self.assertTrue(any('Code:' in item['message'] for item in current))
+        self.assertTrue(all(item['owner'] == '<file>' for item in current))
+
     def test_changed_only_new_deleted_renamed_and_committed_files(self):
         output, _ = self.check(0)
         self.assertIn('0 changed Lisp files', output)

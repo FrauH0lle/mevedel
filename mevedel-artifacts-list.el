@@ -18,6 +18,11 @@
   (require 'cl-lib)
   (require 'tabulated-list))
 
+;; `mevedel-artifact-backend'
+(declare-function mevedel-artifact-backend-catalog "mevedel-artifact-backend"
+                  (workspace &optional detail))
+(autoload 'mevedel-artifact-backend-catalog "mevedel-artifact-backend")
+
 ;; `mevedel-artifact-store'
 (declare-function mevedel-artifact-store-attach
                   "mevedel-artifact-store" (session id &optional buffer))
@@ -27,10 +32,6 @@
                   "mevedel-artifact-store" (workspace id &optional actor callback))
 (declare-function mevedel-artifact-store-duplicate
                   "mevedel-artifact-store" (workspace id new-id))
-(declare-function mevedel-artifact-store-ids
-                  "mevedel-artifact-store" (workspace))
-(declare-function mevedel-artifact-store-list
-                  "mevedel-artifact-store" (workspace))
 (declare-function mevedel-artifact-store-restore-version
                   "mevedel-artifact-store" (workspace id n &optional session-id actor callback))
 (declare-function mevedel-artifact-store-version-path
@@ -41,8 +42,6 @@
 (autoload 'mevedel-artifact-store-conversation "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-delete "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-duplicate "mevedel-artifact-store")
-(autoload 'mevedel-artifact-store-ids "mevedel-artifact-store")
-(autoload 'mevedel-artifact-store-list "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-restore-version "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-version-path "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-versions "mevedel-artifact-store")
@@ -155,13 +154,15 @@
                       (when (memq (plist-get row :kind) mevedel-artifact-store-item-kinds)
                         (list :item (plist-get row :id)))
                       row))
-            (mevedel-artifact-store-list workspace))))
+            (mevedel-artifact-backend-catalog workspace))))
 
 (defun mevedel-artifacts-list-count (session)
   "Return (ATTACHED . IN-PROJECT) artifact counts for SESSION, best effort."
   (or (ignore-errors
         ;; Ids only: reading every artifact's state is not a count.
-        (let ((ids (mevedel-artifact-store-ids (mevedel-session-workspace session))))
+        (let ((ids (mapcar (lambda (row) (plist-get row :id))
+                           (mevedel-artifact-backend-catalog
+                            (mevedel-session-workspace session) 'ids))))
           (cons (cl-count-if (lambda (id) (member id ids))
                              (mevedel-session-attached-artifacts session))
                 (length ids))))

@@ -70,6 +70,13 @@
 (autoload 'mevedel-agent-persistence-ensure-conversation
   "mevedel-agent-persistence")
 
+;; `mevedel-artifact-backend'
+(declare-function mevedel-artifact-backend-catalog "mevedel-artifact-backend"
+                  (workspace &optional detail))
+(declare-function mevedel-artifact-backend-present-p "mevedel-artifact-backend" (workspace id))
+(autoload 'mevedel-artifact-backend-catalog "mevedel-artifact-backend")
+(autoload 'mevedel-artifact-backend-present-p "mevedel-artifact-backend")
+
 ;; `mevedel-execution'
 (declare-function mevedel-execution-list-user "mevedel-execution" (session))
 
@@ -128,12 +135,6 @@
 (declare-function mevedel-skills-scan "mevedel-skills-core"
                   (&optional workspace-root dirs workspace))
 (autoload 'mevedel-skills-scan "mevedel-skills-core")
-
-;; `mevedel-shared-editing'
-(declare-function mevedel-shared-editing-list "mevedel-shared-editing" (workspace))
-(declare-function mevedel-shared-editing-present-p "mevedel-shared-editing" (workspace id))
-(autoload 'mevedel-shared-editing-list "mevedel-shared-editing")
-(autoload 'mevedel-shared-editing-present-p "mevedel-shared-editing")
 
 ;; `mevedel-structs'
 (declare-function mevedel-agent-path-p "mevedel-structs" (path))
@@ -722,8 +723,8 @@ SCHEME is nil, include metadata for every scheme."
                             (mevedel-resource--memory-roots context session)))
          (shared-items (and (memq scheme '(nil shared))
                             session
-                            (mevedel-shared-editing-list
-                             (mevedel-session-workspace session))))
+                            (mevedel-artifact-backend-catalog
+                             (mevedel-session-workspace session) 'items)))
          (servers (and (memq scheme '(nil mcp))
                        (fboundp 'mcp-hub-get-servers)
                        (condition-case nil
@@ -1127,15 +1128,15 @@ Item addresses need an existing item; listings and libraries always resolve."
   (or (null components)
       (equal (car components) "library")
       (and session
-           (mevedel-shared-editing-present-p (mevedel-session-workspace session)
-                                             (car components))
+           (mevedel-artifact-backend-present-p (mevedel-session-workspace session)
+                                               (car components))
            t)))
 
 (defun mevedel-resource--shared-list-result (session)
   "Return the workspace's shared item listing for a bare `shared://' Read.
 Items attached to SESSION are marked."
-  (let ((items (and session (mevedel-shared-editing-list
-                             (mevedel-session-workspace session))))
+  (let ((items (and session (mevedel-artifact-backend-catalog
+                             (mevedel-session-workspace session) 'items)))
         (attached (and session (mevedel-session-attached-artifacts session))))
     (concat
      (if items

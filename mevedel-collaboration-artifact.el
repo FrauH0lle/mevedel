@@ -16,6 +16,14 @@
 
 (require 'json)
 
+;; `mevedel-artifact-backend'
+(declare-function mevedel-artifact-backend-call "mevedel-artifact-backend"
+                  (workspace args callback &optional authorize commit))
+(declare-function mevedel-artifact-backend-catalog "mevedel-artifact-backend"
+                  (workspace &optional detail))
+(autoload 'mevedel-artifact-backend-call "mevedel-artifact-backend")
+(autoload 'mevedel-artifact-backend-catalog "mevedel-artifact-backend")
+
 ;; `mevedel-artifact-store'
 (declare-function mevedel-artifact-store-artifact-directory
                   "mevedel-artifact-store" (workspace id))
@@ -31,7 +39,6 @@
                   "mevedel-artifact-store" (workspace id new-id))
 (declare-function mevedel-artifact-store-id-p "mevedel-artifact-store" (id))
 (declare-function mevedel-artifact-store-item-p "mevedel-artifact-store" (meta))
-(declare-function mevedel-artifact-store-list "mevedel-artifact-store" (workspace))
 (declare-function mevedel-artifact-store-meta "mevedel-artifact-store" (workspace id))
 (declare-function mevedel-artifact-store-primary-path
                   "mevedel-artifact-store" (workspace id &optional meta))
@@ -51,7 +58,6 @@
 (autoload 'mevedel-artifact-store-duplicate "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-id-p "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-item-p "mevedel-artifact-store")
-(autoload 'mevedel-artifact-store-list "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-meta "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-primary-path "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-restore-version "mevedel-artifact-store")
@@ -118,14 +124,11 @@
 (autoload 'mevedel-session-persistence-list-sessions "mevedel-session-persistence")
 
 ;; `mevedel-shared-editing'
-(declare-function mevedel-shared-editing-call "mevedel-shared-editing"
-                  (workspace args callback &optional authorize commit))
 (declare-function mevedel-shared-editing-check-new "mevedel-shared-editing" (kind title))
 (declare-function mevedel-shared-editing-create "mevedel-shared-editing"
                   (workspace kind title actor callback &rest keys))
 (declare-function mevedel-shared-editing-save-version
                   "mevedel-shared-editing" (workspace id &optional session-id))
-(autoload 'mevedel-shared-editing-call "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-check-new "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-create "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-save-version "mevedel-shared-editing")
@@ -278,7 +281,7 @@ without changing the live artifact."
                              (or version (not (plist-get record :item))))
                   (error "This artifact is not published"))
                 (if (and version (plist-get record :item))
-                    (mevedel-shared-editing-call
+                    (mevedel-artifact-backend-call
                      workspace
                      (list :action "export" :id id :version version
                            :format (if (eq (plist-get (mevedel-artifact-store-meta
@@ -435,7 +438,7 @@ mutation can acknowledge.  Resolve rooms and read the store when publishing."
   "Read WORKSPACE's store once for a listing or notification fanout.
 COUNT-ATTACHMENTS includes lobby attachment counts.  CACHED uses the last
 session discovery for this decoration; live buffers always override it."
-  (let ((artifacts (mevedel-artifact-store-list workspace))
+  (let ((artifacts (mevedel-artifact-backend-catalog workspace))
         (counts (make-hash-table :test #'equal)))
     (when (and artifacts count-attachments)
       (let ((sessions (make-hash-table :test #'equal)))

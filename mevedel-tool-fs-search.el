@@ -25,10 +25,13 @@
 (declare-function mevedel-pipeline-handler-resumable "mevedel-pipeline" (function))
 (autoload 'mevedel-pipeline-handler-resumable "mevedel-pipeline")
 
-;; `mevedel-shared-editing'
-(declare-function mevedel-shared-editing-ids "mevedel-shared-editing" (workspace))
+;; `mevedel-artifact-backend'
+(declare-function mevedel-artifact-backend-catalog "mevedel-artifact-backend"
+                  (workspace &optional detail))
+(autoload 'mevedel-artifact-backend-catalog "mevedel-artifact-backend")
+
+;; `mevedel-structs'
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(autoload 'mevedel-shared-editing-ids "mevedel-shared-editing")
 
 ;; `mevedel-tool-editing'
 (declare-function mevedel-tool-editing-view "mevedel-tool-editing" (components callback &optional search))
@@ -136,9 +139,10 @@ then searched as virtual documents whose results CALLBACK receives."
          (address (plist-get descriptor :address))
          (views (cond
                  ((null components)
-                  (mapcar (lambda (id) (cons id (list id)))
-                          (mevedel-shared-editing-ids
-                           (mevedel-session-workspace mevedel--session))))
+                  (mapcar (lambda (item)
+                            (let ((id (plist-get item :id))) (cons id (list id))))
+                          (mevedel-artifact-backend-catalog
+                           (mevedel-session-workspace mevedel--session) 'items)))
                  ((or (equal (car (last components)) "view.png")
                       (equal (car (last components)) "sheet.png")
                       (equal (cadr components) "images"))

@@ -24,7 +24,10 @@
                      (save-excursion
                        (goto-char (or position (point-min)))
                        (let ((line (line-number-at-pos))
-                             (owner (or (lisp-current-defun-name) "<file>")))
+                             ;; An argument-less top-level call names no
+                             ;; definition; its diagnostic is the file's.
+                             (owner (or (ignore-errors (lisp-current-defun-name))
+                                        "<file>")))
                          ;; Pair messages with their top-level definition, not
                          ;; volatile line numbers or a tree-wide warning count.
                          (push `((line . ,line) (owner . ,owner)

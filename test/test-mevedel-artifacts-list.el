@@ -12,6 +12,7 @@
           (file-name-directory (or buffer-file-name load-file-name))
           "mevedel-report-test-support"))
 
+(require 'mevedel-artifact-backend)
 (require 'mevedel-artifact-store)
 (require 'mevedel-artifacts-list)
 (require 'mevedel-cockpit)
@@ -379,8 +380,8 @@
       (with-current-buffer (mevedel-artifacts-list-open
                             (mevedel-artifacts-list-test--context session view data))
         (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t))
-                  ((symbol-function 'mevedel-shared-editing-call)
-                   (lambda (seen args _callback)
+                  ((symbol-function 'mevedel-artifact-backend-call)
+                   (lambda (seen args _callback &rest _)
                      (should (eq workspace seen))
                      (setq queued args))))
           (mevedel-artifacts-list-delete)))

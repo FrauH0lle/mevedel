@@ -19,8 +19,8 @@
 (require 'subr-x)
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
+(autoload 'mevedel-artifact-backend-call "mevedel-artifact-backend")
 (autoload 'mevedel-shared-editing--json "mevedel-shared-editing")
-(autoload 'mevedel-shared-editing-call "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-create "mevedel-shared-editing")
 (autoload 'mevedel-shared-library-libraries "mevedel-shared-library")
 (autoload 'mevedel-shared-library-text "mevedel-shared-library")
@@ -140,7 +140,7 @@ versions it when the current request settles."
   (setq args (plist-put (copy-sequence args) :actor (mevedel-tool-editing--actor)))
   (setq args (plist-put args :opId (secure-hash 'sha256 (format "%s%s" (current-time) (random t)))))
   (setq args (mevedel-tool-editing--restore-nulls args))
-  (mevedel-shared-editing-call
+  (mevedel-artifact-backend-call
    (mevedel-tool-editing--workspace) args
    (mevedel-tool-editing--deliver callback nil)
    mevedel-pipeline--handler-active-p mevedel-pipeline--handler-commit))
@@ -184,7 +184,7 @@ from the same Read lines, joining output string chunks only for matching."
                 (list :action "view" :id id :part "image" :image image))
                (_ (error "Unknown shared:// address")))))
         (when search (setq args (plist-put args :search t)))
-        (mevedel-shared-editing-call
+        (mevedel-artifact-backend-call
          (mevedel-tool-editing--workspace) args
          (lambda (reply)
            (funcall callback
