@@ -1,0 +1,38 @@
+{
+  "description": "A patch naming a hash that no longer matches is rejected whole. The origin answers as SharedEdit does: the stale targets with their current lines, so the consumer can retry without another read.",
+  "tier": "edit",
+  "bindings": {
+    "$ID": "snt-pipeline",
+    "$STALE_HASH": "000000000000",
+    "$MESSAGE": "Stale box; use the current lines below",
+    "$HASH": "b926fb70efe3",
+    "$LINE": "b926fb70efe3 {\"id\":\"box\",\"type\":\"rectangle\",\"x\":0,\"y\":0,\"width\":120,\"height\":60,\"index\":\"a0\"}"
+  },
+  "frames": [
+    {
+      "from": "consumer",
+      "frame": {
+        "t": "editing",
+        "reqId": 1,
+        "body": {
+          "action": "patch",
+          "id": "$ID",
+          "changes": [{ "id": "box", "hash": "$STALE_HASH", "set": { "x": 40 } }]
+        }
+      }
+    },
+    {
+      "from": "origin",
+      "frame": {
+        "t": "editing",
+        "reqId": 1,
+        "body": {
+          "error": "$MESSAGE",
+          "code": "stale",
+          "targets": [{ "id": "box", "hash": "$HASH", "line": "$LINE" }],
+          "revision": 2
+        }
+      }
+    }
+  ]
+}
