@@ -1,0 +1,25 @@
+{
+  "description": "Reading the room's whiteboard returns the hash-prefixed lines shared://ID shows at the origin.",
+  "bindings": {
+    "$ID": "snt-pipeline",
+    "$TEXT": "whiteboard \"SNT analysis pipeline\" · revision 2 · 1 element\nLines are HASH ELEMENT-JSON in drawing order; abbreviated entries are summaries, not replacement JSON. Element: shared://snt-pipeline/elements/ID · Rendering: shared://snt-pipeline/view.png · Discussions (0): shared://snt-pipeline/discussions · History: shared://snt-pipeline/history\n3f9a0c12b7 {\"id\":\"box\",\"type\":\"rectangle\",\"x\":0,\"y\":0,\"width\":120,\"height\":60}\n"
+  },
+  "frames": [
+    {
+      "from": "consumer",
+      "frame": {
+        "t": "editing",
+        "reqId": 1,
+        "body": { "action": "read", "id": "$ID" }
+      }
+    },
+    {
+      "from": "origin",
+      "frame": {
+        "t": "editing",
+        "reqId": 1,
+        "body": { "result": { "text": "$TEXT" } }
+      }
+    }
+  ]
+}

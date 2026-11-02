@@ -1,0 +1,43 @@
+{
+  "name": "mevedel-remote-artifact",
+  "version": "0.1.0",
+  "description": "Work on artifacts shared from a mevedel origin through an MCP server, from Claude Code, Codex or any MCP client.",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "bin": {
+    "mevedel-remote-artifact": "bin/mevedel-remote-artifact.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE",
+    "NOTICE.md"
+  ],
+  "engines": {
+    "node": ">=22.4"
+  },
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FrauH0lle/mevedel.git",
+    "directory": "remote-artifact"
+  },
+  "homepage": "https://github.com/FrauH0lle/mevedel/tree/master/remote-artifact#readme",
+  "bugs": {
+    "url": "https://github.com/FrauH0lle/mevedel/issues"
+  },
+  "keywords": [
+    "mcp",
+    "mevedel",
+    "whiteboard",
+    "collaboration",
+    "claude-code",
+    "codex"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

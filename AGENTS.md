@@ -24,9 +24,10 @@ investigations, and reports.
 
 Each `.el` file also describes its purpose in its `;;; Commentary:` block.
 
-Before working in `relay/` or `shared-editing/`, read
-[relay/AGENTS.md](relay/AGENTS.md) or
-[shared-editing/AGENTS.md](shared-editing/AGENTS.md), respectively, for
+Before working in `relay/`, `shared-editing/` or `remote-artifact/`, read
+[relay/AGENTS.md](relay/AGENTS.md),
+[shared-editing/AGENTS.md](shared-editing/AGENTS.md) or
+[remote-artifact/AGENTS.md](remote-artifact/AGENTS.md), respectively, for
 scoped contracts and checks.
 
 ## Module reference

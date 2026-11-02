@@ -1,0 +1,72 @@
+# mevedel-remote-artifact
+
+Work on whiteboards and documents that live in a
+[mevedel](https://github.com/FrauH0lle/mevedel) workspace on another machine
+(their *origin*) from Claude Code, Codex or any MCP client. The origin shares
+an artifact and gives you an *artifact link*; you attach the link here, and
+your agent reads the artifact through MCP tools. Every read goes live to the
+origin; nothing is copied. Needs Node 22.4 or newer and nothing else.
+
+## Attach a link
+
+Attach links in a terminal, never in a chat: a link is a secret.
+
+```sh
+npx mevedel-remote-artifact attach 'https://relay.example/#ROOM.SECRET' [--name NAME] [--as DISPLAY-NAME]
+npx mevedel-remote-artifact detach NAME
+```
+
+An attached artifact is named by its id at the origin unless `--name`
+chooses another; attaching refuses a name that is already taken. `--as` sets
+the name the origin shows for you (default `user@machine (client)`). Session
+and lobby links are refused. Links are stored in one file per user,
+`$XDG_CONFIG_HOME/mevedel-remote-artifact/links.json` (default
+`~/.config/...`), readable only by you.
+
+## Install and set up a client
+
+Nothing to install beyond Node 22.4 or newer: `npx` fetches the package on
+first use. Attach a link first (above), then register the MCP server once.
+
+Claude Code:
+
+```sh
+claude mcp add remote-artifacts -- npx mevedel-remote-artifact mcp
+```
+
+Codex (`codex mcp add remote-artifacts -- npx mevedel-remote-artifact mcp`, or
+in `~/.codex/config.toml`):
+
+```toml
+[mcp_servers.remote-artifacts]
+command = "npx"
+args = ["mevedel-remote-artifact", "mcp"]
+```
+
+Any other MCP client: run `npx mevedel-remote-artifact mcp` as a stdio server.
+To install globally instead, `npm install -g mevedel-remote-artifact` and use
+`mevedel-remote-artifact mcp` as the command.
+
+## Connection lifecycle
+
+The server connects to an artifact's origin the first time a tool call needs
+it, reuses the connection for later calls, and closes it after 5 idle minutes
+so an open client does not keep the origin awake. The next call reconnects
+transparently. If the origin speaks another protocol version, tools fail with
+"origin speaks protocol N, this package speaks M; update one": update the
+package (or the origin's mevedel) so both match.
+
+Tools:
+
+- `list_artifacts`: each attached artifact's name, title, kind, link tier
+  (view or edit) and whether its origin is reachable.
+- `read_artifact(name)`: the whiteboard or document as hash-prefixed lines,
+  exactly as `shared://ID` shows it at the origin.
+
+When the origin is offline, or the link was revoked or the artifact deleted,
+tools fail with "Origin unavailable (revoked, deleted, or offline)".
+
+## Licence
+
+GPL-3.0-or-later, like mevedel (`LICENSE`). The package has no dependencies
+and bundles no third-party code (`NOTICE.md`).

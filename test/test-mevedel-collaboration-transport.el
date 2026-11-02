@@ -23,6 +23,10 @@
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-session-control-fs)
 (require 'mevedel-transport)
+(require 'mevedel-collaboration-relay-test-support
+         (file-name-concat
+          (file-name-directory (or load-file-name buffer-file-name))
+          "mevedel-collaboration-relay-test-support"))
 (require 'mevedel-sigpipe-test-support
          (file-name-concat
           (file-name-directory (or load-file-name buffer-file-name))
@@ -33,171 +37,7 @@
   "This file, which the SIGPIPE-ignoring child loads.")
 
 
-;;
-;;; Stub relay
-
-;; websocket.el's server discards the HTTP request path, but the relay
-;; contract routes on it.  The stub captures the request line per client
-;; process before delegating to the real server filter.
-
-(defun mevedel-test--relay-path (process)
-  "Return the captured request path for client PROCESS."
-  (process-get process :mevedel-test-path))
-
-(defmacro mevedel-test--with-path-capture (&rest body)
-  "Run BODY with `websocket-server-filter' capturing request paths."
-  `(cl-letf* ((original (symbol-function 'websocket-server-filter))
-              ((symbol-function 'websocket-server-filter)
-               (lambda (process output)
-                 (unless (process-get process :mevedel-test-path)
-                   (when (string-match "\\`[A-Z]+ \\([^ ]+\\)" output)
-                     (process-put process :mevedel-test-path
-                                  (match-string 1 output))))
-                 (funcall original process output))))
-     ,@body))
-
-(defun mevedel-test--stub-relay-start (state port)
-  "Start a stub relay on PORT recording rooms in STATE.
-STATE is a plist placed in a cons cell so handlers can mutate it."
-  (websocket-server
-   port
-   :host 'local
-   :on-open
-   (lambda (ws)
-     (let ((path (mevedel-test--relay-path (websocket-conn ws))))
-       (cond
-        ((and path (string-match "\\?role=host\\'" path))
-         (if (plist-get (car state) :host)
-             (websocket-close ws)
-           (setcar state (plist-put (car state) :host ws))))
-        ((and path (string-match "\\?role=guest\\'" path))
-         (let* ((plist (car state))
-                (peer (or (plist-get plist :next-peer) 1))
-                (guests (or (plist-get plist :guests)
-                            (make-hash-table :test #'eql))))
-           (puthash peer ws guests)
-           (setcar state (plist-put
-                          (plist-put (plist-put plist :guests guests)
-                                     :next-peer (1+ peer))
-                          :peer-of
-                          (cons (cons ws peer)
-                                (plist-get plist :peer-of))))
-           (when-let* ((host (plist-get (car state) :host)))
-             (websocket-send-text
-              host (format "{\"t\":\"peer-joined\",\"peer\":%d}" peer))))))))
-   :on-message
-   (lambda (ws frame)
-     (when (eq (websocket-frame-opcode frame) 'binary)
-       (let* ((payload (websocket-frame-payload frame))
-              (plist (car state))
-              (host (plist-get plist :host))
-              (guests (plist-get plist :guests)))
-         (when (>= (length payload) 4)
-           (if (eq ws host)
-               (let ((peer (logior (ash (aref payload 0) 24)
-                                   (ash (aref payload 1) 16)
-                                   (ash (aref payload 2) 8)
-                                   (aref payload 3))))
-                 (if (zerop peer)
-                     (when guests
-                       (maphash (lambda (_peer guest)
-                                  (mevedel-test--relay-send-binary
-                                   guest payload))
-                                guests))
-                   (when-let* ((guest (and guests (gethash peer guests))))
-                     (mevedel-test--relay-send-binary guest payload))))
-             (when host
-               (let* ((peer (or (cdr (assq ws (plist-get plist :peer-of))) 0))
-                      (rewritten (concat (unibyte-string
-                                          (logand (ash peer -24) #xff)
-                                          (logand (ash peer -16) #xff)
-                                          (logand (ash peer -8) #xff)
-                                          (logand peer #xff))
-                                         (substring payload 4))))
-                 (mevedel-test--relay-send-binary host rewritten))))))))
-   :on-close
-   (lambda (ws)
-     (let* ((plist (car state))
-            (host (plist-get plist :host))
-            (guests (plist-get plist :guests)))
-       (cond
-        ((eq ws host)
-         (setcar state (plist-put plist :host nil))
-         (when guests
-           (maphash (lambda (_peer guest)
-                      (ignore-errors
-                        (websocket-send-text guest "{\"t\":\"room-closed\"}")
-                        (websocket-close guest)))
-                    guests)
-           (clrhash guests)))
-        ((and guests
-              (cl-loop for peer being the hash-keys of guests
-                       when (eq (gethash peer guests) ws) return peer))
-         (let ((peer (cl-loop for peer being the hash-keys of guests
-                              when (eq (gethash peer guests) ws)
-                              return peer)))
-           (remhash peer guests)
-           (when host
-             (ignore-errors
-               (websocket-send-text
-                host
-                (format "{\"t\":\"peer-left\",\"peer\":%d}" peer)))))))))))
-
-(defun mevedel-test--relay-send-binary (ws payload)
-  "Send unibyte PAYLOAD as one binary frame on WS."
-  (ignore-errors
-    (websocket-send ws (make-websocket-frame :opcode 'binary
-                                             :payload payload
-                                             :completep t))))
-
-(defun mevedel-test--pump (predicate &optional timeout)
-  "Run the event loop until PREDICATE returns non-nil or TIMEOUT expires.
-Return the predicate's final value."
-  (let ((deadline (+ (float-time) (or timeout 5)))
-        result)
-    (while (and (not (setq result (funcall predicate)))
-                (< (float-time) deadline))
-      (accept-process-output nil 0.02))
-    result))
-
-(defun mevedel-test--free-port ()
-  "Return a free loopback TCP port."
-  (let* ((server (make-network-process :name "mevedel-test-port-probe"
-                                       :server t :host 'local :service t
-                                       :noquery t))
-         (port (process-contact server :service)))
-    (delete-process server)
-    port))
-
-(defun mevedel-test--stub-relay-stop (server)
-  "Release SERVER and its accepted sockets without sending close frames."
-  (dolist (ws (copy-sequence websocket-server-websockets))
-    (when (eq server (websocket-server-conn ws))
-      (let ((client (websocket-conn ws)))
-        (set-process-filter client #'ignore)
-        (set-process-sentinel client #'ignore)
-        (delete-process client))
-      (setq websocket-server-websockets
-            (delq ws websocket-server-websockets))))
-  (delete-process server))
-
-(defmacro mevedel-test--with-stub-relay (bindings &rest body)
-  "Run BODY with a live stub relay bound per BINDINGS (STATE PORT SERVER).
-STATE is bound to the one-element mutable list whose car holds the
-relay's room plist."
-  (declare (indent 1))
-  (pcase-let ((`(,state ,port ,server) bindings))
-    `(mevedel-test--with-path-capture
-      (let* ((,state (list (list :next-peer 1)))
-             (,port (mevedel-test--free-port))
-             (,server (mevedel-test--stub-relay-start ,state ,port)))
-        (ignore ,state)
-        (unwind-protect
-            (progn ,@body)
-          (mevedel-test--stub-relay-stop ,server))))))
-
-
-(mevedel-deftest mevedel-test--stub-relay-stop
+(mevedel-deftest mevedel-relay-test--stub-relay-stop
   (:doc "teardown releases accepted sockets without writing to cancelled peers")
   (let ((send (symbol-function 'websocket-send))
         transport client tearing-down cleanup-writes)
@@ -208,12 +48,12 @@ relay's room plist."
                        (if tearing-down
                            (push args cleanup-writes)
                          (apply send args)))))
-            (mevedel-test--with-stub-relay (state port server)
+            (mevedel-relay-test--with-stub-relay (state port server)
               (setq transport
                     (mevedel-collaboration--transport-open
                      (format "ws://127.0.0.1:%d/r/cleanup?role=host" port)
                      (make-string 32 5)))
-              (should (mevedel-test--pump
+              (should (mevedel-relay-test--pump
                        (lambda () (eq 'open (plist-get transport :state))) 3))
               (setq client
                     (cl-find-if (lambda (ws) (eq server (websocket-server-conn ws)))
@@ -355,7 +195,7 @@ relay's room plist."
   ,test
   (test)
   :doc "connects without waiting and ignores callbacks after cancellation"
-  (mevedel-test--with-stub-relay (state port server)
+  (mevedel-relay-test--with-stub-relay (state port server)
     (let ((original (symbol-function 'make-network-process))
           network-options transport states)
       (unwind-protect
@@ -491,7 +331,7 @@ relay's room plist."
                  :on-state (lambda (value) (push value states))))
           (let ((ws (plist-get transport :ws)))
             (should (eq 'connecting (plist-get transport :state)))
-            (should (mevedel-test--pump (lambda () (memq 'down states)) 3))
+            (should (mevedel-relay-test--pump (lambda () (memq 'down states)) 3))
             (should (equal '(down) states))
             (should (eq 'down (plist-get transport :state)))
             (should-not (plist-get transport :ws))
@@ -532,7 +372,7 @@ relay's room plist."
 
 (mevedel-deftest mevedel-collaboration--transport-open
   (:doc "delivers sealed frames and control messages both ways through a relay")
-  (mevedel-test--with-stub-relay (state port server)
+  (mevedel-relay-test--with-stub-relay (state port server)
     (let* ((key (make-string 32 5))
            (frames nil)
            (controls nil)
@@ -546,7 +386,7 @@ relay's room plist."
              :on-state (lambda (new) (push new states)))))
       (unwind-protect
           (progn
-            (should (mevedel-test--pump
+            (should (mevedel-relay-test--pump
                      (lambda ()
                        (mevedel-collaboration--transport-open-p transport))))
             (should (equal '(open) states))
@@ -565,7 +405,7 @@ relay's room plist."
                              (push frame guest-frames)))))
               (unwind-protect
                   (progn
-                    (should (mevedel-test--pump
+                    (should (mevedel-relay-test--pump
                              (lambda () (equal controls
                                                '((peer-joined . 1))))))
                     ;; Guest -> host: sealed hello arrives decoded with the
@@ -579,7 +419,7 @@ relay's room plist."
                                 (mevedel-collaboration--seal
                                  key "{\"t\":\"hello\",\"proto\":3}"))
                       :completep t))
-                    (should (mevedel-test--pump (lambda () frames)))
+                    (should (mevedel-relay-test--pump (lambda () frames)))
                     (should (equal 1 (caar frames)))
                     (should (equal "hello" (plist-get (cdar frames) :t)))
                     ;; Host -> guest: targeted and broadcast envelopes
@@ -588,7 +428,7 @@ relay's room plist."
                              transport 1 (list :t "welcome" :proto 3)))
                     (should (mevedel-collaboration--transport-send
                              transport 0 (list :t "record")))
-                    (should (mevedel-test--pump
+                    (should (mevedel-relay-test--pump
                              (lambda () (= 2 (length guest-frames)))))
                     (let ((decoded
                            (mapcar
@@ -620,12 +460,12 @@ relay's room plist."
                                 1 (mevedel-collaboration--seal
                                    key "{\"t\":\"abort\"}"))
                       :completep t))
-                    (should (mevedel-test--pump (lambda () frames)))
+                    (should (mevedel-relay-test--pump (lambda () frames)))
                     (should (= 1 (length frames)))
                     (should (equal "abort" (plist-get (cdar frames) :t))))
                 (websocket-close guest))
               ;; Guest departure reaches the host as peer-left.
-              (should (mevedel-test--pump
+              (should (mevedel-relay-test--pump
                        (lambda () (assq 'peer-left controls))))))
         (mevedel-collaboration--transport-stop transport)
         (should (memq 'stopped states))))))
@@ -653,7 +493,7 @@ relay's room plist."
                (mevedel-collaboration--transport-receive transport frame))))
           (should-not nested)
           (should-not delivered)
-          (should (mevedel-test--pump (lambda () delivered)))
+          (should (mevedel-relay-test--pump (lambda () delivered)))
           (should (equal "bytes" delivered)))
       (mevedel-collaboration--transport-stop transport)
       (delete-file path)))
@@ -712,7 +552,7 @@ relay's room plist."
           (should (equal '(first) seen))
           (should (gethash (plist-get transport :input-key) mevedel-transport--pending))
           (setq busy nil)
-          (should (mevedel-test--pump (lambda () (= 2 (length seen)))))
+          (should (mevedel-relay-test--pump (lambda () (= 2 (length seen)))))
           (should (equal '(second first) seen)))
       (mevedel-collaboration--transport-stop transport))))
 
@@ -813,10 +653,10 @@ relay's room plist."
 
 (mevedel-deftest mevedel-collaboration--transport-down
   (:doc "reconnects with backoff after the relay drops and stops cleanly")
-  (mevedel-test--with-path-capture
+  (mevedel-relay-test--with-path-capture
    (let* ((state (list (list :next-peer 1)))
-          (port (mevedel-test--free-port))
-          (server (mevedel-test--stub-relay-start state port))
+          (port (mevedel-relay-test--free-port))
+          (server (mevedel-relay-test--stub-relay-start state port))
           (key (make-string 32 5))
           (states nil)
           (transport
@@ -826,25 +666,25 @@ relay's room plist."
             :on-state (lambda (new) (push new states)))))
      (unwind-protect
          (progn
-           (should (mevedel-test--pump
+           (should (mevedel-relay-test--pump
                     (lambda ()
                       (mevedel-collaboration--transport-open-p transport))))
            ;; Relay goes away: the transport reports down and schedules a
            ;; retry instead of dying.
            (websocket-server-close server)
-           (should (mevedel-test--pump (lambda () (memq 'down states))))
+           (should (mevedel-relay-test--pump (lambda () (memq 'down states))))
            (should (timerp (plist-get transport :reconnect-timer)))
            ;; The relay returns on the same port: the transport reconnects
            ;; by itself within the backoff window.
            (setq state (list (list :next-peer 1))
-                 server (mevedel-test--stub-relay-start state port))
-           (should (mevedel-test--pump
+                 server (mevedel-relay-test--stub-relay-start state port))
+           (should (mevedel-relay-test--pump
                     (lambda ()
                       (mevedel-collaboration--transport-open-p transport))
                     10))
            (should (equal 'open (car states))))
        (mevedel-collaboration--transport-stop transport)
-       (ignore-errors (mevedel-test--stub-relay-stop server))
+       (ignore-errors (mevedel-relay-test--stub-relay-stop server))
        ;; Stopping cancels any retry so no timer leaks.
        (should-not (plist-get transport :reconnect-timer))))))
 
@@ -865,7 +705,7 @@ relay's room plist."
                        (aref (websocket-encode-frame sent t) 1)))))
 
   :doc "a failing write redials and a stale close leaves the replacement open"
-  (mevedel-test--with-stub-relay (state port server)
+  (mevedel-relay-test--with-stub-relay (state port server)
     (let* ((states nil)
            (transport
             (mevedel-collaboration--transport-open
@@ -874,7 +714,7 @@ relay's room plist."
              :on-state (lambda (new) (push new states)))))
       (unwind-protect
           (progn
-            (should (mevedel-test--pump
+            (should (mevedel-relay-test--pump
                      (lambda ()
                        (mevedel-collaboration--transport-open-p transport))))
             (should (timerp (plist-get transport :keepalive-timer)))
@@ -888,7 +728,7 @@ relay's room plist."
               (should-not (websocket-openp old))
               (should (memq 'down states))
               (should (timerp (plist-get transport :reconnect-timer)))
-              (should (mevedel-test--pump
+              (should (mevedel-relay-test--pump
                        (lambda ()
                          (mevedel-collaboration--transport-open-p transport))))
               (let ((replacement (plist-get transport :ws)))
@@ -899,7 +739,7 @@ relay's room plist."
         (should-not (plist-get transport :keepalive-timer)))))
 
   :doc "a connection silent past the liveness window is dropped and redialed"
-  (mevedel-test--with-stub-relay (state port server)
+  (mevedel-relay-test--with-stub-relay (state port server)
     (let* ((states nil)
            (transport
             (mevedel-collaboration--transport-open
@@ -908,7 +748,7 @@ relay's room plist."
              :on-state (lambda (new) (push new states)))))
       (unwind-protect
           (progn
-            (should (mevedel-test--pump
+            (should (mevedel-relay-test--pump
                      (lambda ()
                        (mevedel-collaboration--transport-open-p transport))))
             (let ((old (plist-get transport :ws))
@@ -927,7 +767,7 @@ relay's room plist."
               (should-not (websocket-openp old))
               (should (equal '(down open) states))
               (should (timerp (plist-get transport :reconnect-timer)))
-              (should (mevedel-test--pump
+              (should (mevedel-relay-test--pump
                        (lambda ()
                          (mevedel-collaboration--transport-open-p transport))))
               (should-not (eq old (plist-get transport :ws)))
@@ -936,7 +776,7 @@ relay's room plist."
         (mevedel-collaboration--transport-stop transport))))
 
   :doc "input queued while Emacs was busy counts before silence is judged"
-  (mevedel-test--with-stub-relay (state port server)
+  (mevedel-relay-test--with-stub-relay (state port server)
     (let* ((states nil)
            (transport
             (mevedel-collaboration--transport-open
@@ -945,7 +785,7 @@ relay's room plist."
              :on-state (lambda (new) (push new states)))))
       (unwind-protect
           (progn
-            (should (mevedel-test--pump
+            (should (mevedel-relay-test--pump
                      (lambda ()
                        (mevedel-collaboration--transport-open-p transport))))
             (let ((ws (plist-get transport :ws))
