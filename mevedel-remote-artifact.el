@@ -97,8 +97,9 @@ nil means USER@HOST.  An agent's edit is attributed at the origin to
 (defvar mevedel-remote-artifact--records :unread
   "Attached links by workspace root, or `:unread' before the record is read.
 An alist (ROOT . ENTRIES); ENTRIES is an alist (ALIAS . ENTRY) and ENTRY
-a plist with `:link', the origin's `:id', `:kind', `:title', `:tier'
-\(\"view\" or \"edit\"), `:guest-id' and `:attached' (a float time).")
+a plist with `:link', the origin's `:id', `:kind', `:title', the
+`:origin' name its welcome gave, `:tier' (\"view\" or \"edit\"),
+`:guest-id' and `:attached' (a float time).")
 
 (defun mevedel-remote-artifact--record-path ()
   "Return the per-user file of attached links."
@@ -168,8 +169,8 @@ The artifact backend calls this once per workspace to restore them."
 (defvar mevedel-remote-artifact--status (make-hash-table :test #'equal)
   "What this Emacs last learned of each link, keyed by its ref.
 A plist: `:reachable' is `yes' or `no', `:error' the last failure,
-`:checked' its float time, and `:title' and `:revision' the artifact's
-as the origin last reported them.")
+`:checked' its float time, and `:title', `:revision' and `:origin' the
+artifact's as the origin last reported them.")
 
 (defvar mevedel-remote-artifact--workspaces (make-hash-table :test #'equal)
   "Workspace objects by root, for announcing origin changes to them.")
@@ -196,6 +197,7 @@ Return non-nil when the link's reachability changed."
                                :error (plist-get outcome :error))
                          (when welcome
                            (list :title (plist-get welcome :title)
+                                 :origin (plist-get welcome :origin)
                                  :revision (plist-get status :revision))))
              mevedel-remote-artifact--status)
     (not (eq reachable (plist-get status :reachable)))))
@@ -574,9 +576,10 @@ A change of reachability is announced as a change of WORKSPACE's listing."
 (defun mevedel-remote-artifact--catalog (workspace detail)
   "Return WORKSPACE's remote artifacts as catalog rows at DETAIL.
 See `mevedel-artifact-backend-catalog'.  A full row adds `:remote' t,
-the relay host as `:origin', the `:origin-id', the link's `:tier' and
-`:reachable' (`yes', `no' or nil while unknown).  Listing them in full
-checks, in the background, the reachability of links not checked lately."
+the `:origin' name (the relay host while the origin gave none), the
+`:relay' host, the `:origin-id', the link's `:tier' and `:reachable'
+\(`yes', `no' or nil while unknown).  Listing them in full checks, in the
+background, the reachability of links not checked lately."
   (mevedel-remote-artifact--remember workspace)
   (mapcar
    (lambda (cell)
@@ -593,15 +596,17 @@ checks, in the background, the reachability of links not checked lately."
           (when (< (or (plist-get status :checked) 0)
                    (- (float-time) mevedel-remote-artifact--check-interval))
             (mevedel-remote-artifact--check workspace entry))
-          (list :id alias :kind (intern (plist-get entry :kind)) :title title
-                :file "state.json" :path nil :size 0 :versions 0
-                :modified (plist-get entry :attached)
-                :remote t
-                :origin (url-host (url-generic-parse-url (plist-get entry :link)))
-                :origin-id (plist-get entry :id)
-                :tier (plist-get entry :tier)
-                :reachable (plist-get status :reachable)
-                :error (plist-get status :error))))))
+          (let ((relay (url-host (url-generic-parse-url (plist-get entry :link)))))
+            (list :id alias :kind (intern (plist-get entry :kind)) :title title
+                  :file "state.json" :path nil :size 0 :versions 0
+                  :modified (plist-get entry :attached)
+                  :remote t
+                  :origin (or (plist-get status :origin) (plist-get entry :origin) relay)
+                  :relay relay
+                  :origin-id (plist-get entry :id)
+                  :tier (plist-get entry :tier)
+                  :reachable (plist-get status :reachable)
+                  :error (plist-get status :error)))))))
    (cl-remove-if-not (lambda (cell) (mevedel-artifact-backend-registered-p workspace (car cell)))
                      (mevedel-remote-artifact--records-of workspace))))
 
@@ -671,6 +676,7 @@ Attaching a link again refreshes it and may rename it."
        workspace
        (cons (cons alias (list :link link :id (plist-get welcome :id) :kind kind
                                :title (plist-get welcome :title)
+                               :origin (plist-get welcome :origin)
                                :tier (if (eq t (plist-get welcome :readOnly)) "view" "edit")
                                :guest-id guest-id
                                :attached (or (plist-get (cdr previous) :attached) (float-time))))

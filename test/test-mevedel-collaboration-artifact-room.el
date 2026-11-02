@@ -445,6 +445,10 @@ An editing transfer appears once, complete, as its `body' shorthand."
            (consumer (mevedel-artifact-room-test--consumer
                       port (plist-get links :link-edit)))
            (bindings `(("$ID" . ,id) ("$TITLE" . "Pipeline")
+                       ("$ORIGIN" . ,(format "%s on %s"
+                                             (file-name-nondirectory
+                                              (directory-file-name root))
+                                             (system-name)))
                        ("$WRITE_TOKEN"
                         . ,(mevedel-artifact-room-test--write-token consumer)))))
       (unwind-protect

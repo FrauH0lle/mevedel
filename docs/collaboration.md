@@ -769,12 +769,15 @@ room's. The room answers with its own welcome only:
 
 ```json
 {"t": "welcome", "proto": 3, "room": "artifact", "id": "ID",
- "kind": "whiteboard", "title": "TITLE", "readOnly": false}
+ "kind": "whiteboard", "title": "TITLE", "origin": "ORIGIN", "readOnly": false}
 ```
 
-It sends no session snapshot, roster, models, queue, tasks, goal, agents or
-store listing. A consumer that receives any other welcome, or a lobby
-listing, has a session or lobby link and disconnects.
+ORIGIN names this Emacs for consumers, so they can tell artifacts of
+different origins apart: `mevedel-collaboration-artifact-room-origin-name`,
+by default `WORKSPACE on HOST`, the workspace directory's name and the
+machine's. The welcome sends no session snapshot, roster, models, queue,
+tasks, goal, agents or store listing. A consumer that receives any other
+welcome, or a lobby listing, has a session or lobby link and disconnects.
 
 After the welcome, the room accepts only chunked `editing` requests in the
 editor's transfer format, checked against an allowlist of actions. The origin
@@ -960,10 +963,11 @@ its reply arrives, and a cancelled request discards its reply: an edit
 already sent may still land at the origin, attributed and revertible there.
 An unreachable, revoked or deleted origin answers with the package's generic
 `Origin unavailable (revoked, deleted, or offline)`. Project artifacts shows a
-remote artifact's Link as `remote HOST, reachable` (or `unavailable`, or `not
-checked yet`), HOST being the relay's, and its details name the origin id and
-link tier; listing it checks a link not checked in the last minute in the
-background. Deleting it there detaches it; opening a remote whiteboard or
+remote artifact's Link as `remote ORIGIN, reachable` (or `unavailable`, or
+`not checked yet`), ORIGIN being the name the origin's welcome gave, and its
+details name the origin, the relay host, the origin id and link tier; listing
+it checks a link not checked in the last minute in the background. Deleting it
+there detaches it; opening a remote whiteboard or
 document, versions, duplicates and conversations are refused. Origin change
 events arriving while connected update its title and are announced through the
 backend's change events.

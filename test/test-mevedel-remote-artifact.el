@@ -131,6 +131,7 @@
          (list :error "Origin unavailable (revoked, deleted, or offline)")
        (append (list :welcome (list :id "snt-pipeline" :kind (plist-get origin :kind)
                                     :title (plist-get origin :title)
+                                    :origin "snt-app on mevedel-host"
                                     :readOnly (if (plist-get origin :writable) :json-false t)))
                (when-let* ((body (plist-get request :body)))
                  (list :reply (mevedel-remote-artifact-test--answer origin body))))))))
@@ -409,12 +410,13 @@ under its origin id."
                        :origin-buffer view :workspace workspace))
               (should (equal "SNT analysis pipeline" (cell 0)))
               (should (equal "whiteboard" (cell 1)))
-              (should (equal "remote relay.example.org, reachable" (cell 6)))
+              (should (equal "remote snt-app on mevedel-host, reachable" (cell 6)))
               (mevedel-cockpit-goto-id "pipeline")
               (let ((details (mevedel-report-test-text
                               (mevedel-artifacts-list--details
                                (mevedel-cockpit-surface-selected) nil))))
-                (should (string-match-p "Origin +relay.example.org" details))
+                (should (string-match-p "Origin +snt-app on mevedel-host" details))
+                (should (string-match-p "Relay +relay.example.org" details))
                 (should (string-match-p "Origin id +snt-pipeline" details))
                 (should (string-match-p "Link +edit" details)))
               ;; A listing checks a link not checked lately, and shows the outcome.
@@ -424,7 +426,7 @@ under its origin id."
               (mevedel-cockpit-surface-refresh "pipeline")
               (settle)
               (mevedel-cockpit-surface-refresh "pipeline")
-              (should (equal "remote relay.example.org, unavailable" (cell 6)))
+              (should (equal "remote snt-app on mevedel-host, unavailable" (cell 6)))
               ;; What only a local artifact has is refused, not created.
               (mevedel-cockpit-goto-id "pipeline")
               (dolist (command '(mevedel-artifacts-list-open-browser

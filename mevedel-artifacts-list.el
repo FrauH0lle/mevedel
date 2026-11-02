@@ -264,6 +264,7 @@ Artifacts shared through artifact links are marked `:shared'."
               (list :id 'origin :title "Origin"
                     :body (mevedel-report-fields
                            (list "Origin" (plist-get item :origin))
+                           (list "Relay" (plist-get item :relay))
                            (list "Origin id" (plist-get item :origin-id))
                            (list "Link" (plist-get item :tier))
                            (list "Reachable" (mevedel-artifacts-list--reachability item))
