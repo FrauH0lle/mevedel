@@ -339,5 +339,71 @@
             (should-not (directory-files directory nil "excalidrawlib"))))
       (delete-directory directory t))))
 
+(require 'mevedel-collaboration-transport)
+
+(mevedel-deftest mevedel-collaboration-editing-dispatch
+  (:doc "Without a session, edits use the given workspace, attach function and authority")
+  (let* ((directory (make-temp-file "mevedel-editing-sessionless-" t))
+         (workspace (mevedel-workspace--create :type 'file :id "w" :root directory :name "w"))
+         (bystander (mevedel-session--create :workspace workspace))
+         (mevedel-shared-editing--runtimes (make-hash-table :test #'equal))
+         (mevedel-artifact-lease--held (make-hash-table :test #'equal))
+         (guests (make-hash-table :test #'eql))
+         (guest (list :name "Alice" :writable t))
+         (room (list :workspace workspace :transport 'test :guests guests))
+         attached frames)
+    (puthash 1 guest guests)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                   (lambda (_transport _peer frame) (push frame frames))))
+          (cl-labels ((dispatch (req-id args authorize)
+                        (setq frames nil)
+                        (mevedel-collaboration-editing-dispatch
+                         room 1 guest req-id args workspace authorize
+                         (lambda (id) (push id attached))))
+                      (settle ()
+                        (mevedel-test--await 10 "editing settles"
+                          (let ((runtime (mevedel-shared-editing--runtime workspace)))
+                            (not (or (plist-get runtime :queue) (plist-get runtime :active)
+                                     (plist-get runtime :batch))))))
+                      (reply ()
+                        (mevedel-test--await 10 "editing replies" frames)
+                        (mevedel-shared-editing--parse
+                         (base64-decode-string (plist-get (car frames) :data))))
+                      (limited (allowed)
+                        ;; Permit ALLOWED checks, counting every one.
+                        (let ((calls 0))
+                          (cons (lambda () (<= (cl-incf calls) allowed))
+                                (lambda () calls))))
+                      (create (id allowed)
+                        (let ((authority (limited allowed)))
+                          (dispatch 1 (list :action "create" :kind "whiteboard" :id id
+                                            :opId id :title "Board")
+                                    (car authority))
+                          (settle)
+                          (funcall (cdr authority)))))
+            ;; Authority is checked at dispatch, then again at queue
+            ;; admission and before commit.
+            (should (> (create "admitted" 1) 1))
+            (should (> (create "committed" 2) 2))
+            (should-not (mevedel-shared-editing-list workspace))
+            (should-not attached)
+            (create "board" most-positive-fixnum)
+            (should (equal (plist-get (plist-get (reply) :result) :id) "board"))
+            (should (equal attached '("board")))
+            (should-not (mevedel-session-attached-artifacts bystander))
+            (dispatch 2 '(:action "read" :id "board") #'always)
+            (let ((result (plist-get (reply) :result)))
+              (should (equal (plist-get result :id) "board"))
+              (should-not (plist-member result :conversation))
+              (should-not (plist-member result :conversationError)))
+            (should (equal (plist-get guest :editing-item) "board"))
+            (should (equal attached '("board")))
+            (plist-put guest :writable nil)
+            (should-error (dispatch 3 '(:action "delete" :id "board") #'always))))
+      (mevedel-shared-editing-stop)
+      (mevedel-artifact-lease-release-all)
+      (delete-directory directory t))))
+
 (provide 'test-mevedel-collaboration-editing)
 ;;; test-mevedel-collaboration-editing.el ends here
