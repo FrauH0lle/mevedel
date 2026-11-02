@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'mevedel-chat)
+(require 'mevedel-collaboration-artifact-room)
 (require 'mevedel-directive-request)
 (require 'mevedel-collaboration-owner)
 (require 'mevedel-agent-control)
@@ -278,6 +279,7 @@
               ((symbol-function 'mevedel-gptel-stream-bridge-install) #'ignore)
               ((symbol-function 'mevedel-gptel-stream-bridge-uninstall) #'ignore)
               ((symbol-function 'mevedel-collaboration-lobby-restore) #'ignore)
+              ((symbol-function 'mevedel-collaboration-artifact-room-restore) #'ignore)
               ((symbol-function 'mevedel-sleep-stop)
                (lambda () (cl-incf stopped))))
       (mevedel-install)
@@ -287,7 +289,7 @@
       (should-not (memq #'mevedel-sleep-update
                         mevedel-execution-state-change-hook))
       (should (= 1 stopped))))
-  :doc "restarts recorded lobbies now, or once startup is done"
+  :doc "restarts recorded lobbies and shared artifacts now, or once startup is done"
   (let ((after-focus-change-function #'ignore)
         (gptel--known-tools (copy-tree gptel--known-tools))
         (gptel--known-presets (copy-tree gptel--known-presets))
@@ -296,7 +298,8 @@
         (mevedel-execution-mailbox-delivery-function
          mevedel-execution-mailbox-delivery-function)
         (emacs-startup-hook nil)
-        (restored 0))
+        (restored 0)
+        (shared 0))
     (cl-letf (((symbol-function 'mevedel-transport-install) #'ignore)
               ((symbol-function 'mevedel-transport-uninstall) #'ignore)
               ((symbol-function 'mevedel-execution-teardown-all) #'ignore)
@@ -315,18 +318,23 @@
               ((symbol-function 'mevedel-gptel-stream-bridge-install) #'ignore)
               ((symbol-function 'mevedel-gptel-stream-bridge-uninstall) #'ignore)
               ((symbol-function 'mevedel-collaboration-lobby-restore)
-               (lambda () (cl-incf restored))))
+               (lambda () (cl-incf restored)))
+              ((symbol-function 'mevedel-collaboration-artifact-room-restore)
+               (lambda () (cl-incf shared))))
       ;; Installed after startup: the user's configuration is in place.
       (let ((after-init-time (current-time)))
         (mevedel-install)
         (should (= 1 restored))
+        (should (= 1 shared))
         (should-not emacs-startup-hook)
         (mevedel-uninstall))
       ;; Installed from the init file: the relay settings may follow it.
       (let ((after-init-time nil))
         (mevedel-install)
         (should (= 1 restored))
-        (should (equal '(mevedel-collaboration-lobby-restore)
+        (should (= 1 shared))
+        (should (equal '(mevedel-collaboration-lobby-restore
+                         mevedel-collaboration-artifact-room-restore)
                        emacs-startup-hook))
         (mevedel-uninstall)
         (should-not emacs-startup-hook)))))

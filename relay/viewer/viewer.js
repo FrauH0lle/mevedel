@@ -1321,6 +1321,10 @@
     if (!frame || typeof frame.t !== 'string') return;
     if (frame.t === 'recovery') {
       renderRecovery(frame);
+    } else if (frame.t === 'welcome' && frame.room === 'artifact') {
+      // An artifact link reaches one artifact for an agent, not a room
+      // this viewer can show; say where it belongs and leave the room.
+      showTerminal('Artifact link', 'Paste this link into mevedel or an MCP client.');
     } else if (frame.t === 'welcome') {
       state.readOnly = frame.readOnly !== false;
       state.staging = {records: [], live: []};

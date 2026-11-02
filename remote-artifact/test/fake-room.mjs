@@ -90,13 +90,18 @@ function wsFrame(opcode, payload) {
  *   lobby     a lobby (a lobby listing instead of a welcome)
  *   mismatch  an origin speaking another protocol version
  *   absent    no origin: the relay closes the room with 4004
+ *   goodbye   an artifact room that ends itself when a request arrives:
+ *             it sends the goodbye fixture with REASON, then the relay
+ *             closes the room
  * BINDINGS override the fixtures' example values.
  * ON-EDITING, when given, answers an editing request no fixture covers:
  * it is called with the request body and { writable } and returns the
  * reply body, or undefined for the default refusal.
- * Return { url, link(tier), received, connections, close }.
+ * Return { url, link(tier), received, connections, goodbye(reason, {back}),
+ * close }.  GOODBYE ends the room for its connected consumers as the
+ * origin does; unless BACK, later connections find no host.
  */
-export async function startFakeRoom({ mode = 'artifact', bindings = {}, readOnly, onEditing } = {}) {
+export async function startFakeRoom({ mode = 'artifact', bindings = {}, readOnly, onEditing, reason } = {}) {
   const roomId = b64url(randomBytes(16));
   const keyBytes = randomBytes(32);
   const writeToken = randomBytes(16);
@@ -104,6 +109,7 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, readOnly
   const received = [];
   let connections = 0;
   const sockets = new Set();
+  const goodbyes = new Set();
   const examples = (name) => ({ ...fixture(name).bindings, ...bindings });
 
   const seal = async (frame) => {
@@ -151,6 +157,16 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, readOnly
       return;
     }
     const send = async (frame) => { for (const f of wire(frame)) socket.write(wsFrame(2, await seal(f))); };
+    // The host ends the room: goodbye, then the relay closes it.
+    const leave = async (why) => {
+      for (const { from, frame: origin } of fixture('goodbye').frames) {
+        if (from === 'origin') await send(bind(origin, { ...examples('goodbye'), ...(why ? { $REASON: why } : {}) }));
+      }
+      socket.write(wsFrame(1, Buffer.from('{"t":"room-closed"}')));
+      closeWith(1000);
+    };
+    goodbyes.add(leave);
+    socket.on('close', () => goodbyes.delete(leave));
     const transfers = new Map();
     let writable = false;
     let inbound = Promise.resolve();
@@ -189,6 +205,10 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, readOnly
         return;
       }
       if (frame.t === 'editing') {
+        if (mode === 'goodbye') {
+          await leave(reason);
+          return;
+        }
         for (const name of EDITING_FIXTURES) {
           const exchange = fixture(name);
           const values = examples(name);
@@ -215,6 +235,11 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, readOnly
     writeToken: b64url(writeToken),
     received,
     get connections() { return connections; },
+    goodbye: async (why, { back = false } = {}) => {
+      await Promise.all([...goodbyes].map((leave) => leave(why)));
+      if (!back) mode = 'absent';
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    },
     link: (tier = 'edit') => `${origin}/#${roomId}.${b64url(tier === 'edit'
       ? Buffer.concat([keyBytes, writeToken]) : tier === 'owner'
         ? Buffer.concat([keyBytes, writeToken, randomBytes(16)]) : keyBytes)}`,

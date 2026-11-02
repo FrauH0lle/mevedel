@@ -34,6 +34,8 @@
                   "mevedel-artifact-store" (workspace id new-id))
 (declare-function mevedel-artifact-store-restore-version
                   "mevedel-artifact-store" (workspace id n &optional session-id actor callback))
+(declare-function mevedel-artifact-store-shared-p
+                  "mevedel-artifact-store" (workspace id))
 (declare-function mevedel-artifact-store-version-path
                   "mevedel-artifact-store" (workspace id n))
 (declare-function mevedel-artifact-store-versions
@@ -43,6 +45,7 @@
 (autoload 'mevedel-artifact-store-delete "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-duplicate "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-restore-version "mevedel-artifact-store")
+(autoload 'mevedel-artifact-store-shared-p "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-version-path "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-versions "mevedel-artifact-store")
 (defvar mevedel-artifact-store-item-kinds)
@@ -143,13 +146,17 @@
       (user-error "No mevedel workspace here")))
 
 (defun mevedel-artifacts-list--store-rows (workspace session)
-  "Return WORKSPACE's store artifacts as rows, marking SESSION's attached."
+  "Return WORKSPACE's store artifacts as rows, marking SESSION's attached.
+Artifacts shared through artifact links are marked `:shared'."
   (let ((attached (and session (mevedel-session-attached-artifacts session))))
     (mapcar (lambda (row)
               (append (list :name (replace-regexp-in-string
                                    "[\n\r\t]+" " " (plist-get row :title))
                             :row (plist-get row :id)
-                            :attached (and (member (plist-get row :id) attached) t))
+                            :attached (and (member (plist-get row :id) attached) t)
+                            :shared (and (mevedel-artifact-store-shared-p
+                                          workspace (plist-get row :id))
+                                         t))
                       ;; A whiteboard or document is edited live, not as a file.
                       (when (memq (plist-get row :kind) mevedel-artifact-store-item-kinds)
                         (list :item (plist-get row :id)))
@@ -190,7 +197,8 @@
     (if (plist-get item :missing) "missing"
       (format-time-string "%Y-%m-%d %H:%M" (plist-get item :modified)))
     (let ((size (or (plist-get item :size) 0)))
-      (mevedel-cockpit-number-cell (file-size-human-readable size) size)))))
+      (mevedel-cockpit-number-cell (file-size-human-readable size) size))
+    (if (plist-get item :shared) "shared" ""))))
 
 (defun mevedel-artifacts-list--header (items context)
   "Return cockpit header for artifact ITEMS and CONTEXT."
@@ -216,6 +224,7 @@
                       (list "Title" (plist-get item :title))
                       (list "Kind" (format "%s" (plist-get item :kind)))
                       (list "Attached" (if (plist-get item :attached) "yes" "no"))
+                      (list "Shared" (if (plist-get item :shared) "yes" "no"))
                       (list "Versions" (number-to-string (plist-get item :versions)))
                       (list "Size" (file-size-human-readable (or (plist-get item :size) 0)))
                       (list "Modified"
@@ -470,7 +479,8 @@ share it.  Nothing is created when that is declined."
              ("Att" 4 t)
              ("Ver" 4 ,(mevedel-cockpit-sort-by-number 3))
              ("Modified" 17 t)
-             ("Size" 0 ,(mevedel-cockpit-sort-by-number 5))]
+             ("Size" 8 ,(mevedel-cockpit-sort-by-number 5))
+             ("Link" 0 t)]
     :sort-key ("Modified" . t)
     :collect mevedel-artifacts-list--collect
     :entry mevedel-artifacts-list--entry
