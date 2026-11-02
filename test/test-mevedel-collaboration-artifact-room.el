@@ -128,11 +128,13 @@ and every room it started is stopped afterwards."
 ;;
 ;;; Fixtures and a consumer
 
-(defun mevedel-artifact-room-test--fixture (name bindings)
+(defun mevedel-artifact-room-test--fixture (name bindings &optional keep)
   "Return the frames of fixture NAME with BINDINGS substituted.
 BINDINGS is an alist of placeholder strings to values; the fixture's
 own examples stand for any placeholder BINDINGS leaves out.  Each frame
-is (FROM . FRAME), FROM being \"consumer\" or \"origin\"."
+is (FROM . FRAME), FROM being \"consumer\" or \"origin\".  With KEEP,
+placeholders BINDINGS leaves out stay as they are, for
+`mevedel-artifact-room-test--matches'."
   (let* ((fixture (json-parse-string
                    (with-temp-buffer
                      (insert-file-contents
@@ -141,9 +143,10 @@ is (FROM . FRAME), FROM being \"consumer\" or \"origin\"."
                      (buffer-string))
                    :object-type 'alist :array-type 'array
                    :false-object :false :null-object :null))
-         (examples (mapcar (lambda (entry)
-                             (cons (symbol-name (car entry)) (cdr entry)))
-                           (alist-get 'bindings fixture)))
+         (examples (unless keep
+                     (mapcar (lambda (entry)
+                               (cons (symbol-name (car entry)) (cdr entry)))
+                             (alist-get 'bindings fixture))))
          (bind nil))
     (setq bind (lambda (value)
                  (cond
@@ -445,6 +448,52 @@ STATE and PORT are the stub relay's."
   (alist-get 'body (cl-find req-id (mevedel-artifact-room-test--frames consumer)
                             :key (lambda (frame) (alist-get 'reqId frame)))))
 
+(defun mevedel-artifact-room-test--matches (expected actual)
+  "Return non-nil when frame ACTUAL has fixture frame EXPECTED's shape.
+A placeholder string in EXPECTED matches any string; everything else,
+object keys included, must be equal."
+  (cond
+   ((and (stringp expected) (string-prefix-p "$" expected)) (stringp actual))
+   ((vectorp expected)
+    (and (vectorp actual) (= (length expected) (length actual))
+         (cl-every #'mevedel-artifact-room-test--matches expected actual)))
+   ((and (consp expected) (consp (car expected)))
+    (and (consp actual) (= (length expected) (length actual))
+         (cl-every (lambda (entry)
+                     (and (assq (car entry) actual)
+                          (mevedel-artifact-room-test--matches
+                           (cdr entry) (alist-get (car entry) actual))))
+                   expected)))
+   (t (equal expected actual))))
+
+(defun mevedel-artifact-room-test--replies (consumer)
+  "Return the request replies CONSUMER received, without change events."
+  (cl-remove "event" (mevedel-artifact-room-test--frames consumer)
+             :key (lambda (frame) (alist-get 'reqId frame)) :test #'equal))
+
+(defun mevedel-artifact-room-test--exchange (consumer name bindings)
+  "Play fixture NAME's consumer frames from CONSUMER with BINDINGS.
+Return (EXPECTED . ACTUAL): the fixture's origin frames, placeholders
+left unbound, and the replies the origin sent."
+  (let* ((frames (mevedel-artifact-room-test--fixture name bindings t))
+         (expected (mapcar #'cdr (cl-remove "consumer" frames :key #'car :test #'equal))))
+    (dolist (frame frames)
+      (when (equal "consumer" (car frame))
+        (mevedel-artifact-room-test--send consumer (cdr frame))))
+    (mevedel-relay-test--pump
+     (lambda () (>= (length (mevedel-artifact-room-test--replies consumer))
+                    (length expected))))
+    (cons expected (mevedel-artifact-room-test--replies consumer))))
+
+(defun mevedel-artifact-room-test--view (workspace id &optional part)
+  "Return the text of WORKSPACE's item ID as the origin shows PART of it.
+PART defaults to \"overview\", the lines of `shared://ID'."
+  (plist-get (plist-get (mevedel-artifact-room-test--call
+                         workspace (list :action "view" :id id
+                                         :part (or part "overview")))
+                        :result)
+             :text))
+
 (mevedel-deftest mevedel-collaboration-artifact-room--read
   ()
   ,test
@@ -470,6 +519,252 @@ STATE and PORT are the stub relay's."
                                   (cdr (assoc "origin" frames))))
                            (mapcar #'mevedel-artifact-room-test--normal
                                    (mevedel-artifact-room-test--frames consumer)))))
+        (mevedel-artifact-room-test--close consumer)))))
+
+
+;;
+;;; Editing
+
+(mevedel-deftest mevedel-collaboration-artifact-room--edit
+  ()
+  ,test
+  (test)
+  :doc "patches through an edit link, answering with the changed lines and picture"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit))
+           attached)
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-artifact-store-attach)
+                     (lambda (&rest args) (push args attached))))
+            (pcase-let* ((`(,expected . ,actual)
+                          (mevedel-artifact-room-test--exchange
+                           consumer "patch" `(("$ID" . ,id))))
+                         (result (alist-get 'result (alist-get 'body (car actual)))))
+              (should (= 1 (length actual)))
+              (should (mevedel-artifact-room-test--matches (car expected) (car actual)))
+              ;; The changed element's stored line, and the board as drawn.
+              (should (string-match-p "\\\\\"id\\\\\":\\\\\"next\\\\\"" (alist-get 'text result)))
+              (should-not (string-match-p "\\\\\"id\\\\\":\\\\\"box\\\\\"" (alist-get 'text result)))
+              (should (string-prefix-p "\x89PNG" (base64-decode-string (alist-get 'png result)))))
+            ;; The origin holds the change, attributed to the remote agent by
+            ;; its hello name, and attached the board to no session.
+            (should (string-match-p "\"id\":\"next\"" (mevedel-artifact-room-test--view workspace id)))
+            (should (string-search "Agent: remote agent (remote)"
+                                   (mevedel-artifact-room-test--view workspace id "history")))
+            (should-not attached))
+        (mevedel-artifact-room-test--close consumer))))
+
+  :doc "rejects a stale patch whole, returning the targets' current lines"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (before (mevedel-artifact-room-test--view workspace id))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit)))
+      (unwind-protect
+          (pcase-let* ((`(,expected . ,actual)
+                        (mevedel-artifact-room-test--exchange
+                         consumer "stale-patch" `(("$ID" . ,id)
+                                                  ("$STALE_HASH" . "000000000000"))))
+                       (body (alist-get 'body (car actual))))
+            (should (mevedel-artifact-room-test--matches (car expected) (car actual)))
+            ;; The current line is the one shared://ID shows for the box.
+            (should (string-search
+                     (concat "\n" (alist-get 'line (aref (alist-get 'targets body) 0)) "\n")
+                     (concat "\n" before "\n")))
+            (should (equal before (mevedel-artifact-room-test--view workspace id))))
+        (mevedel-artifact-room-test--close consumer))))
+
+  :doc "refuses a view link's edit as view-only and changes nothing"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (before (mevedel-artifact-room-test--view workspace id))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (consumer (mevedel-artifact-room-test--joined state port links 'view)))
+      (unwind-protect
+          (pcase-let ((`(,expected . ,actual)
+                       (mevedel-artifact-room-test--exchange
+                        consumer "view-only" `(("$ID" . ,id)))))
+            (should (equal (mapcar #'mevedel-artifact-room-test--normal expected)
+                           (mapcar #'mevedel-artifact-room-test--normal actual)))
+            (should (equal before (mevedel-artifact-room-test--view workspace id))))
+        (mevedel-artifact-room-test--close consumer)))))
+
+(defconst mevedel-artifact-room-test--png
+  (concat "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQ"
+          "DwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+  "A 1x1 PNG, base64.")
+
+(mevedel-deftest mevedel-collaboration-artifact-room--edit-actions
+  ()
+  ,test
+  (test)
+  :doc "renames and recolours the artifact with SharedEdit's arguments"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit)))
+      (unwind-protect
+          (progn
+            (should (assq 'result (mevedel-artifact-room-test--request
+                                   consumer 1 `((action . "rename") (id . ,id)
+                                                (title . "Pipeline v2")))))
+            (should (assq 'result (mevedel-artifact-room-test--request
+                                   consumer 2 `((action . "background") (id . ,id)
+                                                (background . "#ffeedd")))))
+            (should (equal "Pipeline v2"
+                           (plist-get (mevedel-artifact-store-meta workspace id) :title)))
+            (should (string-search "#ffeedd" (mevedel-artifact-room-test--view workspace id))))
+        (mevedel-artifact-room-test--close consumer))))
+
+  :doc "uploads an image, then shows it and the board as pictures to any link"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit))
+           (viewer (mevedel-artifact-room-test--joined state port links 'view)))
+      (unwind-protect
+          (let* ((added (mevedel-artifact-room-test--request
+                         consumer 1 `((action . "image") (id . ,id)
+                                      (data . ,mevedel-artifact-room-test--png)
+                                      (x . 0) (y . 200) (width . 40))))
+                 (text (alist-get 'text (alist-get 'result added)))
+                 (file-id (and (string-match "\\\\\"fileId\\\\\":\\\\\"\\([^\\\"]+\\)" text)
+                               (match-string 1 text))))
+            (should file-id)
+            (should (alist-get 'png (alist-get 'result added)))
+            (let ((image (alist-get 'result (mevedel-artifact-room-test--request
+                                             viewer 1 `((action . "view") (id . ,id)
+                                                        (image . ,file-id)))))
+                  (board (alist-get 'result (mevedel-artifact-room-test--request
+                                             viewer 2 `((action . "view") (id . ,id))))))
+              (should (equal "image/png" (alist-get 'mime image)))
+              (should (equal (base64-decode-string mevedel-artifact-room-test--png)
+                             (base64-decode-string (alist-get 'png image))))
+              (should (string-prefix-p "\x89PNG" (base64-decode-string (alist-get 'png board))))))
+        (mevedel-artifact-room-test--close consumer)
+        (mevedel-artifact-room-test--close viewer))))
+
+  :doc "refuses an image above SharedEdit's 4.7 MB limit"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit)))
+      (unwind-protect
+          (should (string-match-p
+                   "limited to 4700000 bytes"
+                   (alist-get 'error (mevedel-artifact-room-test--request
+                                      consumer 1 `((action . "image") (id . ,id)
+                                                   (data . ,(make-string 6300000 ?A)))))))
+        (mevedel-artifact-room-test--close consumer)))))
+
+(defun mevedel-artifact-room-test--withdraw-at (function withdraw)
+  "Return a stand-in for FUNCTION that runs WITHDRAW once, before it.
+FUNCTION is a step of the editing queue: admission or commit."
+  (let ((original (symbol-function function)) (done nil))
+    (lambda (&rest args)
+      (unless done
+        (setq done t)
+        (funcall withdraw))
+      (apply original args))))
+
+(mevedel-deftest mevedel-collaboration-artifact-room--authorize
+  ()
+  ,test
+  (test)
+  :doc "drops an edit whose link lost write access after dispatch, before commit"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (before (mevedel-artifact-room-test--view workspace id))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit))
+           (room (mevedel-collaboration-artifact-room--find root id)))
+      (unwind-protect
+          (progn
+            ;; The helper computed the edit; the link is narrowed before
+            ;; the queue commits it.
+            (cl-letf (((symbol-function 'mevedel-shared-editing--accept)
+                       (mevedel-artifact-room-test--withdraw-at
+                        'mevedel-shared-editing--accept
+                        (lambda ()
+                          (maphash (lambda (_peer guest) (plist-put guest :writable nil))
+                                   (plist-get room :guests))))))
+              (should (equal "Editing authority ended"
+                             (alist-get 'error
+                                        (mevedel-artifact-room-test--request
+                                         consumer 1
+                                         `((action . "patch") (id . ,id)
+                                           (changes . [((id . "next")
+                                                        (after . ((type . "rectangle")
+                                                                  (x . 200) (y . 0)
+                                                                  (width . 10)
+                                                                  (height . 10))))])))))))
+            (should (equal before (mevedel-artifact-room-test--view workspace id))))
+        (mevedel-artifact-room-test--close consumer))))
+
+  :doc "drops a queued edit whose room stopped before the queue admitted it"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (before (mevedel-artifact-room-test--view workspace id))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit))
+           (room (mevedel-collaboration-artifact-room--find root id))
+           (dispatched nil))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-shared-editing--drain)
+                     (mevedel-artifact-room-test--withdraw-at
+                      'mevedel-shared-editing--drain
+                      (lambda ()
+                        (setq dispatched t)
+                        (mevedel-collaboration-artifact-room--stop room 'test)))))
+            (mevedel-artifact-room-test--send
+             consumer `((t . "editing") (reqId . 1)
+                        (body . ((action . "rename") (id . ,id) (title . "Taken")))))
+            (should (mevedel-relay-test--pump (lambda () dispatched)))
+            ;; The queue is serial: once a later call settles, the edit has.
+            (should (equal before (mevedel-artifact-room-test--view workspace id)))
+            (should (equal "Pipeline"
+                           (plist-get (mevedel-artifact-store-meta workspace id) :title))))
+        (mevedel-artifact-room-test--close consumer)))))
+
+(mevedel-deftest mevedel-collaboration-artifact-room--changed
+  ()
+  ,test
+  (test)
+  :doc "tells a room's consumers of its artifact's changes and of no other's"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (other (mevedel-artifact-room-test--board workspace "Private"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (consumer (mevedel-artifact-room-test--joined state port links 'view))
+           (events (lambda ()
+                     (mapcar (lambda (frame) (alist-get 'body frame))
+                             (cl-remove-if-not
+                              (lambda (frame) (equal "event" (alist-get 'reqId frame)))
+                              (mevedel-artifact-room-test--frames consumer))))))
+      (unwind-protect
+          (progn
+            ;; Edits at the origin, as a local agent or browser makes them.
+            (should-not (plist-get (mevedel-artifact-room-test--call
+                                    workspace (list :action "rename" :id other
+                                                    :title "Still private" :actor "Host" :opId "rename-other"))
+                                   :error))
+            (should-not (plist-get (mevedel-artifact-room-test--call
+                                    workspace (list :action "rename" :id id
+                                                    :title "Pipeline v2" :actor "Host" :opId "rename-own"))
+                                   :error))
+            (should (mevedel-relay-test--pump (lambda () (funcall events))))
+            (accept-process-output nil 0.2)
+            ;; One event: the other board's change never reached this room.
+            (should (equal '(((event . "changed") (id . "ID") (kind . "whiteboard")
+                              (revision . 3) (title . "Pipeline v2")))
+                           (mapcar (lambda (event)
+                                     (mevedel-artifact-room-test--normal
+                                      (cons '(id . "ID")
+                                            (assq-delete-all 'id (copy-sequence event)))))
+                                   (funcall events))))
+            (should (equal id (alist-get 'id (car (funcall events))))))
         (mevedel-artifact-room-test--close consumer)))))
 
 

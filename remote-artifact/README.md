@@ -62,6 +62,21 @@ Tools:
   (view or edit) and whether its origin is reachable.
 - `read_artifact(name)`: the whiteboard or document as hash-prefixed lines,
   exactly as `shared://ID` shows it at the origin.
+- `view_artifact(name, image?)`: the whiteboard as drawn, or with `image` one
+  embedded image (a board image by its `fileId`, a document image by the key
+  its `src` shows).
+- `edit_artifact(name, action, ...)`: `patch`, `image`, `rename` and
+  `background` with mevedel `SharedEdit`'s argument names and results: the
+  stored lines of what changed and, for a whiteboard, the picture. A stale
+  hash rejects the patch and returns its targets' current lines. `image`
+  reads `source`, a local PNG, JPEG, WebP or SVG file of at most 4.7 MB
+  (relative paths resolve against the MCP server's working directory), and
+  refuses anything else before contacting the origin. A view link's edit
+  fails with "This artifact link is view-only".
+
+Edits are attributed at the origin as `Agent: NAME (remote)`, NAME being the
+display name given at attach (`--as`) or the default user, machine and
+client.
 
 When the origin is offline, or the link was revoked or the artifact deleted,
 tools fail with "Origin unavailable (revoked, deleted, or offline)".

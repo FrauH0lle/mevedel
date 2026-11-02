@@ -1,0 +1,29 @@
+{
+  "description": "A view link asking to change its artifact is refused with a plain view-only error; nothing changes at the origin.",
+  "tier": "view",
+  "bindings": {
+    "$ID": "snt-pipeline"
+  },
+  "frames": [
+    {
+      "from": "consumer",
+      "frame": {
+        "t": "editing",
+        "reqId": 1,
+        "body": {
+          "action": "patch",
+          "id": "$ID",
+          "changes": [{ "id": "next", "after": { "type": "rectangle", "x": 200, "y": 0, "width": 120, "height": 60 } }]
+        }
+      }
+    },
+    {
+      "from": "origin",
+      "frame": {
+        "t": "editing",
+        "reqId": 1,
+        "body": { "error": "This artifact link is view-only" }
+      }
+    }
+  ]
+}

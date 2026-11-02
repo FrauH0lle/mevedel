@@ -1,0 +1,36 @@
+{
+  "description": "An edit link patches its whiteboard with SharedEdit's arguments. The origin answers as SharedEdit does: the stored lines of what changed as JSON text, and for a whiteboard the picture as base64 PNG.",
+  "tier": "edit",
+  "bindings": {
+    "$ID": "snt-pipeline",
+    "$TEXT": "{\"id\":\"snt-pipeline\",\"kind\":\"whiteboard\",\"title\":\"SNT analysis pipeline\",\"revision\":3,\"address\":\"shared://snt-pipeline\",\"contribution\":\"f472cbb9bf3b51a2e8716d54f700ae4ea068e995cb1003fc23d711955c16031b\",\"changed\":[\"d7b24fe8c3bd {\\\"id\\\":\\\"next\\\",\\\"type\\\":\\\"rectangle\\\",\\\"x\\\":200,\\\"y\\\":0,\\\"width\\\":120,\\\"height\\\":60,\\\"index\\\":\\\"a1\\\"}\"]}",
+    "$PNG": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+  },
+  "frames": [
+    {
+      "from": "consumer",
+      "frame": {
+        "t": "editing",
+        "reqId": 1,
+        "body": {
+          "action": "patch",
+          "id": "$ID",
+          "changes": [
+            {
+              "id": "next",
+              "after": { "type": "rectangle", "x": 200, "y": 0, "width": 120, "height": 60 }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "from": "origin",
+      "frame": {
+        "t": "editing",
+        "reqId": 1,
+        "body": { "result": { "text": "$TEXT", "png": "$PNG" } }
+      }
+    }
+  ]
+}

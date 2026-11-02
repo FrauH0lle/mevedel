@@ -9,6 +9,7 @@ import http from 'node:http';
 import { createHash, randomBytes, webcrypto } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import path from 'node:path';
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)),
@@ -45,6 +46,9 @@ export function matches(expected, actual) {
 }
 
 const b64url = (bytes) => Buffer.from(bytes).toString('base64url');
+
+/* The editing exchanges the fake room replays, by fixture name. */
+const EDITING_FIXTURES = ['read', 'patch', 'stale-patch', 'view-only'];
 
 /* Frames of RFC 6455 from a byte stream. */
 function frameReader(onFrame) {
@@ -87,9 +91,12 @@ function wsFrame(opcode, payload) {
  *   mismatch  an origin speaking another protocol version
  *   absent    no origin: the relay closes the room with 4004
  * BINDINGS override the fixtures' example values.
+ * ON-EDITING, when given, answers an editing request no fixture covers:
+ * it is called with the request body and { writable } and returns the
+ * reply body, or undefined for the default refusal.
  * Return { url, link(tier), received, connections, close }.
  */
-export async function startFakeRoom({ mode = 'artifact', bindings = {}, readOnly } = {}) {
+export async function startFakeRoom({ mode = 'artifact', bindings = {}, readOnly, onEditing } = {}) {
   const roomId = b64url(randomBytes(16));
   const keyBytes = randomBytes(32);
   const writeToken = randomBytes(16);
@@ -145,6 +152,7 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, readOnly
     }
     const send = async (frame) => { for (const f of wire(frame)) socket.write(wsFrame(2, await seal(f))); };
     const transfers = new Map();
+    let writable = false;
     let inbound = Promise.resolve();
     socket.on('data', frameReader((opcode, payload) => {
       if (opcode === 8) { socket.end(); return; }
@@ -172,7 +180,7 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, readOnly
         if (mode === 'session') { await send({ t: 'welcome', proto: 3, readOnly: false, recordCount: 0 }); return; }
         if (mode === 'lobby') { await send({ t: 'lobby', project: 'proj', sessions: [], omitted: 0 }); return; }
         const [hello] = fixture('hello').frames;
-        const writable = frame.writeToken === b64url(writeToken);
+        writable = frame.writeToken === b64url(writeToken);
         if (!matches({ ...hello.frame, ...(writable ? {} : { writeToken: undefined }) },
           { ...frame, ...(writable ? {} : { writeToken: undefined }) })) return;
         for (const { from, frame: origin } of fixture('welcome').frames) {
@@ -181,16 +189,21 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, readOnly
         return;
       }
       if (frame.t === 'editing') {
-        const exchange = fixture('read');
-        const values = examples('read');
-        const request = exchange.frames.find((f) => f.from === 'consumer').frame;
-        if (JSON.stringify(bind(request, values).body) === JSON.stringify(frame.body)) {
-          for (const { from, frame: origin } of exchange.frames) {
-            if (from === 'origin') await send({ ...bind(origin, values), reqId: frame.reqId });
+        for (const name of EDITING_FIXTURES) {
+          const exchange = fixture(name);
+          const values = examples(name);
+          const request = exchange.frames.find((f) => f.from === 'consumer').frame;
+          if ((!exchange.tier || exchange.tier === (writable ? 'edit' : 'view'))
+            && isDeepStrictEqual(bind(request, values).body, frame.body)) {
+            for (const { from, frame: origin } of exchange.frames) {
+              if (from === 'origin') await send({ ...bind(origin, values), reqId: frame.reqId });
+            }
+            return;
           }
-        } else {
-          await send({ t: 'editing', reqId: frame.reqId, body: { error: 'An artifact link does not permit that' } });
         }
+        const body = onEditing?.(frame.body, { writable })
+          ?? { error: 'An artifact link does not permit that' };
+        await send({ t: 'editing', reqId: frame.reqId, body });
       }
     };
   });

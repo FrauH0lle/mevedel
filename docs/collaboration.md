@@ -737,15 +737,41 @@ store listing. A consumer that receives any other welcome, or a lobby
 listing, has a session or lobby link and disconnects.
 
 After the welcome, the room accepts only chunked `editing` requests in the
-editor's transfer format, checked against an allowlist of actions. Today the
-allowlist holds `read`, which returns `{result: {text}}` with the
-hash-prefixed lines `shared://ID` shows at the origin, for any link tier.
+editor's transfer format, checked against an allowlist of actions. The origin
+executes them itself with the editing helper, as `SharedEdit` and
+`shared://` do; consumers send no CRDT updates. Any link tier may:
+
+- `read`: `{result: {text}}`, the hash-prefixed lines `shared://ID` shows.
+- `view`: `{result: {png, mime}}`, the board as drawn (`shared://ID/view.png`),
+  or with `image: KEY` that embedded image (`shared://ID/images/KEY`).
+
+An edit link may also run `SharedEdit`'s `patch` (`changes`), `rename`
+(`title`), `background` (`background`) and `image` (`data`, the file's base64
+content of at most 4.7 MB, with `x`, `y`, `width`, `alt`, `afterId`). Other
+keys are dropped. An edit answers what `SharedEdit` tells the model:
+`{result: {text, png?}}`, the JSON of the stored lines it changed and, for a
+whiteboard, the picture. A stale hash rejects the whole edit with
+`{error, code: "stale", targets, revision}`, each target carrying its current
+line. A view link asking for an edit gets `This artifact link is view-only`.
+Edits are attributed `Agent: NAME (remote)`, NAME being the display name the
+consumer's hello declared (unverified), so the Revert button applies as to
+any agent's edit; they attach the item to no session.
+
 Every request is pinned to the room's artifact: one naming any other id is
 refused, as is any action outside the allowlist (listing, creating,
-deleting, raw CRDT updates, discussions, libraries). All other frame types,
+deleting, raw CRDT updates, discussions, libraries). The room's authority
+check -- the consumer still admitted, an edit link for an edit, the id the
+room's own, the room still running -- runs at dispatch and again when the
+editing queue admits the request and before it commits, so a link narrowed
+or a room stopped meanwhile changes nothing. All other frame types,
 including prompts, aborts, interaction answers, session requests, files,
 artifact fetches, store listings and actions, and recovery, are dropped
 unanswered. Frames run with `inhibit-interaction`, as in the lobby.
+
+Every committed change of the artifact, whoever made it, reaches its room's
+consumers as `{t: "editing", reqId: "event", body: {event: "changed", id,
+kind, title, revision}}`. Changes of other artifacts never reach the room, and
+artifact rooms are not among the workspace rooms that receive store listings.
 
 A room with a connected consumer, or within its idle interval, keeps the
 machine awake under the lobby's rule (`shared artifact active`).
