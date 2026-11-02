@@ -7,6 +7,7 @@
 
 ;;; Code:
 
+(require 'mevedel-artifact-backend)
 (require 'mevedel-shared-editing)
 (require 'mevedel-shared-conversation)
 (require 'mevedel-shared-library)
@@ -301,7 +302,7 @@ properties appended to a successful read reply."
       (dolist (key '(:id :kind :title :data :format :update :opId :transaction :range))
         (when (plist-member args key)
           (setq request (plist-put request key (plist-get args key)))))
-      (mevedel-shared-editing-call
+      (mevedel-artifact-backend-call
        workspace request
        (lambda (reply)
          (when (funcall authorize)
@@ -403,7 +404,7 @@ rooms) with ROOM, PEER, the guest, the request id and the decoded args."
            (mevedel-collaboration-editing--send
             room peer req-id (list :error (error-message-string err)))))))))
 
-(add-hook 'mevedel-shared-editing-change-hook #'mevedel-collaboration-editing--changed)
+(add-hook 'mevedel-artifact-backend-change-hook #'mevedel-collaboration-editing--changed)
 
 (provide 'mevedel-collaboration-editing)
 ;;; mevedel-collaboration-editing.el ends here

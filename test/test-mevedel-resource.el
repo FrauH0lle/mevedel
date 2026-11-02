@@ -9,6 +9,7 @@
 (require 'mcp)
 (require 'mcp-hub)
 (require 'mevedel-structs)
+(require 'mevedel-artifact-backend)
 (require 'mevedel-plan)
 (require 'mevedel-resource)
 (require 'mevedel-agent-control)
@@ -381,10 +382,12 @@
                     (mevedel-resource-execute
                      (mevedel-resource-prepare operation address context)))))
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-shared-editing-present-p)
+        (cl-letf (((symbol-function 'mevedel-artifact-backend-present-p)
                    (lambda (_ id) (equal id "board")))
-                  ((symbol-function 'mevedel-shared-editing-list)
-                   (lambda (_) (list (list :id "board" :kind "whiteboard" :title "Plan")))))
+                  ((symbol-function 'mevedel-artifact-backend-catalog)
+                   (lambda (_ detail)
+                     (should (eq 'items detail))
+                     (list (list :id "board" :kind "whiteboard" :title "Plan")))))
           (should (equal "shared://board\twhiteboard \"Plan\"\nshared://library\tWhiteboard element libraries for SharedEdit insert"
                          (plist-get (funcall execute 'read "shared://") :result)))
           (should (equal '("board" "elements" "api")
