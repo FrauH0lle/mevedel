@@ -16,10 +16,11 @@ export function openEntry(entry, ctx) {
 
 /**
  * Return { connect, closeAll }.  CONNECT(entry, ctx) resolves with a handle
- * on the pooled room of entry.link; OPEN opens one (a test seam).
+ * on the pooled room of entry.link; OPEN opens one (a test seam).  KEY
+ * chooses which entries share a connection, by default those of one link.
  */
-export function connectionPool({ open = openEntry, idleMs = IDLE_MS } = {}) {
-  /* link -> { opening, room, users, timer } */
+export function connectionPool({ open = openEntry, idleMs = IDLE_MS, key = (entry) => entry.link } = {}) {
+  /* key -> { opening, room, users, timer } */
   const slots = new Map();
 
   const drop = (link, slot) => {
@@ -35,7 +36,7 @@ export function connectionPool({ open = openEntry, idleMs = IDLE_MS } = {}) {
   };
 
   async function connect(entry, ctx) {
-    const link = entry.link;
+    const link = key(entry);
     let slot = slots.get(link);
     if (slot?.room?.closed) { drop(link, slot); slot = undefined; }
     if (!slot) {

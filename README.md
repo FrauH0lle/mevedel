@@ -96,6 +96,30 @@ with the origin: the package cannot list, save or restore them.
 When the origin is offline, or the link was revoked or the artifact deleted,
 tools fail with "Origin unavailable (revoked, deleted, or offline)".
 
+## The bridge for mevedel
+
+mevedel uses this package as its remote-artifact backend: `M-x
+mevedel-remote-artifact-attach` keeps the link in mevedel's own private
+record and runs `mevedel-remote-artifact bridge` as a subprocess. The bridge
+is a machine interface, not a command for people. It reads one JSON request
+per line on standard input and answers one JSON line each on standard output:
+
+```text
+in   {"id", "link", "guestId", "name", "ref"?, "body"?}
+out  {"id", "welcome": {"id", "kind", "title", "readOnly"}, "reply"?}
+out  {"id", "error"}
+out  {"ref", "event"}
+```
+
+A request without `body` only connects and returns the artifact's welcome;
+with one, `body` is an artifact-room editing request (`read`, `view`, `patch`
+and the other actions above, with the origin's argument names), pinned to the
+room's own artifact id, and `reply` is the origin's answer. `name` is the
+display name the origin attributes edits to; each distinct link and name has
+its own pooled connection with the lifecycle above. Origin change events on
+a connection are written with the `ref` of the request that opened it. The
+link travels only over the pipe and is never written out.
+
 ## Licence
 
 GPL-3.0-or-later, like mevedel (`LICENSE`). The package has no dependencies
