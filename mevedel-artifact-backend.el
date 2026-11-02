@@ -23,6 +23,11 @@
 ;; edit through `mevedel-artifact-backend-notify', a changed listing
 ;; through `mevedel-artifact-store-changed-functions'.  Registering or
 ;; unregistering an artifact announces a listing change.
+;;
+;; Registrations outlive Emacs where their owner persists them: the first
+;; lookup of a workspace asks `mevedel-artifact-backend-restore-function'
+;; for that workspace's registrations, which today are the remote
+;; artifacts attached there (`mevedel-remote-artifact').
 
 ;;; Code:
 
@@ -39,6 +44,10 @@
 (autoload 'mevedel-shared-editing-list "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-present-p "mevedel-shared-editing")
 
+;; `mevedel-remote-artifact'
+(declare-function mevedel-remote-artifact-registrations "mevedel-remote-artifact" (workspace))
+(autoload 'mevedel-remote-artifact-registrations "mevedel-remote-artifact")
+
 (defvar mevedel-artifact-backend-change-hook nil
   "Functions called with WORKSPACE, STATE, RESULT after an editing commit.
 A deleted item arrives as a STATE with `:deleted' and `:actor' and a nil
@@ -46,6 +55,15 @@ RESULT.  Observers cannot change whether the preceding commit succeeded.")
 
 (defvar mevedel-artifact-backend--registry (make-hash-table :test #'equal)
   "Workspace root -> alist of (ID . ADAPTER) for artifacts served elsewhere.")
+
+(defvar mevedel-artifact-backend-restore-function #'mevedel-remote-artifact-registrations
+  "Function returning a WORKSPACE's persisted registrations as (ID . ADAPTER).
+It is called once per workspace root, on the first lookup.  A returned id
+that is invalid, names a local artifact or is registered already is
+skipped.")
+
+(defvar mevedel-artifact-backend--restored (make-hash-table :test #'equal)
+  "Workspace roots whose persisted registrations were restored.")
 
 (defun mevedel-artifact-backend-notify (workspace state result)
   "Tell `mevedel-artifact-backend-change-hook' about WORKSPACE's STATE and RESULT.
@@ -55,8 +73,21 @@ A failing observer does not keep the others from hearing it."
       (error nil))))
 
 (defun mevedel-artifact-backend--registered (workspace)
-  "Return WORKSPACE's alist of registered (ID . ADAPTER)."
-  (gethash (mevedel-workspace-root workspace) mevedel-artifact-backend--registry))
+  "Return WORKSPACE's alist of registered (ID . ADAPTER).
+The first lookup of WORKSPACE restores its persisted registrations."
+  (let ((root (mevedel-workspace-root workspace)))
+    (unless (gethash root mevedel-artifact-backend--restored)
+      (puthash root t mevedel-artifact-backend--restored)
+      (when-let* ((restored (funcall mevedel-artifact-backend-restore-function workspace)))
+        (let ((local (mevedel-artifact-store-ids workspace))
+              (registered (gethash root mevedel-artifact-backend--registry)))
+          (dolist (pair restored)
+            (unless (or (not (mevedel-artifact-store-id-p (car pair)))
+                        (member (car pair) local)
+                        (assoc (car pair) registered))
+              (push pair registered)))
+          (puthash root registered mevedel-artifact-backend--registry))))
+    (gethash root mevedel-artifact-backend--registry)))
 
 ;;;###autoload
 (defun mevedel-artifact-backend-registered-p (workspace id)
@@ -70,9 +101,9 @@ ID follows the store's id rule and must not name a local artifact."
     (error "Invalid artifact id: %S" id))
   (when (member id (mevedel-artifact-store-ids workspace))
     (error "Artifact %s already exists in this project" id))
-  (let ((root (mevedel-workspace-root workspace)))
-    (puthash root (cons (cons id adapter)
-                        (assoc-delete-all id (gethash root mevedel-artifact-backend--registry)))
+  (let ((registered (mevedel-artifact-backend--registered workspace)))
+    (puthash (mevedel-workspace-root workspace)
+             (cons (cons id adapter) (assoc-delete-all id (copy-sequence registered)))
              mevedel-artifact-backend--registry))
   (mevedel-artifact-store--changed workspace))
 
@@ -80,7 +111,7 @@ ID follows the store's id rule and must not name a local artifact."
   "Stop serving WORKSPACE's artifact ID through a registered adapter."
   (let* ((root (mevedel-workspace-root workspace))
          (remaining (assoc-delete-all
-                     id (copy-sequence (gethash root mevedel-artifact-backend--registry)))))
+                     id (copy-sequence (mevedel-artifact-backend--registered workspace)))))
     (if remaining
         (puthash root remaining mevedel-artifact-backend--registry)
       (remhash root mevedel-artifact-backend--registry)))

@@ -111,6 +111,7 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, kind, re
   const received = [];
   let connections = 0;
   const sockets = new Set();
+  const senders = new Set();
   const goodbyes = new Set();
   const examples = (name) => ({ ...fixture(name).bindings, ...bindings });
 
@@ -159,6 +160,8 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, kind, re
       return;
     }
     const send = async (frame) => { for (const f of wire(frame)) socket.write(wsFrame(2, await seal(f))); };
+    senders.add(send);
+    socket.on('close', () => senders.delete(send));
     // The host ends the room: goodbye, then the relay closes it.
     const leave = async (why) => {
       for (const { from, frame: origin } of fixture('goodbye').frames) {
@@ -240,6 +243,10 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, kind, re
     writeToken: b64url(writeToken),
     received,
     get connections() { return connections; },
+    /* Send every connected consumer a change event BODY, as the origin does. */
+    event: async (body) => {
+      for (const send of senders) await send({ t: 'editing', reqId: 'event', body });
+    },
     goodbye: async (why, { back = false } = {}) => {
       await Promise.all([...goodbyes].map((leave) => leave(why)));
       if (!back) mode = 'absent';

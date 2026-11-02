@@ -20,6 +20,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
 (autoload 'mevedel-artifact-backend-call "mevedel-artifact-backend")
+(autoload 'mevedel-artifact-backend-registered-p "mevedel-artifact-backend")
 (autoload 'mevedel-shared-editing--json "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-create "mevedel-shared-editing")
 (autoload 'mevedel-shared-library-libraries "mevedel-shared-library")
@@ -127,7 +128,9 @@ versions it when the current request settles."
               (cl-pushnew (cons workspace id) (mevedel-request-edited-artifacts request)
                           :test #'equal)))
           (funcall callback
-                   (append (list :result (mevedel-shared-editing--json model))
+                   ;; A remote artifact's reply carries the origin's text.
+                   (append (list :result (or (plist-get result :text)
+                                             (mevedel-shared-editing--json model)))
                            (when png
                              (list :media
                                    (list (list :path (format "shared://%s/view.png"
@@ -220,7 +223,10 @@ from the same Read lines, joining output string chunks only for matching."
 (defun mevedel-tool-editing--edit-targeted (callback args)
   "Apply a mutation of the item's own content using CALLBACK and ARGS."
   (let ((args (plist-put (copy-sequence args) :image t)))
-    (when (equal (plist-get args :action) "insert")
+    ;; A remote artifact's origin resolves the reference in its own libraries.
+    (when (and (equal (plist-get args :action) "insert")
+               (not (mevedel-artifact-backend-registered-p
+                     (mevedel-tool-editing--workspace) (plist-get args :id))))
       ;; Library item references are LIBRARY/ITEM-ID from shared://library.
       (let* ((ref (plist-get args :item))
              (slash (and (stringp ref) (string-search "/" ref))))

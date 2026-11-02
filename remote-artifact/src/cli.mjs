@@ -1,6 +1,7 @@
 // The terminal commands.  Links are attached here and only here, so a
 // link -- a secret -- never passes through a model or a chat transcript.
 import { randomBytes } from 'node:crypto';
+import { bridge } from './bridge.mjs';
 import { defaultName } from './identity.mjs';
 import { parseLink } from './link.mjs';
 import { serve } from './mcp.mjs';
@@ -82,6 +83,7 @@ export async function main(argv, { env = process.env, stdout = process.stdout,
       case 'attach': await attach(args, { env, stdout }); return 0;
       case 'detach': detach(args, { env, stdout }); return 0;
       case 'mcp': await serve({ input: stdin, output: stdout, env }); return 0;
+      case 'bridge': await bridge({ input: stdin, output: stdout }); return 0;
       default: throw new UsageError();
     }
   } catch (error) {
