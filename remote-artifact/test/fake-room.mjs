@@ -48,7 +48,8 @@ export function matches(expected, actual) {
 const b64url = (bytes) => Buffer.from(bytes).toString('base64url');
 
 /* The editing exchanges the fake room replays, by fixture name. */
-const EDITING_FIXTURES = ['read', 'history', 'patch', 'stale-patch', 'view-only', 'revert'];
+const EDITING_FIXTURES = ['read', 'history', 'patch', 'stale-patch', 'view-only', 'revert',
+  'read-file', 'write-file', 'write-conflict'];
 
 /* Frames of RFC 6455 from a byte stream. */
 function frameReader(onFrame) {
@@ -94,6 +95,7 @@ function wsFrame(opcode, payload) {
  *             it sends the goodbye fixture with REASON, then the relay
  *             closes the room
  * BINDINGS override the fixtures' example values.
+ * KIND overrides the welcome's artifact kind, such as `html'.
  * ON-EDITING, when given, answers an editing request no fixture covers:
  * it is called with the request body and { writable } and returns the
  * reply body, or undefined for the default refusal.
@@ -101,7 +103,7 @@ function wsFrame(opcode, payload) {
  * close }.  GOODBYE ends the room for its connected consumers as the
  * origin does; unless BACK, later connections find no host.
  */
-export async function startFakeRoom({ mode = 'artifact', bindings = {}, readOnly, onEditing, reason } = {}) {
+export async function startFakeRoom({ mode = 'artifact', bindings = {}, kind, readOnly, onEditing, reason } = {}) {
   const roomId = b64url(randomBytes(16));
   const keyBytes = randomBytes(32);
   const writeToken = randomBytes(16);
@@ -200,7 +202,10 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, readOnly
         if (!matches({ ...hello.frame, ...(writable ? {} : { writeToken: undefined }) },
           { ...frame, ...(writable ? {} : { writeToken: undefined }) })) return;
         for (const { from, frame: origin } of fixture('welcome').frames) {
-          if (from === 'origin') await send({ ...bind(origin, examples('welcome')), readOnly: readOnly ?? !writable });
+          if (from === 'origin') {
+            await send({ ...bind(origin, examples('welcome')), ...(kind ? { kind } : {}),
+              readOnly: readOnly ?? !writable });
+          }
         }
         return;
       }

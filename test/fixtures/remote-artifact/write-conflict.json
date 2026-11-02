@@ -1,0 +1,38 @@
+{
+  "description": "A write naming a hash the file no longer has is refused and changes nothing. The origin answers with the file's current hash and, under 256 KiB, its current content, so the consumer can redo its change without another read.",
+  "tier": "edit",
+  "bindings": {
+    "$ID": "landing"
+  },
+  "frames": [
+    {
+      "from": "consumer",
+      "frame": {
+        "t": "editing",
+        "reqId": 1,
+        "body": {
+          "action": "write-file",
+          "id": "$ID",
+          "file": "index.html",
+          "hash": "28c3689be4e0c696a6a45b9d7df5a41c8328b1c9939e240f27f3c6ac9a635099",
+          "text": "<!doctype html>\n<h1>Hi</h1>\n"
+        }
+      }
+    },
+    {
+      "from": "origin",
+      "frame": {
+        "t": "editing",
+        "reqId": 1,
+        "body": {
+          "error": "index.html changed since it was read; redo the change on its current content",
+          "code": "stale",
+          "file": "index.html",
+          "hash": "073fd2dab8fbabb8765175a26b2ef523268eed95a880556fda9e3cf482df2812",
+          "bytes": 38,
+          "text": "<!doctype html>\n<h1>Hello, world</h1>\n"
+        }
+      }
+    }
+  ]
+}

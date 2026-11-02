@@ -26,6 +26,12 @@
 ;; consumer as a remote agent.  Committed changes of the artifact, and of
 ;; no other, reach its room as change events.
 ;;
+;; An HTML artifact is shared as its directory of files instead.  Any link
+;; lists and reads them; an edit link writes, creates and deletes them,
+;; each change checked against the SHA-256 the consumer read, so the
+;; origin needs no patch engine.  File changes notify the store as a local
+;; write does.
+;;
 ;; Consumers never touch versions.  The room groups its writes into
 ;; working stretches instead and records one version when a stretch
 ;; ends.  Connected consumers are listed by name on the artifact's page
@@ -77,7 +83,6 @@
 (declare-function mevedel-shared-editing-call "mevedel-shared-editing"
                   (workspace args callback &optional authorize commit))
 (declare-function mevedel-shared-editing--json "mevedel-shared-editing" (value))
-(declare-function mevedel-shared-editing-list "mevedel-shared-editing" (workspace))
 
 ;; `mevedel-collaboration-transport'
 (declare-function mevedel-collaboration--transport-open
@@ -338,19 +343,166 @@ showing the artifact list it; whatever page FRAME reports is ignored."
   "Read ROOM's whiteboard or document as `shared://ID' shows it.
 With a true `:history' in ARGS, read its recent contributions instead,
 as `shared://ID/history' shows them, each with the id a revert names.
-AUTHORIZE must still permit the read; REPLY receives (:result (:text
-TEXT)) or (:error MESSAGE)."
-  (mevedel-shared-editing-call
-   (plist-get room :workspace)
-   (list :action "view" :id (plist-get room :artifact)
-         :part (if (eq t (plist-get args :history)) "history" "overview"))
-   (lambda (value)
-     (funcall reply
-              (if-let* ((failure (plist-get value :error)))
-                  (list :error failure)
-                (list :result (list :text (plist-get (plist-get value :result)
-                                                     :text))))))
-   authorize))
+An HTML artifact's file is read instead, as
+`mevedel-collaboration-artifact-room--read-file' does.  AUTHORIZE must
+still permit the read; REPLY receives (:result (:text TEXT)) or (:error
+MESSAGE)."
+  (cond
+   ((eq (plist-get room :artifact-kind) 'html)
+    (mevedel-collaboration-artifact-room--read-file room args reply))
+   ((plist-get args :file)
+    (error "Only HTML artifacts have files to read"))
+   (t
+    (mevedel-shared-editing-call
+     (plist-get room :workspace)
+     (list :action "view" :id (plist-get room :artifact)
+           :part (if (eq t (plist-get args :history)) "history" "overview"))
+     (lambda (value)
+       (funcall reply
+                (if-let* ((failure (plist-get value :error)))
+                    (list :error failure)
+                  (list :result (list :text (plist-get (plist-get value :result)
+                                                       :text))))))
+     authorize))))
+
+
+;;
+;;; HTML files
+
+(defconst mevedel-collaboration-artifact-room--stale-content-bytes (* 256 1024)
+  "Largest current file a refused write sends back with its hash.")
+
+(defun mevedel-collaboration-artifact-room--file-fields (file bytes)
+  "Return the reply fields of FILE holding the unibyte string BYTES.
+They name the file and give its SHA-256 `:hash' and size `:bytes', and
+its content as `:text' when BYTES are UTF-8 text, else as base64 `:data'."
+  (let ((text (decode-coding-string bytes 'utf-8-unix)))
+    (append (list :file file :hash (secure-hash 'sha256 bytes) :bytes (length bytes))
+            (if (string-match-p (rx (any 0 (#x3fff80 . #x3fffff))) text)
+                (list :data (base64-encode-string bytes t))
+              (list :text text)))))
+
+(defun mevedel-collaboration-artifact-room--file (room args)
+  "Return the file ARGS name in ROOM's HTML artifact, its primary file by default."
+  (let ((file (plist-get args :file)))
+    (cond
+     ((null file)
+      (plist-get (mevedel-artifact-store-meta (plist-get room :workspace)
+                                              (plist-get room :artifact))
+                 :file))
+     ((stringp file) file)
+     (t (error "A file is named by its path in the artifact")))))
+
+(defun mevedel-collaboration-artifact-room--read-file (room args reply)
+  "Answer REPLY with the file ARGS name in ROOM's HTML artifact.
+Any file in the artifact's directory may be read; without `:file' the
+artifact's primary file is.  The result carries the file's hash, which
+a write names to replace it."
+  (let* ((file (mevedel-collaboration-artifact-room--file room args))
+         (bytes (mevedel-artifact-store-read-file
+                 (plist-get room :workspace) (plist-get room :artifact) file)))
+    (funcall reply
+             (if bytes
+                 (list :result (mevedel-collaboration-artifact-room--file-fields file bytes))
+               (list :error (format "No file %s in this artifact" file))))))
+
+(defun mevedel-collaboration-artifact-room--files (room _guest _args _authorize reply)
+  "Answer REPLY with every file of ROOM's HTML artifact and its size.
+The result names the `:primary' file and lists `:files' as (:file NAME
+:bytes SIZE)."
+  (let ((workspace (plist-get room :workspace))
+        (id (plist-get room :artifact)))
+    (funcall reply
+             (list :result
+                   (list :primary (plist-get (mevedel-artifact-store-meta workspace id) :file)
+                         :files (vconcat (mevedel-artifact-store-files workspace id)))))))
+
+(defun mevedel-collaboration-artifact-room--stale (room file current expected)
+  "Return the refusal of a change to FILE of ROOM's artifact.
+CURRENT is the file's hash now and EXPECTED the one the change named,
+each nil for an absent file.  A file under
+`mevedel-collaboration-artifact-room--stale-content-bytes' comes with
+its content, so the consumer can redo its change without reading again."
+  (let ((bytes (and current
+                    (mevedel-artifact-store-read-file
+                     (plist-get room :workspace) (plist-get room :artifact) file))))
+    (append
+     (list :error (cond
+                   ((null bytes)
+                    (format "%s does not exist; write it without a hash to create it" file))
+                   ((null expected)
+                    (format "%s already exists; redo the change on its current content" file))
+                   (t (format "%s changed since it was read; redo the change on its current content"
+                              file)))
+           :code "stale")
+     (cond
+      ((null bytes) (list :file file :hash nil))
+      ((< (length bytes) mevedel-collaboration-artifact-room--stale-content-bytes)
+       (mevedel-collaboration-artifact-room--file-fields file bytes))
+      (t (list :file file :hash (secure-hash 'sha256 bytes) :bytes (length bytes)))))))
+
+(defun mevedel-collaboration-artifact-room--changed-file (room file)
+  "Note a consumer's committed change to FILE of ROOM's artifact.
+A change of the primary file is part of the room's working stretch, as
+only the primary file is versioned."
+  (when (equal file (plist-get (mevedel-artifact-store-meta (plist-get room :workspace)
+                                                           (plist-get room :artifact))
+                               :file))
+    (mevedel-collaboration-artifact-room-wrote room)))
+
+(defun mevedel-collaboration-artifact-room--write-file (room _guest args _authorize reply)
+  "Write the file ARGS name in ROOM's HTML artifact, if its hash still matches.
+ARGS carry the relative `:file', its content as `:text' or base64
+`:data', and the `:hash' it was read with, nil to create it.  REPLY
+receives (:result (:file :hash :bytes :created)) or a stale refusal
+with the current hash and, for a small file, its content.  The store's
+observers hear of the change as of a local write."
+  (let* ((file (plist-get args :file))
+         (text (plist-get args :text))
+         (data (plist-get args :data))
+         (content (cond
+                   ((and (stringp text) (null data)) (encode-coding-string text 'utf-8-unix))
+                   ((and (stringp data) (null text))
+                    (condition-case nil (base64-decode-string data)
+                      (error (error "The data must be the file's bytes as base64"))))
+                   (t (error "Give the file's content as text or as base64 data")))))
+    (unless (stringp file)
+      (error "A file is named by its path in the artifact"))
+    (let ((outcome (mevedel-artifact-store-write-file
+                    (plist-get room :workspace) (plist-get room :artifact)
+                    file content (plist-get args :hash))))
+      (if (plist-get outcome :stale)
+          (funcall reply (mevedel-collaboration-artifact-room--stale
+                          room file (plist-get outcome :hash) (plist-get args :hash)))
+        (mevedel-collaboration-artifact-room--changed-file room file)
+        (funcall reply
+                 (list :result (list :file file :hash (plist-get outcome :hash)
+                                     :bytes (length content)
+                                     :created (if (plist-get outcome :created)
+                                                  t :json-false))))))))
+
+(defun mevedel-collaboration-artifact-room--delete-file (room _guest args _authorize reply)
+  "Delete the file ARGS name in ROOM's HTML artifact, if its hash still matches.
+ARGS carry the relative `:file' and the `:hash' it was read with.  The
+primary file is refused: without it the artifact is gone, and a link
+never deletes its artifact.  REPLY receives (:result (:file :deleted t))
+or a stale refusal as a write gets."
+  (let* ((workspace (plist-get room :workspace))
+         (id (plist-get room :artifact))
+         (file (plist-get args :file)))
+    (unless (stringp file)
+      (error "A file is named by its path in the artifact"))
+    ;; The guard first, so a refused path is reported as such.
+    (mevedel-artifact-store-file-path workspace id file)
+    (when (equal file (plist-get (mevedel-artifact-store-meta workspace id) :file))
+      (error "%s is the artifact's primary file; an artifact link cannot delete it" file))
+    (let ((outcome (mevedel-artifact-store-delete-file
+                    workspace id file (plist-get args :hash))))
+      (funcall reply
+               (if (plist-get outcome :stale)
+                   (mevedel-collaboration-artifact-room--stale
+                    room file (plist-get outcome :hash) (plist-get args :hash))
+                 (list :result (list :file file :deleted t)))))))
 
 (defconst mevedel-collaboration-artifact-room--image-max-bytes 4700000
   "Largest image an artifact link may upload, as SharedEdit's limit.")
@@ -501,8 +653,14 @@ changed.  AUTHORIZE and REPLY are as in
      authorize)))
 
 (defconst mevedel-collaboration-artifact-room--actions
-  '(("read" :kinds (whiteboard document)
+  '(("read" :kinds (whiteboard document html)
      :run mevedel-collaboration-artifact-room--read)
+    ("files" :kinds (html)
+     :run mevedel-collaboration-artifact-room--files)
+    ("write-file" :kinds (html) :write t
+     :run mevedel-collaboration-artifact-room--write-file)
+    ("delete-file" :kinds (html) :write t
+     :run mevedel-collaboration-artifact-room--delete-file)
     ("view" :kinds (whiteboard document)
      :run mevedel-collaboration-artifact-room--view)
     ("patch" :kinds (whiteboard document) :write t
@@ -655,15 +813,18 @@ room's working stretch."
           (mevedel-workspace))
         (user-error "No mevedel workspace at %s" dir))))
 
+(defconst mevedel-collaboration-artifact-room--kinds '(whiteboard document html)
+  "Kinds of artifact that can be shared through an artifact link.")
+
 (defun mevedel-collaboration-artifact-room--meta (workspace id)
   "Return the metadata of WORKSPACE's shareable artifact ID, or signal.
-Only whiteboards and documents can be shared so far."
+Whiteboards, documents and HTML artifacts can be shared."
   (let ((meta (and (mevedel-artifact-store-id-p id)
                    (mevedel-artifact-store-meta workspace id))))
     (unless meta
       (user-error "No artifact %s in this workspace" id))
-    (unless (mevedel-artifact-store-item-p meta)
-      (user-error "Only whiteboards and documents can be shared through an artifact link"))
+    (unless (memq (plist-get meta :kind) mevedel-collaboration-artifact-room--kinds)
+      (user-error "Only whiteboards, documents and HTML artifacts can be shared through an artifact link"))
     meta))
 
 (defun mevedel-collaboration-artifact-room--start (workspace id)
@@ -696,6 +857,9 @@ Return the live room when one is already running."
                        :room-id (plist-get credentials :room-id)
                        :key (plist-get credentials :key)
                        :write-token (plist-get credentials :write-token)
+                       ;; A largest HTML file, base64 in the JSON request,
+                       ;; then the transfer's own base64.
+                       :editing-max-bytes (* 30 1024 1024)
                        :guests (make-hash-table :test #'eql))
                  (mevedel-collaboration-artifact-room--links
                   (cdr origins) credentials))))
@@ -843,24 +1007,22 @@ does, and shares the artifact again.  The result is a plist of
   "Buffer showing an artifact's links, kept out of *Messages*.")
 
 (defun mevedel-collaboration-artifact-room--choose (&optional shared)
-  "Read one of the current workspace's whiteboards or documents; return its id.
+  "Read one of the current workspace's shareable artifacts; return its id.
 With SHARED, offer only the shared ones."
-  (require 'mevedel-shared-editing)
   (let* ((workspace (or (mevedel-workspace)
                         (user-error "No mevedel workspace here")))
-         (choices (mapcar (lambda (item)
-                            (cons (format "%s (%s %s)" (plist-get item :title)
-                                          (plist-get item :kind) (plist-get item :id))
-                                  (plist-get item :id)))
-                          (seq-filter
-                           (lambda (item)
-                             (or (not shared)
-                                 (mevedel-artifact-store-shared-p
-                                  workspace (plist-get item :id))))
-                           (mevedel-shared-editing-list workspace)))))
+         (choices (cl-loop for row in (mevedel-artifact-store-list workspace)
+                           for id = (plist-get row :id)
+                           when (and (memq (plist-get row :kind)
+                                           mevedel-collaboration-artifact-room--kinds)
+                                     (or (not shared)
+                                         (mevedel-artifact-store-shared-p workspace id)))
+                           collect (cons (format "%s (%s %s)" (plist-get row :title)
+                                                 (plist-get row :kind) id)
+                                         id))))
     (unless choices
       (user-error (if shared "No artifact of this workspace is shared"
-                    "This workspace has no whiteboard or document to share")))
+                    "This workspace has no whiteboard, document or HTML artifact to share")))
     (cdr (assoc (completing-read (if shared "Shared artifact: " "Share artifact: ")
                                  choices nil t)
                 choices))))
@@ -882,7 +1044,8 @@ The edit link goes to the kill ring; neither goes to *Messages*."
 
 ;;;###autoload
 (defun mevedel-collaboration-share-artifact (id)
-  "Share the current workspace's whiteboard or document ID and show its links.
+  "Share the current workspace's artifact ID and show its links.
+ID names a whiteboard, document or HTML artifact.
 The edit link is copied to the kill ring.  An artifact that is shared
 already keeps its links."
   (interactive (list (mevedel-collaboration-artifact-room--choose)))

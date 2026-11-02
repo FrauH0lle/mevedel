@@ -1,6 +1,6 @@
 # mevedel-remote-artifact
 
-Work on whiteboards and documents that live in a
+Work on whiteboards, documents and HTML artifacts that live in a
 [mevedel](https://github.com/FrauH0lle/mevedel) workspace on another machine
 (their *origin*) from Claude Code, Codex or any MCP client. The origin shares
 an artifact and gives you an *artifact link*; you attach the link here, and
@@ -60,10 +60,13 @@ Tools:
 
 - `list_artifacts`: each attached artifact's name, title, kind, link tier
   (view or edit) and whether its origin is reachable.
-- `read_artifact(name, history?)`: the whiteboard or document as
+- `read_artifact(name, file?, history?)`: the whiteboard or document as
   hash-prefixed lines, exactly as `shared://ID` shows it at the origin. With
   `history: true`, its recent contributions instead, as `shared://ID/history`
-  shows them, each with the id `revert` names. Any link may read both.
+  shows them, each with the id `revert` names. For an HTML artifact, one file:
+  the primary page unless `file` names another, text as is, PNG, JPEG, GIF
+  and WebP files as images, other bytes as a note of their size. Any link may
+  read.
 - `view_artifact(name, image?)`: the whiteboard as drawn, or with `image` one
   embedded image (a board image by its `fileId`, a document image by the key
   its `src` shows).
@@ -85,13 +88,30 @@ Tools:
   library. Any link may browse; libraries cannot be changed through a link,
   and document links get no libraries. Sharing a whiteboard exposes the
   origin user's libraries.
+- `list_artifact_files(name)`: an HTML artifact's files with their sizes,
+  the primary one marked. Any link may list.
+- `edit_artifact_file(name, file, old_string, new_string)`: replace one
+  exact, unique occurrence in a text file of an HTML artifact.
+- `write_artifact_file(name, file, content)`: replace a whole text file, or
+  create it with any missing directories. Files are limited to 16 MiB.
+- `delete_artifact_file(name, file)`: delete a file, never the primary one.
+
+The file tools need an edit link, and every change except creating a file
+needs a `read_artifact` of that file first: the server remembers the SHA-256
+of what was read, and the origin writes only if the file still has it. A file
+changed at the origin since is not written; the tool fails with the file's
+current content (under 256 KiB) to redo the change on, which also counts as
+the new read. Creating a file that exists fails the same way. Paths are
+relative to the artifact's directory; `..`, absolute paths and symbolic links
+are refused with "Refused path ...".
 
 Edits are attributed at the origin as `Agent: NAME (remote)`, NAME being the
 display name given at attach (`--as`) or the default user, machine and
 client. The origin can revert them, lists a connected consumer by that name
 on the artifact, and records one version when a stretch of edits ends (5
-minutes without edits, or the connection closing). Versions themselves stay
-with the origin: the package cannot list, save or restore them.
+minutes without edits, or the connection closing); for an HTML artifact, when
+the stretch wrote its primary file. Versions themselves stay with the origin:
+the package cannot list, save or restore them.
 
 When the origin is offline, or the link was revoked or the artifact deleted,
 tools fail with "Origin unavailable (revoked, deleted, or offline)". An origin
