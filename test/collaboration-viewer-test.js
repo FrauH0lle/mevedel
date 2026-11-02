@@ -907,7 +907,7 @@ async function main() {
                                                Buffer.from(ownerToken)]));
 
   const ids = ['transcript', 'history', 'connection', 'notice', 'live-button', 'assistant-working',
-               'terminal-state', 'terminal-title', 'terminal-message',
+               'terminal-state', 'terminal-title', 'terminal-message', 'terminal-action',
                'composer', 'composer-input', 'composer-identity',
                'you-menu', 'you-form', 'you-name', 'you-random', 'you-initials', 'you-label',
                'settings', 'settings-attention', 'settings-issues', 'settings-model', 'settings-mode',
@@ -2870,6 +2870,8 @@ async function main() {
   assert.equal(nodes.composer.hidden, false, 'a notice is not a rejection');
 
   // Bye ends the session: no reconnect, composer gone.
+  nodes['live-button'].dispatch('click');
+  assert.ok(animationFrames.length, 'a live scroll is pending when the room ends');
   timer = null;
   sockets[1].dispatch('message', {data: await seal(key, 1, {t: 'bye', reason: 'user-stop'})});
   await waitFor(() => textOf(nodes.connection).includes('Session ended'), 'bye');
@@ -2880,6 +2882,8 @@ async function main() {
   assert.equal(nodes['terminal-state'].hidden, false);
   assert.equal(textOf(nodes['terminal-title']), 'Session ended');
   assert.match(textOf(nodes['terminal-message']), /new invitation/);
+  while (animationFrames.length) animationFrames.shift()();
+  assert.equal(window.scrollY, 0, 'a queued live scroll cannot hide the terminal notice');
   assert.equal(nodes.notice.hidden, true, 'terminal status replaces the small dock notice');
   assert.equal(nodes['new-session-button'].hidden, true);
   // An ended room's link is dead, so offering to pass it on would lie.
