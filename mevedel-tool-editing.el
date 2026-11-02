@@ -172,7 +172,9 @@ versions it when the current request settles."
 COMPONENTS are the decoded address components after `shared://'.  Call
 CALLBACK once with (:text TEXT), (:data BASE64 :mime MIME) or
 \(:error MESSAGE).  SEARCH instead returns mapped search documents derived
-from the same Read lines, joining output string chunks only for matching."
+from the same Read lines, joining output string chunks only for matching.
+A remote HTML artifact's `files' lists its files and `files/PATH' is one
+file's text."
   (condition-case err
       (let ((args
              (pcase components
@@ -185,6 +187,11 @@ from the same Read lines, joining output string chunks only for matching."
                 (list :action "view" :id id :part "element" :element element))
                (`(,id "images" ,image)
                 (list :action "view" :id id :part "image" :image image))
+               (`(,id "files") (list :action "files" :id id))
+               (`(,id "files" . ,path)
+                (when search
+                  (error "Grep does not search a remote artifact's files; Read them"))
+                (list :action "file" :id id :file (string-join path "/")))
                (_ (error "Unknown shared:// address")))))
         (when search (setq args (plist-put args :search t)))
         (mevedel-artifact-backend-call
@@ -194,13 +201,26 @@ from the same Read lines, joining output string chunks only for matching."
                     (if-let* ((message (plist-get reply :error)))
                         (list :error message)
                       (let ((result (plist-get reply :result)))
-                        (if search
-                            (list :documents (plist-get result :documents))
-                          (if (plist-get result :text)
-                            (list :text (plist-get result :text))
-                          (list :data (plist-get result :png)
-                                :mime (plist-get result :mime))))))))))
+                        (cond
+                         (search (list :documents (plist-get result :documents)))
+                         ((plist-get result :text) (list :text (plist-get result :text)))
+                         ((equal (plist-get args :action) "files")
+                          (list :text (mevedel-tool-editing--files-text
+                                       (plist-get args :id) result)))
+                         ((equal (plist-get args :action) "file")
+                          (list :error (format "%s is not text" (plist-get args :file))))
+                         (t (list :data (plist-get result :png)
+                                  :mime (plist-get result :mime))))))))))
     (error (funcall callback (list :error (error-message-string err))))))
+
+(defun mevedel-tool-editing--files-text (id result)
+  "Return the files RESULT lists for remote artifact ID, one address a line."
+  (mapconcat (lambda (entry)
+               (format "shared://%s/files/%s\t%d bytes%s" id (plist-get entry :file)
+                       (or (plist-get entry :bytes) 0)
+                       (if (equal (plist-get entry :file) (plist-get result :primary))
+                           " · primary" "")))
+             (plist-get result :files) "\n"))
 
 (defun mevedel-tool-editing--create (callback args)
   "Create the item ARGS describe and deliver a pipeline result to CALLBACK."

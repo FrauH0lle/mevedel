@@ -74,8 +74,10 @@
 (declare-function mevedel-artifact-backend-catalog "mevedel-artifact-backend"
                   (workspace &optional detail))
 (declare-function mevedel-artifact-backend-present-p "mevedel-artifact-backend" (workspace id))
+(declare-function mevedel-artifact-backend-registered-p "mevedel-artifact-backend" (workspace id))
 (autoload 'mevedel-artifact-backend-catalog "mevedel-artifact-backend")
 (autoload 'mevedel-artifact-backend-present-p "mevedel-artifact-backend")
+(autoload 'mevedel-artifact-backend-registered-p "mevedel-artifact-backend")
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-list-user "mevedel-execution" (session))
@@ -1108,8 +1110,9 @@ as Glob or Grep scopes."
 (defun mevedel-resource--shared-shape-p (components)
   "Return non-nil when COMPONENTS name a `shared://' resource.
 Items are `ID' with `view.png', `discussions', `history', `elements/ID' and
-`images/KEY' descendants; `library' lists element libraries, optionally one
-library by name, each with a `sheet.png'."
+`images/KEY' descendants; a remote HTML artifact has `files', listing its
+files, and `files/PATH', one file.  `library' lists element libraries,
+optionally one library by name, each with a `sheet.png'."
   (cl-flet ((id-p (value)
               (and (stringp value)
                    (string-match-p mevedel-resource--shared-identity value))))
@@ -1120,16 +1123,41 @@ library by name, each with a `sheet.png'."
       (`("library" ,_ "sheet.png") t)
       (`(,id) (id-p id))
       (`(,id ,(or "view.png" "discussions" "history")) (id-p id))
-      (`(,id ,(or "elements" "images") ,name) (and (id-p id) (id-p name))))))
+      (`(,id ,(or "elements" "images") ,name) (and (id-p id) (id-p name)))
+      (`(,id "files" . ,path)
+       (and (id-p id)
+            (cl-every (lambda (part) (not (member part '("" "." ".."))))
+                      path))))))
+
+(defun mevedel-resource-shared-file-p (components)
+  "Return non-nil when `shared://' COMPONENTS name a remote artifact's file.
+Such an address, shared://ID/files/PATH, is an HTML artifact's file at
+its origin: content, never a local path."
+  (and (equal (cadr components) "files") (cddr components) t))
+
+(defun mevedel-resource-remote-file (address)
+  "Return (ID . FILE) when ADDRESS is shared://ID/files/FILE, else nil.
+FILE is the file's path relative to the remote artifact's directory."
+  (when (and (stringp address) (string-prefix-p "shared://" address))
+    (condition-case nil
+        (let ((components (plist-get (mevedel-resource-parse-address address) :components)))
+          (when (and (mevedel-resource-shared-file-p components)
+                     (mevedel-resource--shared-shape-p components))
+            (cons (car components) (string-join (cddr components) "/"))))
+      (mevedel-resource-error nil))))
 
 (defun mevedel-resource--shared-available-p (components session)
   "Return non-nil when shared COMPONENTS resolve in SESSION's workspace.
-Item addresses need an existing item; listings and libraries always resolve."
+Item addresses need an existing item, and `files' addresses a remote
+one; listings and libraries always resolve."
   (or (null components)
       (equal (car components) "library")
       (and session
-           (mevedel-artifact-backend-present-p (mevedel-session-workspace session)
-                                               (car components))
+           (if (equal (cadr components) "files")
+               (mevedel-artifact-backend-registered-p (mevedel-session-workspace session)
+                                                      (car components))
+             (mevedel-artifact-backend-present-p (mevedel-session-workspace session)
+                                                 (car components)))
            t)))
 
 (defun mevedel-resource--shared-list-result (session)
@@ -1837,7 +1865,9 @@ errors before any content or handler is reached."
                                     (and (eq operation 'grep)
                                          (equal (car components) "root"))))))
                   (and (eq operation 'apply-patch)
-                       (memq scheme '(work memory))))
+                       (or (memq scheme '(work memory))
+                           (and (eq scheme 'shared)
+                                (mevedel-resource-shared-file-p components)))))
         (signal 'mevedel-resource-error
                 (list (format "%s does not support %s:// resources"
                               (if (eq operation 'apply-patch) "ApplyPatch"
@@ -2037,10 +2067,21 @@ errors before any content or handler is reached."
 (defun mevedel-resource-attempt-write-check (attempt)
   "Return a freshness check for ATTEMPT's workspace or memory write target.
 The closure survives attempt consumption and is checked through patch review
-and commit.  It does not grant authority or read file content."
+and commit.  It does not grant authority or read file content.  A remote
+artifact's file stays current while the artifact remains attached."
   (let ((data (copy-sequence (gethash attempt mevedel-resource--attempt-table))))
-    (when (and (eq (plist-get data :operation) 'apply-patch)
-               (not (mevedel-resource-session-work-p (plist-get data :address))))
+    (cond
+     ((not (eq (plist-get data :operation) 'apply-patch)) nil)
+     ((eq (plist-get data :scheme) 'shared)
+      (let ((workspace (plist-get data :workspace))
+            (id (car (plist-get data :components))))
+        (lambda ()
+          (unless (and workspace (mevedel-artifact-backend-registered-p workspace id))
+            (signal 'mevedel-resource-error
+                    (list (format "Remote artifact %s was detached during review: %s"
+                                  id (plist-get data :address)))))
+          t)))
+     ((not (mevedel-resource-session-work-p (plist-get data :address)))
       (let* ((root (plist-get data :root))
              (remote-file-name-inhibit-cache t)
              (identity (and root (file-truename root))))
@@ -2053,13 +2094,16 @@ and commit.  It does not grant authority or read file content."
               (signal 'mevedel-resource-error
                       (list (format "Writable resource target changed during review: %s; review a fresh patch"
                                     (plist-get data :address)))))
-            t))))))
+            t)))))))
 
 (defun mevedel-resource-attempt-write-path (attempt)
   "Return ATTEMPT's prepared backing path for filesystem write policy.
-Session-owned scratch keeps its address-based permission treatment."
+Session-owned scratch keeps its address-based permission treatment.  A
+remote artifact's file has no backing path: it is content at its origin,
+authorized as an edit like SharedEdit's, not as a local file."
   (let ((data (gethash attempt mevedel-resource--attempt-table)))
     (when (and (eq (plist-get data :operation) 'apply-patch)
+               (not (eq (plist-get data :scheme) 'shared))
                (not (mevedel-resource-session-work-p (plist-get data :address))))
       (or (plist-get data :physical-path)
           (signal 'mevedel-resource-unavailable

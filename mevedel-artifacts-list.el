@@ -301,16 +301,27 @@ The local browser cannot read a remote target's filesystem."
   "Open the selected artifact in a web browser.
 A whiteboard or document opens in its editor in the session's room, which
 is started after confirmation when the session is not shared.  Without a
-session it opens in the room of the item's own conversation."
+session it opens in the room of the item's own conversation.  A remote
+HTML artifact opens in the session room's viewer, which reads it from
+its origin."
   (interactive)
-  (let ((context (mevedel-cockpit-surface-context)))
-    (if-let* ((id (plist-get (mevedel-artifacts-list--local-selected) :item)))
+  (let ((context (mevedel-cockpit-surface-context))
+        (selected (mevedel-cockpit-surface-selected)))
+    (cond
+     ((and (plist-get selected :remote) (eq (plist-get selected :kind) 'html))
+      (let ((data (or (mevedel-cockpit-context-data-buffer context)
+                      (user-error "Open Project artifacts from a session to view %s"
+                                  (plist-get selected :title)))))
+        (funcall (mevedel-collaboration-item-opener data)
+                 data (plist-get selected :id) "artifact")))
+     ((plist-get (mevedel-artifacts-list--local-selected) :item)
+      (let ((id (plist-get selected :item)))
         (mevedel-collaboration-open-shared-item
          (or (mevedel-cockpit-context-data-buffer context)
              (mevedel-artifact-store-conversation
               (mevedel-artifacts-list--workspace context) id))
-         id)
-      (mevedel-artifacts-list--browse (mevedel-artifacts-list--selected-path)))))
+         id)))
+     (t (mevedel-artifacts-list--browse (mevedel-artifacts-list--selected-path))))))
 
 (defun mevedel-artifacts-list-visit ()
   "Visit the selected artifact file in Emacs."

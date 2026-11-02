@@ -490,6 +490,18 @@ private temporary copy and delivered through ordinary Read media handling.
 Grep accepts text views only. Writes go through `SharedEdit`, never through a
 resource address. [Shared editing](shared-editing.md) owns the view formats.
 
+A remote HTML artifact's files are the one exception. `shared://ID/files` lists
+them and `shared://ID/files/PATH` reads one, PATH being relative to the
+artifact's directory without `.` or `..` components; both resolve only for an
+attached remote artifact, so a local HTML artifact keeps its filesystem path.
+ApplyPatch accepts `shared://ID/files/PATH` as a writable operand that has no
+backing path: the operand contributes no local path to permission rules or the
+workspace boundary, it is authorized as an edit like `SharedEdit`, and Plan
+mode denies it. Its freshness check is that the artifact stays attached. The
+patch reads and writes the files through the artifact backend; the
+[ApplyPatch manual](tools/applypatch.md#remote-artifact-files) gives its
+behavior. Grep does not search them.
+
 ### `mcp://`
 
 Bare `mcp://` lists configured servers and availability. A server-only

@@ -6,11 +6,20 @@
 ;; the workspace artifact store.  This is
 ;; the path-domain and file-stat leaf used by collaboration projection; file
 ;; bytes remain host-only until an authenticated guest requests a published
-;; record id.
+;; record id.  A write to a remote artifact's file, shared://ALIAS/files/PATH,
+;; projects a card for that artifact too; its origin serves the bytes.
 
 ;;; Code:
 
 (require 'subr-x)
+
+;; `mevedel-artifact-backend'
+(declare-function mevedel-artifact-backend-catalog "mevedel-artifact-backend"
+                  (workspace &optional detail))
+(declare-function mevedel-artifact-backend-registered-p "mevedel-artifact-backend"
+                  (workspace id))
+(autoload 'mevedel-artifact-backend-catalog "mevedel-artifact-backend")
+(autoload 'mevedel-artifact-backend-registered-p "mevedel-artifact-backend")
 
 ;; `mevedel-artifact-store'
 (declare-function mevedel-artifact-store-directory
@@ -30,6 +39,10 @@
                   "mevedel-execution-target" (target path &optional directory))
 (autoload 'mevedel-execution-target-create "mevedel-execution-target")
 (autoload 'mevedel-execution-target-expand-path "mevedel-execution-target")
+
+;; `mevedel-resource'
+(declare-function mevedel-resource-remote-file "mevedel-resource" (address))
+(autoload 'mevedel-resource-remote-file "mevedel-resource")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target
@@ -88,12 +101,36 @@ without target I/O on streaming projection ticks."
         (if (equal file (plist-get meta :file)) title
           (format "%s · %s" title file))))))
 
+(defun mevedel-collaboration--remote-artifact-field (session file)
+  "Return the card of settled ApplyPatch FILE in a remote artifact, or nil.
+FILE's path is shared://ALIAS/files/PATH of an artifact SESSION's
+workspace has attached; the card carries no size, which only its origin
+knows."
+  (pcase-let* ((path (or (plist-get file :move-path) (plist-get file :path)))
+               (`(,alias . ,relative) (mevedel-resource-remote-file path))
+               (workspace (mevedel-session-workspace session)))
+    (when (and alias (not (eq (plist-get file :kind) 'delete))
+               (mevedel-artifact-backend-registered-p workspace alias))
+      (let ((title (plist-get (cl-find alias (mevedel-artifact-backend-catalog workspace 'items)
+                                       :key (lambda (row) (plist-get row :id)) :test #'equal)
+                              :title)))
+        (append (list :artifact (concat alias "/" relative) :store alias)
+                (when (and title (not (string-blank-p title)))
+                  (list :title (format "%s · %s" title relative))))))))
+
 (defun mevedel-collaboration--artifact-field (session file base-directory)
   "Return artifact fields for settled ApplyPatch FILE, or nil.
 SESSION supplies the artifact root and execution target.  BASE-DIRECTORY is
 the directory against which ApplyPatch resolved relative paths.  Move records
 publish their destination; deletes publish no new card, while an older card
 for the deleted path will re-project as missing."
+  (if (string-prefix-p "shared://" (or (plist-get file :move-path) (plist-get file :path) ""))
+      (mevedel-collaboration--remote-artifact-field session file)
+    (mevedel-collaboration--local-artifact-field session file base-directory)))
+
+(defun mevedel-collaboration--local-artifact-field (session file base-directory)
+  "Return artifact fields for settled ApplyPatch FILE in the local store.
+See `mevedel-collaboration--artifact-field' for SESSION and BASE-DIRECTORY."
   (let ((session-target (mevedel-session-execution-target session)))
     (when-let* (((not (eq (plist-get file :kind) 'delete)))
                 (path (or (plist-get file :move-path)
