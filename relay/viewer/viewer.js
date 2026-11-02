@@ -1264,6 +1264,7 @@
 
   // ACTION, when given, is {label, href}: somewhere this ended room leads.
   function showTerminal(connectionText, noticeText, action = null) {
+    followingLive = false;
     if (transport) transport.end();
     state.connected = false;
     notifications.forget();
