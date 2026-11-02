@@ -6,6 +6,7 @@
 ;;; Code:
 
 (require 'mevedel-acp)
+(require 'mevedel-transport)
 (require 'helpers
          (file-name-concat
           (file-name-directory (or load-file-name buffer-file-name)) "helpers"))
@@ -72,14 +73,20 @@
           (mevedel-acp--pace connection process text)
           (should (memq process mevedel-transport--paused))
           (mevedel-acp--wake connection)
+          ;; SIGCONT's status notification can arrive after wake returns.
+          (mevedel-test--await 5 "Paced child did not resume"
+            (eq (process-status process) 'run))
           ;; The text batch, armed a pass after the read, falls due first.
           (let ((mevedel-gptel-stream-bridge-insert-batch-delay 0.2)
-                (start (float-time)))
-            (mevedel-acp--pace connection process text)
-            (should (< 0.24 (- (float-time
-                                (timer--time (process-get process 'mevedel-transport--resume-timer)))
-                               start)
-                       0.26))
+                (schedule (symbol-function 'mevedel-transport-run-at-time))
+                requested-delay)
+            (cl-letf (((symbol-function 'mevedel-transport-run-at-time)
+                       (lambda (seconds function &rest args)
+                         (when (eq function #'mevedel-transport-resume-process)
+                           (setq requested-delay seconds))
+                         (apply schedule seconds function args))))
+              (mevedel-acp--pace connection process text)
+              (should (equal requested-delay 0.25)))
             (mevedel-acp--wake connection))
           (should-not mevedel-transport--paused)
           ;; Disabling text batching disables pacing, including its margin.
