@@ -57,6 +57,21 @@ RESULT.  Observers cannot change whether the preceding commit succeeded.")
 (defvar mevedel-artifact-backend--registry (make-hash-table :test #'equal)
   "Workspace root -> alist of (ID . ADAPTER) for artifacts served elsewhere.")
 
+(defconst mevedel-artifact-backend-edit-keys
+  '(("patch" :changes)
+    ("rename" :title)
+    ("background" :background)
+    ("image" :data :x :y :width :alt :afterId)
+    ("insert" :item :x :y)
+    ("revert" :transaction))
+  "`SharedEdit' actions an artifact link carries, with the keys each passes on.
+The origin's artifact room accepts these and the remote adapter sends
+them; anything else a request carries is dropped.  An image travels as
+`:data', its base64 content, since the origin cannot read the consumer's
+files; an insert names its library item as LIBRARY/ITEM-ID, which the
+origin resolves in its own libraries; a revert names the contribution,
+from the history a read returns, as its `:transaction'.")
+
 (defvar mevedel-artifact-backend--restored (make-hash-table :test #'equal)
   "Workspace roots whose persisted registrations were restored.")
 
@@ -102,7 +117,7 @@ ID follows the store's id rule and must not name a local artifact."
     (puthash (mevedel-workspace-root workspace)
              (cons (cons id adapter) (assoc-delete-all id (copy-sequence registered)))
              mevedel-artifact-backend--registry))
-  (mevedel-artifact-store--changed workspace))
+  (mevedel-artifact-store-changed workspace))
 
 (defun mevedel-artifact-backend-unregister (workspace id)
   "Stop serving WORKSPACE's artifact ID through a registered adapter."
@@ -112,7 +127,7 @@ ID follows the store's id rule and must not name a local artifact."
     (if remaining
         (puthash root remaining mevedel-artifact-backend--registry)
       (remhash root mevedel-artifact-backend--registry)))
-  (mevedel-artifact-store--changed workspace))
+  (mevedel-artifact-store-changed workspace))
 
 ;;;###autoload
 (defun mevedel-artifact-backend-call (workspace args callback &optional authorize commit)

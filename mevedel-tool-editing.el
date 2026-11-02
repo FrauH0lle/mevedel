@@ -23,6 +23,7 @@
 (autoload 'mevedel-artifact-backend-registered-p "mevedel-artifact-backend")
 (autoload 'mevedel-shared-editing--json "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-create "mevedel-shared-editing")
+(autoload 'mevedel-shared-editing-op-id "mevedel-shared-editing")
 (autoload 'mevedel-shared-library-libraries "mevedel-shared-library")
 (autoload 'mevedel-shared-library-text "mevedel-shared-library")
 
@@ -91,7 +92,7 @@ encode these as vectors so the host does not mistake them for objects."
   (unless mevedel--session (error "No active session"))
   (mevedel-session-workspace mevedel--session))
 
-(defun mevedel-tool-editing--actor ()
+(defun mevedel-tool-editing-actor ()
   "Return the attribution of the agent calling an editing tool."
   (concat "Agent: "
           (if (bound-and-true-p mevedel--agent-invocation)
@@ -141,8 +142,8 @@ versions it when the current request settles."
 (defun mevedel-tool-editing--call (callback args)
   "Run validated editing ARGS and deliver a pipeline result to CALLBACK."
   (unless mevedel--session (error "No active session"))
-  (setq args (plist-put (copy-sequence args) :actor (mevedel-tool-editing--actor)))
-  (setq args (plist-put args :opId (secure-hash 'sha256 (format "%s%s" (current-time) (random t)))))
+  (setq args (plist-put (copy-sequence args) :actor (mevedel-tool-editing-actor)))
+  (setq args (plist-put args :opId (mevedel-shared-editing-op-id)))
   (setq args (mevedel-tool-editing--restore-nulls args))
   (mevedel-artifact-backend-call
    (mevedel-tool-editing--workspace) args
@@ -289,7 +290,7 @@ CALLBACK receives (:documents DOCUMENTS) or (:error MESSAGE)."
   (unless mevedel--session (error "No active session"))
   (mevedel-shared-editing-create
    (mevedel-tool-editing--workspace) (plist-get args :kind) (plist-get args :title)
-   (mevedel-tool-editing--actor) (mevedel-tool-editing--deliver callback t)
+   (mevedel-tool-editing-actor) (mevedel-tool-editing--deliver callback t)
    :session mevedel--session
    :authorize mevedel-pipeline--handler-active-p
    :commit mevedel-pipeline--handler-commit))

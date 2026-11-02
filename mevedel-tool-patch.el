@@ -127,8 +127,8 @@
 (defvar mevedel--session)
 
 ;; `mevedel-tool-editing'
-(declare-function mevedel-tool-editing--actor "mevedel-tool-editing" ())
-(autoload 'mevedel-tool-editing--actor "mevedel-tool-editing")
+(declare-function mevedel-tool-editing-actor "mevedel-tool-editing" ())
+(autoload 'mevedel-tool-editing-actor "mevedel-tool-editing")
 
 (defvar mevedel-tool-patch-prepared-proposal nil)
 
@@ -165,7 +165,7 @@ workspace, attribution and authority the files are written with.")
   (or (plist-get operation :physical-path)
       (plist-get operation :path)))
 
-(defun mevedel-tool-patch--remote-p (path)
+(defun mevedel-tool-patch-remote-p (path)
   "Return (ALIAS . FILE) when PATH is a remote artifact's file address."
   (and (stringp path) (string-prefix-p "shared://" path)
        (mevedel-resource-remote-file path)))
@@ -240,7 +240,7 @@ local sessions untouched until permission and plan checks have completed."
     (unless (and operands session-only-p)
       (setq session-only-p nil))
     (let ((remote (cl-loop for operation in (plist-get proposal :operations)
-                           append (mapcar #'mevedel-tool-patch--remote-p
+                           append (mapcar #'mevedel-tool-patch-remote-p
                                           (delq nil (list (plist-get operation :rel-path)
                                                           (plist-get operation :move-rel-path)))))))
       (when (and (memq nil remote) (delq nil remote))
@@ -260,7 +260,7 @@ local sessions untouched until permission and plan checks have completed."
                  (list :session session
                        :workspace (and session
                                        (mevedel-session-workspace session)))))
-               (remote-p (mevedel-tool-patch--remote-p address))
+               (remote-p (mevedel-tool-patch-remote-p address))
                physical)
           ;; A remote file has no backing path to resolve: its address is
           ;; what planning and the commit work with, also in place of the
@@ -542,7 +542,7 @@ tolerated, and content lines are kept raw."
   "Return text contents of regular file PATH.
 When WITH-CODING is non-nil, return (CONTENTS . CODING-SYSTEM).  A remote
 artifact's file is read from `mevedel-tool-patch--remote'."
-  (if-let* ((_ (mevedel-tool-patch--remote-p path))
+  (if-let* ((_ (mevedel-tool-patch-remote-p path))
             (entry (mevedel-tool-patch--remote-entry path)))
       (progn
         (when (plist-get entry :binary)
@@ -573,7 +573,7 @@ artifact's file is read from `mevedel-tool-patch--remote'."
 They are `:remote' (ALIAS . FILE) and the `:hash' the content was read
 with, none for a change creating the file, which ABSENT marks.
 `:origin' is `mevedel-tool-patch--remote'."
-  (when-let* ((remote (mevedel-tool-patch--remote-p path)))
+  (when-let* ((remote (mevedel-tool-patch-remote-p path)))
     (let ((entry (unless absent (mevedel-tool-patch--remote-entry path))))
       (list :remote remote :hash (plist-get entry :hash)
             :origin mevedel-tool-patch--remote))))
@@ -585,7 +585,7 @@ Added files and move destinations are created, so they are not read."
    (cl-loop for operation in (plist-get proposal :operations)
             for path = (plist-get operation :rel-path)
             when (and (not (eq (plist-get operation :kind) 'add))
-                      (mevedel-tool-patch--remote-p path))
+                      (mevedel-tool-patch-remote-p path))
             collect path)))
 
 (defun mevedel-tool-patch--fetch-remote (proposal workspace callback)
@@ -605,7 +605,7 @@ condition of the first file that could not be read."
       (if (null addresses)
           (finish nil)
         (dolist (address addresses)
-          (pcase-let ((`(,alias . ,file) (mevedel-tool-patch--remote-p address)))
+          (pcase-let ((`(,alias . ,file) (mevedel-tool-patch-remote-p address)))
             (if (not (mevedel-artifact-backend-registered-p workspace alias))
                 (finish (list 'error (format "Remote artifact not attached: %s; Read shared:// to list this project's artifacts"
                                              address)))
@@ -1049,7 +1049,7 @@ Returns nil when the two contents hold the same lines."
 (defun mevedel-tool-patch--path-state (path)
   "Return the exact filesystem state needed to revalidate PATH."
   (cond
-   ((mevedel-tool-patch--remote-p path)
+   ((mevedel-tool-patch-remote-p path)
     (let ((entry (when-let* ((files (plist-get mevedel-tool-patch--remote :files)))
                    (gethash path files))))
       (cond ((null entry) '(missing))
@@ -1098,7 +1098,7 @@ Returns nil when the two contents hold the same lines."
 (defun mevedel-tool-patch-assert-baseline (proposal)
   "Signal when a selected path in PROPOSAL changed since review began.
 A remote artifact's file is checked by its origin when it is written."
-  (dolist (path (cl-remove-if #'mevedel-tool-patch--remote-p
+  (dolist (path (cl-remove-if #'mevedel-tool-patch-remote-p
                               (mevedel-tool-patch--selected-paths proposal)))
     (let ((entry (seq-find (lambda (item)
                              (equal path (plist-get item :path)))
@@ -1137,7 +1137,7 @@ A remote artifact's file is checked by its origin when it is written."
          (let ((path (mevedel-tool-patch-physical-path operation)))
            (when (plist-get operation :selected)
              ;; A remote file's origin refuses to create an existing one.
-             (when (and (not (mevedel-tool-patch--remote-p path)) (file-exists-p path))
+             (when (and (not (mevedel-tool-patch-remote-p path)) (file-exists-p path))
                (error "Cannot add existing file: %s" path))
              (push (append (list :action 'write :path path)
                            (and (plist-get operation :resource-path-p)
@@ -1148,7 +1148,7 @@ A remote artifact's file is checked by its origin when it is written."
         ('delete
          (let ((path (mevedel-tool-patch-physical-path operation)))
            (when (plist-get operation :selected)
-             (if (mevedel-tool-patch--remote-p path)
+             (if (mevedel-tool-patch-remote-p path)
                  (mevedel-tool-patch--remote-entry path)
                (mevedel-tool-patch--read-file path))
              (push (append (list :action 'delete :path path)
@@ -1189,7 +1189,7 @@ A remote artifact's file is checked by its origin when it is written."
            (when (plist-get operation :selected)
              (pcase-let ((`(,content . ,coding)
                           (mevedel-tool-patch--read-file path t)))
-               (when (and (not (mevedel-tool-patch--remote-p destination))
+               (when (and (not (mevedel-tool-patch-remote-p destination))
                           (file-exists-p destination))
                  (error "Cannot move to existing file: %s" destination))
                (push (append (list :action 'delete :path path)
@@ -1208,7 +1208,7 @@ A remote artifact's file is checked by its origin when it is written."
                                          content hunks (or (plist-get operation :rel-path) path))
                                       content)))
                                (append
-                                (unless (mevedel-tool-patch--remote-p path)
+                                (unless (mevedel-tool-patch-remote-p path)
                                   (list :mode (file-modes path)))
                                 (list :content updated
                                       :bytes
@@ -1986,14 +1986,13 @@ matches fails as it does for a local file."
             (if prepared
                 (mevedel-tool-patch--materialize-resources proposal)
               (mevedel-tool-patch-prepare-resources proposal t))
-            (if (mevedel-tool-patch--remote-p
+            (if (mevedel-tool-patch-remote-p
                  (plist-get (car (plist-get proposal :operations)) :rel-path))
                 (progn
                   (plist-put proposal :remote-artifact
                              (list :workspace (mevedel-tool-patch--workspace)
-                                   :actor (mevedel-tool-editing--actor)
-                                   :authorize (and (boundp 'mevedel-pipeline--handler-active-p)
-                                                   mevedel-pipeline--handler-active-p)))
+                                   :actor (mevedel-tool-editing-actor)
+                                   :authorize mevedel-pipeline--handler-active-p))
                   (fetch (lambda () (proceed 1))))
               (proceed 0)))
         (error (fail err))))))

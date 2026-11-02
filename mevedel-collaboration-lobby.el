@@ -858,8 +858,7 @@ Credentials stay stored, so starting a lobby again revives its links."
 (defun mevedel-collaboration-lobby ()
   "Start the current workspace's lobby, or show its links."
   (interactive)
-  (let* ((workspace (or (mevedel-workspace)
-                        (user-error "No mevedel workspace here")))
+  (let* ((workspace (mevedel-workspace-current))
          (root (mevedel-workspace-root workspace)))
     (unless (or (mevedel-collaboration-lobby--find workspace)
                 (yes-or-no-p
@@ -894,8 +893,7 @@ Its links work again once it is."
 Every earlier lobby link stops working; the lobby restarts when it was
 running."
   (interactive)
-  (let* ((workspace (or (mevedel-workspace)
-                        (user-error "No mevedel workspace here")))
+  (let* ((workspace (mevedel-workspace-current))
          (lobby (mevedel-collaboration-lobby--find workspace)))
     (when lobby
       (mevedel-collaboration-lobby--stop lobby 'rotated))

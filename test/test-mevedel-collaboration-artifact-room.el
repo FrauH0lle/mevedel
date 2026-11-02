@@ -2034,6 +2034,10 @@ Return the artifact's directory."
       (mevedel-artifact-room-test--host-joined state)
       (run-hooks 'kill-emacs-hook)
       (should (mevedel-relay-test--pump (lambda () (not (plist-get (car state) :host)))))
+      ;; The per-user record is a private data file.
+      (let ((record (file-name-concat mevedel-user-dir "artifact-rooms.eld")))
+        (should (file-exists-p record))
+        (should (= #o600 (file-modes record))))
       ;; The next Emacs knows nothing but the record and the bookkeeping.
       (clrhash mevedel-collaboration-artifact-room--rooms)
       (mevedel-collaboration-artifact-room-restore)

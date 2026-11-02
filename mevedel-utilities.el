@@ -511,6 +511,30 @@ the last value for duplicate keys and supply nil for a missing final value."
    (cl-every #'mevedel--plain-data-p value))
    (t nil)))
 
+(defun mevedel--read-data-file (path)
+  "Return the Lisp value written to the data file PATH, or nil.
+A missing, unreadable or malformed file yields nil; callers validate the
+value's shape themselves."
+  (when (file-readable-p path)
+    (condition-case nil
+        (with-temp-buffer
+          (insert-file-contents path)
+          (read (current-buffer)))
+      (error nil))))
+
+(defun mevedel--write-private-data-file (path value)
+  "Write VALUE readably to the data file PATH, readable only by this user.
+Missing directories are created.  An existing file is replaced, since
+file modes apply when a file is created."
+  (make-directory (file-name-directory path) t)
+  (when (file-exists-p path)
+    (delete-file path))
+  (with-file-modes #o600
+    (with-temp-file path
+      (let ((print-length nil)
+            (print-level nil))
+        (prin1 value (current-buffer))))))
+
 
 ;;
 ;;; Transcript buffers

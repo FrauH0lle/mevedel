@@ -747,7 +747,7 @@ observers, so browser listings and Project artifacts update.
   keeps the credentials.
 
 The roots of workspaces with shared artifacts are recorded per user in
-`mevedel-user-dir` as `artifact-rooms.el`. Beside the lobby restore,
+`mevedel-user-dir` as `artifact-rooms.eld` (mode 0600). Beside the lobby restore,
 `mevedel-install` runs `mevedel-collaboration-artifact-room-restore` once
 startup is done. It scans each recorded root's bookkeeping for credentials and
 redials every shared artifact's room under its stored room id, so links handed

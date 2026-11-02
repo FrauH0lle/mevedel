@@ -135,7 +135,7 @@ Artifact rooms end the deleted artifact's sharing through it.")
          (let ((workspaces (cdr mevedel-artifact-store--pending-changes))
                (mevedel-artifact-store--pending-changes nil))
            (dolist (workspace workspaces)
-             (mevedel-artifact-store--changed workspace)))))))
+             (mevedel-artifact-store-changed workspace)))))))
 
 (defconst mevedel-artifact-store--content-change-delay 2
   "Seconds content-only changes of a workspace wait to be announced together.
@@ -146,7 +146,7 @@ room reread every artifact's metadata and republish after each one.")
 (defvar mevedel-artifact-store--content-changes (make-hash-table :test #'equal)
   "Pending content-change notification timers, by workspace root.")
 
-(defun mevedel-artifact-store--changed (workspace)
+(defun mevedel-artifact-store-changed (workspace)
   "Notify observers of WORKSPACE, after the current mutation if collecting.
 The notice also carries WORKSPACE's content changes awaiting theirs."
   (if mevedel-artifact-store--pending-changes
@@ -172,7 +172,7 @@ Further content changes until then share that notification."
   "Announce WORKSPACE's content changes, unless a notice carried them already."
   (when (gethash (mevedel-workspace-root workspace)
                  mevedel-artifact-store--content-changes)
-    (mevedel-artifact-store--changed workspace)))
+    (mevedel-artifact-store-changed workspace)))
 
 (defun mevedel-artifact-store-directory (workspace)
   "Return WORKSPACE's artifact store directory, with trailing slash."
@@ -361,7 +361,7 @@ just index.html."
     (make-directory (file-name-directory path) t)
     (if (mevedel-artifact-store--compare-and-write
          workspace path nil (list (list :op 'write :path path :content (let ((print-length nil) (print-level nil)) (prin1-to-string meta)))))
-        (progn (mevedel-artifact-store--changed workspace) meta)
+        (progn (mevedel-artifact-store-changed workspace) meta)
       (or (mevedel-artifact-store-meta workspace id)
           (error "Artifact %s disappeared during creation" id)))))
 
@@ -460,7 +460,7 @@ write CONTENT to the primary file in the same program.  Return its number."
                                        :path (mevedel-artifact-store--path directory (plist-get row :file))))))
           (setq number n))))
     (unless number (error "Artifact %s version index is busy; retry" id))
-    (mevedel-artifact-store--changed workspace)
+    (mevedel-artifact-store-changed workspace)
     number))
 
 (defun mevedel-artifact-store-save-version (workspace id &optional session-id)
@@ -668,7 +668,7 @@ not record ID as its own, such as one a copied `meta.el' names, is kept."
     (when item
       (mevedel-artifact-lease--forget (mevedel-artifact-lease-directory workspace id))))
   (run-hook-with-args 'mevedel-artifact-store-deleted-functions workspace id)
-  (mevedel-artifact-store--changed workspace))
+  (mevedel-artifact-store-changed workspace))
 
 (defun mevedel-artifact-store-list (workspace)
   "Return WORKSPACE's artifacts as plists, newest modification first.
@@ -763,7 +763,7 @@ otherwise the next session save carries the attachment."
           (append (mevedel-session-attached-artifacts session) (list id)))
     (when buffer
       (mevedel-session-persistence-write-sidecar-now session buffer))
-    (mevedel-artifact-store--changed (mevedel-session-workspace session))))
+    (mevedel-artifact-store-changed (mevedel-session-workspace session))))
 
 (defun mevedel-artifact-store-update-meta (workspace id &rest properties)
   "Set PROPERTIES in artifact ID's metadata, retaining concurrent updates.
@@ -786,7 +786,7 @@ Return the new metadata."
           (setq updated meta))))
     (unless updated (error "Artifact %s metadata is busy; retry" id))
     ;; A new title or conversation shows in every listing.
-    (mevedel-artifact-store--changed workspace)
+    (mevedel-artifact-store-changed workspace)
     updated))
 
 (defun mevedel-artifact-store-dedicated-p (workspace session-id id)
@@ -1066,7 +1066,7 @@ when a change is refused.  A change notifies the store's observers."
                    (unless (plist-get operation :optional)
                      (mevedel-session-control-fs-program-value result)))
                  program results)
-        (mevedel-artifact-store--changed workspace)
+        (mevedel-artifact-store-changed workspace)
         (list :files
               (mapcar (lambda (change)
                         (if (plist-get change :delete)

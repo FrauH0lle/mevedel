@@ -53,9 +53,6 @@
                   "mevedel-collaboration-artifact-projection" ())
 (autoload 'mevedel-collaboration--artifact-stat-invalidate "mevedel-collaboration-artifact-projection")
 
-;; `mevedel-collaboration-artifact-room'
-(defvar mevedel-collaboration-artifact-room--rooms)
-
 ;; `mevedel-collaboration-background'
 (declare-function mevedel-collaboration--publish-background
                   "mevedel-collaboration-background" (room))
@@ -382,6 +379,11 @@ event (double click, stale viewer), not a second question.")
   "Live collaboration rooms, keyed by their owning data buffer.
 Each shared session has its own room, key, bearer links, and guest set;
 nothing about one room reaches another room's guests.")
+
+(defvar mevedel-collaboration-artifact-room--rooms (make-hash-table :test #'equal)
+  "Live artifact rooms, keyed by (WORKSPACE-ROOT . ARTIFACT-ID).
+`mevedel-collaboration-artifact-room' starts and stops them; presence and
+keep-awake read them here, empty until an artifact is shared.")
 
 
 ;;
@@ -1416,11 +1418,10 @@ NOW is a float-time.  Transient relay outages do not close a share."
                  (when (mevedel-collaboration--keep-awake-state room now)
                    (setq lobby t)))
                mevedel-collaboration-lobby--lobbies))
-    (when (boundp 'mevedel-collaboration-artifact-room--rooms)
-      (maphash (lambda (_key room)
-                 (when (mevedel-collaboration--keep-awake-state room now)
-                   (setq artifact t)))
-               mevedel-collaboration-artifact-room--rooms))
+    (maphash (lambda (_key room)
+               (when (mevedel-collaboration--keep-awake-state room now)
+                 (setq artifact t)))
+             mevedel-collaboration-artifact-room--rooms)
     (delq nil (list (and share "collaboration share active")
                     (and lobby "collaboration lobby active")
                     (and artifact "shared artifact active")))))

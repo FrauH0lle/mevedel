@@ -58,10 +58,10 @@
            (list (lambda (workspace) (push workspace seen)))))
       (should-error
        (mevedel-artifact-store--with-changes
-         (mevedel-artifact-store--changed one)
+         (mevedel-artifact-store-changed one)
          (mevedel-artifact-store--with-changes
-           (mevedel-artifact-store--changed one)
-           (mevedel-artifact-store--changed two))
+           (mevedel-artifact-store-changed one)
+           (mevedel-artifact-store-changed two))
          (should-not seen)
          (error "Partial mutation")))
       (should (equal (list one two) seen)))))
@@ -631,7 +631,7 @@
     (should (equal (list (list session 'buffer)) written))
     (should (equal (list workspace workspace) changed))))
 
-(mevedel-deftest mevedel-artifact-store--changed ()
+(mevedel-deftest mevedel-artifact-store-changed ()
   ,test
   (test)
   :doc "announces versions, new artifacts, metadata changes and deletions"
