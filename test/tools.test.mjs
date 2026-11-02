@@ -63,6 +63,21 @@ test('read_artifact returns the lines the origin shows at shared://ID', async (t
     { ...request.body, id: fixture('read').bindings.$ID });
 });
 
+test('read_artifact with history returns the recent contributions, to any link', async (t) => {
+  const env = tempEnv(t);
+  const origin = await room(t);
+  await attach(env, origin.link('view'));
+  const result = await callTool('read_artifact', { name: 'snt-pipeline', history: true }, { env });
+  assert.ok(!result.isError, result.content[0].text);
+  assert.equal(result.content[0].text, fixture('history').bindings.$TEXT);
+  const request = fixture('history').frames.find((f) => f.from === 'consumer').frame;
+  assert.deepEqual(origin.received.at(-1).body,
+    { ...request.body, id: fixture('history').bindings.$ID });
+  // Without history, a read asks for the lines and nothing else.
+  await callTool('read_artifact', { name: 'snt-pipeline', history: false }, { env });
+  assert.deepEqual(origin.received.at(-1).body, { action: 'read', id: fixture('history').bindings.$ID });
+});
+
 test('tool errors are plain and actionable', async (t) => {
   const env = tempEnv(t);
   const missing = await callTool('read_artifact', { name: 'nope' }, { env });

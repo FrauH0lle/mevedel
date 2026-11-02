@@ -60,20 +60,25 @@ Tools:
 
 - `list_artifacts`: each attached artifact's name, title, kind, link tier
   (view or edit) and whether its origin is reachable.
-- `read_artifact(name)`: the whiteboard or document as hash-prefixed lines,
-  exactly as `shared://ID` shows it at the origin.
+- `read_artifact(name, history?)`: the whiteboard or document as
+  hash-prefixed lines, exactly as `shared://ID` shows it at the origin. With
+  `history: true`, its recent contributions instead, as `shared://ID/history`
+  shows them, each with the id `revert` names. Any link may read both.
 - `view_artifact(name, image?)`: the whiteboard as drawn, or with `image` one
   embedded image (a board image by its `fileId`, a document image by the key
   its `src` shows).
-- `edit_artifact(name, action, ...)`: `patch`, `image`, `rename` and
-  `background` with mevedel `SharedEdit`'s argument names and results: the
-  stored lines of what changed and, for a whiteboard, the picture. A stale
+- `edit_artifact(name, action, ...)`: `patch`, `image`, `rename`,
+  `background`, `insert` and `revert` with mevedel `SharedEdit`'s argument
+  names and results: the stored lines of what changed and, for a whiteboard,
+  the picture. A stale
   hash rejects the patch and returns its targets' current lines. `image`
   reads `source`, a local PNG, JPEG, WebP or SVG file of at most 4.7 MB
   (relative paths resolve against the MCP server's working directory), and
-  refuses anything else before contacting the origin. A view link's edit
-  fails with "This artifact link is view-only". `insert` places a library
-  item (`item` as `LIBRARY/ITEM-ID`, at `x`,`y`) on a whiteboard.
+  refuses anything else before contacting the origin. `insert` places a
+  library item (`item` as `LIBRARY/ITEM-ID`, at `x`,`y`) on a whiteboard.
+  `revert` undoes the contribution `transaction` names and is refused when
+  its targets changed since. A view link's edit fails with "This artifact
+  link is view-only".
 - `whiteboard_libraries(name, library?, preview?)`: the element libraries of
   the user who shared a whiteboard (their own, installed and built-in) as a
   listing of `LIBRARY/ITEM-ID` refs, or with `preview` the picture of one
@@ -83,7 +88,10 @@ Tools:
 
 Edits are attributed at the origin as `Agent: NAME (remote)`, NAME being the
 display name given at attach (`--as`) or the default user, machine and
-client.
+client. The origin can revert them, lists a connected consumer by that name
+on the artifact, and records one version when a stretch of edits ends (5
+minutes without edits, or the connection closing). Versions themselves stay
+with the origin: the package cannot list, save or restore them.
 
 When the origin is offline, or the link was revoked or the artifact deleted,
 tools fail with "Origin unavailable (revoked, deleted, or offline)". An origin
