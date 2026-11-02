@@ -769,13 +769,14 @@ room's. The room answers with its own welcome only:
 
 ```json
 {"t": "welcome", "proto": 3, "room": "artifact", "id": "ID",
- "kind": "whiteboard", "title": "TITLE", "origin": "ORIGIN", "readOnly": false}
+ "kind": "whiteboard", "title": "TITLE", "readOnly": false}
 ```
 
-ORIGIN names this Emacs for consumers, so they can tell artifacts of
-different origins apart: `mevedel-collaboration-artifact-room-origin-name`,
-by default `WORKSPACE on HOST`, the workspace directory's name and the
-machine's. The welcome sends no session snapshot, roster, models, queue,
+The welcome omits `origin` by default. Only an explicitly configured
+`mevedel-collaboration-artifact-room-origin-name` adds `"origin": "NAME"`;
+no workspace directory or machine name is generated. Consumers use the relay
+host when no origin name is supplied. The welcome sends no session snapshot,
+roster, models, queue,
 tasks, goal, agents or store listing. A consumer that receives any other
 welcome, or a lobby listing, has a session or lobby link and disconnects.
 
@@ -838,9 +839,13 @@ An edit link may also run:
 - `write-files` (`changes`, each a `write-file` change or `{file, hash,
   delete: true}`): make several such changes at once. Every hash is checked
   before any file changes, in one program under the store's lock, so either
-  all changes are made or none; a patch of several files lands whole. Success
-  answers `{result: {files}}`, each as `write-file` or `delete-file` answers;
-  a refusal names the first file that changed.
+  all changes are made or none; a patch of several files lands whole. File
+  operation errors restore prior bytes, modes and timestamps and remove newly
+  created files and directories before releasing the lock. A fully rolled-back
+  batch sends no change event and records no working-stretch version. This
+  rollback handles operation errors, not power loss or an uncatchable process
+  kill. Success answers `{result: {files}}`, each as `write-file` or
+  `delete-file` answers; a stale refusal names the first file that changed.
 
 A refused write or deletion changes nothing and answers `{error, code:
 "stale", file, hash}`: the file's current hash (null when it does not exist)
@@ -979,7 +984,8 @@ already sent may still land at the origin, attributed and revertible there.
 An unreachable, revoked or deleted origin answers with the package's generic
 `Origin unavailable (revoked, deleted, or offline)`. Project artifacts shows a
 remote artifact's Link as `remote ORIGIN, reachable` (or `unavailable`, or
-`not checked yet`), ORIGIN being the name the origin's welcome gave, and its
+`not checked yet`), ORIGIN being the name the origin's welcome gave, or the
+relay host when none was supplied, and its
 details name the origin, the relay host, the origin id and link tier; listing
 it checks a link not checked in the last minute in the background. Deleting it
 there detaches it; opening a remote whiteboard or

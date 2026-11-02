@@ -1050,11 +1050,14 @@ when a change is refused.  A change notifies the store's observers."
                                        content))
                 operations))))
     (let* ((prepare (nreverse prepare))
-           (program (append prepare (nreverse checks) (nreverse operations)))
+           (boundary (mevedel-artifact-store-artifact-directory workspace id))
+           (program (append (list (list :op 'begin-files :path boundary))
+                            prepare (nreverse checks) (nreverse operations)
+                            (list (list :op 'commit-files :path boundary))))
            (results (mevedel-session-control-fs-run-program
                      program (mevedel-artifact-store--lock-directory workspace)))
            (stale (cl-loop for change in changes
-                           for result in (nthcdr (length prepare) results)
+                           for result in (nthcdr (1+ (length prepare)) results)
                            when (memq (plist-get result :status) '(mismatch absent))
                            return (plist-get change :file))))
       (if stale

@@ -433,22 +433,43 @@ An editing transfer appears once, complete, as its `body' shorthand."
 ;;
 ;;; Joining
 
+(mevedel-deftest mevedel-collaboration-artifact-room-origin-privacy
+  ()
+  ,test
+  (test)
+  :doc "default welcome omits origin rather than disclosing workspace or host"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((mevedel-collaboration-artifact-room-origin-name nil)
+           (id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (_ (mevedel-artifact-room-test--host-joined state))
+           (consumer (mevedel-artifact-room-test--consumer
+                      port (plist-get links :link-view))))
+      (unwind-protect
+          (progn
+            (mevedel-artifact-room-test--send
+             consumer '((t . "hello") (proto . 3) (name . "viewer")
+                        (guestId . "privacy-consumer")))
+            (should
+             (equal (mapcar #'cdr (mevedel-artifact-room-test--fixture
+                                  "welcome-private" `(("$ID" . ,id))))
+                    (mevedel-artifact-room-test--await consumer 1))))
+        (mevedel-artifact-room-test--close consumer)))))
+
 (mevedel-deftest mevedel-collaboration-artifact-room--on-frame
   ()
   ,test
   (test)
   :doc "answers an edit link's hello with the artifact welcome only"
   (mevedel-artifact-room-test--with-origin (root workspace state port)
-    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+    (let* ((mevedel-collaboration-artifact-room-origin-name "Shared studio")
+           (id (mevedel-artifact-room-test--board workspace "Pipeline"))
            (links (mevedel-collaboration-artifact-room-share root id))
            (_ (mevedel-artifact-room-test--host-joined state))
            (consumer (mevedel-artifact-room-test--consumer
                       port (plist-get links :link-edit)))
            (bindings `(("$ID" . ,id) ("$TITLE" . "Pipeline")
-                       ("$ORIGIN" . ,(format "%s on %s"
-                                             (file-name-nondirectory
-                                              (directory-file-name root))
-                                             (system-name)))
+                       ("$ORIGIN" . "Shared studio")
                        ("$WRITE_TOKEN"
                         . ,(mevedel-artifact-room-test--write-token consumer)))))
       (unwind-protect
@@ -1786,6 +1807,74 @@ Return the artifact's directory."
             (should (file-exists-p (file-name-concat directory "index.html"))))
         (mevedel-artifact-room-test--close editor)
         (mevedel-artifact-room-test--close viewer)))))
+
+(mevedel-deftest mevedel-collaboration-artifact-room--html-write-files-rollback
+  ()
+  ,test
+  (test)
+  :doc "rolls back a batch when a later file's directory is unwritable"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((directory (mevedel-artifact-room-test--site workspace "landing"))
+           (assets (file-name-concat directory "assets"))
+           (links (mevedel-collaboration-artifact-room-share root "landing"))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit))
+           (changed nil)
+           (mevedel-artifact-store-changed-functions
+            (cons (lambda (_workspace) (setq changed t))
+                  mevedel-artifact-store-changed-functions))
+           (versions (mevedel-artifact-store-versions workspace "landing")))
+      (unwind-protect
+          (progn
+            (set-file-modes assets #o555)
+            (should-not (file-writable-p assets))
+            (let ((reply (mevedel-artifact-room-test--request
+                          consumer 1 `((action . "write-files")
+                                       (changes . [((file . "index.html")
+                                                    (hash . ,mevedel-artifact-room-test--page-hash)
+                                                    (text . "<p>must roll back</p>"))
+                                                   ((file . "assets/new.css")
+                                                    (text . "p {}"))])))))
+              (should (string-search "all changes rolled back" (alist-get 'error reply)))
+              (should-not (assq 'result reply)))
+            (should (equal mevedel-artifact-room-test--page
+                           (mevedel-artifact-room-test--file directory "index.html")))
+            (should-not (file-exists-p (file-name-concat assets "new.css")))
+            (should-not changed)
+            (accept-process-output nil 0.1)
+            (should-not (cl-find "event" (mevedel-artifact-room-test--frames consumer)
+                                 :key (lambda (frame) (alist-get 'reqId frame))
+                                 :test #'equal))
+            (mevedel-artifact-room-test--close consumer)
+            (should (equal versions (mevedel-artifact-store-versions workspace "landing"))))
+        (set-file-modes assets #o755)
+        (mevedel-artifact-room-test--close consumer))))
+
+  :doc "also restores deleted bytes and modes, and removes created directories"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((directory (mevedel-artifact-room-test--site workspace "landing"))
+           (blocked (file-name-concat directory "blocked"))
+           (logo (file-name-concat directory "assets/logo.png"))
+           (bytes (mevedel-artifact-room-test--file directory "assets/logo.png"))
+           (links (mevedel-collaboration-artifact-room-share root "landing"))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit)))
+      (unwind-protect
+          (progn
+            (make-directory blocked)
+            (set-file-modes blocked #o555)
+            (set-file-modes logo #o640)
+            (let ((reply (mevedel-artifact-room-test--request
+                          consumer 1 `((action . "write-files")
+                                       (changes . [((file . "new/nested/site.css") (text . "p {}"))
+                                                   ((file . "assets/logo.png")
+                                                    (hash . ,(secure-hash 'sha256 bytes))
+                                                    (delete . t))
+                                                   ((file . "blocked/new.css") (text . "p {}"))])))))
+              (should (string-search "all changes rolled back" (alist-get 'error reply))))
+            (should (equal bytes (mevedel-artifact-room-test--file directory "assets/logo.png")))
+            (should (= #o640 (file-modes logo)))
+            (should-not (file-exists-p (file-name-concat directory "new"))))
+        (set-file-modes blocked #o755)
+        (mevedel-artifact-room-test--close consumer)))))
 
 (mevedel-deftest mevedel-collaboration-artifact-room--html-versions
   ()

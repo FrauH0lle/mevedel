@@ -1,0 +1,18 @@
+{
+  "description": "The default welcome omits origin entirely: no generated workspace or host name.",
+  "bindings": { "$ID": "snt-pipeline", "$TITLE": "Pipeline" },
+  "frames": [
+    {
+      "from": "origin",
+      "frame": {
+        "t": "welcome",
+        "proto": 3,
+        "room": "artifact",
+        "id": "$ID",
+        "kind": "whiteboard",
+        "title": "$TITLE",
+        "readOnly": true
+      }
+    }
+  ]
+}

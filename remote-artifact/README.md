@@ -58,10 +58,13 @@ package (or the origin's mevedel) so both match.
 
 Tools:
 
-- `list_artifacts`: each attached artifact's name, title, kind, origin (the
-  workspace and host the origin names in its welcome, as attach stored it or
-  as a reachable origin names it now), link tier (view or edit) and whether
-  its origin is reachable.
+- `list_artifacts`: each attached artifact's name, title, kind, origin (its
+  explicitly configured welcome name, or the relay host when none is supplied;
+  an unreachable origin uses the name attach stored, or the relay host), link
+  tier (view or edit) and whether its origin is reachable. Origins omit their
+  name by default; only `mevedel-collaboration-artifact-room-origin-name`
+  explicitly set at the origin discloses one, never a generated workspace or
+  machine name.
 - `read_artifact(name, file?, history?)`: the whiteboard or document as
   hash-prefixed lines, exactly as `shared://ID` shows it at the origin. With
   `history: true`, its recent contributions instead, as `shared://ID/history`

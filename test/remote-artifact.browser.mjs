@@ -231,7 +231,7 @@ test(
       assert.match(execFileSync(process.execPath, [cli, 'attach', site.edit, '--name', 'site'],
         { env: consumer, encoding: 'utf8' }), /Attached site: Landing \(html, edit link\)/);
       const listed = await mcp.call('list_artifacts', {});
-      assert.match(listed.text, /^site: "Landing" html from \S.* on \S+, edit link, origin reachable$/m, listed.text);
+      assert.match(listed.text, /^site: "Landing" html from 127\.0\.0\.1, edit link, origin reachable$/m, listed.text);
       const primary = await mcp.call('read_artifact', { name: 'site' });
       assert.equal(primary.isError, false, primary.text);
       assert.equal(primary.text, html);

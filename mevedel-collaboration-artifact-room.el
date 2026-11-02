@@ -287,33 +287,27 @@ artifact deleted meanwhile records nothing."
 
 (defcustom mevedel-collaboration-artifact-room-origin-name nil
   "Name the consumers of this Emacs's artifact links know it by.
-nil means \"WORKSPACE on HOST\": the shared artifact's workspace
-directory name and this machine's name.  Consumers show it beside the
-artifact, so they can tell artifacts of different origins apart."
-  :type '(choice (const :tag "WORKSPACE on HOST" nil) string)
+nil omits the origin name entirely; consumers use the relay host instead.
+Only an explicitly configured name is disclosed, never a generated
+workspace directory or machine name."
+  :type '(choice (const :tag "Do not disclose an origin name" nil) string)
   :group 'mevedel)
-
-(defun mevedel-collaboration-artifact-room--origin-name (room)
-  "Return the origin name ROOM's welcome gives consumers."
-  (or mevedel-collaboration-artifact-room-origin-name
-      (format "%s on %s"
-              (file-name-nondirectory (directory-file-name (plist-get room :directory)))
-              (system-name))))
 
 (defun mevedel-collaboration-artifact-room--welcome (room guest)
   "Return ROOM's artifact welcome for GUEST.
-It names the room kind, the artifact as it is now and the origin, and
-nothing of the workspace beyond them."
+It names the room kind and the artifact as it is now, and includes an
+origin name only when explicitly configured."
   (let ((meta (mevedel-artifact-store-meta (plist-get room :workspace)
-                                           (plist-get room :artifact))))
-    (list :t "welcome"
-          :proto mevedel-collaboration--protocol-version
-          :room "artifact"
-          :id (plist-get room :artifact)
-          :kind (symbol-name (plist-get room :artifact-kind))
-          :title (plist-get meta :title)
-          :origin (mevedel-collaboration-artifact-room--origin-name room)
-          :readOnly (if (plist-get guest :writable) :json-false t))))
+                                         (plist-get room :artifact))))
+    (append (list :t "welcome"
+                  :proto mevedel-collaboration--protocol-version
+                  :room "artifact"
+                  :id (plist-get room :artifact)
+                  :kind (symbol-name (plist-get room :artifact-kind))
+                  :title (plist-get meta :title))
+            (when mevedel-collaboration-artifact-room-origin-name
+              (list :origin mevedel-collaboration-artifact-room-origin-name))
+            (list :readOnly (if (plist-get guest :writable) :json-false t)))))
 
 (defun mevedel-collaboration-artifact-room--hello (room peer frame)
   "Admit PEER to ROOM from its hello FRAME and send it the welcome.

@@ -20,7 +20,11 @@ Each file is one JSON object:
 - `frames`: the exchange in order, each `{"from": "consumer"|"origin",
   "frame": FRAME}`.
 
-The exchanges are `hello`, `welcome`, `read`, `history` (a read of the recent
+The welcomes are `welcome-private` (the default, with no origin name) and
+`welcome` (the host explicitly configured `$ORIGIN`). Consumers use the relay
+host when `origin` is absent; neither workspace nor machine names are generated.
+
+The other exchanges are `hello`, `read`, `history` (a read of the recent
 contributions), `patch` (an edit link's `SharedEdit` patch and its changed
 lines and picture), `stale-patch` (a stale hash and the targets' current
 lines), `view-only` (a view link's edit refused), `revert` (an edit link

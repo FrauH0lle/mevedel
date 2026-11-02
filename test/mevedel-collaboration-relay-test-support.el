@@ -23,15 +23,29 @@
   (process-get process :mevedel-test-path))
 
 (defmacro mevedel-relay-test--with-path-capture (&rest body)
-  "Run BODY with `websocket-server-filter' capturing request paths."
+  "Run BODY with a non-reentrant server filter capturing request paths.
+Socket backpressure can run a filter inside `process-send-string'.  Queue
+that raw input until the original invocation finishes all its callbacks,
+preserving frame order and avoiding recursive forwarding of large transfers."
   `(cl-letf* ((original (symbol-function 'websocket-server-filter))
               ((symbol-function 'websocket-server-filter)
                (lambda (process output)
-                 (unless (process-get process :mevedel-test-path)
-                   (when (string-match "\\`[A-Z]+ \\([^ ]+\\)" output)
-                     (process-put process :mevedel-test-path
-                                  (match-string 1 output))))
-                 (funcall original process output))))
+                 (process-put process :mevedel-test-input
+                              (nconc (process-get process :mevedel-test-input)
+                                     (list output)))
+                 (unless (process-get process :mevedel-test-filter-active)
+                   (process-put process :mevedel-test-filter-active t)
+                   (unwind-protect
+                       (while (process-get process :mevedel-test-input)
+                         (let* ((pending (process-get process :mevedel-test-input))
+                                (chunk (car pending)))
+                           (process-put process :mevedel-test-input (cdr pending))
+                           (unless (process-get process :mevedel-test-path)
+                             (when (string-match "\\`[A-Z]+ \\([^ ]+\\)" chunk)
+                               (process-put process :mevedel-test-path
+                                            (match-string 1 chunk))))
+                           (funcall original process chunk)))
+                     (process-put process :mevedel-test-filter-active nil))))))
      ,@body))
 
 (defun mevedel-relay-test--stub-relay-start (state port)

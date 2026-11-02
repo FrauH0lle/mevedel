@@ -610,7 +610,10 @@ background, the reachability of links not checked lately."
                   :file "state.json" :path nil :size 0 :versions 0
                   :modified (plist-get entry :attached)
                   :remote t
-                  :origin (or (plist-get status :origin) (plist-get entry :origin) relay)
+                  :origin (or (if (plist-member status :origin)
+                                  (plist-get status :origin)
+                                (plist-get entry :origin))
+                              relay)
                   :relay relay
                   :origin-id (plist-get entry :id)
                   :tier (plist-get entry :tier)

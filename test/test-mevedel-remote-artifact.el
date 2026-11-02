@@ -50,11 +50,11 @@
 (defun mevedel-remote-artifact-test--origin ()
   "Return a fake origin: a plist the fake bridge answers from.
 `:requests' collects every request, newest first; `:reachable',
-`:writable' and `:title' shape the answers.  An HTML origin (`:kind'
+`:writable', `:title' and `:origin' shape the answers.  An HTML origin (`:kind'
 \"html\") keeps its `:files' as an alist (FILE . TEXT) and names its
 `:primary' one."
   (list :requests nil :reachable t :writable t :title "SNT analysis pipeline"
-        :kind "whiteboard" :files nil :primary nil))
+        :origin "snt-app on mevedel-host" :kind "whiteboard" :files nil :primary nil))
 
 (defun mevedel-remote-artifact-test--hash (text)
   "Return the hash an origin gives the file content TEXT."
@@ -176,7 +176,7 @@
          (list :error "Origin unavailable (revoked, deleted, or offline)")
        (append (list :welcome (list :id "snt-pipeline" :kind (plist-get origin :kind)
                                     :title (plist-get origin :title)
-                                    :origin "snt-app on mevedel-host"
+                                    :origin (plist-get origin :origin)
                                     :readOnly (if (plist-get origin :writable) :json-false t)))
                (when-let* ((body (plist-get request :body)))
                  (list :reply (mevedel-remote-artifact-test--answer origin body))))))))
@@ -532,6 +532,23 @@ under its origin id."
         (when-let* ((cockpit (get-buffer mevedel-artifacts-list-buffer-name)))
           (kill-buffer cockpit))
         (kill-buffer view)))))
+
+(mevedel-deftest mevedel-remote-artifact-origin-privacy
+  (:doc "Catalog uses relay host for an unnamed welcome, including after a named one"
+   :quiet t)
+  (mevedel-remote-artifact-test--with-session
+    (plist-put origin :origin nil)
+    (attach "private")
+    (should (equal "relay.example.org"
+                   (plist-get (car (mevedel-artifact-backend-catalog workspace 'full))
+                              :origin)))
+    (plist-put origin :origin "Shared studio")
+    (attach "named")
+    (plist-put origin :origin nil)
+    (run "Read" '(:file_path "shared://named"))
+    (should (equal "relay.example.org"
+                   (plist-get (car (mevedel-artifact-backend-catalog workspace 'full))
+                              :origin)))))
 
 (defconst mevedel-remote-artifact-test--fake-room
   (file-name-concat (file-name-directory
