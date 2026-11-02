@@ -27,7 +27,9 @@
 (require 'mevedel-artifact-lease)
 (require 'mevedel-artifact-store)
 (require 'mevedel-collaboration)
+(require 'mevedel-collaboration-artifact)
 (require 'mevedel-collaboration-artifact-room)
+(require 'mevedel-collaboration-guest)
 (require 'mevedel-collaboration-share)
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-shared-editing)
@@ -1775,6 +1777,59 @@ Return the artifact's directory."
       (should-not (mevedel-collaboration-artifact-room-sharing workspace id 'revoke))
       (should-not (mevedel-artifact-store-shared-p workspace id))
       (should-error (mevedel-collaboration-artifact-room-sharing workspace id 'publish)))))
+
+(mevedel-deftest mevedel-collaboration--store-sharing
+  ()
+  ,test
+  (test)
+  :doc "shares, rotates and revokes from the browser for owner links only"
+  (mevedel-artifact-room-test--with-origin (_root workspace _state _port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (lobby (list :workspace workspace :transport 'lobby
+                        :guests (make-hash-table :test #'eql)))
+           (owner (list :name "owner" :writable t :owner t :ready t))
+           (full (list :name "full" :writable t :ready t))
+           (view (list :name "view" :writable nil :ready t))
+           (changes 0)
+           (mevedel-artifact-store-changed-functions
+            (list (lambda (_workspace) (cl-incf changes)))))
+      (cl-flet ((sharing (guest operation)
+                  (mevedel-collaboration--store-action
+                   lobby guest (list :action "sharing" :id id :operation operation)))
+                (listed ()
+                  (plist-get (cl-find id (mevedel-collaboration--store-rows lobby)
+                                      :key (lambda (row) (plist-get row :id))
+                                      :test #'equal)
+                             :shared)))
+        ;; Full and view links cannot share, rotate or revoke.
+        (dolist (guest (list full view))
+          (dolist (operation '("share" "rotate" "revoke"))
+            (should (equal "Only the host or an owner link can share artifacts"
+                           (cadr (should-error (sharing guest operation)))))))
+        (should-not (mevedel-artifact-store-shared-p workspace id))
+        (should (eq :json-false (listed)))
+        (should (zerop changes))
+        ;; Sharing returns the same links the Emacs commands show.
+        (let ((links (sharing owner "share")))
+          (should (eq t (plist-get links :shared)))
+          (should (equal (mevedel-collaboration-artifact-room-sharing workspace id 'share)
+                         (list :link-view (plist-get links :linkView)
+                               :link-edit (plist-get links :linkEdit))))
+          (should (eq t (listed)))
+          (should (> changes 0))
+          (should-error (sharing full "revoke"))
+          (should (mevedel-artifact-store-shared-p workspace id))
+          (let ((rotated (sharing owner "rotate")))
+            (should (eq t (plist-get rotated :shared)))
+            (should (stringp (plist-get rotated :linkEdit)))
+            (should-not (equal (plist-get links :linkEdit) (plist-get rotated :linkEdit)))))
+        (setq changes 0)
+        (should (equal (list :id id :shared :json-false) (sharing owner "revoke")))
+        (should-not (mevedel-artifact-store-shared-p workspace id))
+        (should (eq :json-false (listed)))
+        (should (> changes 0))
+        (should (equal "Unknown sharing operation"
+                       (cadr (should-error (sharing owner "publish")))))))))
 
 (mevedel-deftest mevedel-collaboration-artifact-room--deleted
   ()

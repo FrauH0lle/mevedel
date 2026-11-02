@@ -729,7 +729,8 @@ returns the same links, also after the room stopped or Emacs restarted.
 Sharing, revoking and rotating are one host operation,
 `(mevedel-collaboration-artifact-room-sharing WORKSPACE ID OPERATION)` with
 OPERATION `share`, `revoke` or `rotate`; the commands, the daemon functions and
-the browser all go through it.
+the browser all go through it. Starting or ending a share notifies store
+observers, so browser listings and Project artifacts update.
 
 - **Revoke** (`M-x mevedel-collaboration-revoke-artifact`, or
   `(mevedel-collaboration-artifact-room-revoke DIRECTORY ID)`) stops the room
@@ -760,7 +761,8 @@ offline -- is closed by the relay and reports one generic "Origin unavailable
 (revoked, deleted, or offline)". The browser viewer opening an artifact link
 gets the artifact welcome and shows only "Paste this link into mevedel or an
 MCP client." Project artifacts (`M-x mevedel-artifacts`) marks shared
-artifacts in its Link column and details.
+artifacts in its Link column and details, and browser store listings mark them
+`shared` (see [sharing from the browser](#sharing-from-the-browser)).
 
 A consumer's hello is admitted by the room key and write token like any
 room's. The room answers with its own welcome only:
@@ -1763,6 +1765,27 @@ frames:
 
 Actions that would need a decision in Emacs, such as resuming a dedicated
 session another client holds, are refused with the usual notice.
+
+### Sharing from the browser
+
+Every listing row carries `shared`, true when the artifact has artifact links,
+and the row's meta line says so. An owner link (the host's own browser) also
+gets sharing entries in the `⋯` menu of a whiteboard, document or HTML artifact:
+**Share** when it is not shared, otherwise **Show links**, **Rotate links** and
+**Revoke links**; rotating and revoking ask first. Each sends
+
+```json
+{"t": "store-action", "reqId": 1, "action": "sharing", "id": "ID",
+ "operation": "share"}
+```
+
+with `operation` `share`, `rotate` or `revoke`, which the host passes to the
+one host operation above. Share and rotate answer `shared: true` with
+`linkView` and `linkEdit`; revoke answers `shared: false`. The host refuses the
+action from full and view links with "Only the host or an owner link can share
+artifacts", whatever the page shows. The links appear under the row, each in a
+read-only field with **Copy**, until **Hide** or a listing in which the
+artifact is no longer shared; they are kept in that tab only.
 
 ### Discussing an HTML artifact
 
