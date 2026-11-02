@@ -178,6 +178,28 @@ ensure the staged change passes independently too. CI runs the check even when
 the hook is not installed or is bypassed; required branch checks are a separate
 GitHub repository setting.
 
+#### Artifact-link acceptance
+
+Changes to artifact links (the origin's artifact room, the `remote-artifact/`
+package, or the viewer and relay they meet in) also run one end-to-end check
+before merging:
+
+```bash
+node --test test/remote-artifact.browser.mjs
+```
+
+It builds the relay from `relay/`, so the relay serves the working tree's viewer,
+and starts an isolated origin Emacs (`shared-editing/test/room.el`). That Emacs
+shares a whiteboard through the real sharing operation. The package's own CLI
+attaches the edit link and its stdio MCP server talks to the origin, while
+headless Chromium has the same board open through the origin's room. The test
+checks that an MCP edit appears in the browser without a reload, that a browser
+edit is in the next MCP read, and that revoking the link ends the package's
+connection with the `revoked` reason. It needs Go, Emacs with the Eask
+dependencies, and Playwright Chromium in `shared-editing/node_modules`
+(see [shared editing checks](shared-editing.md#checks)); it runs locally on a
+localhost relay and is not part of the ERT tiers or CI.
+
 #### Deterministic standards and checkdoc ratchet
 
 `scripts/check-standards.py` runs first in `check` and CI. Run it independently

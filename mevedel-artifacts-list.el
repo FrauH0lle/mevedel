@@ -39,6 +39,8 @@
                   "mevedel-artifact-store" (workspace id new-id))
 (declare-function mevedel-artifact-store-restore-version
                   "mevedel-artifact-store" (workspace id n &optional session-id actor callback))
+(declare-function mevedel-artifact-store-shared-p
+                  "mevedel-artifact-store" (workspace id))
 (declare-function mevedel-artifact-store-version-path
                   "mevedel-artifact-store" (workspace id n))
 (declare-function mevedel-artifact-store-versions
@@ -48,6 +50,7 @@
 (autoload 'mevedel-artifact-store-delete "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-duplicate "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-restore-version "mevedel-artifact-store")
+(autoload 'mevedel-artifact-store-shared-p "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-version-path "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-versions "mevedel-artifact-store")
 (defvar mevedel-artifact-store-item-kinds)
@@ -152,13 +155,17 @@
       (user-error "No mevedel workspace here")))
 
 (defun mevedel-artifacts-list--store-rows (workspace session)
-  "Return WORKSPACE's store artifacts as rows, marking SESSION's attached."
+  "Return WORKSPACE's store artifacts as rows, marking SESSION's attached.
+Artifacts shared through artifact links are marked `:shared'."
   (let ((attached (and session (mevedel-session-attached-artifacts session))))
     (mapcar (lambda (row)
               (append (list :name (replace-regexp-in-string
                                    "[\n\r\t]+" " " (plist-get row :title))
                             :row (plist-get row :id)
-                            :attached (and (member (plist-get row :id) attached) t))
+                            :attached (and (member (plist-get row :id) attached) t)
+                            :shared (and (mevedel-artifact-store-shared-p
+                                          workspace (plist-get row :id))
+                                         t))
                       ;; A whiteboard or document is edited live, not as a file.
                       (when (memq (plist-get row :kind) mevedel-artifact-store-item-kinds)
                         (list :item (plist-get row :id)))
@@ -210,11 +217,13 @@
     (_ "not checked yet")))
 
 (defun mevedel-artifacts-list--link-cell (item)
-  "Return the Link cell of artifact ITEM: a remote artifact's origin."
-  (if (plist-get item :remote)
-      (format "remote %s, %s" (plist-get item :origin)
-              (mevedel-artifacts-list--reachability item))
-    ""))
+  "Return the Link cell of artifact ITEM: shared, or a remote artifact's origin."
+  (cond
+   ((plist-get item :remote)
+    (format "remote %s, %s" (plist-get item :origin)
+            (mevedel-artifacts-list--reachability item)))
+   ((plist-get item :shared) "shared")
+   (t "")))
 
 (defun mevedel-artifacts-list--header (items context)
   "Return cockpit header for artifact ITEMS and CONTEXT."
@@ -237,11 +246,13 @@
          nil
          (list
           (list :id 'artifact :title "Artifact"
-		:body (mevedel-report-fields
+                :body (mevedel-report-fields
                        (list "Id" (plist-get item :id))
                        (list "Title" (plist-get item :title))
                        (list "Kind" (format "%s" (plist-get item :kind)))
                        (list "Attached" (if (plist-get item :attached) "yes" "no"))
+                       (unless (plist-get item :remote)
+                         (list "Shared" (if (plist-get item :shared) "yes" "no")))
                        (list "Versions" (number-to-string (plist-get item :versions)))
                        (list "Size" (file-size-human-readable (or (plist-get item :size) 0)))
                        (list "Modified"

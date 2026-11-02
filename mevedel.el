@@ -71,6 +71,8 @@
 (autoload 'mevedel-claude-code-recover-history "mevedel-claude-code-session" nil t)
 (autoload 'mevedel-claude-code-setup "mevedel-claude-code" nil t)
 (autoload 'mevedel-clear-patch-buffer "mevedel-chat" nil t)
+(autoload 'mevedel-collaboration-revoke-artifact "mevedel-collaboration-artifact-room" nil t)
+(autoload 'mevedel-collaboration-rotate-artifact "mevedel-collaboration-artifact-room" nil t)
 (autoload 'mevedel-collaboration-share-artifact "mevedel-collaboration-artifact-room" nil t)
 (autoload 'mevedel-remote-artifact-attach "mevedel-remote-artifact" nil t)
 (autoload 'mevedel-remote-artifact-detach "mevedel-remote-artifact" nil t)
@@ -246,7 +248,15 @@
 (defvar mevedel--view-buffer)
 
 ;; `mevedel-collaboration-artifact-room'
-;; An Emacs daemon shares an artifact through emacsclient.
+;; An Emacs daemon shares, revokes and rotates an artifact through emacsclient.
+(declare-function mevedel-collaboration-artifact-room-restore
+                  "mevedel-collaboration-artifact-room" ())
+(autoload 'mevedel-collaboration-artifact-room-restore
+  "mevedel-collaboration-artifact-room")
+(autoload 'mevedel-collaboration-artifact-room-revoke
+  "mevedel-collaboration-artifact-room")
+(autoload 'mevedel-collaboration-artifact-room-rotate
+  "mevedel-collaboration-artifact-room")
 (autoload 'mevedel-collaboration-artifact-room-share
   "mevedel-collaboration-artifact-room")
 
@@ -876,11 +886,15 @@ always prompt for the session name."
   (mevedel-gptel-retry-install)
   (mevedel-gptel-bridge-install)
 
-  ;; Restart the collaboration lobbies still running when Emacs last
-  ;; exited, once startup has applied the user's relay configuration.
+  ;; Restart the collaboration lobbies still running and the artifacts
+  ;; still shared when Emacs last exited, once startup has applied the
+  ;; user's relay configuration.
   (if after-init-time
-      (mevedel-collaboration-lobby-restore)
-    (add-hook 'emacs-startup-hook #'mevedel-collaboration-lobby-restore))
+      (progn
+        (mevedel-collaboration-lobby-restore)
+        (mevedel-collaboration-artifact-room-restore))
+    (add-hook 'emacs-startup-hook #'mevedel-collaboration-lobby-restore)
+    (add-hook 'emacs-startup-hook #'mevedel-collaboration-artifact-room-restore 90))
 
   (message "mevedel installed successfully"))
 
@@ -981,6 +995,7 @@ always prompt for the session name."
     (mevedel-telemetry--lag-stop))
 
   (remove-hook 'emacs-startup-hook #'mevedel-collaboration-lobby-restore)
+  (remove-hook 'emacs-startup-hook #'mevedel-collaboration-artifact-room-restore)
 
   (message "mevedel uninstalled successfully"))
 

@@ -345,7 +345,9 @@ attaches it to that chat, and read replies carry the item's conversation."
   "Handle bounded editor FRAME from authenticated PEER in ROOM.
 A completed transfer goes to DISPATCH, called like
 `mevedel-collaboration-editing--dispatch' (the default, for session
-rooms) with ROOM, PEER, the guest, the request id and the decoded args."
+rooms) with ROOM, PEER, the guest, the request id and the decoded args.
+A transfer carries at most ROOM's `:editing-max-bytes' of base64, 24 MiB
+unless the room says otherwise."
   (when-let* ((guest (mevedel-collaboration--guest room peer)))
     (let ((req-id (plist-get frame :reqId)))
       (condition-case err
@@ -357,7 +359,9 @@ rooms) with ROOM, PEER, the guest, the request id and the decoded args."
                    (data (plist-get frame :data))
                    (transfer (plist-get guest :editing-transfer)))
               (unless (and (integerp offset) (>= offset 0)
-                           (integerp total) (> total 0) (<= total (* 24 1024 1024))
+                           (integerp total) (> total 0)
+                           (<= total (or (plist-get room :editing-max-bytes)
+                                         (* 24 1024 1024)))
                            (stringp data) (<= (length data) 65536)
                            (string-match-p "\\`[A-Za-z0-9+/=]+\\'" data))
                 (error "Invalid editing transfer"))
