@@ -23,11 +23,38 @@ and lobby links are refused. Links are stored in one file per user,
 `$XDG_CONFIG_HOME/mevedel-remote-artifact/links.json` (default
 `~/.config/...`), readable only by you.
 
-## Use it from an MCP client
+## Install and set up a client
+
+Nothing to install beyond Node 22.4 or newer: `npx` fetches the package on
+first use. Attach a link first (above), then register the MCP server once.
+
+Claude Code:
 
 ```sh
 claude mcp add remote-artifacts -- npx mevedel-remote-artifact mcp
 ```
+
+Codex (`codex mcp add remote-artifacts -- npx mevedel-remote-artifact mcp`, or
+in `~/.codex/config.toml`):
+
+```toml
+[mcp_servers.remote-artifacts]
+command = "npx"
+args = ["mevedel-remote-artifact", "mcp"]
+```
+
+Any other MCP client: run `npx mevedel-remote-artifact mcp` as a stdio server.
+To install globally instead, `npm install -g mevedel-remote-artifact` and use
+`mevedel-remote-artifact mcp` as the command.
+
+## Connection lifecycle
+
+The server connects to an artifact's origin the first time a tool call needs
+it, reuses the connection for later calls, and closes it after 5 idle minutes
+so an open client does not keep the origin awake. The next call reconnects
+transparently. If the origin speaks another protocol version, tools fail with
+"origin speaks protocol N, this package speaks M; update one": update the
+package (or the origin's mevedel) so both match.
 
 Tools:
 
@@ -35,6 +62,28 @@ Tools:
   (view or edit) and whether its origin is reachable.
 - `read_artifact(name)`: the whiteboard or document as hash-prefixed lines,
   exactly as `shared://ID` shows it at the origin.
+- `view_artifact(name, image?)`: the whiteboard as drawn, or with `image` one
+  embedded image (a board image by its `fileId`, a document image by the key
+  its `src` shows).
+- `edit_artifact(name, action, ...)`: `patch`, `image`, `rename` and
+  `background` with mevedel `SharedEdit`'s argument names and results: the
+  stored lines of what changed and, for a whiteboard, the picture. A stale
+  hash rejects the patch and returns its targets' current lines. `image`
+  reads `source`, a local PNG, JPEG, WebP or SVG file of at most 4.7 MB
+  (relative paths resolve against the MCP server's working directory), and
+  refuses anything else before contacting the origin. A view link's edit
+  fails with "This artifact link is view-only". `insert` places a library
+  item (`item` as `LIBRARY/ITEM-ID`, at `x`,`y`) on a whiteboard.
+- `whiteboard_libraries(name, library?, preview?)`: the element libraries of
+  the user who shared a whiteboard (their own, installed and built-in) as a
+  listing of `LIBRARY/ITEM-ID` refs, or with `preview` the picture of one
+  library. Any link may browse; libraries cannot be changed through a link,
+  and document links get no libraries. Sharing a whiteboard exposes the
+  origin user's libraries.
+
+Edits are attributed at the origin as `Agent: NAME (remote)`, NAME being the
+display name given at attach (`--as`) or the default user, machine and
+client.
 
 When the origin is offline, or the link was revoked or the artifact deleted,
 tools fail with "Origin unavailable (revoked, deleted, or offline)". An origin
@@ -44,4 +93,5 @@ stopped (try again once it is back).
 
 ## Licence
 
-GPL-3.0-or-later, like mevedel.
+GPL-3.0-or-later, like mevedel (`LICENSE`). The package has no dependencies
+and bundles no third-party code (`NOTICE.md`).

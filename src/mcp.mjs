@@ -2,16 +2,19 @@
 // 2.0 offering the tool registry.  It has no dependencies; it implements
 // only what a tools-only server needs.
 import { createInterface } from 'node:readline';
+import { connectionPool } from './connections.mjs';
 import { callTool, tools } from './tools.mjs';
 
 const VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
 /**
  * Serve MCP requests from INPUT to OUTPUT until INPUT ends.  ENV locates
- * the link store.
+ * the link store.  Rooms connect on first use and close after IDLE-MS
+ * (default five minutes) without a call.
  */
-export async function serve({ input, output, env = process.env }) {
-  const ctx = { env, client: undefined };
+export async function serve({ input, output, env = process.env, idleMs }) {
+  const pool = connectionPool({ idleMs });
+  const ctx = { env, client: undefined, connect: pool.connect };
   const write = (message) => output.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`);
   const pending = new Set();
   const handle = async (message) => {
@@ -55,4 +58,5 @@ export async function serve({ input, output, env = process.env }) {
     work.finally(() => pending.delete(work));
   }
   await Promise.all(pending);
+  pool.closeAll();
 }
