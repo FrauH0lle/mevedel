@@ -72,6 +72,7 @@ const EDIT_ACTIONS = {
   image: ['x', 'y', 'width', 'alt', 'afterId'],
   rename: ['title'],
   background: ['background'],
+  insert: ['item', 'x', 'y'],
   revert: ['transaction'],
 };
 
@@ -138,9 +139,11 @@ export const tools = [
       + 'ProseMirror blocks, each with a unique attrs.id. image adds a local PNG, JPEG, WebP or SVG file '
       + 'of at most 4.7 MB: on a board at x,y, in a document after afterId; width sets its display width '
       + 'and alt describes a document image. rename sets the title; background sets a board\'s canvas '
-      + 'colour (#rrggbb, or empty for the theme). revert undoes one contribution, named by its id from '
-      + 'read_artifact with history, and is refused if its targets changed since. Returns the stored '
-      + 'lines of what changed and, for a whiteboard, the board as drawn.',
+      + 'colour (#rrggbb, or empty for the theme). insert places a library item of a whiteboard '
+      + '(item as LIBRARY/ITEM-ID from whiteboard_libraries) with its top-left at x,y. revert undoes '
+      + 'one contribution, named by its id from read_artifact with history, and is refused if its '
+      + 'targets changed since. Returns the stored lines of what changed and, for a whiteboard, the '
+      + 'board as drawn.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -150,9 +153,10 @@ export const tools = [
           description: 'Targeted changes for patch: {id,hash,set,unset,after,afterId}.' },
         title: { type: 'string', description: 'New title for rename.' },
         background: { type: 'string', description: 'Canvas colour for background: #rrggbb, or empty for the room theme.' },
+        item: { type: 'string', description: 'Library item for insert: LIBRARY/ITEM-ID from whiteboard_libraries.' },
         source: { type: 'string', description: 'Local image file for image: PNG, JPEG, WebP or SVG, at most 4.7 MB.' },
-        x: { type: 'number', description: 'Left edge of an added board image.' },
-        y: { type: 'number', description: 'Top edge of an added board image.' },
+        x: { type: 'number', description: 'Left edge of an added board image or inserted library item.' },
+        y: { type: 'number', description: 'Top edge of an added board image or inserted library item.' },
         width: { type: 'number', description: 'Display width of an added image, 1 to 8192; its height follows.' },
         alt: { type: 'string', description: 'Description of an added document image.' },
         afterId: { type: 'string', description: 'Document block the added image follows; default the end.' },
@@ -168,6 +172,9 @@ export const tools = [
       const body = { action: args.action };
       for (const key of keys) if (args[key] !== undefined) body[key] = args[key];
       if (args.action === 'image') body.data = await imageData(args.source);
+      if (args.action === 'insert' && (typeof args.item !== 'string' || !args.item.includes('/'))) {
+        throw new Error('insert needs item as LIBRARY/ITEM-ID from whiteboard_libraries');
+      }
       const reply = await exchange(args.name, body, ctx);
       if (reply.code === 'stale') {
         const { error, code, targets, revision } = reply;
@@ -176,6 +183,31 @@ export const tools = [
       }
       if (reply.error) throw new Error(reply.error);
       return { content: [{ type: 'text', text: reply.result.text }, ...picture(reply.result.png)] };
+    },
+  },
+  {
+    name: 'whiteboard_libraries',
+    description: 'Browse the element libraries of the user whose mevedel shares a remote whiteboard '
+      + '(their own, installed ones and the built-in one; sharing a whiteboard exposes them). Without '
+      + 'library it lists every item as LIBRARY/ITEM-ID, the ref edit_artifact insert takes; library '
+      + 'limits the listing to one library; preview returns the picture of the library (or of all of '
+      + 'them) instead. Any link may browse; whiteboards only. Libraries cannot be changed from here.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: nameArgument,
+        library: { type: 'string', description: 'Name of one library, as the listing shows it.' },
+        preview: { type: 'boolean', description: 'Return the picture of the library instead of the listing.' },
+      },
+      required: ['name'],
+      additionalProperties: false,
+    },
+    async run({ name, library, preview }, ctx) {
+      const result = await onRoom(name, { action: 'library',
+        ...(library === undefined ? {} : { library }), ...(preview ? { part: 'sheet' } : {}) }, ctx);
+      return result.text !== undefined
+        ? { content: [{ type: 'text', text: result.text }] }
+        : { content: picture(result.png, result.mime) };
     },
   },
   {
