@@ -139,10 +139,6 @@
 (defvar mevedel-view-mode-map)
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view--call-preserving-input-point "mevedel-view-composer" (thunk))
-(declare-function mevedel-view--call-preserving-input-text "mevedel-view-composer" (thunk))
-(declare-function mevedel-view--call-preserving-window-state "mevedel-view-composer"
-                  (thunk &optional positions-preserved region))
 (declare-function mevedel-view--composer-anchors "mevedel-view-composer" ())
 (declare-function mevedel-view--input-start "mevedel-view-composer" ())
 (declare-function mevedel-view--position-screen-y
@@ -151,6 +147,8 @@
                   "mevedel-view-composer" (anchors))
 (declare-function mevedel-view--transcript-gptel-send-blocked
                   "mevedel-view-composer" (&optional arg))
+(declare-function mevedel-view-call-preserving-user-view-state
+                  "mevedel-view-composer" (thunk &optional region))
 (defvar mevedel-view--input-marker)
 
 ;; `mevedel-view-disclosure'
@@ -364,7 +362,7 @@ resolved agent configuration, not the parent or summary-generation model."
 
 (defvar mevedel-view--agent-parent-map
   (let ((map (make-sparse-keymap)))
-    (define-key map [header-line mouse-1]
+    (define-key map [tab-line mouse-1]
                 (lambda (event)
                   (interactive "e")
                   (when-let* ((window (posn-window (event-start event)))
@@ -372,7 +370,7 @@ resolved agent configuration, not the parent or summary-generation model."
                     (select-window window)
                     (mevedel-view-close-agent-transcript))))
     map)
-  "Header-line map for returning from agent inspection to its parent.")
+  "Tab-line map for returning from agent inspection to its parent.")
 
 
 (defvar-keymap mevedel-view--agent-handle-map
@@ -411,8 +409,10 @@ transcript on click."
     (local-set-key (kbd "q") #'mevedel-view-close-agent-transcript)
     (local-set-key [remap gptel-send]
                    #'mevedel-view--transcript-gptel-send-blocked)
-    (setq header-line-format
-          '(:eval (mevedel-view--agent-transcript-header-line)))
+    ;; The agent header is this view's status strip.  The header line below
+    ;; it stays free for the pinned prompt, as in the main view.
+    (setq-local tab-line-format
+                '(:eval (mevedel-view--agent-transcript-status-strip)))
     (when (plist-get options :preserve-data-view-buffer)
       (with-current-buffer data-buffer
         (add-hook 'kill-buffer-hook
@@ -441,9 +441,9 @@ running in the UI."
      (inv-status inv-status)
      (t entry-status))))
 
-(defun mevedel-view--agent-transcript-header-line ()
-  "Return the header-line string for a transcript inspection view.
-The header line evaluates this on every redisplay of the view.  Optional
+(defun mevedel-view--agent-transcript-status-strip ()
+  "Return the tab-line status strip for a transcript inspection view.
+The tab line evaluates this on every redisplay of the view.  Optional
 fields therefore fit against a running width instead of remeasuring the
 growing header, and hover details are built only when shown."
   (let* ((info (mevedel-view--agent-transcript-current-info))
@@ -1364,24 +1364,20 @@ Return non-nil on success."
   "Rediscover and refresh AGENT-PATH's handles with projection ownership held."
   (let ((start-time (float-time))
         stale-p)
-    (mevedel-view--call-preserving-window-state
+    (mevedel-view-call-preserving-user-view-state
      (lambda ()
-       (mevedel-view--call-preserving-input-point
-       (lambda ()
-         (mevedel-view--call-preserving-input-text
-          (lambda ()
-            (let ((inhibit-read-only t)
-                  (inhibit-modification-hooks t))
-              (pcase-let ((`(,points . ,stale)
-                           (mevedel-view--agent-handle-refresh-points agent-path)))
-                (setq stale-p (or stale
-                                  (and (null points)
-                                       (mevedel-view--agent-source-present-p
-                                        agent-path))))
-                (dolist (point points)
-                  (unless (mevedel-view--refresh-agent-handle-at point agent-path)
-                    (setq stale-p t))))
-              (mevedel-view--render-agent-status))))))))
+       (let ((inhibit-read-only t)
+             (inhibit-modification-hooks t))
+         (pcase-let ((`(,points . ,stale)
+                      (mevedel-view--agent-handle-refresh-points agent-path)))
+           (setq stale-p (or stale
+                             (and (null points)
+                                  (mevedel-view--agent-source-present-p
+                                   agent-path))))
+           (dolist (point points)
+             (unless (mevedel-view--refresh-agent-handle-at point agent-path)
+               (setq stale-p t))))
+         (mevedel-view--render-agent-status))))
     (mevedel-view--debug-log
      'agent-refresh
      :agent-path agent-path

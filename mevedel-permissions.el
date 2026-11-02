@@ -42,7 +42,7 @@
                   "mevedel-permission-persistence" (workspace))
 (declare-function mevedel-permission-persistence-save-resource-grant
                   "mevedel-permission-persistence"
-                  (workspace path access &optional recursive))
+                  (workspace path access &optional recursive origin))
 (declare-function mevedel-permission-persistence-save-rule
                   "mevedel-permission-persistence"
                   (workspace rule))
@@ -62,7 +62,7 @@
                   (buckets tool-name path pattern domain name))
 (declare-function mevedel-permission-rules-merge-resource-grant
                   "mevedel-permission-rules"
-                  (grants path access &optional recursive))
+                  (grants path access &optional recursive origin))
 (declare-function mevedel-permission-rules-path-in-allowed-roots-p
                   "mevedel-permission-rules" (path roots))
 (declare-function mevedel-permission-rules-path-in-exact-allowed-paths-p
@@ -70,7 +70,7 @@
 (declare-function mevedel-permission-rules-path-protected-p
                   "mevedel-permission-rules" (path &optional target access))
 (declare-function mevedel-permission-rules-resource-grant
-                  "mevedel-permission-rules" (path access &optional recursive))
+                  "mevedel-permission-rules" (path access &optional recursive origin))
 (declare-function mevedel-permission-rules-resource-granted-p
                   "mevedel-permission-rules"
                   (path access grants &optional recursive))
@@ -173,7 +173,8 @@ own copying the passed structures."
 
 (defun mevedel-permission-decision-raw-outcome (decision)
   "Return the pipeline outcome represented by DECISION."
-  (if (and (listp decision) (plist-member decision :outcome))
+  (if (and (consp decision) (keywordp (car decision))
+           (plist-member decision :outcome))
       (if (plist-member decision :raw-outcome)
           (plist-get decision :raw-outcome)
         (plist-get decision :outcome))
@@ -191,6 +192,41 @@ own copying the passed structures."
   (if (and (listp content) (keywordp (car-safe content)))
       (plist-put (copy-sequence content) :permission-decision-metadata t)
     content))
+
+(defun mevedel-permission--error-decision (err)
+  "Return a denial for an expected policy ERR, or an internal-error decision."
+  (let ((conditions (get (car err) 'error-conditions)))
+    (cond
+     ((memq 'mevedel-permission-denied conditions)
+      (mevedel-permission--decision
+       (cons 'deny (cadr err)) 'tool-slot))
+     ((or (memq 'mevedel-sandbox-policy-error conditions)
+          (memq 'mevedel-execution-policy-error conditions))
+      (mevedel-permission--decision
+       (cons 'deny (error-message-string err)) 'sandbox-policy))
+     (t (mevedel-permission--decision 'internal-error 'tool-slot :error err)))))
+
+(defun mevedel-permission--run-async (start cont)
+  "Run START with guarded callbacks and deliver one decision to CONT.
+START receives FINISH and GUARD functions.  FINISH settles the decision;
+GUARD wraps asynchronous callbacks so errors become decisions rather than
+escaping the event loop.  Late callbacks do nothing after settlement."
+  (let (settled)
+    (cl-labels
+     ((finish (decision)
+        (unless settled
+          (setq settled t)
+          (with-demoted-errors "Permission callback failed: %S"
+            (funcall cont decision))))
+      (guard (callback)
+        (lambda (&rest values)
+          (unless settled
+            (condition-case err
+                (apply callback values)
+              (error
+               (unless settled
+                 (finish (mevedel-permission--error-decision err)))))))))
+     (funcall (guard start) #'finish #'guard))))
 
 (defun mevedel-permission--one-shot-mutations-p (request &optional explicit)
   "Return the one-shot mutation policy for REQUEST.
@@ -300,6 +336,11 @@ path base; absent an explicit snapshot, use BUFFER's conversation directory."
          request one-shot-mutations-p)
         mode (or mode (mevedel-permission-mode-effective
                        session buffer nil request invocation)))
+  ;; Configuration snapshots remain immutable; filesystem eligibility does not.
+  ;; Keep these probes outside the pure decision preflight.
+  (setq persistent-rules (mevedel-permission-origin-usable-rules persistent-rules)
+        session-rules (mevedel-permission-origin-usable-rules session-rules)
+        resource-grants (mevedel-permission-origin-usable-grants resource-grants path))
   (when (and warn-no-session-p (not session))
     (mevedel--warn-once
      (list 'permission-no-session tool-name)
@@ -517,19 +558,14 @@ session-owned work descendants; workspace-owned shared files are excluded."
   "Return the synchronous tool-slot decision for preflight CONTEXT.
 
 Return nil when the tool has no synchronous slot or its slot declines to
-decide.  Permission denials retain their reason as decision metadata;
-other slot errors are reported and treated as no decision."
+decide.  Expected policy refusals remain denials; unexpected errors stop
+resolution with explicit internal-error metadata."
   (when-let* ((tool (plist-get context :tool))
               (check-fn (mevedel-tool-check-permission tool)))
     (let ((result
            (condition-case err
                (funcall check-fn tool (plist-get context :content))
-             (mevedel-permission-denied
-              (mevedel-permission--decision
-               (cons 'deny (cadr err)) 'tool-slot))
-             (error
-              (message "mevedel: check-permission error: %S" err)
-              nil))))
+             (error (mevedel-permission--error-decision err)))))
       (when result
         (if (mevedel-permission-decision-metadata-p result)
             result
@@ -541,6 +577,8 @@ other slot errors are reported and treated as no decision."
 ARGS are the inputs documented by `mevedel-permission--preflight'.
 
 Returns a plist describing an `allow', `deny', or `ask' decision.
+Unexpected checker failures return `internal-error' with the original
+condition in `:error'; they cannot grant authority or become a denial.
 
 The decision chain:
   1. Extract specifier values via tool-struct getters when missing
@@ -571,7 +609,7 @@ allow.  Neither can substitute for the other."
 (defun mevedel-check-permission (tool-name &rest args)
   "Check permission for TOOL-NAME with ARGS.
 
-Return `allow', `deny', or `ask'."
+Return `allow', `deny', `ask', or `internal-error'."
   (mevedel-permission-decision-raw-outcome
    (apply #'mevedel-check-permission-with-metadata tool-name args)))
 
@@ -586,6 +624,8 @@ Return `allow', `deny', or `ask'."
 Invokes CONT with permission decision metadata.  The original pipeline
 outcome is available through `mevedel-permission-decision-raw-outcome'.
 ARGS are the inputs documented by `mevedel-permission--preflight'.
+Unexpected errors return `internal-error' metadata with an `:error'
+condition.  Asynchronous callbacks and settlement are guarded exactly once.
 
 Normalization, absolute policy, rules, modes, and resource authority run
 synchronously just like `mevedel-check-permission'.  The tool command-policy
@@ -596,41 +636,44 @@ adapter preserves the denial REASON captured from a
 Bucket-aware; see `mevedel-check-permission' for the keyword-arg
 semantics.  EXACT-ALLOWED-PATHS is passed to the shared tail as an
 exact-match in-bounds path list."
-  (let* ((context (apply #'mevedel-permission--preflight tool-name args))
-         (tool (plist-get context :tool))
-         (early-decision (plist-get context :early-decision))
-         (finish
-          (lambda (slot-decision)
-            (funcall cont
-                     (mevedel-permission--finish-tool-decision
-                      context slot-decision)))))
-    (cond
-     (early-decision (funcall cont early-decision))
-     ((and tool (mevedel-tool-check-permission-async tool))
-      (funcall
-       (mevedel-tool-check-permission-async tool)
-       tool
-       (mevedel-permission--metadata-content (plist-get context :content))
-       (lambda (slot-result)
-         (funcall
-          finish
-          (and slot-result
-               (if (mevedel-permission-decision-metadata-p slot-result)
-                   slot-result
-                 (mevedel-permission--decision
-                  slot-result
-                  (cond
-                   ((equal (mevedel-permission-policy-tool-name tool-name)
-                           "Bash")
-                    'bash-classifier)
-                   ((equal tool-name "Eval") 'eval-policy)
-                   (t 'tool-slot)))))))))
-     (t
-      (if (and tool (mevedel-tool-check-permission tool))
-          (funcall finish
-                   (mevedel-permission--sync-tool-decision context))
-        (funcall cont
-                 (mevedel-check-permission--tail-decision context)))))))
+  (mevedel-permission--run-async
+   (lambda (cont guard)
+     (let* ((context (apply #'mevedel-permission--preflight tool-name args))
+            (tool (plist-get context :tool))
+            (early-decision (plist-get context :early-decision))
+            (finish
+             (lambda (slot-decision)
+               (funcall cont
+			(mevedel-permission--finish-tool-decision
+			 context slot-decision)))))
+       (cond
+	(early-decision (funcall cont early-decision))
+	((and tool (mevedel-tool-check-permission-async tool))
+	 (funcall
+	  (mevedel-tool-check-permission-async tool)
+	  tool
+	  (mevedel-permission--metadata-content (plist-get context :content))
+	  (funcall guard (lambda (slot-result)
+			   (funcall
+			    finish
+			    (and slot-result
+				 (if (mevedel-permission-decision-metadata-p slot-result)
+				     slot-result
+				   (mevedel-permission--decision
+				    slot-result
+				    (cond
+				     ((equal (mevedel-permission-policy-tool-name tool-name)
+					     "Bash")
+				      'bash-classifier)
+				     ((equal tool-name "Eval") 'eval-policy)
+				     (t 'tool-slot))))))))))
+	(t
+	 (if (and tool (mevedel-tool-check-permission tool))
+             (funcall finish
+                      (mevedel-permission--sync-tool-decision context))
+           (funcall cont
+                    (mevedel-check-permission--tail-decision context)))))))
+   cont))
 
 (defun mevedel-check-permission-async (tool-name cont &rest args)
   "Check TOOL-NAME permission with ARGS, then call CONT asynchronously."
@@ -853,7 +896,7 @@ not apply on this target simply matches nothing."
 (cl-defun mevedel-permission--apply-prompt-result
     (result tool-name &optional session workspace path
             &key spec-key spec-value resource-access resource-recursive
-            network file-system sandbox-permissions)
+            resource-origin network file-system sandbox-permissions)
   "Dispatch a permission prompt RESULT to the correct storage.
 
 RESULT is one of:
@@ -869,6 +912,7 @@ operation rules (`:path', `:pattern', `:expression', `:domain', `:name').
 When no rule specifier is supplied, PATH also scopes the operation rule.
 RESOURCE-ACCESS stores path authority separately from rules;
 RESOURCE-RECURSIVE non-nil extends it to all descendants of PATH.
+RESOURCE-ORIGIN retains an existing workspace-relative grant identity.
 NETWORK and FILE-SYSTEM store a capability-qualified operation rule.
 SANDBOX-PERMISSIONS qualifies an already requested execution level."
   (cl-flet ((rule (action)
@@ -879,7 +923,20 @@ SANDBOX-PERMISSIONS qualifies an already requested execution level."
                :sandbox-permissions sandbox-permissions))
             (session-rule (rule)
               (when session
-                (mevedel-permission--add-session-rule session rule)))
+                ;; A new explicit session approval is ordinary absolute
+                ;; authority, not a durable copy of persistent provenance.
+                (let ((copy (copy-tree rule)))
+                  (when (plist-member (cdr copy) :file-system)
+                    (setcdr copy
+                            (plist-put
+                             (cdr copy) :file-system
+                             (mapcar
+                              (lambda (grant)
+                                (cl-loop for (key value) on grant by #'cddr
+                                         unless (eq key :workspace-origin)
+                                         append (list key value)))
+                              (plist-get (cdr copy) :file-system)))))
+                  (mevedel-permission--add-session-rule session copy))))
             (session-resource-grant ()
               (when (and session path resource-access)
                 (mevedel-permission-add-session-resource-grant
@@ -887,7 +944,7 @@ SANDBOX-PERMISSIONS qualifies an already requested execution level."
             (persistent-resource-grant ()
               (when (and workspace path resource-access)
                 (mevedel-permission-persistence-save-resource-grant
-                 workspace path resource-access resource-recursive)))
+                 workspace path resource-access resource-recursive resource-origin)))
             (persistent-rule (rule)
               (cond
                (workspace
@@ -916,7 +973,9 @@ SANDBOX-PERMISSIONS qualifies an already requested execution level."
            (persistent-resource-grant)
          (let ((rule (rule 'allow)))
            (persistent-rule rule)
-           (session-rule rule)))
+           (unless (cl-some (lambda (grant) (plist-get grant :workspace-origin))
+                            (plist-get (cdr rule) :file-system))
+             (session-rule rule))))
        'allow)
       ('deny-once 'deny)
       ('deny-session (session-rule (rule 'deny)) 'deny)

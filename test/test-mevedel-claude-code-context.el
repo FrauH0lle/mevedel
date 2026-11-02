@@ -5,6 +5,8 @@
 
 ;;; Code:
 
+(require 'mevedel-pending-inputs)
+
 (require 'mevedel-engine-test-support
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
                            "mevedel-engine-test-support"))
@@ -14,6 +16,7 @@
 (mevedel-deftest mevedel--send-request/claude-child-roster (:quiet t)
   (dolist (receipt '(t nil compact))
     (mevedel-engine-test--with-claude-session
+      :file-workspace (not (eq receipt t))
       (let ((file (file-name-concat root "evidence.txt"))
             record root-turn)
         (write-region "Evidence" nil file nil 'silent)
@@ -68,6 +71,7 @@
 (mevedel-deftest mevedel--send-request/claude-reminders (:quiet t)
   (dolist (receipt '(t nil late silent compact))
     (mevedel-engine-test--with-claude-session
+      :file-workspace (not (eq receipt t))
       (let* ((file (file-name-concat root "evidence.txt"))
              (reminder (mevedel-reminders-make-user-revised-patch
                         (concat "REVISED-PATCH-7194 " (make-string 11000 ?x))))
@@ -497,6 +501,10 @@
       (should-not (string-search "OTHER-STEER" body))
       ;; Sending is not delivery: the entry stays queued and tools wait.
       (should (= 2 (length (mevedel-session-pending-steering session))))
+      (let ((entry (car (mevedel-session-pending-steering session))))
+        (should (plist-get entry :delivering))
+        (should-error (mevedel-pending-inputs--assert-removable session entry)
+                      :type 'user-error))
       (should-error (mevedel-claude-code-context-check request))
       (mevedel-claude-code-context-observe
        request (mevedel-claude-code-context-test--hook-receipt body)))

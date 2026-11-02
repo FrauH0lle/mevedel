@@ -15,10 +15,14 @@
 (require 'gptel-openai)
 (require 'gptel-anthropic)
 (require 'gptel-bedrock)
+(require 'mevedel-cockpit)
+(require 'mevedel-memory-investigation)
+(require 'mevedel-memory-pass)
 (require 'mevedel-memory-scope)
 (require 'mevedel-memory-review)
 (require 'mevedel-memory-list)
 (require 'mevedel-memory-notes)
+(require 'mevedel-models)
 (require 'mevedel-system)
 (require 'mevedel-claude-code)
 (require 'mevedel-engine-test-support
@@ -174,11 +178,26 @@
     (dolist (rule '("`user`:" "`feedback`:" "`project`:" "`reference`:"
                     "Tasks, blockers, deadlines, progress, and decisions belong"
                     "reviewing older notes containing project progress"
+                    "No extraction is a successful outcome."
+                    "do not require a completion audit or a note rewrite."
+                    "nothing else is needed for notes."
+                    "After a successful review, the host disposes of every admitted note once all changes citing it have been applied."
+                    "Failed or rejected reviews delete nothing."
+                    "application dynamically"
+                    "holds deletion while citations remain or their scope cannot be checked."
+                    "Its body is the COMPLETE desired file content, not an addition to append."
+                    "Preserve all unrelated captured guidance."
+                    "exist or be a known-absent applicable file; do not add other targets."
+                    "it never deletes the file path. Body bytes are used exactly as decoded,"
+                    "Analysis, lists and explanations outside proposal blocks invalidate the reply."
                     "No action is a successful"))
-      (should (string-search rule sent-system)))
+      (should (string-search rule (replace-regexp-in-string "[[:space:]]+" " " sent-system))))
+    (dolist (obsolete '("## Notes" "only `note: \"ID\"`" "open-items" "resolved-by" "resolution-anchors" "unresolved-items"
+                        "GIT-HISTORY" "sequential_summary" "Preserved measurements"))
+      (should-not (string-search obsolete sent-system)))
     (with-current-buffer (plist-get handle :buffer)
       (should-not mevedel--session)
-      (should (equal '("Read" "Glob" "Grep") (mapcar #'gptel-tool-name gptel-tools))))
+      (should (equal '("Read" "Glob" "Grep" "Git") (mapcar #'gptel-tool-name gptel-tools))))
     (respond mevedel-test-memory-review--none)
     (respond t)
     (should-not result)
@@ -203,13 +222,14 @@
     (respond mevedel-test-memory-review--none)
     (gptel--fsm-transition request 'DONE)
     (should (eq 'success (plist-get result :outcome))))
-  :doc "admits shared notes beside digests and requires one disposition per admitted note"
+  :doc "admits unresolved numeric notes as evidence without requiring model disposal output"
   (let* ((shared (file-name-concat directory ".mevedel" "shared"))
          (path (file-name-concat shared "note.md"))
+         (body "TODO: parent owns the unresolved integration follow-up.\nScenario: 50 notes took 125 seconds; baseline: 100 notes in 250 seconds.\n")
          scope)
     (make-directory shared t)
-    (write-region "Finding: index destinations must be unique.\n" nil path nil 'silent)
-    (set-file-times path (time-subtract nil (* 3 86400)))
+    (write-region body nil path nil 'silent)
+    (set-file-times path (time-subtract nil (* 15 86400)))
     (mevedel-workspace-identity-ensure directory)
     (setq scope (mevedel-memory-scope-capture workspace))
     (setq scope (plist-put scope :roots (append (plist-get scope :roots)
@@ -221,21 +241,103 @@
       (let ((input (json-parse-string sent)))
         (should (= 1 (length (gethash "digests" input))))
         (should (equal "work://shared/note.md" (gethash "id" (aref (gethash "notes" input) 0))))
+        (should (equal body (gethash "body" (aref (gethash "notes" input) 0))))
+        (should-not (gethash "sequential_summary" (aref (gethash "notes" input) 0)))
         (should (eq :false (gethash "cited_by_memory" (aref (gethash "notes" input) 0)))))
       (respond mevedel-test-memory-review--none)
       (gptel--fsm-transition request 'DONE)
-      (should (eq 'error (plist-get result :outcome)))
-      (review)
-      (respond (replace-regexp-in-string
-                "## No action" (concat "## Notes\n````proposal\nnote: \"work://shared/note.md\"\n"
-                                       "disposition: \"delete\"\nreason: \"Nothing durable.\"\n---\n````\n## No action")
-                mevedel-test-memory-review--none t t))
-      (gptel--fsm-transition request 'DONE)
-      (ert-info ((format "Review error: %s" (plist-get result :error)))
-        (should (eq 'success (plist-get result :outcome))))
+      (should (eq 'success (plist-get result :outcome)))
+      (should-not (plist-get result :proposals))
       (should (equal '("work://shared/note.md") (plist-get result :notes)))
       (should (= 0 (plist-get result :omitted-notes)))
-      (should (eq 'note-delete (plist-get (car (plist-get result :proposals)) :action)))))
+      (should-not (plist-member result :inspected))
+      (should (file-exists-p path))))
+  :doc "request admission lists only supplied notes without widening disposal authority to omitted notes"
+  (let* ((shared (file-name-concat directory ".mevedel" "shared"))
+         scope)
+    (put model :context-window 32)
+    (make-directory shared t)
+    (dotimes (index 3)
+      (let ((path (file-name-concat shared (format "note-%d.md" index))))
+        (write-region (make-string 30000 ?x) nil path nil 'silent)
+        (set-file-times path (time-subtract nil (* (- 18 index) 86400)))))
+    (mevedel-workspace-identity-ensure directory)
+    (setq scope (mevedel-memory-scope-capture workspace))
+    (setq scope (plist-put scope :roots
+                           (append (plist-get scope :roots)
+                                   (list (plist-get (mevedel-memory-notes-capture workspace nil) :root)))))
+    (let* ((captured (mevedel-memory-notes-documents scope))
+           supplied omitted)
+      (cl-labels ((review ()
+                    (setq result nil handle
+                          (mevedel-memory-review-request
+                           scope entries (lambda (value) (setq result value))))))
+        (review)
+        (should-not result)
+        (let* ((input (json-parse-string sent :object-type 'plist :array-type 'list))
+               (root (seq-find (lambda (row) (equal "notes" (plist-get row :kind)))
+                               (plist-get input :roots))))
+          (setq supplied (plist-get input :notes)
+                omitted (seq-drop captured (length supplied)))
+          (should (= 3 (length captured)))
+          (should (> (length supplied) 0))
+          (should omitted)
+          (should (= (length omitted) (plist-get input :omitted_notes)))
+          (should (equal (mapcar (lambda (note) (plist-get note :path)) supplied)
+                         (plist-get root :admitted_files)))
+          ;; Admission must not change the retained capture used by storage.
+          (should (= 3 (length (plist-get (cdr (mevedel-memory-notes-root scope)) :files)))))
+        (respond mevedel-test-memory-review--none)
+        (gptel--fsm-transition request 'DONE)
+        (should (eq 'success (plist-get result :outcome)))
+        (should (equal (mapcar (lambda (note) (plist-get note :id)) supplied)
+                       (plist-get result :notes)))
+        (should (= (length omitted) (plist-get result :omitted-notes)))
+        (should-not (plist-get result :proposals)))))
+  :doc "Instructions retains captured old guidance and decodes complete, empty or whitespace bodies exactly"
+  (let* ((old "# Guidance\nUnrelated guidance must survive.\nSee work://shared/temporary.md.\n")
+         (replacement "# Guidance\nUnrelated guidance must survive.\nUse the maintained contract instead.\n"))
+    (with-temp-file (file-name-concat directory "AGENTS.md") (insert old))
+    (dolist (target '("AGENTS.md" "AGENTS.local.md"))
+      (dolist (body (list replacement "" " \t\n"))
+        (setq result nil)
+        (start)
+        (let* ((input (json-parse-string sent :object-type 'plist :array-type 'list))
+               (root (seq-find (lambda (row) (equal "instructions" (plist-get row :kind)))
+                               (plist-get input :roots)))
+               (document (seq-find (lambda (row) (equal "AGENTS.md" (plist-get row :file)))
+                                   (plist-get input :documents)))
+               (reply (replace-regexp-in-string
+                       "## Instructions\n- none"
+                       (concat "## Instructions\n````proposal\n"
+                               "root: " (json-serialize (plist-get root :id)) "\n"
+                               "file: " (json-serialize target) "\n"
+                               "type: \"project\"\ntitle: \"Self-contained guidance\"\n"
+                               "hook: \"Repair a temporary reference\"\n"
+                               "reason: \"Replace the file while preserving unrelated guidance.\"\n"
+                               "evidence: []\n---\n" body "\n````")
+                       mevedel-test-memory-review--none t t)))
+          (should (member target (plist-get root :admitted_files)))
+          (should (equal old (plist-get document :body)))
+          (should-not (file-exists-p (file-name-concat directory "AGENTS.local.md")))
+          (respond reply)
+          (gptel--fsm-transition request 'DONE)
+          (ert-info ((format "Instruction review failed: %S" result))
+            (should (eq 'success (plist-get result :outcome))))
+          (let ((proposal (car (plist-get result :proposals))))
+            (should (eq 'instructions (plist-get proposal :action)))
+            (should (equal (plist-get root :id) (plist-get proposal :root)))
+            (should (equal target (plist-get proposal :file)))
+            (should (equal "project" (plist-get proposal :type)))
+            (should (equal "Self-contained guidance" (plist-get proposal :title)))
+            (should (equal "Repair a temporary reference" (plist-get proposal :hook)))
+            (should (equal "Replace the file while preserving unrelated guidance."
+                           (plist-get proposal :reason)))
+            (should-not (plist-get proposal :evidence))
+            (should (equal body (plist-get proposal :body))))
+          (should (equal old (with-temp-buffer
+                               (insert-file-contents (file-name-concat directory "AGENTS.md"))
+                               (buffer-string))))))))
   :doc "runs an admitted Read without inheriting interactive tool confirmation"
   (let ((gptel-confirm-tool-calls t) tool-result)
     (with-temp-file (file-name-concat directory "source.el") (insert ";; Source evidence.\n"))
@@ -253,6 +355,9 @@
     (respond mevedel-test-memory-review--none)
     (gptel--fsm-transition request 'DONE)
     (should (eq 'success (plist-get result :outcome)))
+    (should-not (plist-member result :inspected))
+    (should (= 1 (length (plist-get (plist-get result :investigation) :calls))))
+    (should-not (string-search "Source evidence" (prin1-to-string result)))
     (should (= 1 settlements)))
   :doc "rejects unavailable tool names before dispatch without entering an unbounded repair loop"
   (let (diagnostics)

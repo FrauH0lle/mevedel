@@ -251,7 +251,7 @@
    (mevedel-tools-list--help-report)))
 
 (defun mevedel-tools-list-quit ()
-  "Quit the tools cockpit and return to the main session cockpit."
+  "Close the tools cockpit and restore the invoking layout."
   (interactive)
   (mevedel-cockpit-quit "tools cockpit"))
 

@@ -10,6 +10,17 @@
           (file-name-directory (or load-file-name buffer-file-name))
           "mevedel-engine-test-support"))
 (require 'mevedel-claude-code)
+(require 'mevedel-directive-plan)
+
+(mevedel-deftest mevedel-engine-test--with-claude-session (:quiet t)
+  (dolist (file-p '(nil t))
+    (mevedel-engine-test--with-claude-session :file-workspace file-p
+      (should (eq (if file-p 'file 'project) (mevedel-workspace-type workspace)))
+      (should (eq (if file-p 'pid-lock 'portable) (mevedel-session-authority-mode session)))
+      (should (mevedel-claude-code-backend-p gptel-backend))
+      (should (file-directory-p (mevedel-session-save-path session)))
+      (mevedel-session-artifacts-save session buffer)
+      (should (mevedel-session-artifacts-read-artifact session "session.meta.el" t)))))
 
 (mevedel-deftest mevedel-claude-code-register ()
   (let ((gptel--known-backends nil))
@@ -917,6 +928,7 @@
 (mevedel-deftest mevedel-agent-control-send-message/claude-mail (:quiet t)
   (dolist (acknowledge '(t nil "foreign" "mismatch" "error" "malformed" "oversized" "initial" "initial-large"))
     (mevedel-engine-test--with-claude-session
+      :file-workspace (not (eq acknowledge t))
       (let ((file (file-name-concat root "mail-evidence.txt"))
             (mail (concat "Steer this child only."
                           (when (member acknowledge '("oversized" "initial-large"))
@@ -977,6 +989,7 @@
 (mevedel-deftest mevedel--send-request/claude-initial-mail (:quiet t)
   (dolist (acknowledge '(t nil "foreign" "mismatch" "nested"))
     (mevedel-engine-test--with-claude-session
+      :file-workspace (not (eq acknowledge t))
       (setq-local gptel-system-prompt "Session instructions" gptel-tools nil)
       (mevedel-agent-control-send-message
        session "/root" (concat "Large initial mail " (make-string 12000 ?x) " END-MAIL"))
@@ -1009,6 +1022,7 @@
 (mevedel-deftest mevedel--send-request/claude-context-updates (:quiet t)
   (dolist (receipt '(t nil mismatch unchanged compact revert final pending-mail))
     (mevedel-engine-test--with-claude-session
+      :file-workspace (not (eq receipt t))
       (let* ((mevedel-system--prompt-components (copy-tree mevedel-system--prompt-components))
              (mevedel-system-retained-components '(memory))
              (state "Original memory")

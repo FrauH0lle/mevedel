@@ -56,7 +56,13 @@
 					   (:root "workspace" :path ".mevedel/state/journal/private.json")
 					   (:root "journal" :path "unselected.md")
 					   (:root "missing" :path "topic.md")))
-			     (should (string-prefix-p "Error:" (mevedel-test-investigation--call state 'read args))))))
+			     (should (string-prefix-p "Error:" (mevedel-test-investigation--call state 'read args))))
+			   (should (string-match-p "Current source" (mevedel-test-investigation--call
+								     state 'read '(:root "workspace" :path "./source.el"))))
+				   ;; Delivery remains observable without retaining source bodies.
+				   (let ((summary (mevedel-memory-investigation-summary state)))
+				     (should (= 8 (length (plist-get summary :calls))))
+				     (should-not (string-search "Current source" (prin1-to-string state))))))
 		     (when state (mevedel-memory-investigation-stop state))
 		     (delete-directory directory t)))
 		 :doc "Glob and Grep reuse ordinary search over admitted nested snapshots without leaking private paths"
@@ -184,6 +190,19 @@
 			   (should (= failures 1))
 			   (mevedel-memory-investigation-call state 'read nil (lambda (_) (ert-fail "Retired callback")))
 			   (should (= failures 1))
+			   ;; A truncated Read names a delivered line to continue from,
+			   ;; so following it skips nothing.
+			   (let* ((state (mevedel-memory-investigation-create scope nil (lambda () t) #'ignore))
+				  (first (mevedel-test-investigation--call
+					  state 'read '(:root "workspace" :path "large.txt")))
+				  (line (and (string-match "Read again with offset \\([0-9]+\\) to continue" first)
+					     (string-to-number (match-string 1 first))))
+				  (next (mevedel-test-investigation--call
+					 state 'read (list :root "workspace" :path "large.txt" :offset line))))
+			     (should (<= (string-bytes first) 8192))
+			     (should (> line 1))
+			     (should (string-match-p (format "\n *%d\t" line) first))
+			     (should (string-match-p (format "\\` *%d\t" line) next)))
 			   (setq state (mevedel-memory-investigation-create scope nil (lambda () t)
 									    (lambda (value) (setq reason value))))
 			   (should (= 64 mevedel-memory-investigation--max-calls))
@@ -198,6 +217,69 @@
 			   (should (mevedel-memory-investigation-stopped state))))
 		     (when state (mevedel-memory-investigation-stop state))
 		     (delete-directory directory t))))
+
+(mevedel-deftest mevedel-memory-investigation--git ()
+  ,test
+  (test)
+  :doc "Git history stays read-only and bounded without a retained body accumulator"
+  (let* ((directory (file-name-as-directory (file-truename (make-temp-file "mevedel-investigation-git-" t))))
+         (workspace (mevedel-workspace--create :root directory))
+         (mevedel-memory-dirs nil)
+         (git (lambda (&rest args)
+                (with-temp-buffer
+                  (unless (zerop (apply #'call-process "git" nil t nil "-C" directory args))
+                    (error "'git' %S failed: %s" args (buffer-string))))))
+         state)
+    (unwind-protect
+        (progn
+          (funcall git "init" "-q")
+          (with-temp-file (file-name-concat directory "a.el") (insert ";; a\n"))
+          (funcall git "add" "a.el")
+          (funcall git "-c" "user.name=T" "-c" "user.email=t@example.invalid"
+                   "commit" "-q" "-m" "fix(view): Integrate the visited-row anchor" "-m" "Resolves findings 1B and 2.")
+          (let ((head (with-temp-buffer
+                        (call-process "git" nil t nil "-C" directory "rev-parse" "--short" "HEAD")
+                        (string-trim (buffer-string))))
+                (before (with-temp-buffer
+                          (call-process "git" nil t nil "-C" directory "status" "--porcelain")
+                          (buffer-string))))
+            (setq state (mevedel-memory-investigation-create
+                         (mevedel-memory-scope-capture workspace) nil (lambda () t) #'ignore))
+            (should (string-match-p "visited-row anchor"
+                                    (mevedel-test-investigation--call
+                                     state 'git '(:command "log" :pattern "visited.row"))))
+            (let ((shown (mevedel-test-investigation--call state 'git (list :command "show" :pattern head))))
+              (should (string-match-p "Resolves findings 1B and 2" shown))
+              (should (string-match-p (format "Commit %s contained in current HEAD: yes" head) shown)))
+            ;; A hash given to log is shown; a commit off HEAD says so.
+            (funcall git "checkout" "-q" "-b" "side")
+            (funcall git "-c" "user.name=T" "-c" "user.email=t@example.invalid"
+                     "commit" "-q" "--allow-empty" "-m" "Side experiment")
+            (let ((side (with-temp-buffer
+                          (call-process "git" nil t nil "-C" directory "rev-parse" "--short" "HEAD")
+                          (string-trim (buffer-string)))))
+              (funcall git "checkout" "-q" "-")
+              (let ((shown (mevedel-test-investigation--call state 'git (list :command "log" :pattern side :path " "))))
+                (should (string-match-p "Side experiment" shown))
+                (should (string-match-p (format "Commit %s contained in current HEAD: no" side) shown))))
+            (setq before (with-temp-buffer
+                           (call-process "git" nil t nil "-C" directory "status" "--porcelain")
+                           (buffer-string)))
+            (should (equal "No matching commits."
+                           (mevedel-test-investigation--call
+                            state 'git '(:command "log" :pattern "never-mentioned"))))
+            (dolist (args '((:command "show" :pattern "HEAD; rm -rf .")
+                            (:command "show" :pattern "--output=x")
+                            (:command "diff" :pattern "x")
+                            (:command "log" :pattern "x" :path "../outside")))
+              (should (string-prefix-p "Error:" (mevedel-test-investigation--call state 'git args))))
+            ;; Git results reach the caller without a retained full-text copy.
+            (should-not (string-search "Resolves findings 1B and 2" (prin1-to-string state)))
+            (should (equal before (with-temp-buffer
+                                    (call-process "git" nil t nil "-C" directory "status" "--porcelain")
+                                    (buffer-string))))))
+      (when state (mevedel-memory-investigation-stop state))
+      (delete-directory directory t))))
 
 (mevedel-deftest mevedel-memory-investigation--deliver ()
   ,test
@@ -234,7 +316,7 @@
 			(known (copy-tree gptel--known-tools)))
 		   (unwind-protect
 		       (let ((tools (mevedel-memory-investigation-tools state)))
-			 (should (equal '("Read" "Glob" "Grep") (mapcar #'gptel-tool-name tools)))
+			 (should (equal '("Read" "Glob" "Grep" "Git") (mapcar #'gptel-tool-name tools)))
 			 (should (cl-every #'gptel-tool-async tools))
                          (cl-mapc
                           (lambda (tool description)

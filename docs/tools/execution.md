@@ -47,6 +47,68 @@ needed and request the specific missing capability in a new call. A new call
 is not an automatic replay of the failed command. Account for any completed
 effects before repeating an operation.
 
+## Git over SSH
+
+A local confined command that names `git`, run in a repository whose fetch
+remotes use SSH, gets a fetch-only SSH transport. `git fetch`, `git pull
+--ff-only`, `git ls-remote` and `git archive --remote` then reach those remotes
+through the host's ssh, with the user's agent and SSH configuration. ssh runs
+on the host, so the transport passes no key or agent connection into the
+sandbox; confinement also hides the agent socket that `SSH_AUTH_SOCK` names,
+but not other agent sockets, and `~/.ssh` stays masked. No network grant is
+needed. HTTPS remotes are unaffected and still need the network grant above.
+
+The repository must be the workspace root's own, discovered from both the
+root and the working directory: a nested `.git` directory or pointer file
+inside the workspace may have been written by an earlier confined command,
+so it gets no transport.
+
+Fetching writes protected Git metadata, so request write access to the
+repository's Git directory; for a linked worktree, its shared common directory:
+
+```text
+Bash(command="git fetch origin",
+     sandbox_permissions="with_additional_permissions",
+     additional_permissions={"file_system":{"write":["/repo/.git"]}},
+     justification="Fetch origin's new commits.")
+```
+
+A `.git` write grant also lets the command rewrite the remotes, `insteadOf`
+rules and hooks that later brokers and host Git trust, so grant it only for a
+command you would let change them.
+
+The transport accepts only `git-upload-pack` and `git-upload-archive`, and only
+for the SSH destinations of the repository's fetch remotes as configured when
+the command started. Push, other remote commands, other hosts, extra ssh
+options and Git configuration such as `remote.NAME.uploadpack` are refused with
+a `mevedel-git-ssh:` message before ssh runs. Push stays with the user: a
+refusal is not a confinement failure to retry, and a push is escalated only
+when the user asked for it. A wrapper that runs Git without `git` in the
+command text, submodule remotes, and remote execution targets do not get the
+transport.
+
+## Hidden host services
+
+Confined commands see an empty private `XDG_RUNTIME_DIR`: `/run/user` is
+replaced by a tmpfs, so the session D-Bus, the systemd user manager
+(`systemctl --user`, `systemd-run --user`), gpg-agent, keyrings, an Emacs
+server and audio servers are absent. The ssh-agent named by `SSH_AUTH_SOCK` is
+masked too, and so are the X11 and ICE socket directories under `/tmp`.
+Writable roots and the Wayland display socket stay available. Filesystem grants
+for paths at, below or above `/run/user` are refused. A missing bus or agent
+is this boundary, not a fault to repair; if the user's task truly needs that
+service, request a
+[full confinement bypass](#full-confinement-bypass).
+
+Locally, connecting to any other Unix socket that the command did not create
+itself fails with `Permission denied`, including the system D-Bus and sockets
+other programs keep in `/tmp`. Sockets under the workspace and other writable
+roots, except shared temporary space, stay reachable. To use one host socket,
+such as a database or container API socket, request write access to it or its
+directory; a read grant does not allow connecting. A status line ending in
+`host sockets: reachable (REASON)` means this restriction is unavailable on
+the target.
+
 ## Full confinement bypass
 
 If a relevant confined attempt failed and additive grants cannot support the
@@ -68,6 +130,8 @@ a targeted explanation. Bubblewrap uses a user namespace: host root-owned files
 can appear owned by the overflow UID (often 65534), which OpenSSH rejects even
 though the files are readable. A read-only bind of `/` preserves access, not the
 host UID mapping. Additional network or exact-path grants cannot fix that mapping.
+It means ssh ran inside confinement; a Git fetch from the workspace
+repository's SSH remotes uses the [fetch-only transport](#git-over-ssh) instead.
 
 The diagnostic is a clue, not proof: compare the configuration's owner on the
 host and inside confinement, and use `ssh -G HOST` to check configuration without
@@ -75,8 +139,9 @@ connecting or pushing. A genuine host-side ownership problem still needs its own
 diagnosis. Do not disable SSH ownership checks, bypass configuration with `ssh -F`,
 or change file permissions as a namespace workaround.
 
-For a confirmed namespace failure, if the operation is still authorized and
-needed, submit a **new** Bash call with `sandbox_permissions="require_escalated"`
+For a confirmed namespace failure in another SSH operation, if it is still
+authorized and needed, submit a **new** Bash call with
+`sandbox_permissions="require_escalated"`
 and a justification describing the ownership mismatch. Request invocation-only
 approval through the existing permission card. That approved call runs directly
 on the execution target, with ordinary SSH configuration and ownership checks;

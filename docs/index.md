@@ -36,8 +36,17 @@ Read the relevant contracts before planning or changing an unfamiliar area.
 - [`address-to-resource.md`](address-to-resource.md) — closed
   resource-address families, canonical locators, operation matrix, permission
   seam, lifecycle, freshness, and capability boundaries
-- [`memory.md`](memory.md) — curated memory, journal capture and retention,
-  shared working files, consolidation, and proposal decisions
+- [`memory.md`](memory.md) — memory overview and subsystem entry points:
+  - [`memory-curated.md`](memory-curated.md) — roots, topic/index format,
+    save/forget policy, prompt delivery and staleness
+  - [`memory-review.md`](memory-review.md) — review evidence and proposals,
+    request limits, scheduling, pass ownership and the memory cockpit
+  - [`memory-recovery.md`](memory-recovery.md) — proposal decisions, checked
+    application, interrupted-write recovery and reversal
+  - [`memory-notes.md`](memory-notes.md) — shared-note authoring, readiness,
+    extraction, permanent disposal and attachment housekeeping
+  - [`memory-journal.md`](memory-journal.md) — journal capture, generation,
+    discovery, abandoned checkpoints, inspection and retention
 - [`view.md`](view.md) — dual-buffer view model, status /
   interaction / input zones, rendered agent transcript views, input
   history, and the [workspace artifact store](view.md#artifact-store)

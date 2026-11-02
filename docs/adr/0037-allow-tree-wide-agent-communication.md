@@ -5,7 +5,10 @@ Status: accepted
 ## Current decision
 
 Agents may address any retained agent in the same root session tree by canonical
-path. `SendMessage` may target the root or any agent. Agent-originated mail to
+path. `SendMessage` may target the root or any agent. An omitted target defaults
+to the caller's immediate parent; root must specify one. This default avoids
+making nested agents spell a routing path for ordinary parent reports without
+restricting intentional tree-wide communication. Agent-originated mail to
 `/root` can wake the idle root through the Monitor Background event scheduler;
 self-mail never starts a turn. Mail to idle non-root recipients starts their
 turn when capacity allows.

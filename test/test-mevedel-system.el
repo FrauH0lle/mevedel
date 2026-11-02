@@ -103,6 +103,8 @@
   (:doc "built-in profiles select the main role without revision")
   (let ((main (mevedel-system-build-prompt 'main)))
     (should (string-match-p "Task execution protocol" main))
+    (should (string-search "whether code, writing, research" main))
+    (should-not (string-search "pair programming" main))
     (should (string-match-p "Tone and style" main))
     (should (string-match-p "Tool orchestration" main))
     (should (string-match-p "Untrusted tool content" main))
@@ -1049,7 +1051,10 @@
             (dolist (guidance '("main agent, subagents, and later sessions in the same workspace"
                                 "mevedel-created worktree sessions"
                                 "not automatically added to conversations"
-                                "give the receiving agent the note's address"))
+                                "give the receiving agent the note's address"
+                                "No note header or lifecycle labels are required"
+                                "after 14 days without modification by default"
+                                "capture/application safety checks remain pending"))
               (should (string-search guidance prompt))))
           (let ((prompt (mevedel-system-build-prompt 'main :retained t
                                                     :workspace workspace :session session)))
@@ -1071,7 +1076,10 @@
                 (dolist (guidance '("main agent, subagents, and later sessions in the same workspace"
                                     "mevedel-created worktree sessions"
                                     "not automatically added to conversations"
-                                    "give the receiving agent the note's address"))
+                                    "give the receiving agent the note's address"
+                                    "No note header or lifecycle labels are required"
+                                    "after 14 days without modification by default"
+                                    "capture/application safety checks remain pending"))
                   (should (string-search guidance context))))
               (if (equal name "worker")
                   (should (string-search "Persistent memory" prompt))

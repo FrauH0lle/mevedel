@@ -316,17 +316,18 @@ guest has."
 
 (defconst mevedel-collaboration-unsafe-guest-commands
   '("mode" "model" "clear" "tools" "plugin" "skills" "prompt" "edits"
-    "collab" "help" "btw" "tokens" "ps" "worktree")
+    "collab" "help" "btw" "tokens" "ps" "worktree" "buddy")
   "Local slash commands a guest may never invoke, whatever the allowlist.
 
 These either escalate authority (`mode\=' reaches full-auto, whose whole
 point is skipping the permission prompts a guest would otherwise have
 to be asked), mutate durable session state (`clear\='), manage the share
-itself (`collab\='), or only report to the host\='s display -- an echo
-area message, a cockpit, a transient -- that no guest can see or
-dismiss.  Keeping the refusal here rather than in the host\='s judgement
-means a mistaken allowlist entry cannot become an escalation or a dead
-button.")
+itself (`collab\='), switch on host-wide behavior (`buddy\=' watches
+every buffer of the host\='s Emacs), or only report to the host\='s
+display -- an echo area message, a cockpit, a transient -- that no guest
+can see or dismiss.  Keeping the refusal here rather than in the
+host\='s judgement means a mistaken allowlist entry cannot become an
+escalation or a dead button.")
 
 (defcustom mevedel-collaboration-remote-interactions t
   "Whether full-link guests may answer pending interactions.

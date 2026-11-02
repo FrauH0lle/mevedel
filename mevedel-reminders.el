@@ -461,30 +461,47 @@ with `:entries' in reminder order, each (:type TYPE :body BODY), and
     (list :entries (nreverse entries)
           :commits (nreverse commits))))
 
+(defvar mevedel-reminders--prepared-edits nil
+  "Edited-file changes and diffs prepared for the dispatch in progress.
+An alist from a workspace file cache to (CHANGES . DIFFS), where DIFFS is
+an alist from a change in CHANGES to its unified diff.  Bound only while
+`mevedel-reminders-prepare-edited-files' continues a dispatch or
+`mevedel-reminders-collect' uses retained diffs, so the reminder reports
+exactly the changes whose diffs were prepared.")
+
 (defun mevedel-reminders-collect (owner)
   "Collect OWNER's configured reminders and pending hook context for delivery.
 Use the owning buffer's session or retained invocation and existing turn count.
+Edited-file diffs retained by `mevedel-reminders-retain-edited-files' are
+used once.
 Do not acknowledge or consume the captured context until the returned commits."
-  (when-let* ((buffer (plist-get (mevedel-engine-info owner) :buffer))
+  (when-let* ((info (mevedel-engine-info owner))
+              (buffer (plist-get info :buffer))
               ((buffer-live-p buffer)))
-    (with-current-buffer buffer
-      (let* ((invocation mevedel--agent-invocation)
-             (context (or invocation (bound-and-true-p mevedel--session)))
-             (mevedel-reminders--current-chat-buffer buffer))
-        (when context
-          (let* ((batch (mevedel-reminders--collect-from
-                         (if invocation (mevedel-agent-invocation-reminders invocation)
-                           (mevedel-session-reminders context))
-                         (if invocation (mevedel-agent-invocation-turn-count invocation)
-                           (mevedel-session-turn-count context))
-                         context))
-                 (hooks (and (not invocation) (mevedel-session-hook-context-pending context))))
-            (when-let* ((body (mevedel-hooks-format-context hooks)))
-              (setq batch
-                    (list :entries (cons (list :type 'hook-context :body body) (plist-get batch :entries))
-                          :commits (cons (lambda () (mevedel-hooks-consume-session-context context hooks))
-                                         (plist-get batch :commits)))))
-            batch))))))
+    (let ((retained (plist-get info :mevedel-prepared-edits)))
+      (when retained
+        (setf (mevedel-engine-info owner)
+              (plist-put info :mevedel-prepared-edits nil)))
+      (with-current-buffer buffer
+        (let* ((invocation mevedel--agent-invocation)
+               (context (or invocation (bound-and-true-p mevedel--session)))
+               (mevedel-reminders--prepared-edits
+                (append retained mevedel-reminders--prepared-edits))
+               (mevedel-reminders--current-chat-buffer buffer))
+          (when context
+            (let* ((batch (mevedel-reminders--collect-from
+                           (if invocation (mevedel-agent-invocation-reminders invocation)
+                             (mevedel-session-reminders context))
+                           (if invocation (mevedel-agent-invocation-turn-count invocation)
+                             (mevedel-session-turn-count context))
+                           context))
+                   (hooks (and (not invocation) (mevedel-session-hook-context-pending context))))
+              (when-let* ((body (mevedel-hooks-format-context hooks)))
+                (setq batch
+                      (list :entries (cons (list :type 'hook-context :body body) (plist-get batch :entries))
+                            :commits (cons (lambda () (mevedel-hooks-consume-session-context context hooks))
+                                           (plist-get batch :commits)))))
+              batch)))))))
 
 (defun mevedel-reminders--current-buffer ()
   "Return the chat buffer currently collecting reminders, or nil."
@@ -1248,13 +1265,6 @@ see the changes)"
               (format "\n... (%d more lines truncated)"
                       (- (length lines) max-lines))))))
 
-(defvar mevedel-reminders--prepared-edits nil
-  "Edited-file changes and diffs prepared for the dispatch in progress.
-An alist from a workspace file cache to (CHANGES . DIFFS), where DIFFS is
-an alist from a change in CHANGES to its unified diff.  Bound only while
-`mevedel-reminders-prepare-edited-files' continues a dispatch, so the
-reminder reports exactly the changes whose diffs were prepared.")
-
 (defun mevedel-reminders--diffable-change-p (change)
   "Return non-nil when edited-file CHANGE is reported with a diff."
   (and (eq 'modified (plist-get change :status))
@@ -1264,8 +1274,9 @@ reminder reports exactly the changes whose diffs were prepared.")
        (<= (length (or (plist-get change :new) ""))
            mevedel-reminders-edited-file-max-diff-bytes)))
 
-(defun mevedel-reminders-prepare-edited-files (fsm continuation)
-  "Call CONTINUATION with FSM once its edited-file diffs are prepared.
+(defun mevedel-reminders-prepare-edited-files (owner continuation)
+  "Call CONTINUATION with OWNER once its edited-file diffs are prepared.
+OWNER is a gptel state machine, request or agent invocation.
 
 The `edited-file' reminder reports external changes with unified diffs,
 and a diff is a helper process.  Waiting for one inside the dispatch
@@ -1277,7 +1288,7 @@ reminder from them.  A dispatch with nothing to diff continues at once.
 Return nil when CONTINUATION has already run.  Otherwise return a
 cancellation function: it stops the pending diffs, guarantees
 CONTINUATION never runs, and returns non-nil when it stopped a wait."
-  (let* ((buffer (plist-get (gptel-fsm-info fsm) :buffer))
+  (let* ((buffer (plist-get (mevedel-engine-info owner) :buffer))
          (session (and (buffer-live-p buffer)
                        (buffer-local-value 'mevedel--session buffer)))
          (cache (and session
@@ -1296,7 +1307,7 @@ CONTINUATION never runs, and returns non-nil when it stopped a wait."
            (let ((mevedel-reminders--prepared-edits
                   (cons (cons cache (cons changes diffs))
                         mevedel-reminders--prepared-edits)))
-             (funcall continuation fsm)))
+             (funcall continuation owner)))
          (next ()
            (if (null pending)
                (finish)
@@ -1312,7 +1323,7 @@ CONTINUATION never runs, and returns non-nil when it stopped a wait."
                           (when diff (push (cons change diff) diffs))
                           (next)))))))))
       (if (not cache)
-          (progn (funcall continuation fsm) nil)
+          (progn (funcall continuation owner) nil)
         (next)
         (unless done
           (lambda ()
@@ -1320,6 +1331,20 @@ CONTINUATION never runs, and returns non-nil when it stopped a wait."
               (setq done t)
               (when (functionp cancel) (funcall cancel))
               t)))))))
+
+(defun mevedel-reminders-retain-edited-files (owner continuation)
+  "Prepare OWNER's edited-file diffs, then call CONTINUATION with no arguments.
+For an engine that composes its prompt after an asynchronous startup, the
+prepared diffs stay on OWNER until `mevedel-reminders-collect' uses them.
+Return the cancellation function of `mevedel-reminders-prepare-edited-files'."
+  (mevedel-reminders-prepare-edited-files
+   owner
+   (lambda (owner)
+     (when mevedel-reminders--prepared-edits
+       (setf (mevedel-engine-info owner)
+             (plist-put (mevedel-engine-info owner) :mevedel-prepared-edits
+                        mevedel-reminders--prepared-edits)))
+     (funcall continuation))))
 
 (defun mevedel-reminders--prepared-changes (cache)
   "Return (CHANGES . DIFFS) prepared for CACHE in this dispatch, or nil."

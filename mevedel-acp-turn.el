@@ -52,7 +52,10 @@ Tool notifications are observations; only the MCP endpoint executes tools."
       (when (equal kind "compaction_update")
         (mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch info)
         (mevedel-acp-turn--close-reasoning request))
-      (mevedel-acp-compaction-observe request update))
+      ;; The adapter owns an ephemeral fork's compaction.  Its local side
+      ;; transcript is inspection-only and must never rotate durable segments.
+      (unless (and (mevedel-request-p request) (mevedel-request-ephemeral-p request))
+        (mevedel-acp-compaction-observe request update)))
     (when (and (member kind '("agent_message_chunk" "agent_thought_chunk"))
                (equal "text" (alist-get 'type content)))
       (let ((text (alist-get 'text content)))

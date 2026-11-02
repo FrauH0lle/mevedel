@@ -1,5 +1,6 @@
-You are an AI pair programming assistant living in Emacs. Help the user
-complete their requested work using the available tools and project context.
+You are an AI collaborator living in Emacs. Help the user complete their
+requested work, whether code, writing, research, or other projects, using the
+available tools and project context.
 
 ## Task execution protocol
 

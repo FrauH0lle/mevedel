@@ -1,12 +1,19 @@
 # Module layer map
 
+Memory and journal modules below implement the [curated-memory](memory-curated.md),
+[review](memory-review.md), [decision/application/recovery](memory-recovery.md),
+[shared-note lifecycle](memory-notes.md) and [journal](memory-journal.md) contracts.
+
 ```
 Entry point
   mevedel.el                  foundational data, command autoloads, install/uninstall, directives
+  mevedel-evil.el             opt-in Evil states, surface bindings, visual selection and replacement scope bridge
 
 Data model
   mevedel-structs.el          passive workspace/session/request/task data shapes, invariants and shared buffer-local state
   mevedel-directive.el        directive mutation, lifecycle, plan invalidation, rewind
+  mevedel-instruction-edit.el line-mapped visited source buffer synchronization
+  mevedel-instruction-undo.el source geometry and deletion undo/redo without activity rewind
   mevedel-turn.el             request admission/cancellation and terminal settlement
   mevedel-workspace.el        workspace detection, registry, and state lookup
   mevedel-workspace-identity.el project-owned durable workspace identity
@@ -32,13 +39,15 @@ Data model
   mevedel-memory-reference.el bounded, dated workspace-path reference observations
   mevedel-memory-investigation.el request-local Read/Glob/Grep scope, budgets, and cancellation
   mevedel-memory-review.el    bounded sessionless consolidation request and validated reply
+  mevedel-memory-cycle.el     target-clock finite shared-note cohort admission and authenticated attempt recovery
   mevedel-memory-pass.el      consolidation gates, admission, settlement, and checked auto apply
-  mevedel-memory-notes.el     shared working-note readiness, capture, housekeeping, and checked byte-preserving disposal
+  mevedel-working-note-files.el bounded shared-note observations, mtime eligibility, and heading discovery
+  mevedel-memory-notes.el     shared working-note capture, housekeeping, and checked permanent disposal
   mevedel-memory-store.el     private pass evidence, accepted proposals, and review publication
   mevedel-memory-cleanup.el   completed-review retention dependencies and expiry candidates
-  mevedel-memory-decision.el  immutable decisions, application, activation recovery, and rejection evidence
+  mevedel-memory-decision.el  owned proposal transactions, publication, inspection, and recovery
   mevedel-memory-apply.el     complete topic/index and instruction transaction preparation
-  mevedel-memory-write.el     durable before/after intents, shared-root ownership, and checked rollback
+  mevedel-memory-write.el     private decision intents, shared-root ownership, and checked rollback
   mevedel-memory-library.el   current topic inventory and structured user deletion
   mevedel-memory-list.el      candidates/memories/history cockpit, diffs, decisions, recovery
   mevedel-hooks.el            project/user/skill/agent hook loading + runner
@@ -58,12 +67,14 @@ Data model
   mevedel-execution-telemetry.el safe execution facts and profiler adaptation
   mevedel-sandbox.el          optional Bubblewrap child-process confinement
   mevedel-sandbox-grants.el   FD-backed grant mounts and the protected-path mount plan
+  mevedel-pin.el              symlink-refusing opens and writes of authorized tool paths
   mevedel-telemetry.el        append-only lifecycle events and profiler capture
   mevedel-telemetry-usage.el  frozen per-provider-call identity and normalized usage
   mevedel-plan.el             lifecycle-neutral plan data and artifacts
   mevedel-plan-handoff.el     durable accepted-plan preparation and kickoff
   mevedel-permission-mode.el  mode normalization, effective request/invocation projection, session transitions
   mevedel-permission-rules.el rule parsing, matching, buckets, resource grants
+  mevedel-permission-origin.el workspace-relative grant origin, containment and usable-authority projection
   mevedel-permission-persistence.el target-aware authority store codec
   mevedel-permissions.el      permission preflight and 8-step decision facade
   mevedel-tool-permission.el permission-step orchestration, hooks, prompts, logging
@@ -134,6 +145,7 @@ Chat / view
   mevedel-view-control-transfer.el cooperative transfer polling, presentation, and commands
   mevedel-view-disclosure.el  source-backed transcript disclosure state and actions
   mevedel-view-prepare.el     deferred large-tool parsing, source validation, job lifecycle
+  mevedel-activity-group.el   activity-group rule shared by the view and browser
   mevedel-view-render.el      transcript projection, source mapping, live navigation
   mevedel-view-segments.el    historical session segment projection and navigation
   mevedel-view-stream.el      request progress, view animation timer, streaming redraws
@@ -168,6 +180,7 @@ Chat / view
   mevedel-view-path.el        deferred target path verification and memoization
   mevedel-view-table.el       rendered pipe tables and window realignment
   mevedel-cockpit.el          shared tabulated cockpit surface plumbing
+  mevedel-window.el           temporary surface display, origin and exact frame restoration
   mevedel-report.el           read-only sections, memory navigation, report windows
   mevedel-subscription-usage.el session-owned quota report, freshness and cancellation
   mevedel-subscription-usage-provider.el isolated Codex HTTP and native Claude ACP quota retrieval
@@ -179,7 +192,7 @@ Chat / view
   mevedel-worktree.el         Git worktrees, status/list surfaces, fork plumbing
   mevedel-instruction-registry.el workspace instruction buckets, IDs, links
   mevedel-overlays.el         instruction geometry, tags, context, prompts
-  mevedel-directive-source.el directive anchor/presentation lifecycle
+  mevedel-directive-source.el directive anchor/presentation lifecycle and command-scoped instruction replacement
   mevedel-overlay-ui.el       instruction overlay actions and rendering
   mevedel-mentions.el         @ref and @file mention expansion
   mevedel-directive-persistence.el  workspace directive record codec
@@ -240,6 +253,7 @@ Turn engines (Claude Code through ACP and MCP)
   mevedel-claude-code-backend.el provider type, model catalog, installation settings (executable/adapter/directory), minimum CLI/adapter versions and version parser, autoloaded engine dispatch
   mevedel-claude-code.el      guided setup, launch preflight and isolated ACP launch
   mevedel-claude-code-session.el root, directive and shared-item sends and persisted external conversation references
+  mevedel-claude-code-btw.el  ephemeral native history fork, side dispatch and deletion lifecycle
   mevedel-claude-code-agent.el retained-child subscription dispatch, sample limits and native history references
   mevedel-claude-code-history.el native history state, divergence and excerpt recovery
   mevedel-claude-code-context.el native context receipts, compaction restoration and full-context continuation
@@ -270,7 +284,8 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-editing.el     SharedCreate/Edit/SaveImage tools, shared:// views
   mevedel-tool-skills.el      Skill and ListSkills tool schemas
   mevedel-tool-introspect.el  EmacsDescribe/EmacsFind/EmacsManual introspection
-  mevedel-buddy.el            edit recording, diff assembly, review requests
+  mevedel-buddy.el            edit recording, diff assembly, briefs, review requests
+  mevedel-buddy-feed.el       /buddy: feed a session's plan, Goal, or exchange to Buddy
   mevedel-buddy-note.el       ephemeral note overlays and their model tools
   mevedel-tools.el            complete tool registration + stable discovery catalog
   mevedel-tools-list.el       native tools cockpit list

@@ -27,6 +27,47 @@
                byte-compile-current-file))
           "helpers"))
 
+(defmacro test-mevedel-tool-web--with-held-timeouts (&rest body)
+  "Run BODY with request timeout delivery controlled by `expire-request'.
+The HTTP peer calls it after accepting the request that should expire.  Keep
+the requested timeout budget but remove the race with connection/redirect I/O."
+  (declare (indent 0) (debug t))
+  `(let (held-timeouts released-timeouts)
+     (cl-letf* ((schedule (symbol-function 'run-at-time))
+                ((symbol-function 'run-at-time)
+                 (lambda (seconds repeat function &rest args)
+                   (let* ((hold (eql seconds mevedel-tool-web--timeout))
+                          (timer (apply schedule (if hold 60 seconds) repeat function args)))
+                     (when hold (push timer held-timeouts))
+                     timer))))
+       (cl-labels ((expire-request ()
+                     (let ((timer (cl-find-if
+                                   (lambda (candidate)
+                                     (and (not (memq candidate released-timeouts))
+                                          (memq candidate (default-toplevel-value 'timer-list))))
+                                   (reverse held-timeouts))))
+                       (unless timer (error "No pending request timeout"))
+                       (push timer released-timeouts)
+                       (cancel-timer timer)
+                       (timer-set-time timer (current-time))
+                       (timer-activate timer))))
+         (unwind-protect (progn ,@body)
+           (mapc #'cancel-timer held-timeouts))))))
+
+(mevedel-deftest test-mevedel-tool-web--with-held-timeouts
+  (:doc "expires the next live timeout through host delivery, skipping cancelled requests")
+  (let ((mevedel-tool-web--timeout 0.1) cancelled-called called second-called)
+    (test-mevedel-tool-web--with-held-timeouts
+      (cancel-timer (run-at-time 0.1 nil (lambda () (setq cancelled-called t))))
+      (run-at-time 0.1 nil (lambda () (setq called t)))
+      (run-at-time 0.1 nil (lambda () (setq second-called t)))
+      (should-not called)
+      (expire-request)
+      (expire-request)
+      (mevedel-test--await 5 "controlled timeout delivery" (and called second-called))
+      (should-not cancelled-called)
+      (should-error (expire-request) :type 'error))))
+
 
 ;;
 ;;; Registration
@@ -163,9 +204,8 @@
      (list :tool (mevedel-tool-get name "mevedel-web") :args args :name name)
      (lambda (result) (push result results))
      (lambda (error) (ert-fail error)))
-    (let ((deadline (+ (float-time) 4)))
-      (while (and (not results) (< (float-time) deadline))
-        (accept-process-output nil 0.01)))
+    ;; This watchdog covers real connection/redirect progress, not tool latency.
+    (mevedel-test--await 10 "web handler result" results)
     (should (= 1 (length results)))
     (car results)))
 
@@ -342,20 +382,26 @@
        (should (string-prefix-p "Error:" (plist-get result :result))))))
 
   :doc "a redirected request that never answers times out and releases buffers"
-  (let ((mevedel-tool-web--timeout 0.1) (before (buffer-list)))
-    (mevedel-test-http
+  (let ((mevedel-tool-web--timeout 0.1) (before (buffer-list)) requests)
+    (test-mevedel-tool-web--with-held-timeouts
+     (mevedel-test-http
      (lambda (request)
-       (when (string-match-p " /redirect " request)
-         '("302 Found" "Location: /hang\r\n" "")))
+       (push request requests)
+       (if (string-match-p " /redirect " request)
+           '("302 Found" "Location: /hang\r\n" "")
+         (should (string-match-p " /hang " request))
+         (expire-request)
+         nil))
      (lambda (base)
        (let ((result (test-mevedel-tool-web--call
                       "WebFetch" (list :url (concat base "/redirect")))))
          (should (eq 'error (plist-get result :handler-status)))
          (should (string-match-p "timed out" (plist-get result :result))))
+       (should (= 2 (length requests)))
        (dolist (buffer (buffer-list))
          (unless (memq buffer before)
            (should-not (with-current-buffer buffer
-                         (bound-and-true-p url-callback-arguments)))))))))
+                         (bound-and-true-p url-callback-arguments))))))))))
 
 (mevedel-deftest mevedel-tool-web--retrieve ()
   ,test
@@ -771,7 +817,8 @@ display URL and snippet all link to DuckDuckGo's redirect for URL."
         (mevedel-tool-web--search-queue nil)
         (mevedel-tool-web--timeout 0.1)
         results requests)
-    (mevedel-test-http
+    (test-mevedel-tool-web--with-held-timeouts
+     (mevedel-test-http
      (lambda (request) (push request requests) nil)
      (lambda (base)
        (let ((mevedel-tool-web--search-url (concat base "/?q=")))
@@ -781,16 +828,21 @@ display URL and snippet all link to DuckDuckGo's redirect for URL."
          (setq mevedel-tool-web--search-url (concat base "/wrong?q="))
          (should (= 2 mevedel-tool-web--search-active))
          (should (= 1 (length mevedel-tool-web--search-queue)))
-         (let ((deadline (+ (float-time) 4)))
-           (while (and (< (length results) 3) (< (float-time) deadline))
-             (accept-process-output nil 0.01)))
+         ;; Both peers must receive their request before either can expire;
+         ;; otherwise cancelling one socket can hide its delayed server input.
+         (mevedel-test--await 10 "first two search requests" (= 2 (length requests)))
+         (expire-request)
+         (expire-request)
+         (mevedel-test--await 10 "queued search request" (= 3 (length requests)))
+         (expire-request)
+         (mevedel-test--await 10 "search timeout results" (= 3 (length results)))
          (should (= 3 (length results)))
          (should (= 3 (length requests)))
          (should (cl-every (lambda (request)
                              (string-prefix-p "GET /?q=hang " request)) requests))
          (should (cl-every (lambda (result) (eq 'error (plist-get result :status))) results))
          (should (zerop mevedel-tool-web--search-active))
-         (should-not mevedel-tool-web--search-queue))))))
+         (should-not mevedel-tool-web--search-queue)))))))
 
 (defun test-mevedel-tool-web--page-text (html base)
   "Return WebFetch's readable text for HTML fetched from BASE."
@@ -1042,12 +1094,15 @@ display URL and snippet all link to DuckDuckGo's redirect for URL."
   :doc "each YouTube stage settles errors, malformed replies and timeouts without leaks"
   (dolist (stage '(watch metadata captions))
     (dolist (failure '(http malformed timeout))
-      (let ((mevedel-tool-web--timeout 0.1)
+      ;; Deliver timeout callbacks only once the intended stage was accepted.
+      ;; HTTP/malformed cases keep their real request/response path too.
+      (let ((mevedel-tool-web--timeout 1.0)
             (before (buffer-list))
             (timers-before (copy-sequence timer-list))
             (requests 0))
         (ert-info ((format "%s/%s" stage failure))
-          (mevedel-test-http
+          (test-mevedel-tool-web--with-held-timeouts
+           (mevedel-test-http
            (lambda (request)
              (cl-incf requests)
              (let ((current (cond ((string-prefix-p "GET /watch?" request) 'watch)
@@ -1057,7 +1112,7 @@ display URL and snippet all link to DuckDuckGo's redirect for URL."
                    (pcase failure
                      ('http '("500 Internal Server Error" "" "failed"))
                      ('malformed '("200 OK" "" "not valid content"))
-                     ('timeout nil))
+                     ('timeout (expire-request) nil))
                  (pcase current
                    ('watch '("200 OK" "" "{\"INNERTUBE_API_KEY\":\"key\"}"))
                    ('metadata
@@ -1081,7 +1136,7 @@ display URL and snippet all link to DuckDuckGo's redirect for URL."
                  (should-not (with-current-buffer buffer
                                (bound-and-true-p url-callback-arguments)))))
              (dolist (timer timer-list)
-               (should (memq timer timers-before))))))))))
+               (should (memq timer timers-before)))))))))))
 
 (mevedel-deftest mevedel-tool-web--yt-parse-captions ()
   ,test

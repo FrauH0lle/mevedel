@@ -941,6 +941,83 @@
                    "/ssh:dev@target:/home/dev/.mevedel/permissions.el")
                   :type 'user-error)))
 
+(mevedel-deftest mevedel-permission-persistence-load-safe-env-vars ()
+  ,test
+  (test)
+  :doc "merges both stores' safe variables and keeps them when rules are saved"
+  (let* ((dir (make-temp-file "mevedel-safe-env-" t))
+         (mevedel-user-dir (file-name-concat dir "user"))
+         (ws (mevedel-workspace--create :type 'project :root dir))
+         (global (mevedel-permission-persistence-file ws 'global))
+         (local (mevedel-permission-persistence-file ws 'workspace)))
+    (unwind-protect
+        (progn
+          (mevedel-permission-persistence-write-store
+           global '(:rules nil :resource-grants nil :safe-env-vars ("CHECK_BASE")))
+          (make-directory (file-name-directory local) t)
+          (with-temp-file local
+            (prin1 '(:rules nil :resource-grants nil
+                     :safe-env-vars ("CHECK_BASE" "MAKEFLAGS_QUIET"))
+                   (current-buffer)))
+          (should (equal '("CHECK_BASE" "MAKEFLAGS_QUIET")
+                         (mevedel-permission-persistence-load-safe-env-vars ws)))
+          (mevedel-permission-persistence-save-rule
+           ws '("Bash" :pattern "make check" :action allow))
+          (should (equal '("CHECK_BASE" "MAKEFLAGS_QUIET")
+                         (plist-get (mevedel-permission-persistent-authority
+                                     ws 'workspace)
+                                    :safe-env-vars)))
+          (should (equal '(("Bash" :pattern "make check" :action allow))
+                         (plist-get (mevedel-permission-persistent-authority
+                                     ws 'workspace)
+                                    :rules))))
+      (delete-directory dir t)))
+  :doc "an invalid variable name disables the store and names the entry"
+  (let* ((dir (make-temp-file "mevedel-safe-env-bad-" t))
+         (mevedel-user-dir (file-name-concat dir "user"))
+         (ws (mevedel-workspace--create :type 'project :root dir))
+         (local (mevedel-permission-persistence-file ws 'workspace)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory local) t)
+          (with-temp-file local
+            (prin1 '(:rules (("Bash" :pattern "make" :action allow))
+                     :resource-grants nil
+                     :safe-env-vars ("OK" "NOT OK"))
+                   (current-buffer)))
+          (should-not (mevedel-permission-persistence-load-safe-env-vars ws))
+          (should-not (mevedel-permission-persistence-load-rules ws))
+          (should (string-match-p
+                   ":safe-env-vars"
+                   (plist-get (mevedel-permission--read-store-file-uncached
+                               local (mevedel-permission--workspace-target ws) dir)
+                              :reason))))
+      (delete-directory dir t))))
+
+(mevedel-deftest mevedel-permission-remove-persistent-safe-env-var ()
+  ,test
+  (test)
+  :doc "removes one name from the selected store and keeps its other entries"
+  (let* ((dir (make-temp-file "mevedel-safe-env-remove-" t))
+         (mevedel-user-dir (file-name-concat dir "user"))
+         (ws (mevedel-workspace--create :type 'project :root dir))
+         (rule '("Bash" :pattern "make" :action allow))
+         (store `(:rules (,rule) :resource-grants nil :safe-env-vars ("A" "B"))))
+    (unwind-protect
+        (progn
+          (mevedel-permission-persistence-write-store
+           (mevedel-permission-persistence-file ws 'global) store)
+          (mevedel-permission-persistence-write-store
+           (mevedel-permission-persistence-file ws 'workspace) store)
+          (mevedel-permission-remove-persistent-safe-env-var ws 'global "A")
+          (should (equal `(:rules (,rule) :resource-grants nil :safe-env-vars ("B"))
+                         (mevedel-permission-persistent-authority ws 'global)))
+          (mevedel-permission-remove-persistent-safe-env-var ws 'global "B")
+          (should (equal `(:rules (,rule) :resource-grants nil)
+                         (mevedel-permission-persistent-authority ws 'global)))
+          (should (equal store (mevedel-permission-persistent-authority ws 'workspace))))
+      (delete-directory dir t))))
+
 (mevedel-deftest mevedel-permission-persistence-write-store ()
   ,test
   (test)

@@ -421,7 +421,8 @@ empty.  Return nil when no unambiguous instruction is found."
           (setq map (make-hash-table)
                 map-key lookup-key))
         (when-let* ((instr (gethash target-id map)))
-          (when (buffer-live-p (overlay-buffer instr))
+          (when (and (buffer-live-p (overlay-buffer instr))
+                     (= target-id (mevedel--instruction-id instr)))
             (cl-return-from mevedel--instruction-with-id instr)))
         (setq map (make-hash-table))
         (mevedel--foreach-instruction instr

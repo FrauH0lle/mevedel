@@ -12,8 +12,15 @@ remembering before settling it.
 
 Reusable approval stores network and filesystem requirements on a
 recognized single-segment Bash pattern or exact Eval expression. Compound Bash
-commands keep their generalized operation rules, but bind the profile to the
-complete command so one segment cannot inherit another segment's capability.
+commands keep their generalized operation rules and bind a remembered profile
+to the complete command. A later compound command also receives the direct
+profiles of its segments when every segment that is not read-only is allowed by
+a direct rule; a segment that no direct rule allows never inherits another
+segment's capability. A wildcard in a Bash allow rule stands only for ordinary
+arguments: it never covers a separator, pipe, background `&`, parentheses,
+backticks or `$(`, so such syntax is granted only by a rule that spells it out.
+Leading assignments to listed safe environment variables are ignored when
+rules match.
 Each direct profile authorizes its own paths for matching executions. A later
 matching `use_default` invocation automatically receives the union of its direct
 approved profiles without companion resource grants. Independent path authority
@@ -36,6 +43,34 @@ non-reusable commands default to no remembered paths and require explicit
 selection of independent access. A selected path is stored in only one scope.
 Disabling command remembering clears command-scoped paths and network authority
 without converting them to independent grants.
+
+Workspace-persistent profiles and independent resource grants may use literal
+workspace-relative exact paths, bare or prefixed with `./`; `.` or `./` names
+the workspace root. Absolute/home-relative paths, global and session exact-path
+syntax, and tool `:path` globs retain their existing semantics. Relative grants
+carry a private runtime `:workspace-origin` record binding the store-owning
+canonical, target-qualified workspace root and relative spelling. Only marked
+entries write back as `./…`. Empty paths, any `..` component, foreign target or
+resource prefixes, and symlink components below that root are rejected.
+
+Bounded and ordinary absolute entries at the same path remain separate grant
+identities through union, remembering, promotion, revocation, and cockpit
+selection. Coverage transfers the authorizing grant's bound to the effective
+launch grant instead of leaving an unrestricted requested-path copy. Workspace
+remembering creates no redundant bounded session copy, and immediate queued
+rechecks use the updated persistent store. Frozen authority retains origin;
+permission files and durable session authority do not serialize it. A changed
+child or worktree cwd never re-anchors the source store's grants. External
+linked-worktree metadata still requires separate authority.
+
+Usability and containment checks precede pure matching. Native consumption
+rechecks the authorized canonical path without promising atomicity against
+concurrent filesystem replacement. Sandbox preparation rechecks the bound
+before canonical-path and inode capture; later replacement uses the existing
+descriptor-pinned launch seam. A malformed entry rejects its entire store with
+one precise warning per file version, not a partially usable profile.
+Transient filesystem ineligibility instead removes only the unusable grant
+from runtime authority; it does not erase configuration or unrelated denies.
 
 Target replacement strips filesystem entries from session profiles and invalidated
 frozen authority alongside session resource grants. It preserves command and
@@ -70,6 +105,14 @@ or replay a process. A model must still issue a new invocation when it discovers
 a capability that no matching approved profile contains. The complete
 effective profile is resolved before spawn, and a child that may have started
 is never retried automatically.
+
+Failed confined compound Bash results may identify a segment's unattached direct
+filesystem allow profile when denial output mentions its path. Launch-time facts
+survive yielding and polling; covered capabilities, delegated rules, unusable
+grants, success and unrelated errors produce no hint. Bounded excerpts explain
+segment matching without diagnosing causality, attaching segment authority,
+prompting, or replaying. Recovery remains separate calls or a fresh explicit,
+justified authority request after inspecting prior effects.
 
 ## Rationale and consequences
 
@@ -229,3 +272,59 @@ itself. Preparation is idempotent, so fallback shows the reviewed scope. Hooks
 keep the original request. A real confined Git fixture verifies one reviewed
 invocation staging through the prepared metadata tree, while a nested
 repository's metadata stays unwritable and no grant persists.
+
+### Preserve workspace-relative profile origin
+
+The October 2026 portable-grant change extends workspace-store I/O rather than
+making every exact path relative. A relative entry expanded into an ordinary
+absolute grant would lose its containment intent when profile union or coverage
+reused it. Copying that authority into session rules would also outlive a
+workspace-store revocation and discard the source needed for correct writeback.
+
+Profiles and independent grants therefore retain runtime origin through reuse,
+frozen snapshots, and launch preparation, and workspace remembering relies on
+the persistent store rather than installing redundant bounded session copies.
+Absolute and relative grants remain separate identities even at the same path.
+The durable format stores only relative spelling, never private origin records;
+session resume reloads persistent-derived authority. See
+[ADR 0096](0096-bind-each-session-to-one-execution-target.md) for store anchoring
+and target ownership. These bounds supplement the existing descriptor-pinned
+sandbox seam; they do not promise atomic native filesystem operations.
+
+### Segment profiles and argument-only wildcards
+
+An October 2026 review of 62 session permission logs (about 106,000 decisions,
+96 human prompts) found that this repository's `npx @emacs-eask/cli *` profile
+rarely matched how agents ran Eask, and a reproduction through
+`mevedel-bash-policy-check-permission` and the profile resolver showed why the
+opposite failure was also possible. Rule wildcards became `.*`, so the rule
+matched `npx @emacs-eask/cli test && rm -rf build` as a whole: Ask allowed the
+dangerous compound without a prompt, and the `rm` segment ran with the npm
+cache write grant. The same held for `git add:*`, for `$(...)` and backticks
+inside one segment, and for a background `&`. This contradicted the decision
+above that one segment never inherits another's capability.
+
+Allow-rule wildcards for Bash now match a copy of the command whose unquoted
+separators, pipes, background `&`, parentheses and command substitutions
+(also inside double quotes) are masked, so they cover ordinary arguments only.
+Deny and ask rules keep matching any text, because over-matching there only
+restricts. The Ask decision for ordinary compounds also treats read-only
+segments as needing no rule, as the dangerous-compound branch already did.
+
+Requiring one rule to cover every segment would have kept prompting for
+`npx ... test && git add ...` even after the user had approved both commands.
+The chosen union matches Codex, which leaves its sandbox only when every parsed
+segment is allowed by its policy, possibly by different rules
+(`codex-rs/core/src/exec_policy.rs`). Claude Code also checks wildcard rules
+per subcommand, never against a compound command, but applies sandbox paths and
+domains globally to every command (`src/tools/BashTool/bashPermissions.ts`,
+`src/utils/sandbox/sandbox-adapter.ts`), which is broader than this union.
+
+Ten logged `CHECK_BASE=... npx ...` calls prompted only because of the
+assignment. Following Claude Code's allow-list, leading assignments to a
+built-in list of harmless variables, or to names in a store's `:safe-env-vars`,
+are ignored for rule matching and classification when their values are plain
+text. A block-list was rejected: variables such as `GIT_SSH_COMMAND`,
+`NODE_OPTIONS` or `BASH_ENV` run code, and a new one would silently match an
+allow rule. Deny checks and Plan and protected-path decisions still see the
+command as written.

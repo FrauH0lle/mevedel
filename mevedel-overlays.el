@@ -62,12 +62,14 @@
 ;; `mevedel-directive-source'
 (declare-function mevedel--create-directive-in
                   "mevedel-directive-source"
-                  (buffer start end &optional bodyless directive-text))
+                  (buffer start end &optional bodyless directive-text span))
 (declare-function mevedel--create-reference-in
-                  "mevedel-directive-source" (buffer start end))
+                  "mevedel-directive-source" (buffer start end &optional span))
 (declare-function mevedel--delete-instruction
                   "mevedel-directive-source"
                   (instruction &optional buffer))
+(declare-function mevedel--delete-source-missing-directive
+                  "mevedel-directive-source" (record workspace))
 (declare-function mevedel--detached-directive-p
                   "mevedel-directive-source" (directive))
 (declare-function mevedel--directive-record
@@ -89,10 +91,10 @@
                   "mevedel-directive-source" (directive request))
 (declare-function mevedel--set-directive-status
                   "mevedel-directive-source" (directive status))
+(declare-function mevedel--subdirective-owner
+                  "mevedel-directive-source" (directive &optional workspace))
 
 ;; `mevedel-instruction-registry'
-(declare-function mevedel--clear-instruction-state
-                  "mevedel-instruction-registry" (&optional workspace))
 (declare-function mevedel--instruction-activate-buffer
                   "mevedel-instruction-registry" (&optional buffer))
 (declare-function mevedel--instruction-activate-workspace
@@ -151,6 +153,7 @@
 (declare-function mevedel-directive-subdirectives
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-subdirective-request "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-view-composer'
@@ -342,37 +345,105 @@ deleted.  Throw a user error if no instructions to delete were found."
     (when (> deleted-count 0)
       (message "Deleted %d instruction%s" deleted-count (if (> deleted-count 1) "s" "")))))
 
+(defun mevedel--delete-all-instructions-of-type (type interactivep)
+  "Delete instructions of TYPE in the current workspace.
+TYPE is `reference', `directive', or nil for both.  INTERACTIVEP requests
+confirmation and offers inclusion of Source-missing directive records.
+Return the deleted count; Source-missing records count once each, without
+contributing to the buffer count.  Archived records are never deleted."
+  (let* ((workspace (mevedel--instruction-buffer-workspace (current-buffer)))
+         (mevedel--instruction-state-key-override
+          (mevedel--instruction-workspace-key workspace))
+         (instructions
+          (progn
+            ;; Reopened external sources must keep the registry's owner,
+            ;; rather than resolving a different workspace from their path.
+            (dolist (entry (copy-sequence (mevedel--instruction-alist)))
+              (when (stringp (car entry))
+                (mevedel--restore-file-instructions (car entry) nil workspace)))
+            (seq-filter
+             (lambda (instruction)
+               (or (null type)
+                   (eq type (overlay-get instruction 'mevedel-instruction-type))))
+             (mevedel--all-instructions))))
+         (missing
+          (when (and workspace (not (eq type 'reference)))
+            (seq-filter
+             (lambda (record)
+               (eq 'source-missing
+                   (plist-get (mevedel-directive-anchor record) :state)))
+             (mevedel-workspace-directives workspace))))
+         (noun (symbol-name (or type 'instruction)))
+         (buffer-count (length (delete-dups (mapcar #'overlay-buffer instructions)))))
+    (when missing
+      (setq missing
+            (when (and interactivep
+                       (let ((query-replace-map (copy-keymap query-replace-map)))
+                         (define-key query-replace-map (kbd "RET") 'skip)
+                         (define-key query-replace-map [return] 'skip)
+                         (y-or-n-p
+                          (format "Include %d Source-missing directive%s as well (default no)? "
+                                  (length missing)
+                                  (if (= 1 (length missing)) "" "s")))))
+              missing)))
+    (let* ((count (+ (length instructions) (length missing)))
+           (summary (format "%d %s%s in %d buffer%s"
+                            count noun (if (= count 1) "" "s")
+                            buffer-count (if (= buffer-count 1) "" "s"))))
+      ;; Match single deletion's activity guard before making any changes.
+      (dolist (record (append missing
+                              (delq nil (mapcar #'mevedel--directive-record
+                                                (seq-filter #'mevedel--directivep
+                                                            instructions)))))
+        (when (mevedel-directive-has-activity-p record)
+          (user-error "Archive directives with activity")))
+      (when interactivep
+        (when (zerop count)
+          (user-error "No %ss to delete" noun))
+        (unless (y-or-n-p (format "Delete %s in %s? " summary
+                                 (if workspace "the current workspace"
+                                   "the shared global bucket")))
+          (user-error "Aborted")))
+      (dolist (instruction instructions)
+        ;; Deleting a parent already deletes its nested directives.
+        (unless (overlay-get instruction 'mevedel-marked-for-deletion)
+          (mevedel--delete-instruction instruction)))
+      (dolist (record missing)
+        (mevedel--delete-source-missing-directive record workspace))
+      (when (memq mevedel--highlighted-instruction instructions)
+        (setq mevedel--highlighted-instruction nil))
+      (unless (zerop count)
+        (message "Deleted %s" summary))
+      count)))
+
+;;;###autoload
 (defun mevedel-delete-all-instructions ()
-  "Delete all mevedel instructions across all buffers."
+  "Delete references and visible directives in the current workspace.
+All buffers in that workspace are included.  Without a workspace, operate
+on the shared global bucket of all buffers without a workspace instead.
+Interactively, confirm counts and offer Source-missing directives too,
+defaulting to no.  Archived directives remain; activity requires archiving."
   (interactive)
-  (mevedel--instruction-activate-buffer)
-  (let ((instr-count (length (mevedel--all-instructions))))
-    (when (and (called-interactively-p 'any)
-               (zerop instr-count))
-      (user-error "No instructions to delete"))
-    (when (and (called-interactively-p 'any)
-               instr-count
-               (not (y-or-n-p "Are you sure you want to delete all instructions?")))
-      (user-error "Aborted")))
-  (let ((buffer-count 0)
-        (deleted-instr-count 0))
-    (mevedel--foreach-instruction instr
-      with buffer-hash = (make-hash-table)
-      unless (gethash (overlay-buffer instr) buffer-hash)
-      do (progn
-           (puthash (overlay-buffer instr) t buffer-hash)
-           (cl-incf buffer-count))
-      do (progn
-           (mevedel--delete-instruction instr)
-           (cl-incf deleted-instr-count)))
-    (when (not (zerop deleted-instr-count))
-      (message "Deleted %d mevedel instruction%s in %d buffer%s"
-               deleted-instr-count
-               (if (= 1 deleted-instr-count) "" "s")
-               buffer-count
-               (if (= 1 buffer-count) "" "s"))))
-  (mevedel--clear-instruction-state
-   (mevedel--instruction-buffer-workspace (current-buffer))))
+  (mevedel--delete-all-instructions-of-type nil (called-interactively-p 'any)))
+
+;;;###autoload
+(defun mevedel-delete-all-references ()
+  "Delete references in all buffers of the current workspace, with confirmation.
+Without a workspace, operate on the shared global bucket of all buffers
+without a workspace instead.  Leave directive records and presentations intact."
+  (interactive)
+  (mevedel--delete-all-instructions-of-type 'reference (called-interactively-p 'any)))
+
+;;;###autoload
+(defun mevedel-delete-all-directives ()
+  "Delete visible directives and their subdirectives in the current workspace.
+All buffers in that workspace are included.  Without a workspace, operate
+on the shared global bucket of all buffers without a workspace instead.
+Interactively, offer Source-missing records once (default no), then confirm
+counts.  Archived directives remain; activity requires archiving.
+Leave references intact."
+  (interactive)
+  (mevedel--delete-all-instructions-of-type 'directive (called-interactively-p 'any)))
 
 (defun mevedel-next-instruction ()
   "Cycle through instructions in the forward direction."
@@ -863,12 +934,13 @@ A directive is empty if it does not have a body or secondary directives."
                     (not (string-empty-p request)))
                   requests))))
 
-(defun mevedel--create-instruction (type)
+(defun mevedel--create-instruction (type &optional span)
   "Create or scale an instruction of the given TYPE within the region.
 
 If a region is selected but partially covers an existing instruction,
 then the function will resize it.  See either `mevedel-create-reference'
-or `mevedel-create-directive' for details on how the resizing works."
+or `mevedel-create-directive' for details on how the resizing works.
+SPAN, when non-nil, explicitly selects `line' or `char' geometry."
   ;; A directive's durable record is anchored to a file: without one it
   ;; can never be reattached after a load, and archiving or detaching it
   ;; would write a record that no longer loads at all.
@@ -895,6 +967,7 @@ or `mevedel-create-directive' for details on how the resizing works."
                   (if (> (mark) (point))
                       (setf (overlay-start instruction) (point))
                     (setf (overlay-end instruction) (point))))
+                (when span (overlay-put instruction 'mevedel-span span))
                 (mevedel--update-instruction-overlay instruction))
               (when instructions
                 (deactivate-mark)))
@@ -912,7 +985,7 @@ or `mevedel-create-directive' for details on how the resizing works."
                  (instruction (if (eq type 'reference)
                                   (mevedel--create-reference-in buffer
                                                                 (region-beginning)
-                                                                (region-end))
+                                                                (region-end) span)
                                 (mevedel-view-call-preserving-window-configuration
                                  (lambda ()
                                    ;; Minibuffer input can yield to chat redraws.
@@ -925,7 +998,8 @@ or `mevedel-create-directive' for details on how the resizing works."
                                                                  (- (window-end) (window-start))))))
                                      (mevedel--create-directive-in buffer
                                                                    (region-beginning)
-                                                                   (region-end))))))))
+                                                                   (region-end)
+                                                                   nil nil span)))))))
             (with-current-buffer buffer
               (deactivate-mark)
               (when (eq type 'reference)
@@ -1081,7 +1155,11 @@ If OF-TYPE is non-nil, returns the parent with the given type."
                                  (and (mevedel--detached-directive-p instruction)
                                       (mevedel--detached-directive-p instr)))
                                 (<= (overlay-start instr) beg
-                                    end (overlay-end instr))))
+                                    end (overlay-end instr))
+                                ;; Equal ranges can result from replacement.
+                                ;; Neither is the other's geometric parent.
+                                (or (< (overlay-start instr) beg)
+                                    (< end (overlay-end instr)))))
                          (mevedel--instructions-in beg end))))))
 
 (defun mevedel--bodyless-instruction-p (instr)
@@ -1135,20 +1213,6 @@ itself."
                        (string-lessp (overlay-get a 'mevedel-uuid)
                                      (overlay-get b 'mevedel-uuid)))))))))
 
-
-(defun mevedel--instructions-congruent-p (a b)
-  "Return t if instruction overlays A and B are congruent.
-Two overlays are considered congruent if they are in the same buffer and
-have identical start and end positions.
-
-A, B: Two overlays to compare for congruence.
-
-Returns: t if A and B are congruent, nil otherwise."
-  (and (eq (overlay-buffer a) (overlay-buffer b))
-       (= (overlay-start a) (overlay-start b))
-       (= (overlay-end a) (overlay-end b))
-       (not (and (mevedel--detached-directive-p a)
-                 (mevedel--detached-directive-p b)))))
 
 (defun mevedel--instruction-bufferlevel-p (instruction)
   "Return t if INSTRUCTION spans the entirety of its buffer."
@@ -1220,6 +1284,23 @@ If PRED is non-nil, then the best instruction must also satisfy it.  The
 PRED must be a function which accepts an instruction."
   (unless instruction
     (cl-return-from mevedel--topmost-instruction nil))
+  ;; Durable directive ownership outlives source geometry.  Replacements can
+  ;; make parent and detail presentations coextensive without changing owner.
+  (when (eq of-type 'directive)
+    (when-let* ((owner (mevedel--subdirective-owner instruction))
+                (parent
+                 (with-current-buffer (overlay-buffer instruction)
+                   ;; Registry lookup can hydrate this file recursively while
+                   ;; its restored presentations are still being rendered.
+                   (save-restriction
+                     (widen)
+                     (cl-find (mevedel-directive-id (car owner))
+                              (overlays-in (point-min) (point-max))
+                              :key (lambda (overlay)
+                                     (overlay-get overlay 'mevedel-uuid))
+                              :test #'equal)))))
+      (cl-return-from mevedel--topmost-instruction
+        (and (or (null pred) (funcall pred parent)) parent))))
   (with-current-buffer (overlay-buffer instruction)
     (let ((best-instruction instruction))
       (cl-labels ((parent-instr (instr)

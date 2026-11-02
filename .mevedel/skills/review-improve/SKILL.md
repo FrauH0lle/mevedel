@@ -91,7 +91,8 @@ checks after each correction batch:
 1. Run `git diff --check`.
 2. Run `npx @emacs-eask/cli clean elc` before tests.
 3. Run focused tests for every touched behavior.
-4. Run proportionate broader tests and `npx @emacs-eask/cli compile`.
+4. Run the affected tier, `python3 test/run_tests.py --affected`, and
+   `npx @emacs-eask/cli compile`; the full suite belongs before merge.
 5. Resolve diagnostics in touched files; do not hide failing checks.
 
 After fixes and validation, run the dedicated `verifier` agent with its existing

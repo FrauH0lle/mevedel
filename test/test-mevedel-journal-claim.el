@@ -12,6 +12,11 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-journal-claim)
+(require 'mevedel-journal-expiry-test-support
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-journal-expiry-test-support"))
+(require 'mevedel-session-control-fs)
 
 (mevedel-deftest mevedel-journal-claim-acquire ()
   ,test
@@ -184,16 +189,15 @@
   :doc "prunes expired settled attempts while preserving referenced and newest claims"
   (let ((directory (make-temp-file "mevedel-claim-prune-" t)))
     (unwind-protect
-        (let* ((first (mevedel-journal-claim-acquire directory 3))
+        (let* ((first (mevedel-journal-claim-acquire directory 120))
                (_ (mevedel-journal-claim-settle first 'completed ""))
-               (second (mevedel-journal-claim-acquire directory 3))
+               (second (mevedel-journal-claim-acquire directory 120))
                (_ (mevedel-journal-claim-settle second 'completed "retained proof"))
                (current (mevedel-journal-claim-acquire directory 120)))
-          (while (< (mevedel-session-control-fs-target-time directory)
-                    (plist-get second :expires-at))
-            (sleep-for 0.02))
-          (should (= 1 (iter-do (_ (mevedel-journal-claim-prune
-                                    directory (list (plist-get second :generation)) 200)))))
+          (should (= 0 (iter-do (_ (mevedel-journal-claim-prune directory nil 200)))))
+          (mevedel-test-journal-with-expired-claims (list first second)
+            (should (= 1 (iter-do (_ (mevedel-journal-claim-prune
+                                      directory (list (plist-get second :generation)) 200))))))
           (should-not (mevedel-journal-claim-settle first 'completed "late"))
           (should (equal "retained proof" (plist-get (mevedel-journal-claim-outcome second) :payload)))
           (should (equal current (mevedel-journal-claim-current directory)))
@@ -226,7 +230,7 @@
   :doc "an acquirer paused before its locked check cannot reuse a pruned generation"
   (let ((directory (make-temp-file "mevedel-claim-delayed-" t)))
     (unwind-protect
-        (let* ((first (mevedel-journal-claim-acquire directory 3))
+        (let* ((first (mevedel-journal-claim-acquire directory 120))
                (_ (mevedel-journal-claim-settle first 'completed ""))
                (run (symbol-function 'mevedel-session-control-fs-run-program))
                paused winner)
@@ -234,14 +238,15 @@
                      (lambda (operations &optional lock)
                        (when (and (not paused) (eq 'verify-latest (plist-get (car operations) :op)))
                          (setq paused t)
-                         (let ((second (mevedel-journal-claim-acquire directory 3)))
+                         (let ((second (mevedel-journal-claim-acquire directory 120)))
                            (mevedel-journal-claim-settle second 'completed "")
-                           (while (< (mevedel-session-control-fs-target-time directory) (plist-get second :expires-at))
-                             (sleep-for 0.02))
                            (setq winner (mevedel-journal-claim-acquire directory 120))
-                           (should (= 2 (iter-do (_ (mevedel-journal-claim-prune directory nil 200)))))))
+                           (should (= 0 (iter-do (_ (mevedel-journal-claim-prune directory nil 200)))))
+                           (mevedel-test-journal-with-expired-claims (list first second)
+                             (should (= 2 (iter-do (_ (mevedel-journal-claim-prune directory nil 200))))))))
                        (funcall run operations lock))))
             (should-not (mevedel-journal-claim-acquire directory 120)))
+          (should paused)
           (should (equal winner (mevedel-journal-claim-current directory)))
           (should (= 1 (length (directory-files directory nil "\\.claim\\'"))))
           (should (= 3 (plist-get winner :generation))))

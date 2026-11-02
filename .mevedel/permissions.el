@@ -2,43 +2,34 @@
 ;; Auto-generated, safe to edit
 
 (:rules
- (("Bash" :pattern "npx @emacs-eask/cli *" :network t :file-system
-   ((:path "~/.npm" :access write :recursive t)) :action allow)
-  ("Bash" :pattern "git add:*" :action allow)
+ (("Bash" :pattern "npx @emacs-eask/cli *" :file-system
+   ((:path "~/.npm" :access write :recursive t)
+    (:path "~/.eask" :access write :recursive t))
+   :action allow)
+  ("Bash" :pattern "npx --offline @emacs-eask/cli *" :file-system
+   ((:path "~/.npm" :access write :recursive t)
+    (:path "~/.eask" :access write :recursive t))
+   :action allow)
+  ("Bash" :pattern "git add:*" :file-system
+   ((:path "./.git" :access write :recursive t)) :action allow)
+  ("Bash" :pattern "git commit:*" :file-system
+   ((:path "./.git" :access write :recursive t)) :action allow)
+  ("Bash" :pattern "git worktree add:*" :file-system
+   ((:path "./.git" :access write :recursive t)) :action allow)
   ("Bash" :pattern "git diff:*" :action allow)
   ("Bash" :pattern "git status:*" :action allow)
   ("Bash" :pattern "git log:*" :action allow)
-  ("Bash" :pattern "npx --offline @emacs-eask/cli compile --help"
-   :sandbox-permissions require-escalated :action allow)
-  ("Bash" :pattern
-   "npx --offline @emacs-eask/cli compile mevedel-view-fontify.el mevedel-transport.el && npx --offline @emacs-eask/cli clean elc"
-   :sandbox-permissions require-escalated :action allow)
-  ("Bash" :pattern
-   "npx @emacs-eask/cli clean elc && npx @emacs-eask/cli test ert test/test-mevedel-turn-ownership.el && npx @emacs-eask/cli test ert test/test-mevedel-turn.el && npx @emacs-eask/cli test ert test/test-mevedel-presets.el && npx @emacs-eask/cli test ert test/test-mevedel-chat.el && npx @emacs-eask/cli test ert test/test-mevedel-directive-request.el"
-   :sandbox-permissions require-escalated :action allow)
-  ("Bash" :pattern
-   "npx @emacs-eask/cli clean elc && npx @emacs-eask/cli test ert test/test-mevedel-view-render-reentry.el test/test-mevedel-view-render.el test/test-mevedel-view-stream.el test/test-mevedel-view-agent-reminders.el test/test-mevedel-view-segments.el"
-   :sandbox-permissions require-escalated :action allow)
-  ("Bash" :pattern "git -C .scratch/upstream/gptel pull --ff-only" :network t
-   :file-system
-   ((:path "~/Projekte/mevedel/.scratch/upstream/gptel" :access write :recursive
-           t))
-   :action allow)
-  ("Bash" :pattern "git -C .scratch/upstream/gptel pull --ff-only" :network t
-   :file-system
-   ((:path "~/Projekte/mevedel/.scratch/upstream/gptel/.git" :access write
-     :recursive t)
-    (:path "~/Projekte/mevedel/.scratch/upstream/gptel" :access write :recursive
-           t))
-   :action allow)
-  ("Bash" :pattern "git fetch:*" :network t :file-system
-   ((:path "~/.ssh" :access read :recursive t)) :action allow)
   ("Bash" :pattern "git fetch:*" :network t :file-system
    ((:path "~/.ssh" :access read :recursive t)
-    (:path "~/Projekte/mevedel/.git" :access write :recursive t)
-    (:path "~/.ssh" :access read :recursive t))
+    (:path "./.git" :access write :recursive t))
+   :action allow)
+  ("Bash" :pattern "git -C .scratch/upstream/gptel pull --ff-only" :network t
+   :file-system
+   ((:path "./.scratch/upstream/gptel" :access write :recursive t)
+    (:path "./.scratch/upstream/gptel/.git" :access write :recursive t))
    :action allow))
  :resource-grants
  ((:path "~/.mevedel/skills" :access read)
   (:path "~/.agents/skills" :access read)
-  (:path "~/ccs" :access read :recursive t)))
+  (:path "~/ccs" :access read :recursive t))
+ :safe-env-vars ("CHECK_BASE"))

@@ -111,6 +111,70 @@
 ;;
 ;;; Rule matching
 
+(mevedel-deftest mevedel-permission--match-command-grant ()
+  ,test
+  (test)
+  :doc "wildcards cover ordinary arguments, never syntax that runs another command"
+  (pcase-dolist (`(,pattern ,command ,expected)
+                 '(("npx a *" "npx a test" t)
+                   ("npx a *" "npx a eval '(load \"x\"); (y)'" t)
+                   ("npx a *" "npx a $'x;y'" t)
+                   ("npx a *" "npx a test \\; rm b" t)
+                   ("npx a *" "npx a test 2>&1" t)
+                   ("npx a *" "npx a test &>log" t)
+                   ("npx a *" "npx a test && rm b" nil)
+                   ("npx a *" "npx a test; rm b" nil)
+                   ("npx a *" "npx a test | sh" nil)
+                   ("npx a *" "npx a test\nrm b" nil)
+                   ("npx a *" "npx a test & rm b" nil)
+                   ("npx a *" "npx a $(rm b)" nil)
+                   ("npx a *" "npx a \"$(rm b)\"" nil)
+                   ("npx a *" "npx a `rm b`" nil)
+                   ("npx a *" "npx a (rm b)" nil)
+                   ("npx a *" "npx a $'\\''; rm b '" nil)
+                   ("npx a *" "npx a \\>& rm b" nil)
+                   ("npx a *" "NPX a test" nil)
+                   ("git add:*" "git add" t)
+                   ("git add:*" "git add x" t)
+                   ("git add:*" "git addx" nil)
+                   ("git add:*" "git add x; rm y" nil)
+                   ("make -j$(nproc) *" "make -j$(nproc) all" t)
+                   ("cd * && make" "cd sub && make" t)
+                   ("cd * && make" "cd $(rm b) && make" nil)))
+    (should (eq expected
+                (and (mevedel-permission--match-command-grant pattern command) t)))))
+
+(mevedel-deftest mevedel-permission-rules-strip-safe-assignments ()
+  ,test
+  (test)
+  :doc "removes plain leading assignments to listed names from each segment"
+  (pcase-dolist (`(,command ,expected)
+                 '(("A=1 cmd" "cmd")
+                   ("A=1 A=2 cmd x" "cmd x")
+                   ("A='a b' cmd" "cmd")
+                   ("A=\"a b\" cmd" "cmd")
+                   ("cd x && A=1 cmd" "cd x && cmd")
+                   ("A=1 B=2 cmd" "B=2 cmd")
+                   ("B=2 A=1 cmd" "B=2 A=1 cmd")
+                   ("a=1 cmd" "a=1 cmd")
+                   ("A=$(x) cmd" "A=$(x) cmd")
+                   ("A=\"$(x)\" cmd" "A=\"$(x)\" cmd")
+                   ("A=$HOME cmd" "A=$HOME cmd")
+                   ("A=1" "A=1")
+                   ("echo A=1" "echo A=1")))
+    (should (equal expected
+                   (mevedel-permission-rules-strip-safe-assignments
+                    command '("A")))))
+  :doc "leaves commands unchanged without names or a string"
+  (should (equal "A=1 cmd" (mevedel-permission-rules-strip-safe-assignments "A=1 cmd" nil)))
+  (should-not (mevedel-permission-rules-strip-safe-assignments nil '("A")))
+  :doc "scans a long assignment ending at a separator in linear time"
+  (let* ((command (concat "S=/" (make-string 24 ?a) "; ls"))
+         (start (float-time))
+         (result (mevedel-permission-rules-strip-safe-assignments command '("A"))))
+    (should (equal command result))
+    (should (< (- (float-time) start) 0.2))))
+
 (mevedel-deftest mevedel-permission-rules-find ()
   ,test
   (test)
@@ -240,7 +304,12 @@
   (should (mevedel-permission-rules--path-contained-p
            "/srv/tree/sub/file" "/srv/tree"))
   (should-not (mevedel-permission-rules--path-contained-p
-               "/srv/tree-old/file" "/srv/tree")))
+               "/srv/tree-old/file" "/srv/tree"))
+  :doc "a doubled leading slash names the same tree on either side"
+  (should (mevedel-permission-rules--path-contained-p "//srv/tree/file" "/srv/tree"))
+  (should (mevedel-permission-rules--path-contained-p "/srv/tree/file" "//srv/tree"))
+  (should (mevedel-permission-rules-path-in-allowed-roots-p
+           "//srv/tree/file" '("/srv/tree/"))))
 
 (mevedel-deftest mevedel-permission-rules-path-protected-p ()
   ,test
@@ -253,6 +322,34 @@
   (let ((mevedel-protected-paths '(("~/.ssh/**" . inaccessible))))
     (should (mevedel-permission-rules-path-protected-p
              (expand-file-name "~/.ssh"))))
+  :doc "a doubled leading slash cannot escape an inaccessible home rule"
+  (let ((mevedel-protected-paths '(("~/.ssh/**" . inaccessible)
+                                   ("/srv/secret/**" . inaccessible))))
+    (should (mevedel-permission-rules-path-protected-p
+             (concat "/" (expand-file-name "~/.ssh/id_ed25519")) nil 'read))
+    (should (mevedel-permission-rules-path-protected-p "//srv/secret/key" nil 'read)))
+  :doc "a workspace symlink or quoted name reaching a protected tree is protected"
+  (let* ((top (file-truename (make-temp-file "mevedel-protected-link-" t)))
+         (outside (file-name-concat top "outside"))
+         (ws (file-name-concat top "ws"))
+         (mevedel-protected-paths `((,(concat outside "/.ssh/**") . inaccessible))))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat outside ".ssh") t)
+          (make-directory ws)
+          (write-region "DECOY" nil (file-name-concat outside ".ssh/key") nil 'silent)
+          (make-symbolic-link (file-name-concat outside ".ssh") (file-name-concat ws "s"))
+          (should (mevedel-permission-rules-path-protected-p
+                   (file-name-concat ws "s/key") nil 'read))
+          ;; A missing tail below the link is still inside the tree.
+          (should (mevedel-permission-rules-path-protected-p
+                   (file-name-concat ws "s/new") nil 'read))
+          (should (mevedel-permission-rules-path-protected-p
+                   (concat "/:" outside "/.ssh/key") nil 'read))
+          ;; Control: an ordinary workspace path stays unprotected.
+          (should-not (mevedel-permission-rules-path-protected-p
+                       (file-name-concat ws "plain") nil 'read)))
+      (delete-directory top t)))
   :doc "read access respects the protection level"
   (let ((mevedel-protected-paths '(("**/.git/**" . read-only)
                                    ("**/.ssh/**" . inaccessible))))

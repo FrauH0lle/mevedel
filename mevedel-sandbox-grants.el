@@ -2,9 +2,9 @@
 
 ;;; Commentary:
 
-;; Compiles authorized file and directory-tree grants into FD-backed Bubblewrap
-;; mounts, and lays them out against the protected-path restrictions in one
-;; mount plan.  Symlink grants retain their host source path, every link hop,
+;; Compiles authorized grants into identity-checked Bubblewrap mounts, and lays
+;; them out against protected-path restrictions in one mount plan.  Symlink
+;; grants retain their host source path, every link hop,
 ;; and the canonical mount target so protected parent masks can be rebuilt
 ;; without broadening the granted resource.
 
@@ -57,8 +57,8 @@
                 (if target-prefix (concat target-prefix "/") "/")))))
     (nreverse links)))
 
-(defun mevedel-sandbox--target-identity (path)
-  "Return PATH's device and inode as the target's own `stat' reports them.
+(defun mevedel-sandbox--target-stat (path)
+  "Return PATH's identity and device-node flag from the target's `stat'.
 
 The launcher compares this pair with `stat' output taken from an already
 open descriptor on the target, so the recorded pair must come from the same
@@ -71,30 +71,45 @@ device number for remote files, which never matches the target."
       (signal 'mevedel-sandbox-policy-error
               '("Exact filesystem identity requires 'stat'")))
     (with-temp-buffer
-      (let ((status (process-file stat nil t nil "-Lc" "%d:%i"
+      (let ((status (process-file stat nil t nil "-Lc" "%d:%i:%f"
                                   (file-local-name expanded)))
-            identity)
-        (setq identity (string-trim (buffer-string)))
+            output)
+        (setq output (string-trim (buffer-string)))
         (unless (and (integerp status) (zerop status)
-                     (string-match-p "\\`[0-9]+:[0-9]+\\'" identity))
+                     (string-match "\\`\\([0-9]+:[0-9]+\\):\\([0-9a-fA-F]+\\)\\'" output))
           (signal 'mevedel-sandbox-policy-error
                   (list
                    (format "Cannot establish exact filesystem identity: %s"
                            path))))
-        identity))))
+        (list :identity (match-string 1 output)
+              :device-p (memq (logand (string-to-number (match-string 2 output) 16)
+                                     #o170000)
+                              '(#o020000 #o060000)))))))
 
 (defun mevedel-sandbox--resolve-filesystem-permissions
     (permissions &optional inaccessible-paths restrictions)
   "Return PERMISSIONS with canonical paths and original source paths.
 Directory bind mounts expose descendants.  Refuse an exact directory rather
-than silently widening it; an explicitly approved tree subsumes exact grants.
+than silently widening it; an approved tree subsumes ordinary exact grants.
 RESTRICTIONS are the concrete launch protection boundaries.
 Exact directory reads outside INACCESSIBLE-PATHS need no additional mount:
 the base read-only filesystem already allows them."
   (delq nil (mapcar
              (lambda (grant)
-               (let ((path (plist-get grant :path))
+               ;; One spelling for every prefix comparison and mount:
+               ;; `//run/user' is `/run/user' to the kernel.
+               (let ((path (mevedel-collapse-leading-slashes (plist-get grant :path)))
                      (access (plist-get grant :access)))
+                 (unless (mevedel-permission-origin-valid-p grant)
+                   (signal 'mevedel-sandbox-policy-error
+                           (list (format "Workspace-relative filesystem grant is no longer contained: %S"
+                                         path))))
+                 ;; A quoted name escapes spelling-based protection and
+                 ;; would otherwise be dropped silently as an exact read.
+                 (when (and (stringp path) (file-name-quoted-p path))
+                   (signal 'mevedel-sandbox-policy-error
+                           (list (format "Quoted filesystem grant paths are not supported: %S"
+                                         path))))
                  (unless (and (stringp path)
                               (file-name-absolute-p path)
                               (file-exists-p path))
@@ -108,26 +123,48 @@ the base read-only filesystem already allows them."
                  (if (and (file-directory-p path) (not (plist-get grant :recursive)))
                      (when (or (eq access 'write)
                                (mevedel-permission-rules-path-in-allowed-roots-p
-                                (file-truename path) inaccessible-paths))
+                                (mevedel-file-truename path) inaccessible-paths))
                        (signal 'mevedel-sandbox-policy-error
                                (list (format
                                       "Exact directory access cannot be confined: %s; select a recursive directory scope in the permission prompt"
                                       path))))
                    (let* ((resolved (copy-sequence grant))
-                          (canonical (file-truename path))
-                          (identity (mevedel-sandbox--target-identity canonical)))
+                          (canonical (mevedel-file-truename path))
+                          (attributes (mevedel-sandbox--target-stat canonical))
+                          (identity (plist-get attributes :identity))
+                          (device-p (plist-get attributes :device-p)))
+                     ;; A read-only mount does not prevent writes or ioctls on
+                     ;; a device.  Never turn a read grant into device access.
+                     (when device-p
+                       (unless (eq access 'write)
+                         (signal 'mevedel-sandbox-policy-error
+                                 (list (format "Read-only device access cannot be confined: %s; request explicit write access"
+                                               path))))
+                       (setq resolved (plist-put resolved :device-p t)))
                      (setq resolved (plist-put resolved :source-path path))
                      (setq resolved
                            (plist-put resolved :symlinks
                                       (mevedel-sandbox--symlink-chain path)))
                      (setq resolved (plist-put resolved :identity identity))
+                     ;; Resolution may yield to another writer.  Do not accept
+                     ;; a new outside snapshot captured after the first check.
+                     (unless (mevedel-permission-origin-valid-p grant canonical)
+                       (signal 'mevedel-sandbox-policy-error
+                               (list (format "Workspace-relative filesystem grant changed during resolution: %S"
+                                             path))))
                      (plist-put resolved :path canonical)))))
              (cl-remove-if
               (lambda (grant)
                 (and (not (plist-get grant :recursive))
                      (mevedel-execution-grants-covering-grant
                       (plist-get grant :path) (plist-get grant :access)
-                      permissions t nil restrictions)))
+                      permissions t nil restrictions)
+                     ;; A directory bind keeps nodev and cannot supply a
+                     ;; device grant, even when its path authority covers it.
+                     (or (not (file-exists-p (plist-get grant :path)))
+                         (not (plist-get
+                               (mevedel-sandbox--target-stat (plist-get grant :path))
+                               :device-p)))))
               permissions))))
 
 (defun mevedel-sandbox--grant-paths (grant)
@@ -144,14 +181,19 @@ the base read-only filesystem already allows them."
 
 (defun mevedel-sandbox--additional-filesystem-mounts
     (grants &optional first-fd)
-  "Return FD-backed mount arguments for normalized filesystem GRANTS.
+  "Return mount arguments for normalized filesystem GRANTS.
 FIRST-FD defaults to 10."
   (cl-loop for grant in grants
            for fd from (or first-fd 10)
-           append (list (if (eq (plist-get grant :access) 'write)
-                            "--bind-fd"
-                          "--ro-bind-fd")
-                        (number-to-string fd) (plist-get grant :path))))
+           append (if (plist-get grant :device-p)
+                      ;; Ordinary binds add nodev.  Bubblewrap resolves this
+                      ;; descriptor to a path; verify the mounted node too.
+                      (list "--dev-bind" (format "/proc/self/fd/%d" fd)
+                            (plist-get grant :path))
+                    (list (if (eq (plist-get grant :access) 'write)
+                              "--bind-fd"
+                            "--ro-bind-fd")
+                          (number-to-string fd) (plist-get grant :path)))))
 
 (defun mevedel-sandbox--grant-identity (grant)
   "Return the target-native device/inode identity recorded in GRANT."
@@ -161,6 +203,37 @@ FIRST-FD defaults to 10."
       (signal 'mevedel-sandbox-policy-error
               (list "Filesystem grant lacks an exact identity")))
     identity))
+
+(defun mevedel-sandbox--device-grant-command (command grants workdir)
+  "Verify mounted device GRANTS and close their source FDs before COMMAND.
+WORKDIR selects the target's Bash and stat.  Bubblewrap's path-based
+device bind lacks its FD-based mount's identity check and descriptor cleanup."
+  (if (not (cl-some (lambda (grant) (plist-get grant :device-p)) grants))
+      command
+    (let* ((default-directory workdir)
+           (remote (file-remote-p workdir))
+           (bash (executable-find "bash" remote))
+           (stat (executable-find "stat" remote)))
+      (unless (and bash stat)
+        (signal 'mevedel-sandbox-policy-error
+                '("Device confinement requires 'bash' and 'stat'")))
+      (let ((checks
+             (cl-loop for grant in grants for fd from 10
+                      when (plist-get grant :device-p)
+                      collect
+                      (format
+                       (concat "actual=$(%s -Lc '%%d:%%i' -- %s 2>&1) || "
+                               "export MEVEDEL_SANDBOX_GRANT_FAILURE=1; "
+                               "if [ \"$actual\" != %s ]; then "
+                               "export MEVEDEL_SANDBOX_GRANT_FAILURE=1; fi; "
+                               "exec %d<&-")
+                       (shell-quote-argument stat)
+                       (shell-quote-argument (file-local-name (plist-get grant :path)))
+                       (shell-quote-argument (mevedel-sandbox--grant-identity grant)) fd))))
+        (append (list bash "-p" "-c"
+                      (string-join (append checks '("exec \"$@\"")) "; ")
+                      "mevedel-sandbox-devices")
+                command)))))
 
 (defun mevedel-sandbox--fd-backed-command
     (command grants &optional mask-fds workdir)
@@ -264,8 +337,11 @@ backing private empty file masks."
                                  protected-paths))
                       (funcall grant-paths grant)))
            grants))
+         (later (cl-set-difference grants ancestors :test #'eq))
+         ;; Parent directory mounts must not cover a later exact device bind.
          (ordered (append ancestors
-                          (cl-set-difference grants ancestors :test #'eq)))
+                          (cl-remove-if (lambda (grant) (plist-get grant :device-p)) later)
+                          (cl-remove-if-not (lambda (grant) (plist-get grant :device-p)) later)))
          (ancestor-mounts
           (mevedel-sandbox--additional-filesystem-mounts ancestors))
          (later-mounts

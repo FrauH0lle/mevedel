@@ -63,8 +63,13 @@ jobs:
       timeout-minutes: 6
       run: |
         sudo apt-get update -o Acquire::Retries=3
-        sudo apt-get -y install ripgrep bubblewrap
+        sudo apt-get -y install ripgrep bubblewrap locales
         sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+    - name: Provision German UTF-8 locale for control filesystem tests
+      run: |
+        sudo locale-gen de_DE.UTF-8
+        test "$(LC_ALL=de_DE.UTF-8 locale charmap)" = UTF-8
 
     - name: Verify ripgrep and Bubblewrap
       run: |
@@ -97,9 +102,16 @@ jobs:
         python3 test/test_run_tests.py
         python3 -m unittest test/test_check.py
         python3 -m unittest test/test_check_standards.py
+        python3 -m unittest test/test_graphical_check_private_kwin.py
 
     - name: Check execution spool worker
       run: python3 -m unittest test/test_execution_spool.py
+
+    - name: Check fetch-only Git SSH broker
+      run: python3 -m unittest test/test_git_ssh.py
+
+    - name: Check Landlock socket launcher
+      run: python3 -m unittest test/test_landlock.py
 
     - name: Check compilation and tests
       if: matrix.test-lane == 'partitioned'

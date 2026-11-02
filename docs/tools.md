@@ -116,6 +116,13 @@ pipeline sequences the standard cross-cutting steps; handlers contain no
 boilerplate for validation, hooks, permissions, snapshots, or
 persistence.
 
+An asynchronous handler may return `(:cancel FUNCTION)` to register call-local
+cleanup. Cancellation invokes that zero-argument function before settling the
+pipeline, even if cancellation arrives during handler startup. A completed
+handler owns its own cleanup; late cancellation cannot retire a successor call.
+This is distinct from cancelling the surrounding provider request: MCP can
+cancel a single pending call while that request continues.
+
 Interactive pipelines yield between steps for pending input, their elapsed-time
 budget, or after eight nested runner frames. The stack bound also applies across
 nested tool pipelines, leaving room for result rendering and gptel transitions.
@@ -481,6 +488,10 @@ Provider schemas lower it to an ordinary JSON string and append the guidance
 resource addresses use a separate path-or-resource contract, so a recognized
 `scheme://` address is not rejected as a web URL and ordinary paths retain
 their current behavior.
+Ordinary paths of either type are canonicalized before authorization, symlinks
+included, and the handler receives that canonical path. A Read, Grep or Glob
+through a workspace symlink is therefore authorized, and performed, on the
+file it reaches.
 
 Code-navigation tools keep filesystem access in Emacs buffers, so Imenu and
 Tree-sitter operate on remote files through the active file handler. Remote
@@ -1107,7 +1118,9 @@ ordinary output bound; a failed or incomplete scan never permits direct executio
 Bubblewrap capability probes are cached independently per execution target.
 Local probes use the short `mevedel-sandbox-probe-timeout`; remote probes use
 `mevedel-sandbox-remote-probe-timeout` (10 seconds by default) so transport
-latency does not silently disable best-effort confinement.
+latency does not silently disable best-effort confinement. A successful local
+probe also caches the kernel's Landlock ABI, which decides whether confined
+commands get the [host socket restriction](permissions.md#child-confinement).
 
 All operating-system children receive deterministic defaults for UTF-8 locale,
 no color, terminal mode, and pagers, plus `MEVEDEL_EXECUTION=1`. An invocation

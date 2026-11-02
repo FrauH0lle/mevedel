@@ -4,8 +4,11 @@
 ;;; Code:
 (require 'helpers (file-name-concat (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
 (require 'mevedel-view)
+;; Bare `mevedel-view-mode' buffers skip view setup, which loads these.
+(require 'mevedel-view-composer)
 (require 'mevedel-view-markdown)
 (require 'mevedel-view-render)
+(require 'mevedel-view-stream)
 
 (mevedel-deftest mevedel-view--realign-markdown/composer ()
                  ,test
@@ -73,12 +76,46 @@
                           (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
                           (should (= (point) (+ (mevedel-view--input-start) 4)))))))))
 
+(mevedel-deftest mevedel-view-table-decorate/layout-cache ()
+  ,test
+  (test)
+  :doc "a redraw keeps a laid-out table rendered; a new table still waits for idle"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (let ((draft "> draft\nsecond line"))
+        (mevedel-view-test--insert-data
+         data-buf "| First | Second |\n|---|---|\n| target | other |\n" 'response)
+        (with-current-buffer view-buf
+          (set-window-buffer (selected-window) view-buf)
+          (unwind-protect
+              (progn
+                (mevedel-view-test--insert-composer-draft draft 4)
+                (mevedel-view--full-rerender)
+                (should (string-search "| First | Second |" (buffer-string)))
+                (mevedel-view--realign-markdown)
+                (should (string-search "│ target │" (buffer-string)))
+                ;; Redraws reinsert raw source; the table stays rendered.
+                (mevedel-view--full-rerender)
+                (should (string-search "│ target │" (buffer-string)))
+                (should-not (string-search "| First | Second |" (buffer-string)))
+                (should (equal draft (mevedel-view--input-text)))
+                (should (= (point) (+ (mevedel-view--input-start) 4)))
+                ;; A table never laid out keeps the deferred first layout.
+                (mevedel-view-test--insert-data
+                 data-buf "\n| Other | Table |\n|---|---|\n| a | b |\n" 'response)
+                (mevedel-view--full-rerender)
+                (should (string-search "│ target │" (buffer-string)))
+                (should (string-search "| Other | Table |" (buffer-string)))
+                (should (equal draft (mevedel-view--input-text))))
+            (mevedel-view--cancel-realign-timer)))))))
+
 (mevedel-deftest mevedel-view-table-rerender/deferred ()
                  ,test
                  (test)
                  :doc "opens raw, formats one visible table, and discovers off-screen work on scroll"
                  (mevedel-test--with-displayed-buffer
                   (mevedel-view-mode)
+                  (mevedel-view-render-initialize)
                   (let ((inhibit-read-only t)
                         (source "| A | B |\n|---|---|\n| target | value |\n")
                         (draft "> draft\nsecond line\n"))
@@ -118,6 +155,7 @@
                  :doc "queued formatting resolves shifted table positions after the active writer"
                  (mevedel-test--with-displayed-buffer
                   (mevedel-view-mode)
+                  (mevedel-view-render-initialize)
                   (let ((inhibit-read-only t))
                     (unwind-protect
                         (progn
@@ -138,6 +176,7 @@
   (dolist (kind '(overlay property))
     (mevedel-test--with-displayed-buffer
       (mevedel-view-mode)
+      (mevedel-view-render-initialize)
       (let ((inhibit-read-only t)
             (source "| A | B |\n|---|---|\n| target | value |\n")
             hidden)
@@ -166,6 +205,7 @@
   :doc "partly folded tables still render their visible rows and preserve the fold"
   (mevedel-test--with-displayed-buffer
     (mevedel-view-mode)
+    (mevedel-view-render-initialize)
     (let ((inhibit-read-only t) hidden)
       (unwind-protect
           (progn
@@ -188,6 +228,7 @@
   :doc "pending input postpones formatting without losing the scheduled work"
                  (mevedel-test--with-displayed-buffer
                   (mevedel-view-mode)
+                  (mevedel-view-render-initialize)
                   (let ((inhibit-read-only t))
                     (unwind-protect
                         (progn

@@ -6,6 +6,7 @@
 
 ;;; Code:
 
+(require 'seq)
 (require 'mevedel-tool-fs-search)
 (require 'mevedel-structs)
 (require 'mevedel-skills-core)
@@ -160,24 +161,138 @@
                            :address "artifact://remote")))))))
       (delete-directory root t))))
 
-(defun test-mevedel-tool-fs-search--await-callback (fn args)
-  "Call async tool handler FN with ARGS and return its callback result."
-  (let ((done nil)
-        result
-        (deadline (+ (float-time) 5)))
+(defun test-mevedel-tool-fs-search--await-callback (fn args &optional gc-snapshot)
+  "Call async tool handler FN with ARGS and return its callback result.
+GC-SNAPSHOT optionally supplies the GC count and seconds as a cons."
+  (let* ((done nil)
+         result
+         (started (float-time))
+         ;; A completion watchdog, not a search latency assertion.  Let the
+         ;; tool's own timeout settle and report its result before failing here.
+         (deadline (+ started mevedel-tool-fs-search-timeout 10))
+         (gc-snapshot (or gc-snapshot (lambda () (cons gcs-done gc-elapsed))))
+         (gc-start (funcall gc-snapshot))
+         handler-returned)
     (funcall fn
              (lambda (value)
                (setq result value
                      done t))
              args)
+    (setq handler-returned (float-time))
     (while (and (not done)
                 (< (float-time) deadline))
       (accept-process-output nil 0.01))
     (unless done
-      (ert-fail "Timed out waiting for tool callback"))
+      (let ((gc-end (funcall gc-snapshot)))
+        (ert-fail
+       (format
+        (concat "Timed out waiting for tool callback: elapsed-seconds=%.3f"
+                " handler-return-seconds=%.3f gc-count-delta=%d gc-seconds-delta=%.3f"
+                " processes(max=10,name-max=80)=%S")
+        (- (float-time) started) (- handler-returned started)
+        (- (car gc-end) (car gc-start)) (- (cdr gc-end) (cdr gc-start))
+        (mapcar
+         (lambda (process)
+           (let ((name (process-name process)))
+             (list (substring name 0 (min 80 (length name)))
+                   (process-status process))))
+         (seq-take (seq-filter #'process-live-p (process-list)) 10))))))
     (should (and (proper-list-p result)
                  (plist-member result :result)))
     (plist-get result :result)))
+
+(mevedel-deftest test-mevedel-tool-fs-search--await-callback ()
+  ,test
+  (test)
+  :doc "outwaits the tool timeout with bounded failure-only diagnostics and safe late delivery"
+  (let ((clock 100.0)
+        (mevedel-tool-fs-search-timeout 20)
+        (gc-count 10)
+        (gc-seconds 2.0)
+        (waits 0)
+        (process-inspections 0)
+        pending)
+    (cl-letf (((symbol-function 'float-time) (lambda (&rest _) clock))
+              ((symbol-function 'accept-process-output)
+               (lambda (process seconds &rest _)
+                 (should-not process)
+                 (should (= seconds 0.01))
+                 (cl-incf waits)
+                 (setq clock 130.0 gc-count 12 gc-seconds 2.75)))
+              ((symbol-function 'process-list)
+               (lambda () (cl-incf process-inspections) (number-sequence 0 12)))
+              ((symbol-function 'process-live-p) (lambda (process) (> process 0)))
+              ((symbol-function 'process-name)
+               (lambda (process) (format "process-%d-%s" process (make-string 100 ?x))))
+              ((symbol-function 'process-status) (lambda (_) 'run)))
+      ;; Actual GC must not mutate the diagnostic scenario's synthetic counts.
+      (garbage-collect)
+      (let ((failure
+             (should-error
+              (test-mevedel-tool-fs-search--await-callback
+               (lambda (callback args)
+                 (should (eq args 'arguments))
+                 (setq pending callback clock 101.25))
+               'arguments (lambda () (cons gc-count gc-seconds)))
+              :type 'ert-test-failed)))
+        (should
+         (equal
+          (cadr failure)
+          (format
+           (concat "Timed out waiting for tool callback: elapsed-seconds=30.000"
+                   " handler-return-seconds=1.250 gc-count-delta=2 gc-seconds-delta=0.750"
+                   " processes(max=10,name-max=80)=%S")
+           (mapcar (lambda (process)
+                     (list (substring (format "process-%d-%s" process (make-string 100 ?x))
+                                      0 80)
+                           'run))
+                   (number-sequence 1 10)))))))
+    (should (= waits 1))
+    (should (= process-inspections 1))
+    ;; Late delivery does not depend on diagnostic bindings.
+    (funcall pending '(:result "late")))
+  :doc "returns an immediate callback result without waiting or inspecting processes"
+  (cl-letf (((symbol-function 'process-list)
+             (lambda () (ert-fail "Unexpected success-path diagnostics")))
+            ((symbol-function 'accept-process-output)
+             (lambda (&rest _) (ert-fail "Unexpected immediate-result wait"))))
+    (should
+     (equal "immediate"
+            (test-mevedel-tool-fs-search--await-callback
+             (lambda (callback _) (funcall callback '(:result "immediate"))) nil))))
+  :doc "returns a deferred callback result with the original polling interval"
+  (let ((clock 100.0) pending (waits 0))
+    (cl-letf (((symbol-function 'float-time) (lambda (&rest _) clock))
+              ((symbol-function 'process-list)
+               (lambda () (ert-fail "Unexpected success-path diagnostics")))
+              ((symbol-function 'accept-process-output)
+               (lambda (process seconds &rest _)
+                 (should-not process)
+                 (should (= seconds 0.01))
+                 (cl-incf waits)
+                 (setq clock 100.25)
+                 (funcall pending '(:result "deferred")))))
+      (should
+       (equal "deferred"
+              (test-mevedel-tool-fs-search--await-callback
+               (lambda (callback _) (setq pending callback)) nil))))
+    (should (= waits 1)))
+  :doc "still rejects a callback result without the required result field"
+  (should-error
+   (test-mevedel-tool-fs-search--await-callback
+    (lambda (callback _) (funcall callback '(:wrong "shape"))) nil)
+   :type 'ert-test-failed)
+  :doc "allows a loaded helper to settle after the old five-second watchdog"
+  (let ((clock 100.0) pending)
+    (cl-letf (((symbol-function 'float-time) (lambda (&rest _) clock))
+              ((symbol-function 'accept-process-output)
+               (lambda (&rest _)
+                 (setq clock 106.0)
+                 (funcall pending '(:result "No files found matching pattern")))))
+      (should
+       (equal "No files found matching pattern"
+              (test-mevedel-tool-fs-search--await-callback
+               (lambda (callback _) (setq pending callback clock 105.5)) nil))))))
 
 (defun test-mevedel-tool-fs-search--target-rg-wrapper (root)
   "Create a target-only `rg' wrapper under ROOT.

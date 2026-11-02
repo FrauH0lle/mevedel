@@ -48,6 +48,40 @@
           (cl-letf (((symbol-function 'executable-find) #'ignore))
             (should (equal expected
                            (mevedel-session-publication--files-sha256 files)))))
+      (delete-directory directory t)))
+
+  :doc "hashes from a deleted working directory and preserves relative path resolution"
+  (skip-unless (executable-find "sha256sum"))
+  (let* ((directory (make-temp-file "mevedel-sha-cwd-" t))
+         (working (file-name-concat directory "worktree"))
+         (source (file-name-concat directory "source"))
+         (bytes "Retained publication bytes\n")
+         (expected (list (secure-hash 'sha256 bytes)))
+         (call (symbol-function 'call-process))
+         (processes 0))
+    (unwind-protect
+        (progn
+          (make-directory working)
+          (write-region bytes nil source nil 'silent)
+          (cl-letf (((symbol-function 'call-process)
+                     (lambda (&rest args)
+                       (should (file-directory-p default-directory))
+                       (should-not (file-remote-p default-directory))
+                       (cl-incf processes)
+                       (apply call args)))
+                    ((symbol-function 'secure-hash)
+                     (lambda (&rest _) (error "Hashed in Lisp"))))
+            (let ((default-directory (file-name-as-directory working)))
+              (should (equal expected
+                             (mevedel-session-publication--files-sha256
+                              '("../source"))))
+              (delete-directory working)
+              (should (equal expected
+                             (mevedel-session-publication--files-sha256
+                              (list source))))
+              (should (equal default-directory
+                             (file-name-as-directory working)))))
+          (should (= 2 processes)))
       (delete-directory directory t))))
 
 (mevedel-deftest mevedel-session-publication--fixed-artifact-p ()
@@ -286,6 +320,33 @@ and its segment path."
       (when (file-directory-p local-root)
         (delete-directory local-root t))
       (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-session-publication-publish/deleted-working-directory ()
+  ,test
+  (test)
+  :doc "commits retained transcript bytes after the caller's worktree is removed"
+  (skip-unless (executable-find "sha256sum"))
+  (test-mevedel-session-publication--with-published
+   "publication-deleted-cwd" "mevedel-publication-deleted-cwd-" ?d
+   (lambda (session session-dir segment)
+     (let* ((working (make-temp-file "mevedel-removed-worktree-" t))
+            (old-head (plist-get (mevedel-session-publication session) :head))
+            (bytes "Transcript saved after worktree cleanup\n")
+            (raw (mevedel-session-artifacts-build-sidecar session (current-buffer))))
+       (delete-directory working)
+       (let ((default-directory (file-name-as-directory working)))
+         (should
+          (mevedel-session-publication-publish
+           session
+           (list (list :path segment :content bytes)
+                 (list :path (file-name-concat session-dir "session.meta.el")
+                       :content (mevedel-session-artifacts-printed-value raw)
+                       :commit-marker t)))))
+       (should-not (mevedel-session-pending-publication session))
+       (should-not (equal old-head
+                          (plist-get (mevedel-session-publication session) :head)))
+       (should (equal bytes (mevedel-session-artifacts-read-artifact
+                             session "segment-0001.chat.org" t)))))))
 
 (mevedel-deftest mevedel-session-publication-publish/checkpoint-retry (:quiet t)
   (test-mevedel-session-publication--with-published

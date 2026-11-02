@@ -160,6 +160,98 @@
     (mevedel-execution-scheduler-release reader-one)
     (mevedel-execution-scheduler-release reader-two)))
 
+(defun test-mevedel-execution-scheduler--yield-across-owners ()
+  "Check exclusive admission across owners and release on yield."
+  (let* ((root (make-temp-file "mevedel-scheduler-yield-" t))
+         (session (test-mevedel-execution-scheduler--session root))
+         (stop (file-name-concat root "stop"))
+         (first-path (file-name-concat root "first"))
+         (second-path (file-name-concat root "second"))
+         (mevedel-sandbox-mode 'off)
+         first second final record first-started second-started)
+    (unwind-protect
+        (progn
+          (mevedel-execution-start-bash
+           (lambda (value) (setq first value))
+           :session session :owner "main"
+           :command
+           (list "sh" "-c"
+                 "touch \"$1\"; while [ ! -e \"$2\" ]; do sleep .01; done"
+                 "scheduler-yield" first-path stop)
+           :workdir root :writable-roots (list root)
+           :artifact-directory (file-name-concat root "artifacts")
+           :yield-time-ms nil)
+          (setq first-started t)
+          (test-mevedel-execution-scheduler--wait
+           (lambda () (file-exists-p first-path)))
+          (maphash
+           (lambda (_id candidate) (setq record candidate))
+           (mevedel-execution--state-records
+            (mevedel-session-execution-state session)))
+          (should record)
+          (mevedel-execution-start-bash
+           (lambda (value) (setq second value))
+           :session session :owner "agent--scheduler"
+           :command (list "sh" "-c" "touch \"$1\""
+                          "scheduler-second" second-path)
+           :workdir root :writable-roots (list root)
+           :artifact-directory (file-name-concat root "artifacts")
+           :yield-time-ms nil)
+          (setq second-started t)
+          (should-not (file-exists-p second-path))
+          (mevedel-execution--yield-managed record)
+          (test-mevedel-execution-scheduler--wait
+           (lambda () (and first second (file-exists-p second-path))))
+          (should (eq 'running
+                      (plist-get (plist-get first :facts) :state)))
+          (with-temp-file stop)
+          (mevedel-execution-observe
+           session "main"
+           (plist-get (plist-get first :facts) :execution-id)
+           (lambda (value) (setq final value)) :wait-ms 5000)
+          (test-mevedel-execution-scheduler--wait (lambda () final)))
+      (unless (file-exists-p stop) (with-temp-file stop))
+      (when (and first-started (not first))
+        (test-mevedel-execution-scheduler--wait (lambda () first)))
+      (when (and (eq 'running (plist-get (plist-get first :facts) :state))
+                 (not final))
+        (mevedel-execution-observe
+         session "main" (plist-get (plist-get first :facts) :execution-id)
+         (lambda (value) (setq final value)) :wait-ms 5000)
+        (test-mevedel-execution-scheduler--wait (lambda () final)))
+      (when (and second-started (not second))
+        (test-mevedel-execution-scheduler--wait (lambda () second)))
+      (delete-directory root t))))
+
+(mevedel-deftest test-mevedel-execution-scheduler--yield-across-owners ()
+  ,test
+  (test)
+  :doc "preserves a pre-second failure without waiting for an unrequested callback"
+  (let ((starts 0) (waits 0))
+    (cl-letf (((symbol-function 'mevedel-execution-start-bash)
+               (lambda (callback &rest _)
+                 (cl-incf starts)
+                 (funcall callback '(:facts (:state completed)))))
+              ((symbol-function 'test-mevedel-execution-scheduler--wait)
+               (lambda (&rest _)
+                 (cl-incf waits)
+                 (if (= waits 1)
+                     (error "Injected pre-second failure")
+                   (error "Cleanup masked primary failure")))))
+      (should (equal '(error "Injected pre-second failure")
+                     (should-error
+                      (test-mevedel-execution-scheduler--yield-across-owners)))))
+    (should (= starts 1))
+    (should (= waits 1)))
+  :doc "does not wait for a callback when the first start signals before returning"
+  (cl-letf (((symbol-function 'mevedel-execution-start-bash)
+             (lambda (&rest _) (error "Injected first-start failure")))
+            ((symbol-function 'test-mevedel-execution-scheduler--wait)
+             (lambda (&rest _) (error "Cleanup masked start failure"))))
+    (should (equal '(error "Injected first-start failure")
+                   (should-error
+                    (test-mevedel-execution-scheduler--yield-across-owners))))))
+
 (mevedel-deftest mevedel-execution-start-bash/scheduler ()
   ,test
   (test)
@@ -170,7 +262,7 @@
          (one-path (file-name-concat root "one"))
          (two-path (file-name-concat root "two"))
          (mevedel-sandbox-mode 'off)
-         one two)
+         one two one-started two-started)
     (unwind-protect
         (progn
           (cl-labels
@@ -187,15 +279,19 @@
                  :artifact-directory (file-name-concat root "artifacts")
                  :read-only-p t :yield-time-ms nil)))
             (start-reader one-path (lambda (value) (setq one value)))
-            (start-reader two-path (lambda (value) (setq two value))))
+            (setq one-started t)
+            (start-reader two-path (lambda (value) (setq two value)))
+            (setq two-started t))
           (test-mevedel-execution-scheduler--wait
            (lambda () (and (file-exists-p one-path)
-                           (file-exists-p two-path)))
-           0.3))
+                           (file-exists-p two-path)))))
+      ;; Both markers must exist before either child is released.  That proves
+      ;; concurrency independently of shell startup latency under worker load.
       (with-temp-file release)
-      (when (or (file-exists-p one-path) (file-exists-p two-path))
+      (when (or one-started two-started)
         (test-mevedel-execution-scheduler--wait
-         (lambda () (and one two))))
+         (lambda () (and (or (not one-started) one)
+                         (or (not two-started) two)))))
       (delete-directory root t)))
   :doc "request abort removes queued exclusive work without spawning it"
   (let* ((root (make-temp-file "mevedel-scheduler-abort-" t))
@@ -247,64 +343,7 @@
         (test-mevedel-execution-scheduler--wait (lambda () queued)))
       (delete-directory root t)))
   :doc "shares one exclusive lane across owners and releases it on yield"
-  (let* ((root (make-temp-file "mevedel-scheduler-yield-" t))
-         (session (test-mevedel-execution-scheduler--session root))
-         (stop (file-name-concat root "stop"))
-         (first-path (file-name-concat root "first"))
-         (second-path (file-name-concat root "second"))
-         (mevedel-sandbox-mode 'off)
-         first second final record)
-    (unwind-protect
-        (progn
-          (mevedel-execution-start-bash
-           (lambda (value) (setq first value))
-           :session session :owner "main"
-           :command
-           (list "sh" "-c"
-                 "touch \"$1\"; while [ ! -e \"$2\" ]; do sleep .01; done"
-                 "scheduler-yield" first-path stop)
-           :workdir root :writable-roots (list root)
-           :artifact-directory (file-name-concat root "artifacts")
-           :yield-time-ms nil)
-          (test-mevedel-execution-scheduler--wait
-           (lambda () (file-exists-p first-path)))
-          (maphash
-           (lambda (_id candidate) (setq record candidate))
-           (mevedel-execution--state-records
-            (mevedel-session-execution-state session)))
-          (should record)
-          (mevedel-execution-start-bash
-           (lambda (value) (setq second value))
-           :session session :owner "agent--scheduler"
-           :command (list "sh" "-c" "touch \"$1\""
-                          "scheduler-second" second-path)
-           :workdir root :writable-roots (list root)
-           :artifact-directory (file-name-concat root "artifacts")
-           :yield-time-ms nil)
-          (should-not (file-exists-p second-path))
-          (mevedel-execution--yield-managed record)
-          (test-mevedel-execution-scheduler--wait
-           (lambda () (and first second (file-exists-p second-path))))
-          (should (eq 'running
-                      (plist-get (plist-get first :facts) :state)))
-          (with-temp-file stop)
-          (mevedel-execution-observe
-           session "main"
-           (plist-get (plist-get first :facts) :execution-id)
-           (lambda (value) (setq final value)) :wait-ms 5000)
-          (test-mevedel-execution-scheduler--wait (lambda () final)))
-      (unless (file-exists-p stop) (with-temp-file stop))
-      (unless first
-        (test-mevedel-execution-scheduler--wait (lambda () first)))
-      (when (and (eq 'running (plist-get (plist-get first :facts) :state))
-                 (not final))
-        (mevedel-execution-observe
-         session "main" (plist-get (plist-get first :facts) :execution-id)
-         (lambda (value) (setq final value)) :wait-ms 5000)
-        (test-mevedel-execution-scheduler--wait (lambda () final)))
-      (unless second
-        (test-mevedel-execution-scheduler--wait (lambda () second)))
-      (delete-directory root t)))
+  (test-mevedel-execution-scheduler--yield-across-owners)
   :doc "keeps exclusive admission isolated between sessions"
   (let* ((root (make-temp-file "mevedel-scheduler-sessions-" t))
          (session-one (test-mevedel-execution-scheduler--session root))
@@ -336,8 +375,11 @@
            :workdir root :writable-roots (list root)
            :artifact-directory (file-name-concat root "artifacts-two")
            :yield-time-ms nil)
-          (test-mevedel-execution-scheduler--wait (lambda () second) 0.3)
+          ;; The unreleased first process proves lane independence; callback
+          ;; latency under parallel test load is not the contract.
+          (test-mevedel-execution-scheduler--wait (lambda () second))
           (should (file-exists-p second-path))
+          (should-not (file-exists-p release))
           (should-not first))
       (with-temp-file release)
       (test-mevedel-execution-scheduler--wait (lambda () first))

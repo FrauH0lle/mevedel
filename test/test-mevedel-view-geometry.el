@@ -13,6 +13,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-view)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-zone)
 
@@ -39,6 +40,43 @@
                (should (= body-height (window-body-height nil t)))
                (should (= body-width (window-body-width nil t))))))))))
 
+(defun mevedel-view-geometry-test--require-frame-resize (&optional timeout)
+  "Skip if a plain control frame cannot grow within TIMEOUT seconds or five."
+  (let ((frame (make-frame '((width . 80) (height . 30))))
+        (frame-resize-pixelwise t)
+        (unread-command-events nil))
+    (unwind-protect
+        (with-selected-frame frame
+          (with-temp-buffer
+            (set-window-buffer (selected-window) (current-buffer))
+            (redisplay t)
+            (let ((target (1+ (frame-text-height frame)))
+                  (deadline (+ (float-time) (or timeout 5))))
+              (set-frame-height frame target nil t)
+              (while (and (/= target (frame-text-height frame))
+                          (< (float-time) deadline))
+                (setq unread-command-events nil)
+                (sit-for 0.02)
+                (redisplay t))
+              (unless (= target (frame-text-height frame))
+                (ert-skip (format "Compositor refused plain control-frame resize: requested %d pixels, got %d"
+                                  target (frame-text-height frame))))
+              t)))
+      (when (frame-live-p frame) (delete-frame frame t)))))
+
+(mevedel-deftest mevedel-view-geometry-test--require-frame-resize ()
+  (progn (skip-unless (display-graphic-p)) ,test)
+  (test)
+  :doc "A presenting compositor accepts the plain control-frame resize"
+  (should (mevedel-view-geometry-test--require-frame-resize))
+  :doc "A refused control resize skips with an explicit compositor diagnostic"
+  (cl-letf (((symbol-function 'set-frame-height) #'ignore))
+    (let ((failure (should-error
+                    (mevedel-view-geometry-test--require-frame-resize 0)
+                    :type 'ert-test-skipped)))
+      (should (string-search "Compositor refused plain control-frame resize"
+                             (error-message-string failure))))))
+
 (mevedel-deftest mevedel-view--viewport-at-y
   (:doc "Zero Y, exact placement, and unchanged viewports work on native displays.")
   (mevedel-view-geometry-test--with-window
@@ -62,6 +100,173 @@
       (redisplay t)
       (should-not (mevedel-view--composer-anchors))
       (should-not (mevedel-view--window-shows-end-p window)))))
+
+(mevedel-deftest mevedel-view-geometry-reading-anchor ()
+  (progn
+    (skip-unless (display-graphic-p))
+    (mevedel-view-test--with-buffers
+      (save-window-excursion
+        (switch-to-buffer view-buf)
+        (delete-other-windows)
+        (let ((inhibit-read-only t))
+          (goto-char (point-min))
+          (forward-line 1)
+          (dotimes (n 100) (insert (format "History line %d\n" n))))
+        (goto-char (point-max))
+        (insert "> draft\nsecond line")
+        (let* ((window (selected-window))
+               (start (save-excursion
+                        (goto-char (mevedel-view--input-start))
+                        (forward-line -12) (point)))
+               (clicked (save-excursion
+                          (goto-char start) (forward-line 4) (point))))
+          (set-window-start window start t)
+          (set-window-vscroll window 7 t)
+          (redisplay t)
+          (should (mevedel-view--position-screen-y
+                   (mevedel-view--input-start) window))
+          (mouse-set-point (list 'mouse-1 (posn-at-point clicked window)))
+          (let ((y (mevedel-view--position-screen-y clicked window)))
+            (should y)
+            (should (= 7 (window-vscroll window t)))
+            (dolist (count '(4 1 0))
+              (let ((update
+                     (lambda ()
+                       (mevedel-view-zone-reconcile
+                        'status (mevedel-view--status-anchor)
+                        (mevedel-view--status-anchor)
+                        (when (> count 0)
+                          (list (list :namespace 'status :id 'reader-test :priority 1
+                                      :body (mapconcat
+                                             (lambda (n) (format "status row %d\n" n))
+                                             (number-sequence 1 count) ""))))))))
+                (if ,outer
+                    (mevedel-view--call-preserving-window-state update)
+                  (funcall update)))
+              (redisplay t)
+              (should (= clicked (point)))
+              (should (= start (window-start window)))
+              (should (= 7 (window-vscroll window t)))
+              (should (= y (mevedel-view--position-screen-y clicked window)))
+              (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))))))
+  (outer)
+  :doc "Native history click keeps pixel scrolling through status growth and shrink" nil
+  :doc "An outer render transaction retains the clicked history viewport too" t)
+
+(mevedel-deftest mevedel-view-geometry-window-size-roundtrip ()
+  (progn
+    (skip-unless (display-graphic-p))
+    (when (eq ,change 'frame-grow)
+      (mevedel-view-geometry-test--require-frame-resize))
+    (save-window-excursion
+      (delete-other-windows)
+      (mevedel-view-test--with-buffers
+        (switch-to-buffer view-buf)
+        (let* ((composer-frame (selected-frame))
+               (frame-height (frame-text-height composer-frame))
+               (frame-resize-pixelwise t)
+               (resize-mini-windows nil)
+               (unread-command-events nil)
+               (window (selected-window))
+               (other-frame (make-frame `((width . 100) (height . 45)
+                                          (font . ,(frame-parameter nil 'font)))))
+               (draft "> active draft\nsecond line")
+               (change ,change))
+          (unwind-protect
+              (progn
+                (setq-local header-line-format "Header" tab-line-format nil
+                            mode-line-format nil)
+                (let ((inhibit-read-only t))
+                  (goto-char (point-min))
+                  (dotimes (n 100) (insert (format "History line %d.\n" n))))
+                (goto-char (point-max))
+                (insert draft)
+                (mevedel-view--set-viewport
+                 window
+                 (mevedel-view--viewport-at-y
+                  window (mevedel-view--input-start)
+                  (- (cdr (mevedel-view--window-body-geometry window)) 250)))
+                (set-window-vscroll window 7 t)
+                (redisplay t)
+                (select-frame other-frame)
+                (switch-to-buffer view-buf)
+                (set-window-buffer (split-window-right) data-buf)
+                (goto-char (point-min))
+                (redisplay t)
+                (when (eq change 'frame-grow)
+                  ;; A pixelwise frame configure rounds the minibuffer to a
+                  ;; character height.  Settle it before capturing the baseline.
+                  (dolist (target (list (1+ frame-height) frame-height))
+                    (set-frame-height composer-frame target nil t)
+                    ;; The window manager configures asynchronously; this is
+                    ;; a progress watchdog, not a frame-resize latency test.
+                    (let ((deadline (+ (float-time) 5)))
+                      (while (and (/= target (frame-text-height composer-frame))
+                                  (< (float-time) deadline))
+                        (setq unread-command-events nil)
+                        (sit-for 0.02)
+                        (redisplay t)))
+                    (should (= target (frame-text-height composer-frame))))
+                  (set-window-vscroll window 7 t)
+                  (redisplay t))
+                (with-current-buffer view-buf
+                  (let ((start (window-start window))
+                        (scroll (window-vscroll window t))
+                        (total (window-pixel-height window))
+                        (mini-lines (window-body-height (minibuffer-window composer-frame)))
+                        (repair (symbol-function 'mevedel-view--repair-window-growth))
+                        calls)
+                    (should (= 7 scroll))
+                    (should (> (mevedel-view--window-blank-pixels window) 80))
+                    (cl-letf (((symbol-function 'mevedel-view--repair-window-growth)
+                               (lambda (target)
+                                 (when (eq target window)
+                                   (push (list (window-old-body-pixel-height target)
+                                               (cdr (mevedel-view--window-body-geometry target)))
+                                         calls))
+                                 (funcall repair target))))
+                      (dotimes (_ 3)
+                        (pcase change
+                          ('chrome
+                           (dolist (header (list (propertize "Header" 'face '(:height 1.8))
+                                                "Header"))
+                             (setq header-line-format header)
+                             (redisplay t)))
+                          ('popup
+                           (let ((popup (split-window window -8 'below)))
+                             (set-window-buffer popup data-buf)
+                             (redisplay t)
+                             (delete-window popup)
+                             (redisplay t)))
+                          ('frame-grow
+                           (dolist (target (list (+ frame-height 12) frame-height))
+                             (set-frame-height composer-frame target nil t)
+                             (let ((deadline (+ (float-time) 5)))
+                               (while (and (/= target (frame-text-height composer-frame))
+                                           (< (float-time) deadline))
+                                 ;; Window-manager configure events are asynchronous.
+                                 (setq unread-command-events nil)
+                                 (sit-for 0.02)
+                                 (redisplay t)))
+                             (redisplay t)
+                             (should (= target (frame-text-height composer-frame)))
+                             (should (= mini-lines
+                                        (window-body-height (minibuffer-window composer-frame)))))))
+                        (ert-info ((format "Change %S, native size-hook calls: %S" change calls))
+                          (should calls)
+                          (should (= total (window-pixel-height window)))
+                          (should (= start (window-start window)))
+                          (should (= scroll (window-vscroll window t)))
+                          (should (equal draft (mevedel-view--input-text))))))))
+            (when (frame-live-p other-frame) (delete-frame other-frame t))
+            (select-frame composer-frame)
+            (unless (= frame-height (frame-text-height composer-frame))
+              (set-frame-height composer-frame frame-height nil t))
+            (setq unread-command-events nil)))))))
+  (change)
+  :doc "Three native header shrink/grow cycles retain an inactive composer's viewport" 'chrome
+  :doc "Three real popup open/close cycles retain deliberate composer blank space" 'popup
+  :doc "Three native frame grow/shrink cycles retain an inactive composer's pixel viewport" 'frame-grow)
 
 (mevedel-deftest mevedel-view--position-screen-y ()
   (mevedel-view-geometry-test--with-window

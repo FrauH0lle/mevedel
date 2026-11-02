@@ -99,6 +99,31 @@ than through the command allowlist:
   authority for an owner, who can create a session outright. The sheet
   says which of the two it is doing before the guest presses anything.
 
+- `fork` creates a Conversation Fork of the shared session at a settled
+  assistant response, the browser's counterpart to `f` in the cockpit. It
+  is owner-only, like creating a session outright, and the host ignores it
+  from any other guest. Each settled turn's last assistant record carries
+  its stable `forkPoint`; the page shows **Fork from here** under it only
+  on an owner link. The host runs the ordinary fork transaction, so a
+  running request, pending input, live execution, active agent turn or
+  active Goal refuses it with the native reason. The source session is
+  unchanged. The reply reuses the `new-session` frame and its `reqId`,
+  carries an owner link to the child's new room, and other owners are
+  offered that room. The browser sends no first prompt with the fork: the
+  owner writes it in the child room.
+  Each `reqId` forks at most once for the connection that sent it. A retry
+  receives the recorded reply again, and a retry while the fork runs gets
+  none. The host retains a bounded number of replies, and an id whose
+  reply is still retained always replays that reply, whatever its value.
+  An id that is not in the retained ledger and is at or below the highest
+  id the host has forgotten is refused as stale and never performed,
+  even if the host never saw it, because it cannot tell it from a
+  forgotten repeat. Higher ids it has not seen fork normally. If the
+  fork is saved but its room cannot start, the host closes the child's
+  buffers in Emacs, releases its lock and keeps the saved session. The
+  refusal names its session id and says to open it in Emacs with
+  `M-x mevedel`.
+
 - `recovery` exposes selection among the offered models, reasoning efforts and
   registered presets, session rename, native-history recovery, retained-input
   retry, reviewed input requeue/discard,
@@ -523,8 +548,12 @@ resumes when readiness clears the issue.
 
 Owners can choose a replacement provider or preset, complete provider login,
 recover a root or child native history, or explicitly retry retained input.
-Undelivered steering or an interrupted queued delivery pauses delivery and must
-be reviewed first. Recovery never resends a submitted prompt. Queue acceptance,
+Failed-turn steering or an uncertain queued delivery pauses delivery and requires
+explicit recovery. The host can use `C-c C-r` to retry pending input directly;
+the owner browser's individual failed-turn recovery actions remain available.
+A deliberate turn interrupt preserves ordinary unsent steering and holds queued
+input until Resume or another explicit host action, without labeling it failed.
+Recovery never automatically resends a submitted prompt. Queue acceptance,
 removal and pause state are persisted with the session.
 
 A failing observer or projection preserves the room and its last good snapshot.
@@ -707,8 +736,14 @@ configuration files read in place. A project file has no discussions and no
 Delete there; for an owner link, **Ask** opens the new-session dialog with
 the file's path in the first prompt.
 
-**Upload** adds files to the folder on screen, from the picker or dropped on
-the tree. A file travels in acknowledged chunks of 512 KiB (`file-upload`):
+Each file row also has **Download**, which saves the original bytes under the
+file's name without opening a preview or leaving the current folder. It uses
+the same authorized `file-get` transfer and 16 MiB limit as the preview.
+
+**Upload** adds files to the folder on screen, from the picker or dropped
+anywhere in the lobby while the **Files** tab is shown, including its header
+and empty tree. The drop area is marked while dragging files over it.
+A file travels in acknowledged chunks of 512 KiB (`file-upload`):
 the first announces folder, name and size, and the browser sends the next
 only after the host took the previous one, so a refusal stops the transfer
 and the socket never queues a whole file. The host keeps one unfinished
@@ -922,6 +957,25 @@ brings its heading back into view and returns keyboard focus there.
 Archived and agent transcripts use the live conversation's compact grouping:
 consecutive assistant text and tool calls share one visible speaker label.
 
+Substantive native thinking appears as a separate **Thinking** disclosure,
+open by default, with a muted header. It splits tool activity runs and never
+hides inside their folds. Explicit expansion or collapse survives streaming
+updates and reconnect snapshots, including agent and archived transcripts.
+Empty thinking produces no card. The host removes reasoning scaffolding and
+hidden audit data and applies the same text-size bound as other transcript
+records; it also projects native thinking while its block is still streaming.
+
+Completed turns close with the same quiet summary as the native view, such as
+`── Worked for 2m 37s · Thu 29 Oct 14:32 ─────`. The host projects a scoped
+`request-summary` record containing only its stable identity, formatted label,
+and optional full timing details. Browser locale and time-zone settings do not
+change the host-formatted times. Hovering shows the full start/finish dates,
+year, seconds, UTC offsets, and active-work duration. Keyboard focus reveals
+those details in place; activation or a tap/click toggles them explicitly.
+The closing rule stays outside folded activity groups, has no speaker heading,
+and preserves its disclosure state
+across record rebuilds. Saved summaries without timestamps remain duration-only.
+
 The **Assistant working…** indicator sits above the message composer. The
 host publishes status immediately after request admission and teardown,
 including interruption and failure, rather than inferring activity from the
@@ -931,6 +985,10 @@ The shared browser renderer owns disclosure continuity when rebuilding a record.
 Main transcript updates, reconnect snapshots, and polled agent transcripts pass
 the previous record element to it, so explicit expansion and collapse survive
 while new nested disclosures use the host's defaults.
+Agent polls reconcile record identities within the guest's selected agent and
+segment, so growing thinking retains its disclosure without borrowing choices
+from another transcript. The host retains only that selection's record IDs and
+kinds for this reconciliation, not a second copy of the transcript.
 Shared questions use this same renderer in the room and editor sidebar: the
 question stays visible above a closed **Shared context** disclosure containing
 the sent snapshot and attachment links. Its summary identifies the item, scope,
@@ -1143,9 +1201,10 @@ A session shared while an interaction already waits presents that one too:
 starting a room adopts the session's pending prompts in the order they
 arrived, since each announces itself only once, when it is raised.
 `mevedel-collaboration-remote-interactions` gates that surface. Lease
-transfer, save, rewind, arbitrary forks, publication, and execution-target
-changes remain host operations. Owner acceptance of a Worktree plan is the typed,
-host-validated exception, not a general browser fork command.
+transfer, save, rewind, edit, Worktree forks, publication, and execution-target
+changes remain host operations. The owner-only `fork` frame above creates
+Conversation Forks only. Owner acceptance of a Worktree plan is the typed,
+host-validated exception, not a general browser Worktree Fork command.
 
 Plan cards render Markdown with the full implementation instructions and
 read-only settings, without native keyboard hints that a browser cannot use.
@@ -1235,7 +1294,8 @@ resolving to the command first, and
 `mevedel-collaboration-unsafe-guest-commands` wins over any admission: it
 holds the commands that escalate, mutate durable state, manage the share, or
 only report to the host's display (`tokens`, `ps`, `tools`, `worktree`
-included), none of which can do anything useful for a guest. The guest may
+included), none of which can do anything useful for a guest, and `buddy`, which
+would switch on Buddy across the host's Emacs. The guest may
 queue a command through the typed `invoke` field or combine selected skills
 through the `skills` name array on one prompt frame. These fields are mutually
 exclusive. Free text remains skill-inert; only selected names are planned.
@@ -1255,6 +1315,8 @@ current files. Raw model-facing reminder wrappers are not the display body.
 Plain activity runs over the native grouping threshold fold into one browser
 disclosure with the native semantic summary. Running counts and failed tool
 names stay in its one-line heading; the full summary is available on hover.
+Browser activity groups come from the same `mevedel-activity-group` module as
+the Emacs view's, through `mevedel-activity-group-partition`.
 Opening the group exposes the original tool/message/completion rows, with
 their own disclosure choices intact. Newly grouped rows already being read
 remain open; an explicit group fold wins thereafter. Scope changes, compound

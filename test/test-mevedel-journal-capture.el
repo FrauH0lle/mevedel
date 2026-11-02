@@ -12,6 +12,9 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-journal-test-support"))
 (require 'mevedel-journal-process)
+;; Agent compaction cases name their target directly; production loads this
+;; lazily inside a run, which an isolated case may not have started yet.
+(require 'mevedel-compact-target)
 
 (mevedel-deftest mevedel-journal-capture-checkpoint ()
   ,test

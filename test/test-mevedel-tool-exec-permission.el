@@ -775,6 +775,52 @@ additive child permissions are available only to batch Eval"
       (mevedel-tool-exec-permission-effective-sandbox-request
        '(:command "make build") "Bash" "make build" nil
        `(:session ,session :buckets ((:session ,@rules)))))))
+  :doc "a compound command receives profiles only when rules allow every segment"
+  (let* ((npm "/tmp/mevedel-profile-npm")
+         (git "/tmp/mevedel-profile-git")
+         (rules
+          `(("Bash" :pattern "npx @emacs-eask/cli *" :network t
+             :file-system ((:path ,npm :access write)) :action allow)
+            ("Bash" :pattern "git add:*"
+             :file-system ((:path ,git :access write)) :action allow)))
+         (context `(:buckets ((:persistent ,@rules)))))
+    (pcase-dolist (`(,command ,network ,paths)
+                   `(("npx @emacs-eask/cli test" t (,npm))
+                     ("cd sub && npx @emacs-eask/cli clean elc && npx @emacs-eask/cli test"
+                      t (,npm))
+                     ("npx @emacs-eask/cli test && git add foo" t (,git ,npm))
+                     ("npx @emacs-eask/cli test && rm -rf build" nil nil)
+                     ("cat a > b && npx @emacs-eask/cli test" nil nil)
+                     ("npx @emacs-eask/cli test | tee log" nil nil)
+                     ("rm -rf build; npx @emacs-eask/cli test" nil nil)
+                     ("npx @emacs-eask/cli test $(rm -rf build)" nil nil)
+                     ("npx @emacs-eask/cli test & rm -rf build" nil nil)))
+      (let ((profile
+             (plist-get (mevedel-tool-exec-permission-effective-sandbox-request
+                         `(:command ,command) "Bash" command nil context)
+                        :additional-permissions)))
+        (should (eq network (plist-get profile :network)))
+        (should (equal paths
+                       (sort (mapcar (lambda (grant) (plist-get grant :path))
+                                     (plist-get profile :file-system))
+                             #'string<))))))
+  :doc "a listed safe assignment does not hide a command from its profile"
+  (let ((context '(:buckets ((:persistent
+                              ("Bash" :pattern "npx @emacs-eask/cli *"
+                               :network t :action allow)))
+                   :safe-env-vars ("CHECK_BASE"))))
+    (pcase-dolist (`(,command ,network)
+                   '(("CHECK_BASE=abc npx @emacs-eask/cli run script check" t)
+                     ("cd sub && CHECK_BASE=abc npx @emacs-eask/cli test" t)
+                     ("OTHER=abc npx @emacs-eask/cli test" nil)
+                     ("CHECK_BASE=$(rm -rf x) npx @emacs-eask/cli test" nil)))
+      (should
+       (eq network
+           (plist-get
+            (plist-get (mevedel-tool-exec-permission-effective-sandbox-request
+                        `(:command ,command) "Bash" command nil context)
+                       :additional-permissions)
+            :network)))))
   :doc "delegated profiles and full escalation never become sticky additions"
   (let ((delegated
          '(("Bash" :pattern "make:*" :network t :action allow))))
@@ -2786,7 +2832,7 @@ default Bash keeps bare dot inspection automatic"
      (equal '(("Bash" :pattern "make *" :action allow)
               ("Bash" :pattern "rm build" :action deny))
             (mevedel-session-permission-rules session))))
-  :doc "contains Bash rule-write failures in the permission result"
+  :doc "propagates Bash rule-write failures to the guarded permission boundary"
   (let* ((root (make-temp-file "mevedel-bash-prompt-" t))
          (workspace
           (mevedel-workspace--create
@@ -2797,11 +2843,9 @@ default Bash keeps bare dot inspection automatic"
           (make-directory (file-name-directory file) t)
           (with-temp-file file
             (insert "invalid"))
-          (should
-           (string-prefix-p
-            "Error: Bash rule write failed:"
+          (should-error
             (mevedel-tool-exec-permission--bash-prompt-result
-             'always-allow nil workspace "make test" nil nil))))
+             'always-allow nil workspace "make test" nil nil)))
       (delete-directory root t)))
   :doc "returns structured Bash metadata with the canonical specifier"
   (let ((result (mevedel-tool-exec-permission--bash-prompt-result
@@ -2811,6 +2855,17 @@ default Bash keeps bare dot inspection automatic"
     (should (eq 'bash-classifier (plist-get result :via)))
     (should (eq :pattern (plist-get result :specifier-key)))
     (should (equal "make" (plist-get result :specifier-value)))))
+
+(mevedel-deftest mevedel-tool-exec-permission--filesystem-paths ()
+  ,test
+  (test)
+  :doc "a doubled leading slash in a requested grant is collapsed"
+  (should (equal '((:path "/run/user/1000/gnupg/" :access read))
+                 (mevedel-tool-exec-permission--filesystem-paths
+                  ["//run/user/1000/gnupg/"] 'read)))
+  :doc "a quoted /: grant path is refused, not dropped"
+  (should-error (mevedel-tool-exec-permission--filesystem-paths
+                 ["/:/run/user/1000"] 'read)))
 
 (provide 'test-mevedel-tool-exec-permission)
 

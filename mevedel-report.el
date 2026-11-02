@@ -10,6 +10,7 @@
 ;;; Code:
 
 (require 'button)
+(require 'mevedel-cockpit)
 (require 'seq)
 (require 'mevedel-view-fontify)
 (require 'outline)
@@ -138,14 +139,9 @@
 (defun mevedel-report-quit ()
   "Close this inspector and its section index, returning to its owner."
   (interactive)
-  (let* ((buffer (mevedel-report--owner))
-         (origin (buffer-local-value 'mevedel-report--origin buffer)))
+  (let ((buffer (mevedel-report--owner)))
     (with-current-buffer buffer (mevedel-report--kill-index))
-    (when-let* ((window (get-buffer-window buffer)))
-      (quit-window nil window))
-    (kill-buffer buffer)
-    (when (buffer-live-p origin)
-      (pop-to-buffer origin))))
+    (mevedel-window-quit buffer)))
 
 (defun mevedel-report--toggle (button)
   "Toggle the section identified by BUTTON."
@@ -395,8 +391,8 @@ NOSELECT displays the report without moving focus."
   (let ((origin (or mevedel-report--origin (current-buffer)))
         (target (get-buffer-create buffer)))
     (with-current-buffer target (mevedel-report-render report origin))
-    (let ((window (if noselect (display-buffer target)
-                    (pop-to-buffer target) (selected-window))))
+    (let ((window (mevedel-window-display-buffer
+                   target noselect (mevedel-cockpit-menu-return-function))))
       (when (window-live-p window)
         (with-current-buffer target (mevedel-report--display-index window))))
     target))

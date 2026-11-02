@@ -206,8 +206,11 @@ override from a transcript file's location. Save As copies the override with the
 and Worktree forks still discard retained-agent identities under
 [ADR 0062](adr/0062-do-not-clone-live-agents-into-session-forks.md).
 Queued follow-ups retain text, attribution, scope and attachment grants. Live
-submission objects are excluded. Undelivered steering reloads as requiring review,
-with automatic delivery paused; a restart never resurrects a submitted request.
+submission objects are excluded. Steering that still belongs to a request
+reloads as requiring review, with automatic delivery paused; a restart never
+resurrects a submitted request. Ordinary steering deliberately detached by an
+interrupt remains pending, and its interrupt pause survives restore. The host
+can resume it with `C-c C-r` instead of converting it in the cockpit.
 
 
 ## Persistence flow
@@ -689,12 +692,16 @@ acknowledgements.
 
 A session retaining a native identity in its root or any child conversation
 rejects cooperative control transfer, Save As, Fork, Rewind and Redo. Manual
-transcript compaction and the side-conversation command consider only the root
-conversation, and are also unavailable with the external provider selected.
+transcript compaction considers only the root conversation, and is also
+unavailable with the external provider selected. The ephemeral `/btw` command
+instead forks settled native root history through ACP; see
+[side conversations](view.md#ephemeral-btw-side-conversations).
 Unstarted and released markers hold no native history and restrict nothing. These commands cannot
 treat a copied transcript as an equivalent native model history. The adapter's
 native fork extension alone does not map mevedel's chronological checkpoints
-and independent conversation scopes to native message boundaries.
+and independent conversation scopes to native message boundaries. Unlike those
+durable operations, `/btw` forks only the current settled root, stores no native
+identity in session metadata, and deletes the fork when the side ends.
 Direct commands and menu actions report the external-history restriction before
 arming a fork or changing state. Save As refuses before asking for a name or
 saving the parent, and Redo refuses before reading the published-head choices.
@@ -717,8 +724,9 @@ at its next tool batch, or as a further prompt in the same turn when the native
 prompt ends first (see [Native context delivery](#native-context-delivery)). A
 native turn cannot wait at a held boundary: steering still held by the Pending
 Inputs cockpit or an unresolved interaction when the turn succeeds becomes the
-first follow-ups, in submission order. A failed or interrupted turn marks it
-`Needs review`, as on HTTP.
+first follow-ups, in submission order. A failed turn marks it `Needs review`,
+as on HTTP. A deliberate interrupt keeps it ordinary pending steering and holds
+delivery until Resume or another explicit user action.
 
 ### Native context delivery
 
@@ -937,6 +945,15 @@ serializes that program against other users of the same lock. Journal and memory
 mutation use this separate boundary. Each operation reports `ok`, `conflict`,
 `absent`, `mismatch`, `failed` or `skipped`, so a caller reproduces the
 per-operation nil-versus-signal contract of the single-operation wrappers.
+A synchronous remote program's command line crosses TRAMP's pty, where the
+shell-quoted program script alone is about 17 KB. When `gzip` is available
+both locally and on the target, the script travels gzip-compressed and
+base64-wrapped, about 4 KB, behind a short bootstrap that decodes it and
+runs it in place, failing the whole
+program if decoding fails. Measured on a local mock target, this cut a
+one-operation program from about 37 ms to 12 ms. If local compression is
+unavailable or the target lacks `gzip`, the script travels inline, as it does
+for every local program; pipe carriers already send it on stdin.
 For two to 32 independent unbounded reads, the same control program can carry
 regular files together in a GNU tar stream. It keeps every proved parent
 descriptor open, refuses symlink leaves, and disables inherited `TAR_OPTIONS`.
@@ -1458,17 +1475,32 @@ Delivering a background command's completion or monitor batch to its owner's
 mailbox and automatic root or agent transcript checkpoints do not block the
 editor on target programs. Only a materialized local portable session qualifies: its
 save path is local, its authority is portable, a committed publication with a
-sidecar exists, its root buffer is live, and it is not stopping. Cold
-materialization, remote targets, file-backed and PID-lock sessions use the
-synchronous publication above. Every other acknowledged mutation is
+sidecar exists, its root buffer is live, and it is not stopping. Remote,
+file-backed and PID-lock background deliveries instead coalesce arrivals for
+the next transport-safe timer opportunity and commit them together through the
+synchronous writer above. They use the same mutation preparation gate, without
+changing their storage authority or format. Before that opportunity, arrivals
+are producer-owned, not visible mailbox records. During the commit they remain
+tentative; success acknowledgements and delivery run only after commit. Failure removes
+only the batch's tentative records and leaves producers holding their output.
+New arrivals during a commit wait for the next batch. Explicit saves and orderly
+close drain accepted batches; a forced process kill can lose unacknowledged
+producer output, never mail from a completed acknowledgement. Cold background
+delivery uses this path when a save location and live root already exist;
+otherwise it retains the immediate synchronous path. Every other acknowledged mutation is
 synchronous too; agent mail, spawn, RESULT and settlement drain the gate first
 (below) and then commit as before.
 
-The mailbox append is one session-owned publication job that holds
+The warm-local mailbox append is one session-owned publication job that holds
 `publication-active-p` from acceptance to acknowledgement, so renewal timers
 stay quiet and cooperative transfer stays blocked. Its phases are admission,
 freeze, reservation, generation, head commit, adoption, acknowledgement and
-cleanup. Each target phase is a pinned control program launched without
+cleanup. Finalization keeps a separate dispatch/notification exclusion until
+acknowledgement and cleanup return, even though authoritative adoption has
+already released ordinary publication ownership. This lets an acknowledgement
+stage an artifact without admitting a successor or running a mailbox wake
+inside a yielding finalizer. The next gate-open opportunity offers notifications
+before starting the successor. Each target phase is a pinned control program launched without
 waiting; its result is stored by the sentinel and the next phase is scheduled
 from a timer through the idle transport, never from the sentinel. The
 transaction's clock, asserted-directory and recovery cells are job-owned and
@@ -1693,9 +1725,18 @@ one coalesced first-in-first-out set of pending notifications and at most one
 timer. A notification runs at once only when the publication gate is idle (no
 job, preparation or active publication), the transport is idle and nothing is
 already pending; otherwise it joins the set, so a later acknowledgement cannot
-overtake an earlier one. The timer starts at 50 ms and doubles up to 500 ms
-while the gate or transport stays busy, then flushes the set in order, only
-while the root buffer is live and the session is not stopping. A waiter
+overtake an earlier one. The set flushes in order whenever no work is in
+flight (no job, running preparation, active publication or transport
+operation); queued preparations do not hold it back, since a callback's own
+mutation queues behind them. Two triggers flush it: each time the gate opens
+between queued preparations, before the next one starts
+(`mevedel-session-publication-gate-open-functions`), and a timer that starts
+at 50 ms and doubles up to 500 ms while work stays in flight. Both run only
+while the root buffer is live and the session is not stopping. The gate-open
+turn exists because sustained producers keep the queue non-empty: ten
+monitors each emitting one line every two seconds kept publication busy for
+99% of samples, and the timer alone offered no root wake in 40 seconds. A
+waiter
 callback can resume tool code and gated operations, so it runs with no token
 and fresh transaction observations, and defers or drains like any other
 caller. A failing notification warns and does not stop the rest. Temporary
@@ -1983,11 +2024,16 @@ interrupted input requiring review, so a submitted prompt is never replayed.
 Live submission objects and edit state are not persisted. There is no
 queue-size cap.
 
-A failed or aborted root turn pauses follow-up delivery only when steering for
-that turn was left undelivered or a queued follow-up's dispatch may have reached
-the transcript; those entries need review in the Pending Inputs cockpit. The
-next root request clears a pause that no reviewable entry still justifies, and
-the pause banner shows only while entries remain.
+A failed root turn marks leftover steering for review and sets the failure
+pause; uncertain queued dispatch likewise requires explicit retry. An aborted
+root turn instead detaches ordinary leftover steering and sets the user delivery
+pause whenever either pending category remains, without setting a failure latch.
+The hold prevents automatic follow-up, background-event and Goal turns.
+`C-c C-r` combines leftover steering into one first follow-up and clears both
+holds; subsequent queued follow-ups drain as usual. A new explicit root send
+rebinds only ordinary detached steering to the new request and releases the
+interrupt hold. A genuine failure's review entries are not implicitly rebound.
+The pause banner shows only while entries remain.
 
 A saved model selection that no longer resolves uses
 `mevedel-model-fallback-provider`, or the host default when that option is nil,
@@ -2624,6 +2670,10 @@ restart before the first child request can drop the report detail while the
 durable provenance facts remain available for regeneration. Failure outside
 Git never falls back to Conversation Fork.
 
+An owner-link browser guest can also create a Conversation Fork from a settled
+assistant response; see [browser collaboration](collaboration.md). It publishes
+the child without a first prompt and opens a room for it.
+
 `mevedel-session-fork-create` owns admission, staging, publication, and cleanup
 for both fork types. Worktree creation and restoration are conditional steps
 inside that transaction, with failures retaining the created Git artifacts and
@@ -2831,7 +2881,7 @@ counts as processing. Processed notes retire once references end, regardless of
 age. Resolved review/decision history has its own default 14-day window after the
 latest terminal decision and expires as a complete dependency group. Bounded
 coordination cleanup runs even when recall age filtering is disabled; capture
-coverage survives. See [memory](memory.md) for the
+coverage survives. See [journal](memory-journal.md#journal-recall-and-retention) for the
 retention and human inspection contract.
 
 Pending journal capture pins under a session's `.journal-pins/` prevent that
@@ -2854,7 +2904,7 @@ queued/active processing and timers and starts no inference. Accepted digest
 outcomes recover on the next processing opportunity before replacement
 inference. Completed root turns, session opening, and idle maintenance also
 queue abandoned-checkpoint recovery before processing, so work sealed at exit is
-processed when a session next opens. See [memory](memory.md#digest-generation).
+processed when a session next opens. See [memory](memory-journal.md#digest-generation).
 It repairs unready captures and seals frozen completed work under temporary source
 authority, without resuming a conversation or retaining authority during inference.
 Live or foreign PID holders, unreadable locks, live portable leases, publishing

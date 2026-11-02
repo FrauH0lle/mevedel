@@ -8,4 +8,5 @@ git_variables=$(git rev-parse --local-env-vars)
 for variable in $git_variables; do
     unset "$variable"
 done
-exec npx @emacs-eask/cli run script check
+# The pre-commit tier; the full suite runs before merge and in CI.
+exec npx @emacs-eask/cli run script check -- --affected

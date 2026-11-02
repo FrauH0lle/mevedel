@@ -26,6 +26,7 @@
 (require 'mevedel-turn)
 (require 'mevedel-tool-ui)
 (require 'mevedel-permission-queue)
+(require 'mevedel-permission-prompt)
 (require 'mevedel-goal)
 (require 'mevedel-agents)
 (require 'mevedel-agent-control)
@@ -308,7 +309,32 @@
     (should-not (eq mevedel-view--interaction-descriptors
                     mevedel-view--interaction-overlays))
     (should (= 0 (hash-table-count mevedel-view--interaction-descriptors)))
-    (should (= 0 (hash-table-count mevedel-view--interaction-overlays)))))
+    (should (= 0 (hash-table-count mevedel-view--interaction-overlays))))
+
+  :doc "setting up a live view again releases its earlier interaction overlays"
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-session--create :name "reinitialize"))
+           (record (mevedel-agent-record--create
+                    :path "/root/worker" :activity 'running
+                    :invocation (mevedel-agent-invocation--create
+                                 :path "/root/worker")))
+           overlay)
+      (setf (mevedel-session-agent-registry session)
+            (list (cons "/root/worker" record)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (setq overlay (mevedel-view--interaction-register
+                       '(:kind ask :id ask :origin "/root/worker" :body "ask"))))
+      (should (= 1 (length (mevedel-agent-record-blockers record))))
+      (mevedel-view--setup view-buf data-buf)
+      (should-not (overlay-buffer overlay))
+      (with-current-buffer view-buf
+        (should-not (seq-find
+                     (lambda (ov) (overlay-get ov 'mevedel-view-interaction-id))
+                     (overlays-in (point-min) (point-max)))))
+      (should-not (mevedel-agent-record-blockers record)))))
 
 (mevedel-deftest mevedel-view--show-pending-plan
   (:doc "uses the clicked view and focuses hidden or visible approvals")

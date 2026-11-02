@@ -7,8 +7,11 @@ Status: accepted
 The view keeps the user's active surface at its screen position. Zone reconciliation
 and its enclosing full-render transaction
 choose one viewport anchor per window: point inside a surviving visited
-interaction card takes priority; otherwise a previously visible composer keeps
-its position regardless of point. Logical positions are restored before applying
+interaction card or status row (background work, tasks, notices) takes
+priority; otherwise a previously visible composer keeps
+its position only when that window's caret is in the composer. A history reader
+keeps its reading position even if the composer is still visible. Logical
+positions are restored before applying
 that anchor. A visited card retains its screen position unless its shrink creates
 new blank space below the buffer; repairing only that excess takes priority over
 the visited row. Existing blank space is retained.
@@ -28,10 +31,11 @@ and its character tail. After logical restoration, they apply this policy:
 
 | Window context before mutation | Viewport policy | Discriminating case |
 | --- | --- | --- |
-| Point visits a surviving interaction card | Retain the visited row, then fill only newly created blank pixels | Shrinking a visited card below point must not leave a newly empty viewport |
-| Composer visible, saved logical start survives | Retain the composer position and pre-existing blank space, except when growth overflows the window | Shorter status text must not erase intentional blank space; oversized incoming growth fills the last page |
-| Composer visible, saved logical start removed or truncated | Fill the last page, bypassing the character-tail guard | Ask submission can expose longer history lines and increase the tail despite losing rows |
-| Neither a composer nor visited-card anchor | Clamp backward only when the character tail shrank | An offscreen composer returns to a full last page after an interaction disappears |
+| Point visits a surviving interaction card or status row | Retain the visited row, then fill only newly created blank pixels | Shrinking a visited card below point must not leave a newly empty viewport; collapsing a background row must not move a mid-window composer to the last page |
+| Caret in visible composer, saved logical start survives | Retain the composer position and pre-existing blank space, except when growth overflows the window | Shorter status text must not erase intentional blank space; oversized incoming growth fills the last page |
+| Saved logical start removed or truncated | Fill the last page, bypassing the character-tail guard | Ask submission can expose longer history lines and increase the tail despite losing rows |
+| Caret in transcript history, saved logical start survives | Retain the reading viewport through growth and shrinkage below it | A focus click into history must not move it when deferred rendering catches up |
+| Neither a composer, history-reader nor visited-card anchor | Clamp backward only when the character tail shrank | An offscreen composer returns to a full last page after an interaction disappears |
 
 Earlier history views do not move toward the bottom, and shrink repair leaves a
 window already starting at `point-min` there. Strict logical-anchor resolution distinguishes
@@ -86,11 +90,30 @@ Their viewport transaction must not replace that exact mapping with a source-run
 character offset or mistake the changed offset for a lost start. They therefore
 reuse the same viewport policy while retaining the splice's position mapping.
 
-Height-only window growth repairs newly exposed blank space using the height
+History readers keep their native viewport when a window changes height,
+including growth caused by a shrinking echo area. For other windows,
+height-only growth repairs newly exposed blank space using the height
 delta, provided the same buffer and width were displayed previously. This
 inference covers popup closure with an unchanged start, not arbitrary simultaneous
-scrolling, reflow or buffer replacement. The buffer-local window-size-change hook
-requires no continuous geometry recording. Text scaling uses one guarded advice
+scrolling, reflow or buffer replacement. The first size change also remembers
+the original height and viewport. While the buffer and width remain unchanged
+and nothing else moves the viewport, returning to that height restores that
+viewport, in either order: a shrink then growth exposes nothing new, and a
+growth then shrink undoes its repair. Only growth beyond both the original
+height and any height already repaired exposes new blank space, so successive
+growth steps never charge the same pixels twice. This prevents repeated popup,
+focus-related chrome or
+transient frame size round trips from consuming deliberate blank space or
+drifting the transcript. A viewport changed by anything else discards the
+snapshot and retains the ordinary growth inference. Growth repair also skips
+pending command input: a queued mouse click
+already carries a resolved position, and changing its viewport before consuming
+the event would shift the clicked text. Skipping leaves only extra blank space
+and queues no deferred repair. Returning to the original height respects
+pending input the same way, except when the repair being undone is younger
+than 0.1 seconds: that is below human reaction time, so a queued click was
+aimed at the original viewport. The buffer-local window-size-change hook requires
+no continuous geometry recording. Text scaling uses one guarded advice
 around `text-scale-mode`: capture actual blank pixels before face remapping and
 fill only the new excess afterward. Other buffers take the direct path. Both
 repairs preserve deliberate pre-existing blank space.
@@ -101,6 +124,20 @@ turn's activity, replacing the separate progress row and the badge line. The
 blank separator above the rail depends on how the text before it ends, so it is
 checked again whenever a transcript writer finishes and redrawn only when it no
 longer fits.
+
+Scrolling away from the composer and back returns point to the draft, as in a
+terminal. Emacs keeps point visible, so a scroll command that hides the
+draft moves point onto transcript or chrome rows, often the background
+`[Manage]` row just above the rail. The view remembers the draft offset per
+window; the next scroll command after which that position is fully visible
+puts point back. Commands carrying the `scroll-command` property, other-window
+scrolling, and touchpad momentum (`pixel-scroll-start-momentum`) count as
+scrolling; any other command in that window is a deliberate move and drops the
+pending return. Redraws while scrolled away keep the reader position as before.
+Capture uses each displayed view window's own point and buffer, and restoration
+applies only to windows whose viewport actually scrolled. Wheel scrolling over
+a non-selected window and `scroll-other-window` work even from a different
+selected buffer, without changing the selected window's point or viewport.
 
 Arriving permission prompts and questions do not move point. They render, the
 rail shows them as pending, and `C-c C-j` visits the next one from the invoking
@@ -193,6 +230,78 @@ approval's RET action. An idle delay (as in Codex) only narrows that window, so
 focus is explicit.
 
 ## Decision history
+
+- **Scrolling back returns to the draft (2026-10-31).** With
+  `scroll-preserve-screen-position` and two-line wheel steps, three wheel
+  notches up from a composer at the window bottom moved point onto background
+  rows, and scrolling back left it there while the composer was visible again;
+  later redraws then preserved that chrome position as a reading position. A
+  graphical command-loop reproduction confirmed both. Point now returns to its
+  draft offset on the first scroll that shows it fully. Other commands cancel the
+  return, so a deliberate move is never undone. Native non-selected-window
+  regressions exposed that wheel scrolling restores selection before the hooks
+  run. Global command hooks now capture view windows only on scroll commands
+  and restore only those whose viewport changed; ordinary commands do not walk
+  windows or measure geometry.
+
+- **Status rows are visits too (2026-10-31).** Collapsing an expanded
+  background row while the composer sat mid-window moved the composer to the
+  bottom (graphical reproduction: composer at body pixel 400 moved to 600).
+  Point on a status row was neither a composer, history-reader nor visited-card
+  anchor, so the shrinking character tail clamped the window to its last page.
+  Status rows are rows a user visits deliberately, like interaction cards, so
+  they now take the visited-row policy: the row keeps its screen position and
+  only newly created blank space is filled, which returns the composer to its
+  row. A full redraw under a visited `[Manage]` row no longer moves that row.
+  Only windows whose point is in a managed row pay for the row measurement.
+
+- **Size round trips retain their blank-space baseline (2026-10-26).** A live
+  focus trace showed focus returning to one frame repeatedly invoking window
+  growth repair on another frame showing the same view. That inactive window's
+  start moved backward from 199478 to 199348 and later to 199214, making its
+  transcript drift downward. Native header and popup round-trip tests reproduced
+  blank-space erosion: the previous growth-only inference forgot when a shrink
+  had consumed existing blank space without moving the viewport, so growth then
+  filled that intentional space again. A short-lived per-window shrink snapshot
+  retains the original height through an
+  unchanged viewport's size round trip. Native graphical regressions cover
+  repeated header-height changes and real popup opening/closing with two frames
+  displaying the same view. Buffer/width changes or scrolling invalidate the
+  snapshot; genuine newly exposed blank space retains its prior repair policy.
+  Transcript readers now skip height-growth repair entirely, consistent with
+  their existing priority over shrink clamping. Composer and chrome windows retain ordinary
+  unmatched-growth recovery and the shrink snapshot above.
+  The mouse-command-loop regression exposed an earlier interleaving too: the
+  minibuffer shrank from 40 to 20 pixels while the body grew from 622 to 642
+  pixels. Point was still in the composer but a resolved history click was
+  already queued, and growth repair moved the viewport backward by one line.
+  Growth repair now leaves pending input alone. The nil-argument
+  `input-pending-p` query returns immediately without running
+  timers, so this guard does not reenter redisplay from its size hook.
+  A later live size trace showed the actual focus trigger arriving in the
+  other order: on focus return the whole frame grew by 12 pixels (body 1102 to
+  1114, minibuffer unchanged) and shrank back 16 milliseconds later. Growth
+  repair filled the 12 pixels (vertical scroll 14 to 2) and the shrink left
+  them filled, so each focus return drifted the transcript. The snapshot
+  therefore records the original viewport on the first size change in either
+  direction and restores it when that height returns, undoing a transient
+  growth's repair as well as ignoring a transient shrink.
+  Review then found that successive growth steps charged earlier repaired
+  pixels again, and that an unconditional restore could move a click aimed at
+  a long-shown repair. The snapshot now tracks the tallest height already
+  repaired, and restoration under pending input is limited to sequences whose
+  first repair is younger than 0.1 seconds, which covers the 16-millisecond
+  focus transient; a later repair cannot renew that window.
+
+- **The caret chooses the active surface (2026-10-26).** A focus click into
+  history left the viewport unchanged, but the deferred catch-up redraw then
+  restored a composer anchor and moved the transcript. Previously, merely
+  showing the composer made it take priority regardless of point. Composer
+  anchors now require that window's caret in the input; history readers retain
+  their surviving logical starts, including when status rows shrink. Ownership
+  is captured before mutation so a disappearing interaction's fallback point
+  cannot become a protected history reader. Lost-start recovery and the
+  composer's native pixel anchoring retain their existing policies.
 
 - **Bound passive pointer protection (2026-10-19).** The user reported many
   hours-old completed rows after returning from a locked screen. Previously,

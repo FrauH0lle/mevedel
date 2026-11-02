@@ -550,32 +550,11 @@
     (should (string-match-p "y    Run described test key" text))
     (should-not (string-match-p "x    " text))))
 
-(mevedel-deftest mevedel-cockpit--return-buffer ()
-  ,test
-  (test)
-
-  :doc "returns origin, then view, then data as owners disappear"
-  (let ((view-buffer (generate-new-buffer " *cockpit-return-view*"))
-        (data-buffer (generate-new-buffer " *cockpit-return-data*"))
-        (origin-buffer (generate-new-buffer " *cockpit-return-origin*")))
-    (unwind-protect
-        (let ((buffer (mevedel-cockpit-test--open
-                       view-buffer data-buffer origin-buffer nil)))
-          (with-current-buffer buffer
-            (should (eq (mevedel-cockpit--return-buffer) origin-buffer))
-            (kill-buffer origin-buffer)
-            (should (eq (mevedel-cockpit--return-buffer) view-buffer))
-            (kill-buffer view-buffer)
-            (should (eq (mevedel-cockpit--return-buffer) data-buffer))
-            (kill-buffer data-buffer)
-            (should-not (mevedel-cockpit--return-buffer))))
-      (mevedel-cockpit-test--cleanup view-buffer data-buffer origin-buffer))))
-
 (mevedel-deftest mevedel-cockpit-quit ()
   ,test
   (test)
 
-  :doc "kills the cockpit and returns through origin, view, then data"
+  :doc "kills a directly opened cockpit without reopening the menu"
   (dolist (case '((origin)
                   (view kill-origin)
                   (data kill-origin kill-view)))
@@ -597,15 +576,11 @@
               (with-current-buffer buffer
                 (mevedel-cockpit-quit "test cockpit")))
             (should-not (buffer-live-p buffer))
-            (should (eq called-buffer
-                        (pcase (car case)
-                          ('origin origin-buffer)
-                          ('view view-buffer)
-                          ('data data-buffer)))))
+            (should-not called-buffer))
         (mevedel-cockpit-test--cleanup
          view-buffer data-buffer origin-buffer))))
 
-  :doc "quit kills the cockpit before reporting dead owners"
+  :doc "quit remains available after the owners die"
   (let ((view-buffer (generate-new-buffer " *cockpit-dead-view*"))
         (data-buffer (generate-new-buffer " *cockpit-dead-data*")))
     (unwind-protect
@@ -614,10 +589,29 @@
           (kill-buffer view-buffer)
           (kill-buffer data-buffer)
           (with-current-buffer buffer
-            (should-error (mevedel-cockpit-quit "test cockpit")
-                          :type 'user-error))
+            (mevedel-cockpit-quit "test cockpit"))
           (should-not (buffer-live-p buffer)))
       (mevedel-cockpit-test--cleanup view-buffer data-buffer))))
+
+(mevedel-deftest mevedel-cockpit-menu-return-function ()
+  ,test
+  (test)
+
+  :doc "inherited ownership never makes a direct open return to the menu"
+  (let ((view (generate-new-buffer " *return-function-view*"))
+        (data (generate-new-buffer " *return-function-data*"))
+        called)
+    (unwind-protect
+        (let* ((context (mevedel-cockpit-test--context view data))
+               (context (plist-put context :return-menu (lambda () (setq called t)))))
+          (let ((transient-current-command nil))
+            (should-not (mevedel-cockpit-menu-return-function context)))
+          (let ((transient-current-command 'gptel-menu))
+            (should-not (mevedel-cockpit-menu-return-function context)))
+          (let ((transient-current-command 'mevedel-menu--top))
+            (funcall (mevedel-cockpit-menu-return-function context)))
+          (should called))
+      (mevedel-cockpit-test--cleanup view data))))
 
 (provide 'test-mevedel-cockpit)
 

@@ -613,6 +613,82 @@
         (should (equal '("Template user turn"
                          "Template assistant response")
                        (cdr side-system))))))
+  :doc "keeps inherited reminders hidden during live and terminal side renders"
+  (dolist (live-first '(t nil))
+    (let* ((workspace
+            (mevedel-workspace--create
+             :type 'file :id "btw-render-boundary"
+             :root (mevedel-test--placeholder-root) :name "btw-render-boundary"))
+           (session (mevedel-session-create "main" workspace))
+           (draft "> keep this draft\nsecond line")
+           side-view side-data response-info)
+      (mevedel-view-test--with-buffers
+        (with-current-buffer data-buf
+          (setq-local mevedel--workspace workspace
+                      mevedel--session session)
+          (insert "*** Parent prompt\n"
+                  (propertize "Parent answer\n" 'gptel 'response)
+                  "\n*** Active parent prompt\n")
+          (setq-local
+           mevedel--current-request
+           (mevedel-request--create
+            :id "btw-render-parent" :session session
+            :fsm (gptel-make-fsm
+                  :state 'TYPE
+                  :info (list :buffer data-buf :position (copy-marker (point))
+                              :mevedel-request-locals
+                              (mevedel-side-conversation--request-locals)
+                              :mevedel-model-context (buffer-string))))))
+        (with-current-buffer view-buf
+          (setq-local mevedel--session session)
+          (goto-char (mevedel-view--input-start))
+          (insert "/btw Unique side question")
+          (cl-letf (((symbol-function 'pop-to-buffer)
+                     (lambda (buffer &rest _) (setq side-view buffer)))
+                    ((symbol-function 'gptel-send) #'ignore))
+            (mevedel-view-send)))
+        (setq side-data (buffer-local-value 'mevedel--data-buffer side-view)
+              response-info
+              (with-current-buffer side-data
+                (list :buffer side-data :position (copy-marker (point-max)))))
+        (with-current-buffer side-view
+          (goto-char (mevedel-view--input-start))
+          (insert draft)
+          (backward-char 3))
+        (cl-labels
+            ((check-view
+              ()
+              (with-current-buffer side-view
+                (let ((text (buffer-substring-no-properties
+                             (point-min) mevedel-view--input-marker)))
+                  (should (= 1 (cl-count "Unique side question"
+                                         (split-string text "\n") :test #'equal)))
+                  (should-not (string-match-p "System reminder\\|Parent prompt"
+                                             text)))
+                (should (equal draft (mevedel-view--input-text)))
+                (should (= (point) (- (point-max) 3))))))
+          (when live-first
+            ;; A tool/permission refresh can run before the first response
+            ;; establishes a new gptel property run after the inherited reminder.
+            (dotimes (_ 2)
+              (with-current-buffer side-view
+                (mevedel-view--render-stream-update side-data))
+              (check-view)))
+          (with-current-buffer side-data
+            (gptel-curl--stream-insert-response "Side answer." response-info))
+          (when live-first
+            (with-current-buffer side-view
+              (mevedel-view--render-stream-update side-data))
+            (check-view))
+          (with-current-buffer side-data
+            (mevedel-view-stream-render-response
+             (plist-get response-info :position)
+             (plist-get response-info :tracking-marker)))
+          (check-view)
+          (with-current-buffer side-view
+            (should (string-match-p "Side answer\\." (buffer-string)))
+            (mevedel-view--full-rerender))
+          (check-view)))))
   :doc "submits an inline prompt and independent multi-turn follow-up"
   (let* ((workspace
           (mevedel-workspace--create
@@ -1859,6 +1935,35 @@
       (should-not (buffer-live-p side-view))
       (should-not (buffer-live-p side-data))
       (should-not (mevedel-session-save-path side-session)))))
+
+(mevedel-deftest mevedel-side-conversation/cold-order ()
+  ,test
+  (test)
+  :doc "preserves explicit sandbox policy in the formerly failing case order"
+  (let ((source (file-name-concat
+                 (file-name-directory (locate-library "mevedel"))
+                 "test/test-mevedel-side-conversation.el")))
+    (with-temp-buffer
+      (let ((status
+             (call-process
+              (expand-file-name invocation-name invocation-directory)
+              nil t nil "--batch" "-Q" "--eval"
+              (prin1-to-string
+               `(progn
+                  (setq load-path ',load-path)
+                  (load ,source nil t)
+                  (dolist (name '(mevedel-side-conversation--interrupted-boundary/test
+                                  mevedel-view-send/btw/test@1
+                                  mevedel-view-send/btw/test@13
+                                  mevedel-view-send/btw/test@17))
+                    (let ((result (ert-run-test (ert-get-test name))))
+                      (unless (ert-test-passed-p result)
+                        (signal
+                         (car (ert-test-result-with-condition-condition result))
+                         (cdr (ert-test-result-with-condition-condition result)))))))))))
+        (ert-info ((buffer-string))
+          (should (equal 0 status))
+          (should (equal "" (buffer-string))))))))
 
 (provide 'test-mevedel-side-conversation)
 ;;; test-mevedel-side-conversation.el ends here

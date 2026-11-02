@@ -193,8 +193,8 @@ UPDATE, like input already queued by the display backend."
   "mouse-tool-target.el" t t 'stream)
 
 (defun mevedel-view-mouse-test--wait (predicate)
-  "Run real timers until PREDICATE succeeds, with a bounded deadline."
-  (let ((deadline (+ (float-time) 1.0)))
+  "Run real timers until PREDICATE succeeds, with a progress watchdog."
+  (let ((deadline (+ (float-time) 5.0)))
     (while (and (not (funcall predicate)) (< (float-time) deadline))
       (accept-process-output nil 0.01))
     (should (funcall predicate))))
@@ -202,6 +202,7 @@ UPDATE, like input already queued by the display backend."
 (defvar mevedel-view-mouse-test--macro-resume nil)
 (defvar mevedel-view-mouse-test--macro-observations nil)
 (defvar mevedel-view-mouse-test--macro-requeue nil)
+(defvar mevedel-view-mouse-test--macro-motion nil)
 
 (defun mevedel-view-mouse-test--macro-press (event)
   "Track EVENT's release inside one command, like macro-based mouse clients."
@@ -216,7 +217,13 @@ UPDATE, like input already queued by the display backend."
                   (buffer-modified-tick)
                   (string-search "Deferred response 5" (buffer-string)))
             mevedel-view-mouse-test--macro-observations)
-      (setq release (read-key))
+      (when mevedel-view-mouse-test--macro-motion
+        (push (list 'mouse-movement (copy-tree (event-start event)))
+              unread-command-events))
+      ;; Tracking reports pointer motion as well as release.  Treating motion
+      ;; as release could leave before the scheduled catch-up even started.
+      (while (eq (car-safe (setq release (read-key))) 'mouse-movement))
+      (should (eq (car-safe release) 'mouse-1))
       (push (list 'after track-mouse (car-safe last-command-event)
                   (eq last-command-event event)
                   (not (null (terminal-parameter nil 'mouse-drag-start)))
@@ -227,13 +234,15 @@ UPDATE, like input already queued by the display backend."
         (push release unread-command-events)
       (mouse-set-point release))))
 
-(defun mevedel-view-mouse-test--macro-click (position resume &optional requeue)
+(defun mevedel-view-mouse-test--macro-click (position resume &optional requeue motion)
   "Click POSITION while RESUME runs timers inside macro-based tracking.
-With REQUEUE, hand the release back to the ordinary command loop."
+With REQUEUE, hand the release back to the ordinary command loop.
+With MOTION, deliver a movement event before the release."
   (let* ((start (posn-at-point position))
          (release (list 'mouse-1 (copy-tree start)))
          (mevedel-view-mouse-test--macro-resume resume)
          (mevedel-view-mouse-test--macro-requeue requeue)
+         (mevedel-view-mouse-test--macro-motion motion)
          (map (copy-keymap (current-local-map)))
          timer exit-timer deadline)
     ;; Preserve the real release binding from the clicked fragment.  The
@@ -376,10 +385,11 @@ With REQUEUE, hand the release back to the ordinary command loop."
               (should-not mevedel-view--render-timer)
               (should mevedel-view--pending-render-kind)
               (funcall
-               (if (memq ordering '(macro-between macro-requeue))
+               (if (memq ordering '(macro-between macro-requeue macro-requeue-motion))
                    (lambda (pos _order callback)
                      (mevedel-view-mouse-test--macro-click
-                      pos callback (eq ordering 'macro-requeue)))
+                      pos callback (memq ordering '(macro-requeue macro-requeue-motion))
+                      (eq ordering 'macro-requeue-motion)))
                  #'mevedel-view-mouse-test--focus-click)
                clicked ordering
                (lambda (complete)
@@ -467,7 +477,89 @@ With REQUEUE, hand the release back to the ordinary command loop."
   :doc "incremental Manage button click with macro-requeued release"
   'incremental 'macro-requeue "[Manage]"
   :doc "batched Manage button click with macro-requeued release"
-  'batch 'macro-requeue "[Manage]")
+  'batch 'macro-requeue "[Manage]"
+  :doc "batched background catch-up with motion before macro-requeued release"
+  'batch 'macro-requeue-motion "Focus background target")
+
+(mevedel-deftest mevedel-view-mouse-history-focus ()
+  (progn
+    (skip-unless (display-graphic-p))
+    (save-window-excursion
+      (delete-other-windows)
+      (mevedel-view-test--with-buffers
+        (mevedel-view-test--insert-data data-buf "History focus prompt\n\n" nil)
+        (mevedel-view-test--insert-data
+         data-buf
+         (mapconcat (lambda (n) (format "History line %d.\n" n))
+                    (number-sequence 0 99) "")
+         'response)
+        (switch-to-buffer view-buf)
+        (let ((focused t)
+              (kind ,kind)
+              (mevedel-view-rerender-debounce 0.015)
+              (draft "> active draft\nsecond line"))
+          (mevedel-view-test--insert-composer-draft draft)
+          (cl-letf (((symbol-function 'frame-focus-state)
+                     (lambda (&optional _) focused)))
+            (mevedel-view--full-rerender)
+            (when (eq kind 'incremental)
+              ;; A new live turn starts after its user prompt, not inside the
+              ;; preceding response's contiguous gptel property run.
+              (mevedel-view-test--insert-data
+               data-buf "Continue with a live response.\n\n" nil)
+              (mevedel-view--full-rerender)
+              (mevedel-view-stream-begin-turn
+               (mevedel-view--history-insertion-marker)
+               (with-current-buffer data-buf (point-max)))
+              (mevedel-view-test--insert-data data-buf "Live initial.\n\n" 'response)
+              (mevedel-view--render-stream-update data-buf))
+            (goto-char (mevedel-view--input-start))
+            (let* ((window (selected-window))
+                   (input (point))
+                   (y (- (cdr (mevedel-view--window-body-geometry window))
+                         (* 3 (frame-char-height)))))
+              (mevedel-view--set-viewport
+               window (mevedel-view--viewport-at-y window input y))
+              (set-window-vscroll window 7 t)
+              (redisplay t)
+              (let* ((start (window-start window))
+                     (clicked (save-excursion
+                                (goto-char (point-min))
+                                (search-forward "History line 95.")
+                                (- (point) 3)))
+                     (reading-y (mevedel-view--position-screen-y clicked window)))
+                (ert-info ((format "Kind %S start=%d clicked=%d input=%d end=%d"
+                                   kind start clicked input (point-max)))
+                  (should reading-y))
+                (should (mevedel-view--position-screen-y input window))
+                (should (= 7 (window-vscroll window t)))
+                (setq focused nil)
+                (mevedel-view-test--insert-data
+                 data-buf
+                 (mapconcat (lambda (n) (format "Catch-up line %d.\n" n))
+                            (number-sequence 0 7) "")
+                 'response)
+                (mevedel-view--schedule-render kind data-buf 0.015)
+                (should-not mevedel-view--render-timer)
+                (mevedel-view-mouse-test--focus-click
+                 clicked 'between
+                 (lambda (_)
+                   (setq focused t)
+                   (mevedel-view--resume-attended-views)
+                   (mevedel-view-mouse-test--wait
+                    (lambda () (null mevedel-view--render-timer)))))
+                (mevedel-view-mouse-test--wait
+                 (lambda () (null mevedel-view-render--batch)))
+                (redisplay t)
+                (should (string-search "Catch-up line 7." (buffer-string)))
+                (should (= clicked (point)))
+                (should (= start (window-start window)))
+                (should (= 7 (window-vscroll window t)))
+                (should (= reading-y (mevedel-view--position-screen-y (point) window)))
+                (should (equal draft (mevedel-view--input-text))))))))))
+  (kind)
+  :doc "A history focus click retains its pixel viewport across full catch-up" 'full
+  :doc "A history focus click retains its pixel viewport across incremental catch-up" 'incremental)
 
 (provide 'test-mevedel-view-mouse)
 ;;; test-mevedel-view-mouse.el ends here

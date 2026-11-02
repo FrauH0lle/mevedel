@@ -118,6 +118,7 @@
     // answer; a record no stored message claims follows its discussion, or
     // the whole item's. A record unchanged since the last render keeps its
     // node, so text selected in an answer survives streaming elsewhere.
+    // A request's closing summary follows its answer but is not one.
     let rendered = new Map();
     let placed = {byMessage: new Map(), tail: new Map(), answers: new Map(), last: new Map()};
     function place() {
@@ -127,7 +128,7 @@
       let context = null;
       for (const record of records || []) {
         if (record.kind === 'user') context = record.shared || null;
-        if (record.kind !== 'user' && record.kind !== 'assistant') continue;
+        if (!['user', 'assistant', 'request-summary'].includes(record.kind)) continue;
         const print = JSON.stringify(record);
         const old = rendered.get(record.id);
         const node = old && old.print === print ? old.node

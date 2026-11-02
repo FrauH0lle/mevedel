@@ -778,6 +778,10 @@ when it changed meanwhile, rereads it and retries once. Reading needs no lease. 
 receives a change skipping a revision, as after a hand-over between two Emacs
 instances, rereads the whole item instead of applying only that change. If
 that read fails, the editor says so and reads again with the next change.
+Only the Emacs that commits a change tells browsers about it: it notifies its
+own rooms, and nothing watches the store for another instance's writes. A
+browser attached through a different Emacs therefore sees that change, in an
+open editor or the store listing, only when it next reads the item or listing.
 
 Versions follow the store's caps. A version keeps the item's content, title
 and discussions but not its receipts or contribution history. One is recorded

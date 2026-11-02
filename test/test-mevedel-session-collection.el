@@ -178,9 +178,12 @@
   :doc "cold scans use a child and recheck a changed head before collection"
   (test-mevedel-collection--with-session
     (let ((kill-emacs-hook kill-emacs-hook))
-      (dotimes (index 14)
+      ;; Seventeen cold generations cross the production worker threshold.
+      (dotimes (index 13)
         (insert (format "More history %d\n" index))
         (mevedel-session-artifacts-save session buffer))
+      (should (= 17 (length (mevedel-session-publication--generation-names
+                            (mevedel-session-save-path session)))))
       (clrhash mevedel-session-publication--generation-cache)
       (clrhash mevedel-session-publication--facts-cache)
       (mevedel-session-collection-schedule session)
@@ -209,9 +212,11 @@
   :doc "cancellation removes the worker before a late reply can rearm collection"
   (test-mevedel-collection--with-session
     (let ((kill-emacs-hook kill-emacs-hook))
-      (dotimes (index 14)
+      (dotimes (index 13)
         (insert (format "More history %d\n" index))
         (mevedel-session-artifacts-save session buffer))
+      (should (= 17 (length (mevedel-session-publication--generation-names
+                            (mevedel-session-save-path session)))))
       (clrhash mevedel-session-publication--generation-cache)
       (clrhash mevedel-session-publication--facts-cache)
       (mevedel-session-collection-schedule session)
@@ -230,7 +235,8 @@
   (test)
   :doc "warm history is checked for worker eligibility only once per head"
   (test-mevedel-collection--with-session
-    (dotimes (index 28)
+    ;; Still large enough to start a worker if the warm-cache proof is lost.
+    (dotimes (index 13)
       (insert (format "Warm history %d\n" index))
       (mevedel-session-artifacts-save session buffer))
     (let* ((directory (mevedel-session-save-path session))
@@ -240,7 +246,7 @@
            (mevedel-session-collection--slice-seconds 0)
            (filter (symbol-function 'seq-filter))
            (visits 0))
-      (should (= 32 (length names)))
+      (should (= 17 (length names)))
       (dolist (generation names)
         (mevedel-session-publication-generation-summary directory generation t))
       (cl-letf (((symbol-function 'seq-filter)
@@ -252,14 +258,14 @@
           (mevedel-session-collection--step session job))
         (should (= 3 (hash-table-count (plist-get job :summaries))))
         (should-not (plist-get job :worker))
-        (should (= 32 visits))
+        (should (= 17 visits))
         ;; A moved head must still reconsider the new generation set.
         (insert "New warm head\n")
         (mevedel-session-artifacts-save session buffer)
         (mevedel-session-collection--step session job)
-        (should (= 62 visits))
+        (should (= 32 visits))
         (mevedel-session-collection--step session job)
-        (should (= 62 visits)))))
+        (should (= 32 visits)))))
   :doc "a cold history below the worker threshold is checked only once"
   (test-mevedel-collection--with-session
     (clrhash mevedel-session-publication--generation-cache)
@@ -321,22 +327,25 @@
     (let* ((mevedel-session-collection--slice-seconds 0)
            (directory (mevedel-session-save-path session))
            (steps 0)
-           (publications 0))
-      (dotimes (index 8)
-        (insert (format "Earlier history %d\n" index))
-        (mevedel-session-artifacts-save session buffer))
+           (publications 0)
+           (deletion-publications 0))
+      ;; The four fixture generations already leave reclaimable history.
       (let ((before (length (mevedel-session-publication--generation-names directory))))
+        (should (= 4 before))
         (mevedel-session-collection-schedule session)
         (let ((job (gethash session mevedel-session-collection--jobs)))
           (while (gethash session mevedel-session-collection--jobs)
             ;; Publish between steps in every phase, deletion included.
             (when (zerop (% steps 3))
+              (when (plist-get (plist-get job :plan) :operations)
+                (cl-incf deletion-publications))
               (insert (format "Published during collection %d\n" (cl-incf publications)))
               (mevedel-session-artifacts-save session buffer))
             (unless (plist-get job :pending)
               (mevedel-session-collection--step session job))
             (accept-process-output nil 0.01)
             (should (< (cl-incf steps) 600))))
+        (should (> deletion-publications 0))
         (should (< (length (mevedel-session-publication--generation-names directory))
                    (+ before publications))))
       ;; Every remaining head still resolves to files that exist.

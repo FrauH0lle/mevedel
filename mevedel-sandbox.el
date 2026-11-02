@@ -5,13 +5,16 @@
 ;; Builds and probes the Linux Bubblewrap boundary used by model-triggered
 ;; child processes.  The host is read-only, approved roots are rebound
 ;; writable, and process and network namespaces cover the requested process
-;; and all descendants.  This module selects confinement and prepares
-;; execution facts; `mevedel-execution' owns launch and teardown without replay.
+;; and all descendants.  Where the kernel supports it, a Landlock launcher
+;; also keeps local commands from connecting to host Unix sockets outside an
+;; allow-list.  This module selects confinement and prepares execution facts;
+;; `mevedel-execution' owns launch and teardown without replay.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'mevedel-permission-mode)
+(require 'mevedel-utilities)
 
 (eval-when-compile
   (require 'subr-x))
@@ -38,6 +41,8 @@
 (autoload 'mevedel-permission-rules-path-protected-p "mevedel-permission-rules")
 
 ;; `mevedel-sandbox-grants'
+(declare-function mevedel-sandbox--device-grant-command
+                  "mevedel-sandbox-grants" (command grants workdir))
 (declare-function mevedel-sandbox--fd-backed-command
                   "mevedel-sandbox-grants"
                   (command grants &optional mask-fds workdir))
@@ -46,7 +51,10 @@
 (declare-function mevedel-sandbox--resolve-filesystem-permissions
                   "mevedel-sandbox-grants"
                   (permissions &optional inaccessible-paths restrictions))
+(declare-function mevedel-sandbox--grant-paths "mevedel-sandbox-grants" (grant))
+(autoload 'mevedel-sandbox--device-grant-command "mevedel-sandbox-grants")
 (autoload 'mevedel-sandbox--fd-backed-command "mevedel-sandbox-grants")
+(autoload 'mevedel-sandbox--grant-paths "mevedel-sandbox-grants")
 (autoload 'mevedel-sandbox--mount-plan "mevedel-sandbox-grants")
 (autoload 'mevedel-sandbox--resolve-filesystem-permissions
   "mevedel-sandbox-grants")
@@ -111,6 +119,8 @@ inside a session updates only that session."
                  best-effort)
           (const :tag "Required -- refuse without Bubblewrap" required)
           (const :tag "Off -- execute directly with disclosure" off))
+  ;; Cold loading must initialize the default, not change the active session.
+  :initialize #'custom-initialize-default
   :set #'mevedel-sandbox-mode--set
   :get #'mevedel-sandbox-mode--get
   :group 'mevedel)
@@ -169,6 +179,24 @@ remote target is left untouched."
 
 (defconst mevedel-sandbox-intrinsic-paths '("/dev/null")
   "Paths supplied by the private child environment without host authority.")
+
+(defconst mevedel-sandbox--git-ssh-script
+  (file-name-concat
+   (mevedel-library-source-directory (or load-file-name buffer-file-name))
+   "scripts" "mevedel-git-ssh.py")
+  "Fetch-only Git SSH client and host broker.")
+
+(defvar mevedel-sandbox--git-ssh-program "ssh"
+  "Host ssh program the fetch-only Git broker runs.")
+
+(defconst mevedel-sandbox--landlock-script
+  (file-name-concat
+   (mevedel-library-source-directory (or load-file-name buffer-file-name))
+   "scripts" "mevedel-landlock.py")
+  "Launcher restricting which host Unix sockets a confined command reaches.")
+
+(defconst mevedel-sandbox--landlock-abi 9
+  "First Landlock ABI with `LANDLOCK_ACCESS_FS_RESOLVE_UNIX'.")
 
 
 ;;
@@ -279,12 +307,38 @@ OMIT-PROC-P leaves the host proc filesystem visible through the root bind."
      (t
       (format "Bubblewrap probe failed: %s" detail)))))
 
+(defun mevedel-sandbox--landlock-probe ()
+  "Return the local Landlock socket launcher, or why it is unavailable.
+Return (:python PYTHON :abi ABI) when the running kernel's Landlock ABI
+restricts pathname Unix sockets, otherwise (:reason REASON).  Without it,
+confined commands still reach host sockets their mounts expose."
+  (if-let* ((python (executable-find "python3")))
+      (let ((abi
+             (condition-case nil
+                 (with-temp-buffer
+                   (let ((default-directory temporary-file-directory))
+                     (and (eql 0 (call-process python nil '(t nil) nil "-I" "-S"
+                                               mevedel-sandbox--landlock-script
+                                               "abi"))
+                          (string-match "\\`\\([0-9]+\\)\n?\\'" (buffer-string))
+                          (string-to-number (match-string 1 (buffer-string))))))
+               (error nil))))
+        (cond
+         ((null abi) (list :reason "Landlock probe failed"))
+         ((zerop abi) (list :reason "Landlock is not enabled"))
+         ((< abi mevedel-sandbox--landlock-abi)
+          (list :reason (format "Landlock ABI %d lacks socket restriction (needs %d)"
+                                abi mevedel-sandbox--landlock-abi)))
+         (t (list :python python :abi abi))))
+    (list :reason "'python3' is not installed")))
+
 (defun mevedel-sandbox-probe (&optional workdir)
   "Return and cache Bubblewrap availability facts for WORKDIR's target.
 
 The probe creates the same core namespaces and mounts as real execution but
 runs only `true'.  A failed probe means the backend is unavailable even when a
-`bwrap' executable is installed."
+`bwrap' executable is installed.  Available facts carry :landlock, the result
+of `mevedel-sandbox--landlock-probe' for a local target."
   (let* ((target (and workdir (file-remote-p workdir)))
          (cached (alist-get target mevedel-sandbox--probe-cache
                             nil nil #'equal)))
@@ -342,7 +396,13 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                             (when (or (plist-get without-proc :timed-out-p)
                                       (plist-get without-proc :error))
                               (list :retry-on-execution t))))))))))))
-           facts)))))
+           (if (plist-get facts :available)
+               (append facts
+                       (list :landlock
+                             (if target
+                                 (list :reason "remote execution target")
+                               (mevedel-sandbox--landlock-probe))))
+             facts))))))
 
 (defun mevedel-sandbox--canonical-directories (roots)
   "Return existing canonical directories from ROOTS without duplicates."
@@ -353,7 +413,7 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
             (when (and (stringp root)
                        (file-directory-p (expand-file-name root)))
               (file-name-as-directory
-               (file-truename (expand-file-name root)))))
+               (mevedel-file-truename (expand-file-name root)))))
           roots))))
 
 (defun mevedel-sandbox--first-missing-path (path &optional planned)
@@ -425,9 +485,10 @@ Resolve the `.git' pointer and its `commondir' file on PATH's target."
 
 (defconst mevedel-sandbox--root-anchored-names '(".mevedel")
   "Directories that exist only at a workspace root.
-A protected `**/NAME/...' pattern below one protects, at each discovery
-root, the whole directory its literal part names, without walking the
-root; native checks still match the pattern itself at any depth.")
+A protected `**/NAME/...' pattern below one protects the whole directory
+its literal part names, without walking the root.  Missing state is
+created only at the primary root; existing secondary state is protected
+too.  Native checks still match at any depth.")
 
 (defun mevedel-sandbox--find-protected-directory (root name executable)
   "Find literal protected NAME below local ROOT with GNU find EXECUTABLE.
@@ -457,6 +518,8 @@ the execution target's temporary directory, defaults to
 scratch the child already owns, a repository placed there is not protected,
 and walking all of it on every launch cost more than the protection was
 worth while surfacing transient trees that vanished before launch.
+The first writable root is the primary confinement root; only it receives
+default missing mount targets, never the memory or additional roots.
 SCAN-FUNCTION, when non-nil, receives ROOT, NAME, EXECUTABLE and MODE for
 each native directory scan and returns (PATH . BLOCKED) pairs.
 Literal state roots carry `:create-parents' so preparation protects their
@@ -477,7 +540,7 @@ across launches, since another active sandbox may still mount them."
                (lambda (root)
                  (and (file-directory-p (expand-file-name root))
                       (member (file-name-as-directory
-                               (file-truename (expand-file-name root)))
+                               (mevedel-file-truename (expand-file-name root)))
                               exempt)))
                writable-roots)
             writable-roots))
@@ -581,7 +644,7 @@ across launches, since another active sandbox may still mount them."
                   (setq target-home
                         (or target-home
                             (file-name-as-directory
-                             (file-truename (concat target-prefix "~/")))))
+                             (mevedel-file-truename (concat target-prefix "~/")))))
                   (if (string-equal root-pattern "~")
                       (directory-file-name target-home)
                     (file-name-concat target-home
@@ -607,10 +670,11 @@ across launches, since another active sandbox may still mount them."
                              mode directory-p))
              (literal-directory
               (dolist (root (delete-dups (copy-sequence discovery-roots)))
-                (search-literal-directory root literal-directory mode)
+                (search-literal-directory root literal-directory mode))
+              (when (member (car writable-roots) discovery-roots)
                 (add-candidate
-                 (file-name-concat root literal-directory) mode t)))
-             ;; mevedel's own state sits at each workspace root.  A
+                 (file-name-concat (car writable-roots) literal-directory) mode t)))
+             ;; mevedel's own state sits at workspace roots.  A
              ;; pattern globbing below it protects the whole directory its
              ;; literal part names: one required mount, without a walk,
              ;; that also covers entries created later.  A literal file
@@ -626,8 +690,10 @@ across launches, since another active sandbox may still mount them."
                 ;; parents, so authored siblings stay writable and a confined
                 ;; shell cannot plant state before mevedel creates it.
                 (dolist (root (delete-dups (copy-sequence discovery-roots)))
-                  (add-candidate (file-name-concat root (string-join literal "/"))
-                                 mode directory-p directory-p))))
+                  (let ((path (file-name-concat root (string-join literal "/"))))
+                    (when (or (equal root (car writable-roots))
+                              (file-exists-p path))
+                      (add-candidate path mode directory-p directory-p))))))
              (t
               (let ((search-roots (copy-sequence discovery-roots)))
                 (when absolute-pattern
@@ -653,7 +719,7 @@ across launches, since another active sandbox may still mount them."
       (nreverse candidates))))
 
 (defun mevedel-sandbox-cleanup (preparation)
-  "Remove unchanged synthetic mount targets owned by PREPARATION.
+  "Stop PREPARATION's Git broker and remove its unchanged mount targets.
 
 Teardown can run from a sentinel or settle timer while a remote command is
 active.  Every cleanup step is target I/O, so issuing it there can cross the
@@ -663,6 +729,8 @@ Nothing waits on a mount target being gone, so a busy transport defers
 the whole cleanup rather than nesting.  A disabled transport drops
 deferred work, so that case cleans up immediately rather than leaving
 the targets behind."
+  ;; The broker is local, so stopping it never crosses a remote transport.
+  (mevedel-sandbox--git-ssh-stop (plist-get preparation :git-ssh))
   (if (and (mevedel-transport-busy-p
             (plist-get (car (plist-get preparation :cleanup-paths)) :path))
            (mevedel-transport-run-when-idle
@@ -745,7 +813,7 @@ a one-element list; path and symlink checks still happen here."
          (physical-roots
           (mapcar (lambda (root)
                     (let ((root (directory-file-name (expand-file-name root))))
-                      (cons root (directory-file-name (file-truename root)))))
+                      (cons root (directory-file-name (mevedel-file-truename root)))))
                   writable-roots))
          ;; Roots that are already canonical.  Below one, a path whose every
          ;; component was just proved not to be a symlink is its own truename.
@@ -872,7 +940,7 @@ a one-element list; path and symlink checks still happen here."
                                     (string-prefix-p (file-name-as-directory root) path))))
                             canonical-roots)
                            path
-                         (file-truename path))))
+                         (mevedel-file-truename path))))
                   (unless (string-equal canonical path)
                     (push (append (list :path canonical
                                         :mode mode
@@ -927,7 +995,7 @@ a one-element list; path and symlink checks still happen here."
 WORKDIR supplies the execution path domain.  Inspect containing masks and
 canonical aliases without scanning directory trees or preparing mounts.
 Launch preparation still checks the actual restrictions afresh."
-  (let* ((canonical (file-truename path))
+  (let* ((canonical (mevedel-file-truename path))
          (paths (delete-dups (list (expand-file-name path) canonical))))
     (or
      (cl-some
@@ -954,7 +1022,7 @@ Launch preparation still checks the actual restrictions afresh."
           (let ((mask (plist-get candidate :path)))
             (and (file-directory-p mask)
                  (mevedel-permission-rules-path-in-allowed-roots-p
-                  canonical (list (file-truename mask))))))
+                  canonical (list (mevedel-file-truename mask))))))
         (mevedel-sandbox--protected-candidates workdir nil))))))
 
 (defun mevedel-sandbox--unrestricted-facts (sandbox reason)
@@ -963,6 +1031,316 @@ Launch preparation still checks the actual restrictions afresh."
         :filesystem 'unrestricted
         :network 'unrestricted
         :reason reason))
+
+
+;;
+;;; Fetch-only Git SSH transport
+
+(defun mevedel-sandbox--git-ssh-trusted-p (path roots git)
+  "Return non-nil when Git metadata PATH predates any confined write.
+ROOTS are the preparation's canonical writable roots, primary root first.
+Metadata outside every writable root is unreachable to this command, though
+an earlier command may have written it under a grant.
+Inside them, only the primary root's own `.git' directory qualifies: it is
+protected, or created empty, before every confined command there, while a
+nested `.git' elsewhere may have been planted by an earlier command.  A
+primary root inside another Git work tree may itself be such a plant, so
+its `.git' directory is refused; GIT finds the enclosing work tree."
+  (let ((primary-git (file-name-concat (car roots) ".git")))
+    (if (file-in-directory-p path primary-git)
+        (and (file-directory-p primary-git)
+             (not (file-symlink-p primary-git))
+             (let ((default-directory
+                    (file-name-directory (directory-file-name (car roots)))))
+               (not (eql 0 (call-process git nil nil nil "rev-parse"
+                                         "--is-inside-work-tree")))))
+      (not (cl-some (lambda (root) (file-in-directory-p path root)) roots)))))
+
+(defun mevedel-sandbox--git-ssh-discover (git directory)
+  "Return (TOPLEVEL GIT-DIR COMMON-DIR) that GIT discovers from DIRECTORY.
+Return nil outside a work tree.  Environment overrides of discovery are
+dropped, so only the on-disk `.git' entries decide."
+  (with-temp-buffer
+    (let ((default-directory (file-name-as-directory directory))
+          (process-environment
+           (seq-remove
+            (lambda (entry)
+              (string-match-p
+               (concat "\\`GIT_\\(?:DIR\\|COMMON_DIR\\|WORK_TREE\\|CEILING_DIRECTORIES"
+                       "\\|DISCOVERY_ACROSS_FILESYSTEM\\)=")
+               entry))
+            process-environment)))
+      (when (eql 0 (call-process git nil '(t nil) nil "rev-parse"
+                                 "--path-format=absolute" "--show-toplevel"
+                                 "--git-dir" "--git-common-dir"))
+        (let ((lines (split-string (buffer-string) "\n" t)))
+          (when (= 3 (length lines))
+            (mapcar #'mevedel-file-truename lines)))))))
+
+(defun mevedel-sandbox--git-ssh-git-dir (git workdir roots)
+  "Return the primary root's Git directory when WORKDIR uses it, else nil.
+ROOTS are the canonical writable roots, primary root first.  Only the
+primary root's own `.git' entry is consulted: a directory, or a linked
+worktree's pointer file whose administrative directory links back to it,
+never a symlink.  GIT must discover exactly that repository from both the
+root and WORKDIR, so a nested `.git' entry anywhere below cannot redirect
+the broker; and the resolved directories must satisfy
+`mevedel-sandbox--git-ssh-trusted-p'."
+  (let* ((root (directory-file-name (car roots)))
+         (entry (file-name-concat root ".git")))
+    (when-let* (((file-exists-p entry))
+                ((not (file-symlink-p entry)))
+                (found (mevedel-sandbox--git-ssh-discover git root))
+                ((equal (car found) root))
+                ((equal found (mevedel-sandbox--git-ssh-discover git workdir)))
+                (directory (nth 1 found))
+                ((or (file-directory-p entry)
+                     ;; A genuine linked worktree records its pointer file.
+                     (let ((back (file-name-concat directory "gitdir")))
+                       (and (file-regular-p back)
+                            (equal (mevedel-file-truename
+                                    (string-trim
+                                     (with-temp-buffer
+                                       (insert-file-contents back nil 0 4096)
+                                       (buffer-string))))
+                                   entry)))))
+                ((mevedel-sandbox--git-ssh-trusted-p directory roots git))
+                ((mevedel-sandbox--git-ssh-trusted-p (nth 2 found) roots git)))
+      directory)))
+
+(defun mevedel-sandbox--git-ssh-urls (git git-dir)
+  "Return the fetch URLs of the repository at GIT-DIR that may use SSH.
+GIT reads that repository explicitly, so a nested `.git' cannot be
+discovered in its place.  Git expands `insteadOf' rewrites.  The broker
+parses the URLs strictly; this only skips repositories whose remotes
+cannot use SSH.  Remote-helper URLs (`helper::address') are not SSH."
+  (with-temp-buffer
+    (let ((default-directory (file-name-as-directory git-dir))
+          urls)
+      (when (eql 0 (call-process git nil '(t nil) nil
+                                 (concat "--git-dir=" git-dir) "remote" "-v"))
+          (dolist (line (split-string (buffer-string) "\n" t))
+            (when (string-match "\\`[^\t]+\t\\(.+\\) (fetch)\\'" line)
+              (let ((url (match-string 1 line)))
+                (when (and (string-search ":" url)
+                           (not (string-match-p
+                                 "\\`[A-Za-z][A-Za-z0-9+.-]*::" url))
+                           (not (string-match-p
+                                 "\\`\\(?:https?\\|git\\|file\\)://" url)))
+                  (push url urls)))))
+          (delete-dups (nreverse urls))))))
+
+(defun mevedel-sandbox--git-ssh-start (command workdir roots)
+  "Start the fetch-only Git SSH broker for confined COMMAND in WORKDIR.
+ROOTS are the canonical writable roots, primary root first.
+Return a plist with :process, :directory and :socket, or nil when COMMAND
+does not mention git, WORKDIR is remote, its Git metadata may have been
+written by a confined command, or no fetch remote uses SSH.  The allowed
+destinations are read now, before the confined command starts.  A `.git'
+write grant still lets a command change what later brokers trust.  The
+broker lives in its own
+owner-only directory under the local tool-server socket root, which
+confinement masks; only this command's directory is bound back."
+  (when-let* (((not (file-remote-p workdir)))
+              ((cl-some (lambda (argument)
+                          (and (stringp argument)
+                               (string-match-p "\\bgit\\b" argument)))
+                        command))
+              (python (executable-find "python3"))
+              (git (executable-find "git"))
+              (git-dir (mevedel-sandbox--git-ssh-git-dir git workdir roots))
+              (urls (mevedel-sandbox--git-ssh-urls git git-dir))
+              (directory (with-file-modes #o700
+                           (make-temp-file
+                            (file-name-concat (mevedel-mcp-socket-root) "git-ssh-")
+                            t))))
+    (condition-case err
+        (let* ((socket (file-name-concat directory "socket"))
+               (default-directory (file-name-as-directory directory))
+               (process
+                (make-process
+                 :name "mevedel-git-ssh"
+                 :command (list python "-I" mevedel-sandbox--git-ssh-script
+                                "serve" socket
+                                (json-serialize
+                                 (list :ssh mevedel-sandbox--git-ssh-program
+                                       :urls (vconcat urls))))
+                 :connection-type 'pipe
+                 :coding 'binary
+                 :noquery t
+                 :filter #'ignore
+                 :sentinel #'ignore)))
+          (list :process process :directory directory :socket socket
+                :client (mapconcat #'shell-quote-argument
+                                   (list python "-I" mevedel-sandbox--git-ssh-script
+                                         "client")
+                                   " ")))
+      (error
+       (delete-directory directory t)
+       (signal (car err) (cdr err))))))
+
+(defun mevedel-sandbox--git-ssh-stop (broker)
+  "Stop BROKER and its ssh children, and remove its socket directory."
+  (when broker
+    (let ((process (plist-get broker :process))
+          (directory (plist-get broker :directory)))
+      ;; The broker runs in its own process group with its ssh children.
+      (when (process-live-p process)
+        (delete-process process))
+      (when (file-directory-p directory)
+        (delete-directory directory t)))))
+
+(defun mevedel-sandbox--git-ssh-arguments (broker)
+  "Return Bubblewrap arguments for local agent masking and BROKER.
+The user's ssh-agent socket is masked: a socket on a read-only mount still
+accepts connections, so inheriting it would let confined code sign with the
+user's keys.  BROKER, when non-nil, is reachable through `GIT_SSH_COMMAND'."
+  (append
+   (when-let* ((agent (getenv "SSH_AUTH_SOCK"))
+               ((file-name-absolute-p agent))
+               ((file-exists-p agent)))
+     (list "--ro-bind" "/dev/null" agent))
+   (list "--unsetenv" "SSH_AUTH_SOCK")
+   (when broker
+     (let ((directory (plist-get broker :directory)))
+       (list "--ro-bind" directory directory
+             "--setenv" "GIT_SSH_COMMAND" (plist-get broker :client)
+             "--setenv" "GIT_SSH_VARIANT" "ssh"
+             "--setenv" "MEVEDEL_GIT_SSH_SOCKET" (plist-get broker :socket))))))
+
+(defconst mevedel-sandbox--runtime-parent "/run/user/"
+  "Parent of the per-user runtime directories on systemd and elogind hosts.")
+
+(defun mevedel-sandbox--runtime-masks (workdir)
+  "Return the per-user runtime directories confinement hides for WORKDIR.
+A runtime directory holds sockets that act with the user's full authority
+outside confinement: the session bus (whose systemd manager starts commands
+on request), the systemd user manager, gpg-agent, keyrings, an Emacs server,
+audio servers and container APIs.  A socket on a read-only mount still
+accepts connections, so each directory is replaced by an empty private tmpfs.
+The target's `/run/user' is masked; a local target also masks
+`XDG_RUNTIME_DIR' when that lies elsewhere.  Return target-local directory
+names ending in a slash."
+  (let* ((remote (file-remote-p workdir))
+         (candidates
+          (cons mevedel-sandbox--runtime-parent
+                (when-let* (((not remote))
+                            (runtime (getenv "XDG_RUNTIME_DIR"))
+                            ((file-name-absolute-p runtime))
+                            ((file-directory-p runtime)))
+                  (list (file-name-as-directory (mevedel-file-truename runtime))))))
+         (existing (cl-remove-if-not
+                    (lambda (directory)
+                      (file-directory-p (concat remote directory)))
+                    (delete-dups candidates))))
+    ;; A directory inside another mask is already hidden.
+    (cl-remove-if
+     (lambda (directory)
+       (cl-some (lambda (other)
+                  (and (not (equal other directory))
+                       (string-prefix-p other directory)))
+                existing))
+     existing)))
+
+(defun mevedel-sandbox--wayland-socket ()
+  "Return the canonical local Wayland socket named by `WAYLAND_DISPLAY', or nil."
+  (when-let* ((display (getenv "WAYLAND_DISPLAY"))
+              (socket (if (file-name-absolute-p display)
+                          display
+                        (when-let* ((runtime (getenv "XDG_RUNTIME_DIR")))
+                          (file-name-concat runtime display))))
+              ((file-exists-p socket)))
+    (mevedel-file-truename socket)))
+
+(defun mevedel-sandbox--check-runtime-grants (grants masks)
+  "Refuse resolved filesystem GRANTS that overlap runtime MASKS.
+Grant mounts follow the masks, so a grant at, below or above a masked
+directory would bring its sockets back.  An approval for such a path cannot
+be confined; only a full escalation can reach those services."
+  (dolist (grant grants)
+    (dolist (path (mevedel-sandbox--grant-paths grant))
+      (let ((local (file-name-as-directory
+                    (mevedel-collapse-leading-slashes (file-local-name path)))))
+        (when (cl-some (lambda (mask)
+                         (or (string-prefix-p mask local)
+                             (string-prefix-p local mask)))
+                       masks)
+          (signal 'mevedel-sandbox-policy-error
+                  (list (format "Filesystem grants cannot reach the per-user runtime directory, whose sockets act as the user outside confinement: %s"
+                                (plist-get grant :source-path)))))))))
+
+(defun mevedel-sandbox--runtime-arguments (workdir roots masks)
+  "Return Bubblewrap arguments hiding runtime MASKS for WORKDIR.
+ROOTS inside a masked directory are bound back writable, and the local
+Wayland socket is bound back so graphical commands keep their display."
+  (let ((masked-p (lambda (path)
+                    (cl-some (lambda (mask) (string-prefix-p mask path))
+                             masks))))
+    (append
+     (cl-mapcan (lambda (mask) (list "--tmpfs" (directory-file-name mask)))
+                masks)
+     (cl-mapcan (lambda (root)
+                  (when (funcall masked-p (file-local-name root))
+                    (list "--bind" root root)))
+                roots)
+     (when-let* (((not (file-remote-p workdir)))
+                 (socket (mevedel-sandbox--wayland-socket))
+                 ((funcall masked-p socket)))
+       (list "--ro-bind" socket socket)))))
+
+(defconst mevedel-sandbox--socket-directories '("/tmp/.X11-unix" "/tmp/.ICE-unix")
+  "Shared directories that hold only host session sockets.
+The X server accepts input injection and the ICE session manager controls
+the desktop session, so confinement replaces each with an empty tmpfs.  Both
+are system-managed and persist, so the mask needs no per-launch scan and
+also hides sockets created after launch.")
+
+(defun mevedel-sandbox--socket-arguments (workdir)
+  "Return Bubblewrap arguments hiding WORKDIR's target session socket directories."
+  (let ((remote (file-remote-p workdir)))
+    (cl-mapcan (lambda (directory)
+                 (when (file-directory-p (concat remote directory))
+                   (list "--tmpfs" directory)))
+               mevedel-sandbox--socket-directories)))
+
+(defun mevedel-sandbox--socket-allow-list (roots temporary-root grants broker)
+  "Return the paths whose host Unix sockets a confined command may reach.
+These are the sockets mevedel provides -- BROKER's directory and the Wayland
+display socket -- the canonical writable ROOTS except shared temporary space,
+and the paths of explicit write GRANTS.  Connecting needs write permission
+on a socket, so read grants add nothing.  TEMPORARY-ROOT, the local
+temporary directory and /tmp, and any root or write grant at or above them,
+stay restricted: other programs put their sockets there.  A grant below
+them, such as /tmp/build, is still allowed."
+  (let ((shared (delete-dups
+                 (mapcar (lambda (directory)
+                           (file-name-as-directory (mevedel-file-truename directory)))
+                         (delq nil (list temporary-root temporary-file-directory
+                                         "/tmp/")))))
+        allowed)
+    (setq allowed
+          (lambda (path)
+            ;; Canonical, so a `//tmp' spelling or a link to /tmp is /tmp.
+            (let ((directory (file-name-as-directory (mevedel-file-truename path))))
+              (not (cl-some (lambda (shared) (string-prefix-p directory shared))
+                            shared)))))
+    (delete-dups
+     (append
+      (when broker (list (plist-get broker :directory)))
+      (when-let* ((socket (mevedel-sandbox--wayland-socket))) (list socket))
+      (cl-remove-if-not allowed roots)
+      (cl-loop for grant in grants
+               when (and (eq (plist-get grant :access) 'write)
+                         (funcall allowed (plist-get grant :path)))
+               collect (plist-get grant :path))))))
+
+(defun mevedel-sandbox--host-socket-facts (launcher)
+  "Return confinement facts for Landlock LAUNCHER, a probe's :landlock value."
+  (if (plist-get launcher :python)
+      (list :host-sockets 'allow-listed)
+    (list :host-sockets 'reachable
+          :host-sockets-reason (or (plist-get launcher :reason)
+                                   "Landlock was not probed"))))
 
 (defun mevedel-sandbox--refused-facts (sandbox reason)
   "Return facts for a child refused by SANDBOX for REASON."
@@ -1000,15 +1378,18 @@ WORKDIR identifies the execution target that the pending child will use."
                (mevedel-sandbox-probe))))
         (cond
          ((plist-get availability :available)
-          (list :sandbox 'bubblewrap
-                :filesystem 'workspace-write
-                :proc (if (plist-get availability :mount-proc)
-                          'fresh
-                        'host)
-                :network
-                (if (eq t (plist-get additional-permissions :network))
-                    'unrestricted
-                  'isolated)))
+          (append
+           (list :sandbox 'bubblewrap
+                 :filesystem 'workspace-write
+                 :proc (if (plist-get availability :mount-proc)
+                           'fresh
+                         'host)
+                 :network
+                 (if (eq t (plist-get additional-permissions :network))
+                     'unrestricted
+                   'isolated))
+           (mevedel-sandbox--host-socket-facts
+            (plist-get availability :landlock))))
          ((eq mode 'required)
           (list :sandbox 'refused
                 :filesystem 'unavailable
@@ -1025,14 +1406,18 @@ WORKDIR identifies the execution target that the pending child will use."
 
 (defun mevedel-sandbox--confined-preparation
     (command workdir writable-roots executable mount-proc-p
-             additional-permissions &optional temporary-root candidates)
+             additional-permissions &optional temporary-root candidates
+             landlock)
   "Prepare COMMAND in WORKDIR with WRITABLE-ROOTS using EXECUTABLE.
 MOUNT-PROC-P requests a fresh proc filesystem for the PID namespace.
 ADDITIONAL-PERMISSIONS is the validated additive execution profile.
 TEMPORARY-ROOT is the writable temporary directory exempt from
-protected-path glob discovery.  CANDIDATES wraps already discovered paths."
+protected-path glob discovery.  CANDIDATES wraps already discovered paths.
+LANDLOCK is the probe's :landlock fact; with its launcher, a local command
+reaches only the host Unix sockets `mevedel-sandbox--socket-allow-list'
+names."
   (let* ((canonical-workdir
-          (file-name-as-directory (file-truename workdir)))
+          (file-name-as-directory (mevedel-file-truename workdir)))
          (roots (mevedel-sandbox--canonical-directories writable-roots)))
     (unless roots
       (signal 'mevedel-sandbox-policy-error
@@ -1050,7 +1435,10 @@ protected-path glob discovery.  CANDIDATES wraps already discovered paths."
            (protected
             (mevedel-sandbox--protected-restrictions
              canonical-workdir roots temporary-root candidates))
-           (restrictions (plist-get protected :restrictions)))
+           (restrictions (plist-get protected :restrictions))
+           (local-p (not (file-remote-p canonical-workdir)))
+           (launcher (and local-p (plist-get landlock :python)))
+           broker)
       (condition-case err
           (let* ((filesystem-permissions
                   (mevedel-sandbox--resolve-filesystem-permissions
@@ -1063,6 +1451,9 @@ protected-path glob discovery.  CANDIDATES wraps already discovered paths."
                             when (eq (plist-get restriction :mode) 'inaccessible)
                             collect (plist-get restriction :path))
                    restrictions))
+                 (runtime-masks (mevedel-sandbox--runtime-masks canonical-workdir))
+                 (_ (mevedel-sandbox--check-runtime-grants
+                     filesystem-permissions runtime-masks))
                  (plan (mevedel-sandbox--mount-plan
                         restrictions filesystem-permissions))
                  (network-access-p
@@ -1073,21 +1464,37 @@ protected-path glob discovery.  CANDIDATES wraps already discovered paths."
                  (filesystem-write-count
                   (cl-count 'write filesystem-permissions
                             :key (lambda (grant) (plist-get grant :access))))
-                 (facts (list :sandbox 'bubblewrap
-                              :git-common-directories
-                              (mapcar #'file-local-name
-                                      (plist-get protected :git-common-directories))
-                              :filesystem 'workspace-write
-                              :proc (if mount-proc-p 'fresh 'host)
-                              :network (if network-access-p
-                                           'unrestricted
-                                         'isolated)
-                              :writable-roots roots
-                              :protected-paths (length restrictions)
-                              :additional-filesystem
-                              (length filesystem-permissions)
-                              :additional-filesystem-read filesystem-read-count
-                              :additional-filesystem-write filesystem-write-count))
+                 (_ (when local-p
+                      ;; Without the broker, SSH fails confined as before;
+                      ;; that must not refuse the whole command.
+                      (setq broker
+                            (condition-case err
+                                (mevedel-sandbox--git-ssh-start
+                                 command canonical-workdir roots)
+                              (error
+                               (message "mevedel: Git SSH broker unavailable: %s"
+                                        (error-message-string err))
+                               nil)))))
+                 (facts (append
+                         (list :sandbox 'bubblewrap
+                               :git-common-directories
+                               (mapcar #'file-local-name
+                                       (plist-get protected :git-common-directories))
+                               :filesystem 'workspace-write
+                               :proc (if mount-proc-p 'fresh 'host)
+                               :network (if network-access-p
+                                            'unrestricted
+                                          'isolated)
+                               :writable-roots roots
+                               :protected-paths (length restrictions)
+                               :additional-filesystem
+                               (length filesystem-permissions)
+                               :additional-filesystem-read filesystem-read-count
+                               :additional-filesystem-write filesystem-write-count)
+                         (mevedel-sandbox--host-socket-facts
+                          (if local-p
+                              landlock
+                            (list :reason "remote execution target")))))
                  (arguments
                   (append
                    (list "--new-session"
@@ -1097,23 +1504,42 @@ protected-path glob discovery.  CANDIDATES wraps already discovered paths."
                    (cl-mapcan
                     (lambda (root) (list "--bind" root root))
                     roots)
+                   ;; After the roots, which it must hide when they contain
+                   ;; it; grants and protected masks still apply beneath it.
+                   (mevedel-sandbox--runtime-arguments
+                    canonical-workdir roots runtime-masks)
                    (plist-get plan :arguments)
+                   ;; After the roots: /tmp is normally a writable root.
+                   (mevedel-sandbox--socket-arguments canonical-workdir)
                    ;; Local tool servers carry the owning turn's authority.
                    ;; Without a socket root no server can exist to mask.
-                   (when-let* (((not (file-remote-p canonical-workdir)))
+                   (when-let* ((local-p)
                                (root (mevedel-mcp-socket-root t)))
                      (list "--tmpfs" root))
+                   (when local-p
+                     (mevedel-sandbox--git-ssh-arguments broker))
                    (list "--unshare-user"
                          "--unshare-pid")
                    (unless network-access-p
                      (list "--unshare-net"))
                    (when mount-proc-p
                      (list "--proc" "/proc"))
-                   (list "--chdir" canonical-workdir
-                         "--"
-                         "sh" "-c" mevedel-sandbox--marker-script
-                         "mevedel-sandbox" marker)
-                   command)))
+                   (list "--chdir" canonical-workdir "--")
+                   (mevedel-sandbox--device-grant-command
+                    (append
+                     ;; Before the marker: a launcher that cannot restrict
+                     ;; the command fails the launch instead of running it.
+                     (when launcher
+                       (append
+                        (list launcher "-I" "-S" mevedel-sandbox--landlock-script
+                              "exec")
+                        (mevedel-sandbox--socket-allow-list
+                         roots temporary-root filesystem-permissions broker)
+                        (list "--")))
+                     (list "sh" "-c" mevedel-sandbox--marker-script
+                           "mevedel-sandbox" marker)
+                     command)
+                    (plist-get plan :grants) canonical-workdir))))
             (list :state 'confined
                   :command
                   (mevedel-sandbox--fd-backed-command
@@ -1122,8 +1548,10 @@ protected-path glob discovery.  CANDIDATES wraps already discovered paths."
                    canonical-workdir)
                   :marker marker
                   :cleanup-paths (plist-get protected :cleanup-paths)
+                  :git-ssh broker
                   :facts facts))
         (error
+         (mevedel-sandbox--git-ssh-stop broker)
          (mevedel-sandbox-cleanup protected)
          (signal (car err) (cdr err)))))))
 
@@ -1140,6 +1568,10 @@ protected-path glob discovery.  CANDIDATES wraps already discovered paths."
 Return a plist with :state, :command, and :facts.  Confined preparations also
 carry :marker.  A required but unavailable backend
 returns :state `refused' and :error without a command.
+WRITABLE-ROOTS starts with the primary confinement root (the workspace for
+managed commands, private scratch for helpers), followed by memory, temporary
+and additional roots.  Default missing protected directories are created only
+at the primary root, independently of WORKDIR's working subdirectory.
 ADDITIONAL-PERMISSIONS is a validated additive execution profile.
 SANDBOX-PERMISSIONS may be `require-escalated' after explicit approval.
 MODE defaults to the global sandbox mode.  TEMPORARY-ROOT names the
@@ -1179,7 +1611,8 @@ CANDIDATES is the private, single-invocation discovery result used by
                   command workdir writable-roots
                   (plist-get availability :executable)
                   (plist-get availability :mount-proc)
-                  additional-permissions temporary-root candidates)
+                  additional-permissions temporary-root candidates
+                  (plist-get availability :landlock))
                (error
                 (mevedel-sandbox--refused-preparation
                  'refused (error-message-string err))))
@@ -1285,7 +1718,7 @@ Remote and non-native pattern discovery keep their synchronous behavior."
                                (prin1-to-string (mevedel-permission-protected-path-policy)))
                       candidates
                       (mevedel-sandbox--protected-candidates
-                       (file-name-as-directory (file-truename workdir))
+                       (file-name-as-directory (mevedel-file-truename workdir))
                        (mevedel-sandbox--canonical-directories writable-roots)
                        temporary-root
                        (lambda (root name executable protection)
@@ -1350,6 +1783,9 @@ Scan for exact lines without splitting and rebuilding all command output."
                read-count write-count)))
    (when (eq (plist-get facts :proc) 'host)
      "; proc: host")
+   (when (eq (plist-get facts :host-sockets) 'reachable)
+     (format "; host sockets: reachable (%s)"
+             (plist-get facts :host-sockets-reason)))
    (let ((reason (plist-get facts :reason)))
      (when reason
        (format "; reason: %s" reason)))))

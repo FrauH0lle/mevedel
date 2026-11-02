@@ -137,6 +137,9 @@
                   "mevedel-collaboration-owner" (room peer))
 (autoload 'mevedel-collaboration--handle-new-session
   "mevedel-collaboration-owner")
+(declare-function mevedel-collaboration--handle-fork
+                  "mevedel-collaboration-owner" (room peer frame))
+(autoload 'mevedel-collaboration--handle-fork "mevedel-collaboration-owner")
 (autoload 'mevedel-collaboration--handle-session-models
   "mevedel-collaboration-owner")
 (autoload 'mevedel-collaboration--handle-set-mode
@@ -1364,6 +1367,7 @@ sending guest instead of waiting for an answer."
      (mevedel-collaboration--handle-set-mode room peer frame))
     ("new-session"
      (mevedel-collaboration--handle-new-session room peer frame))
+    ("fork" (mevedel-collaboration--handle-fork room peer frame))
     ("session-models"
      (mevedel-collaboration--handle-session-models room peer))))
 
@@ -1378,6 +1382,9 @@ sending guest instead of waiting for an answer."
        (when (gethash peer (plist-get room :guests))
          (plist-put room :last-guest-departure (float-time)))
        (remhash peer (plist-get room :guests))
+       ;; Fork request ids are scoped to the admitted connection.
+       (when-let* ((ledgers (plist-get room :fork-ledgers)))
+         (remhash peer ledgers))
        (mevedel-collaboration-presence-publish room)))))
 
 (defun mevedel-collaboration--on-state (data-buffer state)
@@ -1393,6 +1400,8 @@ sending guest instead of waiting for an answer."
        (maphash (lambda (peer _guest) (mevedel-collaboration-editing-depart room peer))
                 (plist-get room :guests))
        (clrhash (plist-get room :guests))
+       (when-let* ((ledgers (plist-get room :fork-ledgers)))
+         (clrhash ledgers))
        (mevedel-collaboration-presence-publish room)
        ;; The links and QR are handed out before the async dial settles.
        ;; A dial that has never succeeded -- wrong relay URL or a missing or

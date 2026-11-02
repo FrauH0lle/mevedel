@@ -70,6 +70,83 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (when (and (= (point) (point-max)) (< rows height))
           (max 0 (- height rows 1)))))))
 
+(mevedel-deftest mevedel-view--composer-anchors ()
+  ,test
+  (test)
+  :doc "A visible composer anchors only the window whose caret is editing it"
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (let ((inhibit-read-only t))
+        (goto-char (point-min))
+        (forward-line 1)
+        (dotimes (n 100) (insert (format "transcript %d\n" n))))
+      (goto-char (point-max))
+      (insert "> draft\nsecond line")
+      (let* ((reader (selected-window))
+             (editor (split-window-right))
+             (input (mevedel-view--input-start))
+             (start (save-excursion
+                      (goto-char input) (forward-line -10) (point))))
+        (dolist (window (list reader editor))
+          (set-window-start window start t))
+        (set-window-point editor input)
+        (goto-char start)
+        (forward-line 2)
+        (should (mevedel-view-test--composer-screen-y reader))
+        (should (mevedel-view-test--composer-screen-y editor))
+        (let ((anchors (mevedel-view--composer-anchors)))
+          (should-not (assq reader anchors))
+          (should (assq editor anchors)))
+        ;; Selecting the editor must not make the other window follow it.
+        (with-selected-window editor
+          (let ((anchors (mevedel-view--composer-anchors)))
+            (should-not (assq reader anchors))
+            (should (assq editor anchors)))))))
+  :doc "A history reader keeps its viewport through status growth and shrink"
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (let ((inhibit-read-only t))
+        (goto-char (point-min))
+        (forward-line 1)
+        (dotimes (n 100) (insert (format "transcript %d\n" n))))
+      (goto-char (point-max))
+      (insert "> draft\nsecond line")
+      (let ((start (save-excursion
+                     (goto-char (mevedel-view--input-start))
+                     (forward-line -10) (point))))
+        (set-window-start nil start t)
+        (goto-char start)
+        (forward-line 2)
+        (let ((reading (point))
+              (y (mevedel-view-test--position-screen-y (point) (selected-window))))
+          (should (mevedel-view-test--composer-screen-y (selected-window)))
+          (dolist (count '(4 1 0))
+            (mevedel-view-composer-test--status-rows count)
+            (should (= reading (point)))
+            (should (= start (window-start)))
+            (should (= y (mevedel-view-test--position-screen-y
+                          (point) (selected-window)))))
+          (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))))
+
+(mevedel-deftest mevedel-view--history-reader-windows ()
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (let ((inhibit-read-only t))
+        (goto-char (point-min))
+        (insert "history\n"))
+      (goto-char ,position)
+      (should (equal ,expected (mevedel-view--history-reader-windows)))))
+  (position expected)
+  :doc "Transcript point is captured before mutation" (point-min) (list (selected-window))
+  :doc "The composer is not a history reader" (mevedel-view--input-start) nil
+  :doc "Status and interaction chrome are not history readers" mevedel-view--status-marker nil)
+
 (mevedel-deftest mevedel-view--restore-composer-anchors ()
   ,test
   (test)
@@ -609,19 +686,119 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                       (point))))
         (set-window-start window start t)
         (should (= blank (mevedel-view-composer-test--blank-rows window)))
+        (goto-char (if (eq case 'reader) start (point-max)))
+        (when (eq case 'reader)
+          (should (memq window (mevedel-view--history-reader-windows)))
+          (should (mevedel-view--window-shows-end-p window)))
+        (when (memq case '(roundtrip stale-start stale-scroll stale-width stale-buffer beyond nested))
+          (cl-letf (((symbol-function 'window-old-body-pixel-height)
+                     (lambda (_) (+ height 8)))
+                    ((symbol-function 'window-old-body-pixel-width) (lambda (_) width))
+                    ((symbol-function 'window-old-buffer) (lambda (_) view-buf)))
+            (run-hook-with-args 'window-size-change-functions window)
+            (let ((state (window-parameter window 'mevedel-view--size-baseline)))
+              (should state)
+              (should (= (+ height 8) (plist-get state :height)))
+              (should (plist-get state :viewport))
+              (when (eq case 'nested)
+                (cl-letf (((symbol-function 'window-old-body-pixel-height)
+                           (lambda (_) (+ height 4))))
+                  (run-hook-with-args 'window-size-change-functions window))
+                (should (eq state (window-parameter window 'mevedel-view--size-baseline))))))
+          (when (eq case 'stale-start)
+            (set-window-start window (save-excursion (goto-char start) (forward-line 1) (point)) t)))
         (cl-letf (((symbol-function 'window-old-body-pixel-height)
                    (lambda (_) (pcase case ('uninitialized 0)
                                  ('shrink (+ height 8)) (_ (- height 8)))))
                   ((symbol-function 'window-old-body-pixel-width)
-                   (lambda (_) (if (eq case 'width) (1+ width) width)))
+                   (lambda (_) (if (memq case '(width stale-width)) (1+ width) width)))
                   ((symbol-function 'window-old-buffer)
-                   (lambda (_) (if (eq case 'buffer) data-buf view-buf))))
+                   (lambda (_) (if (memq case '(buffer stale-buffer)) data-buf view-buf)))
+                  ((symbol-function 'input-pending-p) (lambda (&optional _) (eq case 'pending))))
           ;; Dispatch through the same buffer-local hook as redisplay.  A
           ;; missing installation must fail on geometry, not hook membership.
-          (run-hook-with-args 'window-size-change-functions window))
-        (should (= (if (eq case 'grow) (max 0 (- blank 8)) blank)
-                   (mevedel-view-composer-test--blank-rows window)))
-        (unless (eq case 'grow) (should (= start (window-start window)))))))
+          (let ((geometry (symbol-function 'mevedel-view--window-body-geometry))
+                (restore (symbol-function 'mevedel-view--restore-window-blank-pixels))
+                (vscroll (symbol-function 'window-vscroll))
+                (previous (mevedel-view--window-blank-pixels window))
+                restored-blank)
+            (cl-letf (((symbol-function 'mevedel-view--window-body-geometry)
+                       (lambda (target)
+                         (if (eq case 'beyond) (cons 0 (+ height 16))
+                           (funcall geometry target))))
+                      ((symbol-function 'window-vscroll)
+                       (lambda (target &optional pixels)
+                         ;; Batch terminal frames ignore set-window-vscroll.
+                         (if (eq case 'stale-scroll) 1
+                           (funcall vscroll target pixels))))
+                      ((symbol-function 'mevedel-view--restore-window-blank-pixels)
+                       (lambda (target saved-blank)
+                         (setq restored-blank saved-blank)
+                         (funcall restore target saved-blank))))
+              (run-hook-with-args 'window-size-change-functions window))
+            (when (memq case '(stale-start stale-scroll))
+              (should (= (max 0 (- previous 8)) restored-blank)))
+            (let ((state (window-parameter window 'mevedel-view--size-baseline)))
+              (pcase case
+                ;; A stale baseline is replaced by this growth's own height.
+                ((or 'stale-start 'stale-scroll)
+                 (should (= (- height 8) (plist-get state :height))))
+                ((or 'stale-width 'stale-buffer) (should-not state))
+                ;; Growth beyond the original height keeps it as the baseline.
+                ('beyond (should (= (+ height 8) (plist-get state :height))))))
+            (when (eq case 'grow-twice)
+              ;; The first growth's repair is already part of the viewport, so
+              ;; four more pixels expose only four new ones.  A later repair
+              ;; keeps the date of the first departure from the original view.
+              (set-window-parameter
+               window 'mevedel-view--size-baseline
+               (plist-put (window-parameter window 'mevedel-view--size-baseline)
+                          :repaired 42.0))
+              (let (second)
+                (cl-letf (((symbol-function 'window-old-body-pixel-height)
+                           (lambda (_) height))
+                          ((symbol-function 'window-old-body-pixel-width)
+                           (lambda (_) width))
+                          ((symbol-function 'window-old-buffer) (lambda (_) view-buf))
+                          ((symbol-function 'input-pending-p) #'ignore)
+                          ((symbol-function 'mevedel-view--window-body-geometry)
+                           (lambda (target)
+                             (cons (car (funcall geometry target)) (+ height 4))))
+                          ((symbol-function 'mevedel-view--restore-window-blank-pixels)
+                           (lambda (target saved-blank)
+                             (setq second saved-blank)
+                             (set-window-start target (1+ (window-start target)) t))))
+                  (run-hook-with-args 'window-size-change-functions window))
+                (should (= (max 0 (- blank 8)) second))
+                (should (eql 42.0 (plist-get (window-parameter
+                                              window 'mevedel-view--size-baseline)
+                                             :repaired)))))
+            (when (memq case '(grow-shrink grow-shrink-pending grow-shrink-late))
+              ;; Growth filled new blank space; shrinking back undoes it unless
+              ;; queued input could have targeted a long-shown repair.
+              (should-not (= start (window-start window)))
+              (when (eq case 'grow-shrink-late)
+                (let ((state (window-parameter window 'mevedel-view--size-baseline)))
+                  (set-window-parameter window 'mevedel-view--size-baseline
+                                        (plist-put state :repaired (- (float-time) 1)))))
+              (cl-letf (((symbol-function 'window-old-body-pixel-height)
+                         (lambda (_) height))
+                        ((symbol-function 'window-old-body-pixel-width)
+                         (lambda (_) width))
+                        ((symbol-function 'window-old-buffer) (lambda (_) view-buf))
+                        ((symbol-function 'input-pending-p)
+                         (lambda (&optional _) (not (eq case 'grow-shrink))))
+                        ((symbol-function 'mevedel-view--window-body-geometry)
+                         (lambda (_) (cons 0 (- height 8)))))
+                (run-hook-with-args 'window-size-change-functions window))
+              (should-not (window-parameter window 'mevedel-view--size-baseline))
+              (when (eq case 'grow-shrink-late)
+                (should-not (= start (window-start window)))))))
+        (unless (memq case '(stale-start stale-scroll beyond grow-shrink-late))
+          (should (= (if (memq case '(grow grow-twice)) (max 0 (- blank 8)) blank)
+                     (mevedel-view-composer-test--blank-rows window)))
+          (unless (memq case '(grow grow-twice))
+            (should (= start (window-start window))))))))
   (blank case)
   :doc "fills only newly exposed blank space" 8 'grow
   :doc "does not move a full window" 0 'grow
@@ -629,7 +806,20 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   :doc "does not infer geometry across width changes" 8 'width
   :doc "does not infer geometry across buffer changes" 8 'buffer
   :doc "does not infer geometry before the first redisplay" 8 'uninitialized
-  :doc "does not repair a shrinking window" 8 'shrink)
+  :doc "does not repair a shrinking window" 8 'shrink
+  :doc "a shrink/growth round trip retains existing blank space" 13 'roundtrip
+  :doc "scrolling the start invalidates the size baseline" 13 'stale-start
+  :doc "changing partial scroll invalidates the size baseline" 13 'stale-scroll
+  :doc "a width change clears the size baseline" 13 'stale-width
+  :doc "a buffer change clears the size baseline" 13 'stale-buffer
+  :doc "growth beyond the original height keeps that baseline" 13 'beyond
+  :doc "nested shrinks retain the first blank-space baseline" 13 'nested
+  :doc "a history reader with visible end keeps its start through unmatched growth" 13 'reader
+  :doc "pending input retains the viewport until its resolved event is consumed" 13 'pending
+  :doc "a growth/shrink round trip restores the viewport its repair moved" 13 'grow-shrink
+  :doc "consecutive growth counts only space beyond the repaired height" 13 'grow-twice
+  :doc "a transient repair is undone even with a queued click" 13 'grow-shrink-pending
+  :doc "a long-shown repair stays while a queued click may target it" 13 'grow-shrink-late)
 
 (mevedel-deftest mevedel-view--preserve-text-scale-blanks ()
   (let ((view ,view))
@@ -1169,7 +1359,21 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           ;; An unchanged width does not rewrite the prompt.
           (let ((tick (buffer-modified-tick)))
             (mevedel-view--refit-input-prompt)
-            (should (= tick (buffer-modified-tick)))))))))
+            (should (= tick (buffer-modified-tick))))
+          ;; Scaling text changes the remapped columns without resizing a
+          ;; window; batch frames cannot, so the narrower budget is stubbed.
+          (require 'face-remap)
+          (cl-letf (((symbol-function 'mevedel-view--input-prompt-columns)
+                     (lambda () 24)))
+            (text-scale-set 2)
+            (let ((rows (mevedel-view-test--prompt-rows)))
+              (should (= 4 (length rows)))
+              (dolist (row rows)
+                (should (<= (string-width row) 24)))
+              (should (string-suffix-p "…" (nth 1 rows)))))
+          (text-scale-set 0)
+          (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+          (should (= (point) (+ 4 (mevedel-view--input-start)))))))))
 
 (mevedel-deftest mevedel-view--switch-composer-scope (:quiet t)
   ,test
@@ -1583,7 +1787,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                    prompt (buffer-substring
                            mevedel-view--input-marker (mevedel-view--input-start))))
           (should (equal "" (mevedel-view--input-text)))
-          (should (= (overlay-start mevedel-view--composer-keymap-overlay)
+          (should (= (overlay-start mevedel-view--composer-display-overlay)
                      (mevedel-view--input-start)))))))
 
   :doc "a real deletion at the draft boundary remains undoable after prompt refresh"
@@ -1601,7 +1805,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
       (undo-start)
       (undo-more 1)
       (should (equal "> quoted\nsecond" (mevedel-view--input-text)))
-      (should (= (overlay-start mevedel-view--composer-keymap-overlay)
+      (should (= (overlay-start mevedel-view--composer-display-overlay)
                  (mevedel-view--input-start)))))
 
   :doc "drops render-only history and multiline drafts starting with >"
@@ -2298,8 +2502,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           (mevedel-view--render-status)
           (mevedel-view--interaction-rebuild)
           (let ((start (mevedel-view--input-start)))
-            (should (= start (overlay-start mevedel-view--composer-keymap-overlay)))
-            (should (= (point-max) (overlay-end mevedel-view--composer-keymap-overlay)))
+            (should (= start (overlay-start mevedel-view--composer-display-overlay)))
+            (should (= (point-max) (overlay-end mevedel-view--composer-display-overlay)))
             (should (equal draft (buffer-substring-no-properties start (point-max))))
             (should-not (text-property-not-all
                          (point-min) mevedel-view--input-marker
@@ -2354,8 +2558,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           (should (= (point) (+ start 3)))
           (should (= (mark) (+ start 10)))
           (should mark-active)
-          (should (= (overlay-start mevedel-view--composer-keymap-overlay) start))
-          (should (= (overlay-end mevedel-view--composer-keymap-overlay) (point-max)))
+          (should (= (overlay-start mevedel-view--composer-display-overlay) start))
+          (should (= (overlay-end mevedel-view--composer-display-overlay) (point-max)))
           (should (equal indent (get-char-property (+ start 8) 'line-prefix)))
           (should (equal indent (get-char-property (+ start 8) 'wrap-prefix)))
           (should-not (get-char-property (1- start) 'line-prefix)))))))
@@ -2367,20 +2571,20 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (goto-char (mevedel-view--input-start))
-      (should-not (overlay-get mevedel-view--composer-keymap-overlay 'after-string))
+      (should-not (overlay-get mevedel-view--composer-display-overlay 'after-string))
       (insert "> draft\n")
-      (let ((display (overlay-get mevedel-view--composer-keymap-overlay 'after-string)))
+      (let ((display (overlay-get mevedel-view--composer-display-overlay 'after-string)))
         (should (equal "   " display))
         (should (get-text-property 2 'cursor display)))
       (should (equal "> draft\n"
                      (buffer-substring-no-properties
                       (mevedel-view--input-start) (point-max))))
       (insert "x")
-      (should-not (overlay-get mevedel-view--composer-keymap-overlay 'after-string))
+      (should-not (overlay-get mevedel-view--composer-display-overlay 'after-string))
       (delete-char -1)
-      (should (overlay-get mevedel-view--composer-keymap-overlay 'after-string))
+      (should (overlay-get mevedel-view--composer-display-overlay 'after-string))
       (delete-char -1)
-      (should-not (overlay-get mevedel-view--composer-keymap-overlay 'after-string))))
+      (should-not (overlay-get mevedel-view--composer-display-overlay 'after-string))))
 
   :doc "silently restored drafts refresh the empty-line display too"
   (mevedel-view-test--with-buffers
@@ -2389,7 +2593,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (dolist (text '("draft\n" "other" "\n" ""))
           (mevedel-view--restore-composer-snapshot
            (list :text text :point-offset (length text)) session t)
-          (should (eq (and (overlay-get mevedel-view--composer-keymap-overlay
+          (should (eq (and (overlay-get mevedel-view--composer-display-overlay
                                         'after-string) t)
                       (string-suffix-p "\n" text)))))))
 

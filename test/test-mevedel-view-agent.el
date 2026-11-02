@@ -110,6 +110,9 @@
           (when (buffer-live-p agent-data) (kill-buffer agent-data)))))))
 
 (mevedel-deftest mevedel-view-open-agent-transcript ()
+  ,test
+  (test)
+  :doc "a cold transcript renders read-only and closing restores the parent"
   (save-window-excursion
     (mevedel-view-test--with-buffers
       (let* ((root (make-temp-file "mevedel-cold-agent-view-" t))
@@ -158,7 +161,66 @@
                                               (mevedel-agent-record-conversation-buffer record))))
           (when (buffer-live-p agent-view) (kill-buffer agent-view))
           (mevedel-agent-control-teardown-session session)
-          (delete-directory root t))))))
+          (delete-directory root t)))))
+
+  :doc "the agent header sits in the status row and the task prompt pins below it"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (let* ((session (mevedel-view-agent-test--session))
+             (path "/root/pinned")
+             (agent-data (generate-new-buffer " *pinned-agent-data*"))
+             (record (mevedel-view-agent-test--record path 'running))
+             agent-view)
+        (unwind-protect
+            (progn
+              (setf (mevedel-agent-record-conversation-buffer record) agent-data
+                    (mevedel-session-agent-registry session) (list (cons path record)))
+              (with-current-buffer data-buf (setq-local mevedel--session session))
+              (with-current-buffer agent-data
+                (org-mode)
+                (setq-local mevedel--view-buffer view-buf
+                            mevedel--session session)
+                (insert "Agent Task: pinned review of the header rows\n")
+                (insert (propertize (apply #'concat
+                                           (make-list 120 "Agent answer line\n"))
+                                    'gptel 'response)))
+              (with-current-buffer view-buf
+                (switch-to-buffer view-buf)
+                (mevedel-view-open-agent-transcript path)
+                (setq agent-view (window-buffer (selected-window)))
+                (with-current-buffer agent-view
+                  (cl-loop repeat 100 while mevedel-view-render--batch do
+                    (mevedel-view-render--batch-step
+                     agent-view mevedel-view-render--batch))
+                  (let ((window (selected-window)))
+                    (should (equal '(:eval (mevedel-view--sticky-prompt-line))
+                                   header-line-format))
+                    (should (equal '(:eval (mevedel-view--agent-transcript-status-strip))
+                                   tab-line-format))
+                    ;; Batch `format-mode-line' returns "" without evaluating;
+                    ;; the graphical check covers the rendered rows.
+                    (should (string-search
+                             path (mevedel-view--agent-transcript-status-strip)))
+                    ;; The task header is on screen: the reserved row stays empty.
+                    (set-window-start window (point-min) t)
+                    (should-not (mevedel-view--sticky-prompt-line))
+                    (goto-char (point-min))
+                    (search-forward "Agent answer line")
+                    (forward-line 40)
+                    (set-window-start window (line-beginning-position) t)
+                    (set-window-point window (line-beginning-position))
+                    (let ((start (window-start window))
+                          (point (window-point window))
+                          (line (mevedel-view--sticky-prompt-line)))
+                      (should (string-search
+                               "Agent Task: pin" line))
+                      (should-not (string-search path line))
+                      (redisplay t)
+                      (should (= start (window-start window)))
+                      (should (= point (window-point window))))))))
+          (when (and (buffer-live-p agent-view) (not (eq agent-view view-buf)))
+            (kill-buffer agent-view))
+          (when (buffer-live-p agent-data) (kill-buffer agent-data)))))))
 
 (mevedel-deftest mevedel-view--display-agent-transcript-view
   (:doc "same-window and side-window inspection return to the original parent")
@@ -208,15 +270,15 @@
                     (should (eq view-buf mevedel-view--agent-transcript-parent-view))
                     (if (eq (car action) 'display-buffer-same-window)
                         (mevedel-view-close-agent-transcript)
-                      (let* ((header (mevedel-view--agent-transcript-header-line))
+                      (let* ((header (mevedel-view--agent-transcript-status-strip))
                              (map (get-text-property 0 'local-map header))
                              (window (selected-window)))
                         (should (string-prefix-p "[← Parent]" header))
                         ;; A click must use its event window, not the current
                         ;; buffer, which can still be the parent view.
                         (select-window parent-window)
-                        (funcall (lookup-key map [header-line mouse-1])
-                                 (list 'mouse-1 (list window 'header-line '(0 . 0) 0))))))
+                        (funcall (lookup-key map [tab-line mouse-1])
+                                 (list 'mouse-1 (list window 'tab-line '(0 . 0) 0))))))
                   (should (eq parent-window (selected-window)))
                   (should (eq view-buf (window-buffer parent-window)))
                   (with-current-buffer view-buf
@@ -420,7 +482,7 @@
                    (mevedel-view-agent-model-details '(:model "mistral"))))
     (should-not (mevedel-view-agent-model-details nil))))
 
-(mevedel-deftest mevedel-view--agent-transcript-header-line
+(mevedel-deftest mevedel-view--agent-transcript-status-strip
   ()
   ,test
   (test)
@@ -438,19 +500,19 @@
                     mevedel-view--agent-transcript-parent-view view-buf
                     mevedel-view--agent-transcript-info
                     (list :session session :status 'running :calls 12 :elapsed 84))
-        (let ((header (mevedel-view--agent-transcript-header-line)))
+        (let ((header (mevedel-view--agent-transcript-status-strip)))
           (should (string-prefix-p "[← Parent] · /root/partner · [running]" header))
           (should (string-search "Claude Code / opus:high" header))
           (should (= 2 (length (split-string header "12 calls"))))
           (should (string-search "12 calls" header)))
         (setf (mevedel-agent-record-model-metadata record)
               '(:backend "Claude Code" :model "sonnet" :effort nil))
-        (let ((header (mevedel-view--agent-transcript-header-line)))
+        (let ((header (mevedel-view--agent-transcript-status-strip)))
           (should (string-search "Claude Code / sonnet" header))
           (should-not (string-search "opus" header))
           (should-not (string-search "sonnet:" header)))
         (setf (mevedel-agent-record-model-metadata record) nil)
-        (should-not (string-search "Claude Code" (mevedel-view--agent-transcript-header-line))))))
+        (should-not (string-search "Claude Code" (mevedel-view--agent-transcript-status-strip))))))
 
   :doc "narrow windows keep Parent, leaf identity and state before model metadata"
   (save-window-excursion
@@ -464,7 +526,7 @@
                     mevedel-view--agent-transcript-info
                     '(:status running :calls 12 :elapsed 84
                       :model-metadata (:backend "Claude Code" :model "opus" :effort "high")))
-        (let ((header (mevedel-view--agent-transcript-header-line)))
+        (let ((header (mevedel-view--agent-transcript-status-strip)))
           (should (<= (string-width header) (window-body-width)))
           (should (string-prefix-p "[← Parent]" header))
           (should (string-search "worker" header))
@@ -472,7 +534,7 @@
           (should-not (string-search "opus" header)))
         (window-resize (selected-window) 20 t)
         (setq mevedel-view--agent-path "/root/worker")
-        (let ((header (mevedel-view--agent-transcript-header-line)))
+        (let ((header (mevedel-view--agent-transcript-status-strip)))
           (should (<= (string-width header) (window-body-width)))
           (should (string-search "opus:high" header))
           (should-not (string-search "Claude Code" header))))))
@@ -490,7 +552,7 @@
                     mevedel-view--agent-transcript-info
                     '(:status running :session-label "session-7"
                       :model-metadata (:backend "Claude Code" :model "opus" :effort "high")))
-        (let* ((header (mevedel-view--agent-transcript-header-line))
+        (let* ((header (mevedel-view--agent-transcript-status-strip))
                (pos (string-search "worker" header))
                (help (get-text-property pos 'help-echo header)))
           (should-not (string-search path header))
@@ -765,23 +827,25 @@
                         (lookup-key (current-local-map) (kbd "q"))))
             (should (eq #'mevedel-view--transcript-gptel-send-blocked
                         (lookup-key (current-local-map) [remap gptel-send])))
+            (should (equal '(:eval (mevedel-view--agent-transcript-status-strip))
+                           tab-line-format))
             (with-current-buffer data-buffer
               (should (memq #'mevedel-view--on-agent-transcript-data-killed
                             kill-buffer-hook)))))
       (when (buffer-live-p data-buffer)
         (kill-buffer data-buffer))))
 
-  :doc "ordinary views leave their map and header untouched"
+  :doc "ordinary views leave their map and status row untouched"
   (let ((data-buffer (generate-new-buffer " *test-agent-data*")))
     (unwind-protect
         (with-temp-buffer
           (let ((map (make-sparse-keymap)))
             (use-local-map map)
-            (setq header-line-format 'keep)
+            (setq-local tab-line-format 'keep)
             (mevedel-view-agent-initialize nil data-buffer)
             (should-not mevedel-view--agent-transcript-p)
             (should (eq map (current-local-map)))
-            (should (eq 'keep header-line-format))))
+            (should (eq 'keep tab-line-format))))
       (when (buffer-live-p data-buffer)
         (kill-buffer data-buffer)))))
 

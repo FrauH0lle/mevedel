@@ -148,6 +148,10 @@ const delivered = [
 ];
 controller.render(delivered);
 assert.equal(lastMarker().state, 'sent');
+// A request's closing rule does not answer it.
+controller.render([...delivered, {id: 's1', kind: 'request-summary', text: '── Worked for 12s '}]);
+assert.equal(lastMarker().state, 'sent');
+controller.render(delivered);
 busy = true;
 controller.activity();
 assert.equal(lastMarker().state, 'working');

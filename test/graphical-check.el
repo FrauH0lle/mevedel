@@ -10,6 +10,19 @@
 
 (require 'cl-lib)
 (require 'json)
+;; The view fixture's buffer macro; the runner loads it only in the child.
+(cl-eval-when (compile) (require 'helpers))
+
+(declare-function mevedel-tool-render-data-format "mevedel-tool-render-data"
+                  (render-data &optional tool-use-id))
+(declare-function mevedel-view--setup "mevedel-view" (view-buf data-buf &optional options))
+(declare-function mevedel-view--full-rerender "mevedel-view-render"
+                  (&optional transcript-buffer source-changed-p))
+(declare-function mevedel-view--interaction-rebuild "mevedel-view-interaction"
+                  (&optional owned visits))
+(declare-function mevedel-view--spinner-tick "mevedel-view-stream" ())
+(declare-function mevedel-view-table-rerender "mevedel-view-table" (&optional window))
+(declare-function mevedel-view--input-text "mevedel-view-composer" ())
 
 (defconst mevedel-graphical-check--root
   (file-name-directory
@@ -19,7 +32,8 @@
 
 (defconst mevedel-graphical-check--files
   '("test-mevedel-view-table-graphical.el" "test-mevedel-view-geometry.el"
-    "test-mevedel-view-mouse.el")
+    "test-mevedel-view-mouse.el" "test-mevedel-window-graphical.el"
+    "test-mevedel-view-user-state.el")
   "Default real-display ERT suites.")
 
 (defun mevedel-graphical-check--options (arguments)
@@ -101,6 +115,15 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
                (created nil)
                (status 0))
     (setq command-line-args-left nil)
+    ;; SIGTERM/SIGHUP end batch Emacs through `kill-emacs', which runs this
+    ;; hook but skips the `unwind-protect' below.  `delete-process' kills the
+    ;; child synchronously.  It cannot also be reaped here: the hook runs
+    ;; inside the signal handler, where Emacs does not handle SIGCHLD, so the
+    ;; dead child remains a zombie until its adopter reaps it.
+    (add-hook 'kill-emacs-hook
+              (lambda ()
+                (when (and process (process-live-p process)) (delete-process process))
+                (when (file-exists-p temporary) (delete-directory temporary t))))
     (unwind-protect
         (condition-case err
             (progn
@@ -174,6 +197,7 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
   (require 'helpers)
   (require 'mevedel-execution)
   (require 'mevedel-pending-inputs)
+  (require 'mevedel-tool-render-data)
   (require 'mevedel-view)
   (require 'mevedel-view-agent)
   (require 'mevedel-view-render)
@@ -187,6 +211,13 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
      data-buf
      "# Graphical view fixture\n\nA **bold response**, *emphasis*, and `inline code`.\n\n| Check | Result |\n|---|---|\n| Markdown | Fontified |\n| Frame | Exported |\n\n"
      'response)
+    (mevedel-view-test--insert-data
+     data-buf
+     (mevedel-tool-render-data-format
+      (list :kind 'request-summary :elapsed-seconds 157
+            :started-at (float-time (encode-time 43 29 14 29 10 2026))
+            :finished-at (float-time (encode-time 20 32 14 29 10 2026))))
+     'ignore)
     (switch-to-buffer view-buf)
     ;; Font Lock refuses internal buffers whose names begin with a space.
     (rename-buffer "*mevedel graphical fixture*" t)
@@ -269,6 +300,10 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
       (unless (equal "> active draft\nsecond line" (mevedel-view--input-text))
         (error "Fixture redraw changed the composer"))
       (goto-char (point-min))
+      (search-forward "── Worked for 2m 37s · Thu 29 Oct 14:32 ")
+      (unless (get-text-property (- (point) 2) 'help-echo)
+        (error "Fixture timestamp lost its timing tooltip"))
+      (goto-char (point-min))
       (set-window-start nil (point-min))
       (message nil)
       (redisplay t)
@@ -284,7 +319,19 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
         (let ((coding-system-for-write 'no-conversion))
           (with-temp-file (file-name-concat output (format "view.%s" type))
             (set-buffer-multibyte nil)
-            (insert (x-export-frames nil type))))))))
+            (insert (x-export-frames nil type)))))
+      (let ((width (frame-width)))
+        (unwind-protect
+            (progn
+              (set-frame-width nil 60)
+              (redisplay t)
+              (mevedel-view-table-rerender (selected-window))
+              (redisplay t)
+              (let ((coding-system-for-write 'no-conversion))
+                (with-temp-file (file-name-concat output "view-narrow.png")
+                  (set-buffer-multibyte nil)
+                  (insert (x-export-frames nil 'png)))))
+          (set-frame-width nil width))))))
 
 (defun mevedel-graphical-check--child (output)
   "Run the graphical checks, save diagnostics in OUTPUT, and always exit."
@@ -301,6 +348,13 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
           (let* ((stats (ert-run-tests-batch t))
                  (skipped (ert-stats-skipped stats))
                  (unexpected (ert-stats-completed-unexpected stats)))
+            ;; ERT's batch summary names skips but omits their conditions.
+            ;; Keep environmental refusals visible in the retained log.
+            (cl-loop for test across (ert--stats-tests stats)
+                     for result = (ert-test-most-recent-result test)
+                     when (ert-test-skipped-p result)
+                     do (message "Skipped %s:%s" (ert-test-name test)
+                                 (ert-reason-for-test-result result)))
             (with-temp-file (file-name-concat output "summary.json")
               (insert (json-encode
                        `((emacs . ,emacs-version)

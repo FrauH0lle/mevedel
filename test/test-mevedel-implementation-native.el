@@ -12,6 +12,7 @@
 (require 'mevedel-claude-code-session)
 (require 'mevedel-implementation-policy)
 (require 'mevedel-prompt-submission)
+(require 'mevedel-permission-review)
 
 (defun mevedel-implementation-native-test--assert-baseline (session)
   "Assert SESSION's saved and buffer-local selections remain the baseline."
@@ -105,7 +106,7 @@
            (goal (mevedel-goal-create "Carry out the accepted change"
                                       :session session :implementation-policy policy))
            (file (file-name-concat root "evidence.txt"))
-           (launch-count 0) owners launches
+           (launch-count 0) owners launches review-evidence
            (mevedel-post-tool-use-functions
             (list (lambda (_event)
                     ;; Pause at the automatic turn's real tool boundary.  The
@@ -134,6 +135,15 @@
                       (ert-fail "Goal started an unexpected extra native turn"))
                     (push mevedel--current-request owners)
                     (push (list model effort) launches)
+                    ;; Consume the real generated transcript and admitted owner
+                    ;; through the permission review's evidence builder.  The
+                    ;; objective is separate from actual user-role trigger text.
+                    (push (mevedel-permission-review--evidence
+                           (list :kind 'generic :tool-name "Read"
+                                 :args (list :file_path file)
+                                 :session session :data-buffer buffer
+                                 :request mevedel--current-request))
+                          review-evidence)
                     (list :meta
                           `((hookCommand . ,hook)
                             (toolBatches . [[((name . "Read")
@@ -148,6 +158,20 @@
           (and (eq 'paused (mevedel-goal-status goal))
                (not (mevedel-turn-busy-p buffer))))
         (should (= 2 launch-count))
+        (should (= 2 (length review-evidence)))
+        (let ((initial (cadr review-evidence))
+              (automatic (car review-evidence)))
+          (should (equal '("Start with the evidence")
+                         (plist-get (plist-get initial :user-intent) :turns)))
+          (should (equal (list "Start with the evidence" mevedel-goal--continuation-trigger)
+                         (plist-get (plist-get automatic :user-intent) :turns)))
+          (should (equal "Carry out the accepted change"
+                         (plist-get automatic :goal-objective)))
+          ;; Neither the objective nor the model's answer is a new human
+          ;; authorization; the only additional user-role text is the fixed
+          ;; continuation trigger produced by the Goal scheduler.
+          (should-not (plist-get (plist-get automatic :user-intent) :older-turns-omitted))
+          (should-not (plist-get (plist-get automatic :user-intent) :latest-turn-omitted)))
         (should (= 2 (mevedel-goal-turns-run goal)))
         (should (equal '(("sonnet" high) ("sonnet" high)) launches))
         (dolist (owner owners)

@@ -9,6 +9,7 @@
 
 (require 'cl-lib)
 (require 'mevedel-execution-target)
+(require 'mevedel-permission-origin)
 (require 'mevedel-permission-rules)
 (require 'subr-x)
 
@@ -18,7 +19,7 @@ Include authored and canonical ancestors, literal policy aliases and concrete
 launch RESTRICTIONS.  Match each policy's root, not its descendant suffix, so
 an approved protected tree still covers ordinary descendants within it."
   (let* ((paths (delete-dups (list (directory-file-name (expand-file-name path))
-                                 (directory-file-name (file-truename path)))))
+                                 (directory-file-name (mevedel-file-truename path)))))
          boundaries)
     (dolist (entry (mevedel-permission-protected-path-policy))
       (unless (and (eq access 'read) (eq (cdr entry) 'read-only))
@@ -26,7 +27,7 @@ an approved protected tree still covers ordinary descendants within it."
           (dolist (candidate paths)
             (while candidate
               (when (mevedel-permission-rules-match-path-p candidate pattern target)
-                (push (file-truename candidate) boundaries))
+                (push (mevedel-file-truename candidate) boundaries))
               (setq candidate (file-name-parent-directory candidate))
               (when candidate (setq candidate (directory-file-name candidate)))))
           ;; A literal protected alias can mask the canonical target even when
@@ -37,13 +38,13 @@ an approved protected tree still covers ordinary descendants within it."
                                     (mevedel-execution-target-expand-path target pattern)
                                   (expand-file-name pattern)))
                         ((file-exists-p literal)))
-              (let ((canonical (file-truename literal)))
+              (let ((canonical (mevedel-file-truename literal)))
                 (when (mevedel-permission-rules-path-in-allowed-roots-p
                        (car (last paths)) (list canonical))
                   (push canonical boundaries))))))))
     (dolist (restriction restrictions)
       (when (or (eq access 'write) (eq (plist-get restriction :mode) 'inaccessible))
-        (let ((boundary (file-truename (plist-get restriction :path))))
+        (let ((boundary (mevedel-file-truename (plist-get restriction :path))))
           (when (cl-some (lambda (candidate)
                            (mevedel-permission-rules-path-in-allowed-roots-p
                             candidate (list boundary))) paths)
@@ -57,15 +58,16 @@ RECURSIVE requires a tree.  TARGET supplies the policy path domain;
 RESTRICTIONS supplies concrete launch masks.  A broad ancestor never crosses
 a separate protection boundary.  Exact directory writes or masked reads
 require already approved recursive authority, not an exact directory grant."
-  (let* ((canonical (directory-file-name (file-truename path)))
+  (let* ((canonical (directory-file-name (mevedel-file-truename path)))
          (boundaries (mevedel-execution-grants--boundaries path access target restrictions))
          (tree (or recursive
                    (and (file-directory-p path)
                         (or (eq access 'write) boundaries)))))
     (cl-find-if
      (lambda (grant)
-       (and (mevedel-permission-rules-resource-granted-p path access (list grant) tree)
-            (let ((root (directory-file-name (file-truename (plist-get grant :path))))
+       (and (mevedel-permission-origin-valid-p grant path)
+            (mevedel-permission-rules-resource-granted-p path access (list grant) tree)
+            (let ((root (directory-file-name (mevedel-file-truename (plist-get grant :path))))
                   (source (directory-file-name (expand-file-name (plist-get grant :path)))))
               (and (mevedel-permission-rules-path-in-allowed-roots-p canonical (list root))
                    (cl-every

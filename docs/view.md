@@ -60,6 +60,16 @@ authoritative transcript.
   loss. It replaces the currently displayed view and never owns a composer,
   streaming target, or interaction registry.
 
+Root data buffers keep visible names (`*mevedel:SESSION@WORKSPACE*`, view
+`*mevedel:SESSION@WORKSPACE:view*`): `t` (`mevedel-view-toggle-transcript`)
+opens them as editable Org, and Emacs disables font-lock in buffers whose
+names start with a space and creates them without undo. Agent conversation
+buffers are hidden (` *mevedel-agent-ID*`, keeping that name after their
+transcript file is attached; cold ones load as ` *mevedel artifact FILE*`), so
+one sub-agent adds no `.chat.org` entry to buffer lists. Open them through
+the agent transcript view and `t`, or type a leading space at
+`switch-to-buffer`.
+
 An open running-agent transcript view follows the main view's update cadence:
 streamed text uses `mevedel-view-stream-render-delay` (a batch flushed by the
 stream bridge renders in the flush's own wakeup), tool boundaries use
@@ -804,7 +814,7 @@ names, and the row shows that body under a header naming the dependencies.
 ### Turn and activity rules
 
 An assistant turn closes with one rule. Once the request summary is known the
-rule carries it, as in `── Worked for 2m 37s ─────`: the label uses
+rule carries it, as in `── Worked for 2m 37s · Thu 29 Oct 14:32 ─────`: the label uses
 `mevedel-view-separator`, and a strike-through on its extended newline
 (`mevedel-view-request-summary-rule`) continues it to the window edge, so split
 and narrow windows need no width calculation. One blank row separates it from
@@ -814,6 +824,16 @@ that empty row leaves the same space above the next heading. A user turn that
 renders nothing visible, such as a harness-started background-event wake,
 contributes no rows, so the space after a closing rule does not depend on
 which kind of turn follows.
+
+The timestamp is the actual finish time in the host's local time zone, using
+English weekday/month abbreviations and a 24-hour clock. Hovering it shows the
+full start and finish dates, year, seconds, UTC offsets, and active-work
+duration. `Worked for` excludes blocking interaction pauses, so it is not
+necessarily the wall-clock difference between those timestamps. The hidden
+request summary saves numeric Unix `:started-at` and `:finished-at` values
+alongside `:elapsed-seconds`; repeated settlement, rerendering, and restoration
+preserve the settled values. Summaries without recorded timestamps show only
+the duration, without inventing dates. Running turns and headings stay untimed.
 
 Inside a turn, activity hangs below the prose that announced it, separated by a
 blank line only. Prose that follows activity starts with a quiet rule: two
@@ -829,7 +849,9 @@ activity is never rewritten. The search stops at turn-closing chrome, so a
 directive response without its own heading never takes a rule from the user
 turn before it. Activity that ends a turn is closed by the turn's rule.
 
-Runs of more than `mevedel-view-tool-group-collapse-threshold` (default 3)
+`mevedel-activity-group.el` alone decides which activity folds, for this view
+and the browser projection alike. Runs of more than
+`mevedel-view-tool-group-collapse-threshold` (default 3; zero disables)
 plain tool rows fold into one grouped activity row such as
 `Searched 5 patterns, read 1 file, ran 5 commands`; tools
 without a verb mapping — MCP tools included — appear as `NAME ×N`. A summary
@@ -858,8 +880,11 @@ open, so it does not fold later when the reader moves on. Grouping therefore
 does not hide or move text the reader is inspecting. An explicit group fold wins over
 its children's states. Rows that demand individual presentation — agent
 handles, compound tools, rows carrying hook audits, rows their renderer wants expanded or
-compact, and coalesced rows — never fold into a group; they split the run
-around themselves. Substantive thinking also splits surrounding tool runs:
+compact, and coalescing rows — never fold into a group; they split the run
+around themselves. A standalone hook audit row splits the run the same way.
+Hidden rows such as routine polls, the transcript's own completion delivery
+and request summaries, which render after the activity they close, neither
+join nor split it. In-flight calls join the trailing run as running members. Substantive thinking also splits surrounding tool runs:
 it renders as a standalone **Thinking...** disclosure, expanded by default,
 so collapsing either neighboring group never hides it. Explicit manual
 collapse and expansion survive streaming chunks, tool completion, settlement,
@@ -1075,8 +1100,11 @@ Rebuilding the prompt is also chrome: undoing a draft never restores an older
 permission badge or prompt prefix inside the composer.
 
 Zone changes and re-renders preserve one active surface per window: point in a
-surviving visited interaction takes priority, then a visible composer, then the
-logical reading position. Anchors use body-relative pixels and native display
+surviving visited interaction takes priority, then a visible composer with that
+window's caret in it, then the logical reading position. Clicking or moving into
+history keeps the reading viewport even when the composer remains visible;
+another window editing the same composer keeps its independent composer anchor.
+Anchors use body-relative pixels and native display
 geometry, including wrapping, remapped faces, inline images and partial vertical
 scrolling. Bounded fresh chrome measurements keep body coordinates and usable
 height consistent before redisplay, even when header or tab-line heights change.
@@ -1085,9 +1113,12 @@ composer anchor retains intentional blank space. A lost or truncated logical
 window start instead permits filling the last page, even if anchoring exposes
 longer history lines and grows the character tail. Visiting windows repair only
 new blank pixels created below the buffer, retaining their prior blank area.
-For unanchored windows, a smaller character tail also permits clamping a start
-later than the last page backward; unchanged or growing tails retain their
-reading position. Equal-length reflow alone does not trigger that fallback.
+Surviving history readers keep their viewport through both growth and shrinkage
+below them. For other unanchored windows, a smaller character tail also permits
+clamping a start later than the last page backward; unchanged or growing tails
+retain their position. Equal-length reflow alone does not trigger that fallback.
+Reader ownership is captured before mutation, so removing a visited interaction
+does not mistake its fallback point for a surviving history reader.
 
 Spinner start, update, and stop leave logical-position restoration to zone
 reconciliation. They do not restore raw saved markers over it: a selection
@@ -1111,10 +1142,21 @@ command switches buffers. Commandless mutations repair immediately despite a
 stale `this-command` value. History/snapshot replacement and sending a folded draft are
 single transactions, not independent insertion/deletion viewport states. Only
 an actual increase in blank pixels triggers backward traversal. Height-only
-window growth infers the old blank area from the height delta when the buffer
-and width are unchanged; width changes
-and newly displayed buffers are not inferred. Text scaling captures actual blank
-pixels around `text-scale-mode`, including programmatic calls, without adding
+window growth leaves transcript readers at their native reading viewport;
+for other windows it infers the old blank area from the height delta when the
+buffer and width are unchanged. Width changes and newly displayed buffers are
+not inferred. The first size change remembers the original height and viewport;
+returning to that height restores the viewport while the buffer and width are
+unchanged and nothing else moved it. Shrink-then-grow therefore exposes nothing
+new, grow-then-shrink undoes its repair, and only growth beyond both the
+original height and any height already repaired exposes new blank space. Popup, chrome and transient frame size round
+trips thus neither erode intentional blank space nor drift the transcript.
+Any other viewport change discards that snapshot. Growth repair also skips pending input so
+an already-resolved focus click cannot have its text moved before it is read;
+undoing repairs under pending input is allowed only within 0.1 seconds of the first,
+too soon for the click to have targeted the repaired view.
+Text scaling captures actual blank pixels around `text-scale-mode`, including
+programmatic calls, without adding
 work to ordinary commands or redisplay. Both repairs retain pre-existing blank
 space.
 
@@ -1364,16 +1406,21 @@ uses the window width), so a long prompt does not run across a wide window. In
 tight windows, it truncates to its own row's width, without taking
 space from the operational controls. Its stored text is capped at 512 characters,
 including an ellipsis, after filtering and whitespace normalization. This bounds
-the width measurement performed on every header-line evaluation. Clicking it reveals the original prompt,
+the width measurement performed on every header-line evaluation. Every preview
+shares one header-line keymap; the clicked text carries its target, so an
+evaluation allocates no keymap or closure. Clicking it reveals the original prompt,
+expanding a folded turn or input when necessary. It is view-only:
+synthetic/model-only context is excluded, and archived segments use only their
+own visible turns.
 Finding the prompt above the top edge is a binary search over the view's prompt
 header runs, collected once per text change: a scroll step can evaluate the
 header line several times, and a backward property walk cost 0.1-0.3 ms each.
 The cache follows `buffer-chars-modified-tick`, not the modification tick:
 fontifying newly visible text while scrolling changes only properties and
 would otherwise rebuild it on almost every step.
-expanding a folded turn or input when necessary. It is view-only:
-synthetic/model-only context is excluded, and archived segments use only their
-own visible turns.
+Agent transcript views use the same two rows: their agent header (parent link,
+path, state, model and session) is the status strip, and the header line below
+pins the agent's task or a later follow-up prompt the same way.
 In the live segment after compaction, the row can also show the originating
 prompt from an earlier segment when no retained prompt governs the window.
 When compaction copies multiple prompts into the live tail, content before
@@ -1403,13 +1450,19 @@ right-side state is dropped. Clickable parts route to session cockpit
 surfaces such as top, mode, model, and tools. The request state is
 plain status text. Goal status/turns and the model name are separate links:
 the model always opens Model, even when a Goal is active or completed.
+**compact on/off** toggles automatic compaction for this open local-history
+session with the strip's usual left-click binding. It updates only the tab
+line, preserving the composer, cursor, selection and window positions. Native
+Claude sessions show **compact provider**, with explanatory hover text and no
+click action. Ephemeral `/btw` sides omit the control. See
+[compaction](compaction.md#user-model) for lifetime and failure-reset behavior.
 The view must not copy or proxy gptel's clickable
 data-buffer header line; gptel-owned header controls stay in the raw
 data buffer. The request state is `settling` while a lost turn's deferred
 terminal work still owns the session. The tab line is evaluated on every
 redisplay, so the strip is cached by its raw inputs: session name, root,
 target identity, publication and lease state, permission and Plan mode,
-directive scope, request state, model, Goal status and turns, preset, tool
+directive scope, request state, model, Goal status and turns, preset, compaction, tool
 count, width, display type and selected window. Each redisplay reads them
 without entering the transcript buffer and formats labels only when one
 changes. Entering an Org transcript buffer swaps its many buffer-local
@@ -1417,7 +1470,42 @@ variables; the five lookups that did so cost 26 µs per redisplay, and
 reading the bindings directly costs under 2 µs with no string allocation.
 
 The session cockpit is the normal control surface from the view. It resolves
-the live view/data pair once and routes each action to the owner buffer. The
+the live view/data pair once and routes each action to the owner buffer.
+Session ownership and window return state are separate: calling an action in
+the data buffer does not display that buffer or change where quitting returns.
+
+Tables and information panels use `mevedel-window.el` for their temporary
+display lifecycle. Opening records the invoking window and the configuration
+of the frame actually used by `display-buffer`; this also handles directive
+composers whose child frame redirects popups into its parent. Quitting uses
+`quit-window` and releases the disposable buffer. If the frame's other windows
+still match their post-display layout and buffers, it restores the original
+layout and buffers while retaining current point and scroll positions in
+surviving windows. Otherwise native quit restoration alone closes the surface,
+preserving buffer switches and window changes made elsewhere while it was open.
+Both paths select the live invoking window. Refreshing or reopening a
+visible surface retains its original return state. Report section indexes close
+with their reader, before the layout is restored. An original buffer or frame
+that was killed in the meantime cannot be restored; quitting does not display
+an arbitrary session owner as a replacement.
+
+Only a surface opened by an actual session-menu suffix returns to a menu.
+The opening command records that continuation from the transient's explicit
+session context and prefix identity. Direct commands, slash commands and keys
+such as `C-c C-e` return straight to their caller, without opening a menu.
+Nested information panels return to the table or menu that opened them;
+Worktree status retains its own parent-menu continuation.
+
+Transient menus use disposable bottom side windows, leaving existing editing
+side windows alone when a slot is available. On dismissal they restore their
+pre-popup layout even if a user display rule or side-window slot limit forced
+reuse of an existing window. Restoration runs before a selected suffix opens
+its own surface, not from a late transient exit hook that would erase that
+surface. Intentional navigation in surviving windows is preserved. `C-g`
+dismisses the transient; explicit action keys such as Data view still perform
+their documented buffer switch.
+
+The
 explicit `g gptel menu` cockpit row is the advanced bridge into gptel's menu
 from the paired data buffer. One bridge restores at a time: the pending
 view, its data buffer, and the window state to return to are single, because
@@ -1587,7 +1675,7 @@ appears after the next such action rather than instantly.
 ## Ephemeral `/btw` Side Conversations
 
 `/btw [PROMPT]` opens one multi-turn side conversation owned by the current
-root session. It may be invoked while the root response is streaming. The side
+root session. With gptel it may be invoked while the root response is streaming. The side
 receives an invocation-time copy of the effective post-compaction context and
 request configuration. Additional gptel text and media context is materialized
 at that point rather than retaining live files, buffers, or overlays. Fresh
@@ -1599,17 +1687,39 @@ incomplete and reference-only. Later root activity is never synchronized or
 merged. Synchronous and callback-style gptel context formatters are both
 materialized before the side accepts input.
 
+With Claude Code, `/btw` forks the adapter's native stored history, then resumes
+only the new identity for side turns. It requires settled, current history on
+this installation: finish a parent turn first, and recover edited, foreign or
+uncertain history before opening a side. A parent changed during fork startup
+causes refusal and cleanup instead of a silently newer snapshot. No transcript
+excerpt substitutes for a native fork. The adapter must advertise session fork,
+resume and delete; missing capabilities produce an explicit refusal. Claude Code
+is currently the only selectable ACP backend; the fork/delete transport itself
+uses the shared ACP session-operation path.
+
 The inherited context stays in the side data buffer for gptel but is below the
 view's projection boundary, so the side opens with only its origin header and
 new turns visible. The side has its own transient session, request lifecycle,
 permission queue, stream rendering, and composer. It has no session/input
-history, persistence, compaction, queued follow-ups, slash commands, skills,
+history, persistence, mevedel-managed compaction, queued follow-ups, slash commands, skills,
 Goal/Plan/task state, or ordinary session hooks. `C-c RET` sends only while the
-side is idle and `C-c C-k` aborts the current side response without closing the
-conversation. Aborting appends the same structural incomplete boundary so a
+side is idle and `C-c C-k` aborts the current side response. With gptel this does
+not close the conversation. Aborting appends the same structural incomplete boundary so a
 follow-up cannot mistake partial prose for a settled answer. Closing the side
 discards it; closing the parent also closes its side. Neither operation rolls
 back already approved workspace effects.
+
+Native side answers retain their fork for follow-ups. Closing the side or its
+parent, aborting, a provider error, or orderly Emacs exit deletes the fork via
+ACP after its writer stops. Abort and error leave the side transcript readable,
+but reject more input until you close it and open a new side. Late startup
+replies after closure are also deleted. Failed deletion warns with the fork ID
+and remains eligible for exit cleanup; a hard crash or failed cleanup can leave
+adapter-owned history behind. Process shutdown alone is not deletion. Native
+side dispatch uses the frozen restricted tool roster and ephemeral request
+settlement, not root preset refresh, context receipts or durable history publication.
+Provider compaction stays inside the native fork and does not rotate or archive
+the temporary side transcript in mevedel.
 
 A parent owns at most one side. Bare `/btw` focuses it; `/btw PROMPT` submits
 only when its composer is empty and no side response is active. Refused inline
@@ -2079,7 +2189,23 @@ Attention gating is a redraw path like any other: a skipped tick or flush
 leaves buffer text, properties, and the composer byte-identical, and the
 resumed render runs through the same preserving wrappers.
 
-`mevedel-view--call-preserving-window-state` restores point, mark, window points,
+Every asynchronous writer outside zone reconciliation goes through one entry,
+`mevedel-view-call-preserving-user-view-state`: live and settled stream
+updates, full and batched rerenders, latest-turn and tool-row refreshes,
+agent handle refreshes, terminal breadcrumbs, request-rail ticks and
+background elapsed ticks. It keeps composer text (also in a view no window
+shows), point, mark and every window's viewport, and drops the writer's undo
+entries. Status, interaction and rail zones reconcile through
+`mevedel-view-zone-reconcile`, which applies the same policy itself, so the
+request spinner's start, update and stop need no wrapper of their own. Three
+mechanisms stay distinct by design: draft and prompt replacements are single
+composer mutations ([ADR 0126](adr/0126-keep-the-composer-still.md)), table
+splices map positions by cell, and
+`mevedel-view-call-preserving-window-configuration` also restores frame
+layout. Decorative animation frames change only `display` properties and
+move no positions.
+
+The entry restores point, mark, window points,
 and window starts through semantic render anchors rather than raw buffer
 positions: a composer position by its input offset, a managed-fragment
 position by zone namespace, fragment id, and offset, and rendered transcript
@@ -2307,7 +2433,14 @@ Markdown rendering adds small view-only affordances:
   The rendered region retains the canonical Markdown
   source and the layout's window pixel width as text properties and
   carries the view's own source/read-only/turn properties across the
-  rewrite;
+  rewrite. Each view keeps up to 64 completed layouts, keyed by source including
+  rendering properties (not projection source handles), window pixel width,
+  inset, frame identity/font, named-face
+  and fontset generation, and face remapping. Face/font setters invalidate
+  resolved layouts without resolving source faces on every redraw. A redraw
+  that reinserts a table laid out before applies its layout during the
+  write, so the table never shows raw; a new table still waits for its
+  deferred first layout;
 - rendered `@file` mentions, Markdown file links, and bare file paths
   are clickable open-file buttons, including `:LINE`, `:L<line>`,
   `:#L<line>`, comma-separated line lists, and `#L<line>` targets. A path
@@ -2708,6 +2841,8 @@ related input bindings are:
 - `C-y`: yank text or insert a clipboard image
 - `C-c C-e`: open the Pending Inputs cockpit
 - `C-c C-q`: confirm and clear all pending input
+- `C-c C-w`: retract the newest pending entry into an empty composer
+- `C-c C-r`: resume idle pending steering in one turn, then queued follow-ups
 - `M-p` / `M-n`: previous / next input
 - `M-r`: search history
 - `C-c C-l`: browse history
@@ -2716,7 +2851,16 @@ related input bindings are:
 - `Shift-TAB` / `<backtab>`: cycle `ask`, `edits`, and `full-auto`
 - `C-<tab>` in the composer: toggle Plan without changing the permission mode
 
-These bindings apply only while point is in the editable composer.
+These bindings apply only while point is in the editable composer. They use
+lookup-time keyboard routing rather than an overlay keymap, so an overlapping
+word or text-property keymap cannot hide composer commands it does not bind.
+An explicit contextual `keymap` binding still wins, as do transient overriding
+maps. Ordinary minor-mode maps remain below the composer keyboard map. The
+composer's presentation overlay supplies indentation and cursor alignment only.
+Evil retains its additional empty-prompt controls in normal and insert states.
+Configure additional top-level composer keys before opening or reinitializing
+a view; registration derives the available entry points from the composer maps.
+
 History persists at the workspace level as
 `<workspace-root>/.mevedel/input-history.el`, so new and resumed
 sessions in the same project share prompt recall. When persistence is not
@@ -2819,6 +2963,11 @@ Slash commands cannot become pending input.
 
 The interaction zone shows up to three compact previews per category. Click or
 `RET` on an entry expands its input locally, with one entry open at a time.
+`d` or `DEL` on an entry's header row drops only that entry without a cockpit or
+delivery pause. Full one-line entries support deletion too. A stale row, an
+entry being edited or converted, or input already claimed for dispatch refuses
+deletion. All deletion paths recheck session mutation authority and release
+reserved submission context; attachment files themselves are not deleted.
 Inputs already shown in full have no expansion control. An expanded row keeps
 only its number, collapse control and optional directive scope in the header;
 the input appears once in the body, not again as an abbreviated header preview.
@@ -2831,6 +2980,16 @@ become spaces in that preview. Summaries use display-column limits, and both
 collapsed and expanded previews process only bounded input prefixes rather than
 rescanning an arbitrarily large queued paste on each asynchronous refresh. These
 presentation limits never change the complete queued input.
+
+`C-c C-w` withdraws the newest accepted pending entry across both categories,
+even after queue reordering or conversion. It restores bound mention text,
+attachment grants, reserved hook context, and the entry's composer scope. It
+refuses an existing draft (including whitespace), a draft already saved in the
+destination scope, or a running composer submission/edit. Clear or send the
+restored draft before withdrawing the next entry. This command does not pause
+delivery. Steering snapshots are claimed before expansion, and native steering
+remains claimed until its receipt or terminal settlement; withdrawal cannot
+race with attachment reads or delete an already dispatched prompt.
 
 **Manage queue…** or `C-c C-e` opens the Pending Inputs cockpit and pauses
 automatic delivery; the link labels that consequence. Blank summary space is
@@ -2849,7 +3008,22 @@ restoring reserved submission context or changing session state, so stale,
 foreign, and quiescing surfaces fail closed.
 
 After a failed turn or an interrupted queued dispatch, entries marked
-`Needs review` require an explicit decision. Select `f` to convert failed
+`Needs review` require an explicit decision. From an idle, empty composer,
+`C-c C-r` is the direct retry: it combines leftover steering in queue order
+into one user message, clears the interrupt/failure holds, and starts that turn
+through the ordinary durable follow-up dispatcher. Queued follow-ups, including
+failed follow-ups explicitly retried by Resume, remain behind it and drain as
+usual. Live steering retains its already accepted hook/skill preparation;
+cold-restored text prepares normally. A blocked dispatch retains the combined
+message at the queue head, available for retry, editing or retraction. Resume
+does not bypass readiness, permission or Plan holds and requires closing
+an open Pending Inputs cockpit first. Its steering turn is an explicit user
+turn, like a manual send: Resume does not change the Goal's state. Goal-owned
+queued follow-ups remain held while that Goal is paused, blocked or
+budget-limited. The pending summary advertises Resume
+while idle and retract at all times.
+
+The cockpit remains available for individual recovery decisions. Select `f` to convert failed
 steering or requeue a failed follow-up at the follow-up tail, preserving its
 attachments, guest attribution, and scope, or delete the entry. `R` clears the
 failure pause only after both categories contain no unresolved failed entries;
@@ -2895,10 +3069,18 @@ failed steering awaiting review, a pending Plan approval, directive planning
 or Goal handoff, and a paused, blocked, or budget-limited Goal that owns the
 next entry.
 
-If a turn fails with undelivered steering, those entries
-remain steering, become `Needs review`, and pause all automatic pending-input
-delivery. The user must edit, delete, or recategorize the failed entries, then
-resume delivery from the cockpit. Later follow-ups remain intact.
+If a turn fails with undelivered steering, those entries remain steering,
+become `Needs review`, and pause automatic pending-input delivery. Resume is
+explicit consent to retry them; individual edit, delete and conversion actions
+remain available in the cockpit. Later follow-ups remain intact.
+
+A deliberate interrupt (`C-c C-k` or abort) instead leaves unsent steering as
+ordinary pending input, detached from the stopped request, not `Needs review`.
+Steering and queued follow-ups wait for Resume or explicit user action; the
+interrupt hold survives saving and reopening the session. Background events and
+Goal continuation cannot dispatch past that hold. A fresh root send rebinds
+ordinary detached steering to its newly admitted request in the same order and
+releases the interrupt hold; failed-turn entries are never rebound implicitly.
 
 Entries retain atomically bound mention text and dropped-file grants; a grant remains active in memory only after its entry is delivered. It is not
 persisted in the session sidecar.
@@ -2911,6 +3093,9 @@ prepared twice. Accepted input is added to ordinary workspace input history.
 `mevedel-view-agent.el` owns transcript lookup and inspection views, live
 rows and badges, and status/handle refresh. Transcript turn rendering remains
 in `mevedel-view-render.el`.
+Inspection views put the agent header in the tab line and keep the header line
+for the [pinned prompt](#status-strip-and-cockpit-routing), so a long task stays
+identifiable after it scrolls away. `[← Parent]` in the tab line closes the view.
 
 Agent activity rows are projections of canonical tool and lifecycle events:
 `Started PATH`, `SendMessage: PATH`,

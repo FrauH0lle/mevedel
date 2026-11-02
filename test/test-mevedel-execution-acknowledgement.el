@@ -30,6 +30,20 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-publication-test-helpers"))
 
+(defun test-mevedel-execution-ack--start-yielded (session root output)
+  "Start a managed command for SESSION at ROOT that prints OUTPUT after yielding.
+The command waits for a gate file created only after the first observation
+yielded, so a delayed yield timer cannot let it finish in the foreground,
+which would never produce the mailbox delivery these cases hold."
+  (let ((initial (test-mevedel-execution--start-managed
+                  session root
+                  (list "sh" "-c"
+                        (concat "while [ ! -e go ]; do sleep 0.01; done; printf "
+                                output)))))
+    (should (plist-get (plist-get initial :facts) :execution-id))
+    (write-region "" nil (file-name-concat root "go") nil 'silent)
+    initial))
+
 (defun test-mevedel-execution-ack--record ()
   "Return a bare record whose owner context is the symbol `context'."
   (mevedel-execution--record-create
@@ -139,8 +153,7 @@
                  (setq held ack)
                  'pending)))
           (setq initial
-                (test-mevedel-execution--start-managed
-                 session root '("sh" "-c" "sleep .05; printf done")))
+                (test-mevedel-execution-ack--start-yielded session root "done"))
           (setq id (plist-get (plist-get initial :facts) :execution-id))
           (test-mevedel-execution--wait (lambda () held))
           (setq record (mevedel-execution--owned-yielded-record
@@ -188,8 +201,7 @@
                  (setq held ack)
                  'pending)))
           (setq initial
-                (test-mevedel-execution--start-managed
-                 session root '("sh" "-c" "sleep .05; printf kept")))
+                (test-mevedel-execution-ack--start-yielded session root "kept"))
           (setq id (plist-get (plist-get initial :facts) :execution-id))
           (test-mevedel-execution--wait (lambda () held))
           (setq record (mevedel-execution--owned-yielded-record
@@ -218,8 +230,7 @@
         (let ((mevedel-execution-mailbox-delivery-function
                (lambda (_event _context ack) (setq held ack) 'pending)))
           (setq initial
-                (test-mevedel-execution--start-managed
-                 session root '("sh" "-c" "sleep .05; printf unread")))
+                (test-mevedel-execution-ack--start-yielded session root "unread"))
           (setq id (plist-get (plist-get initial :facts) :execution-id))
           (test-mevedel-execution--wait (lambda () held))
           (mevedel-test--with-captured-diagnostics nil
@@ -347,9 +358,7 @@ Return (RECORD ID HELD-ACK-CELL) once the terminal event awaits its ack."
   (let (held)
     (setq mevedel-execution-mailbox-delivery-function
           (lambda (_event _context ack) (setq held ack) 'pending))
-    (let* ((initial (test-mevedel-execution--start-managed
-                     session root
-                     (list "sh" "-c" (concat "sleep .05; printf " output))))
+    (let* ((initial (test-mevedel-execution-ack--start-yielded session root output))
            (id (plist-get (plist-get initial :facts) :execution-id)))
       (test-mevedel-execution--wait (lambda () held))
       (list (mevedel-execution--owned-yielded-record session "main" id)

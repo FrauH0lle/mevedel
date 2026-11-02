@@ -34,26 +34,33 @@ reviewing older notes containing project progress. No action is a successful
 review. Avoid duplicates; update or remove outdated memories when supported.
 Do not create or rewrite memories merely to produce proposals.
 
+Also curate the captured memory itself, even when no new evidence arrives.
+Merge topics that state overlapping rules or facts into one, Update a topic
+whose guidance is one-sided by adding when it applies and when it does not,
+and Remove topics that are redundant with another topic, maintained
+documentation, or instructions. Prefer fewer, sharper topics.
+
 Shared working notes in `notes` are temporary working material from
 `work://shared/`. They are cleaned up after this review, so extract every
 qualifying memory from them now: cite the note's ID in a proposal's `evidence`.
 The same qualification rules apply; a note's existence is no reason to save
-it. Then dispose of each note exactly once in the Notes section:
+it. Extract anything qualifying as ordinary memory proposals citing the note ID
+in `evidence`; nothing else is needed for notes. No extraction is a successful
+outcome. Do not invent memories to justify cleanup. Open work, unresolved findings,
+numeric measurements and possible future usefulness do not require a completion
+audit or a note rewrite. After a successful review, the host disposes of every
+admitted note once all changes citing it have been applied. Failed or rejected
+reviews delete nothing. Omitted or merely referenced notes remain outside this
+review, even if investigation tools can read them.
 
-- `delete`: the normal outcome, after extraction or when nothing qualifies.
-  When future usefulness is uncertain, delete.
-- `keep`: only for concrete continuing use, such as an open handoff or an
-  investigation still in progress. The note is reviewed again later.
-- `condense`: rewrite the note to the part still in use, for example only its
-  open handoff after its finding was extracted.
-
-Do not keep or condense a note merely because it might help someday, and do
-not invent memories to justify deleting one. A note is removed only after
-every extraction citing it has been applied.
 A note with `cited_by_memory` is referenced by a memory topic or instruction
-file. Delete it only together with an Update or Remove proposal that makes the
-citing memory self-contained, citing the note's ID as evidence; otherwise keep
-it.
+file. Propose Update or Remove for the citing memory, or Instructions for the
+citing instruction file, so surviving guidance is self-contained without the
+temporary note reference. Cite the note's ID as evidence. Preserve unrelated
+guidance and do not promote temporary task state into memory merely to remove
+a citation. If the captured scope does not support a safe repair, application
+dynamically holds deletion while citations remain or their scope cannot be
+checked. The hold is a dependency refusal, not a different output action.
 
 Use only the supplied read tools and captured scopes to investigate uncertain
 claims. A literal reference match proves textual occurrence only. A missing
@@ -61,6 +68,9 @@ match in a bounded search is not proof of absence; unavailable or exhausted
 investigation remains unknown. Preserve the date and scope of reference checks.
 Do not assert that a symbol, flag, command, or external reference is verified
 merely because its spelling appears in a file. Do not add a verified stamp.
+`reference_checks` groups observations by shared `topic`, `scope`, and
+`checked` date; each `checks` item retains its own `token` and `result`.
+Shared metadata applies to every item and never certifies a lesson.
 
 Work within these hard limits, not toward them:
 
@@ -82,15 +92,15 @@ Return these level-two headings in order:
 ## Merge
 ## Remove
 ## Instructions
-## Notes
 ## No action
 
-Include `## Notes` exactly when the input contains notes; omit it otherwise.
+Always finish with the `## No action` section.
 Every action section contains one or more proposal blocks, or the single line
-`- none`. Notes contains one block per supplied note and is never `- none`.
+`- none`.
 The No action section contains plain bullets explaining why no changes
 are useful, or `- none` when there is nothing further to report. No preamble,
 other headings outside proposal bodies, or trailing commentary is permitted.
+Analysis, lists and explanations outside proposal blocks invalidate the reply.
 
 Each proposal uses a backtick fence labelled `proposal`, with at least four
 backticks. Use a longer outer fence if the replacement body contains one that
@@ -109,7 +119,7 @@ and a JSON array for evidence:
     reason: "Why the evidence supports this change"
     evidence: ["exact admitted digest ID"]
     ---
-    Complete replacement body, without file frontmatter.
+    Complete replacement body (memory topics omit generated frontmatter).
 
 The separator is a line containing only `---`. The body is Markdown, not a JSON
 string. Write the header as the separate key: value lines shown above, not a JSON
@@ -132,22 +142,20 @@ Action rules:
   The target may be one of the merged sources; other source topics are removed.
 - Remove names an admitted existing topic and has an empty body after `---`.
 - Instructions names an exact applicable file in a captured instruction root.
-  Its body contains only the new guidance to append, not the existing file.
+  Its body is the COMPLETE desired file content, not an addition to append.
+  Preserve all unrelated captured guidance. The captured target may already
+  exist or be a known-absent applicable file; do not add other targets. An empty
+  body clears an existing file or creates a known-absent file with zero bytes;
+  it never deletes the file path. Body bytes are used exactly as decoded,
+  including any final newline; an empty body has no implicit newline.
+  The newline immediately before the closing fence is structural and is not
+  part of the decoded body. To retain a final newline in the desired file,
+  include an extra newline before that closing fence.
 
 Do not propose direct changes to MEMORY.md. Application constructs topic
 frontmatter from title, hook, and type, and updates the corresponding index
 transactionally. No two proposals may write or remove the same file; this also
 applies to merge sources. Shared index updates are managed by application.
-
-A Notes block uses the same fence with exactly these three header fields:
-
-    note: "the note's exact ID"
-    disposition: "delete"
-    reason: "Why this disposition fits"
-    ---
-
-The body after `---` is empty for `delete` and `keep`. For `condense` it is the
-complete replacement note text.
 
 A syntactically valid proposal is still a fallible suggestion. Prefer No action
 to saving an unsupported claim or repeating an earlier rejected suggestion

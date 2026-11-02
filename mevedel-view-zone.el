@@ -30,6 +30,7 @@
 (declare-function mevedel-view--clamp-window-starts "mevedel-view-composer"
                   (tails &optional force))
 (declare-function mevedel-view--composer-anchors "mevedel-view-composer" ())
+(declare-function mevedel-view--history-reader-windows "mevedel-view-composer" ())
 (declare-function mevedel-view--input-start "mevedel-view-composer" ())
 (declare-function mevedel-view--position-screen-y
                   "mevedel-view-composer" (position window &optional fully))
@@ -60,6 +61,16 @@
 (defconst mevedel-view-zone--names
   '(status interaction progress directive-inspector)
   "Fixed names of fragment-backed view zones.")
+
+(defconst mevedel-view-zone-owned-properties
+  '(mevedel-view-zone-key mevedel-view-zone-region mevedel-view-zone-namespace
+    mevedel-view-zone-id mevedel-view-zone-section mevedel-view-zone-navigatable
+    mevedel-view-zone-entry mevedel-view-zone-collapsible
+    mevedel-view-zone-collapse-key mevedel-view-zone-collapsed
+    mevedel-view-zone-activate mevedel-view-zone-anchor)
+  "Text properties that tie managed zone text to its region.
+Text yanked from a zone must not keep them: stale-text cleanup deletes
+zone text its live region does not own, even inside the composer.")
 
 
 ;;
@@ -859,10 +870,20 @@ Return nil when its fragment is gone.  With STRICT, also return nil when
 its sub-anchor or offset no longer exists, rather than clamping it."
   (mevedel-view-zone--restore-fragment-position (car anchor) (cdr anchor) strict))
 
+(defun mevedel-view-zone-visit-anchor (position)
+  "Return an anchor for POSITION when it visits a managed row, or nil.
+Interaction cards and status rows (background work, tasks, notices) are
+rows a user visits deliberately: a redraw keeps such a row's screen
+position instead of applying the composer or reading-start policy."
+  (and (memq (get-text-property position 'mevedel-view-zone-namespace)
+             '(interaction status))
+       (mevedel-view-zone-position-anchor position)))
+
 (defun mevedel-view-zone--capture-logical-state (zone region composer-anchors)
   "Capture logical positions and each window's viewport policy for ZONE REGION.
-REGION may be nil on first render.  A visible interaction visit anchors
-point's screen row, even when another zone is being reconciled.  Only
+REGION may be nil on first render.  A visible interaction or status
+visit anchors point's screen row, even when another zone is being
+reconciled.  Only
 visiting windows pay for the bounded display-row measurement.
 COMPOSER-ANCHORS identify other windows whose visible composer stays still."
   (list
@@ -876,10 +897,7 @@ COMPOSER-ANCHORS identify other windows whose visible composer stays still."
       (let* ((position (window-point window))
              (composer (assq window composer-anchors))
              (visit (and (not (mevedel-view-zone--input-offset position))
-                         (when-let* ((interaction
-                                      (mevedel-view-zone--live-region 'interaction)))
-                           (mevedel-view-zone--fragment-position-state
-                            'interaction interaction position))))
+                         (mevedel-view-zone-visit-anchor position)))
              (y (and visit (mevedel-view--position-screen-y position window))))
         (list window
               (and region (mevedel-view-zone--fragment-position-state
@@ -910,8 +928,7 @@ Other windows retain their logical or marker-backed reading starts."
           (when-let* ((position (mevedel-view-zone--restore-fragment-position
                                  zone point-state)))
             (set-window-point window position))
-          (let ((visited (and y (mevedel-view-zone--restore-fragment-position
-                                   'interaction visit)))
+          (let ((visited (and y (mevedel-view-zone-anchor-position visit)))
                 (start (mevedel-view-zone--restore-fragment-position
                         zone start-state t)))
             (when (and start-state (not start))
@@ -957,6 +974,7 @@ live zone text keeps its current bounds until reconciliation finishes."
             region
           (let* ((composer-anchors (and (mevedel-view-zone--composer-live-p)
 					(mevedel-view--composer-anchors)))
+		 (readers (mevedel-view--history-reader-windows))
 		 (logical-state (mevedel-view-zone--capture-logical-state
 				 zone region composer-anchors))
 		 (window-tails (mevedel-view--window-tail-lengths))
@@ -1006,7 +1024,8 @@ live zone text keeps its current bounds until reconciliation finishes."
               ;; exposes longer lines and therefore increases the character tail.
               (mevedel-view--clamp-window-starts
                (seq-remove (lambda (tail)
-                             (or (and (assq (car tail) composer-anchors)
+                             (or (and (or (assq (car tail) composer-anchors)
+                                          (memq (car tail) readers))
                                       (not (memq (car tail) lost-starts)))
 				 (memq (car tail) visited-windows)))
 			   window-tails)

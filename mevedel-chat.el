@@ -82,6 +82,10 @@
 (declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
 (autoload 'mevedel-auth-assert-ready "mevedel-auth")
 
+;; `mevedel-claude-code-btw'
+(declare-function mevedel-claude-code-btw-send "mevedel-claude-code-btw" (input policy))
+(autoload 'mevedel-claude-code-btw-send "mevedel-claude-code-btw")
+
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--safe-accepted-prompt
                   "mevedel-collaboration" (data-buffer))
@@ -420,15 +424,26 @@ render immediately, so this never delays tool-call feedback."
   "Discard failed DATA-BUFFER and its companion view without querying.
 Run all cleanup hooks despite individual errors, then force closure if needed.
 With DISCARD-MODIFICATIONS, clear each buffer's modified flag before its hooks;
-otherwise leave the flag available to lifecycle cleanup."
+otherwise leave the flag available to lifecycle cleanup.
+
+While a buffer's hooks run, a nested kill of that same buffer is refused.
+The data buffer's view hook kills its companion, whose own hook kills the
+data buffer again; that inner kill would see the hook list this function
+suspended and finish the buffer early, so the remaining hooks, among
+them the session lock release, would run without the buffer or its
+session."
   (when (buffer-live-p data-buffer)
     (let ((view-buffer (buffer-local-value 'mevedel--view-buffer data-buffer)))
       (dolist (buffer (list data-buffer view-buffer))
         (when (buffer-live-p buffer)
           (let* ((hooks (buffer-local-value 'kill-buffer-hook buffer))
+                 (refuse-nested (lambda () (not (eq (current-buffer) buffer))))
                  (safe-hooks
                   (lambda ()
-                    (let ((kill-buffer-hook hooks))
+                    ;; The outer kill has passed its queries; only nested
+                    ;; kills of this buffer consult this binding.
+                    (let ((kill-buffer-hook hooks)
+                          (kill-buffer-query-functions (list refuse-nested)))
                       (run-hook-wrapped
                        'kill-buffer-hook
                        (lambda (hook)
@@ -1319,7 +1334,9 @@ The effective model and effort apply only to this request, not saved selection."
         ;; hooks and yielding checks can change that baseline.  gptel's model
         ;; transform owns its private prompt locals; native takes explicit args.
         (if (mevedel-claude-code-backend-p backend)
-            (mevedel-claude-code-send (or model-input native-input) policy)
+            (if (and mevedel--session (mevedel-session-audit-session mevedel--session))
+                (mevedel-claude-code-btw-send (or model-input native-input) policy)
+              (mevedel-claude-code-send (or model-input native-input) policy))
           (when (and mevedel--session (not mevedel--current-directive-uuid)
                      (assoc "root" (mevedel-session-external-conversations mevedel--session)))
             (mevedel-claude-code-release-history mevedel--session))

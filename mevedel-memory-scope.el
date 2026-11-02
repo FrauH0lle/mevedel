@@ -31,48 +31,72 @@
 (defconst mevedel-memory-scope--max-file-bytes (* 32 1024)
   "Maximum complete bytes admitted from any one memory or instruction file.")
 
-(defconst mevedel-memory-scope--max-bytes (* 96 1024)
-  "Maximum total before-state bytes captured for one consolidation pass.")
+(defconst mevedel-memory-scope--max-bytes (* 256 1024)
+  "Maximum total before-state bytes captured for one consolidation pass.
+Topics beyond it are omitted; `mevedel-memory-scope--rotate' varies which
+ones from day to day so curation can still reach every topic.")
 
-(defun mevedel-memory-scope--inventory (directory)
+(defun mevedel-memory-scope--rotate (names &optional day)
+  "Return NAMES rotated by DAY, the current UTC day number by default.
+Each daily review then starts its byte-bounded capture at a different topic."
+  (if (cdr names)
+      (let ((offset (mod (or day (floor (float-time) 86400)) (length names))))
+        (append (nthcdr offset names) (seq-take names offset)))
+    names))
+
+(defun mevedel-memory-scope--inventory (directory &optional attributes)
   "Return DIRECTORY's bounded names and whether their observation is complete.
-Include directory and symlink names but never descend through symlinks."
+Include directory and symlink names but never descend through symlinks.
+With ATTRIBUTES, also return :attributes, an alist mapping each name to its
+`file-attributes', observed in the same per-directory listing."
   (let ((pending (list directory)) (remaining mevedel-memory-scope--max-entries)
-        names directories (complete t))
+        names directories observed (complete t))
     (while (and pending (> remaining 0))
       (let* ((parent (pop pending))
+             ;; One listing per directory yields names and types together,
+             ;; instead of a symlink and directory probe per entry.
              (children (and (file-exists-p parent)
-                            (directory-files parent t directory-files-no-dot-files-regexp
-                                             nil (1+ remaining)))))
+                            (directory-files-and-attributes
+                             parent t directory-files-no-dot-files-regexp
+                             nil 'integer (1+ remaining)))))
         (when (> (length children) remaining)
           (setq complete nil children (seq-take children remaining)))
-        (dolist (path children)
-          (cl-decf remaining)
-          (push (file-relative-name path directory) names)
-          (when (and (not (equal (file-name-nondirectory path) ".mevedel"))
-                     (not (file-symlink-p path)) (file-directory-p path))
-            (push (file-relative-name path directory) directories)
-            (push path pending)))))
-    (list :existing (sort names #'string<) :directories (sort directories #'string<)
-          :complete (and complete (not pending)))))
+        (dolist (child children)
+          (let* ((path (car child)) (name (file-relative-name path directory)))
+            (cl-decf remaining)
+            (push name names)
+            (when attributes (push (cons name (cdr child)) observed))
+            ;; A symlink's type is its target string, never t.
+            (when (and (not (equal (file-name-nondirectory path) ".mevedel"))
+                       (eq t (file-attribute-type (cdr child))))
+              (push name directories)
+              (push path pending))))))
+    (append (list :existing (sort names #'string<) :directories (sort directories #'string<)
+                  :complete (and complete (not pending)))
+            (when attributes (list :attributes observed)))))
+
+(defun mevedel-memory-scope--text (bytes limit)
+  "Return BYTES decoded as UTF-8 text, or signal unless within LIMIT and exact."
+  (let ((text (decode-coding-string bytes 'utf-8-unix)))
+    (unless (and (<= (length bytes) limit)
+                 (not (string-search "\0" bytes))
+                 (not (cl-some #'mevedel--invalid-message-char-p text))
+                 (equal bytes (encode-coding-string text 'utf-8-unix)))
+      (error "Memory file exceeds its bound or is not UTF-8 text"))
+    text))
 
 (defun mevedel-memory-scope--snapshot (path limit &optional result)
   "Capture complete literal PATH bytes, bounded by LIMIT, or expected absence.
 Use the pinned target read so a changed parent cannot redirect the read.
 RESULT, when supplied, is the pinned read result for PATH from a bounded batch."
   (condition-case nil
-      (let* ((bytes (if result
-                        (progn
-                          (unless (equal path (plist-get result :path))
-                            (error "Snapshot result names another path"))
-                          (mevedel-session-control-fs-program-value result))
-                      (mevedel-session-control-fs-read-file path 'no-conversion (1+ limit))))
-             (text (decode-coding-string bytes 'utf-8-unix)))
-        (unless (and (<= (length bytes) limit)
-                     (not (string-search "\0" bytes))
-                     (not (cl-some #'mevedel--invalid-message-char-p text))
-                     (equal bytes (encode-coding-string text 'utf-8-unix)))
-          (error "Memory file exceeds its bound or is not UTF-8 text"))
+      (let ((bytes (if result
+                       (progn
+                         (unless (equal path (plist-get result :path))
+                           (error "Snapshot result names another path"))
+                         (mevedel-session-control-fs-program-value result))
+                     (mevedel-session-control-fs-read-file path 'no-conversion (1+ limit)))))
+        (mevedel-memory-scope--text bytes limit)
         (list :path path :exists t :bytes bytes :hash (secure-hash 'sha256 bytes)
               :mode (file-modes path)))
     (mevedel-session-control-fs-absent (list :path path :exists nil))))
@@ -128,10 +152,13 @@ The request owner must account for these snapshots in context admission."
               (let* ((inventory (and (eq kind 'memory) (mevedel-memory-scope--inventory directory)))
                      (candidates
                       (if (eq kind 'memory)
-                          (cons "MEMORY.md" (cl-remove-if-not
-                                             (lambda (name) (and (string-suffix-p ".md" name)
-                                                                 (not (equal name "MEMORY.md"))))
-                                             (plist-get inventory :existing)))
+                          (cons "MEMORY.md" (mevedel-memory-scope--rotate
+                                             (sort (copy-sequence
+                                                    (cl-remove-if-not
+                                                    (lambda (name) (and (string-suffix-p ".md" name)
+                                                                        (not (equal name "MEMORY.md"))))
+                                                     (plist-get inventory :existing)))
+                                                   #'string<)))
                         (delete-dups
                          (append '("AGENTS.md" "AGENTS.local.md")
                                  (mapcar (lambda (path) (file-relative-name path directory))
@@ -255,11 +282,38 @@ components. Never sample a newly proposed target to manufacture before-state."
           (list :path path :exists nil))
         (error "File was not admitted to this review"))))
 
-(defun mevedel-memory-scope-check (scope id files)
+(defun mevedel-memory-scope--check-reads (scope id files)
+  "Freshly reread FILES in SCOPE root ID for one verification phase.
+Return path/result pairs for `mevedel-memory-scope-check'; never retain them
+between phases.  Each program has at most eight reads, each bounded to its
+captured body length plus one, as in an individual freshness check.  Captured
+bodies are at most 32 KiB, bounding each program to 256 KiB plus eight bytes.
+Process the entire roster, including expected-absent files."
+  (let ((root (mevedel-memory-scope--root scope id)) operations results)
+    (when (eq (plist-get root :kind) 'notes)
+      (error "Shared notes require their hash-based freshness check"))
+    (dolist (file files)
+      (let ((before (mevedel-memory-scope-before scope id file)))
+        (push (list :op 'read :optional t :coding 'no-conversion
+                    :path (file-name-concat (plist-get root :dir) file)
+                    :max-bytes (1+ (length (plist-get before :bytes))))
+              operations)))
+    (dolist (batch (seq-partition (nreverse operations) 8))
+      (let ((reads (mevedel-session-control-fs-run-program batch)))
+        (unless (= (length reads) (length batch))
+          (error "Incomplete memory freshness observations"))
+        (setq results
+              (nconc results (cl-mapcar (lambda (op read) (cons (plist-get op :path) read))
+                                       batch reads)))))
+    results))
+
+(defun mevedel-memory-scope-check (scope id files &optional observations)
   "Return freshness status for FILES in captured root ID of SCOPE.
 The result has :status `fresh', `stale', or `unavailable', and a :reason for
 non-fresh states. This is a read-only check, not write coordination: callers
-must hold current ownership and target coordination across check and commit."
+must hold current ownership and target coordination across check and commit.
+OBSERVATIONS may supply fresh path/result pairs from this verification phase;
+every checked path must be present.  Never reuse them across phases."
   (condition-case err
       (let ((root (mevedel-memory-scope--root scope id)) stale)
         (dolist (file files)
@@ -270,7 +324,12 @@ must hold current ownership and target coordination across check and commit."
                   (unless (eq (plist-get root :kind) 'notes)
                     (condition-case nil
                         (list :exists t :bytes
-                              (mevedel-session-control-fs-read-file path 'no-conversion (1+ (length bytes))))
+                              (if observations
+                                  (let ((result (cdr (assoc path observations))))
+                                    (unless (and result (equal path (plist-get result :path)))
+                                      (error "Missing or mismatched memory freshness observation"))
+                                    (mevedel-session-control-fs-program-value result))
+                                (mevedel-session-control-fs-read-file path 'no-conversion (1+ (length bytes)))))
                       (mevedel-session-control-fs-absent (list :exists nil))))))
             (unless (and (equal path (plist-get before :path))
                          (or (not (plist-get before :exists)) (plist-get before :directory)

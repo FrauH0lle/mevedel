@@ -354,6 +354,15 @@ before the operation ran."
    "      test ! -L \"$leaf\" || exit 69\n"
    "      rm -rf -- \"$leaf\" || exit 67\n"
    "      ;;\n"
+   "    observation-clock)\n"
+   "      test ! -L \"$leaf\" || exit 69\n"
+   "      test -d \"$leaf\" || exit 68\n"
+   "      exec 8<\"$leaf\" || exit 67\n"
+   "      test ! -L \"$leaf\" || exit 69\n"
+   "      cd -- /proc/self/fd/8 || exit 70\n"
+   "      now=$(LC_ALL=C; printf '%s' \"${EPOCHREALTIME-}\") || exit 67\n"
+   "      printf '%s' \"$now\" | base64 -w0 || exit 67\n"
+   "      ;;\n"
    "    clock|before-time)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
    "      exec 8<\"$leaf\" || exit 67\n"
@@ -390,59 +399,6 @@ before the operation ran."
    "      else\n"
    "        test \"$sum\" = \"$payload\" || exit 72\n"
    "      fi\n"
-   "      ;;\n"
-   ;; A content-addressed blob is named by its SHA-256.  Its copy is proved
-   ;; against that name before the exclusive link publishes it, so a source
-   ;; path redirected after the caller's observation can only fail; an
-   ;; existing blob with the right bytes makes capture idempotent.
-   "    capture-blob)\n"
-   "      [[ \"$leaf\" =~ ^[0-9a-f]{64}$ ]] || exit 71\n"
-   "      source=$(printf '%s' \"$payload\" | base64 -d) || exit 71\n"
-   "      test -n \"$source\" || exit 71\n"
-   "      if test -e \"$leaf\" || test -L \"$leaf\"; then\n"
-   "        test ! -L \"$leaf\" && test -f \"$leaf\" || exit 69\n"
-   "        sum=$(sha256sum <\"$leaf\") || exit 67\n"
-   "        test \"${sum%% *}\" = \"$leaf\" || exit 72\n"
-   "        exit 0\n"
-   "      fi\n"
-   "      test ! -L \"$source\" || exit 69\n"
-   "      test -e \"$source\" || exit 77\n"
-   "      test -f \"$source\" || exit 68\n"
-   "      temporary=$(mktemp -- .mevedel-control-fs-XXXXXX) || exit 66\n"
-   "      trap 'rm -f -- \"$temporary\"' EXIT\n"
-   "      exec 8<\"$temporary\" || exit 66\n"
-   "      test \"$(readlink /proc/self/fd/8)\" = \"${parent%/}/$temporary\" || exit 70\n"
-   "      exec 8>/proc/self/fd/8 || exit 66\n"
-   "      dd if=\"$source\" iflag=nofollow status=none >&8 || exit 67\n"
-   "      chmod 600 -- /proc/self/fd/8 || exit 67\n"
-   "      sum=$(sha256sum </proc/self/fd/8) || exit 67\n"
-   "      test \"${sum%% *}\" = \"$leaf\" || exit 72\n"
-   "      ln -- \"$temporary\" \"$leaf\" || exit 73\n"
-   "      rm -f -- \"$temporary\"\n"
-   "      trap - EXIT\n"
-   "      ;;\n"
-   ;; Restoration copies a blob beside the pinned leaf, proves the copy's
-   ;; bytes against the blob's name, then renames it into place.  Callers
-   ;; state the expected current leaf as an earlier operation.
-   "    restore-blob)\n"
-   "      test ! -L \"$leaf\" || exit 69\n"
-   "      decoded=$(printf '%s' \"$payload\" | base64 -d) || exit 71\n"
-   "      mode=${decoded%%$'\\n'*}\n"
-   "      blob=${decoded#*$'\\n'}\n"
-   "      [[ \"$mode\" =~ ^[0-7]+$ ]] || exit 71\n"
-   "      [[ \"${blob##*/}\" =~ ^[0-9a-f]{64}$ ]] || exit 71\n"
-   "      test ! -L \"$blob\" && test -f \"$blob\" || exit 66\n"
-   "      temporary=$(mktemp -- .mevedel-control-fs-XXXXXX) || exit 66\n"
-   "      trap 'rm -f -- \"$temporary\"' EXIT\n"
-   "      exec 8<\"$temporary\" || exit 66\n"
-   "      test \"$(readlink /proc/self/fd/8)\" = \"${parent%/}/$temporary\" || exit 70\n"
-   "      exec 8>/proc/self/fd/8 || exit 66\n"
-   "      dd if=\"$blob\" iflag=nofollow status=none >&8 || exit 67\n"
-   "      sum=$(sha256sum </proc/self/fd/8) || exit 67\n"
-   "      test \"${sum%% *}\" = \"${blob##*/}\" || exit 72\n"
-   "      chmod \"$mode\" -- /proc/self/fd/8 || exit 67\n"
-   "      mv -fT -- \"$temporary\" \"$leaf\" || exit 67\n"
-   "      trap - EXIT\n"
    "      ;;\n"
    "    verify-latest)\n"
    "      suffix=$payload\n"
@@ -491,6 +447,16 @@ before the operation ran."
    "          printf '%s\\0' \"${entry#./}\"\n"
    "        done\n"
    "      } | base64 -w0\n"
+   "      ;;\n"
+   "    stat-tree)\n"
+   "      test ! -L \"$leaf\" || exit 69\n"
+   "      test -e \"$leaf\" || exit 77\n"
+   "      test -d \"$leaf\" || exit 68\n"
+   "      exec 8<\"$leaf\" || exit 70\n"
+   "      cd -P -e -- /proc/self/fd/8 || exit 70\n"
+   "      test \"$PWD\" = \"${parent%/}/$leaf\" || exit 70\n"
+   "      export LC_ALL=C\n"
+   "      (set -o pipefail; find -P . -printf '%y\\0%p\\0%D\\0%i\\0%s\\0%T@\\0%C@\\0%m\\0%U\\0%G\\0' | base64 -w0) || exit 67\n"
    "      ;;\n"
    "    tree-size)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
@@ -589,7 +555,7 @@ file-name ending, as plain text.  `base64' resolves through the target PATH,
 like `stat'.")
 
 (defvar mevedel-session-control-fs--programs (make-hash-table :test #'equal)
-  "Resolved target `bash' and `stat' paths, keyed by TRAMP prefix.
+  "Resolved target `bash', `stat' and, remotely, `gzip' paths by TRAMP prefix.
 
 Locating a program on a remote target costs one `test -x' per `exec-path'
 entry, and the durability layer inhibits the remote file-name cache, so
@@ -599,7 +565,9 @@ script proves its own parent directory, and a moved interpreter fails the
 operation, which drops the entry.")
 
 (defun mevedel-session-control-fs--programs (remote)
-  "Return a cons of target `bash' and `stat' paths for REMOTE."
+  "Return the target program paths for REMOTE.
+The value is a list of `bash' and `stat' and, for a remote target only, the
+optional `gzip' that `mevedel-session-control-fs--script-arguments' uses."
   ;; Every remote target is readiness-gated to Linux already; a local
   ;; target never is, yet the scripts need procfs descriptor pinning and
   ;; GNU stat, mv, and base64 semantics.  Refusing here covers every
@@ -617,8 +585,63 @@ operation, which drops the entry.")
               (stat (executable-find "stat" remote)))
           (unless (and bash stat)
             (error "Portable control filesystem requires bash and stat"))
-          (puthash key (cons bash stat)
+          (puthash key (list bash stat
+                             (and remote (executable-find "gzip" remote)))
                    mevedel-session-control-fs--programs)))))
+
+(defvar mevedel-session-control-fs--compressed-script nil
+  "The program script as wrapped base64 of its gzip bytes, once computed.
+The symbol `none' records that local compression is unavailable.")
+
+;; A reload installs a new program script, so discard its old encoding too.
+(setq mevedel-session-control-fs--compressed-script nil)
+
+(defconst mevedel-session-control-fs--compressed-bootstrap
+  (concat "g=$1; s=$2; shift 2; "
+          "script=$(set -o pipefail; printf %s \"$s\" | base64 -d | \"$g\" -dc) || exit 70; "
+          "eval \"$script\"")
+  "Command line that decompresses the program script and runs it in place.
+Its first two arguments are the target `gzip' and the encoded script; the
+script's own arguments follow.")
+
+(defun mevedel-session-control-fs--compressed-script ()
+  "Return the encoded compressed program script, or nil when unavailable."
+  (unless mevedel-session-control-fs--compressed-script
+    (setq mevedel-session-control-fs--compressed-script
+          (or (ignore-errors
+                (with-temp-buffer
+                  (set-buffer-multibyte nil)
+                  (insert (encode-coding-string
+                           mevedel-session-control-fs--program-script 'utf-8-unix))
+                  (let ((default-directory temporary-file-directory))
+                    (when (eql 0 (call-process-region
+                                  (point-min) (point-max) "gzip" t t nil "-9nc"))
+                      ;; Wrapped at 76 columns, so no physical line nears the
+                      ;; pty budget `mevedel-session-control-fs--argument-budget'
+                      ;; describes.
+                      (base64-encode-string (buffer-string))))))
+              'none)))
+  (and (stringp mevedel-session-control-fs--compressed-script)
+       mevedel-session-control-fs--compressed-script))
+
+(defun mevedel-session-control-fs--script-arguments (remote programs)
+  "Return the interpreter arguments that run the program script.
+REMOTE is the target prefix and PROGRAMS its resolved program paths.
+
+A remote command line crosses TRAMP's pty, where the shell-quoted script
+alone is about 17 KB and pty backpressure made every program wait for it.
+Where the target has `gzip', the script travels compressed at about a
+fifth of that size behind a short decompressing bootstrap.  A local
+command is exec'd directly and keeps the script inline, as does a target
+without `gzip'."
+  (let ((gzip (and remote (nth 2 programs)))
+        (encoded (and remote (nth 2 programs)
+                      (mevedel-session-control-fs--compressed-script))))
+    (if encoded
+        (list "-p" "-c" mevedel-session-control-fs--compressed-bootstrap
+              "mevedel-session-control-fs" (file-local-name gzip) encoded)
+      (list "-p" "-c" mevedel-session-control-fs--program-script
+            "mevedel-session-control-fs"))))
 
 (defun mevedel-session-control-fs--connection-directory (path)
   "Return an always-present directory on PATH's target for process dispatch.
@@ -650,13 +673,13 @@ parent must not turn into a `Setting current directory' failure."
     (delete-directory . "delete-directory")
     (delete-empty-directory . "delete-empty-directory")
     (target-time . "clock")
+    (observation-time . "observation-clock")
     (list-directory . "list")
+    (stat-tree . "stat-tree")
     (verify-list . "verify-list")
     (tree-size . "tree-size")
     (file-hash . "hash")
-    (verify-hash . "verify-hash")
-    (capture-blob . "capture-blob")
-    (restore-blob . "restore-blob"))
+    (verify-hash . "verify-hash"))
   "Program operation names mapped to their target-side verbs.")
 
 (defun mevedel-session-control-fs--program-status (code)
@@ -673,7 +696,11 @@ parent must not turn into a `Setting current directory' failure."
   (pcase (plist-get op :op)
     ('read (decode-coding-string payload
                                  (or (plist-get op :coding) 'utf-8-unix)))
-    ('list-directory (split-string payload "\0" t))
+    ((or 'list-directory 'stat-tree) (split-string payload "\0" t))
+    ('observation-time
+     (unless (string-match-p "\\`[0-9]+\\.[0-9]+\\'" payload)
+       (signal 'file-error (list "Target observation clock is unavailable" (plist-get op :path))))
+     (string-to-number payload))
     ('target-time
      (let ((text (string-trim payload)))
        (unless (string-match-p "\\`[0-9]+\\'" text)
@@ -718,21 +745,6 @@ parent must not turn into a `Setting current directory' failure."
                          (natnump (plist-get op :max-bytes)))
               (error "Read byte limit must be a non-negative integer"))
             (number-to-string (plist-get op :max-bytes)))
-           ;; Blob sources travel as encoded target-local names; the target
-           ;; proves copied bytes against the blob's hash name instead.
-           ((memq (plist-get op :op) '(capture-blob restore-blob))
-            (let ((source (plist-get op :source))
-                  (mode (plist-get op :mode)))
-              (unless (and (stringp source)
-                           (equal (file-remote-p source) (file-remote-p (plist-get op :path)))
-                           (or (eq (plist-get op :op) 'capture-blob) (natnump mode)))
-                (error "Invalid control blob operation"))
-              (base64-encode-string
-               (encode-coding-string
-                (concat (when (eq (plist-get op :op) 'restore-blob) (format "%o\n" mode))
-                        (file-local-name (expand-file-name source)))
-                'utf-8-unix)
-               t)))
            ((eq (plist-get op :op) 'verify-hash)
             (unless (and (stringp content) (string-match-p "\\`[0-9a-f]\\{64\\}\\'" content))
               (error "Invalid expected control file hash"))
@@ -1205,7 +1217,8 @@ LOCK-DIRECTORY is its optional target-side lock."
       (let* ((default-directory
               (mevedel-session-control-fs--connection-directory
                (or remote "/")))
-             (bash (car (mevedel-session-control-fs--programs remote)))
+             (programs (mevedel-session-control-fs--programs remote))
+             (bash (car programs))
              (staged (list nil))
              ;; Encoded once: the oversized path used to re-encode every
              ;; payload a second time for the request file.
@@ -1266,10 +1279,10 @@ LOCK-DIRECTORY is its optional target-side lock."
                              (apply
                               #'process-file
                               bash input (list output nil) nil
-                              "-p" "-c"
-                              mevedel-session-control-fs--program-script
-                              "mevedel-session-control-fs"
-                              (append flags arguments)))))
+                              (append
+                               (mevedel-session-control-fs--script-arguments
+                                remote programs)
+                               flags arguments)))))
                          (text (with-current-buffer output (buffer-string))))
                     (unless (and (integerp status) (zerop status))
                       ;; The resolved interpreters are the only cached input, so a
@@ -1825,6 +1838,13 @@ silently substituted zero would make every stored deadline look live to
 this client and every deadline it writes look expired to every other
 client."
   (mevedel-session-control-fs--run-1 'target-time directory))
+
+(defun mevedel-session-control-fs-observation-time (directory)
+  "Return target host seconds without writing inside DIRECTORY.
+This read-only clock is for age observations, not lease ownership.  The
+directory and its parent are descriptor-proved by the native program;
+missing or linked paths and invalid clock output fail closed."
+  (mevedel-session-control-fs--run-1 'observation-time directory))
 
 (provide 'mevedel-session-control-fs)
 

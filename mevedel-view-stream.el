@@ -94,9 +94,7 @@
 (declare-function mevedel-view--agent-fsm-p
                   "mevedel-view-composer" (info data-buffer))
 (autoload 'mevedel-view--agent-fsm-p "mevedel-view-composer")
-(declare-function mevedel-view--call-preserving-input-point
-                  "mevedel-view-composer" (thunk))
-(declare-function mevedel-view--call-preserving-user-view-state
+(declare-function mevedel-view-call-preserving-user-view-state
                   "mevedel-view-composer" (thunk &optional region))
 (declare-function mevedel-view--call-with-render-boundaries-advancing
                   "mevedel-view-composer" (thunk))
@@ -1389,7 +1387,7 @@ animation or elapsed timer remains to notice the new colors."
                         mevedel-view--spinner-label-target
                         'mevedel-view-spinner-frame)
                        (mevedel-view--spinner-metadata-visible-p)))
-          (mevedel-view--call-preserving-user-view-state
+          (mevedel-view-call-preserving-user-view-state
            (lambda () (mevedel-view--ensure-request-progress))
            (mevedel-view--request-progress-mutation-region)))
         ;; Theme/face changes can turn a color bank into a glyph fallback (or
@@ -1460,26 +1458,24 @@ animation or elapsed timer remains to notice the new colors."
 (defun mevedel-view--start-spinner (&optional status)
   "Show request progress with STATUS text in the view buffer.
 STATUS defaults to \"Thinking...\"."
-  (mevedel-view--call-preserving-input-point
-   (lambda ()
-     (mevedel-view--debug-log
-      'spinner-start
-      :status status
-      :state (mevedel-view--debug-state mevedel--data-buffer))
-     (when mevedel-view--request-progress-suppressed
-       (setq mevedel-view--spinner-start-time nil))
-     (setq mevedel-view--request-progress-suppressed nil)
-     (unless mevedel-view--spinner-start-time
-       (setq mevedel-view--spinner-start-time (current-time)))
-     (unless mevedel-view--spinner-phase-start
-       (setq mevedel-view--spinner-phase-start (float-time)))
-     (cl-incf mevedel-view--spinner-generation)
-     (setq mevedel-view--spinner-status (or status "Thinking...")
-           mevedel-view--spinner-owner 'request)
-     ;; Reconciliation restores semantic positions inside the replaced rail;
-     ;; see `mevedel-view--render-request-progress' for nested projections.
-     (mevedel-view--render-request-progress)
-     (mevedel-view--start-spinner-timer))))
+  (mevedel-view--debug-log
+   'spinner-start
+   :status status
+   :state (mevedel-view--debug-state mevedel--data-buffer))
+  (when mevedel-view--request-progress-suppressed
+    (setq mevedel-view--spinner-start-time nil))
+  (setq mevedel-view--request-progress-suppressed nil)
+  (unless mevedel-view--spinner-start-time
+    (setq mevedel-view--spinner-start-time (current-time)))
+  (unless mevedel-view--spinner-phase-start
+    (setq mevedel-view--spinner-phase-start (float-time)))
+  (cl-incf mevedel-view--spinner-generation)
+  (setq mevedel-view--spinner-status (or status "Thinking...")
+        mevedel-view--spinner-owner 'request)
+  ;; Reconciliation restores semantic positions inside the replaced rail;
+  ;; see `mevedel-view--render-request-progress' for nested projections.
+  (mevedel-view--render-request-progress)
+  (mevedel-view--start-spinner-timer))
 
 (defun mevedel-view--spinner-region-p (start end)
   "Return non-nil when START..END still contain spinner text."
@@ -1492,34 +1488,32 @@ STATUS defaults to \"Thinking...\"."
 
 (defun mevedel-view--update-spinner (status &optional owner)
   "Update request progress to show STATUS text owned by OWNER."
-  (mevedel-view--call-preserving-input-point
-   (lambda ()
-     (mevedel-view--debug-log
-      'spinner-update
-      :status status
-      :state (mevedel-view--debug-state mevedel--data-buffer))
-     (when-let* ((session
-                  (and (buffer-live-p mevedel--data-buffer)
-                       (buffer-local-value 'mevedel--session
-                                           mevedel--data-buffer)))
-                 ((fboundp 'mevedel-telemetry-record)))
-       (mevedel-telemetry-record
-        session 'status-transition
-        :previous-owner mevedel-view--spinner-owner
-        :previous-status mevedel-view--spinner-status
-        :owner (or owner mevedel-view--status-owner-override 'request)
-        :status status))
-     (setq mevedel-view--request-progress-suppressed nil)
-     (unless mevedel-view--spinner-start-time
-       (setq mevedel-view--spinner-start-time (current-time)))
-     (unless mevedel-view--spinner-phase-start
-       (setq mevedel-view--spinner-phase-start (float-time)))
-     (cl-incf mevedel-view--spinner-generation)
-     (setq mevedel-view--spinner-status status
-           mevedel-view--spinner-owner
-           (or owner mevedel-view--status-owner-override 'request))
-     (mevedel-view--render-request-progress)
-     (mevedel-view--start-spinner-timer))))
+  (mevedel-view--debug-log
+   'spinner-update
+   :status status
+   :state (mevedel-view--debug-state mevedel--data-buffer))
+  (when-let* ((session
+               (and (buffer-live-p mevedel--data-buffer)
+                    (buffer-local-value 'mevedel--session
+                                        mevedel--data-buffer)))
+              ((fboundp 'mevedel-telemetry-record)))
+    (mevedel-telemetry-record
+     session 'status-transition
+     :previous-owner mevedel-view--spinner-owner
+     :previous-status mevedel-view--spinner-status
+     :owner (or owner mevedel-view--status-owner-override 'request)
+     :status status))
+  (setq mevedel-view--request-progress-suppressed nil)
+  (unless mevedel-view--spinner-start-time
+    (setq mevedel-view--spinner-start-time (current-time)))
+  (unless mevedel-view--spinner-phase-start
+    (setq mevedel-view--spinner-phase-start (float-time)))
+  (cl-incf mevedel-view--spinner-generation)
+  (setq mevedel-view--spinner-status status
+        mevedel-view--spinner-owner
+        (or owner mevedel-view--status-owner-override 'request))
+  (mevedel-view--render-request-progress)
+  (mevedel-view--start-spinner-timer))
 
 (defun mevedel-view--spinner-status-snapshot ()
   "Return a snapshot of the current request-progress status."
@@ -1548,41 +1542,39 @@ Return non-nil when the status was restored."
 
 (defun mevedel-view--stop-spinner ()
   "Return the permanent rail to idle and release request animation."
-  (mevedel-view--call-preserving-input-point
-   (lambda ()
-     (mevedel-view--debug-log
-      'spinner-stop-delete
-      :spinner (mevedel-view--debug-spinner-state)
-      :state (mevedel-view--debug-state mevedel--data-buffer))
-     (when-let* ((session
-                  (and (buffer-live-p mevedel--data-buffer)
-                       (buffer-local-value 'mevedel--session
-                                           mevedel--data-buffer)))
-                 ((fboundp 'mevedel-telemetry-record)))
-       (mevedel-telemetry-record
-        session 'status-transition
-        :previous-owner mevedel-view--spinner-owner
-        :previous-status mevedel-view--spinner-status
-        :owner nil :status nil))
-     (cl-incf mevedel-view--spinner-generation)
-     (setq mevedel-view--spinner-status nil
-           mevedel-view--spinner-owner nil
-           mevedel-view--spinner-phase-start nil
-           mevedel-view--spinner-frozen-seconds nil
-           mevedel-view--spinner-last-sample-seconds nil
-           mevedel-view--spinner-sample-frame nil
-           mevedel-view--spinner-theme-stale-p nil)
-     (unless mevedel-view--pending-tool-calls
-        (unless (and (boundp 'mevedel--data-buffer)
-                     mevedel--data-buffer
-                     (buffer-live-p mevedel--data-buffer)
-                     (buffer-local-value 'mevedel--current-request
-                                         mevedel--data-buffer))
-          (setq mevedel-view--spinner-start-time nil))
-        (if mevedel-view-execution--elapsed-targets
-            (mevedel-view--start-spinner-timer)
-          (mevedel-view--stop-spinner-timer)))
-     (mevedel-view--render-request-progress))))
+  (mevedel-view--debug-log
+   'spinner-stop-delete
+   :spinner (mevedel-view--debug-spinner-state)
+   :state (mevedel-view--debug-state mevedel--data-buffer))
+  (when-let* ((session
+               (and (buffer-live-p mevedel--data-buffer)
+                    (buffer-local-value 'mevedel--session
+                                        mevedel--data-buffer)))
+              ((fboundp 'mevedel-telemetry-record)))
+    (mevedel-telemetry-record
+     session 'status-transition
+     :previous-owner mevedel-view--spinner-owner
+     :previous-status mevedel-view--spinner-status
+     :owner nil :status nil))
+  (cl-incf mevedel-view--spinner-generation)
+  (setq mevedel-view--spinner-status nil
+        mevedel-view--spinner-owner nil
+        mevedel-view--spinner-phase-start nil
+        mevedel-view--spinner-frozen-seconds nil
+        mevedel-view--spinner-last-sample-seconds nil
+        mevedel-view--spinner-sample-frame nil
+        mevedel-view--spinner-theme-stale-p nil)
+  (unless mevedel-view--pending-tool-calls
+    (unless (and (boundp 'mevedel--data-buffer)
+                 mevedel--data-buffer
+                 (buffer-live-p mevedel--data-buffer)
+                 (buffer-local-value 'mevedel--current-request
+                                     mevedel--data-buffer))
+      (setq mevedel-view--spinner-start-time nil))
+    (if mevedel-view-execution--elapsed-targets
+        (mevedel-view--start-spinner-timer)
+      (mevedel-view--stop-spinner-timer)))
+  (mevedel-view--render-request-progress))
 
 (defun mevedel-view--stop-request-progress ()
   "Stop and suppress the current request progress row."
@@ -1721,7 +1713,7 @@ wherever the transcript placed it, so an activity group can count it."
                         record (mevedel-view--history-insertion-marker))
                  (let ((at (marker-position
                             (mevedel-view--history-insertion-marker))))
-                   (mevedel-view--call-preserving-user-view-state
+                   (mevedel-view-call-preserving-user-view-state
                     (lambda ()
                       (mevedel-view--call-with-render-boundaries-advancing
                        (lambda ()

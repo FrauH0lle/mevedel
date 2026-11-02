@@ -68,6 +68,53 @@ it from the interface.
   work, correctness, cost, latency, and user interruptions; fewer tokens alone
   do not establish a better interface.
 
+## PROPORTIONATE SOLUTIONS
+
+Match a solution's complexity to the stakes of the problem. Some problems need
+complex solutions; most do not.
+
+- Before designing, state the problem in one plain sentence and what a failure
+  would actually cost. Deleting an old temporary text file is not the same
+  problem as mutating durable user data.
+- Prefer removing a requirement to engineering around it. When a guarantee
+  becomes expensive to provide, first ask whether it is needed at all.
+- Treat each new mechanism added to rescue a previous one (caches for proofs,
+  audits for caches, recovery for audits) as a signal to stop and re-scope, not
+  as the next step. Two such rescues in a row require a fresh scope decision.
+- Size safety mechanisms by consequence. Ephemeral, reproducible or low-value
+  data does not need undo, proofs or recovery machinery.
+- A plan or slice that grows well beyond its original estimate is paused and
+  re-justified with the person who owns the goal before work continues.
+
+## NO SURPRISES
+
+The user's point, windows and focus belong to the user. Only the command the
+user just invoked may change them, and only in the way its name promises.
+
+- **Background work never moves anything.** Process filters, timers, agent and
+  tool updates, status redraws and deferred renders keep point, mark, the
+  composer draft and each window's start where they were, in every window
+  showing the buffer ([ADR 0126](docs/adr/0126-keep-the-composer-still.md)).
+  Write through the view's preserving entries rather than editing view text
+  directly.
+- **No unrequested windows or focus changes.** Asynchronous events do not call
+  `pop-to-buffer`, `switch-to-buffer`, `select-window` or `select-frame`, and
+  do not split, resize or delete windows. Arriving prompts, results and
+  discoveries announce themselves (a rail count, a status row, a message) and
+  wait for the user to visit them.
+- **Commands change only what they name.** A command that opens a surface
+  displays it, and selects it only when the user is expected to act there; it
+  returns the user to the invoking window and draft position on close. A
+  command does not switch an unrelated view, tab or filter as a side effect.
+- **Stable targets.** Rows, buttons and cards under point or the pointer keep
+  their screen position while the user reads them; new content arrives at the
+  far edge.
+
+Treat an unexplained cursor jump, window or focus change as a defect, not a
+cosmetic issue. Test it the way the
+[testing conventions](docs/development.md#testing-conventions) describe for
+redraws.
+
 ## NO BACKWARDS COMPATIBILITY
 
 mevedel is under active development and has no backwards-compatibility

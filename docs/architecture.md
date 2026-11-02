@@ -178,10 +178,114 @@ of those states, and the codec rejects one that does not. Creating a directive
 therefore requires a file-visiting buffer: without a file nothing could
 reattach it, and detaching or archiving it would freeze a fileless anchor into
 a record that no longer loads. Deleting an entire directive range preserves its durable
-record and replaces the evaporated range overlay with a compact detached row;
-partial edits use normal overlay resizing. Co-located detached rows are ordered
+record and replaces the evaporated range overlay with a compact detached row.
+Co-located detached rows are ordered
 by their former source positions. References keep their source-bound
 evaporation behavior.
+
+Bulk deletion follows the same source-owner cleanup and activity guard as
+single deletion. `mevedel-delete-all-references` and
+`mevedel-delete-all-directives` filter the current workspace's registry without
+resetting its other instruction state; `mevedel-delete-all-instructions` uses
+the same path for both types. Buffers without a workspace share the `:global`
+bucket. Interactive deletion confirms instruction and buffer counts, with a
+separate default-no question for Source-missing directive records. Archived
+records are not selected, and any selected directive with activity blocks the
+operation before deletion begins. Noninteractive calls delete only source
+presentations and their records, without confirmation or Source-missing inclusion.
+Closed sources retain their registry workspace when reopened for bulk deletion,
+including sources reattached outside that workspace's root. Deletion retires
+the removed numeric IDs and prunes their links from both live presentations and
+preserved directive/subdirective anchor properties, so ID reuse cannot redirect
+an old link to an unrelated instruction.
+
+Instruction overlays persist `mevedel-span` as `line` or `char`. Creation
+infers line shape from a beginning-of-line start and an end-of-line or
+next-beginning-of-line end; the source creation helpers also accept an explicit
+shape for linewise selection integrations. Restored records lacking this
+property use the same inference. Empty instructions default to character shape.
+Line instructions keep whole surviving edge lines after edits. Intersecting
+replacements grow both shapes; adjacent insertions do not grow character spans,
+and adjacent whole lines do not grow line spans. Deleting a boundary newline
+joins the neighboring text into the line instruction. Full deletion still
+evaporates references and detaches directives.
+
+`mevedel-instruction-edit.el` synchronizes visited source buffers by zero-context
+line-diff runs. Equal-sized changed runs map each old line to its corresponding
+new line. For an unequal-sized run, each instruction reserves the first new
+lines for the old run's lines before it and the last new lines for the old
+run's lines after it, covering the remaining middle. If fewer than one middle
+line remains, it covers the whole replacement instead. An instruction covering
+the entire old run covers the entire new run. This shared
+path serves diff application, ApplyPatch, and outdated-instruction restoration,
+avoiding character-minimal insertion drift and excluding unchanged hunk context.
+Session rewind's transcript-only replacement remains separate: its display
+hooks are intentionally inhibited, and its transcript presentation is rebuilt.
+
+Source edit hooks capture and normalize only instructions touching the changed
+range, including its edges; ordinary typing does not scan the buffer's entire
+instruction registry. `mevedel-instruction-undo.el` fences edge-touching edits
+with native undo function entries, installing saved geometry after text changes
+in both directions. Strictly interior edits use native marker shifts and add
+no function entries unless normalization or explicit mapping actually moves an
+overlay beyond those shifts. A promoted edit can split a coalesced native
+insertion interval without adding an undo boundary. Full-deletion undo/redo
+restores the original overlay identity,
+source anchors, nested membership, and reciprocal links, without restoring old
+directive activity. Details consumed by a surviving successful implementation
+attempt stay consumed, even when undo restores source from before settlement;
+unconsumed details restore normally. If another instruction reused a deleted
+numeric ID, the restored instruction receives a fresh ID while retaining its UUID. Explicit
+archive/removal takes precedence over an old source undo. Selective undo is not
+supported: Emacs currently drops custom function entries when filtering undo
+history to a region.
+
+Replacement growth applies both to a single replacement notification
+(`replace-match`, `replace-region-contents`, or a `combine-change-calls` group)
+and to a full deletion followed by insertion at its collapsed position within
+one replacement scope. The vanilla scope is one command, ending at
+`post-command-hook`, including commands that switch buffers. Recursive minibuffer
+commands finish their own scopes without settling an enclosing command's pending
+replacement; the outer command can still insert its prompted text. Full-deletion
+candidates keep their original overlay identity collapsed at the deletion point
+until resolution. A same-position insertion recovers the span over the new text;
+line spans normalize to complete lines. Pending directives keep their activity,
+state, and attached anchor evidence rather than temporarily detaching. With no
+replacement, scope completion removes references or detaches directives using
+the existing source-owner semantics. Undo records retain the original scope's
+resolution so undo/redo cannot reopen an already completed replacement session.
+Noninteractive primitive edits outside a command or explicit held scope retain
+immediate full-deletion behavior.
+
+Partial deletion through an instruction edge also retains replacement intent for
+that edge within the same scope. Inserting at the surviving edge includes the new
+text together with the surviving instruction, even if native front-advance would
+otherwise move its start past the insertion. An untouched opposite edge remains
+adjacent, not intersecting; deleting both edges permits replacement at both,
+without narrowing an earlier full replacement's growth. Only successful effective
+deletions create intent: rejected edits and unchanged announced context cannot
+authorize growth. Ordinary adjacent insertions without an earlier edge deletion
+do not grow the instruction. Scope completion clears this partial-edge intent.
+
+When separate deletion/insertion replaces an entire parent together with nested
+instructions, only the outermost replaced instruction recovers over the new
+text. Nested directive details keep their durable records and history without
+source presentations, as when their parent fully detaches; nested references
+are removed. Arbitrary typed text does not supply a meaningful nested mapping.
+Undo restores the nested presentations, identities, geometry, and links.
+Single-notification replacements can still produce coextensive presentations;
+equal ranges are never each other's geometric parents, and presentation redraw
+does not delete either instruction merely because their bounds coincide.
+
+`mevedel-instruction-replacement-hold` and
+`mevedel-instruction-replacement-end` let an editing integration extend that
+scope across commands in one buffer; ending, cancellation, and teardown belong
+to the integration. `mevedel-evil.el` installs this bridge only through explicit
+`mevedel-evil-setup`, holding Evil change operators through their following insert
+session. Loading the optional module does not load Evil or change bindings,
+hooks, or initial states. Setup owns normal-state bindings and visual range/type
+translation; the generic source owner remains independent of Evil. Neither
+replacement resolution nor undo rewinds durable directive activity.
 
 Top-level directive presentations may persist an exact provider and
 reasoning-effort override. Nested directives are durable details owned by the
@@ -886,7 +990,7 @@ durable plans for the parent and retained agents. `work://shared/` maps to
 workspace-owned, untracked `.mevedel/shared/` for temporary working notes and
 handoffs across sessions, with agent-chosen filenames and folders. Memory
 consolidation extracts their lasting knowledge and removes them
-([shared working-note lifecycle](memory.md#shared-working-note-lifecycle)).
+([shared working-note lifecycle](memory-notes.md#shared-working-note-lifecycle)).
 See [`address-to-resource.md`](address-to-resource.md) and
 [`ADR 0104`](adr/0104-keep-resource-addresses-closed-and-capability-neutral.md).
 
@@ -938,8 +1042,9 @@ retrieving the memory manual before mutations. Buddy receives no saving
 procedure. Unchanged indexes do not rewrite this section at midnight. Durable memory bodies live in linked topic files under the
 same root, using `user`, `feedback`, `project`, or `reference`
 frontmatter. `MEMORY.md` should contain one-line links only.
-LLM-writable. See [`memory.md`](memory.md) for the full layout, save
-policy, staleness rules, and the `/remember` consolidation command and cockpit.
+LLM-writable. See [curated memory](memory-curated.md) for the full layout, save
+policy and staleness rules, and the [review contract](memory-review.md) for the
+`/remember` consolidation command and cockpit.
 
 Completed saved root turns, digest publication and workspace activation offer
 automatic consolidation. A disposable workspace timing cache keeps the hot check

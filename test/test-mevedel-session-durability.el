@@ -9,6 +9,7 @@
 (require 'gptel-request)
 (require 'mevedel-agent-control)
 (require 'mevedel-session-persistence)
+(require 'mevedel-session-control-fs)
 (require 'mevedel-session-durability)
 (require 'mevedel-session-recovery)
 (require 'mevedel-session-transfer)
@@ -852,14 +853,25 @@
          (session (test-mevedel-session-durability--local-session root))
          (owner (make-string 64 ?a))
          (other (make-string 64 ?b))
-         ;; The target-authoritative clock has whole-second resolution, so
-         ;; expiry must be observed across real target seconds.  The lease
-         ;; also has to outlive the control operations of one acquisition.
-         (mevedel-session-lease-seconds 2))
+         ;; The lease has to outlive the control operations of one
+         ;; acquisition.
+         (mevedel-session-lease-seconds 2)
+         ;; Whole target seconds added to every later target clock reading,
+         ;; so expiry is observed without waiting for the real clock.
+         (offset 0)
+         (shifted 0)
+         (program-value (symbol-function
+                         'mevedel-session-control-fs--program-value)))
     (make-directory session-dir t)
     (setf (mevedel-session-save-path session) session-dir)
     (unwind-protect
-        (progn
+        (cl-letf (((symbol-function 'mevedel-session-control-fs--program-value)
+                   (lambda (op payload)
+                     (let ((value (funcall program-value op payload)))
+                       (if (and (eq 'target-time (plist-get op :op))
+                                (> offset 0))
+                           (progn (cl-incf shifted) (+ value offset))
+                         value)))))
           (should
            (eq 'available
                (mevedel-session-durability-lease-state session-dir)))
@@ -874,11 +886,13 @@
             (should
              (eq 'foreign
                  (mevedel-session-durability-lease-state session-dir))))
-          (sleep-for 2.1)
+          (setq offset (1+ mevedel-session-lease-seconds))
           (let ((mevedel-session-durability--client-id other))
             (should
              (eq 'expired
                  (mevedel-session-durability-lease-state session-dir))))
+          ;; The expiry came from a real target reading moved forward.
+          (should (> shifted 0))
           (let ((mevedel-session-durability--client-id owner))
             (mevedel-session-durability-lease-release session-dir session)))
       (mevedel-session-durability--cancel-renewal session)

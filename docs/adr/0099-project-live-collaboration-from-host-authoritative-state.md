@@ -63,9 +63,14 @@ input is typed data checked by the native validator, not a remote minibuffer.
 If full plan disclosure exceeds the card's wire budget, acceptance remains in
 Emacs and the browser offers feedback only with an explicit full-review notice.
 Truncation cannot become approval of instructions the browser did not disclose.
-Save, Rewind, arbitrary Fork, lease transfer, publication, and execution-target
-changes remain host operations. Accepting an offered Worktree plan is the narrow
-owner-authorized exception.
+Save, Rewind, edit, Worktree Fork, lease transfer, publication, and
+execution-target changes remain host operations. Two owner-authorized
+exceptions exist. Accepting an offered Worktree plan is one. The other is a
+Conversation Fork at a settled assistant response, which the projection names by
+its stable fork point. The host runs the native fork transaction with its
+admission checks, leaves the source session unchanged, and performs each request
+id at most once per admitted connection. Retries receive the recorded outcome.
+A fork whose room cannot start stays saved and is named in the refusal.
 
 The workspace lobby lets writable guests open listed sessions through the
 host's ordinary restore path. It may reclaim a provably stale same-host PID
@@ -322,3 +327,13 @@ The following changes belong to ADR 0099 unless another ID is named.
   now stays open, selected skills travel as an explicit name array, and the
   existing planner applies them together. Admission is checked for every name
   on receipt and delivery; pasted message tokens remain inert.
+- **Owner Conversation Fork, 2026-10-31:** the inbox asked for edit, rewind
+  and fork in the browser. Conversation Fork was chosen first: it never changes
+  the source session or its files and needs no confirmation of discarded
+  state, unlike Rewind and edit, which stay in Emacs. It is owner-only, like
+  creating a session outright. A review found that a 3-second duplicate window
+  let a replayed sealed frame, sent after the window or around another request,
+  create extra children. Request ids are now settled once per admitted
+  connection. A failed room start had also left the published child's buffer
+  live; the host now discards the live child but keeps the saved fork for the
+  owner who asked for it.

@@ -17,6 +17,10 @@ Comment on:
 - Decisions the user has not made yet, and what the options are.
 - Responsibilities that may belong somewhere other than here.
 
+A request may open with a brief: the plan, goal, or request the programmer is
+implementing themselves. Orient your guidance toward it: the next step it
+implies here, what this code still needs to reach it, and where it diverges.
+
 Name concrete options and what each costs. "You will need HTTP; `url.el` is
 built in, `plz.el` is the usual add-on" is useful. "Consider your networking
 strategy" is not.

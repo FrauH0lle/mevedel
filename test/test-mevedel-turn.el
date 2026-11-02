@@ -928,7 +928,7 @@
                (lambda (_fsm event status)
                  (push (list event status) events)))
               ((symbol-function 'mevedel--turn-fail-pending-input)
-               (lambda (_fsm) (push 'pending-input-failure events)))
+               (lambda (_fsm &optional _status) (push 'pending-input-failure events)))
               ((symbol-function 'mevedel--turn-end-request)
                (lambda (_fsm) (push 'request-end events)))
               ((symbol-function
@@ -971,7 +971,7 @@
                     ((symbol-function 'mevedel-transport-run-when-idle)
                      (lambda (&rest _) nil))
                     ((symbol-function 'mevedel--turn-fail-pending-input)
-                     (lambda (_) (push 'pending-input-failure events)))
+                     (lambda (_ &optional _status) (push 'pending-input-failure events)))
                     ((symbol-function 'mevedel--turn-end-request)
                      (lambda (_)
                        (push 'request-end events)

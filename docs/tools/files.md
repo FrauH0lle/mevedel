@@ -51,6 +51,16 @@ and Plan boundary. Bare, root-only, and memory union addresses are discovery
 surfaces, not patch targets. Journal records are dated evidence, not current
 instructions; they remain read-only. Private pending journal state is unavailable.
 
+Read of `work://shared/` or a shared descendant directory generates bounded
+note rows; bare `work://` includes the same shared rows alongside session files.
+Rows show canonical address, modification age, age-readiness and a bounded first
+Markdown heading. Notes and attachments become age-ready after 14 days untouched
+by default (`mevedel-working-note-max-age-days`); future mtimes wait. No note
+header or lifecycle labels are parsed. Age-readiness is not mutation
+authority: capture/application safety checks remain pending. Incomplete inventory
+or reads stay visible. Listing does not create storage or mark every file in use;
+direct-file Read and Glob/Grep keep their ordinary contracts.
+
 Skill exact locators have the form `skill://NAME@SOURCE-KEY[/RELATIVE-PATH]`,
 where SOURCE-KEY is the full lowercase SHA-256 source identity from discovery.
 Readable aliases select the current discovered origin:

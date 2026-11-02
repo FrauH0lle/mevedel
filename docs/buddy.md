@@ -14,7 +14,38 @@ M-x mevedel-buddy-dismiss-note   dismiss the note at point
 M-x mevedel-buddy-dismiss-notes  dismiss every note in this buffer
 M-x mevedel-buddy-clear-changes  forget the edits recorded so far
 M-x mevedel-buddy-abort          abandon a review that has wedged
+/buddy [BRIEF|off]               from a session: implement it yourself, with Buddy
 ```
+
+## Feeding a session to Buddy
+
+`/buddy` in a session hands what the session knows about the work to Buddy, so
+you can implement it yourself while Buddy reviews and guides with that intent
+in view. It takes the first available brief:
+
+1. the text after the command, as in `/buddy add retry with backoff`;
+2. in Plan mode, the current plan unless it was already accepted;
+3. the objective of an unfinished Goal;
+4. the latest request and the assistant's response to it.
+
+The brief is stored for the session's project scope, the same key source
+buffers in that project use, and prefixed to every automatic review and
+guidance request in that scope. It is capped at 12,000 characters because each
+review pays for it again. `/buddy` then turns on `mevedel-buddy-global-mode`.
+A later `/buddy` replaces the brief. `/buddy off` forgets it and turns the
+global mode off. A session outside a project has no scope to share and is
+refused.
+
+The command changes nothing else. Plan mode, a pending proposal and its
+approval card, the Goal, the transcript, and the selected window all stay as
+they were. You can still accept the plan later, or keep asking the planning
+conversation questions while you write the code.
+
+The brief is model input, not an instruction: the review prompt treats code
+that contradicts it as a finding and unfinished work as no finding, and the
+guidance prompt orients suggestions toward it. It uses the Buddy transport and
+model unchanged; no session request is made. Collaboration guests cannot
+invoke `/buddy`, because it switches on Buddy across the host's Emacs.
 
 ## Two channels
 
@@ -78,8 +109,8 @@ another project merely by changing what it visits.
 
 ## Everything is ephemeral
 
-Notes, dismissals, recorded edits, note ids, and the last-reviewed time live in
-memory and die with the Emacs process. Buddy does not persist that state, write curated memory, or insert notes into a
+Notes, dismissals, recorded edits, note ids, briefs, and the last-reviewed time
+live in memory and die with the Emacs process. Buddy does not persist that state, write curated memory, or insert notes into a
 session transcript. It can record diagnostic lifecycle events through an
 available session's telemetry writer. Later reviews derive notes from the source
 they are shown.

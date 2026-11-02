@@ -2908,6 +2908,42 @@
     (mevedel-agent-control-notify session 'next (lambda () (push 'next calls)))
     (should (equal '(next) calls))))
 
+(mevedel-deftest mevedel-agent-control--offer-at-gate-open ()
+  ,test
+  (test)
+  :doc "pending offers run in FIFO order at once despite a queued successor"
+  (let ((session (mevedel-agent-control-test--session)) calls)
+    (with-temp-buffer
+      (mevedel-session-set-root-buffer session (current-buffer))
+      (setf (mevedel-session-publication-preparation-token session) '(owner))
+      (unwind-protect
+          (progn
+            (mevedel-agent-control-notify session 'first (lambda () (push 'first calls)))
+            (mevedel-agent-control-notify session 'second (lambda () (push 'second calls)))
+            (let ((timer (mevedel-session-mail-notification-timer session)))
+              (should (timerp timer))
+              ;; The gate opens with another preparation still queued.
+              (setf (mevedel-session-publication-preparation-token session) nil
+                    (mevedel-session-publication-preparations session)
+                    (list (cons #'ignore nil)))
+              (should-not calls)
+              (mevedel-agent-control--offer-at-gate-open session)
+              (should (equal '(first second) (reverse calls)))
+              (should-not (memq timer timer-list))
+              (should-not (mevedel-session-mail-notifications session))
+              (should-not (mevedel-session-mail-notification-timer session))))
+        (setf (mevedel-session-publication-preparation-token session) nil
+              (mevedel-session-publication-preparations session) nil)
+        (mevedel-agent-control--cancel-notifications session))))
+  :doc "without pending offers it runs nothing and arms no timer"
+  (let ((session (mevedel-agent-control-test--session))
+        (timers (copy-sequence timer-list)))
+    (with-temp-buffer
+      (mevedel-session-set-root-buffer session (current-buffer))
+      (mevedel-agent-control--offer-at-gate-open session)
+      (should-not (mevedel-session-mail-notification-timer session))
+      (should-not (seq-difference timer-list timers)))))
+
 (mevedel-deftest mevedel-agent-control-send-message ()
   ,test
   (test)

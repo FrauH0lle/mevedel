@@ -1642,24 +1642,31 @@ When ACTIVE-ONLY is non-nil, dormant path-scoped skills are excluded."
                (mevedel-skill-description skill))))))
 
 (defun mevedel-skills--format-list-tool-result
-    (skills omitted &optional mark-dormant)
-  "Format SKILLS for the ListSkills tool, noting OMITTED entries."
-  (if (null skills)
-      "No model-invocable skills match."
-    (let ((body
-           (mapconcat (lambda (skill)
-                        (mevedel-skills--listing-describe
-                         skill
-                         (and mark-dormant
-                              (mevedel-skills--model-visible-p skill)
-                              (mevedel-skill-path-patterns skill)
-                              (not (mevedel-skill-active-p skill)))))
-                      skills "\n")))
-      (if (> omitted 0)
-          (concat body
-                  (format "\n\n%d more skill(s) omitted; use query to narrow."
-                          omitted))
-        body))))
+    (skills omitted &optional mark-dormant user-only)
+  "Format SKILLS for the ListSkills tool, noting OMITTED entries.
+USER-ONLY names matching skills the model cannot invoke, so it can point
+the user at them instead of concluding they do not exist."
+  (concat
+   (if (null skills)
+       "No model-invocable skills match."
+     (let ((body
+            (mapconcat (lambda (skill)
+                         (mevedel-skills--listing-describe
+                          skill
+                          (and mark-dormant
+                               (mevedel-skills--model-visible-p skill)
+                               (mevedel-skill-path-patterns skill)
+                               (not (mevedel-skill-active-p skill)))))
+                       skills "\n")))
+       (if (> omitted 0)
+           (concat body
+                   (format "\n\n%d more skill(s) omitted; use query to narrow."
+                           omitted))
+         body)))
+   (when user-only
+     (concat "\n\nUser-only skills (Skill cannot invoke them; the user can run them): "
+             (mapconcat (lambda (skill) (concat "$" (mevedel-skill-name skill)))
+                        user-only ", ")))))
 
 (defun mevedel-skills--list-handler (callback args)
   "Pipeline handler for the `ListSkills' tool.
@@ -1691,10 +1698,21 @@ CALLBACK is the async tool callback.  ARGS is a plist with optional :query."
              (shown (cl-subseq matches 0
                                 (min (length matches)
                                      mevedel-skills--list-tool-limit)))
-             (omitted (max 0 (- (length matches) (length shown)))))
+             (omitted (max 0 (- (length matches) (length shown))))
+             (user-only
+              (and narrowed
+                   (seq-take
+                    (cl-remove-if-not
+                     (lambda (skill)
+                       (and (mevedel-skill-user-invocable-p skill)
+                            (mevedel-skills-skill-enabled-p skill)
+                            (not (mevedel-skills--model-visible-p skill))
+                            (mevedel-skills--skill-matches-query-p skill query)))
+                     (mevedel-session-skills session))
+                    mevedel-skills--list-tool-limit))))
         (funcall return
                  (mevedel-skills--format-list-tool-result
-                  shown omitted narrowed)))))))
+                  shown omitted narrowed user-only)))))))
 
 
 ;;

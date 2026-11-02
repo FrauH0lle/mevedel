@@ -148,8 +148,6 @@
                   "mevedel-overlays" (instruction))
 (declare-function mevedel--instructions-at
                   "mevedel-overlays" (point &optional type))
-(declare-function mevedel--instructions-congruent-p
-                  "mevedel-overlays" (a b))
 (declare-function mevedel--parent-instruction
                   "mevedel-overlays" (instruction &optional of-type))
 (declare-function mevedel--reference-tags
@@ -171,7 +169,6 @@
 (autoload 'mevedel--instruction-bufferlevel-p "mevedel-overlays")
 (autoload 'mevedel--instruction-type "mevedel-overlays")
 (autoload 'mevedel--instructions-at "mevedel-overlays")
-(autoload 'mevedel--instructions-congruent-p "mevedel-overlays")
 (autoload 'mevedel--parent-instruction "mevedel-overlays")
 (autoload 'mevedel--reference-tags "mevedel-overlays")
 (autoload 'mevedel--topmost-instruction "mevedel-overlays")
@@ -1099,31 +1096,18 @@ PRIORITY is the inherited priority and PARENT is the tree parent."
 (defun mevedel--update-instruction-overlay
     (instruction &optional update-children)
   "Update INSTRUCTION's presentation and optionally UPDATE-CHILDREN."
-  (let ((conflicting
-         (cl-some
-          (lambda (other)
-            (and
-             (not (eq other instruction))
-             (mevedel--instructions-congruent-p
-              instruction other)))
-          (mevedel--instructions-at
-           (overlay-start instruction)))))
-    (if conflicting
-        (mevedel--delete-instruction instruction)
-      (let* ((parent
-              (mevedel--parent-instruction instruction))
-             (priority
-              (if parent
-                  (1+ (overlay-get parent 'priority))
-                mevedel--default-instruction-priority)))
-        (when (eq (overlay-get instruction 'mevedel-instruction-type)
-                  'directive)
-          (mevedel--refresh-directive-anchor instruction))
-        (mevedel--update-instruction-overlay-tree
-         instruction update-children priority parent)
-        (when (mevedel--detached-directive-p instruction)
-          (mevedel--order-detached-directives-at
-           (overlay-start instruction)))))))
+  (let* ((parent (mevedel--parent-instruction instruction))
+         (priority (if parent
+                       (1+ (overlay-get parent 'priority))
+                     mevedel--default-instruction-priority)))
+    ;; Presentation must not delete authored data when an edit makes two
+    ;; ranges equal.  Creation validates conflicts at its own boundary.
+    (when (eq (overlay-get instruction 'mevedel-instruction-type) 'directive)
+      (mevedel--refresh-directive-anchor instruction))
+    (mevedel--update-instruction-overlay-tree
+     instruction update-children priority parent)
+    (when (mevedel--detached-directive-p instruction)
+      (mevedel--order-detached-directives-at (overlay-start instruction)))))
 
 
 ;; Overlay actions adapted from `gptel-rewrite'

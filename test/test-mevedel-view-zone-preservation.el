@@ -7,7 +7,9 @@
 
 ;;; Code:
 
+(require 'mevedel-mention-bindings)
 (require 'mevedel-view)
+(require 'mevedel-view-interaction)
 (require 'mevedel-view-stream)
 (require 'helpers
          (file-name-concat
@@ -95,7 +97,84 @@
             (undo-start)
             (undo-more 1)
             (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
-          (mevedel-view--stop-spinner))))))
+          (mevedel-view--stop-spinner)))))
+
+  :doc "panel text yanked into the composer is draft text, kept with its bindings through zone redraws"
+  (dolist (recreate '(nil t))
+    (mevedel-view-test--with-buffers
+      (with-current-buffer view-buf
+        (let ((render (lambda (body)
+                        (mevedel-view-zone-reconcile
+                         'status mevedel-view--status-marker mevedel-view--status-marker
+                         (list (list :namespace 'status :id 'tasks :body body)))))
+              (binding '(:kind skill :token "$alpha"
+                         :source-file "/skills/alpha/SKILL.md")))
+          (funcall render "Panel")
+          (let ((bounds (mevedel-view-zone-fragment-bounds 'status 'tasks)))
+            (kill-ring-save (plist-get bounds :start) (1- (plist-get bounds :end))))
+          (mevedel-view-test--insert-composer-draft "$alpha tail" 7)
+          (let ((start (mevedel-view--input-start)))
+            (mevedel-mention-bindings-set start (+ start 6) binding))
+          (yank)
+          (should-not (text-property-not-all
+                       (mevedel-view--input-start) (point-max)
+                       'mevedel-view-zone-namespace nil))
+          (let ((offset (- (point) (mevedel-view--input-start))))
+            (when recreate
+              (mevedel-view-zone-clear 'status))
+            (funcall render "Changed")
+            (should (equal "$alpha Paneltail" (mevedel-view--input-text)))
+            (should (= offset (- (point) (mevedel-view--input-start))))
+            (should (equal binding (get-text-property
+                                    (mevedel-view--input-start)
+                                    'mevedel-mention-binding))))))))
+
+  :doc "interaction card text yanked into the composer carries no card ownership"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view--interaction-register '(:kind ask :id ask :body "Question"))
+      (let ((start (text-property-any (point-min) (point-max)
+                                      'mevedel-view-interaction-id 'ask)))
+        (kill-ring-save start (next-single-property-change
+                               start 'mevedel-view-interaction-id)))
+      (mevedel-view-test--insert-composer-draft "" 0)
+      (yank)
+      (should (string-search "Question" (mevedel-view--input-text)))
+      (dolist (property (cons 'mevedel-view-interaction-id
+                              mevedel-view-zone-owned-properties))
+        (should-not (text-property-not-all
+                     (mevedel-view--input-start) (point-max) property nil)))))
+
+  :doc "a status redraw beside a pending approval keeps the card, its row and the draft"
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (delete-other-windows)
+      (switch-to-buffer view-buf)
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+        (let* ((card (mevedel-view--interaction-register
+                      '(:kind permission :id perm :body "Allow Bash?\n[y] yes [n] no")))
+               (render (lambda (body)
+                         (mevedel-view-zone-reconcile
+                          'status mevedel-view--status-marker mevedel-view--status-marker
+                          (list (list :namespace 'status :id 'tasks :body body)))))
+               (card-state
+                (lambda ()
+                  (let* ((start (text-property-any (point-min) (point-max)
+                                                   'mevedel-view-interaction-id 'perm))
+                         (end (next-single-property-change
+                               start 'mevedel-view-interaction-id nil (point-max))))
+                    (list (buffer-substring-no-properties start end)
+                          (- (mevedel-view--input-start) start)))))
+               (offset (- (point) (mevedel-view--input-start))))
+          (funcall render "one")
+          (let ((before (funcall card-state)))
+            (funcall render "one\ntwo\nthree")
+            (funcall render "x")
+            (should (equal before (funcall card-state)))
+            (should (eq card (gethash 'perm mevedel-view--interaction-overlays)))
+            (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+            (should (= offset (- (point) (mevedel-view--input-start))))))))))
 
 (provide 'test-mevedel-view-zone-preservation)
 ;;; test-mevedel-view-zone-preservation.el ends here

@@ -12,11 +12,11 @@ components and duplicate names. Main, agent, approval reviewer, and Buddy prompt
 use this mechanism. The isolated context-summary generator owns a fixed prompt.
 
 Role, tone, shared task policy, and memory use/save policy are separate
-components. Main owns the coding tone; worker, explorer, and verifier share a
-reporting tone. Main and worker select memory saving guidance. Buddy selects
-memory context and use policy without saving instructions. The save policy
-requires retrieving `mevedel://memory.md` before mutations; that manual owns
-root selection, frontmatter, and index maintenance.
+components. Main owns the general collaboration tone; worker, explorer, and
+verifier share a reporting tone. Main and worker select memory saving guidance.
+Buddy selects memory context and use policy without saving instructions. The
+save policy requires retrieving `mevedel://memory.md` before mutations; that
+manual owns root selection, frontmatter, and index maintenance.
 
 Retained agents freeze their behavioral system content and selected observation
 names at spawn. Named workspace, memory, journal, environment, skill, resource,
@@ -39,7 +39,7 @@ decisions, evidence bounds and examples.
 
 Explicit ordered composition makes prompt dependencies visible at their owner.
 Shared policy has one home; roles retain distinct duties and machine-consumed
-report formats. Guardians and summaries do not inherit coding task policy.
+report formats. Guardians and summaries do not inherit the main task policy.
 A retained role does not need a per-turn reminder to reconstruct policy that is
 restored outside the compacted transcript.
 
@@ -87,3 +87,9 @@ established for every model.
   capability request. Because the reviewer can now approve an invocation,
   workspace instructions were removed from trusted system policy; evidence is
   supplied separately. The `guardian` workload is retained.
+- **The main role stopped assuming programming in October 2026.** It had
+  introduced the assistant as a pair programmer, which framed writing and
+  research workspaces as off-task. Its identity line now names code, writing
+  and research; the inspect-before-changing and citation rules cover documents
+  as well as code. A preset or per-workspace role option was not added, because
+  wording alone removed the assumption and every code rule still applies.

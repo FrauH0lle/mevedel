@@ -8,6 +8,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-utilities)
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-expand-path
@@ -237,9 +238,9 @@ Returns non-nil if PATH matches PATTERN."
               (mevedel-execution-target-expand-path target pattern))
              ((or (string-prefix-p "~" pattern)
                   (file-name-absolute-p pattern))
-              (expand-file-name pattern))
+              (mevedel-expand-file-name pattern))
              (t pattern)))
-           (expanded-path (expand-file-name path))
+           (expanded-path (mevedel-expand-file-name path))
            (directory-glob-root
             (when (string-suffix-p "/**" expanded)
               (substring expanded 0 -3)))
@@ -301,6 +302,142 @@ A rule may carry at most one of these.  The first match wins.")
       ((or :domain :name)
        (string-match-p (wildcard-to-regexp pattern) value)))))
 
+(defconst mevedel-permission--shell-syntax-marker #xF0000
+  "Base of the private characters that stand for masked shell syntax.
+Each masked character C becomes this base plus C, so distinct operators stay
+distinct while no ordinary argument text can contain them.")
+
+(defun mevedel-permission--mask-shell-syntax (text)
+  "Return TEXT with unquoted command-forming shell syntax masked.
+Separators, pipes, background `&', parentheses, backticks, and `$(' become
+private marker characters; see `mevedel-permission--shell-syntax-marker'.
+Single-quoted, ANSI-C quoted (`$\\='...\\='') and escaped text stays ordinary.
+Inside double quotes, only command substitution is masked, because the shell
+still runs it there.  Redirections such as `2>&1' and `&>' keep their `&'
+only after an unescaped, unquoted `>' or `<'."
+  (let ((length (length text))
+        (state nil)
+        (escaped nil)
+        (redirect nil)
+        (result nil))
+    (dotimes (index length)
+      (let* ((char (aref text index))
+             (next (and (< (1+ index) length) (aref text (1+ index))))
+             (substitution (or (eq char ?`)
+                               (and (eq char ?$) (eq next ?\())))
+             (after-redirect redirect)
+             (mask
+              (progn
+                (setq redirect nil)
+                (cond
+                 (escaped (setq escaped nil) nil)
+                 ((eq state 'single) (when (eq char ?') (setq state nil)) nil)
+                 ((eq state 'ansi-open) (setq state 'ansi) nil)
+                 ((eq state 'ansi)
+                  (pcase char
+                    (?\\ (setq escaped t))
+                    (?' (setq state nil)))
+                  nil)
+                 ((eq char ?\\) (setq escaped t) nil)
+                 ((eq state 'double)
+                  (when (eq char ?\") (setq state nil))
+                  substitution)
+                 ((eq char ?') (setq state 'single) nil)
+                 ((eq char ?\") (setq state 'double) nil)
+                 ((and (eq char ?$) (eq next ?')) (setq state 'ansi-open) nil)
+                 (substitution t)
+                 ((memq char '(?> ?<)) (setq redirect t) nil)
+                 ((memq char '(?\; ?| ?\n ?\( ?\))) t)
+                 ((eq char ?&) (not (or after-redirect (eq next ?>))))))))
+        (push (if mask (+ mevedel-permission--shell-syntax-marker char) char)
+              result)))
+    (apply #'string (nreverse result))))
+
+(defun mevedel-permission--match-command-grant (pattern command)
+  "Return non-nil when Bash allow PATTERN grants COMMAND.
+Unlike ordinary pattern matching, a wildcard here stands only for ordinary
+argument text: `*', `?', and a trailing `:*' never cover masked shell syntax
+\(see `mevedel-permission--mask-shell-syntax').  A pattern that spells that
+syntax out literally still matches it."
+  (when (and pattern command)
+    (let* ((case-fold-search nil)
+           (ordinary (format "[^%c-%c]" mevedel-permission--shell-syntax-marker
+                             (+ mevedel-permission--shell-syntax-marker 255)))
+           (masked-command (mevedel-permission--mask-shell-syntax command))
+           (prefix-p (string-suffix-p ":*" pattern))
+           (masked-pattern (mevedel-permission--mask-shell-syntax
+                            (if prefix-p (substring pattern 0 -2) pattern))))
+      (string-match-p
+       (concat "\\`"
+               (if prefix-p
+                   (concat (regexp-quote masked-pattern)
+                           "\\(?: " ordinary "*\\)?")
+                 (mapconcat (lambda (char)
+                              (pcase char
+                                (?* (concat ordinary "*"))
+                                (?? ordinary)
+                                (_ (regexp-quote (string char)))))
+                            masked-pattern ""))
+               "\\'")
+       masked-command))))
+
+(defconst mevedel-permission-rules-builtin-safe-env-vars
+  '("GOEXPERIMENT" "GOOS" "GOARCH" "CGO_ENABLED" "GO111MODULE"
+    "RUST_BACKTRACE" "RUST_LOG" "NODE_ENV"
+    "PYTHONUNBUFFERED" "PYTHONDONTWRITEBYTECODE"
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD" "PYTEST_DEBUG"
+    "LANG" "LANGUAGE" "LC_ALL" "LC_CTYPE" "LC_TIME" "CHARSET"
+    "TERM" "COLORTERM" "NO_COLOR" "FORCE_COLOR" "TZ"
+    "LS_COLORS" "LSCOLORS" "GREP_COLOR" "GREP_COLORS" "GCC_COLORS"
+    "TIME_STYLE" "BLOCK_SIZE" "BLOCKSIZE")
+  "Environment variables whose leading assignments Bash allow rules ignore.
+None of them can load code, choose another executable, or change where a
+command reads its configuration.  Permission stores add to this list through
+their `:safe-env-vars' entries.")
+
+(defun mevedel-permission-rules-strip-safe-assignments (command names)
+  "Return COMMAND without leading assignments to NAMES in each segment.
+An assignment is removed only when its value is plain text, so a value
+containing an expansion or command substitution keeps it, and with it the
+command's conservative classification.  Other text is unchanged."
+  (if (or (null names) (not (stringp command))
+          (not (string-search "=" command)))
+      command
+    (let* ((marker mevedel-permission--shell-syntax-marker)
+           (masked (mevedel-permission--mask-shell-syntax command))
+           (unsafe (format "%c-%c" marker (+ marker 255)))
+           ;; Plain text matches one character per repetition: a nested
+           ;; `+' inside the `*' backtracks exponentially when no blank
+           ;; follows the value, as before a `;'.
+           (assignment
+            (concat "\\([A-Za-z_][A-Za-z0-9_]*\\)="
+                    "\\(?:'[^']*'"
+                    "\\|\"[^\"\\\\$`" unsafe "]*\""
+                    "\\|[^ \t'\"\\\\$`" unsafe "]\\)*"
+                    "[ \t]+"))
+           (separators (mapcar (lambda (char) (+ marker char))
+                               '(?\; ?| ?\n ?&)))
+           (length (length command))
+           (index 0)
+           (case-fold-search nil)
+           pieces)
+      (while (< index length)
+        (let ((start index))
+          (while (and (< index length)
+                      (or (memq (aref masked index) separators)
+                          (memq (aref masked index) '(?\s ?\t))))
+            (setq index (1+ index)))
+          (push (substring command start index) pieces))
+        (while (and (eq (string-match assignment masked index) index)
+                    (member (match-string 1 masked) names))
+          (setq index (match-end 0)))
+        (let ((start index))
+          (while (and (< index length)
+                      (not (memq (aref masked index) separators)))
+            (setq index (1+ index)))
+          (push (substring command start index) pieces)))
+      (apply #'concat (nreverse pieces)))))
+
 (cl-defun mevedel-permission-rules-find
     (rules tool-name &key path pattern domain name)
   "Find all matching rules in RULES for TOOL-NAME under the given values.
@@ -309,6 +446,10 @@ RULES is a list in the format of `mevedel-permission-rules'.  Rule
 matches are determined by the rule's specifier against PATH, PATTERN,
 DOMAIN, or NAME.  Eval `:expression' rules compare PATTERN literally;
 `:pattern' rules retain wildcard semantics.
+A Bash allow rule grants authority, so its pattern matches with
+`mevedel-permission--match-command-grant': wildcards cover ordinary
+arguments, never shell syntax that forms another command.  Deny and ask
+rules restrict, so their wildcards keep matching any text.
 Unqualified rules match unconditionally.  Return a list of
 matching rules in order (later entries = higher priority)."
   (let ((matches nil)
@@ -329,6 +470,11 @@ matching rules in order (later entries = higher priority)."
              ;; No specifier: matches unconditionally
              ((null kind)
               (push rule matches))
+             ((and (eq kind :pattern)
+                   (equal tool-name "Bash")
+                   (eq (plist-get (cdr rule) :action) 'allow))
+              (when (mevedel-permission--match-command-grant rule-value pattern)
+                (push rule matches)))
              ;; Specifier present: compare against the corresponding value
              ((mevedel-permission--match-specifier
                kind rule-value (alist-get kind values))
@@ -384,21 +530,37 @@ unqualified rules.  Within each group, deny > ask > allow.  Return
 
 TARGET supplies the path domain for target-home patterns.  When ACCESS is
 `read', read-only entries permit access; inaccessible entries still protect it.
+A quoted `/:' name and, for a local PATH, the canonical file it reaches
+through symlinks are checked too: a workspace link into a protected tree
+names that tree.
 Returns non-nil if the path is protected."
   (when path
-    (let ((expanded (expand-file-name path)))
+    (let* ((expanded (mevedel-expand-file-name path))
+           (unquoted (if (and (not (file-remote-p expanded))
+                              (string-prefix-p "/:" expanded))
+                         (mevedel-collapse-leading-slashes (substring expanded 2))
+                       expanded))
+           (spellings
+            (delete-dups
+             (list expanded unquoted
+                   (unless (file-remote-p unquoted)
+                     ;; Resolves existing ancestors and keeps a missing tail.
+                     (let ((file-name-handler-alist nil))
+                       (mevedel-file-truename unquoted)))))))
       (cl-loop for (pattern . mode) in
                (mevedel-permission-protected-path-policy)
                thereis
                (and (not (and (eq access 'read) (eq mode 'read-only)))
-                    (mevedel-permission-rules-match-path-p
-                     expanded pattern target))))))
+                    (cl-some (lambda (spelling)
+                               (mevedel-permission-rules-match-path-p
+                                spelling pattern target))
+                             spellings))))))
 
 (defun mevedel-permission-rules--path-contained-p (path root)
   "Return non-nil when PATH is ROOT or is contained by it."
   (when (and path root)
-    (let ((abs-path (expand-file-name path))
-          (abs-root (expand-file-name root)))
+    (let ((abs-path (mevedel-expand-file-name path))
+          (abs-root (mevedel-expand-file-name root)))
       (or (string= (directory-file-name abs-path)
                    (directory-file-name abs-root))
           (string-prefix-p (file-name-as-directory abs-root)
@@ -413,9 +575,9 @@ Returns non-nil if the path is protected."
 (defun mevedel-permission-rules-path-in-exact-allowed-paths-p (path allowed-paths)
   "Return non-nil when PATH exactly matches one of ALLOWED-PATHS."
   (when path
-    (let ((expanded (expand-file-name path)))
+    (let ((expanded (mevedel-expand-file-name path)))
       (cl-loop for allowed in allowed-paths
-               thereis (string= expanded (expand-file-name allowed))))))
+               thereis (string= expanded (mevedel-expand-file-name allowed))))))
 
 (defun mevedel-permission-rules-resource-granted-p
     (path access grants &optional recursive)
@@ -424,7 +586,7 @@ RECURSIVE non-nil requests authority over PATH and all descendants,
 which only a recursive grant containing PATH provides.  Otherwise an
 exact grant on PATH or a recursive grant containing PATH suffices."
   (when (and path (memq access '(read write)))
-    (let ((expanded (expand-file-name path)))
+    (let ((expanded (mevedel-expand-file-name path)))
       (cl-loop for grant in grants
                when (proper-list-p grant)
                thereis
@@ -433,9 +595,13 @@ exact grant on PATH or a recursive grant containing PATH suffices."
                         (mevedel-permission-rules--path-contained-p
                          expanded (plist-get grant :path))
                       (and (not recursive)
-                           (string= expanded
-                                    (expand-file-name
-                                     (plist-get grant :path)))))
+                           (if (plist-get grant :workspace-origin)
+                               (string= (directory-file-name expanded)
+                                        (directory-file-name
+                                         (mevedel-expand-file-name (plist-get grant :path))))
+                             (string= expanded
+                                      (mevedel-expand-file-name
+                                       (plist-get grant :path))))))
                     (or (eq (plist-get grant :access) 'write)
                         (eq (plist-get grant :access) access)))))))
 
@@ -552,30 +718,33 @@ defcustom buckets may otherwise authorize or explicitly ask for LEVEL."
 ;;
 ;;; Session rule storage
 
-(defun mevedel-permission-rules-resource-grant (path access &optional recursive)
+(defun mevedel-permission-rules-resource-grant (path access &optional recursive origin)
   "Return normalized PATH ACCESS resource grant.
-RECURSIVE non-nil marks the grant as covering PATH and all descendants."
+RECURSIVE non-nil marks the grant as covering PATH and all descendants.
+ORIGIN preserves a private workspace-relative bound on runtime authority."
   (unless (and (stringp path) (not (string-empty-p path)))
     (error "Invalid resource path: %S" path))
   (unless (memq access '(read write))
     (error "Invalid resource access: %s" access))
   (unless (memq recursive '(t nil))
     (error "Invalid resource recursive flag: %S" recursive))
-  (append (list :path (expand-file-name path) :access access)
-          (and recursive '(:recursive t))))
+  (append (list :path (mevedel-expand-file-name path) :access access)
+          (and recursive '(:recursive t))
+          (and origin (list :workspace-origin origin))))
 
 (defun mevedel-permission-rules-merge-resource-grant
-    (grants path access &optional recursive)
+    (grants path access &optional recursive origin)
   "Return GRANTS with PATH promoted to ACCESS within its RECURSIVE scope.
 Grant identity is the normalized path plus the recursive flag; access
 promotion and deduplication never cross between an exact and a
-recursive grant on the same path."
-  (let* ((grant (mevedel-permission-rules-resource-grant path access recursive))
+recursive grant on the same path.  ORIGIN is part of the grant identity."
+  (let* ((grant (mevedel-permission-rules-resource-grant path access recursive origin))
          (expanded (plist-get grant :path))
          (same-identity-p
           (lambda (item)
             (and (stringp (plist-get item :path))
-                 (string= expanded (expand-file-name (plist-get item :path)))
+                  (equal origin (plist-get item :workspace-origin))
+                 (string= expanded (mevedel-expand-file-name (plist-get item :path)))
                  (eq (and (plist-get item :recursive) t) (and recursive t))))))
     (if (cl-find-if (lambda (item)
                       (and (funcall same-identity-p item)

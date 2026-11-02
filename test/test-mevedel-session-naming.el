@@ -983,20 +983,27 @@ Each call is a plist of :backend, :model, :effort, :prompt, :callback,
                 (let* ((old-save-path (mevedel-session-save-path session))
                        (artifact-directory
                         (file-name-concat old-save-path "tool-results"))
+                       (ready (file-name-concat tempdir "rename-ready"))
+                       (release (file-name-concat tempdir "rename-release"))
                        (mevedel-sandbox-mode 'off)
-                       initial terminal execution-id)
+                       initial blocked terminal execution-id)
                   (mevedel-execution-start-bash
                    (lambda (value) (setq initial value))
                    :session session :data-buffer buf :owner "agent-a"
                    :owner-context session
                    :command
-                   '("sh" "-c" "printf before; sleep 1; printf after")
+                   (list "sh" "-c"
+                         (concat "printf before; : > \"$1\"; "
+                                 "while ! test -e \"$2\"; do sleep 0.01; done; "
+                                 "printf after")
+                         "rename-execution" ready release)
                    :workdir tempdir :writable-roots (list tempdir)
                    :artifact-directory artifact-directory
                    :yield-time-ms 10)
                   (with-timeout (2 (error "Execution did not yield"))
-                    (while (null initial)
+                    (while (or (null initial) (not (file-exists-p ready)))
                       (accept-process-output nil 0.02)))
+                  (should (eq 'running (plist-get (plist-get initial :facts) :state)))
                   (setq execution-id
                         (plist-get (plist-get initial :facts) :execution-id))
                   (mevedel-rename-session "alt-permissions")
@@ -1008,6 +1015,15 @@ Each call is a plist of :backend, :model, :effort, :prompt, :callback,
                   (should (string-match-p
                            "\\`\\*mevedel:alt-permissions@"
                            (buffer-name buf)))
+                  ;; The real child entered its gate and cannot finish until
+                  ;; after the rename, even on a heavily loaded worker.
+                  (should (file-exists-p ready))
+                  (should-not (file-exists-p release))
+                  (mevedel-execution-observe
+                   session "agent-a" execution-id
+                   (lambda (value) (setq blocked value)) :wait-ms 0)
+                  (should (eq 'running (plist-get (plist-get blocked :facts) :state)))
+                  (with-temp-file release (insert "continue\n"))
                   (mevedel-execution-observe
                    session "agent-a" execution-id
                    (lambda (value) (setq terminal value))

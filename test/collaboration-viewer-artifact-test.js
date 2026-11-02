@@ -19,7 +19,10 @@ nodes['artifact-download'].hidden = true;
 nodes['artifact-delete'].hidden = true;
 let confirmAnswer = true;
 const created = [];
+const blobs = [];
 const revoked = [];
+const timers = new Map();
+let timerSequence = 0;
 const links = [];
 const opened = [];
 const flashes = [];
@@ -42,7 +45,9 @@ TestURL.createObjectURL = () => {
 };
 TestURL.revokeObjectURL = url => revoked.push(url);
 class TestBlob {
-  constructor(parts, options = {}) { this.parts = parts; this.type = options.type; }
+  constructor(parts, options = {}) {
+    this.parts = parts; this.type = options.type; blobs.push(this);
+  }
 }
 const window = {
   confirm: () => confirmAnswer,
@@ -63,14 +68,19 @@ const window = {
 const context = {
   window, document, console, URL: TestURL, Blob: TestBlob,
   TextDecoder, Uint8Array, atob,
+  setTimeout: callback => { timers.set(++timerSequence, callback); return timerSequence; },
+  clearTimeout: id => timers.delete(id),
 };
 load('relay/viewer/viewer-artifact.js', context);
 const href = navigation(context);
 const sent = [];
+let sendOk = true;
+const pages = [];
 let summary;
 const controller = window.mevedelArtifactView.create({
   href,
-  send(frame) { sent.push(frame); return Promise.resolve(true); },
+  send(frame) { sent.push(frame); return Promise.resolve(sendOk); },
+  onPage: () => pages.push('changed'),
   el: (tag, className, text) => element(document, tag, className, text),
   flash: message => flashes.push(message),
   summarize: (key, text) => { summary = {key, text}; },
@@ -170,6 +180,8 @@ controller.handle({reqId: 3, error: 'Deleted on the host'});
 assert.match(textOf(nodes['artifact-body']), /Deleted on the host/);
 nodes['artifact-close'].dispatch('click');
 assert.equal(nodes['artifact-panel'].hidden, true);
+// Saved URLs have a deferred lifetime independent of panel close.
+for (const [id, callback] of timers) { timers.delete(id); callback(); }
 assert.deepEqual(revoked, created);
 
 (async () => {
@@ -300,6 +312,64 @@ controller.handle({reqId: sent.at(-1).reqId, name: 'refused.html', error: 'Unava
 assert.equal(nodes['artifact-title'].textContent, 'artifact');
 assert.equal(controller.describe().artifact.artifact, undefined);
 controller.close();
+
+// A row download never opens a panel or changes history. Its byte stream
+// can interleave with a preview, which uses the same request sequence.
+const historyBefore = pages.length;
+const fileBytes = Uint8Array.from([0, 255, 13, 10, 128, 42]);
+const binary64 = Buffer.from(fileBytes).toString('base64');
+const download = controller.download('docs/data & notes.bin');
+const downloadId = sent.at(-1).reqId;
+assert.deepEqual({...sent.at(-1)}, {t: 'file-get', reqId: downloadId, path: 'docs/data & notes.bin'});
+assert.equal(nodes['artifact-panel'].hidden, true);
+assert.equal(pages.length, historyBefore);
+controller.handle({t: 'file', reqId: downloadId, mime: 'application/octet-stream',
+                   data: binary64.slice(0, 4)});
+controller.openFile('preview.txt');
+const previewId = sent.at(-1).reqId;
+assert.notEqual(previewId, downloadId);
+controller.handle({t: 'file', reqId: previewId, mime: 'text/plain', data: 'cHJldmlldw==', final: true});
+const previewBefore = textOf(nodes['artifact-body']);
+const pageCount = pages.length;
+controller.handle({t: 'file', reqId: downloadId, data: binary64.slice(4), final: true});
+await download;
+assert.equal(links.at(-1).download, 'data & notes.bin');
+assert.equal(links.at(-1).clicked, true);
+assert.deepEqual(blobs.at(-1).parts[0], fileBytes);
+assert.equal(blobs.at(-1).type, 'application/octet-stream');
+assert.equal(textOf(nodes['artifact-body']), previewBefore);
+assert.equal(controller.describe().file, 'preview.txt');
+assert.equal(pages.length, pageCount);
+const linksBefore = links.length;
+controller.handle({t: 'file', reqId: downloadId, data: binary64, final: true});
+assert.equal(links.length, linksBefore, 'late chunks cannot save twice');
+controller.close();
+
+// Empty files, host refusals, corrupt/oversized data, idle timeouts and
+// offline sends all settle without changing the current page.
+const empty = controller.download('empty.txt');
+controller.handle({t: 'file', reqId: sent.at(-1).reqId, data: '', final: true});
+await empty;
+assert.equal(blobs.at(-1).parts[0].length, 0);
+for (const [frame, pattern] of [
+  [{error: 'Not in the project'}, /Not in the project/],
+  [{data: '!!!', final: true}, /corrupted/],
+  [{data: 'A'.repeat(24 * 1024 * 1024 + 1)}, /Too large/],
+]) {
+  const failed = controller.download('failed.bin');
+  controller.handle({t: 'file', reqId: sent.at(-1).reqId, ...frame});
+  await assert.rejects(failed, pattern);
+  assert.equal(nodes['artifact-panel'].hidden, true);
+}
+const silent = controller.download('silent.bin');
+const silentId = sent.at(-1).reqId;
+timers.get(timerSequence)();
+await assert.rejects(silent, /did not finish/);
+controller.handle({t: 'file', reqId: silentId, data: binary64, final: true});
+sendOk = false;
+await assert.rejects(controller.download('offline.bin'), /Connection lost/);
+for (const [id, callback] of timers) { timers.delete(id); callback(); }
+assert.deepEqual([...revoked].sort(), [...created].sort(), 'all object URLs are released');
 
 console.log('viewer artifact passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

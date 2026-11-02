@@ -304,7 +304,11 @@
                       session candidate)
                finally (setq relative candidate absolute path))
               (with-current-buffer agent-buffer
-                (set-visited-file-name absolute t t))
+                ;; Visiting renames the buffer after the file; keep its
+                ;; hidden conversation name out of buffer lists.
+                (let ((name (buffer-name)))
+                  (set-visited-file-name absolute t t)
+                  (rename-buffer name t)))
               (setf
                (mevedel-agent-invocation-transcript-relative-path invocation)
                relative

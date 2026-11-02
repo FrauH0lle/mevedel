@@ -1,0 +1,307 @@
+;;; test-mevedel-memory-notes-cohort.el --- Finite shared-note capture -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Real-file coverage of whole-cohort freezing, metadata-only persistence,
+;; deterministic restart order and closed, exact-version batch admission.
+
+;;; Code:
+
+(require 'helpers
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
+(require 'mevedel-memory-notes)
+(require 'mevedel-memory-scope)
+(require 'mevedel-session-control-fs)
+(require 'mevedel-working-note-files)
+(require 'mevedel-workspace-identity)
+
+(mevedel-deftest mevedel-memory-notes-cohort
+    (:vars* ((root (file-name-as-directory (file-truename (make-temp-file "notes-cohort-" t))))
+             (workspace (mevedel-workspace--create :root root))
+             (shared (file-name-concat root ".mevedel" "shared"))
+             (mevedel-memory-dirs nil)
+             (now 1800000000))
+     :before-each ((mevedel-workspace-identity-ensure root) (make-directory shared t))
+     :after-each ((dolist (buffer (buffer-list))
+                   (when-let* ((path (buffer-local-value 'buffer-file-name buffer))
+                               ((string-prefix-p root path)))
+                     (with-current-buffer buffer (set-buffer-modified-p nil))
+                     (kill-buffer buffer)))
+                  (delete-directory root t)))
+  (cl-letf (((symbol-function 'mevedel-session-control-fs-observation-time) (lambda (_) now)))
+    (cl-labels
+        ((put (name &optional index body)
+           (let ((path (file-name-concat shared name)))
+             (write-region (or body "A durable observation.\n") nil path nil 'silent)
+             (set-file-modes path #o644)
+             (set-file-times path (seconds-to-time (+ (- now (* 20 86400)) (or index 0))))
+             path))
+         (freeze () (mevedel-memory-notes-cohort workspace nil))
+         (names (cohort) (mapcar (lambda (member) (plist-get member :file)) (plist-get cohort :members)))
+         (capture (cohort) (mevedel-memory-notes-capture workspace nil :cohort cohort))
+         (files (capture) (plist-get (cdr (plist-get capture :root)) :files)))
+      ,test))
+  (test)
+  :doc "17 and 100 members freeze before the sixteen-note request bound"
+  (dolist (count '(17 100))
+    (dotimes (index count) (put (format "n%03d.md" index) index))
+    (let* ((cohort (freeze)) (batch (capture cohort)))
+      (should (plist-get cohort :complete))
+      (should (= count (length (plist-get cohort :members))))
+      (should (= 16 (plist-get batch :notes)))
+      (should (= (- count 16) (plist-get batch :remaining)))
+      (should-not (plist-get batch :deferred))
+      (should (equal (seq-take (names cohort) 16) (files batch))))
+    (dolist (name (directory-files shared nil "\\.md\\'")) (delete-file (file-name-concat shared name))))
+  :doc "byte and single-large-note batch limits do not truncate the frozen cohort"
+  (progn
+    (put "a.md" 0 (concat "# Large\n" (make-string (* 40 1024) ?a)))
+    (dotimes (index 20) (put (format "b%02d.md" index) (1+ index) (make-string (* 8 1024) ?b)))
+    (let* ((cohort (freeze)) (batch (capture cohort))
+           (rest (plist-put (copy-tree cohort) :members (cdr (plist-get cohort :members))))
+           (next (capture rest)))
+      (should (= 21 (length (names cohort))))
+      (should (equal '("a.md") (files batch)))
+      (should (= 20 (plist-get batch :remaining)))
+      (should (= 12 (plist-get next :notes)))
+      (should (= 8 (plist-get next :remaining)))))
+  :doc "walking a multi-batch cohort reads each member's version once, linearly in cohort size"
+  (let ((mevedel-memory-notes--max-notes 2)
+        (version (symbol-function 'mevedel-memory-notes--version))
+        (reads 0))
+    (dolist (count '(6 12))
+      (dotimes (index count) (put (format "n%02d.md" index) index))
+      (let* ((cohort (freeze)) (rest cohort) (batches 0) (admitted nil))
+        (setq reads 0)
+        (cl-letf (((symbol-function 'mevedel-memory-notes--version)
+                   (lambda (path) (cl-incf reads) (funcall version path))))
+          (while (plist-get rest :members)
+            (let* ((batch (capture rest)) (taken (files batch)))
+              (should (= 2 (length taken)))
+              (should-not (plist-get batch :deferred))
+              (should (= (- (length (plist-get rest :members)) 2) (plist-get batch :remaining)))
+              (setq admitted (append admitted taken) batches (1+ batches)
+                    rest (plist-put (copy-tree rest) :members
+                                    (seq-remove (lambda (member) (member (plist-get member :file) taken))
+                                                (plist-get rest :members)))))))
+        ;; An admitted member is read three times: readiness, the snapshot's
+        ;; version, and the post-snapshot recheck.  Members past the batch are
+        ;; not read, so totals stay linear; rereading every remaining member
+        ;; per batch would add 4+2 reads at six members and 10+8+...+2 at twelve.
+        (should (= (* 3 count) reads))
+        (should (= (/ count 2) batches))
+        (should (equal (names cohort) admitted)))
+      (dolist (name (directory-files shared nil "\\.md\\'")) (delete-file (file-name-concat shared name)))))
+  :doc "a member changed past the batch counts as remaining, then is deferred once at its own batch"
+  (let ((mevedel-memory-notes--max-notes 2))
+    (put "a.md" 0) (put "b.md" 1)
+    (let* ((late (put "c.md" 2)) (cohort (freeze)))
+      (write-region "Edited after freezing\n" nil late nil 'silent)
+      (set-file-times late (seconds-to-time (+ (- now (* 20 86400)) 2)))
+      (let ((batch (capture cohort)))
+        (should (equal '("a.md" "b.md") (files batch)))
+        (should (= 1 (plist-get batch :remaining)))
+        (should-not (plist-get batch :deferred)))
+      (let ((last (capture (plist-put (copy-tree cohort) :members (last (plist-get cohort :members))))))
+        (should-not (plist-get last :root))
+        (should (= 0 (plist-get last :remaining)))
+        (should (equal '("c.md") (mapcar (lambda (row) (plist-get (plist-get row :member) :file))
+                                         (plist-get last :deferred)))))))
+  :doc "a used or dirty member past the batch is reported blocked only while it is still its frozen version"
+  (let ((mevedel-memory-notes--max-notes 2))
+    (dolist (use '(dirty in-use))
+      (dolist (changed '(t nil))
+        (put "a.md" 0) (put "b.md" 1)
+        (let* ((late (put "c.md" 2)) (cohort (freeze)) buffer)
+          (when changed
+            ;; Edited on disk but still age-ready: only its version differs.
+            (write-region "Edited after freezing\n" nil late nil 'silent)
+            (set-file-times late (seconds-to-time (+ (- now (* 20 86400)) 2))))
+          (when (eq use 'dirty)
+            (setq buffer (find-file-noselect late))
+            (with-current-buffer buffer (setq-local create-lockfiles nil) (insert "Draft")))
+          (let ((batch (mevedel-memory-notes-capture workspace nil :cohort cohort
+                                                     :in-use (when (eq use 'in-use) '("c.md")))))
+            (should (equal '("a.md" "b.md") (files batch)))
+            (should (= 0 (plist-get batch :remaining)))
+            (should (equal '("c.md") (mapcar (lambda (row) (plist-get (plist-get row :member) :file))
+                                             (plist-get batch :deferred))))
+            ;; A changed member defers silently, as when its version is read first;
+            ;; the unchanged control still explains why it waits.
+            (should (equal (unless changed
+                             (list (cons "c.md" (if (eq use 'dirty) "Shared file has unsaved buffer changes"
+                                                  "Shared file is in active local use"))))
+                           (plist-get batch :blocked))))
+          (when buffer
+            (with-current-buffer buffer (set-buffer-modified-p nil))
+            (kill-buffer buffer))
+          (dolist (name (directory-files shared nil "\\.md\\'")) (delete-file (file-name-concat shared name)))))))
+  :doc "only raw metadata survives serialization and tied mtimes sort by relative path"
+  (progn
+    (put "z.md" 0 "UNIQUE-SOURCE-BODY\n")
+    (put "a.md")
+    (let* ((cohort (freeze)) (printed (prin1-to-string cohort))
+           (restored (car (read-from-string printed)))
+           (member (car (plist-get cohort :members)))
+           (version (plist-get member :version)))
+      (should (equal '("a.md" "z.md") (names cohort)))
+      (should-not (string-search "UNIQUE-SOURCE-BODY" printed))
+      (should-not (string-search ":bytes" printed))
+      (should-not (string-search ":text" printed))
+      (should (equal cohort restored))
+      (should (equal (files (capture cohort)) (files (capture restored))))
+      (dolist (key '(:type :mtime :ctime :mode :size :device :inode :hash :empty))
+        (should (plist-member version key)))
+      (should (equal (plist-get version :mtime)
+                     (file-attribute-modification-time (file-attributes (file-name-concat shared "a.md")))))
+      (should (equal version (mevedel-memory-notes--version (file-name-concat shared "a.md"))))))
+  :doc "supplied nil and a frozen empty cohort never fall back to fresh arrivals"
+  (let ((empty (freeze)))
+    (put "arrival.md")
+    (should-not (plist-get (capture empty) :root))
+    (should-not (plist-get (capture nil) :root))
+    (should (equal '("arrival.md") (files (mevedel-memory-notes-capture workspace nil)))))
+  :doc "later arrivals and edits are excluded even if their mtimes remain age-ready"
+  (progn
+    (put "stable.md")
+    (let ((path (put "edited.md" 1)) (cohort (freeze)))
+      (put "arrival.md" -100)
+      (write-region "Edited version\n" nil path nil 'silent)
+      (set-file-times path (seconds-to-time (- now (* 20 86400))))
+      (let ((batch (capture cohort)))
+        (should (equal '("stable.md") (files batch)))
+        (should (equal "edited.md" (plist-get (plist-get (car (plist-get batch :deferred)) :member) :file)))
+        (should (= 0 (plist-get batch :remaining))))))
+  :doc "same-byte touches, mode changes and replacements are different cohort versions"
+  (dolist (change '(touch mode replace))
+    (let* ((path (put "version.md")) (cohort (freeze))
+           (member (car (plist-get cohort :members)))
+           (version (plist-get member :version)))
+      (pcase change
+        ('touch (set-file-times path (seconds-to-time (1+ (- now (* 20 86400))))))
+        ('mode (set-file-modes path #o600))
+        ('replace
+         ;; Keeping the old inode alive makes this a deterministic recreation.
+         (rename-file path (concat path ".old"))
+         (put "version.md")
+         (should-not (equal (plist-get version :inode)
+                            (file-attribute-inode-number (file-attributes path))))))
+      (let ((batch (capture cohort)))
+        (should-not (plist-get batch :root))
+        (should (equal member (plist-get (car (plist-get batch :deferred)) :member))))
+      (delete-file path)
+      (when (file-exists-p (concat path ".old")) (delete-file (concat path ".old")))))
+  :doc "ctime distinguishes restored mtime and mode while content and inode remain unchanged"
+  (let* ((path (put "same.md")) (cohort (freeze))
+         (version (plist-get (car (plist-get cohort :members)) :version)))
+    (set-file-modes path #o600)
+    (set-file-modes path #o644)
+    (set-file-times path (plist-get version :mtime))
+    (should-not (equal (plist-get version :ctime) (file-attribute-status-change-time (file-attributes path))))
+    (should-not (plist-get (capture cohort) :root)))
+  :doc "a mid-snapshot touch is rejected and the unchanged control is admitted"
+  (let* ((path (put "race.md")) (cohort (freeze))
+         (snapshot (symbol-function 'mevedel-memory-scope--snapshot)) entered)
+    (should (equal '("race.md") (files (capture cohort))))
+    (cl-letf (((symbol-function 'mevedel-memory-scope--snapshot)
+               (lambda (&rest args)
+                 (prog1 (apply snapshot args)
+                   (when (equal (car args) path)
+                     (setq entered t)
+                     (set-file-times path (seconds-to-time (1+ (- now (* 20 86400))))))))))
+      (should-not (plist-get (capture cohort) :root)))
+    (should entered))
+  :doc "fresh unsaved use defers a member without consuming batch-limited members"
+  (progn
+    (dotimes (index 18) (put (format "n%02d.md" index) index))
+    (let* ((cohort (freeze)) (buffer (find-file-noselect (file-name-concat shared "n00.md"))))
+      (with-current-buffer buffer (setq-local create-lockfiles nil) (insert "Draft"))
+      (let ((batch (capture cohort)))
+        (should (= 16 (plist-get batch :notes)))
+        (should (= 1 (plist-get batch :remaining)))
+        (should (= 1 (length (plist-get batch :deferred))))
+        (should (equal "n00.md" (plist-get (plist-get (car (plist-get batch :deferred)) :member) :file))))))
+  :doc "incomplete inventories fail rather than freezing a silently truncated prefix"
+  (progn
+    (put "a.md") (put "b.md")
+    (let ((mevedel-working-note-files-max-entries 1))
+      (should-error (freeze) :type 'error)))
+  :doc "a removed shared directory defers the original cohort without creating a replacement"
+  (progn
+    (put "a.md")
+    (let ((cohort (freeze)))
+      (delete-directory shared t)
+      (let ((batch (capture cohort)))
+        (should-not (plist-get batch :root))
+        (should (= 1 (length (plist-get batch :deferred)))))
+      (should-not (file-exists-p shared))
+      (should-not (plist-get (freeze) :members))
+      (should-not (file-exists-p shared))))
+  :doc "namespace identity is required without creating identity state on behalf of a caller"
+  (cl-letf (((symbol-function 'mevedel-workspace-identity-read) (lambda (_) nil)))
+    (should-error (mevedel-memory-notes--cohort-context workspace)))
+  :doc "workspace and physical target scope are checked while client root hints are not namespace"
+  (progn
+    (put "a.md")
+    (let ((cohort (freeze)))
+      (cl-letf (((symbol-function 'mevedel-workspace-identity-client) (lambda () "replacement-client")))
+        (should (equal '("a.md") (files (capture cohort)))))
+      (dolist (key '(:workspace :dir :target))
+        (let ((foreign (copy-tree cohort)))
+          (setf (plist-get foreign key) "foreign")
+          (should-error (capture foreign))))))
+  :doc "prepared snapshots preserve the complete frozen version, not only its hash"
+  (progn
+    (put "a.md")
+    (let* ((cohort (freeze)) (batch (capture cohort))
+           (row (plist-get batch :root))
+           (snapshot (cdar (plist-get (cdr row) :before))))
+      (should (equal (plist-get (car (plist-get cohort :members)) :version)
+                     (plist-get snapshot :cohort-version)))
+      (should (equal (file-name-concat shared "a.md") (plist-get snapshot :path)))))
+  :doc "attachments and empty directories join the cohort but the shared root never does"
+  (let ((path (put "data.bin" 0 (unibyte-string 0 1 2)))
+        (directory (file-name-concat shared "empty")))
+    (make-directory directory)
+    (set-file-times directory (seconds-to-time (- now (* 20 86400))))
+    (let* ((cohort (freeze)) (batch (capture cohort)))
+      (should (= 2 (length (names cohort))))
+      (should (= 1 (plist-get batch :attachments)))
+      (should (= 1 (plist-get batch :directories)))
+      (delete-file path)
+      (delete-directory directory)
+      (let ((gone (capture cohort)))
+        (should-not (plist-get gone :root))
+        (should (= 2 (length (plist-get gone :deferred)))))))
+  :doc "a one-item housekeeping batch bound never truncates the whole attachment and directory cohort"
+  (let ((mevedel-memory-notes--max-attachments 1))
+    (put "a.bin" 0 (unibyte-string 0 1 2))
+    (put "b.bin" 1 (unibyte-string 0 1 2))
+    (dolist (name '("first" "second"))
+      (let ((directory (file-name-concat shared name)))
+        (make-directory directory)
+        (set-file-times directory (seconds-to-time (- now (* 20 86400))))))
+    (let* ((cohort (freeze)) (batch (capture cohort)))
+      (should (= 4 (length (plist-get cohort :members))))
+      (should (= 2 (cl-count 'attachment (plist-get cohort :members) :key (lambda (member) (plist-get member :kind)))))
+      (should (= 2 (cl-count 'directory (plist-get cohort :members) :key (lambda (member) (plist-get member :kind)))))
+      (should (= 1 (+ (plist-get batch :attachments) (plist-get batch :directories))))
+      (should (= 3 (plist-get batch :remaining)))
+      (should-not (plist-get batch :deferred))))
+  :doc "version attribute and hash observations refuse links and detect a mutation during hashing"
+  (let* ((path (put "a.md"))
+         (hash (symbol-function 'mevedel-session-control-fs-file-hash)) entered)
+    (should (eq 'file (plist-get (mevedel-memory-notes--version-attributes path) :type)))
+    (make-symbolic-link path (file-name-concat shared "link.md"))
+    (should-error (mevedel-memory-notes--version (file-name-concat shared "link.md")))
+    (cl-letf (((symbol-function 'mevedel-session-control-fs-file-hash)
+               (lambda (file)
+                 (prog1 (funcall hash file)
+                   (setq entered t)
+                   (set-file-modes file #o600)))))
+      (should-error (mevedel-memory-notes--version path)))
+    (should entered)))
+
+(provide 'test-mevedel-memory-notes-cohort)
+;;; test-mevedel-memory-notes-cohort.el ends here
