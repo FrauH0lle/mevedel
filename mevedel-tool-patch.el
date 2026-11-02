@@ -10,9 +10,10 @@
 ;; A remote HTML artifact's files are patched at shared://ALIAS/files/PATH.
 ;; They are content at the artifact's origin, not local files: the handler
 ;; fetches each one with its hash before planning, hunks apply to that
-;; content, and the commit writes every result back only if its hash still
-;; matches, undoing the files it already wrote when one is refused.  A patch
-;; touches either remote files or local ones, never both.
+;; content, and the commit sends every result back in one request that the
+;; origin carries out only if every hash still matches, so the patch lands
+;; whole or not at all.  A patch touches the files of one remote artifact or
+;; local files, never both.
 
 ;;; Code:
 
@@ -243,7 +244,10 @@ local sessions untouched until permission and plan checks have completed."
                                           (delq nil (list (plist-get operation :rel-path)
                                                           (plist-get operation :move-rel-path)))))))
       (when (and (memq nil remote) (delq nil remote))
-        (error "A patch of a remote artifact's files cannot change other files; split it into separate patches")))
+        (error "A patch of a remote artifact's files cannot change other files; split it into separate patches"))
+      ;; Its origin writes them at once, so all of them land or none.
+      (when (cdr (delete-dups (mapcar #'car (remq nil remote))))
+        (error "A patch changes the files of one remote artifact; split it into one patch per artifact")))
     (setq session (and (boundp 'mevedel--session) mevedel--session))
     (when (and session-work-p materialize)
       (setq session (mevedel-tool-patch--ensure-work-session)))
@@ -566,12 +570,12 @@ artifact's file is read from `mevedel-tool-patch--remote'."
 
 (defun mevedel-tool-patch--remote-change (path &optional absent)
   "Return the remote fields of a planned change to PATH, nil for a local one.
-They are `:remote' (ALIAS . FILE), the `:hash' the content was read with
-and the content read, `:old', to undo the change; ABSENT marks a change
-creating the file.  `:origin' is `mevedel-tool-patch--remote'."
+They are `:remote' (ALIAS . FILE) and the `:hash' the content was read
+with, none for a change creating the file, which ABSENT marks.
+`:origin' is `mevedel-tool-patch--remote'."
   (when-let* ((remote (mevedel-tool-patch--remote-p path)))
     (let ((entry (unless absent (mevedel-tool-patch--remote-entry path))))
-      (list :remote remote :hash (plist-get entry :hash) :old entry
+      (list :remote remote :hash (plist-get entry :hash)
             :origin mevedel-tool-patch--remote))))
 
 (defun mevedel-tool-patch--remote-operands (proposal)
@@ -620,82 +624,52 @@ condition of the first file that could not be read."
                      (cl-decf pending)
                      (finish nil))))))))))))
 
-(defun mevedel-tool-patch--remote-request (change)
-  "Return the origin request carrying out the planned remote CHANGE."
-  (pcase-let ((`(,alias . ,file) (plist-get change :remote)))
-    (append (list :action (if (eq (plist-get change :action) 'delete) "delete-file" "write-file")
-                  :id alias :file file)
-            (when-let* ((hash (plist-get change :hash))) (list :hash hash))
-            (when (eq (plist-get change :action) 'write)
-              (list :text (plist-get change :content))))))
+(defun mevedel-tool-patch--remote-request (changes)
+  "Return the origin request carrying out the planned remote CHANGES.
+They change files of one remote artifact, all in this one request."
+  (list :action "write-files" :id (car (plist-get (car changes) :remote))
+        :changes (vconcat
+                  (mapcar (lambda (change)
+                            (append (list :file (cdr (plist-get change :remote)))
+                                    (when-let* ((hash (plist-get change :hash)))
+                                      (list :hash hash))
+                                    (if (eq (plist-get change :action) 'delete)
+                                        (list :delete t)
+                                      (list :text (plist-get change :content)))))
+                          changes))))
 
-(defun mevedel-tool-patch--remote-undo (change hash)
-  "Return the origin request undoing remote CHANGE, whose result has HASH now.
-A created file is deleted, a replaced one gets its old content back, and
-a deleted one is created again, each only if nobody changed it since."
-  (pcase-let* ((`(,alias . ,file) (plist-get change :remote))
-               (old (plist-get change :old)))
-    (append (list :id alias :file file)
-            (cond
-             ((null old) (list :action "delete-file" :hash hash))
-             (t (append (list :action "write-file")
-                        (when (eq (plist-get change :action) 'write) (list :hash hash))
-                        (if (plist-get old :binary)
-                            (list :data (plist-get old :data))
-                          (list :text (plist-get old :text)))))))))
+(defun mevedel-tool-patch--remote-refusal (changes reply)
+  "Return the error condition of the origin's REPLY refusing remote CHANGES."
+  (let* ((change (cl-find (plist-get reply :file) changes
+                          :key (lambda (change) (cdr (plist-get change :remote)))
+                          :test #'equal))
+         (address (plist-get change :path)))
+    (cond
+     ((not (and change (equal (plist-get reply :code) "stale")))
+      (list 'error (plist-get reply :error)))
+     ;; A creation is refused when the file exists, as locally.
+     ((and (eq (plist-get change :action) 'write) (null (plist-get change :hash)))
+      (list 'error (format "Cannot add existing file: %s" address)))
+     (t (list 'mevedel-tool-patch-remote-stale
+              (format "%s changed at its origin since it was read; nothing was applied.  Read it again and redo the patch"
+                      address))))))
 
 (defun mevedel-tool-patch--commit-remote (changes continuation fail)
-  "Write remote CHANGES at their origins in order, then call CONTINUATION.
-Each write or deletion names the hash its file was read with, so the
-origin refuses it when the file changed since.  On a refusal the changes
-already written are undone, each only if nobody changed its file since,
-and FAIL receives an error condition: `mevedel-tool-patch-remote-stale'
-for a changed file, `mevedel-tool-patch-partial-rollback' when not every
-written change could be undone."
-  (let* ((origin (plist-get (car changes) :origin))
-         (workspace (plist-get origin :workspace))
-         (actor (plist-get origin :actor))
-         (authorize (plist-get origin :authorize)))
-    (cl-labels
-        ((send (request next)
-           (mevedel-artifact-backend-call
-            workspace (append request (list :actor actor)) next authorize))
-         (address (change)
-           (plist-get change :path))
-         (refusal (change reply)
-           (cond
-            ((not (equal (plist-get reply :code) "stale"))
-             (list 'error (format "%s: %s" (address change) (plist-get reply :error))))
-            ;; A creation is refused when the file exists, as locally.
-            ((and (eq (plist-get change :action) 'write) (null (plist-get change :old)))
-             (list 'error (format "Cannot add existing file: %s" (address change))))
-            (t (list 'mevedel-tool-patch-remote-stale
-                     (format "%s changed at its origin since it was read; nothing was applied.  Read it again and redo the patch"
-                             (address change))))))
-         (undo (done failure kept)
-           (if (null done)
-               (funcall fail (if kept
-                                 (list 'mevedel-tool-patch-partial-rollback failure kept)
-                               failure))
-             (pcase-let ((`(,change . ,hash) (car done)))
-               (send (mevedel-tool-patch--remote-undo change hash)
-                     (lambda (reply)
-                       (undo (cdr done) failure
-                             (if (plist-get reply :error)
-                                 (cons (address change) kept)
-                               kept)))))))
-         (step (remaining done)
-           (if (null remaining)
-               (funcall continuation)
-             (let ((change (car remaining)))
-               (send (mevedel-tool-patch--remote-request change)
-                     (lambda (reply)
-                       (if (plist-get reply :error)
-                           (undo done (refusal change reply) nil)
-                         (step (cdr remaining)
-                               (cons (cons change (plist-get (plist-get reply :result) :hash))
-                                     done)))))))))
-      (step changes nil))))
+  "Write remote CHANGES at their origin, then call CONTINUATION.
+They go in one request naming the hash each file was read with, and the
+origin checks every hash before it changes any file, so the patch lands
+whole or not at all.  On a refusal FAIL receives an error condition,
+`mevedel-tool-patch-remote-stale' for a file changed since it was read."
+  (let ((origin (plist-get (car changes) :origin)))
+    (mevedel-artifact-backend-call
+     (plist-get origin :workspace)
+     (append (mevedel-tool-patch--remote-request changes)
+             (list :actor (plist-get origin :actor)))
+     (lambda (reply)
+       (if (plist-get reply :error)
+           (funcall fail (mevedel-tool-patch--remote-refusal changes reply))
+         (funcall continuation)))
+     (plist-get origin :authorize))))
 
 (defun mevedel-tool-patch--lines (text)
   "Return TEXT as LF-normalized lines, retaining a final empty line."

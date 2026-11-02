@@ -97,7 +97,43 @@
         ((not (and current (equal (plist-get body :hash) (mevedel-remote-artifact-test--hash current))))
          (funcall stale))
         (t (plist-put origin :files (assoc-delete-all file (copy-sequence files)))
-           (list :result (list :file file :deleted t))))))))
+           (list :result (list :file file :deleted t)))))
+      ;; Every hash is checked before any file changes, as the origin does.
+      ("write-files"
+       (let* ((changes (append (plist-get body :changes) nil))
+              (current-hash (lambda (change)
+                              (when-let* ((text (cdr (assoc (plist-get change :file) files))))
+                                (mevedel-remote-artifact-test--hash text))))
+              (refused (cl-find-if (lambda (change)
+                                     (not (equal (plist-get change :hash)
+                                                 (funcall current-hash change))))
+                                   changes)))
+         (cond
+          ((cl-find-if (lambda (change) (and (plist-get change :delete)
+                                             (equal (plist-get change :file) primary)))
+                       changes)
+           (list :error (format "%s is the artifact's primary file; an artifact link cannot delete it"
+                                primary)))
+          (refused
+           (mevedel-remote-artifact-test--file-answer
+            origin (list :action "write-file" :file (plist-get refused :file)
+                         :hash (plist-get refused :hash))))
+          (t
+           (list :result
+                 (list :files
+                       (vconcat
+                        (mapcar (lambda (change)
+                                  (let ((name (plist-get change :file)))
+                                    (if (plist-get change :delete)
+                                        (progn (plist-put origin :files
+                                                          (assoc-delete-all
+                                                           name (copy-sequence (plist-get origin :files))))
+                                               (list :file name :deleted t))
+                                      (setf (alist-get name (plist-get origin :files) nil nil #'equal)
+                                            (plist-get change :text))
+                                      (list :file name
+                                            :hash (mevedel-remote-artifact-test--hash (plist-get change :text))))))
+                                changes)))))))))))
 
 (defun mevedel-remote-artifact-test--answer (origin body)
   "Return ORIGIN's reply to request BODY, as an artifact room gives it."
@@ -598,8 +634,9 @@ body of the last request that reached the origin."
       (should (equal "<!doctype html>\n<h1>Hi</h1>\n" (file "index.html")))
       ;; The whole file went back with the hash it was read with, attributed
       ;; to the agent.
-      (should (equal (list :action "write-file" :file "index.html" :hash read-hash
-                           :text "<!doctype html>\n<h1>Hi</h1>\n")
+      (should (equal (list :action "write-files"
+                           :changes (vector (list :file "index.html" :hash read-hash
+                                                  :text "<!doctype html>\n<h1>Hi</h1>\n")))
                      (sent)))
       (should (equal "tester@host /root" (plist-get (car (plist-get origin :requests)) :name))))
     ;; Nothing reached the local store or the filesystem under the address.
@@ -658,8 +695,9 @@ EDIT maps the file's text to the text another writer leaves there."
         (left (or times 1)))
     (lambda (request callback)
       (let ((body (plist-get request :body)))
-        (when (and (> left 0) (equal "write-file" (plist-get body :action))
-                   (equal file (plist-get body :file)))
+        (when (and (> left 0) (equal "write-files" (plist-get body :action))
+                   (cl-find file (plist-get body :changes)
+                            :key (lambda (change) (plist-get change :file)) :test #'equal))
           (cl-decf left)
           (setf (alist-get file (plist-get origin :files) nil nil #'equal)
                 (funcall edit (alist-get file (plist-get origin :files) nil nil #'equal)))))
@@ -674,7 +712,7 @@ EDIT maps the file's text to the text another writer leaves there."
              "hunk 1 (patch line [0-9]+) does not match shared://landing/files/index.html"
              (text (patch 'error "*** Update File: shared://landing/files/index.html"
                           "@@" "-<h1>Bye</h1>" "+<h1>Hi</h1>"))))
-    (should-not (equal "write-file" (plist-get (sent) :action)))
+    (should-not (equal "write-files" (plist-get (sent) :action)))
     ;; A change at the origin after the read: applied once more on the
     ;; current content, the hunks still match and land there.
     (let ((mevedel-remote-artifact--transport
@@ -702,36 +740,42 @@ EDIT maps the file's text to the text another writer leaves there."
     (should-not (string-search "Mine" (file "index.html")))))
 
 (mevedel-deftest mevedel-tool-patch-handler/remote-assets
-  (:doc "ApplyPatch creates, deletes and moves a remote HTML artifact's files, all or nothing"
+  (:doc "ApplyPatch creates, deletes and moves a remote HTML artifact's files in one write, all or nothing"
    :quiet t)
   (mevedel-remote-artifact-test--with-html
     ;; A new file is written without a hash, so it is only ever created.
     (patch 'success "*** Add File: shared://landing/files/assets/logo.svg"
            "+<svg xmlns=\"http://www.w3.org/2000/svg\"/>")
-    (should (equal '(:action "write-file" :file "assets/logo.svg"
-                             :text "<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n")
+    (should (equal '(:action "write-files"
+                             :changes [(:file "assets/logo.svg"
+                                              :text "<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n")])
                    (sent)))
     (should (equal "<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n" (file "assets/logo.svg")))
     (should (string-search "Cannot add existing file: shared://landing/files/site.css"
                            (text (patch 'error "*** Add File: shared://landing/files/site.css"
                                         "+p {}"))))
     (should (equal "h1 { color: red; }\n" (file "site.css")))
-    ;; A move is a deletion with the read hash and a creation.
-    (patch 'success "*** Update File: shared://landing/files/site.css"
-           "*** Move to: shared://landing/files/assets/site.css"
-           "@@" "-h1 { color: red; }" "+h1 { color: blue; }")
+    ;; A move is a deletion with the read hash and a creation, in one write.
+    (let ((sent-before (length (plist-get origin :requests))))
+      (patch 'success "*** Update File: shared://landing/files/site.css"
+             "*** Move to: shared://landing/files/assets/site.css"
+             "@@" "-h1 { color: red; }" "+h1 { color: blue; }")
+      ;; One read and one write.
+      (should (= (+ 2 sent-before) (length (plist-get origin :requests)))))
     (should-not (file "site.css"))
     (should (equal "h1 { color: blue; }\n" (file "assets/site.css")))
     ;; A deletion names the hash it was read with.
     (let ((hash (mevedel-remote-artifact-test--hash (file "assets/logo.svg"))))
       (patch 'success "*** Delete File: shared://landing/files/assets/logo.svg")
-      (should (equal (list :action "delete-file" :file "assets/logo.svg" :hash hash) (sent))))
+      (should (equal (list :action "write-files"
+                           :changes (vector (list :file "assets/logo.svg" :hash hash :delete t)))
+                     (sent))))
     (should-not (file "assets/logo.svg"))
     ;; The origin keeps its primary file.
     (should (string-search "primary file"
                            (text (patch 'error "*** Delete File: shared://landing/files/index.html"))))
     (should (file "index.html"))
-    ;; When a later file is refused, the files already written are restored.
+    ;; When one file is refused, no file is written.
     (let ((mevedel-remote-artifact--transport
            (mevedel-remote-artifact-test--edit-before-write
             origin "assets/site.css" (lambda (text) (concat text "p { margin: 0; }\n")) 2)))
@@ -743,6 +787,18 @@ EDIT maps the file's text to the text another writer leaves there."
                                           "@@" "-h1 { color: blue; }" "+h1 { color: green; }")))))
     (should (equal "<!doctype html>\n<h1>Hello</h1>\n" (file "index.html")))
     (should-not (string-search "green" (file "assets/site.css")))
+    ;; One patch changes the files of one remote artifact, which its origin
+    ;; writes at once.
+    (mevedel-remote-artifact-attach
+     workspace "https://relay.example.org/#room-2.c2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0LXNlY3JldC0y"
+     "second")
+    (should (string-search "one remote artifact"
+                           (text (patch 'error
+                                        "*** Update File: shared://landing/files/index.html"
+                                        "@@" "-<h1>Hello</h1>" "+<h1>Hi</h1>"
+                                        "*** Add File: shared://second/files/new.css"
+                                        "+p {}"))))
+    (should (equal "<!doctype html>\n<h1>Hello</h1>\n" (file "index.html")))
     ;; A view-only link refuses every write.
     (plist-put origin :writable nil)
     (should (string-search "view-only"

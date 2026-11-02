@@ -386,12 +386,14 @@ library item as LIBRARY/ITEM-ID, resolved by the origin.")
   '(("file" "read" :file)
     ("files" "files")
     ("write-file" "write-file" :file :hash :text :data)
-    ("delete-file" "delete-file" :file :hash))
+    ("delete-file" "delete-file" :file :hash)
+    ("write-files" "write-files" :changes))
   "HTML file actions, each with the origin action and the keys it sends.
 `file' reads one file, the primary one without `:file', with its
 `:hash'; `files' lists them.  A write or deletion names the `:hash' the
 file was read with, none to create it, and the origin refuses it as
-stale when the file changed since.  A key without a value is not sent.")
+stale when the file changed since.  `write-files' makes several such
+`:changes' at once, all or none.  A key without a value is not sent.")
 
 (defun mevedel-remote-artifact--translate (alias args)
   "Return how local editing ARGS for the remote artifact ALIAS are served.

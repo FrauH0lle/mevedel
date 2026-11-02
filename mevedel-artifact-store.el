@@ -995,39 +995,86 @@ explains, or larger than `mevedel-artifact-store-file-max-bytes'."
     (unless (eq (plist-get result :status) 'absent)
       (plist-get (mevedel-session-control-fs-program-value result) :sha256))))
 
-(defun mevedel-artifact-store--file-change (workspace id file hash operations
-                                                      &optional directories)
-  "Run OPERATIONS on FILE of WORKSPACE's artifact ID if it still has HASH.
-HASH is the file's SHA-256 as hex, or nil for a file that must not exist.
-OPERATIONS is a function of FILE's path returning the program to run
-after that check, under the store's lock.  DIRECTORIES are FILE's
-directories, relative to the artifact's, to create before the check
-where missing.  Return non-nil when OPERATIONS ran, or (:stale t :hash
-CURRENT) when FILE no longer matched, CURRENT being nil for an absent
-file.  A change notifies the store's observers."
-  (unless (or (null hash) (and (stringp hash) (string-match-p "\\`[0-9a-f]\\{64\\}\\'" hash)))
-    (error "A file's hash is the SHA-256 of its bytes, as 64 lowercase hex digits"))
-  (let* ((path (mevedel-artifact-store-file-path workspace id file))
-         (prepare (mapcar (lambda (directory)
-                            (list :op 'make-directory :optional t
-                                  :path (mevedel-artifact-store-file-path
-                                         workspace id directory)))
-                          directories))
-         (program (append prepare
-                          (list (if hash (list :op 'verify-hash :path path :content hash)
-                                  (list :op 'absent :path path)))
-                          (funcall operations path)))
-         (results (mevedel-session-control-fs-run-program
-                   program (mevedel-artifact-store--lock-directory workspace))))
-    (if (memq (plist-get (nth (length prepare) results) :status) '(mismatch absent))
-        (list :stale t :hash (mevedel-artifact-store--file-hash path))
-      ;; An optional step, such as a directory that exists already, may fail.
-      (cl-mapc (lambda (operation result)
-                 (unless (plist-get operation :optional)
-                   (mevedel-session-control-fs-program-value result)))
-               program results)
-      (mevedel-artifact-store--changed workspace)
-      t)))
+(defun mevedel-artifact-store-write-files (workspace id changes)
+  "Make CHANGES to the files of WORKSPACE's artifact ID if each still matches.
+Each change is a plist naming a `:file' relative to the artifact's
+directory and the `:hash' its writer last saw, the SHA-256 of its bytes
+as hex, or nil for a file that must not exist yet.  With `:delete' t
+the file is deleted, which needs its hash; otherwise it is replaced by,
+or created with its missing directories as, `:content', a unibyte
+string of at most `mevedel-artifact-store-file-max-bytes'.  Every check
+and then every change run as one program under the store's lock, so
+either all changes are made or none.
+
+Return (:files RESULTS), a result per change in order: (:file FILE :hash
+NEW :created CREATED) or (:file FILE :deleted t).  When a file no longer
+matches, change nothing and return (:stale t :file FILE :hash CURRENT)
+for the first such FILE, CURRENT being nil for an absent file.  Signal
+when a change is refused.  A change notifies the store's observers."
+  (let (files prepare checks operations)
+    (dolist (change changes)
+      (let* ((file (plist-get change :file))
+             (hash (plist-get change :hash))
+             (content (plist-get change :content))
+             (path (mevedel-artifact-store-file-path workspace id file)))
+        (when (member file files)
+          (error "%s is changed twice; give each file one change" file))
+        (push file files)
+        (unless (or (null hash)
+                    (and (stringp hash) (string-match-p "\\`[0-9a-f]\\{64\\}\\'" hash)))
+          (error "A file's hash is the SHA-256 of its bytes, as 64 lowercase hex digits"))
+        (push (if hash
+                  (list :op 'verify-hash :path path :content hash)
+                (list :op 'absent :path path))
+              checks)
+        (if (plist-get change :delete)
+            (progn
+              (unless hash
+                (error "Deleting %s needs the hash it was read with" file))
+              (push (list :op 'delete-file :path path) operations))
+          (unless (and (stringp content) (not (multibyte-string-p content)))
+            (error "File content must be bytes"))
+          (when (> (length content) mevedel-artifact-store-file-max-bytes)
+            (error "%s would be larger than %d bytes" file mevedel-artifact-store-file-max-bytes))
+          ;; Only a new file can lack its directories.
+          (unless hash
+            (let ((parents (butlast (split-string file "/"))))
+              (dotimes (depth (length parents))
+                (push (list :op 'make-directory :optional t
+                            :path (mevedel-artifact-store-file-path
+                                   workspace id (string-join (take (1+ depth) parents) "/")))
+                      prepare))))
+          (push (list :op 'write-mode :path path
+                      :content (concat (format "%o\n" (or (file-modes path)
+                                                          (logand #o666 (default-file-modes))))
+                                       content))
+                operations))))
+    (let* ((prepare (nreverse prepare))
+           (program (append prepare (nreverse checks) (nreverse operations)))
+           (results (mevedel-session-control-fs-run-program
+                     program (mevedel-artifact-store--lock-directory workspace)))
+           (stale (cl-loop for change in changes
+                           for result in (nthcdr (length prepare) results)
+                           when (memq (plist-get result :status) '(mismatch absent))
+                           return (plist-get change :file))))
+      (if stale
+          (list :stale t :file stale
+                :hash (mevedel-artifact-store--file-hash
+                       (mevedel-artifact-store-file-path workspace id stale)))
+        ;; An optional step, such as a directory that exists already, may fail.
+        (cl-mapc (lambda (operation result)
+                   (unless (plist-get operation :optional)
+                     (mevedel-session-control-fs-program-value result)))
+                 program results)
+        (mevedel-artifact-store--changed workspace)
+        (list :files
+              (mapcar (lambda (change)
+                        (if (plist-get change :delete)
+                            (list :file (plist-get change :file) :deleted t)
+                          (list :file (plist-get change :file)
+                                :hash (secure-hash 'sha256 (plist-get change :content))
+                                :created (null (plist-get change :hash)))))
+                      changes))))))
 
 (defun mevedel-artifact-store-write-file (workspace id file content hash)
   "Replace FILE of WORKSPACE's artifact ID with CONTENT if it still has HASH.
@@ -1038,37 +1085,23 @@ exist yet; its missing directories are created.  The check and the write
 are one step under the store's lock.  Return (:hash NEW :created
 CREATED), or (:stale t :hash CURRENT) without writing, CURRENT being nil
 for an absent file.  Signal when FILE is refused."
-  (when (multibyte-string-p content)
-    (error "File content must be bytes"))
-  (when (> (length content) mevedel-artifact-store-file-max-bytes)
-    (error "%s would be larger than %d bytes" file mevedel-artifact-store-file-max-bytes))
-  (let* ((parents (butlast (split-string file "/")))
-         (outcome
-          (mevedel-artifact-store--file-change
-           workspace id file hash
-           (lambda (path)
-             (list (list :op 'write-mode :path path
-                         :content (concat (format "%o\n" (or (file-modes path)
-                                                              (logand #o666 (default-file-modes))))
-                                          content))))
-           ;; Only a new file can lack its directories.
-           (unless hash
-             (cl-loop for depth from 1 to (length parents)
-                      collect (string-join (take depth parents) "/"))))))
-    (if (eq outcome t)
-        (list :hash (secure-hash 'sha256 content) :created (null hash))
-      outcome)))
+  (let ((outcome (mevedel-artifact-store-write-files
+                  workspace id (list (list :file file :hash hash :content content)))))
+    (if (plist-get outcome :stale)
+        (list :stale t :hash (plist-get outcome :hash))
+      (let ((result (car (plist-get outcome :files))))
+        (list :hash (plist-get result :hash) :created (plist-get result :created))))))
 
 (defun mevedel-artifact-store-delete-file (workspace id file hash)
   "Delete FILE of WORKSPACE's artifact ID if it still has HASH.
 HASH is the SHA-256 of the bytes the deleter last saw, as hex.  Return
 t, or (:stale t :hash CURRENT) without deleting, as
 `mevedel-artifact-store-write-file' does."
-  (unless hash
-    (error "Deleting %s needs the hash it was read with" file))
-  (mevedel-artifact-store--file-change
-   workspace id file hash
-   (lambda (path) (list (list :op 'delete-file :path path)))))
+  (let ((outcome (mevedel-artifact-store-write-files
+                  workspace id (list (list :file file :hash hash :delete t)))))
+    (if (plist-get outcome :stale)
+        (list :stale t :hash (plist-get outcome :hash))
+      t)))
 
 (provide 'mevedel-artifact-store)
 ;;; mevedel-artifact-store.el ends here

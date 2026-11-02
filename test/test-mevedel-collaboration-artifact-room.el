@@ -1702,6 +1702,76 @@ Return the artifact's directory."
             (should (file-exists-p (file-name-concat directory "assets/logo.png"))))
         (mevedel-artifact-room-test--close consumer)))))
 
+(mevedel-deftest mevedel-collaboration-artifact-room--html-write-files
+  ()
+  ,test
+  (test)
+  :doc "changes several files at once when every hash still matches"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((directory (mevedel-artifact-room-test--site workspace "landing"))
+           (links (mevedel-collaboration-artifact-room-share root "landing"))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit)))
+      (unwind-protect
+          (pcase-let ((`(,expected . ,actual)
+                       (mevedel-artifact-room-test--exchange
+                        consumer "write-files" '(("$ID" . "landing")))))
+            (should (equal (mapcar #'mevedel-artifact-room-test--normal expected)
+                           (mapcar #'mevedel-artifact-room-test--normal actual)))
+            (should (equal "<!doctype html>\n<h1>Hello, world</h1>\n"
+                           (mevedel-artifact-room-test--file directory "index.html")))
+            (should (equal "h1 { color: teal; }\n"
+                           (mevedel-artifact-room-test--file directory "styles/site.css")))
+            (should-not (file-exists-p (file-name-concat directory "assets/logo.png"))))
+        (mevedel-artifact-room-test--close consumer))))
+
+  :doc "changes nothing when one hash is stale, and names that file"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((directory (mevedel-artifact-room-test--site workspace "landing"))
+           (links (mevedel-collaboration-artifact-room-share root "landing"))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit))
+           (reply (mevedel-artifact-room-test--request
+                   consumer 1 `((action . "write-files")
+                                (changes . [((file . "index.html")
+                                             (hash . ,mevedel-artifact-room-test--page-hash)
+                                             (text . "<p>mine</p>"))
+                                            ((file . "new.css") (text . "p {}"))
+                                            ((file . "assets/logo.png")
+                                             (hash . ,mevedel-artifact-room-test--page-hash)
+                                             (delete . t))])))))
+      (unwind-protect
+          (progn
+            (should (equal "stale" (alist-get 'code reply)))
+            (should (equal "assets/logo.png" (alist-get 'file reply)))
+            (should (equal mevedel-artifact-room-test--page
+                           (mevedel-artifact-room-test--file directory "index.html")))
+            (should-not (file-exists-p (file-name-concat directory "new.css")))
+            (should (file-exists-p (file-name-concat directory "assets/logo.png"))))
+        (mevedel-artifact-room-test--close consumer))))
+
+  :doc "refuses the primary file's deletion and a view link, changing nothing"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((directory (mevedel-artifact-room-test--site workspace "landing"))
+           (links (mevedel-collaboration-artifact-room-share root "landing"))
+           (editor (mevedel-artifact-room-test--joined state port links 'edit))
+           (viewer (mevedel-artifact-room-test--joined state port links 'view))
+           (changes `[((file . "new.css") (text . "p {}"))
+                      ((file . "index.html")
+                       (hash . ,mevedel-artifact-room-test--page-hash) (delete . t))]))
+      (unwind-protect
+          (progn
+            (should (string-search "primary file"
+                                   (alist-get 'error (mevedel-artifact-room-test--request
+                                                      editor 1 `((action . "write-files")
+                                                                 (changes . ,changes))))))
+            (should (equal "This artifact link is view-only"
+                           (alist-get 'error (mevedel-artifact-room-test--request
+                                              viewer 1 `((action . "write-files")
+                                                         (changes . ,changes))))))
+            (should-not (file-exists-p (file-name-concat directory "new.css")))
+            (should (file-exists-p (file-name-concat directory "index.html"))))
+        (mevedel-artifact-room-test--close editor)
+        (mevedel-artifact-room-test--close viewer)))))
+
 (mevedel-deftest mevedel-collaboration-artifact-room--html-versions
   ()
   ,test

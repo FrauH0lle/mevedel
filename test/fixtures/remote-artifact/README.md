@@ -57,6 +57,11 @@ stale answer it may reapply them to the returned content. `delete-file`
 takes `file` and `hash` (required) and answers `{"result": {"file",
 "deleted": true}}` or the same stale refusal; it refuses the primary file.
 `files` lists `{"result": {"primary", "files": [{"file", "bytes"}]}}`.
+`write-files` takes `changes`, each a `write-file` body's `file`, `hash` and
+content or `{"file", "hash", "delete": true}`, checks every hash before it
+changes any file and makes all changes or none (`write-files.json`). It
+answers `{"result": {"files": [...]}}`, one entry per change as the single
+actions answer, or the stale refusal of the first file that changed.
 
 A frame is the decoded JSON a sealed envelope carries, with one shorthand: an
 editing request or reply, `{"t": "editing", "reqId": N, "body": VALUE}`,

@@ -470,6 +470,17 @@ only the primary file is versioned."
                                :file))
     (mevedel-collaboration-artifact-room-wrote room)))
 
+(defun mevedel-collaboration-artifact-room--content (args)
+  "Return the bytes ARGS give a file as `:text' or base64 `:data'."
+  (let ((text (plist-get args :text))
+        (data (plist-get args :data)))
+    (cond
+     ((and (stringp text) (null data)) (encode-coding-string text 'utf-8-unix))
+     ((and (stringp data) (null text))
+      (condition-case nil (base64-decode-string data)
+        (error (error "The data must be the file's bytes as base64"))))
+     (t (error "Give the file's content as text or as base64 data")))))
+
 (defun mevedel-collaboration-artifact-room--write-file (room _guest args _authorize reply)
   "Write the file ARGS name in ROOM's HTML artifact, if its hash still matches.
 ARGS carry the relative `:file', its content as `:text' or base64
@@ -478,14 +489,7 @@ receives (:result (:file :hash :bytes :created)) or a stale refusal
 with the current hash and, for a small file, its content.  The store's
 observers hear of the change as of a local write."
   (let* ((file (plist-get args :file))
-         (text (plist-get args :text))
-         (data (plist-get args :data))
-         (content (cond
-                   ((and (stringp text) (null data)) (encode-coding-string text 'utf-8-unix))
-                   ((and (stringp data) (null text))
-                    (condition-case nil (base64-decode-string data)
-                      (error (error "The data must be the file's bytes as base64"))))
-                   (t (error "Give the file's content as text or as base64 data")))))
+         (content (mevedel-collaboration-artifact-room--content args)))
     (unless (stringp file)
       (error "A file is named by its path in the artifact"))
     (let ((outcome (mevedel-artifact-store-write-file
@@ -523,6 +527,63 @@ or a stale refusal as a write gets."
                    (mevedel-collaboration-artifact-room--stale
                     room file (plist-get outcome :hash) (plist-get args :hash))
                  (list :result (list :file file :deleted t)))))))
+
+(defun mevedel-collaboration-artifact-room--write-files (room _guest args _authorize reply)
+  "Change several files of ROOM's HTML artifact if every hash still matches.
+ARGS carry `:changes', each naming a relative `:file' and the `:hash' it
+was read with, nil to create it, and either its content as `:text' or
+base64 `:data', or `:delete' t.  Every hash is checked before any file
+changes, under the store's lock, so all changes are made or none: a
+patch of several files lands whole.  The primary file is never deleted.
+REPLY receives (:result (:files RESULTS)), RESULTS in the order of the
+changes as `write-file' and `delete-file' answer them, or the stale
+refusal of the first file that changed since it was read."
+  (let* ((workspace (plist-get room :workspace))
+         (id (plist-get room :artifact))
+         (primary (plist-get (mevedel-artifact-store-meta workspace id) :file))
+         (changes (plist-get args :changes)))
+    (unless (and (vectorp changes) (> (length changes) 0))
+      (error "write-files needs changes: the files to write or delete"))
+    (let* ((requested
+            (mapcar (lambda (change)
+                      (let ((file (plist-get change :file))
+                            (hash (plist-get change :hash)))
+                        (unless (stringp file)
+                          (error "A file is named by its path in the artifact"))
+                        ;; The guard first, so a refused path is reported as such.
+                        (mevedel-artifact-store-file-path workspace id file)
+                        (if (eq t (plist-get change :delete))
+                            (progn
+                              (when (equal file primary)
+                                (error "%s is the artifact's primary file; an artifact link cannot delete it"
+                                       file))
+                              (list :file file :hash hash :delete t))
+                          (list :file file :hash hash
+                                :content (mevedel-collaboration-artifact-room--content change)))))
+                    changes))
+           (outcome (mevedel-artifact-store-write-files workspace id requested)))
+      (if-let* ((stale (and (plist-get outcome :stale) (plist-get outcome :file))))
+          (funcall reply (mevedel-collaboration-artifact-room--stale
+                          room stale (plist-get outcome :hash)
+                          (plist-get (cl-find stale requested
+                                              :key (lambda (change) (plist-get change :file))
+                                              :test #'equal)
+                                     :hash)))
+        (dolist (change requested)
+          (mevedel-collaboration-artifact-room--changed-file room (plist-get change :file)))
+        (funcall reply
+                 (list :result
+                       (list :files
+                             (vconcat
+                              (cl-mapcar
+                               (lambda (change result)
+                                 (if (plist-get change :delete)
+                                     (list :file (plist-get change :file) :deleted t)
+                                   (list :file (plist-get change :file)
+                                         :hash (plist-get result :hash)
+                                         :bytes (length (plist-get change :content))
+                                         :created (if (plist-get result :created) t :json-false))))
+                               requested (plist-get outcome :files))))))))))
 
 (defconst mevedel-collaboration-artifact-room--image-max-bytes 4700000
   "Largest image an artifact link may upload, as SharedEdit's limit.")
@@ -690,6 +751,8 @@ AUTHORIZE and REPLY are as in
      :run mevedel-collaboration-artifact-room--write-file)
     ("delete-file" :kinds (html) :write t
      :run mevedel-collaboration-artifact-room--delete-file)
+    ("write-files" :kinds (html) :write t
+     :run mevedel-collaboration-artifact-room--write-files)
     ("view" :kinds (whiteboard document)
      :run mevedel-collaboration-artifact-room--view)
     ("patch" :kinds (whiteboard document) :write t

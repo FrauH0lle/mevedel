@@ -835,6 +835,12 @@ An edit link may also run:
   bytes, created}}` with the new hash.
 - `delete-file` (`file`, `hash`): delete the file if it still has `hash`. The
   primary file is refused, since without it the artifact is gone.
+- `write-files` (`changes`, each a `write-file` change or `{file, hash,
+  delete: true}`): make several such changes at once. Every hash is checked
+  before any file changes, in one program under the store's lock, so either
+  all changes are made or none; a patch of several files lands whole. Success
+  answers `{result: {files}}`, each as `write-file` or `delete-file` answers;
+  a refusal names the first file that changed.
 
 A refused write or deletion changes nothing and answers `{error, code:
 "stale", file, hash}`: the file's current hash (null when it does not exist)
@@ -938,13 +944,14 @@ A remote HTML artifact's files have addresses of their own,
 them and `shared://ID/files/PATH` reads one (the room's `files` and `read`
 with `file`). `ApplyPatch` takes them as operands. It reads each file it
 updates, deletes or moves with its hash, applies the hunks to that content and
-sends the whole result as `write-file` with the hash it read; an added file
-or a move's destination is written without a hash, so it is only created, and
-a deletion is `delete-file` with the hash. A stale answer undoes the patch's
-earlier writes the same way, so nothing stays applied. Applied without review,
+sends every result in one `write-files` with the hash it read; an added file
+or a move's destination goes without a hash, so it is only created, and a
+deletion carries the hash. The origin checks every hash before it writes any
+file, so a stale answer leaves nothing applied. Applied without review,
 the patch is then applied once more to the current content, where a hunk that
 no longer matches fails as for a local file. A reviewed patch shows the
-conflict and stays open. One patch cannot mix remote files with other files.
+conflict and stays open. One patch changes the files of one remote artifact,
+and nothing else, since only one origin can write them at once.
 Permission treats the operands as remote content: they contribute no local
 path, Edits applies them as it applies `SharedEdit`, and Plan mode denies them.
 
