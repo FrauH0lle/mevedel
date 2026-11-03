@@ -1,71 +1,28 @@
 ---
-name: "Replay performance stalls from a restored copy of the real session"
-description: "A transcript pasted into detached test buffers skips agent transcripts, archived segments and publications, so it can miss the stall entirely"
-type: project
+name: "Reproduce performance with representative state without mutating the original"
+description: "Detached transcript fixtures can omit the expensive path; replay an isolated session copy and verify that restoration itself does not alter evidence."
+type: feedback
 ---
 
-# Replay performance stalls from a restored copy of the real session
+# Reproduce performance with representative state without mutating the original
 
-On 2026-10-03 the first fix for session `2026-10-03T07-07-aa7dca1083e9`
-(multi-second `mevedel-view--flush-scheduled-render` stalls) was validated by a
-replay that inserted the saved transcript into `mevedel-view-test--with-buffers`.
-Those buffers have no session, so nothing reached agent transcripts, archived
-segments or the session's published artifacts. The replay reported
-5.9 ms updates while the real code paths still cost 0.36 s per streamed update.
+**Rule:** a fast replay is not evidence about a stall unless it exercises the relevant session state and production paths. Restore an isolated copy of the affected session at the stalled state rather than assuming a transcript pasted into detached test buffers is representative.
 
-A second replay restored a copy of the real session (read-only; the live Emacs
-kept its lease) and replayed the request that froze: three agents running, a
-700 KB in-progress turn, its 73 collapsed sections expanded, and the turn's
-final transcript streamed back in property-run chunks. It found five causes the
-first replay could not reach, including per-render rereads of every archived
-segment and an expanded hook audit that invalidated the retained live tail.
-See ADR 0119's "keep a long live activity unit cheap to re-render" entry.
+**Why — observed 2026-10-03:** a detached-buffer replay omitted agent transcripts, archived segments, and published artifacts. It reported 5.9 ms updates while the real paths still cost about 0.36 seconds per streamed update. A replay from a restored session copy reached expensive paths the first fixture could not, including archive reads and expanded audit rendering. These are historical observations, not current performance guarantees.
 
-**How to apply:** reproduce a session's stall from a restored copy of that
-session, at the state where it stalled, before trusting a replay's numbers.
-Recipe that worked (harness was `.scratch/live-replay/`, local only):
+**When and how to apply:**
 
-- Copy the session directory to a temp root and keep `.lease/`: the
-  publication head lives there. Drop `diagnostics/`.
-- Before `mevedel-session-persistence-restore`, stub what the user's init
-  provides: a gptel backend named in the sidecar (`gptel-make-openai "Codex"`),
-  the preset (`gptel-make-preset 'mevedel-gpt6`), and `:reasoning-effort` on
-  the model symbols. Stub `yes-or-no-p`/`y-or-n-p`.
-- A stall inside an earlier request lives in an archived segment: load it with
-  `mevedel-session-artifacts-read-segment` into the chat buffer, cut the tail,
-  begin the live turn at the last user turn, expand sections, then feed the
-  tail back and call `mevedel-view--flush-scheduled-render` per chunk.
-- Compile with Eask first; `clean elc` leaves everything interpreted and
-  distorts timings. Set `profiler-max-stack-depth` to 64; the default 16
-  truncates render stacks and hides most of the cost.
-- For before/after, byte-compile `git show HEAD:` copies of the touched modules
-  into a separate directory and prepend it to `load-path`. Gate that on an
-  environment variable carefully: `VAR=` sets an empty string, which
-  `getenv` treats as set.
-- Batch shows render cost only; a graphical child Emacs (`emacs -Q` with the
-  Eask `load-path`) adds redisplay and queued-input latency.
+- For a session-specific stall, preserve the relevant archived segments, agents, publications, expansion state, and in-progress turn in an isolated copy. Do not replay into the live original.
+- Match loaded code, compilation state, dependencies, and necessary configuration before comparing timings. A faster interpreted or differently configured fixture is not a controlled comparison.
+- Distinguish batch render cost from graphical redisplay and queued-input latency; choose the environment appropriate to the claim.
+- Use a before/after comparison that actually reaches the costly path. A synthetic fixture remains useful for a narrow regression once its relationship to that path is established; restoring a full session is not mandatory for every performance test.
 
-Related: [Remote hook readiness and stdin timing](remote-hook-readiness-verification.md)
--- a green replay diagnoses nothing unless it imposes the real conditions.
+## Restoration can itself change the evidence
 
-## Operating on real sessions in batch (2026-10-19)
+**Observed 2026-10-19:** batch maintenance of real sessions exposed unintended writes during restoration. Stub backend configuration changed persisted reasoning effort and chooser metadata; restoration also published repair state. A harness described as inspection was therefore capable of changing user state.
 
-A one-time prune of 23 real sessions with the new collector showed that a
-batch harness can silently rewrite user state:
+**Reusable lesson:** do not assume that opening or restoring persisted state is observational. Prefer isolated copies for investigations, preserve a baseline, and compare persisted content when checking that a workflow leaves state unchanged. Never treat a stub configuration as interchangeable with the user's configuration for operations that can republish it.
 
-- Production restore publishes repair heads (GPTEL_BOUNDS, orphaned
-  executions marked lost). A harness with stub backends republished the
-  sidecar with `:reasoning-effort` high→nil and a wrong chooser preview.
-  Register the user's exact backends/models/presets (from
-  `~/.emacs.d/site-lisp/config.el` and the preset module), and gate on a
-  full sidecar diff against a pre-everything baseline; allow only known
-  benign keys (`:target-incarnation`, ID-keyed `:agent-registry` order).
-- When restore wants to reconcile more (e.g. `:ptc-checkpoints`), use a
-  head-preserving lifecycle: acquire the released lease, schedule collection,
-  drive slices, release. Leave reconciliation to the user's next reopen.
-- Batch slice loops must pump timers/process output, or lease renewal
-  starves and coalesced retries spin.
-- Per session: reflink backup (`cp -a --reflink=always`, btrfs), record
-  SHA-256 of every retained head's artifacts before and after, run a
-  read-only restore of a copy, and delete the backup only after it verifies.
-  Every one of these gates caught a real problem.
+This is not standing permission to acquire leases, prune sessions, publish repairs, or alter live state. Authorized maintenance needs its own checks and current workflow.
+
+Consult `docs/sessions.md` and the relevant source/history for current persistence, lease, restoration, and performance contracts. Historical harness paths, backend names, allowlisted metadata keys, and batch-pruning commands are not a maintained execution recipe.

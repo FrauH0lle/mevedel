@@ -1,12 +1,12 @@
 ---
 name: "Preserve controls and conditions when attributing test outcomes"
-description: "Match relevant context, selection state, delivered inputs, and assertion conditions before attributing outcomes."
+description: "Establish starting state, equivalent context, delivered inputs, and actual assertion conditions before attributing outcomes."
 type: feedback
 ---
 
 # Preserve controls and conditions when attributing test outcomes
 
-**Rule:** attribute failures and coverage claims using equivalent context, identified loaded sources, delivered test inputs, and the actual assertion or skip condition—not test names, aggregate status, or later green runs alone.
+**Rule:** attribute failures, side effects, and coverage claims using recorded starting state, equivalent context, identified loaded sources, delivered test inputs, and the actual assertion or skip condition—not test names, aggregate status, visible end state, or later green runs alone.
 
 **Why — controlled observations recorded 2026-10-13:**
 
@@ -26,8 +26,17 @@ With real polymode on Emacs 31.1, `find-buffer-visiting` returned a file-named i
 
 The reusable testing lesson is that changing the current buffer does not reproduce selection/MRU-dependent behavior. This established an isolated mechanism, not the precise historical sequence after the reported `git switch`.
 
+**Starting-state correction, 2026-11-02:**
+
+The assistant interpreted the user's “Attached” response as evidence that an edit had attached a whiteboard to a session. The user corrected: “The board was attached from the very beginning.”
+
+A subsequent live test used a different, initially unattached board. Its host-side attachment flag remained false after a plain read and became true after an acknowledged guest update. This later observation supported the side effect in that controlled run; it did not make the original inference valid.
+
+**Reusable lesson, inferred from the correction and controlled test:** confirmation of a visible state does not establish that the preceding action caused it. Record the starting state before testing a side effect, preferably with a signal tied to the claimed state transition. A host-side signal can establish attachment without establishing browser presentation.
+
 **When and how to apply:**
 
+- Before attributing a side effect, establish the relevant pre-action state and compare it with the post-action state. Do not turn an ambiguous user confirmation into a causal observation.
 - For suspected regressions, compare baseline and changed sources under equivalent relevant context and identify the code and dependencies actually loaded.
 - When behavior may depend on selected buffers, windows, or recent-use ordering, reproduce the relevant selection transitions; a `with-current-buffer` binding alone is not equivalent.
 - For intermittent failures, retain counterexamples even after a green suite. Report what reproduced separately from any proposed mechanism.
@@ -38,4 +47,5 @@ The reusable testing lesson is that changing the current buffer does not reprodu
 **Evidence limits:**
 
 - The Git captures did not establish identical nanosecond mtimes or prove a racy-index cause. The historical Bubblewrap skips' approximately 0.501-second durations supported a deadline explanation, but their conditions and output were not captured; worker contention remained unproven. Later passing runs did not resolve either causal question.
-- The browser observations were version-specific automated probes, not physical touchscreen-dragging or OS-clipboard integration tests. Genuine touch capture can be implicit, so `hasPointerCapture` alone did not prove that the explicit production capture call caused capture.
+- The browser observations were version-specific automated probes, not physical touchscreen-dragging or OS-clipboard integration tests. Genuine touch capture can be implicit, so `hasPointerCapture` alone did not prove that the explicit production capture call caused it.
+- The attachment test established the observed transition for the tested board and run, not a universal guarantee about every remote edit.

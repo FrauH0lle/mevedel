@@ -1,6 +1,6 @@
 ---
 name: "Verify the loaded runtime and dependency provenance"
-description: "Distinguish loaded artifacts, cold-start behavior, relevant readiness, dependency provenance, and live event sequences"
+description: "Check actual artifacts, fresh compiled first use, initialization-time isolation, relevant readiness, and dependency provenance."
 type: feedback
 ---
 
@@ -20,6 +20,20 @@ When verifying a live change:
 Observed 2026-09-16: a startup callback could be undefined before its owning module loaded, although an already-used inspecting session reported both `featurep` and `fboundp` true. Preloaded test fixtures hid the gap.
 
 For loading, registration, and initialization changes, use a fresh process and exercise first use without preloading the owner. A later agent-spawn failure on 2026-10-14 provided another example: a declaration did not load the referenced handler, and a cold-load regression exposed the missing load boundary.
+
+The delegated cold-load investigation reported on 2026-10-19 that a predicate autoload made an `fboundp` guard true, while package-wide compilation inlined the struct predicate and accessed tags that its owning module had not initialized. The guard was not optimized away. Fresh source and package-wide compiled subprocess regressions distinguished those paths.
+
+**Reusable lesson:** callable presence is not proof that all initialization required by compiled use has occurred. For changes involving autoloads, structs, macros, or compiler transformations, exercise the real first-use entry in both fresh source and representative compiled processes. Do not infer compiled cold-start safety from a warm session or a source-only test. This is not a blanket requirement to eagerly load optional owners.
+
+## Inspect isolation before dependencies load
+
+The environment investigation reported on 2026-10-19 that an Eask process had a temporary HOME but initially retained the real home's native-cache path. Test helpers loaded a native dependency before ERT redirected the cache. Inspection during ERT therefore showed an isolated cache path even though functions from the external native unit were already loaded.
+
+A fresh actual-Eask startup regression inspected state before dependency loading and distinguished the old and corrected startup paths. Reloading the same installed bytecode with native loading disabled also separated the dependency's native failure from a mevedel context defect.
+
+**Reusable lesson:** establish isolation before the earliest relevant dependency load, not merely when the test body starts. When diagnosing apparent isolation or provenance contradictions, inspect both startup state and the already-loaded units. A temporary HOME or a later isolated search path does not prove that earlier loads were isolated.
+
+**Attribution limit:** artifact timestamps and matching import rosters supported earlier test/diagnostic contamination but did not identify the exact process that produced every cache unit. Do not turn that circumstantial evidence into a definitive producer attribution. Investigation of external caches also does not authorize modifying them.
 
 ## Readiness probes must target the relevant initialization boundary
 

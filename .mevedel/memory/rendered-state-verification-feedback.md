@@ -1,23 +1,58 @@
 ---
-name: "Verify consumer-visible state, not intermediate signals"
-description: "Assert rendered/consumed state, not internal flags, audit rows, or same-segment tests"
+name: "Verify the real consumer boundary, not intermediate success"
+description: "Use the production path and caller identity; distinguish transport, persistence, rendering, and behavioral acceptance."
 type: feedback
 ---
 
-# Verify consumer-visible state, not intermediate signals
+# Verify the real consumer boundary, not intermediate success
 
-When a change alters what a user or another consumer observes — a rendered view or status zone, tool presentation, results read after compaction, retained evidence — assert the state at the boundary that consumer uses. Internal success flags, durable audit records, and same-segment tests are intermediate signals and do not establish the visible outcome.
+**Rule:** test through the production path, using the identity and information the real caller has, and assert the outcome at the boundary the consumer actually uses. Internal flags, delivery receipts, persisted records, and constructed messages establish intermediate facts—not necessarily usable results, visible presentation, or accepted steering.
 
-**Why:** Observed 2026-09-28 in session 2026-09-27T19-53. Four verification probes each passed an intermediate check while the consumer-visible state differed:
+**Why:** shortcuts can manufacture both false failures and false confidence. These are model-inferred lessons from observed verification probes and the explicitly attributed user correction below, not a requirement to run every kind of end-to-end test for every change.
 
-- Hiding observation rows: the completion verifier's probe retained `"INITIAL\nFINAL"` with exit 7, but guest current records were empty and guest archived history showed only `"INITIAL"` with a running header. Model inference from that observed result: such a change needs cross-segment result-access checks for every consuming projection; same-segment tests do not establish that output stays accessible after compaction (`segment-0010`, `UpdateGoal` completion-verification result).
-- Async presentation: the `mevedel-view-stream-handle-execution-event` probe observed `row-finished=t visible-breadcrumbs=0 durable-breadcrumbs=1`; only `mevedel-view--full-rerender` made the breadcrumb visible, so a durable audit record plus an updated original row did not prove the notification appeared. Model inference: assert the rendered view immediately after terminal handling, without forcing a redraw (`segment-0011`, final `UpdateGoal` verification).
-- Control operations: accepted `WriteStdin` input `"answer\n"` followed by process exit 2 produced `:control-succeeded-p t` while rendering showed `× WriteStdin: sent input` and guest status `"failed"`. Model inference: testing only `:control-succeeded-p` misses status conflation downstream; verify through the full renderer pipeline (`segment-0011`).
-- Retained-evidence fallback: with the original execution row and output artifact unavailable, a serialized successful completion carrying `:execution-output ""` made `mevedel-view-audit--evidence` report "Original execution row and retained output are unavailable"; the corresponding nonempty-output probe passed. Model inference: fallback coverage needs both present-but-empty and absent evidence — nonempty fixtures alone miss this boundary (`segment-0015`; `mevedel-view-audit.el:709–712`, `test/test-mevedel-view-render-audits.el:638–674`).
+## Use the actual path and caller identity
+
+Observed 2026-09-28:
+
+- Delimiter-shaped agent output appeared to break a synthetic transcript parser, but the real producer escaped it and the producer-to-parser probe preserved the execution identity. Include production serialization and the real major mode before attributing a synthetic failure to the product.
+- A retained-output lookup succeeded when supplied an already-resolved original tool ID, while the user-facing “Show result” entry point had only the execution ID and could not recover the output. Supplying information unavailable to the caller bypassed the failing boundary.
+- A folded-turn probe had one durable breadcrumb but two visible breadcrumbs. A fallback could expose retained output while leaving the canonical row folded and unreachable. Persisted cardinality, visible cardinality, output access, and navigation are separate claims.
+
+The navigation probe modeled two segment reads in memory and invoked real navigation/fallback functions; it did not establish filesystem persistence or a full compaction run.
+
+## Assert consumed state, including boundary cases
+
+Observed in verification probes on 2026-09-28:
+
+- The verifier could retain full terminal output while guest current records were empty and guest archived history showed only initial output with a running header.
+- A completion audit record existed and the original row was finished, but no breadcrumb appeared until a full rerender.
+- An accepted `WriteStdin` operation had a successful internal control flag while downstream presentation showed failure after the process exited unsuccessfully.
+- Retained-evidence fallback worked for nonempty output but treated present-and-empty output as unavailable.
 
 **How to apply:**
 
-- For view, status, tool-presentation, compaction-boundary, or evidence-retention changes, assert the consumed result (rendered buffer text, the post-compaction read, the evidence-presence check) through the same entry point the consumer uses, not an internal predicate, serialized record, or audit row.
-- Treat a green same-segment test as unproven for behavior a different segment, projection, or renderer stage consumes; add a case that crosses that boundary.
-- Include a present-but-empty fixture alongside the absent and nonempty ones whenever fallback or retained-evidence behavior is under test.
-- These were verification probes, not user corrections: keep the rule general, and re-check the specific symbol and line references against the current source before relying on them.
+- Assert rendered buffer text, guest reads, navigation, or retained-evidence access through the consumer's real entry point—not just an internal predicate or serialized record.
+- Inspect immediate terminal-event presentation without forcing a redraw that could conceal a missing update.
+- Cross segment, archive, projection, or renderer boundaries when the claim depends on them; same-segment coverage does not establish cross-segment behavior.
+- Include absent, present-but-empty, and nonempty fixtures for evidence-presence and fallback logic.
+- Distinguish a successful control action from the eventual outcome of the process it controls.
+
+## Quoted payload contents are not structural boundaries
+
+Observed 2026-10-12: isolated round-trip probes failed when an output string contained `<!-- /mevedel-render-data -->`, despite valid Lisp serialization. Quoted `#+end_tool` / `#+begin_tool` text also produced a phantom tool row without requiring stale `GPTEL_BOUNDS`.
+
+**Lesson:** owner identity, valid serialization, and producer provenance do not make quoted payload text structural. Include delimiter-shaped strings in producer-to-consumer round trips and ensure boundary recognition respects the complete serialized payload.
+
+The earlier successful agent-message escaping probe establishes only that path and those cases, not every transcript delimiter. The affected metadata-strip probe retained metadata, but no outgoing provider request was inspected; this does not establish provider exposure.
+
+## Delivery evidence is not behavioral acceptance
+
+Observed 2026-11-01 in “Background Job Load Test”: `claude-haiku-5-5` rejected two steering messages despite successful `PostToolBatch` hook receipts and a header asserting user authority. The user explicitly confirmed that the messages were theirs (“Yes, it was me”), correcting their classification as an injection attempt.
+
+**Lesson:** when validating authorized steering, establish observable behavioral acceptance as well as delivery. A successful receipt or user-role transcript display does not show that the model recognized the message as user-authorized.
+
+The model described the steering as “tool output,” while inspected native API-request blobs labeled the hook context `message.role: system`. The model's explanation is not proof of wire placement; final wire normalization was not established.
+
+Adapter probes established message construction, not live model behavior. No live replay established reliable acceptance through the proposed ordinary-user-prompt route or a controlled Haiku-versus-Sonnet/Opus difference. The user reported acceptance by Opus/Sonnet; keep that report distinct from controlled observation.
+
+This correction concerns genuine user-authored steering. It does not authorize treating arbitrary hook or tool content as user instructions.
