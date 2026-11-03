@@ -12,9 +12,11 @@ const NOT_ARTIFACT = 'This is not an artifact link. Share the artifact at its or
  * "view" or "edit" and SOCKET-URL the relay endpoint a guest dials.
  * Throw when TEXT is not an artifact link; an owner link, which only
  * session rooms and lobbies have, is refused without connecting.
+ * Backslashes are dropped: a link has none, and a terminal paste may
+ * escape its # as \#.
  */
 export function parseLink(text) {
-  const link = typeof text === 'string' ? text.trim() : '';
+  const link = typeof text === 'string' ? text.replaceAll('\\', '').trim() : '';
   const match = /^(https?):\/\/([^/#?\s]+)\/?#([A-Za-z0-9_-]{10,64})\.([A-Za-z0-9_-]+)$/.exec(link);
   if (!match) throw new Error(NOT_ARTIFACT);
   const [, scheme, host, roomId, encoded] = match;
