@@ -702,7 +702,7 @@ whichever tab is shown.
 
 An artifact room shares one artifact with consumers elsewhere, such as Claude
 Code or Codex through the
-[remote-artifact package](../remote-artifact/README.md), without giving them
+[remote-artifact package](https://github.com/FrauH0lle/mevedel/blob/master/remote-artifact/README.md), without giving them
 the workspace. It is the third room kind beside session rooms and the lobby and
 runs independently of the lobby: starting, stopping or rotating the lobby does
 not touch it. This Emacs, the artifact's origin, stays authoritative and carries
@@ -976,7 +976,7 @@ cards carry the latest one this Emacs heard, so an open panel can offer a
 to the origin, which it closes after 5 idle minutes.
 
 mevedel does not reimplement the relay transport: it runs the
-[remote-artifact package's](../remote-artifact/README.md#the-bridge-for-mevedel)
+[remote-artifact package's](https://github.com/FrauH0lle/mevedel/blob/master/remote-artifact/README.md#the-bridge-for-mevedel)
 `bridge` command as one private subprocess, by default the copy shipped with
 mevedel under `mevedel-shared-editing-node-program`
 (`mevedel-remote-artifact-command` chooses another). The package's pool
