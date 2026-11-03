@@ -17,6 +17,14 @@ test('a 32-byte secret is a view link and a 48-byte one an edit link', () => {
   assert.equal(edit.socketUrl, 'ws://127.0.0.1:8080/r/room-id-0001?role=guest');
 });
 
+test('shell escapes a terminal paste adds are ignored', () => {
+  // zsh's url-quote-magic pastes the link's # and ? as \# and \?.
+  const edit = parseLink(`https://relay.example/\\#room-id-0001.${b64(48)}`);
+  assert.equal(edit.tier, 'edit');
+  assert.equal(edit.roomId, 'room-id-0001');
+  assert.equal(edit.link, `https://relay.example/#room-id-0001.${b64(48)}`);
+});
+
 test('an owner-tier secret or a malformed link is not an artifact link', () => {
   assert.throws(() => parseLink(`https://relay.example/#room-id-0001.${b64(64)}`),
     /owner link of a session or lobby, not an artifact link/);
