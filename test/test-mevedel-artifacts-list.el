@@ -17,6 +17,8 @@
 (require 'mevedel-artifacts-list)
 (require 'mevedel-cockpit)
 (require 'mevedel-collaboration-artifact)
+(require 'mevedel-collaboration-artifact-room)
+(require 'mevedel-remote-artifact)
 (require 'mevedel-shared-editing)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
@@ -404,6 +406,47 @@
                      (setq queued args))))
           (mevedel-artifacts-list-delete)))
       (should (equal queued '(:action "delete" :id "board" :actor "Host"))))))
+
+(mevedel-deftest mevedel-artifacts-list-share ()
+  ,test
+  (test)
+  :doc "shares, rotates and revokes the selected artifact in the cockpit's workspace"
+  (mevedel-artifacts-list-test--with-store
+    (mevedel-artifacts-list-test--artifact session store "mockup" "index.html" "<h1>hi</h1>")
+    (let (calls shared)
+      (with-current-buffer (mevedel-artifacts-list-open
+                            (mevedel-artifacts-list-test--context session view data))
+        (cl-letf (((symbol-function 'mevedel-artifact-store-shared-p)
+                   (lambda (_workspace _id) shared))
+                  ((symbol-function 'mevedel-collaboration-share-artifact)
+                   (lambda (id seen) (push (list 'share id seen) calls) (setq shared t)))
+                  ((symbol-function 'mevedel-collaboration-rotate-artifact)
+                   (lambda (id seen) (push (list 'rotate id seen) calls)))
+                  ((symbol-function 'mevedel-collaboration-revoke-artifact)
+                   (lambda (id seen) (push (list 'revoke id seen) calls) (setq shared nil))))
+          ;; An unshared artifact has no links to replace or revoke.
+          (should-error (mevedel-artifacts-list-rotate) :type 'user-error)
+          (should-error (mevedel-artifacts-list-revoke) :type 'user-error)
+          (mevedel-artifacts-list-share)
+          (should (equal "shared" (aref (tabulated-list-get-entry) 6)))
+          (mevedel-artifacts-list-rotate)
+          (mevedel-artifacts-list-revoke)))
+      (should (equal (list (list 'share "mockup" workspace)
+                           (list 'rotate "mockup" workspace)
+                           (list 'revoke "mockup" workspace))
+                     (nreverse calls)))))
+
+  :doc "attaches a remote artifact from a link read without echo"
+  (mevedel-artifacts-list-test--with-store
+    (mevedel-artifacts-list-test--artifact session store "mockup" "index.html" "<h1>hi</h1>")
+    (let (attached)
+      (with-current-buffer (mevedel-artifacts-list-open
+                            (mevedel-artifacts-list-test--context session view data))
+        (cl-letf (((symbol-function 'read-passwd) (lambda (&rest _) "LINK"))
+                  ((symbol-function 'mevedel-remote-artifact-attach)
+                   (lambda (seen link name) (setq attached (list seen link name)) "board")))
+          (call-interactively #'mevedel-artifacts-list-attach-remote)))
+      (should (equal (list workspace "LINK" nil) attached)))))
 
 (mevedel-deftest mevedel-artifacts-list-quit ()
   ,test

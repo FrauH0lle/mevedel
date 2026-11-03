@@ -115,12 +115,26 @@
                   "mevedel-collaboration-artifact" (link id &optional route))
 (autoload 'mevedel-collaboration-item-link "mevedel-collaboration-artifact")
 
+;; `mevedel-collaboration-artifact-room'
+(declare-function mevedel-collaboration-revoke-artifact
+                  "mevedel-collaboration-artifact-room" (id &optional workspace))
+(declare-function mevedel-collaboration-rotate-artifact
+                  "mevedel-collaboration-artifact-room" (id &optional workspace))
+(declare-function mevedel-collaboration-share-artifact
+                  "mevedel-collaboration-artifact-room" (id &optional workspace))
+(autoload 'mevedel-collaboration-revoke-artifact "mevedel-collaboration-artifact-room" nil t)
+(autoload 'mevedel-collaboration-rotate-artifact "mevedel-collaboration-artifact-room" nil t)
+(autoload 'mevedel-collaboration-share-artifact "mevedel-collaboration-artifact-room" nil t)
+
 ;; `mevedel-collaboration-lobby'
 (declare-function mevedel-collaboration-lobby--find
                   "mevedel-collaboration-lobby" (workspace))
 
 ;; `mevedel-remote-artifact'
+(declare-function mevedel-remote-artifact-attach "mevedel-remote-artifact"
+                  (workspace link &optional name))
 (declare-function mevedel-remote-artifact-detach "mevedel-remote-artifact" (workspace alias))
+(autoload 'mevedel-remote-artifact-attach "mevedel-remote-artifact" nil t)
 (autoload 'mevedel-remote-artifact-detach "mevedel-remote-artifact" nil t)
 
 ;; `mevedel-shared-editing'
@@ -348,6 +362,48 @@ session the project lobby's; that room reads it from its origin."
   "Visit the selected artifact file in Emacs."
   (interactive)
   (find-file (mevedel-artifacts-list--selected-path)))
+
+(defun mevedel-artifacts-list--shared-selected ()
+  "Return the selected artifact, refusing one that is not shared."
+  (let ((item (mevedel-artifacts-list--local-selected)))
+    (unless (plist-get item :shared)
+      (user-error "%s is not shared; S shares it" (plist-get item :title)))
+    item))
+
+(defun mevedel-artifacts-list--after-sharing (function item)
+  "Call FUNCTION with ITEM's id and the cockpit workspace, then refresh."
+  (let ((id (plist-get item :id)))
+    (funcall function id (mevedel-artifacts-list--workspace))
+    (mevedel-cockpit-surface-refresh id)))
+
+(defun mevedel-artifacts-list-share ()
+  "Share the selected artifact through artifact links and show them.
+A shared artifact keeps its links; they are shown again."
+  (interactive)
+  (mevedel-artifacts-list--after-sharing
+   #'mevedel-collaboration-share-artifact (mevedel-artifacts-list--local-selected)))
+
+(defun mevedel-artifacts-list-rotate ()
+  "Replace the selected shared artifact's links and show the new ones."
+  (interactive)
+  (mevedel-artifacts-list--after-sharing
+   #'mevedel-collaboration-rotate-artifact (mevedel-artifacts-list--shared-selected)))
+
+(defun mevedel-artifacts-list-revoke ()
+  "Stop sharing the selected artifact; its links stop working."
+  (interactive)
+  (mevedel-artifacts-list--after-sharing
+   #'mevedel-collaboration-revoke-artifact (mevedel-artifacts-list--shared-selected)))
+
+(defun mevedel-artifacts-list-attach-remote (link &optional name)
+  "Attach the remote artifact LINK shares to this workspace.
+The link is read without echo; a prefix argument asks for NAME."
+  (interactive
+   (list (read-passwd "Artifact link: ")
+         (when current-prefix-arg (read-string "Attach as: "))))
+  (let ((alias (mevedel-remote-artifact-attach
+                (mevedel-artifacts-list--workspace) link name)))
+    (mevedel-cockpit-surface-refresh alias)))
 
 (defun mevedel-artifacts-list-attach ()
   "Attach the selected artifact to the current session."
@@ -588,7 +644,15 @@ share it.  Nothing is created when that is declined."
             mevedel-artifacts-list-conversation)
            ("s" "Save the selected whiteboard or document as a version"
             mevedel-artifacts-list-save-version)
-           ("d" "Delete the selected artifact"
+           ("S" "Share the selected artifact, or show its links"
+            mevedel-artifacts-list-share)
+           ("Z" "Replace the selected artifact's links"
+            mevedel-artifacts-list-rotate)
+           ("X" "Stop sharing the selected artifact"
+            mevedel-artifacts-list-revoke)
+           ("R" "Attach a remote artifact from its link"
+            mevedel-artifacts-list-attach-remote)
+           ("d" "Delete the selected artifact, or detach a remote one"
             mevedel-artifacts-list-delete)))
   "Cockpit surface spec for the artifact store.")
 

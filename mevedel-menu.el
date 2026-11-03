@@ -1767,6 +1767,35 @@ nothing to restore."
   (mevedel-cockpit-call-in-data (mevedel-menu--context)
                                 #'mevedel-collaboration-lobby-stop))
 
+(defun mevedel-menu--call-artifact-command (command)
+  "Run artifact COMMAND interactively in this session's workspace."
+  (mevedel-cockpit-call-in-data (mevedel-menu--context) #'call-interactively command))
+
+(defun mevedel-menu--share-artifact ()
+  "Share one of this workspace's artifacts, or show its links."
+  (interactive)
+  (mevedel-menu--call-artifact-command 'mevedel-collaboration-share-artifact))
+
+(defun mevedel-menu--rotate-artifact ()
+  "Replace the links of one of this workspace's shared artifacts."
+  (interactive)
+  (mevedel-menu--call-artifact-command 'mevedel-collaboration-rotate-artifact))
+
+(defun mevedel-menu--revoke-artifact ()
+  "Stop sharing one of this workspace's artifacts."
+  (interactive)
+  (mevedel-menu--call-artifact-command 'mevedel-collaboration-revoke-artifact))
+
+(defun mevedel-menu--attach-remote-artifact ()
+  "Attach a remote artifact to this workspace from its link."
+  (interactive)
+  (mevedel-menu--call-artifact-command 'mevedel-remote-artifact-attach))
+
+(defun mevedel-menu--detach-remote-artifact ()
+  "Forget one of this workspace's remote artifacts."
+  (interactive)
+  (mevedel-menu--call-artifact-command 'mevedel-remote-artifact-detach))
+
 (defun mevedel-menu--share-lobby-rotate ()
   "Replace this workspace's lobby links after confirmation."
   (interactive)
@@ -1997,6 +2026,15 @@ Every action goes through the same commands as `/collab'."
     ("L" "Stop the lobby" mevedel-menu--share-lobby-stop
      :inapt-if mevedel-menu--lobby-down-p)
     ("r" "Rotate lobby links…" mevedel-menu--share-lobby-rotate)]
+   ["Artifacts"
+    :pad-keys t
+    ("A" "Share one, or show links…" mevedel-menu--share-artifact)
+    ("Z" "Replace its links…" mevedel-menu--rotate-artifact)
+    ("U" "Stop sharing one…" mevedel-menu--revoke-artifact)]
+   ["Remote artifacts"
+    :pad-keys t
+    ("R" "Attach from a link…" mevedel-menu--attach-remote-artifact)
+    ("D" "Detach…" mevedel-menu--detach-remote-artifact)]
    ["Inspect"
     :pad-keys t
     ("i" "Status" mevedel-menu--share-status)

@@ -716,6 +716,11 @@ edit link to the kill ring and shows both links in a help window, never in
 `:link-view` and `:link-edit`. Markdown, image and other file artifacts
 cannot be shared.
 
+The same actions sit in Project artifacts, on the selected artifact: `S`
+shares it or shows its links again, `Z` replaces its links and `X` stops
+sharing it. The cockpit's Share menu has them under Artifacts, asking for
+the artifact: `A` share or show links, `Z` replace links, `U` stop sharing.
+
 Links keep the room shape `WEB-ORIGIN/#ROOM-ID.SECRET`: a view link's secret
 is the 32-byte room key, an edit link's the key and a 16-byte write token. No
 owner token is minted, and one offered in a hello is ignored. The link names no
@@ -923,7 +928,9 @@ when that id names a local artifact or another attached one, it asks for
 another name, the artifact's alias here. Attaching the same link again
 refreshes it, and under a new name renames it. `M-x
 mevedel-remote-artifact-detach` forgets it; the origin and other holders are
-unaffected. Links are kept per user, outside the project, in
+unaffected. Project artifacts attaches with `R` and detaches the selected
+remote artifact with `d`; the cockpit's Share menu has `R` and `D` under
+Remote artifacts. Links are kept per user, outside the project, in
 `mevedel-user-dir`'s `remote-artifacts.eld` (mode 0600), by workspace root;
 the artifact backend restores a workspace's attachments on its first lookup
 of that workspace.

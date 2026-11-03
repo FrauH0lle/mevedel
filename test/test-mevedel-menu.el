@@ -18,6 +18,7 @@
           "helpers"))
 (require 'mevedel-cockpit)
 (require 'mevedel-collaboration)
+(require 'mevedel-collaboration-artifact-room)
 (require 'mevedel-collaboration-lobby)
 (require 'mevedel-report-test-support
          (file-name-concat
@@ -35,6 +36,7 @@
 (require 'mevedel-permissions-list)
 (require 'mevedel-plugins)
 (require 'mevedel-presets)
+(require 'mevedel-remote-artifact)
 (require 'mevedel-session-persistence)
 (require 'mevedel-skills-ui)
 (require 'mevedel-structs)
@@ -1920,7 +1922,31 @@
                        (should (string-match-p "stops working" prompt))
                        t)))
             (mevedel-menu--share-lobby-rotate))
-          (should (eq data-buf rotated)))))))
+          (should (eq data-buf rotated))))))
+
+  :doc "runs the artifact sharing and remote artifact commands in the session's workspace"
+  (mevedel-menu-test--with-buffers
+    (let (calls)
+      (cl-letf (((symbol-function 'mevedel-collaboration-share-artifact)
+                 (lambda () (interactive) (push (list 'share (current-buffer)) calls)))
+                ((symbol-function 'mevedel-collaboration-rotate-artifact)
+                 (lambda () (interactive) (push (list 'rotate (current-buffer)) calls)))
+                ((symbol-function 'mevedel-collaboration-revoke-artifact)
+                 (lambda () (interactive) (push (list 'revoke (current-buffer)) calls)))
+                ((symbol-function 'mevedel-remote-artifact-attach)
+                 (lambda () (interactive) (push (list 'attach (current-buffer)) calls)))
+                ((symbol-function 'mevedel-remote-artifact-detach)
+                 (lambda () (interactive) (push (list 'detach (current-buffer)) calls))))
+        (with-current-buffer view-buf
+          (mevedel-menu--share-artifact)
+          (mevedel-menu--rotate-artifact)
+          (mevedel-menu--revoke-artifact)
+          (mevedel-menu--attach-remote-artifact)
+          (mevedel-menu--detach-remote-artifact)))
+      (should (equal (list (list 'share data-buf) (list 'rotate data-buf)
+                           (list 'revoke data-buf) (list 'attach data-buf)
+                           (list 'detach data-buf))
+                     (nreverse calls))))))
 
 (defun mevedel-menu-test--window-layout ()
   "Return window topology, buffers and selection for the selected frame."

@@ -1131,13 +1131,14 @@ The edit link goes to the kill ring; neither goes to *Messages*."
   (message "mevedel: edit link copied to kill ring"))
 
 ;;;###autoload
-(defun mevedel-collaboration-share-artifact (id)
+(defun mevedel-collaboration-share-artifact (id &optional workspace)
   "Share the current workspace's artifact ID and show its links.
-ID names a whiteboard, document or HTML artifact.
+ID names a whiteboard, document or HTML artifact of WORKSPACE, by
+default the current buffer's.
 The edit link is copied to the kill ring.  An artifact that is shared
 already keeps its links."
   (interactive (list (mevedel-collaboration-artifact-room--choose)))
-  (let* ((workspace (mevedel-workspace-current))
+  (let* ((workspace (or workspace (mevedel-workspace-current)))
          (meta (mevedel-collaboration-artifact-room--meta workspace id)))
     (unless (or (mevedel-artifact-store-shared-p workspace id)
                 (yes-or-no-p
@@ -1150,12 +1151,13 @@ already keeps its links."
      meta (mevedel-collaboration-artifact-room-sharing workspace id 'share))))
 
 ;;;###autoload
-(defun mevedel-collaboration-revoke-artifact (id)
+(defun mevedel-collaboration-revoke-artifact (id &optional workspace)
   "Stop sharing the current workspace's artifact ID.
+WORKSPACE, by default the current buffer's, holds the artifact.
 Every connected consumer is disconnected and its links stop working
 for good."
   (interactive (list (mevedel-collaboration-artifact-room--choose t)))
-  (let* ((workspace (mevedel-workspace-current))
+  (let* ((workspace (or workspace (mevedel-workspace-current)))
          (title (or (plist-get (mevedel-artifact-store-meta workspace id) :title) id)))
     (unless (yes-or-no-p
              (format "Whoever holds its links loses access.  Revoke the links of \"%s\"? "
@@ -1165,12 +1167,13 @@ for good."
     (message "mevedel: %s is no longer shared" title)))
 
 ;;;###autoload
-(defun mevedel-collaboration-rotate-artifact (id)
+(defun mevedel-collaboration-rotate-artifact (id &optional workspace)
   "Replace the links of the current workspace's shared artifact ID.
+WORKSPACE, by default the current buffer's, holds the artifact.
 The old links stop working; the new ones are shown, the edit link
 copied to the kill ring."
   (interactive (list (mevedel-collaboration-artifact-room--choose t)))
-  (let* ((workspace (mevedel-workspace-current))
+  (let* ((workspace (or workspace (mevedel-workspace-current)))
          (meta (mevedel-collaboration-artifact-room--meta workspace id)))
     (unless (yes-or-no-p
              (format "The old links stop working.  Replace the links of \"%s\"? "
