@@ -8,6 +8,8 @@ tests, compiling, or committing. These are repository requirements.
 - **gptel**, **acp >=0.15.2**, **yaml**, **orderless**, **websocket**, **qrencode**, **Emacs >=31.1**,
   **org-mode**
 
+The GitHub workflow checks also require Bash and `jq`.
+
 Eask dependency installs can get stale.
 Run `npx @emacs-eask/cli upgrade PACKAGE` to update. For example:
 
@@ -55,8 +57,12 @@ the dependency test checks that its schema packages remain synchronized.
 `@tiptap/y-tiptap` has its own version series. Dependabot PRs automatically
 merge after all required checks pass against the current base. The metadata-only
 `Dependabot auto-merge` workflow enables GitHub's native auto-merge after a
-successful PR workflow; it never checks out or executes PR code. Repository
-auto-merge and the required partitioned, fresh-file, remote-transport,
+successful PR workflow; it never checks out or executes PR code. Merges using
+[`GITHUB_TOKEN`](https://docs.github.com/en/actions/concepts/security/github_token)
+do not trigger push workflows, so the same
+metadata-only workflow dispatches missing master CI and dependency runs, plus
+the relay release when its files changed. Existing runs are left alone.
+Repository auto-merge and the required partitioned, fresh-file, remote-transport,
 browser-assets and relay checks on `master` enforce the gate. A failing check
 keeps the PR open, including major updates. Dependabot security updates also depend on the
 repository's dependency graph, alerts, and security-update settings.

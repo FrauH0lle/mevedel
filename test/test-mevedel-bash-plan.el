@@ -109,6 +109,7 @@
                      (should (equal draft (mevedel-view--input-text))))
                    result)))
             (git "init" "-q" "--initial-branch=main")
+            (git "config" "maintenance.auto" "false")
             (git "config" "core.autocrlf" "false")
             (with-temp-file tracked (insert "one\n"))
             (git "add" "--" "tracked.txt")

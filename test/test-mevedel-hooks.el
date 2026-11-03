@@ -1936,7 +1936,13 @@
              ((:matcher "Bash"
                :hooks ((:type command :command "exit 1" :fail-closed t))))))))
     (unwind-protect
-        (cl-letf* ((send (symbol-function 'process-send-string))
+        (cl-letf* ((make (symbol-function 'make-process))
+                   (send (symbol-function 'process-send-string))
+                   ((symbol-function 'make-process)
+                    (lambda (&rest arguments)
+                      ;; A startup failure may exit even before the wrapper reads.
+                      (apply make
+                             (plist-put arguments :command '("sh" "-c" "exit 1")))))
                    ((symbol-function 'process-send-string)
                     (lambda (process text)
                       ;; Hold the sentinel until the write observes the exit.
@@ -2959,6 +2965,30 @@
 			   (should (eq mevedel-hooks-test--seen-buffer
 				       dispatch-buffer))))
 		     (delete-directory root t))))
+
+(mevedel-deftest mevedel-hooks-run-event/early-closed-stdin
+  (:quiet t :doc "a command closing stdin before input delivery cannot kill Emacs")
+  (let* ((root (make-temp-file "mevedel-hook-closed-input-" t))
+         (session (mevedel-hooks-test--session root))
+         (mevedel-hook-rules
+          '((PreToolUse
+             ((:hooks ((:type command :command "exec 0<&-; sleep .5; exit 1"
+                        :fail-closed t))))))))
+    (unwind-protect
+        (cl-letf* ((send (symbol-function 'process-send-string))
+                   ((symbol-function 'process-send-string)
+                    (lambda (process text)
+                      (when (equal (process-name process) "mevedel-hook")
+                        ;; Let a fast command close stdin before its event arrives.
+                        (sleep-for .1))
+                      (funcall send process text))))
+          (should
+           (equal (mevedel-hooks-test--await
+                   (lambda (callback)
+                     (mevedel-hooks-run-event
+                      'PreToolUse '(:tool-name "Bash") callback session)))
+                  '(:continue nil :stop-reason "Hook exited with status 1"))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-run-event/fail-closed
 		 (:quiet t :doc "command failures fail open by default and fail closed when requested")

@@ -96,16 +96,18 @@
            (lambda (result) (setq helper-result result))
            "mevedel-owner-helper"
            (list "sh" "-c"
-                 "printf '%s' \"$PWD\" > \"$1\"; exec sleep 30"
+                 "printf '%s\n' \"$PWD\" > \"$1\"; exec sleep 30"
                  "helper" scratch-file)
            nil (list root) :session session :owner "agent-a")
           (test-mevedel-execution--wait
-           (lambda () (file-readable-p scratch-file)))
-          (setq scratch
-                (string-trim
-                 (with-temp-buffer
-                   (insert-file-contents scratch-file)
-                   (buffer-string))))
+           (lambda ()
+             (when (file-readable-p scratch-file)
+               (setq scratch
+                     (with-temp-buffer
+                       (insert-file-contents scratch-file)
+                       (buffer-string)))
+               (string-suffix-p "\n" scratch))))
+          (setq scratch (string-trim scratch))
           (write-region "terminal" nil tombstone-file nil 'silent)
           (setq tombstone
                 (test-mevedel-execution--attach-child

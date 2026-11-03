@@ -305,7 +305,9 @@
                    (setq mevedel--current-request replacement)
                    (setf (mevedel-request-permission-mode-override replacement) 'edits)
                    (setf (mevedel-session-permission-mode session) 'full-auto))))
-        (mevedel--complete-turn fsm))
+        (mevedel--complete-turn fsm)
+        (mevedel-test--await 5 "Deferred publication did not reach the replacement"
+          (eq replacement mevedel--current-request)))
       (should (eq replacement mevedel--current-request))
       (should (eq 'full-auto (mevedel-session-permission-mode session)))
       (should (eq 'edits (mevedel-request-permission-mode-override replacement)))
