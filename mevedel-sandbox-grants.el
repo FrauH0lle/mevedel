@@ -58,7 +58,7 @@
     (nreverse links)))
 
 (defun mevedel-sandbox--target-stat (path)
-  "Return PATH's identity and device-node flag from the target's `stat'.
+  "Return PATH's identity, device-node and socket flags from target `stat'.
 
 The launcher compares this pair with `stat' output taken from an already
 open descriptor on the target, so the recorded pair must come from the same
@@ -84,7 +84,10 @@ device number for remote files, which never matches the target."
         (list :identity (match-string 1 output)
               :device-p (memq (logand (string-to-number (match-string 2 output) 16)
                                      #o170000)
-                              '(#o020000 #o060000)))))))
+                              '(#o020000 #o060000))
+              :socket-p (= (logand (string-to-number (match-string 2 output) 16)
+                                   #o170000)
+                            #o140000))))))
 
 (defun mevedel-sandbox--resolve-filesystem-permissions
     (permissions &optional inaccessible-paths restrictions)
@@ -133,6 +136,8 @@ the base read-only filesystem already allows them."
                           (attributes (mevedel-sandbox--target-stat canonical))
                           (identity (plist-get attributes :identity))
                           (device-p (plist-get attributes :device-p)))
+                     (when (plist-get attributes :socket-p)
+                       (setq resolved (plist-put resolved :socket-p t)))
                      ;; A read-only mount does not prevent writes or ioctls on
                      ;; a device.  Never turn a read grant into device access.
                      (when device-p
@@ -159,12 +164,14 @@ the base read-only filesystem already allows them."
                      (mevedel-execution-grants-covering-grant
                       (plist-get grant :path) (plist-get grant :access)
                       permissions t nil restrictions)
-                     ;; A directory bind keeps nodev and cannot supply a
-                     ;; device grant, even when its path authority covers it.
+                     ;; Tree filesystem authority supplies neither device
+                     ;; access nor permission to connect to a host socket.
                      (or (not (file-exists-p (plist-get grant :path)))
-                         (not (plist-get
-                               (mevedel-sandbox--target-stat (plist-get grant :path))
-                               :device-p)))))
+                         (let ((facts (mevedel-sandbox--target-stat
+                                       (plist-get grant :path))))
+                           (not (or (plist-get facts :device-p)
+                                    (and (eq (plist-get grant :access) 'write)
+                                         (plist-get facts :socket-p))))))))
               permissions))))
 
 (defun mevedel-sandbox--grant-paths (grant)
@@ -235,13 +242,59 @@ device bind lacks its FD-based mount's identity check and descriptor cleanup."
                       "mevedel-sandbox-devices")
                 command)))))
 
+(defconst mevedel-sandbox--socket-fd-opener
+  "import os,sys
+n=int(sys.argv[1]); masks=[int(x) for x in sys.argv[2].split(',') if x]
+args=sys.argv[3:]; os.environ.pop('MEVEDEL_SANDBOX_GRANT_FAILURE',None)
+try:
+    for index in range(n):
+        fd=os.open(args[2*index],os.O_PATH|os.O_CLOEXEC)
+        try:
+            st=os.fstat(fd)
+            if str(st.st_dev)+':'+str(st.st_ino) != args[2*index+1]:
+                raise OSError('identity mismatch')
+            os.dup2(fd,10+index,inheritable=True)
+            os.set_inheritable(10+index,True)
+        finally:
+            if fd != 10+index: os.close(fd)
+    for target in masks:
+        fd=os.open('/dev/null',os.O_RDONLY|os.O_CLOEXEC)
+        try:
+            os.dup2(fd,target,inheritable=True)
+            os.set_inheritable(target,True)
+        finally:
+            if fd != target: os.close(fd)
+    os.execvpe(args[2*n],args[2*n:],os.environ)
+except OSError as error:
+    print('mevedel: exact filesystem grant changed: '+str(error),file=sys.stderr)
+    sys.exit(125)
+"
+  "Open socket-containing grant sets without connecting to socket inodes.
+Every descriptor is identity-checked before exec; process exit closes all FDs
+on refusal.  O_PATH also avoids opening device nodes for I/O during pinning.")
+
 (defun mevedel-sandbox--fd-backed-command
     (command grants &optional mask-fds workdir)
   "Wrap COMMAND to preserve exact target GRANTS on file descriptors.
 MASK-FDS are the empty input descriptors backing protected-file masks.
 When WORKDIR is remote, discover and launch the wrapper on that target."
-  (if (not (or grants mask-fds))
-      command
+  (cond
+   ((not (or grants mask-fds)) command)
+   ((cl-some (lambda (grant) (plist-get grant :socket-p)) grants)
+    (let* ((default-directory (or workdir default-directory))
+           (python (executable-find "python3" (file-remote-p default-directory))))
+      (unless python
+        (signal 'mevedel-sandbox-policy-error
+                '("Exact socket grants require 'python3'")))
+      (append (list python "-I" "-S" "-c" mevedel-sandbox--socket-fd-opener
+                    (number-to-string (length grants))
+                    (mapconcat #'number-to-string mask-fds ","))
+              (cl-mapcan (lambda (grant)
+                           (list (file-local-name (plist-get grant :source-path))
+                                 (mevedel-sandbox--grant-identity grant)))
+                         grants)
+              command)))
+   (t
     (let* ((remote (and workdir (file-remote-p workdir)))
            (bash
             (if remote
@@ -299,7 +352,7 @@ When WORKDIR is remote, discover and launch the wrapper on that target."
               (list (plist-get grant :source-path)
                     (mevedel-sandbox--grant-identity grant)))
             grants)
-           command))))))
+           command)))))))
 
 (defun mevedel-sandbox--mount-plan (restrictions grants)
   "Return the Bubblewrap mounts for protected RESTRICTIONS and GRANTS.
@@ -338,10 +391,12 @@ backing private empty file masks."
                       (funcall grant-paths grant)))
            grants))
          (later (cl-set-difference grants ancestors :test #'eq))
-         ;; Parent directory mounts must not cover a later exact device bind.
+         ;; Parent mounts must not cover a pinned socket or exact device bind.
          (ordered (append ancestors
-                          (cl-remove-if (lambda (grant) (plist-get grant :device-p)) later)
-                          (cl-remove-if-not (lambda (grant) (plist-get grant :device-p)) later)))
+                          (cl-remove-if (lambda (grant) (or (plist-get grant :device-p)
+                                                           (plist-get grant :socket-p))) later)
+                          (cl-remove-if-not (lambda (grant) (or (plist-get grant :device-p)
+                                                               (plist-get grant :socket-p))) later)))
          (ancestor-mounts
           (mevedel-sandbox--additional-filesystem-mounts ancestors))
          (later-mounts

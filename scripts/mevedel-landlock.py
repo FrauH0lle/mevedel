@@ -6,13 +6,14 @@ unavailable.  Pathname socket restriction needs version 9
 
 `exec [ALLOWED...] -- COMMAND...` runs inside Bubblewrap.  It restricts this
 process and every descendant so that connecting to, or sending a datagram to,
-a pathname Unix socket created outside the new domain succeeds only beneath
-an ALLOWED path, and connecting to an abstract socket created outside the
+a pathname Unix socket created outside the new domain succeeds only for
+an ALLOWED socket, and connecting to an abstract socket created outside the
 domain fails, then execs COMMAND.  Sockets the command or its descendants
-create stay reachable.  No other filesystem or network access is handled, so
-Bubblewrap's mounts remain the filesystem boundary.  An ALLOWED path that
-cannot be opened gets no rule, which leaves its sockets unreachable.  Any
-other failure exits with status 125 before COMMAND starts.
+create stay reachable.  Cross-directory rename and link are explicitly allowed;
+socket permissions attach to individual socket inodes, not directories, so
+ordinary file moves cannot gain access.  Bubblewrap's mounts remain the
+filesystem boundary.  An ALLOWED path that cannot be opened or is not a socket
+gets no rule.  Any other failure exits with status 125 before COMMAND starts.
 
 Out of scope, as for the Git SSH broker: a writable development checkout of
 this script.  Emacs runs `abi` on the host, so a confined edit to it in a
@@ -21,6 +22,7 @@ workspace that is the mevedel checkout runs as host code.
 
 import ctypes
 import os
+import stat
 import struct
 import sys
 
@@ -30,6 +32,7 @@ SYS_ADD_RULE = 445
 SYS_RESTRICT_SELF = 446
 CREATE_RULESET_VERSION = 1 << 0
 RULE_PATH_BENEATH = 1
+ACCESS_FS_REFER = 1 << 13
 ACCESS_FS_RESOLVE_UNIX = 1 << 16
 SCOPE_ABSTRACT_UNIX_SOCKET = 1 << 0
 PR_SET_NO_NEW_PRIVS = 38
@@ -58,23 +61,31 @@ def abi():
 
 
 def restrict(allowed):
-    """Restrict this process to host Unix sockets beneath ALLOWED paths."""
+    """Restrict this process to the individual host sockets in ALLOWED."""
     # struct landlock_ruleset_attr: handled_access_fs, handled_access_net, scoped.
     attributes = ctypes.create_string_buffer(
-        struct.pack("=QQQ", ACCESS_FS_RESOLVE_UNIX, 0,
+        struct.pack("=QQQ", ACCESS_FS_REFER | ACCESS_FS_RESOLVE_UNIX, 0,
                     SCOPE_ABSTRACT_UNIX_SOCKET))
     ruleset = call(SYS_CREATE_RULESET, attributes,
                    ctypes.c_size_t(len(attributes.raw)), ctypes.c_uint32(0))
     try:
-        for path in allowed:
+        # REFER is denied even when unhandled.  Allow it everywhere: mounts
+        # still limit writes.  Never grant socket access to a whole directory.
+        for path, access in [("/", ACCESS_FS_REFER)] + [
+                (path, ACCESS_FS_RESOLVE_UNIX) for path in allowed]:
             try:
                 descriptor = os.open(path, os.O_PATH | os.O_CLOEXEC)
             except OSError:
+                if access == ACCESS_FS_REFER:
+                    raise
                 continue
             try:
+                if (access == ACCESS_FS_RESOLVE_UNIX
+                        and not stat.S_ISSOCK(os.fstat(descriptor).st_mode)):
+                    continue
                 # struct landlock_path_beneath_attr is packed.
                 rule = ctypes.create_string_buffer(
-                    struct.pack("=Qi", ACCESS_FS_RESOLVE_UNIX, descriptor))
+                    struct.pack("=Qi", access, descriptor))
                 call(SYS_ADD_RULE, ctypes.c_int(ruleset),
                      ctypes.c_int(RULE_PATH_BENEATH), rule, ctypes.c_uint32(0))
             finally:

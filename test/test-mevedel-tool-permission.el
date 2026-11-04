@@ -246,6 +246,40 @@ Return the outcome and the logged entry."
               (should (string-match-p "directory-tree scope" (cdr outcome))))))
       (delete-directory root t)))
 
+  :doc "hook, fallback and queued approvals retain only their explicit resource selection"
+  (dolist (source '(hook fallback queued coalesced denied))
+    (let* ((selection '((:path "/service/socket" :access write)))
+           (entry (list :kind 'generic :callback #'ignore
+                        :resource-selection-cell (list (copy-tree selection))))
+           queued settled-context settled-outcome)
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (funcall callback
+                            (pcase source
+                              ('hook '(:permission-decision allow))
+                              ('denied '(:permission-decision deny))))))
+                ((symbol-function 'mevedel-permission--enqueue)
+                 (lambda (value &optional _session) (setq queued value))))
+        (mevedel-tool-permission--request
+         nil entry nil
+         (lambda (context outcome)
+           (setq settled-context context settled-outcome outcome))
+         nil (and (eq source 'fallback) 'allow))
+        (when (eq source 'queued)
+          (funcall (plist-get queued :callback) 'allow-once))
+        (when (eq source 'coalesced)
+          (mevedel-permission-queue--safe-settle queued 'allow 'coalesced))
+        (if (memq source '(denied coalesced))
+            (progn
+              (if (eq source 'denied)
+                  (should (eq 'deny (car settled-outcome)))
+                (should (eq 'allow settled-outcome)))
+              (should-not (plist-get settled-context :approved-resources)))
+          (should (memq settled-outcome '(allow allow-once)))
+          (should (equal selection (plist-get settled-context :approved-resources)))
+          (should-not (eq (car (plist-get entry :resource-selection-cell))
+                          (plist-get settled-context :approved-resources)))))))
+
   :doc "an unresolved request uses its card-free fallback"
   (let (queued settled-outcome)
     (cl-letf (((symbol-function 'mevedel-hooks-run-event)

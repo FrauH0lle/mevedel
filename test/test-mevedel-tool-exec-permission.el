@@ -7,12 +7,14 @@
 ;;; Code:
 
 (require 'mevedel-tool-exec-permission)
+(require 'mevedel-tool-permission)
 (require 'cl-lib)
 (require 'seq)
 (require 'mevedel-bash-analysis)
 (require 'mevedel-bash-policy)
 (require 'mevedel-structs)
 (require 'mevedel-execution-target)
+(require 'mevedel-hooks)
 (require 'mevedel-permission-mode)
 (require 'mevedel-permission-persistence)
 (require 'mevedel-permission-prompt)
@@ -20,6 +22,7 @@
 (require 'mevedel-permission-queue)
 (require 'mevedel-permission-rules)
 (require 'mevedel-permissions)
+(require 'mevedel-sandbox)
 (require 'mevedel-telemetry)
 (require 'mevedel-turn)
 (require 'mevedel-workspace)
@@ -895,6 +898,142 @@ additive child permissions are available only to batch Eval"
       (mevedel-tool-exec-permission-effective-sandbox-request
        (list :expression "(buffer-list)" :mode "live" :justification justification)
        "Eval" "(buffer-list)" 'live '(:buckets ((:session))))))))
+
+(ert-deftest mevedel-tool-exec-permission-socket-admission ()
+  "Directory authority cannot approve a host socket at the permission seam."
+  (let* ((root (make-temp-file "mevedel-socket-admission-" t))
+         (path (file-name-concat root "socket"))
+         (server (make-network-process :name "socket-admission" :family 'local
+                                       :server t :service path :noquery t))
+         (parent `(:path ,root :access write :recursive t))
+         (exact `(:path ,path :access write))
+         (mevedel-permission-rules nil))
+    (unwind-protect
+        (dolist (tool '("Bash" "Eval"))
+          (dolist (source '(resource profile invocation))
+            (dolist (approved '(nil t))
+              (let* ((grants (if approved (list parent exact) (list parent)))
+                     (rule `(,tool :pattern "true" :action allow
+                             ,@(when (eq source 'profile)
+                                 (list :file-system grants))))
+                     (context (mevedel-permission--invocation-context
+                               :tool-name tool :pattern "true" :mode 'ask
+                               :session-rules (list rule)
+                               :resource-grants (and (eq source 'resource) grants)))
+                     (mevedel-tool-exec-permission-approved-resources
+                      (and (eq source 'invocation) approved (list exact)))
+                     (request (mevedel-tool-exec-permission-effective-sandbox-request
+                               `(:sandbox_permissions "with_additional_permissions"
+                                 :additional_permissions (:file_system (:write [,path]))
+                                 :justification "Connect")
+                               tool "true" (and (equal tool "Eval") 'batch) context))
+                     (request (plist-put request :operation-pattern "true"))
+                     (request (plist-put request :approval-cell
+                                         (list (and (eq source 'invocation) approved))))
+                     (decision (mevedel-tool-exec-permission--decide
+                                tool "true" request context))
+                     (launch (plist-get (plist-get request :additional-permissions)
+                                        :file-system)))
+                (ert-info ((format "%s %s approved=%s request=%S"
+                                   tool source approved request))
+                  (should (eq (if approved 'allow 'ask) (plist-get decision :outcome)))
+                  (cl-letf (((symbol-function 'mevedel-sandbox--wayland-socket)
+                             (lambda () nil)))
+                    (should (equal (and approved (list path))
+                                   (mevedel-sandbox--socket-allow-list launch nil)))))))))
+      (delete-process server)
+      (delete-directory root t))))
+
+(ert-deftest mevedel-tool-exec-permission-coalesced-file-is-not-socket-approval ()
+  "Coalescing under a stored tree cannot mint an exact socket selection."
+  (let* ((root (make-temp-file "mevedel-coalesced-socket-" t))
+         (path (file-name-concat root "file"))
+         (selection `((:path ,path :access write)))
+         (session (mevedel-session--create
+                   :name "coalesced-socket" :permission-mode 'ask
+                   :permission-rules '(("Bash" :pattern "true" :action allow))))
+         (args `(:sandbox_permissions "with_additional_permissions"
+                 :additional_permissions (:file_system (:write [,path]))
+                 :justification "Write file"))
+         (context (list :session session :buffer (current-buffer)))
+         (mevedel-permission-rules nil)
+         settled outcome server)
+    (unwind-protect
+        (progn
+          (write-region "file" nil path nil 'silent)
+          (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                     (lambda (_event _payload callback &rest _) (funcall callback nil)))
+                    ((symbol-function 'mevedel-permission--enqueue)
+                     (lambda (entry &optional owner)
+                       (mevedel-permission-queue--set
+                        (list (plist-put entry :session owner)) owner))))
+            (mevedel-tool-permission--request
+             context (list :kind 'sandbox :tool-name "Bash" :command "true"
+                           :sandbox-permissions 'additive
+                           :requested-additional-permissions (list :file-system selection)
+                           :resource-selection-cell (list selection))
+             session (lambda (updated result) (setq settled updated outcome result))))
+          (should (= 1 (length (mevedel-permission-queue--get session))))
+          (should (eq 'ask (mevedel-permission-queue--reevaluate
+                           (car (mevedel-permission-queue--get session)))))
+          (setf (mevedel-session-resource-grants session)
+                `((:path ,root :access write :recursive t)))
+          (mevedel-permission-queue--coalesce 'allow-session session)
+          (should (eq 'allow-once outcome))
+          (should-not (mevedel-permission-queue--get session))
+          (should-not (plist-get settled :approved-resources))
+          (delete-file path)
+          (setq server (make-network-process :name "coalesced-socket" :family 'local
+                                            :server t :service path :noquery t))
+          (let* ((mevedel-tool-exec-permission-approved-resources
+                  (plist-get settled :approved-resources))
+                 (permission-context (mevedel-permission--invocation-context
+                                      :tool-name "Bash" :pattern "true"
+                                      :session (plist-get settled :session)))
+                 (request (mevedel-tool-exec-permission-effective-sandbox-request
+                           args "Bash" "true" nil permission-context))
+                 (grants (plist-get (plist-get request :additional-permissions)
+                                    :file-system)))
+            (cl-letf (((symbol-function 'mevedel-sandbox--wayland-socket) (lambda () nil)))
+              (should-not (mevedel-sandbox--socket-allow-list grants nil)))))
+      (when server (delete-process server))
+      (mevedel-permission-queue--set nil session)
+      (delete-directory root t))))
+
+(ert-deftest mevedel-tool-exec-permission-socket-proof-not-forgeable ()
+  "Public additions cannot carry internal launch authorization."
+  (should-error
+   (mevedel-tool-exec-permission--normalize-additional-permissions
+    '(:file_system (:write ["/tmp/socket"] :socket-authorized t))))
+  (should-error
+   (mevedel-tool-exec-permission--normalize-additional-permissions
+    '(:socket-authorized t :file_system (:write ["/tmp/socket"])))))
+
+(ert-deftest mevedel-tool-exec-permission-socket-launch-type-change ()
+  "A file approved through a directory cannot become socket authority later."
+  (let* ((root (make-temp-file "mevedel-socket-race-" t))
+         (path (file-name-concat root "file"))
+         (parent `(:path ,root :access write :recursive t))
+         (context `(:resource-grants (,parent) :buckets ((:session))))
+         server)
+    (unwind-protect
+        (progn
+          (write-region "file" nil path nil 'silent)
+          (let* ((request (mevedel-tool-exec-permission-effective-sandbox-request
+                           `(:sandbox_permissions "with_additional_permissions"
+                             :additional_permissions (:file_system (:write [,path]))
+                             :justification "Write file") "Bash" "true" nil context))
+                 (launch (plist-get (plist-get request :additional-permissions)
+                                    :file-system)))
+            (should-not (plist-get (car launch) :socket-authorized))
+            (delete-file path)
+            (setq server (make-network-process :name "socket-race" :family 'local
+                                              :server t :service path :noquery t))
+            (cl-letf (((symbol-function 'mevedel-sandbox--wayland-socket)
+                       (lambda () nil)))
+              (should-not (mevedel-sandbox--socket-allow-list launch nil)))))
+      (when server (delete-process server))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-tool-exec-permission--additional-authority-state ()
   ,test

@@ -1135,7 +1135,9 @@ cannot use SSH.  Remote-helper URLs (`helper::address') are not SSH."
 ROOTS are the canonical writable roots, primary root first.
 Return a plist with :process, :directory and :socket, or nil when COMMAND
 does not mention git, WORKDIR is remote, its Git metadata may have been
-written by a confined command, or no fetch remote uses SSH.  The allowed
+written by a confined command, or no fetch remote uses SSH.  Return only
+after the socket exists and the broker is live; refuse startup and clean up
+if it exits or does not bind within five seconds.  The allowed
 destinations are read now, before the confined command starts.  A `.git'
 write grant still lets a command change what later brokers trust.  The
 broker lives in its own
@@ -1154,30 +1156,39 @@ confinement masks; only this command's directory is bound back."
                            (make-temp-file
                             (file-name-concat (mevedel-mcp-socket-root) "git-ssh-")
                             t))))
-    (condition-case err
-        (let* ((socket (file-name-concat directory "socket"))
-               (default-directory (file-name-as-directory directory))
-               (process
-                (make-process
-                 :name "mevedel-git-ssh"
-                 :command (list python "-I" mevedel-sandbox--git-ssh-script
-                                "serve" socket
-                                (json-serialize
-                                 (list :ssh mevedel-sandbox--git-ssh-program
-                                       :urls (vconcat urls))))
-                 :connection-type 'pipe
-                 :coding 'binary
-                 :noquery t
-                 :filter #'ignore
-                 :sentinel #'ignore)))
-          (list :process process :directory directory :socket socket
-                :client (mapconcat #'shell-quote-argument
-                                   (list python "-I" mevedel-sandbox--git-ssh-script
-                                         "client")
-                                   " ")))
-      (error
-       (delete-directory directory t)
-       (signal (car err) (cdr err))))))
+    (let (process)
+      (condition-case err
+          (let* ((socket (file-name-concat directory "socket"))
+                 (default-directory (file-name-as-directory directory))
+                 (deadline (+ (float-time) 5)))
+            (setq process
+                  (make-process
+                   :name "mevedel-git-ssh"
+                   :command (list python "-I" mevedel-sandbox--git-ssh-script
+                                  "serve" socket
+                                  (json-serialize
+                                   (list :ssh mevedel-sandbox--git-ssh-program
+                                         :urls (vconcat urls))))
+                   :connection-type 'pipe
+                   :coding 'binary
+                   :noquery t
+                   :filter #'ignore
+                   :sentinel #'ignore))
+            (while (and (process-live-p process)
+                        (not (file-exists-p socket))
+                        (< (float-time) deadline))
+              (accept-process-output process 0.01))
+            (unless (and (process-live-p process) (file-exists-p socket))
+              (error "Git SSH broker did not create its socket"))
+            (list :process process :directory directory :socket socket
+                  :client (mapconcat #'shell-quote-argument
+                                     (list python "-I" mevedel-sandbox--git-ssh-script
+                                           "client")
+                                     " ")))
+        ((error quit)
+         (when (processp process) (delete-process process))
+         (delete-directory directory t)
+         (signal (car err) (cdr err)))))))
 
 (defun mevedel-sandbox--git-ssh-stop (broker)
   "Stop BROKER and its ssh children, and remove its socket directory."
@@ -1303,36 +1314,23 @@ also hides sockets created after launch.")
                    (list "--tmpfs" directory)))
                mevedel-sandbox--socket-directories)))
 
-(defun mevedel-sandbox--socket-allow-list (roots temporary-root grants broker)
-  "Return the paths whose host Unix sockets a confined command may reach.
-These are the sockets mevedel provides -- BROKER's directory and the Wayland
-display socket -- the canonical writable ROOTS except shared temporary space,
-and the paths of explicit write GRANTS.  Connecting needs write permission
-on a socket, so read grants add nothing.  TEMPORARY-ROOT, the local
-temporary directory and /tmp, and any root or write grant at or above them,
-stay restricted: other programs put their sockets there.  A grant below
-them, such as /tmp/build, is still allowed."
-  (let ((shared (delete-dups
-                 (mapcar (lambda (directory)
-                           (file-name-as-directory (mevedel-file-truename directory)))
-                         (delq nil (list temporary-root temporary-file-directory
-                                         "/tmp/")))))
-        allowed)
-    (setq allowed
-          (lambda (path)
-            ;; Canonical, so a `//tmp' spelling or a link to /tmp is /tmp.
-            (let ((directory (file-name-as-directory (mevedel-file-truename path))))
-              (not (cl-some (lambda (shared) (string-prefix-p directory shared))
-                            shared)))))
-    (delete-dups
-     (append
-      (when broker (list (plist-get broker :directory)))
-      (when-let* ((socket (mevedel-sandbox--wayland-socket))) (list socket))
-      (cl-remove-if-not allowed roots)
-      (cl-loop for grant in grants
-               when (and (eq (plist-get grant :access) 'write)
-                         (funcall allowed (plist-get grant :path)))
-               collect (plist-get grant :path))))))
+(defun mevedel-sandbox--socket-allow-list (grants broker)
+  "Return exact host socket candidates from resolved GRANTS and BROKER.
+Include BROKER's socket, the Wayland display socket and the canonical paths
+of explicit write grants carrying internal `:socket-authorized' proof.
+Read grants add nothing.  The launcher checks
+each opened descriptor and allows only socket inodes, never directory trees.
+GRANTS are resolved entries from the identity-checked grant mount plan."
+  (delete-dups
+   (append
+    (when broker (list (plist-get broker :socket)))
+    (when-let* ((socket (mevedel-sandbox--wayland-socket)))
+      (list (mevedel-file-truename socket)))
+    (cl-loop for grant in grants
+             when (and (eq (plist-get grant :access) 'write)
+                       (not (plist-get grant :recursive))
+                       (eq (plist-get grant :socket-authorized) t))
+             collect (plist-get grant :path)))))
 
 (defun mevedel-sandbox--host-socket-facts (launcher)
   "Return confinement facts for Landlock LAUNCHER, a probe's :landlock value."
@@ -1534,7 +1532,7 @@ names."
                         (list launcher "-I" "-S" mevedel-sandbox--landlock-script
                               "exec")
                         (mevedel-sandbox--socket-allow-list
-                         roots temporary-root filesystem-permissions broker)
+                         (plist-get plan :grants) broker)
                         (list "--")))
                      (list "sh" "-c" mevedel-sandbox--marker-script
                            "mevedel-sandbox" marker)

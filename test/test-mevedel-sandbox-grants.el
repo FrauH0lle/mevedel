@@ -400,6 +400,15 @@ exact-grant preparation refuses when the target cannot inspect descriptors"
         (should (equal '("--bind-fd" "10" "/dev"
                          "--dev-bind" "/proc/self/fd/11" "/dev/zero")
                        (plist-get plan :arguments))))))
+  :doc "socket order: a covering tree never replaces an already pinned exact socket"
+  (let ((socket '(:path "/tree/socket" :access write :socket-p t))
+        (tree '(:path "/tree" :access write :recursive t)))
+    (dolist (grants (list (list socket tree) (list tree socket)))
+      (let ((plan (mevedel-sandbox--mount-plan nil grants)))
+        (should (equal (list tree socket) (plist-get plan :grants)))
+        (should (equal '("--bind-fd" "10" "/tree"
+                         "--bind-fd" "11" "/tree/socket")
+                       (plist-get plan :arguments))))))
   :doc "read grant on a masked directory:
 `mevedel-sandbox--mount-plan' drops the mask but keeps the read-only remount"
   (should
@@ -410,6 +419,59 @@ exact-grant preparation refuses when the target cannot inspect descriptors"
     (mevedel-sandbox--mount-plan
      '((:path "/p" :mode inaccessible :directory-p t))
      '((:source-path "/p" :path "/p" :access read :recursive t))))))
+
+(mevedel-deftest mevedel-sandbox--fd-backed-command-sockets ()
+  ,test
+  (test)
+  :doc "socket grants: retain exact write authority and pin mixed grants and masks without extra FDs"
+  (skip-unless (eq system-type 'gnu/linux))
+  (skip-unless (executable-find "python3"))
+  (let* ((root (make-temp-file "mevedel-socket-grants-" t))
+         (socket (file-name-concat root "socket"))
+         (file (file-name-concat root "file"))
+         (output (generate-new-buffer " *mevedel-socket-grants*")))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "granted"))
+          (should (= 0 (call-process "python3" nil output nil "-c"
+                                     "import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])"
+                                     socket)))
+          (should (plist-get (mevedel-sandbox--target-stat socket) :socket-p))
+          (let* ((permissions `((:path ,root :access write :recursive t)
+                                (:path ,socket :access write)))
+                 (resolved (mevedel-sandbox--resolve-filesystem-permissions permissions))
+                 (socket-grant (cadr resolved))
+                 (grants (list (car (mevedel-sandbox--resolve-filesystem-permissions
+                                     `((:path ,file :access read)))) socket-grant))
+                 (command '("python3" "-c"
+                            "import os,stat; assert open('/proc/self/fd/10').read() == 'granted'; assert stat.S_ISSOCK(os.fstat(11).st_mode); assert os.read(12,1) == b''; assert not any(os.path.exists('/proc/self/fd/'+str(fd)) for fd in list(range(3,10))+list(range(13,32))); print('pinned')"))
+                 (wrapped (mevedel-sandbox--fd-backed-command command grants '(12))))
+            (should (= 2 (length resolved)))
+            (should (plist-get socket-grant :socket-p))
+            (should (= 1 (length (mevedel-sandbox--resolve-filesystem-permissions
+                                 `((:path ,root :access write :recursive t)
+                                   (:path ,socket :access read))))))
+            (with-current-buffer output (erase-buffer))
+            (should (= 0 (apply #'call-process (car wrapped) nil output nil (cdr wrapped))))
+            (with-current-buffer output (should (equal "pinned\n" (buffer-string))))
+            ;; Replace the socket with a different inode before launch.
+            (rename-file socket (file-name-concat root "original-socket"))
+            (with-temp-file socket)
+            (with-current-buffer output (erase-buffer))
+            (should (= 125 (apply #'call-process (car wrapped) nil output nil (cdr wrapped))))
+            (with-current-buffer output
+              (should (string-match-p "exact filesystem grant changed" (buffer-string)))
+              (should-not (string-match-p "pinned" (buffer-string))))
+            (delete-file socket)
+            (with-current-buffer output (erase-buffer))
+            (should (= 125 (apply #'call-process (car wrapped) nil output nil (cdr wrapped))))
+            (with-current-buffer output
+              (should (string-match-p "exact filesystem grant changed" (buffer-string))))
+            (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil)))
+              (should-error (mevedel-sandbox--fd-backed-command command grants '(12))
+                            :type 'mevedel-sandbox-policy-error))))
+      (kill-buffer output)
+      (delete-directory root t))))
 
 (provide 'test-mevedel-sandbox-grants)
 

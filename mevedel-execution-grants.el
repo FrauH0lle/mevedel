@@ -51,14 +51,23 @@ an approved protected tree still covers ordinary descendants within it."
             (push boundary boundaries)))))
     (delete-dups (mapcar #'directory-file-name boundaries))))
 
+(defun mevedel-execution-grants-socket-p (path)
+  "Return non-nil if canonical PATH currently names a Unix socket.
+Use file attributes so this also checks remote execution paths."
+  (let ((modes (file-attribute-modes
+                (file-attributes (mevedel-file-truename path)))))
+    (and (stringp modes) (string-prefix-p "s" modes))))
+
 (defun mevedel-execution-grants-covering-grant
     (path access grants &optional recursive target restrictions)
   "Return a GRANTS entry that can enforce ACCESS to PATH in a child.
 RECURSIVE requires a tree.  TARGET supplies the policy path domain;
 RESTRICTIONS supplies concrete launch masks.  A broad ancestor never crosses
 a separate protection boundary.  Exact directory writes or masked reads
-require already approved recursive authority, not an exact directory grant."
+require already approved recursive authority, not an exact directory grant.
+Writing an existing socket requires exact nonrecursive authority."
   (let* ((canonical (directory-file-name (mevedel-file-truename path)))
+         (socket (and (eq access 'write) (mevedel-execution-grants-socket-p canonical)))
          (boundaries (mevedel-execution-grants--boundaries path access target restrictions))
          (tree (or recursive
                    (and (file-directory-p path)
@@ -69,7 +78,10 @@ require already approved recursive authority, not an exact directory grant."
             (mevedel-permission-rules-resource-granted-p path access (list grant) tree)
             (let ((root (directory-file-name (mevedel-file-truename (plist-get grant :path))))
                   (source (directory-file-name (expand-file-name (plist-get grant :path)))))
-              (and (mevedel-permission-rules-path-in-allowed-roots-p canonical (list root))
+              (and (or (not socket)
+                       (and (not (plist-get grant :recursive))
+                            (equal canonical root)))
+                   (mevedel-permission-rules-path-in-allowed-roots-p canonical (list root))
                    (cl-every
                     (lambda (boundary)
                       (or (mevedel-permission-rules-path-in-allowed-roots-p root (list boundary))

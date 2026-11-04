@@ -1039,39 +1039,57 @@ Masking hides paths, but the temporary directory must stay shared, because
 commands, native tools and batch Eval exchange files through it, and other
 programs put sockets there and under `/run`. A local confined command
 therefore starts through `scripts/mevedel-landlock.py`, which applies a
-Landlock ruleset before the command and its descendants run. It handles only
+Landlock ruleset before the command and its descendants run. It restricts
 `LANDLOCK_ACCESS_FS_RESOLVE_UNIX` (Landlock ABI 9): connecting to, or sending
 a datagram to, a pathname Unix socket created outside the command fails with
-`EACCES` unless the socket lies beneath an allowed path:
+`EACCES` unless that individual socket is allowed:
 
-- the Git SSH broker's per-command directory and the Wayland socket bound
+- the Git SSH broker's per-command socket and the Wayland socket bound
   back into the runtime directory, the sockets mevedel provides. The MCP
   socket root needs no entry: it is masked, and only the broker directory is
   bound back beneath it;
-- writable roots other than shared temporary space: the session's temporary
-  directory, `/tmp`, and any root containing them are excluded;
-- paths of explicitly approved write grants, except a grant at or above shared
-  temporary space: a write grant on `/tmp` (however spelled or reached through
-  a link) would otherwise reopen every host socket there, while a grant on
-  `/tmp/build` still allows that directory. Connecting requires write
-  permission on a socket, so a read grant does not reopen one.
+- explicitly approved write grants naming a socket. A directory grant, even
+  recursive, does not authorize its sockets, and a read grant does not allow
+  connecting. An exact socket write grant remains effective alongside a
+  covering directory grant. Socket grants use identity-checked `O_PATH`
+  descriptors because ordinary file opens cannot pin Unix sockets.
+
+Remembered directory authority cannot automatically approve a later request
+naming one of its sockets. Launch authorization comes from an original exact
+write grant or an explicit resource selection approved for that invocation,
+not an exact path derived from directory coverage. A regular file covered only
+by directory authority cannot gain socket access by changing type before launch.
+Saved exact path grants remain path-based: each new command resolves the current
+resource at that approved path, rather than preserving an old inode or file type.
+
+Writable roots, including the workspace and shared temporary space, do not
+grant host-socket access. Rules attach to socket inodes rather than directory
+trees: moving or hard-linking a blocked socket into the workspace, beside an
+approved socket, or over its name does not make the blocked socket reachable.
+An existing rule does not transfer to a replacement inode; a later command
+resolves its approved socket paths again when preparing its own grants.
+
+The ruleset also explicitly allows `LANDLOCK_ACCESS_FS_REFER` beneath `/`.
+Landlock denies that right even when it is omitted from handled rights, which
+otherwise breaks ordinary cross-directory renames and hard links, including
+compiler output placement. Keeping socket exceptions on individual inodes
+gives directories equal socket permissions, so ordinary file moves do not
+trigger Landlock's access-gain check. Genuine filesystem or bind-mount
+boundaries can still return `EXDEV`; Bubblewrap's mounts still enforce writes.
 
 The ruleset also sets `LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET`, so an abstract
 socket created outside the command, such as Xwayland's, stays unreachable even
 with a network grant. Sockets the command or its descendants create remain
-reachable to them. No other filesystem or network access is handled; the
+reachable to them. No other filesystem or network access is restricted; the
 mounts above remain the filesystem boundary. The system D-Bus, systemd's local
 SSH and Varlink manager sockets, a Codex app-server control socket under
 `/tmp/codex-daemon-UID/`, and Qt single-instance or login-manager sockets in
 `/tmp` are therefore unreachable.
 
-Sockets in writable workspace roots remain a reachable class: one a host
-program created there, such as Git's fsmonitor daemon socket inside the
-protected read-only `.git` directory or a project-local database socket, and
-one an earlier confined command left listening. Landlock rules only add
-access, so a protected subtree cannot be carved out of a root's rule; doing
-so would mean listing every sibling instead of the root, which misses entries
-created later. Read-only protection of `.git` stops writes, not connections.
+An existing workspace service, including a socket left by an earlier confined
+command or Git's fsmonitor daemon, needs an exact socket write grant for a new
+command to connect. File access to its directory alone is insufficient. Sockets
+created by the current command and its descendants need no additional grant.
 
 The `abi` probe on the host and the launcher inside confinement run `python3`
 on the script in mevedel's source directory, like the Git SSH broker and the

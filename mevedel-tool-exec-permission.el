@@ -693,44 +693,64 @@ remembered direct user authority."
       (setq request (plist-put request :eval-mode eval-mode)))
     (if (eq (plist-get request :level) 'escalated)
         request
-      (let ((profile
-             (mevedel-tool-exec-permission--merge-additional-profiles
-              (plist-get request :additional-permissions)
-              (and mevedel-tool-exec-permission-approved-resources
-                   (list :file-system mevedel-tool-exec-permission-approved-resources))
-              (and (or (equal tool-name "Bash")
-                       (eq eval-mode 'batch))
+      (let* ((remembered
+              (and (or (equal tool-name "Bash") (eq eval-mode 'batch))
                    (mevedel-tool-exec-permission--remembered-additional-profile
-                    tool-name operation permission-context)))))
+                    tool-name operation permission-context)))
+             (authority
+              (append mevedel-tool-exec-permission-approved-resources
+                      (mevedel-tool-exec-permission--direct-resource-grants
+                       permission-context)
+                      (plist-get remembered :file-system)))
+             (target (and (plist-get permission-context :session)
+                          (mevedel-session-execution-target
+                           (plist-get permission-context :session))))
+             (profile
+              (mevedel-tool-exec-permission--merge-additional-profiles
+               (plist-get request :additional-permissions)
+               (and mevedel-tool-exec-permission-approved-resources
+                    (list :file-system mevedel-tool-exec-permission-approved-resources))
+               remembered)))
         ;; Reuse an already approved tree at the requested directory, never an
         ;; unapproved protected exception or an unrepresentable exact mount.
         (when (plist-get profile :file-system)
-          (let ((authority (append (mevedel-tool-exec-permission--direct-resource-grants
-                                    permission-context)
-                                   (plist-get (mevedel-tool-exec-permission--remembered-additional-profile
-                                               tool-name operation permission-context)
-                                              :file-system)))
-                (target (and (plist-get permission-context :session)
-                             (mevedel-session-execution-target
-                              (plist-get permission-context :session)))))
+          (setq profile
+                (plist-put profile :file-system
+                           (mapcar
+                            (lambda (grant)
+                              (let* ((path (plist-get grant :path))
+                                     (access (plist-get grant :access))
+                                     (tree (and (file-directory-p path)
+                                                (mevedel-execution-grants-covering-grant
+                                                 path access authority t target)))
+                                     (cover (or tree (mevedel-execution-grants-covering-grant
+                                                      path access authority
+                                                      (plist-get grant :recursive) target))))
+                                (if cover
+                                    (mevedel-permission-origin-derive
+                                     cover path access (or (and tree t)
+                                                           (plist-get grant :recursive)))
+                                  grant)))
+                            (plist-get profile :file-system)))))
+        ;; Mint launch proof only from original exact authority, never a path
+        ;; derived from a covering tree.  A regular file replaced by a socket
+        ;; after this point has no proof and cannot enter the socket allow-list.
+        (let ((authority
+               (seq-remove (lambda (grant) (plist-get grant :recursive)) authority)))
+          (when (plist-get profile :file-system)
             (setq profile
-                  (plist-put profile :file-system
-                             (mapcar
-                              (lambda (grant)
-                                (let* ((path (plist-get grant :path))
-                                       (access (plist-get grant :access))
-                                       (tree (and (file-directory-p path)
-                                                  (mevedel-execution-grants-covering-grant
-                                                   path access authority t target)))
-                                       (cover (or tree (mevedel-execution-grants-covering-grant
-                                                        path access authority
-                                                        (plist-get grant :recursive) target))))
-                                  (if cover
-                                      (mevedel-permission-origin-derive
-                                       cover path access (or (and tree t)
-                                                             (plist-get grant :recursive)))
-                                    grant)))
-                              (plist-get profile :file-system))))))
+                  (plist-put
+                   profile :file-system
+                   (mapcar
+                    (lambda (grant)
+                      (if (and (eq (plist-get grant :access) 'write)
+                               (not (plist-get grant :recursive))
+                               (mevedel-execution-grants-socket-p (plist-get grant :path))
+                               (mevedel-execution-grants-covering-grant
+                                (plist-get grant :path) 'write authority nil target))
+                          (plist-put grant :socket-authorized t)
+                        grant))
+                    (plist-get profile :file-system))))))
         (if profile
             (let ((copy (copy-sequence request)))
               (setq copy (plist-put copy :level 'additive))

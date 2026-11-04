@@ -313,6 +313,18 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
 					       (list :type 'permission-approved
 						     :permission-approvals
 						     (copy-tree (plist-get updated :permission-approvals)))))))
+				;; Carry explicit selections through every authorized settlement,
+				;; not just the human queue.  Generic operation approval without
+				;; a resource selection must not mint filesystem authority.
+				(when (and (memq outcome '(allow allow-once allow-session always-allow))
+					   (not (eq 'policy
+						    (plist-get (car (plist-get entry :approval-decision-cell))
+							       :source)))
+					   (plist-get entry :resource-selection-cell))
+				  (setq updated
+					(plist-put updated :approved-resources
+						   (copy-tree
+						    (car (plist-get entry :resource-selection-cell))))))
 				(funcall original-settle updated outcome))))
               (workspace (plist-get context :workspace)))
 	 (mevedel-hooks-run-tool-event
@@ -393,12 +405,6 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
 					 (plist-put
 					  queued :callback
 					  (lambda (outcome)
-					    (when (memq outcome '(allow-once allow-session always-allow))
-					      (setq updated
-						    (plist-put updated :approved-resources
-							       (copy-tree
-								(car (plist-get queued
-										:resource-selection-cell))))))
 					    (funcall
 					     settle
 					     (if (mevedel-tool-permission--denial-outcome-p

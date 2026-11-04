@@ -78,7 +78,7 @@ Key features:
   batch Eval child confinement
 - Python 3 for safely opening and writing authorized file-tool paths
 - Optional: a kernel with Landlock ABI 9 or newer, to keep
-  confined commands away from host Unix sockets outside the workspace
+  confined commands away from host Unix sockets without an exact exception
 - Optional: [mcp.el](https://github.com/lizqwerscott/mcp.el) for `@mcp` mentions
 - Optional: Poppler (`pdftoppm`) for rendering selected PDF pages with `Read`
 - Optional: Node 22.4 or newer on the Emacs host for
@@ -1113,8 +1113,10 @@ and network confinement while using the host `/proc` view and discloses that
 fact as `proc: host`. The confined profile exposes the host read-only, reopens
 allowed roots writable, uses the session working directory, and gives
 descendants fresh process and network namespaces. On kernels with Landlock ABI
-9, local commands also cannot connect to host Unix sockets outside writable
-roots and explicit write grants; elsewhere results disclose `host sockets:
+9, local commands also cannot connect to pre-existing host Unix sockets except
+the Git SSH broker, the Wayland display, and exact socket write grants.
+Writable directories do not grant socket access; sockets created by the command
+remain usable by it and its descendants. Elsewhere results disclose `host sockets:
 reachable`. `best-effort` selects direct
 execution when the initial confinement probe is unavailable and reports
 unrestricted filesystem and network access; `required` refuses instead; `off`

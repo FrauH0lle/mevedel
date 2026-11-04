@@ -162,6 +162,56 @@ remote command locally, as sshd would, and logs each invocation to `log'."
     (should-not (mevedel-sandbox--git-ssh-start '("sh" "-c" "git fetch")
                                                 "/ssh:host:/srv/work" (list work)))
     (should-not (directory-files sockets nil "\\`git-ssh-")))
+  :doc "an exact socket exception is ready when startup returns, even after a delayed bind"
+  (test-mevedel-sandbox-git-ssh--with-repositories
+    (let ((delayed (file-name-concat root "delayed-broker.py"))
+          broker)
+      (with-temp-file delayed
+        (insert "import runpy, time\ntime.sleep(0.2)\nrunpy.run_path("
+                (json-serialize mevedel-sandbox--git-ssh-script)
+                ", run_name='__main__')\n"))
+      (unwind-protect
+          (let ((mevedel-sandbox--git-ssh-script delayed))
+            (setq broker (mevedel-sandbox--git-ssh-start
+                          '("git" "fetch") work (list work)))
+            (should (file-exists-p (plist-get broker :socket)))
+            (should (process-live-p (plist-get broker :process))))
+        (when broker (mevedel-sandbox--git-ssh-stop broker)))))
+  :doc "a broker exiting before bind fails startup and leaves no socket directory or process"
+  (test-mevedel-sandbox-git-ssh--with-repositories
+    (let ((failed (file-name-concat root "failed-broker.py"))
+          (before (process-list))
+          broker)
+      (with-temp-file failed (insert "raise SystemExit(1)\n"))
+      (unwind-protect
+          (let ((mevedel-sandbox--git-ssh-script failed))
+            (should-error
+             (setq broker (mevedel-sandbox--git-ssh-start
+                           '("git" "fetch") work (list work))))
+            (should-not (directory-files sockets nil "\\`git-ssh-"))
+            (should-not (cl-set-difference (process-list) before)))
+        (when broker (mevedel-sandbox--git-ssh-stop broker)))))
+  :doc "quitting during broker readiness waits removes the process and socket directory"
+  (test-mevedel-sandbox-git-ssh--with-repositories
+    (let ((waiting (file-name-concat root "waiting-broker.py"))
+          (before (process-list))
+          broker)
+      (with-temp-file waiting (insert "import time\ntime.sleep(30)\n"))
+      (unwind-protect
+          (let ((mevedel-sandbox--git-ssh-script waiting))
+            (cl-letf (((symbol-function 'accept-process-output)
+                       (lambda (&rest _) (signal 'quit nil))))
+              (should
+               (eq 'canceled
+                   (condition-case nil
+                       (progn
+                         (setq broker (mevedel-sandbox--git-ssh-start
+                                       '("git" "fetch") work (list work)))
+                         'returned)
+                     (quit 'canceled)))))
+            (should-not (directory-files sockets nil "\\`git-ssh-"))
+            (should-not (cl-set-difference (process-list) before)))
+        (when broker (mevedel-sandbox--git-ssh-stop broker)))))
   :doc "a started broker listens in an owner-only directory until stopped"
   (test-mevedel-sandbox-git-ssh--with-repositories
     (let ((broker (mevedel-sandbox--git-ssh-start

@@ -380,6 +380,11 @@ Return non-nil when this call delivered or consumed the outcome."
   (let ((cell (mevedel-permission-queue--ensure-settled-cell entry)))
     (unless (car cell)
       (setcar cell t)
+      ;; Reusing stored authority is not a new approval of the requested
+      ;; exact resources.  Keep that distinction across the callback boundary.
+      (when (eq phase 'coalesced)
+        (when-let* ((approval (plist-get entry :approval-decision-cell)))
+          (setcar approval (list :source 'policy :via 'coalesced))))
       (apply #'mevedel-permission-queue--log
              (pcase phase
                ('pop 'permission-resolved)

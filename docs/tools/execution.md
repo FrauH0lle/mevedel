@@ -102,10 +102,11 @@ service, request a
 
 Locally, connecting to any other Unix socket that the command did not create
 itself fails with `Permission denied`, including the system D-Bus and sockets
-other programs keep in `/tmp`. Sockets under the workspace and other writable
-roots, except shared temporary space, stay reachable. To use one host socket,
-such as a database or container API socket, request write access to it or its
-directory; a read grant does not allow connecting. A status line ending in
+other programs keep in `/tmp` or the workspace. To use one host socket,
+such as a database or container API socket, request write access to that exact
+socket path. Directory write grants, including recursive grants, and read grants
+do not allow connecting. Sockets the command or its descendants create remain
+usable by them; a later command needs its own socket authority. A status line ending in
 `host sockets: reachable (REASON)` means this restriction is unavailable on
 the target.
 
