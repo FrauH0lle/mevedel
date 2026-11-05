@@ -18,8 +18,7 @@
 - [Do not attribute guesses or unchecked behavior to reference systems](reference-system-values-feedback.md) - Check authoritative documentation, source, or observed behavior before using another product to justify a design
 - [Reduce permission prompts' visual weight](permission-prompt-visual-weight.md) - User finds sandbox and permission prompts imposing and prefers collapsing parts of them
 - [View changes must preserve rendering and CPU gains](view-render-performance-constraint.md) - Rendering cost and CPU use are hard constraints; measure graphical-only effects in a graphical environment
-- [Prove injected failures and stubs exercise the intended path](injected-failure-test-evidence.md) - Check injection entry, exact diagnostics, isolated-file behavior, and a discriminating negative control
-- [Preserve controls and conditions when attributing test outcomes](controlled-test-attribution.md) - Establish starting state, equivalent context, delivered inputs, and actual assertion conditions before attributing outcomes.
+- [Establish test conditions before claiming coverage or causation](controlled-test-attribution.md) - Check starting state, delivered inputs, injection entry, exact assertions, and discriminating controls before attributing outcomes.
 - [Trace unreadable addresses back to discovery](resource-discovery-consumption-verification.md) - Check discovery-to-consumption at root and descendant scopes without weakening valid access refusals
 - [Correctness and simplicity without losing features or performance](development-priorities-user-preference.md) - Avoid overengineering, record delegated decisions, preserve user features, and measure promising performance alternatives.
 - [Keep named-agent guidance uniform](uniform-agent-role-guidance-feedback.md) - Make general-purpose delegation discoverable without singling out verifier for special contrasting guidance
