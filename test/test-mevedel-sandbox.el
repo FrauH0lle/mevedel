@@ -1584,6 +1584,11 @@ a disabled transport cleans immediately instead of dropping work"
             (dolist (path (list runtime (concat runtime "/gnupg") "/run"))
               (when (file-directory-p path)
                 (should-error (prepare path) :type 'mevedel-sandbox-policy-error)))
+            ;; The refusal names the escalation a keyring-backed tool needs.
+            (should (string-search
+                     "require_escalated"
+                     (cadr (should-error (prepare runtime)
+                                         :type 'mevedel-sandbox-policy-error))))
             ;; Negative control: the admitted grant brings the bus back.
             (cl-letf (((symbol-function 'mevedel-sandbox--check-runtime-grants)
                        #'ignore))

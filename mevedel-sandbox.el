@@ -1277,7 +1277,7 @@ be confined; only a full escalation can reach those services."
                              (string-prefix-p local mask)))
                        masks)
           (signal 'mevedel-sandbox-policy-error
-                  (list (format "Filesystem grants cannot reach the per-user runtime directory, whose sockets act as the user outside confinement: %s"
+                  (list (format "Filesystem grants cannot reach the per-user runtime directory, whose sockets act as the user outside confinement: %s.  Its session bus and keyrings, which tools such as gh and glab use for credentials, need `require_escalated'"
                                 (plist-get grant :source-path)))))))))
 
 (defun mevedel-sandbox--runtime-arguments (workdir roots masks)

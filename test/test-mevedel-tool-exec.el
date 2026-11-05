@@ -1280,6 +1280,30 @@ A synchronous result must come with exactly one matching acknowledgement."
                    output `(:sandbox-facts (:sandbox ,sandbox)) suppressed failed)))
         (should (string-prefix-p output text))
         (should-not (string-search "overflow UID" text)))))
+  :doc "hidden session bus failure: names keyring tools and an approved fresh escalation"
+  (let* ((output (concat "could not read the token: failed to read \"token\" "
+                         "from the operating system keyring: dial unix "
+                         "/run/user/1000/bus: connect: no such file or directory\n"))
+         (text (mevedel-tool-exec--sandbox-disclosure
+                output '(:sandbox-facts (:sandbox bubblewrap)) nil t)))
+    (should (string-prefix-p output text))
+    (should (string-search "session D-Bus is hidden" text))
+    (should (string-search "`glab`" text))
+    (should (string-search "`/run/user` are refused" text))
+    (should (string-search "`require_escalated`" text))
+    (should (string-search "no retry is automatic" text))
+    (should-not (string-search mevedel-tool-exec--sandbox-recovery-guidance text)))
+  :doc "hidden session bus hint: stays scoped to a failed confined bus diagnostic"
+  (dolist (case '(("dial unix /run/user/1000/bus: connect\n" escalated t nil)
+                  ("dial unix /run/user/1000/bus: connect\n" bubblewrap nil nil)
+                  ("dial unix /run/user/1000/bus: connect\n" bubblewrap t t)
+                  ("dial unix /run/user/1000/bus-proxy: connect\n" bubblewrap t nil)
+                  ("dial unix /run/user/1000/pulse/native: connect\n" bubblewrap t nil)))
+    (pcase-let ((`(,output ,sandbox ,failed ,suppressed) case))
+      (let ((text (mevedel-tool-exec--sandbox-disclosure
+                   output `(:sandbox-facts (:sandbox ,sandbox)) suppressed failed)))
+        (should (string-prefix-p output text))
+        (should-not (string-search "session D-Bus is hidden" text)))))
   :doc "authority preparation refusal:
 invalid grants retain the specific reason and do not prescribe full escalation"
   (let ((text

@@ -310,6 +310,19 @@ operation rather than a successful or semantic non-error result."
             "still applies; no retry is automatic. Keep SSH ownership and "
             "configuration checks intact; do not bypass configuration or "
             "change its permissions to work around the namespace."))
+          ((and failed-p (eq (plist-get facts :sandbox) 'bubblewrap)
+                (string-match-p "/run/user/[0-9]+/bus\\(?:[^[:alnum:]_.-]\\|\\'\\)"
+                                (or text "")))
+           (concat
+            "The session D-Bus is hidden from confined commands, because its "
+            "systemd manager would run commands outside confinement. Tools "
+            "that read credentials from the keyring over it, such as `gh`, "
+            "`glab` and `secret-tool`, cannot authenticate here, and grants "
+            "for paths at, below or above `/run/user` are refused. If the "
+            "user's task needs such a tool, submit a new Bash invocation with "
+            "`require_escalated` and a justification, requesting "
+            "invocation-only approval to run outside confinement. Command "
+            "approval still applies; no retry is automatic."))
           ((and failed-p (eq (plist-get facts :sandbox) 'bubblewrap))
            mevedel-tool-exec--sandbox-recovery-guidance))))
        "\n\n")))))

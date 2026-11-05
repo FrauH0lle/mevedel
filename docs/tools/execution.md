@@ -100,6 +100,11 @@ is this boundary, not a fault to repair; if the user's task truly needs that
 service, request a
 [full confinement bypass](#full-confinement-bypass).
 
+Tools that keep credentials in the keyring, such as `gh`, `glab` and
+`secret-tool`, reach it over the session bus. Confined, they report a missing
+`/run/user/UID/bus` or no stored token. A failed result naming that bus repeats
+this; request `require_escalated` for such a tool rather than a grant.
+
 Locally, connecting to any other Unix socket that the command did not create
 itself fails with `Permission denied`, including the system D-Bus and sockets
 other programs keep in `/tmp` or the workspace. To use one host socket,
