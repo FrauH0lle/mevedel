@@ -96,7 +96,7 @@ run while it is pending."
       (setq context (mevedel-session-durability-capture-context)))
     (should-not mevedel-session-durability--transaction-clock)
     (should-not mevedel-session-durability--commit-riders)
-    (should (equal '((clock) (asserted) (recovery) (:before nil) nil)
+    (should (equal '((clock) (asserted) (recovery) (:before nil) nil nil)
                    context)))
   :doc "captures the process owner function in effect at launch"
   (let ((owner (lambda (_process) nil))

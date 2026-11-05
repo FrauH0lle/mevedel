@@ -271,7 +271,7 @@ only through PICKED-CUM-TURN.  Entries with non-integer
     mail-batch mail-notifications
     mail-notification-timer mail-notification-delay control-transfer control-transfer-drains root-buffer
     lease
-    lease-renewal-timer save-path session-id created-at updated-at
+    lease-renewal-timer lease-renewal-job save-path session-id created-at updated-at
     current-segment forked-from-session-id forked-from-turn fork-type
     forked-from-fork-point-id worktree-source-root worktree-directory
     worktree-branch worktree-base-commit prompt-index chapters file-snapshots
@@ -407,6 +407,7 @@ The identity and timestamp keywords describe the new materialized child."
            :root-buffer nil
            :lease nil
            :lease-renewal-timer nil
+           :lease-renewal-job nil
            :save-path save-path
            :session-id session-id
            :created-at (or created-at

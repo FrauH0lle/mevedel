@@ -1059,6 +1059,28 @@ lease there would cancel the heartbeat for a condition the next mutation
 heals anyway, so renewal retakes the record instead and the session keeps its
 authority across standby.
 
+The renewal timer uses one asynchronous heartbeat job per session, including
+own-expiry reclaim. Local targets and remote targets with a direct asynchronous
+carrier and already-resolved interpreter paths run their pinned control programs
+without waiting in the timer callback. Each job has fresh transaction state and
+never borrows another publisher's pending writes, clock observations or child
+process owner, including when its continuations interrupt that publisher.
+Ticks skip busy transports, active publications, teardown, an existing job and
+carriers that would fall back to synchronous execution. Explicit renewal and
+mutation APIs remain synchronous; they drain an earlier heartbeat before changing
+lease state. Publication preparations wait behind it too, as do control-transfer
+decisions, release and staged adoption; staging excludes new heartbeat ticks
+until its runtime state is installed. Unsupported remote carriers rely on explicit
+renewal or mutation for renewal and own-expiry reclaim, not a blocking timer.
+
+The heartbeat updates a private lease binding and verifies the final target head
+and clock before adoption. Changed job identity, lease binding, save path or root
+buffer, or cancelled renewal, fences later phases and prevents a stale callback
+from rebinding the live session or restarting its timer. An already-running
+program remains part of the mutation drain until its outcome arrives; ignoring a
+callback alone does not serialize target writes. This changes scheduling, not the
+lease format, election protocol or target-clock authority.
+
 ### Portable project durability publication
 
 Portable project session state remains authoritative under the target

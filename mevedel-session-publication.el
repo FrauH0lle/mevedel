@@ -154,7 +154,8 @@
   "Return non-nil when SESSION owns accepted asynchronous publication work.
 Finalization alone is excluded: an acknowledgement may stage a new artifact
 after adoption.  Dispatch and notifications separately respect finishing."
-  (or (mevedel-session-publication-job session)
+  (or (mevedel-session-lease-renewal-job session)
+      (mevedel-session-publication-job session)
       (mevedel-session-publication-preparation-token session)
       (mevedel-session-publication-preparations session)))
 
@@ -170,7 +171,8 @@ Errors are reported and do not stop the queue.")
   "Schedule SESSION's next preparation outside the current callback."
   (let* ((thunk
           (lambda ()
-            (unless (or (mevedel-session-publication-job session)
+            (unless (or (mevedel-session-lease-renewal-job session)
+                        (mevedel-session-publication-job session)
                         (mevedel-session-publication-finishing-p session)
                         (mevedel-session-publication-preparation-token session)
                         (mevedel-session-publication-active-p session))
@@ -180,7 +182,8 @@ Errors are reported and do not stop the queue.")
                 ((error quit)
                  (display-warning 'mevedel (error-message-string err) :warning))))
             ;; The hook may have started work; recheck the gate.
-            (unless (or (mevedel-session-publication-job session)
+            (unless (or (mevedel-session-lease-renewal-job session)
+                        (mevedel-session-publication-job session)
                         (mevedel-session-publication-finishing-p session)
                         (mevedel-session-publication-preparation-token session))
               (if (mevedel-session-publication-active-p session)

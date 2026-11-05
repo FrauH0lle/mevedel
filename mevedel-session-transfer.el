@@ -730,6 +730,12 @@ transaction; the ordinary mutation gate consumes those proofs afterward."
 
 DECISION is `grant' or `reject'.  Repeating the same decision is idempotent;
 attempting to rewrite an existing decision fails."
+  (mevedel-session-durability--gate session nil)
+  (let ((mevedel-session-durability--heartbeat-inhibit t))
+    (mevedel-session-transfer--decide session decision)))
+
+(defun mevedel-session-transfer--decide (session decision)
+  "Apply DECISION for SESSION with heartbeat admission excluded by the caller."
   (when (eq decision 'grant)
     (mevedel-engine-assert-local-history session "Session control transfer"))
   (unless (mevedel-session-durability--portable-session-p session)
@@ -822,6 +828,12 @@ attempting to rewrite an existing decision fails."
 The requester's named release fence is created before the old lease is marked
 released.  Creating the fence or releasing the lease is idempotent, while
 acceptance alone never changes the lease owner."
+  (mevedel-session-durability--gate session nil)
+  (let ((mevedel-session-durability--heartbeat-inhibit t))
+    (mevedel-session-transfer--release session)))
+
+(defun mevedel-session-transfer--release (session)
+  "Release SESSION's transfer lease with heartbeat admission excluded."
   (mevedel-engine-assert-local-history session "Session control transfer")
   (unless (mevedel-session-durability--portable-session-p session)
     (error "Control transfer requires a portable project session"))

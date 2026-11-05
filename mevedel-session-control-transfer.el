@@ -68,6 +68,8 @@
 (autoload 'mevedel-session-codec-deserialize "mevedel-session-codec")
 
 ;; `mevedel-session-durability'
+(declare-function mevedel-session-durability--gate
+                  "mevedel-session-durability" (session token &optional reentrant))
 (declare-function mevedel-session-durability-lease-acquire
                   "mevedel-session-durability"
                   (session-dir buffer-name &optional session))
@@ -76,6 +78,8 @@
                   (session-dir &optional session))
 (declare-function mevedel-session-durability-publication-head
                   "mevedel-session-durability" (session-dir &optional names))
+(defvar mevedel-session-durability--heartbeat-inhibit)
+(autoload 'mevedel-session-durability--gate "mevedel-session-durability")
 (autoload 'mevedel-session-durability-lease-acquire
   "mevedel-session-durability")
 (autoload 'mevedel-session-durability-lease-release
@@ -595,8 +599,13 @@ must not keep other clients out.
 The target incarnation, transcript, and instruction restore are staged before
 the live session or buffer changes.  DIRECT-ACQUISITION resumes an unheld
 session, including its native history, rather than a cooperative transfer."
+  ;; Staging copies runtime slots before yielding instruction work.  A heartbeat
+  ;; started there would be erased by the later whole-session copy, hiding a
+  ;; running target program from the mutation gate.
+  (mevedel-session-durability--gate session nil)
   (condition-case err
-      (let* ((save-path (mevedel-session-save-path session))
+      (let* ((mevedel-session-durability--heartbeat-inhibit t)
+             (save-path (mevedel-session-save-path session))
              (workspace (mevedel-session-workspace session))
              (transfer (mevedel-session-control-transfer session))
              (publication

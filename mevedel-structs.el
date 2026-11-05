@@ -273,6 +273,7 @@ workspace."
   root-buffer       ; transient authoritative chat data buffer, or nil
   lease             ; transient portable lease record and live ownership state
   lease-renewal-timer ; transient timer renewing remote mutation authority
+  lease-renewal-job ; transient single-flight asynchronous heartbeat owner
   ;; Persistence -- nil until lazy materialization.
   save-path         ; absolute path to the session directory under .mevedel/sessions/
   session-id        ; string: stable session identifier (matches save-path basename)

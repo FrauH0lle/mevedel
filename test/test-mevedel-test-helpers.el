@@ -205,8 +205,10 @@
               (should (eq schedule (symbol-function 'run-with-idle-timer))))
           (when timer (cancel-timer timer)))))))
 
-(mevedel-deftest mevedel-test--cancel-stray-lease-timers
-  (:doc "retires delayed store notifications before another test can observe them")
+(mevedel-deftest mevedel-test--cancel-stray-lease-timers ()
+  ,test
+  (test)
+  :doc "retires delayed store notifications before another test can observe them"
   (let* ((mevedel-artifact-store--content-changes (make-hash-table :test #'equal))
          (workspace (mevedel-workspace--create :root "/fixture/")))
     (mevedel-artifact-store--content-changed workspace)
@@ -217,7 +219,14 @@
             (mevedel-test--cancel-stray-lease-timers)
             (should-not (memq timer timer-list))
             (should (= 0 (hash-table-count mevedel-artifact-store--content-changes))))
-        (cancel-timer timer)))))
+        (cancel-timer timer))))
+  :doc "retires the installed lease heartbeat before another test can observe it"
+  (mevedel-engine-test--with-session
+    (let ((timer (mevedel-session-lease-renewal-timer session)))
+      (should (timerp timer))
+      (should (eq (timer--function timer) #'mevedel-session-durability-heartbeat))
+      (mevedel-test--cancel-stray-lease-timers)
+      (should-not (memq timer timer-list)))))
 
 (mevedel-deftest mevedel-test--ensure-mock-tramp-method
   (:quiet t

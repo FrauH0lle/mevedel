@@ -76,11 +76,12 @@
   "mevedel-session-publication")
 (autoload 'mevedel-session-publication-valid-head-p
   "mevedel-session-publication")
-;; The barrier exists only once publication is loaded, and an asynchronous
-;; job cannot exist before that, so callers guard it with `fboundp'.
+;; Cold lease acquisition loads publication before it can arm a heartbeat.
 (declare-function mevedel-session-publication-barrier
                   "mevedel-session-publication" (session &optional token))
 (declare-function mevedel-session-publication-busy-p
+                  "mevedel-session-publication" (session))
+(declare-function mevedel-session-publication--schedule
                   "mevedel-session-publication" (session))
 
 ;; `mevedel-session-recovery'
@@ -118,6 +119,8 @@
 (declare-function mevedel-session-lease "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-lease-renewal-timer
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-lease-renewal-job
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-control-transfer
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-publication
@@ -133,6 +136,10 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-publication-uncommitted-batches
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-publication-stopping-p
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-root-buffer "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -174,6 +181,16 @@ measured with the target clock at whole-second resolution."
   "Seconds between portable project lease renewal attempts."
   :type 'integer
   :group 'mevedel)
+
+(cl-defstruct (mevedel-session-durability--heartbeat
+               (:constructor mevedel-session-durability--heartbeat-create))
+  session shadow path lease buffer cancelled)
+
+(defvar mevedel-session-durability--heartbeat-inhibit nil
+  "Non-nil while a synchronous control operation excludes heartbeat ticks.")
+
+(defvar mevedel-session-durability--async-valid-p nil
+  "Optional predicate fencing an asynchronous lease operation's continuations.")
 
 (defcustom mevedel-session-publication-lease-seconds 3600
   "Seconds reserved for each uninterrupted publication artifact operation.
@@ -834,6 +851,8 @@ expiry and the replacement's own.  A lapsed deadline fails the prelude."
   "Cancel SESSION's lease-renewal timer, if any."
   (when (fboundp 'mevedel-session-collection-cancel)
     (mevedel-session-collection-cancel session))
+  (when-let* ((job (mevedel-session-lease-renewal-job session)))
+    (setf (mevedel-session-durability--heartbeat-cancelled job) t))
   (when-let* ((timer (mevedel-session-lease-renewal-timer session))
               ((timerp timer)))
     (cancel-timer timer))
@@ -861,18 +880,22 @@ still holds expire for real."
       (when release-pending
         (setq live (plist-put live :release-pending t)))
       (setf (mevedel-session-lease session) live)
-      (cond
-       ((eq state 'owned)
-        (unless (timerp (mevedel-session-lease-renewal-timer session))
-          (setf (mevedel-session-lease-renewal-timer session)
-                (run-at-time
-                 mevedel-session-lease-renewal-seconds
-                 mevedel-session-lease-renewal-seconds
-                 #'mevedel-session-durability-lease-renew session))))
-       ;; Contested keeps the timer: see this function's docstring.
-       ((eq state 'contested))
-       (t
-        (mevedel-session-durability--cancel-renewal session))))))
+      ;; The async updater runs on a private session projection.  Its bindings
+      ;; are provisional: neither timers nor collection belong to that object.
+      (unless (when-let* ((job (mevedel-session-lease-renewal-job session)))
+                (eq session (mevedel-session-durability--heartbeat-shadow job)))
+	(cond
+	 ((eq state 'owned)
+          (unless (timerp (mevedel-session-lease-renewal-timer session))
+            (setf (mevedel-session-lease-renewal-timer session)
+                  (run-at-time
+                   mevedel-session-lease-renewal-seconds
+                   mevedel-session-lease-renewal-seconds
+                   #'mevedel-session-durability-heartbeat session))))
+	 ;; Contested keeps the timer: see this function's docstring.
+	 ((eq state 'contested))
+	 (t
+          (mevedel-session-durability--cancel-renewal session)))))))
 
 (defun mevedel-session-durability--finite-nonnegative-number-p (value)
   "Return non-nil when VALUE is a finite nonnegative number.
@@ -1103,6 +1126,7 @@ unexpired client owns it.  Expired takeover requires explicit confirmation.
 When SESSION is non-nil, record the resulting lease state on it, after
 serializing behind its asynchronous publication: see
 `mevedel-session-durability--gate' for TOKEN."
+  (require 'mevedel-session-publication)
   (when (and session
              (not (mevedel-session-durability--portable-session-p session)))
     (error "Portable lease requires a portable project session"))
@@ -1591,7 +1615,7 @@ lost and stays that way."
 (defun mevedel-session-durability-lease-renew (session &optional token)
   "Renew SESSION's unexpired owned lease, returning non-nil on success.
 
-Renewal runs from a timer, and a timer fires wherever the main loop happens to
+Explicit renewal may run wherever the main loop happens to
 be waiting, including inside a TRAMP operation.  Target I/O from there is a
 reentrant TRAMP call: TRAMP refuses it and the connection can be left wedged
 for the operation that was already running.  Renewal therefore performs no
@@ -1611,7 +1635,9 @@ condition that the next mutation heals anyway.
 
 A queued or running asynchronous publication owns the lease too, so a tick
 without its preparation TOKEN reports the known state instead of draining it:
-a timer must never wait."
+the installed timer uses `mevedel-session-durability-heartbeat' instead."
+  (when (mevedel-session-lease-renewal-job session)
+    (mevedel-session-durability--gate session token))
   (if (or (mevedel-session-publication-active-p session)
           (and (not (and token
                          (eq token
@@ -1981,7 +2007,8 @@ do the same for its own continuations."
         mevedel-session-durability--asserted-directories
         (bound-and-true-p mevedel-session-recovery--mutation-cache)
         mevedel-session-durability--commit-riders
-        mevedel-session-durability-async-process-function))
+        mevedel-session-durability-async-process-function
+        mevedel-session-durability--async-valid-p))
 
 (defun mevedel-session-durability-call-in-context (context function)
   "Call FUNCTION with the transaction state CONTEXT captured."
@@ -1989,7 +2016,17 @@ do the same for its own continuations."
          (mevedel-session-durability--asserted-directories (nth 1 context))
          (mevedel-session-recovery--mutation-cache (nth 2 context))
          (mevedel-session-durability--commit-riders (nth 3 context))
-         (mevedel-session-durability-async-process-function (nth 4 context)))
+         (mevedel-session-durability-async-process-function (nth 4 context))
+         (mevedel-session-durability--async-valid-p (nth 5 context))
+         ;; Heartbeat continuations cannot borrow a surrounding publisher's flags.
+         (mevedel-session-durability--observed-time
+          (and (null (nth 5 context)) mevedel-session-durability--observed-time))
+         (mevedel-session-durability--final-commit
+          (and (null (nth 5 context)) mevedel-session-durability--final-commit))
+         ;; An explicit drain may force ordinary async callers synchronous.
+         ;; A heartbeat keeps yielding between every phase, even in that drain.
+         (mevedel-session-control-fs--async-wait
+          (and (null (nth 5 context)) mevedel-session-control-fs--async-wait)))
     (funcall function)))
 
 (defun mevedel-session-durability--async-job (callback)
@@ -2042,18 +2079,32 @@ remote command.  A transport that refuses the wait fails the job."
          (owner (nth 4 context))
          (launch
           (lambda ()
-            (let ((process
-                   (mevedel-session-control-fs-run-program-async
-                    operations
-                    (lambda (results error)
-                      (funcall
-                       guard
-                       (lambda ()
-                         (mevedel-session-durability-call-in-context
-                          context
-                          (lambda () (funcall continue results error)))))))))
-              (when (and process owner)
-                (funcall owner process))))))
+            (mevedel-session-durability-call-in-context
+             context
+             (lambda ()
+               (cond
+                ((and (nth 5 context) (not (funcall (nth 5 context))))
+                 (funcall finish nil '(error "Lease heartbeat superseded")))
+                ((and (nth 5 context)
+                      (not (mevedel-session-durability--heartbeat-carrier-p directory)))
+                 (funcall finish nil '(file-error "Lease heartbeat carrier unavailable")))
+                (t
+                 (let ((process
+                        (mevedel-session-control-fs-run-program-async
+                         operations
+                         (lambda (results error)
+                           (funcall
+                            guard
+                            (lambda ()
+                              (mevedel-session-durability-call-in-context
+                               context
+                               (lambda ()
+                                 (if (and (nth 5 context)
+                                          (not (funcall (nth 5 context))))
+                                     (funcall finish nil '(error "Lease heartbeat superseded"))
+                                   (funcall continue results error))))))))))
+                   (when (and process owner)
+                     (funcall owner process))))))))))
     (if (mevedel-transport-busy-p directory)
         (unless (mevedel-transport-run-when-idle
                  (list 'mevedel-session-durability-async (make-symbol "step"))
@@ -2564,6 +2615,200 @@ before launch; JOB and CONTEXT are as for
                                      (plist-get request :owner-client-id))))
                     nil))))))))))))
 
+(defun mevedel-session-durability--heartbeat-carrier-p (path)
+  "Return non-nil when PATH can launch a heartbeat without synchronous fallback.
+Remote interpreter lookup must already be warm.  This qualifies a launch,
+not a completed result: process failure itself invalidates that cache."
+  (let ((remote (file-remote-p path)))
+    (or (null remote)
+        (and (gethash remote mevedel-session-control-fs--programs)
+             (mevedel-session-control-fs--pipe-capable-p remote)))))
+
+(defun mevedel-session-durability--heartbeat-valid-p (job)
+  "Return non-nil while JOB still owns its original live session projection."
+  (let ((session (mevedel-session-durability--heartbeat-session job))
+        (path (mevedel-session-durability--heartbeat-path job)))
+    (and (eq job (mevedel-session-lease-renewal-job session))
+         (not (mevedel-session-durability--heartbeat-cancelled job))
+         (equal path (mevedel-session-save-path session))
+         (eq (mevedel-session-durability--heartbeat-lease job)
+             (mevedel-session-lease session))
+         (eq (mevedel-session-durability--heartbeat-buffer job)
+             (mevedel-session-root-buffer session))
+         (or (null (mevedel-session-durability--heartbeat-buffer job))
+             (buffer-live-p (mevedel-session-durability--heartbeat-buffer job))))))
+
+(defun mevedel-session-durability--heartbeat-finish (job error)
+  "Retire JOB, adopting its verified projection unless superseded, or ERROR."
+  (let* ((session (mevedel-session-durability--heartbeat-session job))
+         (shadow (mevedel-session-durability--heartbeat-shadow job))
+         (valid (mevedel-session-durability--heartbeat-valid-p job)))
+    (when (eq job (mevedel-session-lease-renewal-job session))
+      (setf (mevedel-session-lease-renewal-job session) nil)
+      (when valid
+        (let ((lease (mevedel-session-lease shadow)))
+          (mevedel-session-durability--bind-lease
+           session lease (if error 'lost (plist-get lease :state))
+           (and (not error) (plist-get lease :bytes))))
+        (when error
+          (display-warning 'mevedel
+                           (format "Portable session heartbeat failed: %s" error)
+                           :warning)))
+      (when (mevedel-session-publication-busy-p session)
+        (mevedel-session-publication--schedule session)))))
+
+(defun mevedel-session-durability--heartbeat-verify (shadow callback)
+  "Observe SHADOW's final authority afresh, then call CALLBACK with an error."
+  (let* ((directory (mevedel-session-durability--lease-path
+                     (mevedel-session-save-path shadow)))
+         (proposed (mevedel-session-lease shadow))
+         (job (mevedel-session-durability--async-job
+               (lambda (_success error) (funcall callback error))))
+         (context (mevedel-session-durability-capture-context)))
+    (mevedel-session-durability--observe-lease-async
+     directory (plist-get proposed :generation) nil job context
+     (lambda (observed)
+       (unless (numberp (plist-get observed :now))
+         (error "Portable session target clock unavailable"))
+       (let ((settle
+              (lambda (head)
+                (let ((owned
+                       (and (equal (plist-get proposed :bytes)
+                                   (mevedel-session-durability--record-bytes head))
+                            (mevedel-session-durability--owned-lease-record-p
+                             head directory (plist-get observed :now)))))
+                  (mevedel-session-durability--bind-lease
+                   shadow head
+                   (cond (owned 'owned)
+                         ((eq 'claiming (plist-get head :status)) 'contested)
+                         (t 'lost))
+                   (and owned (mevedel-session-durability--record-bytes head)))
+                  (funcall (car job) owned nil)))))
+         (if (eql (plist-get proposed :generation)
+                  (mevedel-session-durability--newest-generation
+                   (plist-get observed :names)))
+             (funcall settle (plist-get observed :record))
+           (mevedel-session-durability--lease-head-async
+            directory (mevedel-session-durability--observed-names observed)
+            job context settle)))))))
+
+(defun mevedel-session-durability--heartbeat-reclaim (shadow callback)
+  "Reclaim only SHADOW's own expired head without blocking; call CALLBACK.
+CALLBACK receives SUCCESS and ERROR.  Election, predecessor comparison and
+abort follow `mevedel-session-durability--claim-next', using real programs."
+  (let* ((directory (mevedel-session-durability--lease-path
+                     (mevedel-session-save-path shadow)))
+         (job (mevedel-session-durability--async-job callback))
+         (context (mevedel-session-durability-capture-context)))
+    (mevedel-session-durability--observe-lease-async
+     directory nil nil job context
+     (lambda (observed)
+       (unless (numberp (plist-get observed :now))
+         (error "Portable session target clock unavailable"))
+       (mevedel-session-durability--lease-head-async
+        directory (mevedel-session-durability--observed-names observed) job context
+        (lambda (head)
+          (if (not (and (mevedel-session-durability--valid-lease-p head)
+                        (equal mevedel-session-durability--client-id
+                               (plist-get head :client-id))
+                        (memq (plist-get head :status) '(claiming active))
+                        (<= (plist-get head :expires-at) (plist-get observed :now))
+                        (not (plist-get (mevedel-session-lease shadow) :release-pending))))
+              (funcall (car job) nil nil)
+            (let* ((generation (1+ (mevedel-session-durability--newest-generation
+                                    (plist-get observed :names))))
+                   (path (mevedel-session-durability--generation-path directory generation))
+                   (older (mevedel-session-durability--generation-paths
+                           directory (mevedel-session-durability--observed-names observed)))
+                   (candidate (mevedel-session-durability--lease-record
+                               (plist-get head :buffer) generation 'claiming
+                               (plist-get head :publication-head)
+                               (plist-get head :unsettled-mutation)
+                               (plist-get observed :now)
+                               (plist-get head :transfer-generation))))
+              (mevedel-session-durability--async-program
+               directory
+               (cons (list :op 'create :path path
+                           :content (mevedel-session-durability--record-bytes candidate))
+                     (mevedel-session-durability--read-operations older))
+               job context
+               (lambda (results error)
+                 (when error (signal (car error) (cdr error)))
+                 (let ((created (car results)))
+                   (if (eq 'conflict (plist-get created :status))
+                       (funcall (car job) nil nil)
+                     (mevedel-session-control-fs-program-value created)
+                     (let* ((same (equal head (mevedel-session-durability--head-of-records
+                                               (mevedel-session-durability--parse-records
+                                                (cdr results)))))
+                            (record (plist-put (copy-sequence candidate) :status
+                                               (if same 'active 'aborted))))
+                       (mevedel-session-durability--async-program
+                        directory
+                        (cons (list :op 'write :path path
+                                    :content (mevedel-session-durability--record-bytes record))
+                              (mapcar (lambda (old)
+                                        (list :op 'delete-file :path old :optional t))
+                                      (if same older (list path))))
+                        job context
+                        (lambda (settled failure)
+                          (when failure (signal (car failure) (cdr failure)))
+                          (mevedel-session-control-fs-program-value (car settled))
+                          (when same
+                            (mevedel-session-durability--bind-lease
+                             shadow record 'owned
+                             (mevedel-session-durability--record-bytes record)))
+                          (funcall (car job) same nil))))))))))))))))
+
+(defun mevedel-session-durability-heartbeat (session)
+  "Renew SESSION from its timer without waiting for target programs.
+Single-flight ownership shares the publication gate.  Explicit mutation and
+teardown drain it; subsequent ticks never drain.  Unsupported remote carriers
+and synchronous-drain contexts skip a tick instead of blocking the editor."
+  (let ((path (mevedel-session-save-path session)))
+    (unless (or (null path) mevedel-session-durability--heartbeat-inhibit
+                mevedel-session-control-fs--async-wait
+                (plist-get (mevedel-session-lease session) :release-pending)
+                (mevedel-session-publication-stopping-p session)
+                (mevedel-session-publication-active-p session)
+                (mevedel-transport-busy-p path)
+                (not (mevedel-session-durability--heartbeat-carrier-p path)))
+      (unless (mevedel-session-publication-busy-p session)
+        (let* ((job (mevedel-session-durability--heartbeat-create
+                     :session session :path path :lease (mevedel-session-lease session)
+                     :buffer (mevedel-session-root-buffer session)))
+               (shadow (mevedel-session--create
+                        :save-path path :lease (copy-sequence (mevedel-session-lease session))
+                        :lease-renewal-job job))
+               (mevedel-session-durability--async-valid-p
+                (lambda () (mevedel-session-durability--heartbeat-valid-p job))))
+          (setf (mevedel-session-durability--heartbeat-shadow job) shadow
+                (mevedel-session-lease-renewal-job session) job)
+          ;; A timer may interrupt another session's publisher.  Its cells,
+          ;; riders and process owner must never become this job's context.
+          (dlet ((mevedel-session-durability--transaction-clock (list nil))
+                 (mevedel-session-durability--asserted-directories (list nil))
+                 (mevedel-session-recovery--mutation-cache (list nil))
+                 (mevedel-session-durability--observed-time nil)
+                 (mevedel-session-durability--commit-riders nil)
+                 (mevedel-session-durability--final-commit nil)
+                 (mevedel-session-durability-async-process-function nil))
+            (let* ((verify (lambda ()
+                             (mevedel-session-durability--heartbeat-verify
+                              shadow (lambda (error)
+                                       (mevedel-session-durability--heartbeat-finish job error)))))
+                   (finish (lambda (success error)
+                             (if error
+                                 (mevedel-session-durability--heartbeat-finish job error)
+                               (if success (funcall verify)
+                                 (mevedel-session-durability--heartbeat-reclaim
+                                  shadow (lambda (_reclaimed failure)
+                                           (if failure
+                                               (mevedel-session-durability--heartbeat-finish job failure)
+                                             (funcall verify)))))))))
+              (mevedel-session-durability--update-owned-lease-async
+               shadow '(active publishing) 'active mevedel-session-lease-seconds finish))))))))
+
 (defun mevedel-session-durability-adopt-owned-lease (session source &optional token)
   "Move SOURCE's verified owned lease and path into SESSION.
 
@@ -2579,7 +2824,7 @@ creation also precedes mutation, so failure leaves SESSION and SOURCE intact."
          (run-at-time
           mevedel-session-lease-renewal-seconds
           mevedel-session-lease-renewal-seconds
-          #'mevedel-session-durability-lease-renew session)))
+          #'mevedel-session-durability-heartbeat session)))
     (mevedel-session-durability--cancel-renewal session)
     (mevedel-session-durability--cancel-renewal source)
     (setf (mevedel-session-save-path session) save-path

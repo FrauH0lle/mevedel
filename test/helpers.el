@@ -399,7 +399,7 @@ during later tests, which floods their output and can wedge a shared TRAMP
 connection."
   (dolist (timer (append timer-list timer-idle-list))
     (when (or (memq (timer--function timer)
-                    '(mevedel-session-durability-lease-renew
+                    '(mevedel-session-durability-heartbeat
                       mevedel-artifact-store--announce-content
                       mevedel-session-persistence--checkpoint-tick
                       mevedel-transport-run-when-idle

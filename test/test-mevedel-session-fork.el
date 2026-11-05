@@ -37,7 +37,7 @@
 
   :doc "covers every session slot and isolates both clone policies"
   (progn
-    (should (= 102
+    (should (= 103
                (length
                 (cdr (cl-struct-slot-info 'mevedel-session)))))
     (should (mevedel-session-fork--assert-clone-slot-completeness))
@@ -126,6 +126,7 @@
            :control-transfer-drains '(drain)
            :lease 'lease
            :lease-renewal-timer 'timer
+           :lease-renewal-job 'heartbeat
            :current-segment 1
            :prompt-index '((1 . ((:turn 1 :cum-turn 1))))
            :chapters '((:segment 1 :title "Earlier chat" :closed-at "closed"))
@@ -203,6 +204,7 @@
                      (mevedel-session-control-transfer-drains candidate)
                      (mevedel-session-lease candidate)
                      (mevedel-session-lease-renewal-timer candidate)
+                     (mevedel-session-lease-renewal-job candidate)
                      (mevedel-session-permission-queue candidate)
                      (mevedel-session-permission-absence candidate)
                      (mevedel-session-pending-plan-approval candidate)))
