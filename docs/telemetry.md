@@ -203,7 +203,9 @@ cancellation releases the fence and leaves the machine retryable.
   dispatching process sentinels, timers or redisplay. Emacs owns the mutex,
   stack roots and thread cancellation. The module guards against GC hooks,
   advice and debugger callbacks consuming the timeout before the intended
-  wait. Stopping sampling signals and joins the worker. If the module, timed
+  wait. The worker samples from its own hidden buffer, so the face remappings
+  or local state of the buffer that started it never apply to other windows.
+  Stopping sampling signals and joins the worker. If the module, timed
   wait or worker creation is unavailable, the shared main-thread timer
   samples instead, preserving process ownership: every 100 ms, or once a
   second while a PGTK frame exists, since stock PGTK redraws the whole frame

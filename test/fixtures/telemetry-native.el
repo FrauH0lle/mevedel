@@ -20,10 +20,20 @@
                                            :working-directory root))
          (origin (generate-new-buffer " *mevedel-lag-origin*"))
          (noninteractive nil)
-         process calls errors)
+         process calls errors ticks
+         (record-tick
+          (lambda (&rest _)
+            (unless (eq (current-thread) main-thread)
+              (push (cons (current-buffer)
+                          (buffer-local-value 'face-remapping-alist
+                                              (current-buffer)))
+                    ticks)))))
     (unwind-protect
         (progn
+          (advice-add 'mevedel-telemetry--lag-tick :before record-tick)
           (with-current-buffer origin
+            ;; A view's face remapping (e.g. solaire) must not reach the worker.
+            (setq-local face-remapping-alist '((default . bold)))
             (mevedel-telemetry--lag-request session 'request-start "native-lag"))
           (should-not mevedel-telemetry--lag-timer)
           (should (thread-live-p mevedel-telemetry--lag-thread))
@@ -32,6 +42,15 @@
             (should (eq worker mevedel-telemetry--lag-thread)))
           ;; The worker may outlive its caller's buffer.
           (sleep-for 0.12)
+          (let ((deadline (+ (float-time) 5)))
+            (while (and (not ticks) (< (float-time) deadline))
+              (sleep-for 0.02)))
+          (should ticks)
+          ;; The worker samples from its own buffer, not the starter's.
+          (dolist (tick ticks)
+            (should-not (eq origin (car tick)))
+            (should-not (cdr tick)))
+          (advice-remove 'mevedel-telemetry--lag-tick record-tick)
           (kill-buffer origin)
           (setq process
                 (make-process
@@ -115,6 +134,7 @@
           (mevedel-telemetry--lag-request session 'request-start "restart")
           (should (thread-live-p mevedel-telemetry--lag-thread))
           (mevedel-telemetry--lag-stop))
+      (advice-remove 'mevedel-telemetry--lag-tick record-tick)
       (when (buffer-live-p origin) (kill-buffer origin))
       (when process
         (set-process-sentinel process #'ignore)

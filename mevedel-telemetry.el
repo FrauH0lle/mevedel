@@ -926,13 +926,22 @@ therefore counted as late as it took, once it returns."
 (defun mevedel-telemetry--lag-watch ()
   "Sample until this thread is replaced or stopped.
 Native condition waits release the interpreter without dispatching process
-sentinels or timers.  Ordinary `sleep-for' is unsafe in this worker."
+sentinels or timers.  Ordinary `sleep-for' is unsafe in this worker.
+
+The worker samples from its own hidden buffer.  A new thread keeps the buffer
+that was current when it was made, usually a view or a memory pass's origin,
+and each wakeup makes that buffer current again.  Its local face remappings,
+such as those of `solaire-mode', would then apply to redisplay and repaint
+other windows with the wrong background."
   (let* ((thread (current-thread))
          ;; Dynamic bindings are thread-local: native observer IO must not be
          ;; subtracted from unrelated main-thread callbacks or remote work.
          (mevedel-telemetry--lag-observer-seconds 0)
          (mutex (make-mutex "mevedel-lag"))
          (gate (make-condition-variable mutex "mevedel-lag")))
+    (with-current-buffer (get-buffer-create " *mevedel-lag-heartbeat*" t)
+      (setq default-directory temporary-file-directory))
+    (set-buffer (get-buffer " *mevedel-lag-heartbeat*"))
     (condition-case err
         (with-mutex mutex
           (while (eq thread mevedel-telemetry--lag-thread)
