@@ -847,7 +847,8 @@ even after a nested terminal transition, so this gate owns the whole group."
     (error
      ;; Request readiness can detect a replacement admitted while it yielded
      ;; and signal before reaching policy capture.  Settle that stale machine,
-     ;; but leave errors unrelated to changed preparation on their old path.
+     ;; but leave errors unrelated to changed preparation on their old path,
+     ;; including errors after this machine's own admission recorded its id.
      (if (when-let* ((info (gptel-fsm-info fsm))
                     ((not (plist-get info :mevedel-request-begun)))
                     ((not (plist-get info :mevedel-request-id)))
@@ -907,23 +908,24 @@ alist with mevedel-specific handlers added:
                               (when-let* ((preparation
                                            (plist-get info :mevedel-implementation-preparation)))
                                 (mevedel-implementation-policy-assert-preparation preparation))
-                              (unless mevedel--current-request
-                                (let ((mevedel-implementation-policy--admission-preparation
-                                       (plist-get info :mevedel-implementation-preparation)))
-                                  (mevedel-request-begin
-                                   mevedel--session
-                                   mevedel--current-directive-uuid)))
-                              (when (and mevedel--current-request
-                                         (fboundp 'mevedel-request-id))
-                                (setf (mevedel-request-fsm
-                                       mevedel--current-request)
-                                      fsm)
-                                (plist-put
-                                 info :mevedel-request-id
-                                 (mevedel-request-id
-                                  mevedel--current-request))
-                                (plist-put info :mevedel-request
-                                           mevedel--current-request))
+                              (let ((adopt
+                                     (lambda (request)
+                                       (setf (mevedel-request-fsm request) fsm)
+                                       (plist-put info :mevedel-request-id
+                                                  (mevedel-request-id request))
+                                       (plist-put info :mevedel-request request))))
+                                (unless mevedel--current-request
+                                  (let ((mevedel-implementation-policy--admission-preparation
+                                         (plist-get info :mevedel-implementation-preparation)))
+                                    ;; Adopt at admission: a later admission
+                                    ;; step's error must not read as stale.
+                                    (mevedel-request-begin
+                                     mevedel--session
+                                     mevedel--current-directive-uuid
+                                     (list :admitted adopt))))
+                                (when (and mevedel--current-request
+                                           (fboundp 'mevedel-request-id))
+                                  (funcall adopt mevedel--current-request)))
                               (mevedel-goal-capture-request fsm)
                               (mevedel-preset-prepare-request mevedel--current-request)
                               (when (fboundp

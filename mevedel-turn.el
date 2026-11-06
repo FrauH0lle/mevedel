@@ -454,6 +454,9 @@ directive being processed.  Return the new request struct.
 OPTIONS may explicitly supply `:permission-mode' and `:plan-read-only',
 including nil, instead of shared pending/session defaults.  Explicit mode
 does not consume pending mode, and directives do not consume root policy.
+OPTIONS `:admitted' is called with the new request as soon as it owns the
+buffer, so a caller can still recognize its own admission when a later
+admission step signals.
 
 A root request is the user's retry: blocking recovery issues refuse it, and
 it clears the previous attempt's informational issues and a failure pause no
@@ -541,6 +544,8 @@ recovery state alone."
           (list :buffer (current-buffer) :mevedel-request-id id
                 :mevedel-request request))
     (setq mevedel--current-request request)
+    (when-let* ((admitted (plist-get options :admitted)))
+      (funcall admitted request))
     (mevedel--turn-resume-pending-input request)
     (unless directive-uuid
       (setq mevedel--pending-implementation-policy nil))

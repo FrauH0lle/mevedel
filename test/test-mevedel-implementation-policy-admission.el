@@ -219,6 +219,22 @@ An initial :file-workspace FORM selects file storage for policy-only cases."
       (should (eq 'active (mevedel-goal-status goal)))
       (mevedel-preparation-test--abort replacement)))
 
+  :doc "an error after this FSM's own admission surfaces instead of reading as stale"
+  (mevedel-preparation-test--with-goal
+    (let* (resume
+           (fsm (mevedel-preparation-test--send
+                 (lambda (continue) (setq resume continue))))
+           (info (gptel-fsm-info fsm)))
+      (cl-letf (((symbol-function 'mevedel-sleep-update)
+                 (lambda (&rest _) (error "Post-admission failure"))))
+        (should (equal "Post-admission failure"
+                       (cadr (should-error (funcall resume))))))
+      (should-not (plist-get info :mevedel-preparation-rejected))
+      (should mevedel--current-request)
+      (should (eq mevedel--current-request (plist-get info :mevedel-request)))
+      (should (eq fsm (mevedel-request-fsm mevedel--current-request)))
+      (mevedel-preparation-test--abort fsm)))
+
   :doc "ordinary Goals without accepted policy remain on their unrelated baseline path"
   (mevedel-preparation-test--with-goal
     (setf (mevedel-goal-implementation-policy goal) nil)
