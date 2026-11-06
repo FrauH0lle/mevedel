@@ -28,6 +28,21 @@ and lobby links are refused. Links are stored in one file per user,
 Nothing to install beyond Node 22.4 or newer: `npx` fetches the package on
 first use. Attach a link first (above), then register the MCP server once.
 
+Until the package is on the npm registry, fetch it from GitHub instead: the
+`remote-artifact-dist` branch holds this directory as its root and follows
+`master`. Wherever this README says `npx mevedel-remote-artifact`, use
+
+```sh
+npx -y --allow-git=all github:FrauH0lle/mevedel#remote-artifact-dist
+```
+
+for example
+`claude mcp add remote-artifacts -- npx -y --allow-git=all github:FrauH0lle/mevedel#remote-artifact-dist mcp`.
+npm 12 refuses packages from git unless `--allow-git=all` allows them;
+older npm accepts the option or ignores it. A global install starts faster:
+`npm install -g --allow-git=all github:FrauH0lle/mevedel#remote-artifact-dist`,
+then `mevedel-remote-artifact mcp`; repeat the install to update.
+
 Claude Code:
 
 ```sh

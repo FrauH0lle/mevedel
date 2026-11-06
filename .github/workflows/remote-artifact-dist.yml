@@ -1,0 +1,41 @@
+name: remote-artifact-dist
+
+# Publishes remote-artifact/ as the root of the remote-artifact-dist branch,
+# so the package installs straight from GitHub without the npm registry:
+#   npx -y --allow-git=all github:FrauH0lle/mevedel#remote-artifact-dist mcp
+# `git subtree split' is deterministic, so each run fast-forwards the branch.
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'remote-artifact/**'
+      - '.github/workflows/remote-artifact-dist.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Test the package
+        run: npm test --prefix remote-artifact
+
+      - name: Split and push the distribution branch
+        run: |
+          git subtree split --prefix=remote-artifact -b remote-artifact-dist
+          git push origin remote-artifact-dist:remote-artifact-dist
