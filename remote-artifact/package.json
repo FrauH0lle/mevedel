@@ -18,7 +18,7 @@
     "node": ">=22.4"
   },
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test \"test/*.test.mjs\""
   },
   "repository": {
     "type": "git",
