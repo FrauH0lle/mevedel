@@ -1,0 +1,2554 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and architecture manual for mevedel, for humans and agents.">
+      
+      
+      
+        <link rel="canonical" href="https://frauh0lle.github.io/mevedel/backlog/">
+      
+      
+        <link rel="prev" href="../agents/triage-labels/">
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Backlog - mevedel docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#project-backlog" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="mevedel docs" class="md-header__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            mevedel docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Backlog
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="mevedel docs" class="md-nav__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    mevedel docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Using mevedel
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Using mevedel
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../view/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversation and workspace view
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../collaboration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Browser collaboration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../plan-mode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plans
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../goals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Goals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents and tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mentions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mentions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills and plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../preview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Patch review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../buddy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Buddy notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sessions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sessions and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_11" id="__nav_2_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and journal
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Memory and journal
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory-curated/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Curated memory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory-review/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Review contract and cockpit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory-recovery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decisions, application and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shared working-note lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory-journal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Journal capture and retention
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../permissions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permissions and confinement
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../module-map/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Module map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../address-to-resource/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resource addressing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../compaction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context compaction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reminders/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context delivery and reminders
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle hooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guardian-prompts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guardian prompts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tool reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ptc-dialect/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Programmatic tool calls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Files and search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/applypatch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ApplyPatch
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry and diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commit conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/domain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/issue-tracker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local issues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/triage-labels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Triage labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backlog
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backlog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#inbox" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inbox
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execution
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Execution">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#harness-enforced-bash-timeouts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Harness-enforced Bash timeouts
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#view" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        View
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="View">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pinned-prompt-on-the-remaining-surfaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pinned prompt on the remaining surfaces
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#whiteboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Whiteboard
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Whiteboard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#excalidraw-parity-left-out-of-the-element-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Excalidraw parity left out of the element model
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#review" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Review
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Review">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#automatic-turn-advisor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automatic turn advisor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#buddy-comment-trigger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Buddy comment trigger
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hook-extensions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hook extensions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Hook extensions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-transition-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task transition events
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deferred-extensions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deferred extensions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#plugins" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Plugins
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Plugins">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#opt-in-update-notifications" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Opt-in update notifications
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#browser-session-history-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Browser session history actions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#unexplained-failures-and-unverified-leads" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unexplained failures and unverified leads
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Unexplained failures and unverified leads">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#view-and-transcript" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        View and transcript
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tests-and-transport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tests and transport
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#inbox" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inbox
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execution
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Execution">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#harness-enforced-bash-timeouts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Harness-enforced Bash timeouts
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#view" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        View
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="View">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pinned-prompt-on-the-remaining-surfaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pinned prompt on the remaining surfaces
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#whiteboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Whiteboard
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Whiteboard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#excalidraw-parity-left-out-of-the-element-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Excalidraw parity left out of the element model
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#review" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Review
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Review">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#automatic-turn-advisor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automatic turn advisor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#buddy-comment-trigger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Buddy comment trigger
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hook-extensions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hook extensions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Hook extensions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-transition-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task transition events
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deferred-extensions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deferred extensions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#plugins" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Plugins
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Plugins">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#opt-in-update-notifications" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Opt-in update notifications
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#browser-session-history-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Browser session history actions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#unexplained-failures-and-unverified-leads" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unexplained failures and unverified leads
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Unexplained failures and unverified leads">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#view-and-transcript" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        View and transcript
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tests-and-transport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tests and transport
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/FrauH0lle/mevedel/edit/master/docs/backlog.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="project-backlog">Project backlog<a class="headerlink" href="#project-backlog" title="Permanent link">&para;</a></h1>
+<p>Canonical home for concise future-work requests and unresolved defects.
+Detailed plans, investigations, and review reports belong in <code>work://shared/</code>.
+Read this before planning work in any listed area.</p>
+<p>Use the inbox for ideas that have not been investigated yet. Promote an
+item to a detailed entry when its scope and current status are understood.
+Remove items when they are implemented, obsolete, or no longer valuable.</p>
+<h2 id="inbox">Inbox<a class="headerlink" href="#inbox" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Continue the work on the "always visible prompt" (the composer stays visible while the transcript scrolls). Two prototypes, from 2026-10-26, are in <code>.scratch/floating-composer/</code>: a child frame (<code>mevedel-floating-composer.el</code>) and a split window (<code>check-split.el</code>). Not the pinned prompt header shipped on 2026-10-31.</li>
+<li>The cursor has the tendency to jump to the "  [Manage]" row of "background work" on updates/redraws even though it was on the composer or elsewhere. The scroll variant is fixed (sweep 2026-10-31, candidate 4); a redraw-only jump did not reproduce in 30 streamed chunks with status rows arriving and leaving. Reopen with a recipe if it recurs.</li>
+</ul>
+<h2 id="execution">Execution<a class="headerlink" href="#execution" title="Permanent link">&para;</a></h2>
+<h3 id="harness-enforced-bash-timeouts">Harness-enforced Bash timeouts<a class="headerlink" href="#harness-enforced-bash-timeouts" title="Permanent link">&para;</a></h3>
+<p>Managed Bash commands run until they exit or are stopped. <code>145c66a</code> removed
+<code>mevedel-bash-timeout</code> (120 s default) and the model-facing <code>timeout_seconds</code>,
+so only a native <code>timeout</code> the model writes itself bounds a command. A
+forgotten command keeps running and holds the
+<a href="../sessions/#system-sleep">system sleep inhibitor</a>. When Bash completion wake-ups
+and the <a href="../tools/#monitor">Monitor tool</a> were added (2026-10), the user decided
+against restoring a Bash deadline for now; only Monitor expires (<code>timeout_ms</code>).
+Revisit if forgotten commands become a problem in practice. Reference point:
+Claude Code caps background commands at 10 minutes by default and 2 hours at
+most. Expiry would reuse the existing TERM/KILL process-group teardown and
+report a timeout outcome.</p>
+<h2 id="view">View<a class="headerlink" href="#view" title="Permanent link">&para;</a></h2>
+<h3 id="pinned-prompt-on-the-remaining-surfaces">Pinned prompt on the remaining surfaces<a class="headerlink" href="#pinned-prompt-on-the-remaining-surfaces" title="Permanent link">&para;</a></h3>
+<p>The main view and agent transcript views pin the governing prompt on its own
+header row below the status strip
+(<a href="../view/#status-strip-and-cockpit-routing">view contract</a>). Two surfaces still
+lose the prompt once it scrolls away:</p>
+<ul>
+<li>Directive frames set a window-level <code>header-line-format</code> to their condensed
+  directive header (<code>mevedel-directive-frame--ensure</code>), which hides the
+  buffer's prompt row. Decide whether the narrow frame should spend a second
+  row on it, or show the prompt only while its header is off screen.</li>
+<li>The browser viewer (<code>relay/viewer/</code>) has no pinned prompt. A sticky element
+  above the transcript, fed from the rendered prompt headers, is the analogue;
+  check it on the narrow-phone viewer.</li>
+</ul>
+<h2 id="whiteboard">Whiteboard<a class="headerlink" href="#whiteboard" title="Permanent link">&para;</a></h2>
+<h3 id="excalidraw-parity-left-out-of-the-element-model">Excalidraw parity left out of the element model<a class="headerlink" href="#excalidraw-parity-left-out-of-the-element-model" title="Permanent link">&para;</a></h3>
+<p><a href="../adr/0121-store-whiteboards-as-excalidraw-elements/">ADR 0121</a> stores and
+draws Excalidraw elements but cherry-picks interaction. Not yet implemented:
+segment dragging for elbow arrows, object and grid snapping, a frame tool and
+moving children with their frame, sticky-note font auto-fit with its lifted
+corner and date footer, the constant-width laser-pointer stroke, and embedding
+the scene in PNG/SVG downloads. Add each when a board needs it; Excalidraw's
+behavior is compiled in excali-mode's <code>docs/excalidraw-spec.md</code>
+(https://github.com/yibie/excali-mode).</p>
+<h2 id="review">Review<a class="headerlink" href="#review" title="Permanent link">&para;</a></h2>
+<h3 id="automatic-turn-advisor">Automatic turn advisor<a class="headerlink" href="#automatic-turn-advisor" title="Permanent link">&para;</a></h3>
+<p>Consider an opt-in second-model review of successful root turns, with bounded
+feedback delivered to the next request. Reuse the Stop hook, reviewer runtime,
+and reminder delivery. Keep findings distinct from Buddy's advisory notes, and
+specify evidence scope, deduplication, cooldown, cancellation, and cost before
+implementation. Pursue when recurring review failures justify the extra model
+call; keep it advisory, without restarting completed turns. Implement this
+bounded feature before considering generic prompt or agent hook handlers.
+There is no automatic root-turn reviewer/instruction-injection path today.
+The original request came from the 2026-08-20 watchdog/advisor discussion.</p>
+<h3 id="buddy-comment-trigger">Buddy comment trigger<a class="headerlink" href="#buddy-comment-trigger" title="Permanent link">&para;</a></h3>
+<p>Follow-up to <code>/buddy</code>: a comment containing <code>BUDDY!</code> in a buffer with
+<code>mevedel-buddy-mode</code> runs guidance at once on its enclosing defun, using the
+comment text as the question. No existing watcher fits as is. Buddy's change
+recording sees the edit, but the trigger needs its own rules before it can use
+the idle timer:</p>
+<ul>
+<li>Fire when the edit settles, not on the <code>!</code> keystroke, so the question after
+  the marker is complete.</li>
+<li>Skip <code>mevedel-buddy-min-interval</code> and preempt an automatic review, as
+  <code>mevedel-buddy-guide</code> does.</li>
+<li>Fire once per comment. A comment left in the buffer must not fire again on
+  later edits elsewhere. Key it in memory by marker or text hash.</li>
+<li>Send the enclosing defun (<code>beginning-of-defun</code>), or the whole buffer when
+  there is none.</li>
+</ul>
+<p>Detection checks only the changed lines in <code>mevedel-buddy--after-change</code>; it
+never polls or rescans buffers. Buddy does not remove the comment after the
+guidance runs: the user deletes it.</p>
+<h2 id="hook-extensions">Hook extensions<a class="headerlink" href="#hook-extensions" title="Permanent link">&para;</a></h2>
+<h3 id="task-transition-events">Task transition events<a class="headerlink" href="#task-transition-events" title="Permanent link">&para;</a></h3>
+<p>Consider a task transition event when notifications or tracker synchronization
+need to observe every completion. A hook matching <code>TaskWrite</code> misses automatic
+completion by <code>mevedel-tool-task-finalize-owner</code> in <code>mevedel-tool-task.el</code>.
+Observe actual state transitions across both paths rather than tool calls alone.
+Defer until a concrete integration needs that coverage.</p>
+<h3 id="deferred-extensions">Deferred extensions<a class="headerlink" href="#deferred-extensions" title="Permanent link">&para;</a></h3>
+<ul>
+<li>HTTP, prompt, MCP-tool, and agent handlers: revisit when a named workflow
+  cannot be served adequately by command/Elisp handlers. Define permission,
+  cancellation, and recursive-hook behavior before adding a handler type.</li>
+<li>Handler-level predicates: keep conditions inside handlers unless repeated
+  workflows or measured launch cost justify declarative filtering. Prefer an
+  event-specific matcher where sufficient, such as skill-name matching for
+  <code>UserPromptExpansion</code>, rather than a general predicate language.</li>
+<li>Configuration, cwd/files, tool-batch, and shell-environment events: add
+  individually when a caller needs a boundary existing events cannot express;
+  define the event's scope and control effects before implementation.</li>
+</ul>
+<h2 id="plugins">Plugins<a class="headerlink" href="#plugins" title="Permanent link">&para;</a></h2>
+<h3 id="opt-in-update-notifications">Opt-in update notifications<a class="headerlink" href="#opt-in-update-notifications" title="Permanent link">&para;</a></h3>
+<p>Managed plugins are shallow GitHub clones (<code>mevedel-plugins-install</code>); they
+change only through <code>/plugin update NAME</code> (<code>git pull --ff-only</code>) or the
+cockpit's update action. Nothing tells the user an update exists. Automatic
+updates stay out of scope: they change executable code, and hooks, without
+consent.</p>
+<p>Shallow clones never refresh their remote refs, so any check needs the
+network. The current git seam (<code>mevedel-plugins--process-git</code>) is a
+synchronous <code>process-file</code> that would block Emacs, and the plugin modules
+have no async process, timer or place to surface results. Design:</p>
+<ul>
+<li><code>mevedel-plugins-update-check-interval</code>: nil (default, no checks) or a
+  number of days. No network call at load or startup: the first check runs
+  on an idle timer after the registry is first used in a session, and the
+  last check time persists in global plugin state, so restarts within the
+  interval do not check again.</li>
+<li>The check runs <code>git ls-remote origin HEAD</code> asynchronously (<code>make-process</code>,
+  one plugin at a time) for each managed root and compares the result with
+  local <code>HEAD</code>. Results are cached per plugin.</li>
+<li>Surfacing follows NO SURPRISES in CODING_STANDARDS.md: one echo-area message
+  per newly seen upstream commit ("updates available for N plugins; /plugin
+  to review"), never repeated for the same commit; cockpit rows show
+  "update available" from the cache. Offline or failed checks stay silent
+  apart from a "check failed" row note.</li>
+<li>A cockpit "Check for updates" action runs the same async check on demand,
+  regardless of the interval setting.</li>
+<li>Scope: <code>mevedel-plugin-lifecycle.el</code> (async check), <code>mevedel-plugin-registry.el</code>
+  (setting, cached state), <code>mevedel-plugin-ui.el</code> (row note, action),
+  docs/skills.md; tests through an async git-executor seam, including the
+  "no network at load" guarantee.</li>
+</ul>
+<h2 id="browser-session-history-actions">Browser session history actions<a class="headerlink" href="#browser-session-history-actions" title="Permanent link">&para;</a></h2>
+<p>Owner links can create a Conversation Fork from a settled assistant response
+(<code>fork</code> frame, docs/collaboration.md). Rewind, edit and Worktree Fork remain
+Emacs-only. Each needs an owner-only typed frame that resolves the same stable
+<code>forkPoint</code> the projection already publishes, and runs the existing Emacs
+transaction. A browser frame runs under <code>inhibit-interaction</code>, so any native
+minibuffer or overlay confirmation would refuse it. Each action therefore
+needs a browser-side confirmation of its own.</p>
+<ul>
+<li><strong>Rewind:</strong> <code>mevedel-session-rewind</code> confirms in Emacs. It names both sides
+  of the boundary, capture gaps, the files to restore, external changes it
+  would overwrite, and the live state it would clear. A browser rewind needs
+  a host-built impact card (a <code>ui-request</code> like plan approval, bounded, with
+  an "open in Emacs" fallback when the impact does not fit) and an owner
+  confirmation. Every room in the session must then republish its records
+  after the truncation. Redo follows the same shape.</li>
+<li><strong>Edit:</strong> resubmitting an edited earlier prompt is Rewind before that
+  prompt plus a new prompt, so it should follow Rewind and reuse its card.</li>
+<li><strong>Worktree Fork:</strong> needs Git preflight, branch naming (the Worktree plan
+  acceptance already validates a browser branch name) and the retained-artifact
+  error path.</li>
+<li><strong>Fork with a first prompt:</strong> the browser fork publishes an empty child and
+  the owner writes in its room. Sending the prompt with the fork, as the <code>f</code>
+  composer flow does, could reuse the <code>new-session</code> first-prompt path.</li>
+<li><strong>Non-owner request flow:</strong> a full-control guest could ask, like
+  <code>new-session</code>, with the owner or host approving.</li>
+</ul>
+<h2 id="unexplained-failures-and-unverified-leads">Unexplained failures and unverified leads<a class="headerlink" href="#unexplained-failures-and-unverified-leads" title="Permanent link">&para;</a></h2>
+<p>Recovered on 2026-10-28 from working notes that memory consolidation deleted
+or proposed deleting. These are historical observations, unverified leads and
+unfinished verification, not newly reproduced defects; no resolution or other
+active record was found in the review. Verify current behavior before changing
+code, and remove an item once explained, fixed or no longer worth pursuing.</p>
+<h3 id="view-and-transcript">View and transcript<a class="headerlink" href="#view-and-transcript" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Stale-zone scan cost (2026-10-18): <code>mevedel-view-zone--delete-stale-text</code>
+  scans the whole buffer on every changed reconcile, including each per-second
+  rail update. A synthetic transcript showed cost growing with size; no real
+  long session was profiled. Profile one before narrowing the scan, and keep
+  stale-text recovery across undo, reinsertion and lost local state.</li>
+<li>Skill hint (2026-10-18): the hint refreshes only when the view's text
+  changes, so a skill-list change waits for the next edit or render. Refreshing
+  on skill changes would add per-command or push machinery; accept or close.</li>
+<li>Ask overhaul timing failures (2026-10-18): full-suite timing failures in
+  <code>journal-recall-expiry</code> and
+  <code>acp-turn-start/tool-hooks</code> did not reproduce under 8 contention copies on
+  one CPU (2026-10-31); only the original ordered conditions remain to try.</li>
+<li>Browser completion notices and image-button acceptance limits (2026-10-18):
+  renderer/host protocol checks did not include browser visual acceptance of the
+  final completion notices. Image-button graphical checks verified activation
+  and normal-state decoration suppression, not hover-theme or higher-priority
+  overlay styling. Locate subsequent evidence or exercise those specific states
+  before extending the historical acceptance claims; preserve image activation,
+  committed-artifact resolution and notice ownership/wording.</li>
+<li>Remaining layout checks (2026-10-17): minibuffer-active and graphical
+  variable-height or wrapped tall drafts have no check; run them on the
+  private-KWin runner, preserving draft position and interactive row identity.</li>
+<li>Task-panel mouse disclosure (2026-10-16 suggestion): panels currently toggle
+  with TAB/RET while mouse clicks place point. Consider a clickable header only,
+  preserving selection on task rows. This is an optional consistency improvement,
+  not an implemented feature or a request for per-task detail inspectors.</li>
+<li>Pending-input local preview acceptance limits (2026-10-16): the implementation
+  handoff reported rendered-consumer tests, but no separate read-only-authority,
+  deferred-render, or live graphical interaction checks. This is historical
+  verification scope, not a reproduced defect or proof current coverage is absent.
+  Before claiming those scenarios verified, locate subsequent coverage or run a
+  bounded check that preserves drafts, selection, viewport, delivery and queue
+  management's explicit pause semantics.</li>
+<li>Automatic Read collapse (2026-10-14): an opened Read row later appeared
+  collapsed in a live session; replays did not reproduce it. A bounded fold
+  trace was prepared; the next step is a consented live reproduction. The prior
+  live trial used an unattended scratch view, which deferred rendering: its
+  sampler never opened a row while busy, so the final no-anomaly render did not
+  test mid-turn row survival. Use an attended view, actually open the row during
+  the active turn, and attribute trace events to the relevant buffer and time.</li>
+<li>Mailbox hierarchy (2026-10-14): a following Eval should be a sibling of the
+  Finished card inside the same expanded activity. Later live inspection and
+  incremental/canonical replays found it nested correctly, but did not reproduce
+  the screenshot-time transition. The later collapsed-card display-boundary fix
+  does not establish that transition's cause. Replay retained source/view-tail
+  anchors and groupability across ToolCall metadata publication or targeted
+  replacement; preserve incremental rendering rather than rerender every event.
+  Under ADR 0119's rule, only a tool starts a run, so the Eval is a sibling of
+  the Finished card only when a tool precedes the card in that run.</li>
+</ul>
+<h3 id="tests-and-transport">Tests and transport<a class="headerlink" href="#tests-and-transport" title="Permanent link">&para;</a></h3>
+<ul>
+<li>End-to-end GPT-6 latency after the 2026-10-14 tool-call lag fixes remained
+  unmeasured in the final checkpoint, with no follow-up measurement found;
+  the component fixes were verified individually.</li>
+<li>Resource-installation search can exceed its 20 s production deadline under
+  heavy host load (2026-10-31). The search covers two fixture files (median
+  0.16 s isolated, 0.63 s maximum contended), but tracing caught synchronized
+  5-7 s event-loop stalls; the stall source is unidentified. The test watchdog
+  now sits above the production deadline.</li>
+<li><code>mevedel-window-child-frame-return/test</code> failed once on parent-layout
+  equality (109/110 on 2026-10-31; retry and base 110/110). Graphical,
+  unreproduced; rerun on the private-KWin runner if it recurs.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.indexes", "content.code.copy", "content.action.edit", "search.suggest"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

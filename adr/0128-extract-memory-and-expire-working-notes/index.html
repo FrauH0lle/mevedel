@@ -1,0 +1,2180 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and architecture manual for mevedel, for humans and agents.">
+      
+      
+      
+        <link rel="canonical" href="https://frauh0lle.github.io/mevedel/adr/0128-extract-memory-and-expire-working-notes/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Extract memory and expire working notes - mevedel docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#extract-memory-and-expire-working-notes" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="mevedel docs" class="md-header__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            mevedel docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Extract memory and expire working notes
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="mevedel docs" class="md-nav__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    mevedel docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Using mevedel
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Using mevedel
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../view/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversation and workspace view
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../collaboration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Browser collaboration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plan-mode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plans
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../goals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Goals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents and tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../mentions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mentions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills and plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../preview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Patch review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../buddy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Buddy notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sessions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sessions and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_11" id="__nav_2_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and journal
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Memory and journal
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory-curated/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Curated memory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory-review/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Review contract and cockpit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory-recovery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decisions, application and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shared working-note lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory-journal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Journal capture and retention
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../permissions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permissions and confinement
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../module-map/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Module map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../address-to-resource/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resource addressing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../compaction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context compaction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reminders/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context delivery and reminders
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../hooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle hooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guardian-prompts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guardian prompts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tool reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ptc-dialect/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Programmatic tool calls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Files and search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/applypatch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ApplyPatch
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry and diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commit conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/domain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/issue-tracker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local issues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/triage-labels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Triage labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../backlog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backlog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope-and-decision-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope and decision status
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Context
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Decision">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#three-different-stores" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Three different stores
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#note-format-and-write-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Note format and write boundary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#generated-discovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generated discovery
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#eligibility-not-completion-proof" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Eligibility, not completion proof
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#one-daily-review-bounded-batches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One daily review, bounded batches
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#review-contract-extract-memory-then-delete" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Review contract: extract memory, then delete
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#permanent-disposal-not-an-undo-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Permanent disposal, not an undo store
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#no-header-migration-or-compatibility-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        No header migration or compatibility path
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-this-supersedes-in-adr-0117" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What this supersedes in ADR 0117
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decision-history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision history
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#consequences-and-acceptance-evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Consequences and acceptance evidence
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/FrauH0lle/mevedel/edit/master/docs/adr/0128-extract-memory-and-expire-working-notes.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="extract-memory-and-expire-working-notes">Extract memory and expire working notes<a class="headerlink" href="#extract-memory-and-expire-working-notes" title="Permanent link">&para;</a></h1>
+<p>Status: Accepted</p>
+<h2 id="scope-and-decision-status">Scope and decision status<a class="headerlink" href="#scope-and-decision-status" title="Permanent link">&para;</a></h2>
+<p>This records the lifecycle implemented after the
+user's 2026-10-29 scope decisions. It separates shared notes from the journal
+publication and durable-memory transaction protocol in
+<a href="../0117-publish-journal-results-from-fenced-outcomes/">ADR 0117</a>. Finite daily cohorts
+(<code>0dba3ac4</code>), headerless permanent disposal (<code>2028fe48</code>) and admission-derived
+deletions (<code>569c37db</code>) are implemented on <code>master</code>. The runtime has no header
+codec, kind/status policy or note undo.</p>
+<h2 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h2>
+<p>The review had become a second task tracker: it investigated whether every
+finding, caveat, measurement and owner handoff was resolved before disposing of
+a note. The third acceptance replay reviewed 40 notes and returned 38 keeps,
+two condensations and no deletes. That is evidence of retention, not measured
+capacity for the replacement design. The user wants temporary notes to disappear
+after extracting qualifying knowledge, not proof that the work described in
+them is finished. Open work cannot become memory merely to permit cleanup.</p>
+<h2 id="decision">Decision<a class="headerlink" href="#decision" title="Permanent link">&para;</a></h2>
+<h3 id="three-different-stores">Three different stores<a class="headerlink" href="#three-different-stores" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Journal:</strong> automatic, dated transcript digests; evidence, not instructions,
+  a task tracker, or a permanent store. Existing capture, recall and journal
+  expiry contracts remain in ADR 0117.</li>
+<li><strong>Shared notes:</strong> freely writable, machine-local temporary working material
+  for any authorized session or agent. One topic per note; find and update a
+  relevant existing note rather than maintaining a wiki or index by hand.</li>
+<li><strong>Memory:</strong> the only permanent knowledge store in this lifecycle. Existing
+  selective user/feedback/project/reference rules still apply. Tasks, progress,
+  blockers and decisions belong in trackers, backlog or maintained documentation;
+  continuation belongs in session context and compaction. This does not make
+  maintained source, documentation or the project tracker disposable.</li>
+</ul>
+<h3 id="note-format-and-write-boundary">Note format and write boundary<a class="headerlink" href="#note-format-and-write-boundary" title="Permanent link">&para;</a></h3>
+<p>Markdown files (<code>.md</code>, case-insensitive) below <code>work://shared/</code> are notes. Other
+files, including JSON reports, scripts and plain-text files, are attachments.
+Both expire as described below; only readable UTF-8 Markdown enters model review.</p>
+<p>There is <strong>no note header</strong>. ApplyPatch treats shared files as ordinary authored
+content: it neither inserts nor validates frontmatter on creates, updates or
+moves. There is no managed/unmanaged distinction, kind/status classification,
+attribution field or creation timestamp in the lifecycle. Old header-shaped text
+is ordinary content, not a format requiring interpretation or migration.
+Guidance asks for one topic per file, a descriptive first heading and source/task
+attribution in prose. Actionable work belongs in the tracker/backlog rather than
+depending on a temporary handoff's survival. Normal permissions, selected-hunk
+review, exact bytes, buffers and filesystem transactions remain unchanged.</p>
+<h3 id="generated-discovery">Generated discovery<a class="headerlink" href="#generated-discovery" title="Permanent link">&para;</a></h3>
+<p><code>Read(work://shared/)</code> generates a listing from the current contained inventory:
+canonical address, days since modification, age-readiness reason and the bounded
+first Markdown heading (empty when absent). It is not a model-generated summary,
+trusted guidance or a maintained file. Attachment rows have age and readiness
+without a heading. Bare <code>work://</code> uses the same shared rows
+beside session files; Glob/Grep retain their filename/content contracts.</p>
+<p>Prefix reads and inventory limits are bounded; incomplete results say so.
+Listing and search do not mark every returned file in use or reset its age.
+Discovery creates no storage and never authorizes a later mutation. There is no
+new hand-edited README, index, per-topic manifest or permanent note catalogue.</p>
+<h3 id="eligibility-not-completion-proof">Eligibility, not completion proof<a class="headerlink" href="#eligibility-not-completion-proof" title="Permanent link">&para;</a></h3>
+<p>Use the execution target's current time and the file's <strong>last modification time</strong>:</p>
+<p>Every note and attachment uses one defcustom,
+<code>mevedel-working-note-max-age-days</code>, default <strong>14 days</strong>; nil disables automatic
+disposal. Empty-folder housekeeping uses the same age setting. Fourteen days
+means elapsed multiples of 86,400 seconds, inclusive at the boundary. Reading,
+listing and review time do not reset this clock; an actual modification does.
+The default remains fourteen days as the chosen margin for unobserved use;
+users may lower the setting for themselves. Size never triggers deletion:
+review bounds can block an oversized note, not make it disposable. This expiry
+applies only below <code>work://shared/</code>, not to maintained files or curated memory;
+journal retention remains separate. Edit a note to keep it temporarily, or
+promote its content to memory, maintained documentation or the tracker as
+appropriate rather than depending on the note's survival.
+Future mtimes wait rather than implying negative-age eligibility.
+Source words such as TODO, pending,
+remaining or handoff have no effect on eligibility or deletion.</p>
+<p><strong>Never mutate an observed in-use entry.</strong> Keep exact-file resource-tool access
+by live root sessions and their agents as local use evidence, with a separate
+24-hour access window rather than the removed quiet-period setting. Recheck use
+and unsaved visiting buffers at capture/admission and at the actual forward-write
+boundary after preparatory I/O. Other sessions merely running, folder listings
+and broad searches do not protect every note. Cancellation, original authority,
+changed bytes/mode, linked paths and unsaved edits still prevent unsafe writes.</p>
+<p>Local use evidence is not shared between Emacs clients or retained across a
+restart, and shell/external reads are unobserved. This is an accepted limitation:
+the fourteen-day modification threshold provides the chosen margin without
+guaranteeing recovery. Do not add a cross-client usage lease registry or claim
+global reader detection. Explicitly active collaboration files are excluded by the operator
+when conducting a live inventory; filenames are not permanent runtime exemptions.</p>
+<h3 id="one-daily-review-bounded-batches">One daily review, bounded batches<a class="headerlink" href="#one-daily-review-bounded-batches" title="Permanent link">&para;</a></h3>
+<p>At idle maintenance, admit at most one automatic daily review cycle per workspace
+per elapsed 24 hours on the target clock, under existing workspace ownership.
+That cycle processes <strong>all eligible notes</strong>, in bounded successor batches, not
+one sixteen-note request per day. This is why the automatic 24-hour limit stays
+fixed; explicit review can process notes sooner without changing that limit.
+Freeze a finite cohort of path/version identities
+at cycle admission. Each identity is attempted at most once in that cycle;
+changed, newly eligible and newly arrived versions wait for the next daily cycle.
+Recheck current eligibility before every batch and mutation. The cycle records
+attempts separately from confirmed deletion; a failed review is not service.</p>
+<p>Keep the existing ordinary request bounds (16 notes, 96 KiB; oversized Markdown
+alone in bounded chunks up to the configured limit), per-request deadlines,
+output/tool budgets, cancellation and yielding between owned operations. Persist
+enough cycle identity and attempt information to resume an interrupted cycle
+without re-reviewing its completed attempts. A local busy owner postpones work;
+a request/storage failure stops inference visibly instead of spinning. Held use
+or extraction decisions can finish through checked application without re-running
+the model. No catch-up chain, keep-as-progress test or rolling 48-batch cap may
+prevent processing the rest of the finite daily cohort.</p>
+<p>Note review requires no journal digest count and runs when journaling is disabled.
+Journal-only consolidation keeps its separate existing admission policy; ordinary
+turn/digest events need not launch a new note cycle. <code>manual</code>, <code>propose</code> and <code>auto</code>
+remain distinct: manual requires an explicit request, propose leaves decisions
+for approval, and auto applies extraction followed by disposal without prompts.
+Explicit review/drain may bypass daily timing but not in-use or transaction safety.
+An empty cycle makes no model request. No session or idle opportunity means no
+background inference, not a promise of wall-clock deletion while Emacs is closed.</p>
+<h3 id="review-contract-extract-memory-then-delete">Review contract: extract memory, then delete<a class="headerlink" href="#review-contract-extract-memory-then-delete" title="Permanent link">&para;</a></h3>
+<p>The reviewer checks only for qualifying memory and proposes normal memory changes.
+It does not enumerate open work, prove resolution, reproduce every measurement,
+search Git for completion, or decide whether a note should become a tracker.
+No qualifying memory is a successful extraction result and still permits deletion.</p>
+<p>The model emits only ordinary qualifying memory/instruction proposals citing the
+note ID in <code>evidence</code>; nothing else is needed for notes. There is no Notes section,
+per-note acknowledgement, disposition, reason, keep/condense alternative or
+resolution header. After a successful review the accepting store creates internal
+deletion proposals for every exact admitted note, not every captured file.
+Malformed memory/instruction proposals or ambiguous output reject the review
+before acceptance and create no deletions. Chunk summaries carry potentially
+qualifying lessons, attribution and uncertainty, not an unresolved-work inventory.</p>
+<p>Each accepted deletion depends on all memory changes citing that note. Apply all
+those changes first, then delete the exact reviewed version. Pending extraction
+holds deletion; failed/rejected/stale extraction leaves the source available for
+a later review, not an invented successful keep. Repair existing memory/instruction
+citations to temporary sources through ordinary checked updates/removals in the
+same review. A remaining citation is an explicit dependency hold/diagnostic, not
+a semantic keep or permission to break a permanent topic. New memory must be
+self-contained or point to an authoritative durable source. Freshly recheck the
+complete applicable memory/instruction citation scope before the actual note
+delete, including after approval/application waits. A new citation or incomplete
+observation holds deletion; captured absence is not proof of current absence.</p>
+<p>Attachments receive no model review. At the configured untouched age (default
+14 days), delete them only when not in use and not referenced by any surviving
+note or memory/instruction file.
+Surviving readable text attachments also protect their references: the Markdown
+boundary limits model review, not reference safety for scripts, JSON or plain text.
+Keep conservative reference scanning, including complete large-file scans and
+fresh reference checks before mutation; unknown/incomplete reads defer deletion.
+Empty unreferenced directories can be pruned, preserving the shared root.
+Attachments use the same permanent deletion path as notes, without an undo copy,
+private-copy quota or system-trash alternative.</p>
+<h3 id="permanent-disposal-not-an-undo-store">Permanent disposal, not an undo store<a class="headerlink" href="#permanent-disposal-not-an-undo-store" title="Permanent link">&para;</a></h3>
+<p>Temporary files are not critical durable user data. A checked target operation
+verifies ownership, reviewed hash/mode (or empty-directory state), then deletes
+the entry and optionally prunes empty ancestors below the shared root. Fresh
+extraction, reference, modification-age, local-use and unsaved-buffer checks
+still guard actual forward mutation. There is no blob capture, quota accounting,
+undo deadline, note restoration or note rollback. Reversing a memory extraction
+does not restore its deleted source notes. Durable memory/instruction reversal
+and interrupted-write reconciliation retain their separate existing contracts.</p>
+<p>Prepared/accepted/write evidence can retain reviewed text under the ordinary
+history lifecycle. This decision adds neither a per-file payload purge deadline
+nor a secure-erasure guarantee. It does not scrub quoted fragments, backups,
+authored memory or unrelated state. Do not rebuild payload receipts, caches,
+audit indexes or recovery systems for temporary-file disposal.</p>
+<h3 id="no-header-migration-or-compatibility-path">No header migration or compatibility path<a class="headerlink" href="#no-header-migration-or-compatibility-path" title="Permanent link">&para;</a></h3>
+<p>No note conversion is needed or provided. Existing files keep their authored
+bytes, modes and mtimes; old header-shaped text has no lifecycle meaning.</p>
+<p>Follow <code>CODING_STANDARDS.md</code>'s no-backwards-compatibility rule: remove old APIs,
+settings, prompt fields, dispositions, guards, counters and all their callers;
+do not keep aliases or an old/new proposal reader. Recover active marked writes
+and resolve or explicitly discard old pending note decisions using the old build
+before cutover. Do not reinterpret old accepted keep/condense records as deletes
+or mutate their authenticated bundles. There is no runtime format adapter or
+version gate. Session serialization is unchanged; its migrator is not involved.</p>
+<h3 id="what-this-supersedes-in-adr-0117">What this supersedes in ADR 0117<a class="headerlink" href="#what-this-supersedes-in-adr-0117" title="Permanent link">&para;</a></h3>
+<p>ADR 0117's <a href="../0117-publish-journal-results-from-fenced-outcomes/#current-decision">Current decision</a>
+now points here for shared-note review cadence (formerly progress-qualified
+catch-up and a 48-batch ceiling), identical-condense normalization, and the shared-note
+lifecycle (formerly three dispositions, open-item/anchor/numeric/source-marker guards
+and system trash).
+The separate journal, ownership, exact-write, durable rollback and recovery
+decisions remain.
+Ordinary history retention remains distinct from disposable-file age and does
+not make note reversal available.</p>
+<p>The following <strong>Decision history</strong> choices are replaced, retaining why each
+was tried: <a href="../0117-publish-journal-results-from-fenced-outcomes/#2026-10-29-catch-up-follows-fresh-arrivals-identical-condensation-is-retention">catch-up and identical condensation</a>,
+<a href="../0117-publish-journal-results-from-fenced-outcomes/#2026-10-29-preserve-numeric-paragraphs-structurally-instead-of-keeping-whole-notes">numeric preservation</a>,
+<a href="../0117-publish-journal-results-from-fenced-outcomes/#2026-10-28-progress-guards-automatic-catch-up-the-cap-is-a-ceiling">progress-qualified catch-up and its cap</a>,
+and the system-trash alternative in <strong>“Size alone no longer blocks every shared-file
+cleanup path.”</strong> The complete-note/chunk and attachment reference-scan rationale
+remains. The failure behind <strong>“Shared files left the journal for a consolidation-owned
+lifecycle”</strong> still supports direct note review; its
+three-disposition remedy is replaced, not the separation from journal capture.</p>
+<h2 id="decision-history">Decision history<a class="headerlink" href="#decision-history" title="Permanent link">&para;</a></h2>
+<p>On 2026-10-31 an architecture review proposed moving shared-note disposal
+out of the proposal-decision protocol: a notes-owned delete with fresh use,
+unsaved-buffer and reference checks, one hash-and-mode-verified deletion and an
+attempt record in the cycle record, with no per-note proposal decision. Before
+the decision transaction was deepened, one note deletion cost 139-185 control
+programs (compiled probe, one pass of four 64-byte notes, one run per apply).
+The deepened transaction (sweep commit a4d795e7) measured 83 programs for the
+first deletion and 60 for each following one in the same probe. For a fresh
+128-byte note-deleting automatic apply, compiled, five measured samples per
+build after warmup, medians before and after: wall time 2540 ms and 2079 ms;
+longest synchronous application callback (Lisp and IO, excluding child waits)
+605 ms and 305 ms; longest heartbeat-sampled block 554 ms and 289 ms; sampled
+total blocking 660 ms and 385 ms (a lower bound). Blocking therefore remains
+material. The proposal was
+rejected for that sweep: the per-note decision carries <code>propose</code>-mode approval,
+cockpit shared-note rows with their disposition and <code>awaits extraction</code> state,
+and inspectable decisions, which a separate module would either remove or
+rebuild. If matched measurements still show material editor blocking per
+deletion, the owned note-delete path inside the decision transaction is
+optimized first; its durable write intent and root marker stay until a
+complete replacement contract exists.</p>
+<p>The first draft and implementation slices introduced lifecycle frontmatter,
+scratch/open tool defaults, explicit handoff/report/done labels, and split
+seven/fourteen-day ages. A later draft required thirty-day undo, single-preimage
+storage and purge. On 2026-10-29 the user dropped undo and its scaling/recovery
+offshoots: their machinery was disproportionate to losing temporary files.
+A brief flat thirty-day age choice was superseded by <strong>decision 15</strong>: flat
+fourteen days and no header at all. Edits already reset age; seven flat days
+would age out idle handoffs, while a split depends on labels models may omit.
+The header codec, normalization, classification, migration and undo paths were
+removed rather than kept as compatibility machinery. The tracker/memory split,
+selective extraction, finite cohorts and inexpensive deletion guards remain.</p>
+<p>The next controlled eight-note extraction check failed before acceptance: the
+reviewer put note acknowledgements under Promote and emitted no memory bodies,
+despite calling the four positive lessons durable in No action. On 2026-10-30 the
+user removed the acknowledgement contract entirely. Successful review admission
+already determines which exact sources were processed, and extraction evidence
+already determines their dependencies; a second model-written note roster adds
+format failures without useful authority. The parser now handles memory and
+instruction changes only; the store generates disposal from admitted IDs after
+successful validation. Failed/rejected review still disposes of nothing.</p>
+<h2 id="consequences-and-acceptance-evidence">Consequences and acceptance evidence<a class="headerlink" href="#consequences-and-acceptance-evidence" title="Permanent link">&para;</a></h2>
+<p>Temporary notes can disappear while they still describe open work. That is the
+intended change: owners must put actionable work in the tracker before it ages
+out. Permanent deletion replaces the attempt to prove semantic completeness;
+original-target and exact-byte protections against corrupt writes remain.
+Missing labels cannot make notes immortal. Oversized/unreadable files, active
+use, unsaved changes and unavailable references remain visible deferrals.</p>
+<p>The target capacity is 50–100 notes per day, <strong>not established by deterministic
+tests</strong>. The deterministic fifty-note native drain exercises actual request
+serialization, response parsing, acceptance and permanent deletion, replacing
+only URL transport. It checks rejected memory output, changed and late
+versions, and a thirteen-day headerless handoff excluded from the frozen cohort.
+Scripted transport proves mechanics, not inference quality, cost or throughput.
+Any separately authorized real-provider replay uses a private copied corpus,
+never the live shared folder, and reports confirmed deletions separately from
+arrivals and memory extractions proposed/applied, format failures and wall time.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.top", "navigation.indexes", "content.code.copy", "content.action.edit", "search.suggest"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

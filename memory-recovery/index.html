@@ -1,0 +1,2239 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and architecture manual for mevedel, for humans and agents.">
+      
+      
+      
+        <link rel="canonical" href="https://frauh0lle.github.io/mevedel/memory-recovery/">
+      
+      
+        <link rel="prev" href="../memory-review/">
+      
+      
+        <link rel="next" href="../memory-notes/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Decisions, application and recovery - mevedel docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#memory-decisions-application-and-recovery" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="mevedel docs" class="md-header__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            mevedel docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Decisions, application and recovery
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="mevedel docs" class="md-nav__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    mevedel docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Using mevedel
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Using mevedel
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../view/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversation and workspace view
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../collaboration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Browser collaboration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../plan-mode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plans
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../goals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Goals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents and tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mentions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mentions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills and plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../preview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Patch review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../buddy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Buddy notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sessions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sessions and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_2_11" id="__nav_2_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and journal
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_11_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Memory and journal
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory-curated/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Curated memory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory-review/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Review contract and cockpit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decisions, application and recovery
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decisions, application and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#proposal-decisions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proposal decisions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Proposal decisions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#checked-application" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checked application
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovery-and-reversal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recovery and reversal
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shared working-note lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory-journal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Journal capture and retention
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../permissions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permissions and confinement
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../module-map/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Module map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../address-to-resource/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resource addressing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../compaction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context compaction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reminders/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context delivery and reminders
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle hooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guardian-prompts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guardian prompts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tool reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ptc-dialect/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Programmatic tool calls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Files and search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/applypatch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ApplyPatch
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry and diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commit conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/domain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/issue-tracker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local issues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/triage-labels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Triage labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../backlog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backlog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#proposal-decisions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proposal decisions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Proposal decisions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#checked-application" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checked application
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovery-and-reversal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recovery and reversal
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/FrauH0lle/mevedel/edit/master/docs/memory-recovery.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="memory-decisions-application-and-recovery">Memory decisions, application and recovery<a class="headerlink" href="#memory-decisions-application-and-recovery" title="Permanent link">&para;</a></h1>
+<h2 id="proposal-decisions">Proposal decisions<a class="headerlink" href="#proposal-decisions" title="Permanent link">&para;</a></h2>
+<p>The decision module owns each proposal decision as one transaction. Callers use
+<code>mevedel-memory-decision-apply</code>, <code>-reject</code>, <code>-reverse</code>, or <code>-recover-write</code>;
+they do not acquire claims, prepare write intents, or interpret child replies.
+The write module is private implementation, apart from its control-directory
+and intent-filename helpers used by retention.</p>
+<p>Each verb returns a plist with <code>:status</code>, optional <code>:reason</code>, detached
+<code>:decision</code> metadata when a decision exists, and an opaque <code>:continuation</code>.
+Statuses are <code>applied</code>, <code>rejected</code>, <code>reversed</code>, <code>stale</code>, <code>unavailable</code>,
+<code>recovery-required</code>, <code>waiting</code>, <code>held</code>, <code>skipped</code>, and <code>idle-wait</code>. A hold or
+unmet extraction dependency returns <code>held</code> or <code>waiting</code>, not an accepted
+decision. The cockpit presents those refusals to the user. Automatic application
+returns <code>skipped</code> for any already-decided proposal.</p>
+<p>One explicit serial request may pass the previous result's <code>:continuation</code> to
+the next verb. The decision owner freshly proves consecutive claim generations
+for the same actor and origin before omitting repeated workspace recovery.
+Omitting the continuation starts with full recovery. Holds (early or late),
+waiting, idle deferral, failure, interruption, changed origin, and claim-chain
+gaps discard continuity. Clean terminal outcomes and skipped work can retain it.
+The continuation is ephemeral, never an authority cache, and must not be reused
+across separate commands. Each continuously owned phase authenticates its
+accepted bundle once; acceptance settlement, a new claim, or a child handoff
+ends that phase. Forward-write checks remain fresh.</p>
+<p>For automatic application, construct an opaque origin binding with
+<code>mevedel-memory-decision-automatic-context</code>. It can be reused within the request;
+each job has separate bookkeeping, while <code>mevedel-memory-decision-cancel</code>
+cancels the shared context and its active work. <code>automatic-current-p</code> checks the
+original actor's live policy and workspace identity rather than the timer's
+current buffer. The context is not frozen permission.</p>
+<p>Without a callback, application is synchronous and signals errors and quit.
+<code>mevedel-memory-decision-interrupted</code> carries any already-accounted decision.
+With <code>:callback</code>, application delivers one result, including admission failure,
+as <code>:error</code> or <code>:cancelled</code> when appropriate; confirmed effects and updated-file
+accounting survive cancellation and publication failure. Exceptions from the
+caller callback propagate rather than causing a second delivery. A callback
+alone grants no automatic authority. Automatic context plus callback selects
+child-assisted placement on supported local Linux workspaces; unsupported and
+remote targets retain checked synchronous execution. <code>pending</code> selects undecided
+automatic identities through the same child boundary when given both arguments;
+otherwise it is a read-only selection without acquiring a claim.</p>
+<p><code>mevedel-memory-decision-inspect</code> supplies detached provisional proposal/write
+snapshots for the cockpit, copying mutable strings and lists. Inspection grants
+no authority: actions freshly authenticate state. <code>retention</code> reports whether
+decision/write evidence still prevents history expiry.</p>
+<p><code>mevedel-memory-decision-reject</code> records a rejection without editing memory or
+changing the accepted review. Publication can repair its derived public text.
+Rejection acquires workspace ownership and checks the
+proposal's original target authority. A repeated rejection returns the same
+terminal decision, including its original reason. The reason is optional and
+limited to 4 KiB. Private <code>.mevedel/state/journal/decisions/&lt;decision-id&gt;.el</code> records retain the
+claim, exact public metadata, and optional write-intent identity. Their hash is accepted before publication,
+so a later client can recover a rejection after the owner stops.</p>
+<p>Public <code>kind: decision</code> records contain decision, pass, proposal, and workspace
+identities, date, status, reason, and a private-state hash. Their body is derived
+from metadata and includes no private topic or proposed replacement. Decision
+status is verified against immutable acceptance evidence; public text alone
+cannot decide a pending proposal or release its evidence. When every proposal
+in a pass has an authenticated terminal decision, publication releases that
+pass's digest pins. Under one journal-mutation claim, publication reauthenticates
+the decision and bundle, checks the exact pass-review bytes, and repairs an
+absent or changed projection. Repair of existing bytes checks the observed hash,
+unsettled claim and deadline under the mutation-claim lock; a changed observation
+or fenced owner refuses repair. Review
+and decision records remain retained while evidence or unresolved work needs
+them, then expire together under the resolution-based history window.</p>
+<p>Decision recovery groups small metadata records by pass, then freshly
+authenticates each decision and its retained write evidence. It shares at most
+one authenticated proposal bundle with the write reader within that scan and
+discards the proof after publication. Pending automatic selection shares one
+public journal observation, refreshing it and discarding pass proofs after
+each application. Every application still acquires fresh workspace and target
+ownership and performs freshness checks; only a freshly proved serial
+continuation can omit the workspace recovery prelude.</p>
+<p>For local automatic application, the child selects both the proposal's previous
+decision and its required extraction decisions under the operation's workspace
+claim. The editor checks the exact dependency roster against the accepted
+proposal and freshly authenticates each selected decision before deleting a
+source note. Dependency checks do not rescan public history in the editor;
+manual and unsupported-target application retain native discovery.</p>
+<p>Before a later request, the coordinator recovers accepted decisions and includes
+bounded recent rejection evidence: the original suggestion and reason, under
+the original memory-root authority. It admits at most twenty whole records
+within 8 KiB and reports omitted or unavailable records. This can help the model
+recognize reworded suggestions; it is untrusted evidence and does not guarantee
+semantic suppression. Rejection, application, and reversal APIs are implemented
+through the proposal cockpit as well as their internal APIs.</p>
+<h3 id="checked-application">Checked application<a class="headerlink" href="#checked-application" title="Permanent link">&para;</a></h3>
+<p><code>mevedel-memory-apply-changes</code> prepares complete topic/index or instruction
+changes from accepted before-state without writing them. Topic frontmatter is
+generated from the validated name, description, and type. Index updates escape
+labels and filenames, retain unrelated lines, and reject duplicate or invalid
+destinations, including two encoded names for the same file. Instructions
+replace their exact captured applicable file with the complete decoded body,
+including zero bytes for an empty body. Existing and captured known-absent
+targets use the same checked write path; this action never deletes a path.
+Every emitted change retains expected original
+bytes or absence and exact proposed bytes for the shared patch transaction.
+Generated files must fit the memory reader's 32-KiB per-file bound, including
+index growth, so a change cannot exclude its root from the next review.</p>
+<p>The patch transaction checks supplied before-state before any write and
+again before writing each path. It restores only its own expected after-state;
+intervening disk and unsaved buffer edits survive a failure. A caller can fence
+all writes and rollback through a target mutation callback in addition to
+client-side ownership checks. Interrupted buffer
+synchronization rolls back before propagating a quit.</p>
+<p><code>mevedel-memory-decision-apply</code> acquires the workspace claim and an independent
+claim at the original target root. Topic and instruction files must still match
+their captured state. For <code>MEMORY.md</code>, only entries for the proposal's topic and
+merge sources must match, including entry absence. Unrelated entries, prose, and
+entry ordering may change. The shared index parser rejects duplicate destinations,
+invalid paths, and unsupported link syntax. A missing index has no entries.
+After these checks, application uses the complete current index snapshot and
+preserves its unrelated content and permissions. Exact file checks still protect
+the interval between preparation and writing, including unchanged dependencies.
+Full before/after states live in private
+<code>.mevedel/state/journal/writes/&lt;intent-id&gt;.el</code> records. Standard <code>.mevedel/memory/</code>
+roots keep a hash-only marker in the sibling <code>state/memory-write/pending/</code> before
+curated writes. Other memory and instruction roots use
+<code>ROOT/.mevedel/state/memory-write/root/pending/</code>. Coordination belongs to the
+original target, independently of the calling workspace. An unresolved
+marker blocks other workspaces at that root even after the original claim
+expires. Coordination files are excluded from consolidation memory and source
+scopes; inventory does not descend into their directory.</p>
+<p>For local Linux automatic application, a sequential job runs publication and
+store recovery in a maintenance child under one parent-owned, fixed-deadline
+180-second workspace claim per operation. Pending automatic proposal discovery
+and discovery of a selected proposal's previous public decision also run in
+that child. It freshly authenticates decision status to omit every
+already-decided proposal, rather than starting another recovery child just to
+skip it; undecided extractions and their waiting dependent disposals remain
+eligible. Selection returns identities only, never reusable acceptance proofs.
+The editor checks the worker reply's operation identity, current job,
+originating session/workspace binding, unchanged root and freshly read workspace
+identity, cancellation, mode and fresh ownership on return, then freshly reads
+the proposal and authenticates the selected decision against private accepted
+evidence. A missing decision observation is an error, not an empty roster.
+Reentrant and late duplicate replies cannot reenter
+an executing or finished operation. Automatic admission reads the live origin
+buffer's mode, not whichever buffer happens to run a timer or continuation.
+Only the editor acquires original-target ownership, prepares the intent, checks
+unsaved visiting buffers, writes files and synchronizes buffers. No target claim
+crosses the child boundary. The editor durably accepts each decision and retires
+a resolved write's marker while it still owns the target. A targeted child then
+reauthenticates that exact decision identity and hash, publishes it and checks
+pass settlement/pin release, without repeating full recovery or target mutation.
+The operation remains registered until this reply; neither acceptance alone nor
+an interrupted publication produces a clean recovery predecessor. Failure or
+cancellation preserves the accepted decision for recovery and any confirmed
+newly written-file accounting. Supported local automatic application waits for
+one second of editor idleness and checks pending input before each proposal and
+again after child recovery. Activity defers the proposal identity without
+counting it as held or unapplied: the completed recovery operation is fenced and
+released before the idle wait, and a fresh operation reacquires ownership later.
+No claim deadline is extended or authority retained while waiting. Undecided
+proposals remain durable for normal pending selection after cancellation or exit.
+The editor's write transaction remains synchronous and can still block input;
+the yielding proposal batch does not make that transaction nonblocking. Citation body
+rereads use fresh per-root batches of at most eight, with unchanged byte bounds,
+capture/reread/inventory ordering and final live-editor checks. The pass stays
+registered until application finishes and its final callback runs once.
+Explicit user application remains immediate; manual and unsupported remote application retain
+the synchronous API. Deferred automatic retries retain their original buffer,
+session, workspace and identity context, rather than adopting the timer's current
+buffer. They freshly check that context and its live auto policy before admission
+and at forward mutation boundaries. Invalid context or explicit cancellation
+leaves decisions pending without rearming a retry from another actor. Explicit
+cancel also removes deferred work when no pass is running. Unsupported workers
+use the same guarded executor with native editor recovery, without a child.
+Before target-sensitive recovery, the worker authenticates
+retained scope metadata: historical remote roots remain authoritative even if
+current configuration is local. Such history, or uncertain metadata, selects
+checked native editor recovery under the same continuously held claim instead.
+This preflight passes no accepted proofs back to the editor and does not bypass
+accepted-expiry or marked-write recovery. It adds a history scan per operation;
+offloading editor work does not imply lower total CPU or IO cost.
+This split removes eligible recovery and selected-status/publication history
+scans from the editor, not the synchronous intent/check/write/acceptance sequence:
+an editor continuation can still block.</p>
+<p>Scheduled publication recovery yields to this client's registered pass or
+explicit drain, including waiting gaps, and to already-admitted local cleanup.
+It retains the original callback and origin/workspace/root/canonical-key context
+across a bounded, nonzero deferral instead of capturing a new caller. Conversely,
+a drain waits for already-admitted decision work, including its claim-acquisition
+handoff. Merely queued recovery and pre-admission freshness checks do not count as
+admitted work, so the two sides cannot indefinitely defer to each other.
+Admission rechecks exact registrations after reentrant IO; cancellation or a
+changed root/key cannot launch work for a replacement owner. These local
+observations neither grant native ownership nor turn foreign contention or IO
+failures into a local retry. A competing native claim declines that unadmitted
+recovery opportunity without a completion callback; later maintenance may offer
+fresh work. It is not an accepted recovery job awaiting completion.
+Publication recovery alone does not require auto
+mode or a live application session and does not authorize proposal application.</p>
+<p>Automatic shared-note mutations recheck whether an open session uses the note
+at the actual write boundary, after preparation, as well as holding notes
+already in use; this applies to the synchronous fallback for worker-ineligible
+targets as well as the yielding path. All affected visiting buffers, including
+unchanged before-state dependencies, must still be unmodified. Cancellation or
+a newly started use prevents new forward writes without disabling safely
+owned checked rollback. Note deletion checks local use again after the final
+ownership/root IO and buffer checks: those checks can yield and admit a new
+reader after the earlier admission check. This last check does no IO and a hold
+still follows checked abandonment. A refusal after durable intent preparation follows the
+checked abandonment path only for a known admission hold or cancellation whose
+complete before-state is freshly proved after any checked rollback. It
+authenticates the exact intent and original tokens, checks visiting buffers
+before and after fencing, and authenticates that coordinator's cancelled,
+empty-payload outcome on its original host. Under the still-owned original
+target claim and lock, it verifies full disk before-state and the exact marker
+before removing that marker alone. The immutable unmarked intent remains;
+no public decision is accepted, so the proposal stays pending. Cross-host checks
+stay on their original authorities. Uncertain, mixed or after states retain
+ordinary application/recovery accounting. Genuine IO, ownership, fencing or
+retirement failures remain actionable and retain unresolved evidence; quitting
+during incomplete retirement is not quiet success. Child-phase cancellation fences
+ownership before stopping this client's child. Once editor mutation starts,
+cancellation stops forward admission but retains the unrenewed workspace claim
+through transaction unwind and checked rollback; completion settles it before
+the final callback. Expired or replaced ownership still refuses rollback and
+retains recovery evidence. Late replies cannot start another write.
+An allowed or delivered user quit remains a visible cancellation during setup
+or cleanup:
+it stops subsequent proposals, and an interrupted write completes its checked
+rollback before delivering cancellation. Request-file IO remains interruptible;
+only local child launch, process registration and the pure parent handle handoff
+defer pending quit briefly, so cleanup can fence the exact claim before deletion.
+Inherited outer quit inhibition remains authoritative; startup neither consumes
+its pending flag nor overrides the timer/filter/sentinel caller's policy.
+Settlement IO failure remains an error even if one idempotent retry succeeds.
+Registry cleanup and the final callback still happen once. If neither attempt
+establishes a fence, the original unrenewed deadline timer performs one terminal
+fencing/retirement attempt; these lifecycle paths never delete the child on an
+unproved fence.
+Storage failure still preventing that proof is explicitly reported and leaves
+the child tracked, not falsely described as a bounded process lifetime.
+A nil native settlement does not prove release: retirement requires its accepted
+outcome or a freshly authenticated outcome for that exact claim. If neither
+exists after a fresh target-clock expiry check, retirement elects and authenticates
+expiry for the original token, without acquiring or renewing ownership. Scheduled
+publication recovery uses the same proof before release or child deletion; an
+unproved release cannot schedule subsequent live-write inspection.
+Generic maintenance-process teardown can still force-stop children without
+waiting for storage; it does not establish settlement or erase retained evidence.</p>
+<p>The shared maintenance launcher also owns cockpit display children. Its closed
+operation table selects public owner entries and bounded replies. Launch failure
+signals to the owner without a callback. After a successful launch, completion
+arrives once through idle transport, never in the process sentinel or before
+launch returns; disabled or cancelled transport uses a deferred timer fallback.
+Explicit launcher cancellation drops live or queued replies; unsolicited signals
+and nonzero exits deliver an error once. The operation owner still checks identity
+and fences mutation claims before cancellation; display cancellation has no
+mutation claim to settle. Native editor recovery remains an owner policy, not
+another launcher adapter.</p>
+<p>Callbacks distinguish held admission and ordinary user cancellation from errors;
+neither fabricates an accepted decision. Timeout, malformed replies,
+authentication, IO and cleanup failures remain errors. Cancellation cannot erase
+an already authenticated result or its confirmed updated-file count, and stops
+subsequent proposals. A cancelled coordinator fence alone does not identify why
+an operation stopped: successful and failed operations also use fencing.</p>
+<p>Curated mutations and target-claim settlement take the same target-side <code>flock</code>
+on the pinned claims directory. Each mutation checks the unsettled claim,
+filesystem-clock deadline, expected bytes and mode under that lock; replacement
+mode is set on the temporary before rename. A delayed old writer either finishes
+before takeover or fails its guard afterward. The same mechanism protects
+rollback and marker retirement. This requires Linux <code>flock</code> on the storage
+host; acquisition waits at most 20 seconds and process death releases the lock.</p>
+<p>Application accepts an immutable decision, retires the resolved marker under
+target ownership, then publishes under fresh journal-mutation ownership. This
+order is shared by synchronous and child-assisted execution. Failed publication
+leaves the accepted decision recoverable even after the marker is retired. Status
+ordering uses accepted claim generations, so retries in the same second still
+produce an unambiguous latest result. Entry-level index checks work independently
+of review identity and retained write history. The original pass stays immutable;
+only the transaction's working copy receives the checked current index snapshot.
+Conflicting entries or topic files produce a stale decision naming the conflict.</p>
+<h3 id="recovery-and-reversal">Recovery and reversal<a class="headerlink" href="#recovery-and-reversal" title="Permanent link">&para;</a></h3>
+<p><code>mevedel-memory-decision-recover-write</code> reconciles exact retained states without
+repeating application: complete writes become applied, untouched attempts become
+unavailable, and mixed or intervening changes remain recovery-required with their
+marker intact. Its explicit rollback option restores a pending attempt through
+the patch engine only when every dependency matches recorded before or after
+state. Foreign or unsaved edits prevent rollback.</p>
+<p><code>mevedel-memory-decision-reverse</code> reverses a resolved application only while all
+affected files match its exact after-state. It persists a separate reverse intent
+linked to the original intent identity and hash, then uses the same patch and
+decision path. Successful reversal adds an immutable <code>reversed</code> decision; the
+original application remains inspectable. Reversed proposals remain terminal,
+so repeating accept, reject, or reverse cannot silently reapply them. A new
+review is needed for a new proposal.</p>
+<p>Reversal can also be interrupted: completed reverse writes become <code>reversed</code>
+when reconciled, untouched attempts leave the proposal <code>applied</code>, and partial
+attempts remain recovery-required. Explicitly rolling back a partial reversal
+restores the previously applied state. Reversal retains exact whole-file checks:
+an earlier proposal cannot be reversed through a later proposal's index edits;
+reverse those later changes first, or leave the current files intact.</p>
+<p><code>mevedel-memory-decision-recover-pending</code> discovers retained write records and
+reconciles their independently marked attempts without inference or file
+reapplication. It first recovers settled publications under successor workspace
+ownership. Unmarked intents are not classified as applications, even if an
+external edit happens to match their proposed bytes. Unreadable or unavailable
+records stay inspectable. Completed, durably saved root turns schedule this
+recovery independently of journaling being enabled. Repeated opportunities
+coalesce and wait for idle transport. On local Linux workspaces, accepted
+publication recovery and read-only write-candidate discovery run in a batch child
+under the workspace claim. Discovery authenticates writes grouped by pass,
+discarding bodies between passes, and returns only marked or unavailable
+identities. Its directory listing is the cutoff: later arrivals wait for another
+recovery. The reply is bounded to 8 MiB and 65,536 identities; overflow or child
+failure is an error, never a truncated or successful empty selection.
+The editor validates the reply's operation identity and inspects one selected
+write per event-loop callback. A currently marked candidate enters a new owned
+operation that freshly rereads evidence, current target authority and live
+buffers before reconciliation; child observations never authorize mutation.
+Changed markers, retired records and unsaved edits are checked after yielding.
+Unreadable records report their diagnostic while independent inspections continue.
+Native fallback remembers immutable marker paths for successfully read records,
+but observes their existence afresh in batches of at most eight, never one
+unbounded warm-cache marker program. Cancellation stops the
+remaining checks, and the original deadline also bounds this inspection phase.
+Root-turn automatic consolidation is offered after recovery finishes, so it does
+not race that recovery claim. A queued offer refused by a busy claim does not
+consume the scheduling cooldown; a fresh admission observation still does.
+Consolidation still recovers under its own claim
+before selecting evidence; the intervening live-write phase releases ownership.
+A live workspace owner leaves recovery for a later opportunity. The session
+chooser and conversation setup do not start this recovery or cleanup; opening a
+session only queues journal processing and a consolidation offer. Exit cancels queued
+recovery, fences this client's active claims and stops its children. A 180-second
+deadline bounds scheduled recovery, and late replies cannot continue it. Remote
+workspaces and explicit synchronous recovery retain the target-native path.
+Recovery neither requests a model nor repeats or rolls back memory writes.
+Because root turns retry recovery, a failure warns once per distinct reason and
+later repeats go to <code>*Messages*</code>; it states that review waits for recovery, and
+an invalid accepted bundle names its pass. Successful recovery forgets reported
+failures. Each unavailable write record likewise warns once per session.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.indexes", "content.code.copy", "content.action.edit", "search.suggest"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>
