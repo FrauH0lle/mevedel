@@ -154,6 +154,31 @@
         (should (= (point) (plist-get (mevedel-view-zone-fragment-bounds 'status 'rows)
                                       :start))))))
 
+  :doc "a vanished part anchor returns to its surviving parent row, not the fragment start"
+  (with-temp-buffer
+    (mevedel-view-zone-test--setup-markers)
+    (let ((render
+           (lambda (details)
+             (mevedel-view-zone-reconcile
+              'status (point-min) (point-min)
+              (list (list :namespace 'status :id 'rows
+                          :body (concat
+                                 (propertize "header\n" 'mevedel-view-zone-anchor 'header)
+                                 (propertize "agent row\n" 'mevedel-view-zone-anchor '(agent "a"))
+                                 (and details
+                                      (propertize "  Model opus\n" 'mevedel-view-zone-anchor
+                                                  '((agent "a") details)))
+                                 (propertize "other row\n" 'mevedel-view-zone-anchor '(agent "b")))))))))
+      (funcall render t)
+      (goto-char (point-min))
+      (search-forward "Model o")
+      (let ((anchor (mevedel-view-zone-position-anchor (point))))
+        (funcall render nil)
+        (should (looking-at-p "agent row\n"))
+        (should (= (point) (mevedel-view-zone-anchor-position anchor)))
+        (ert-info ("strict resolution still reports the lost part")
+          (should-not (mevedel-view-zone-anchor-position anchor t))))))
+
   :doc "keeps a window start inside a fragment the same screen rows below its start"
   (save-window-excursion
     (with-temp-buffer
@@ -591,6 +616,20 @@
     (should (equal '(1 . 4) (mevedel-view-zone--anchor-run (list 'row 1) 1 11)))
     (should-not (mevedel-view-zone--anchor-run (list 'row 2) 1 9))
     (should-not (mevedel-view-zone--anchor-run 'missing 1 11))))
+
+(mevedel-deftest mevedel-view-zone--parent-anchor-run
+  (:doc "finds the nearest surviving list parent of a part anchor, never a symbol head")
+  (with-temp-buffer
+    (insert (propertize "row" 'mevedel-view-zone-anchor 'row)
+            (propertize "agent" 'mevedel-view-zone-anchor '(agent "a")))
+    (should (equal '(4 . 9) (mevedel-view-zone--parent-anchor-run
+                             '((agent "a") details) 1 9)))
+    (should (equal '(4 . 9) (mevedel-view-zone--parent-anchor-run
+                             '(((agent "a") details) line) 1 9)))
+    (should-not (mevedel-view-zone--parent-anchor-run '((agent "b") details) 1 9))
+    ;; (row c) is a flat key whose symbol head is not a parent row.
+    (should-not (mevedel-view-zone--parent-anchor-run '(row c) 1 9))
+    (should-not (mevedel-view-zone--parent-anchor-run 'header 1 9))))
 
 (mevedel-deftest mevedel-view-zone-position-anchor
   (:doc "returns nil outside zone text; `mevedel-view-zone-anchor-position' resolves the identity after a redraw and returns nil once the fragment is gone")

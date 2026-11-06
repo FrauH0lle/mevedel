@@ -792,6 +792,17 @@ Search the `mevedel-view-zone-anchor' runs between START and END."
         (setq pos next)))
     found))
 
+(defun mevedel-view-zone--parent-anchor-run (anchor start end)
+  "Return the run of ANCHOR's nearest surviving parent between START and END.
+An anchor (PARENT PART...) whose PARENT is itself a list names a part of
+PARENT's row, such as an expanded agent's details; return nil when no
+parent is left."
+  (let (run)
+    (while (and (not run) (consp anchor) (consp (car anchor)))
+      (setq anchor (car anchor)
+            run (mevedel-view-zone--anchor-run anchor start end)))
+    run))
+
 (defun mevedel-view-zone--fragment-position-state (zone region position
                                                         &optional window)
   "Return fragment-relative state for POSITION inside ZONE REGION.
@@ -822,9 +833,10 @@ shift the view by a row."
 
 (defun mevedel-view-zone--restore-fragment-position (zone state &optional strict)
   "Return the restored buffer position for ZONE STATE, or nil.
-An anchored position whose anchor no longer exists returns to the
-fragment start rather than to an offset that now names other text.
-With STRICT, return nil instead when the anchor or its offset was lost."
+An anchored position whose anchor no longer exists returns to the start
+of its nearest surviving parent anchor, or else to the fragment start,
+rather than to an offset that now names other text.  With STRICT, return
+nil instead when the anchor or its offset was lost."
   (when state
     (when-let* ((bounds (mevedel-view-zone-fragment-bounds
                          zone (plist-get state :id))))
@@ -836,7 +848,10 @@ With STRICT, return nil instead when the anchor or its offset was lost."
                     (cons start end)))
              (window (plist-get state :window)))
         (cond
-         ((null run) (unless strict start))
+         ((null run)
+          (unless strict
+            (or (car (mevedel-view-zone--parent-anchor-run anchor start end))
+                start)))
          ((and window (window-live-p window))
           (save-excursion
             (goto-char (car run))

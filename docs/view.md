@@ -2065,8 +2065,13 @@ a fragment on the same content. A producer tags sub-parts of a fragment body
 with a `mevedel-view-zone-anchor` text property whose value is `equal` across
 redraws, such as a row key. A position in tagged text keeps its anchor and its
 offset within that anchor's run, so text before it can change length without
-moving it. If the anchor is gone, the position returns to the fragment start
-rather than to an offset that now names other text. Untagged text keeps the
+moving it. An anchor `(PARENT PART)` whose PARENT is itself a list anchor names
+a part of PARENT's row, as in an expanded agent's `((agent PATH) details)`. If
+an anchor is gone, the position returns to the start of its nearest surviving
+parent row, otherwise to the fragment start, rather than to an offset that now
+names other text. Collapsing an agent from its Model details or actions thus
+leaves point on that agent's row. Strict resolution still reports the lost
+part, so window starts do not adopt the fallback. Untagged text keeps the
 fragment offset. A window start keeps its screen-row distance below the
 anchor or fragment start, measured with a bounded `vertical-motion`, so
 re-wrapped text above it does not shift the view by a row. The

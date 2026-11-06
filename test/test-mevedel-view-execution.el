@@ -1479,6 +1479,39 @@ mouse events in them, which later interactive calls would read."
       (should (string-search "  ▸ Running   bash" (buffer-string)))
       (should-not (mevedel-view-zone-collapse-state
                    mevedel-view-execution--collapse-key))))
+  :doc "collapsing from an agent's row, Model detail or actions returns point to that agent's row"
+  (mevedel-view-execution-test--with-view
+    (save-window-excursion
+      (delete-other-windows)
+      (switch-to-buffer view-buf)
+      (setq live nil)
+      (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+                 (lambda ()
+                   '((:path "/root/other" :status running :depth 0)
+                     (:path "/root/target" :status running :depth 0
+                      :model-metadata (:model "opus"))))))
+        (mevedel-view--render-status)
+        (goto-char (point-max))
+        (insert "> draft\nsecond line")
+        (let ((row '(agent "/root/target")))
+          ;; nil starts and stays on the surviving row: the control case.
+          (dolist (target '(nil "    Model     opus" "[Interrupt]"))
+            (ert-info ((format "collapse from %S" target))
+              (goto-char (car (mevedel-view-zone--anchor-run row (point-min) (point-max))))
+              (call-interactively (key-binding (kbd "TAB")))
+              (should (equal "/root/target" mevedel-view-execution--selected-agent))
+              (when target
+                (mevedel-view-execution-test--at target)
+                (should-not (equal row (get-text-property
+                                        (point) 'mevedel-view-zone-anchor))))
+              (call-interactively (key-binding (kbd "TAB")))
+              (should-not mevedel-view-execution--selected-agent)
+              (should-not (mevedel-view-zone-collapse-state
+                           mevedel-view-execution--collapse-key))
+              (should (= (point) (car (mevedel-view-zone--anchor-run
+                                       row (point-min) (point-max)))))
+              (should (= (point) (window-point (selected-window))))
+              (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))))))
   :doc "narrow hovered expansions keep displayed rows on agent and execution completion"
   (mevedel-view-execution-test--with-view
     (save-window-excursion
