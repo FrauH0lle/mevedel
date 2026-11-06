@@ -1179,12 +1179,15 @@ consults the file name handlers each time."
       (if (<= (string-width tail) max-width) tail "")))))
 
 (defun mevedel-view--status-strip-spacer (rhs)
-  "Return a spacer that right-aligns RHS in the tab line."
+  "Return a spacer that right-aligns RHS in the tab line.
+Fall back to columns when the display refuses pixel measurement during
+redisplay, as Neomacs's layout engine does."
   (propertize
    " " 'display
-   (if (and (fboundp 'string-pixel-width)
-            (display-graphic-p))
-       `(space :align-to (- right (,(string-pixel-width rhs))))
+   (if-let* (((fboundp 'string-pixel-width))
+             ((display-graphic-p))
+             (pixels (ignore-errors (string-pixel-width rhs))))
+       `(space :align-to (- right (,pixels)))
      `(space :align-to (- right ,(string-width rhs))))))
 
 (defun mevedel-view--archived-prompt (session segment entry)

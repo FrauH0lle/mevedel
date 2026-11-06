@@ -1707,11 +1707,14 @@ threshold throughout."
   "The collection floor in bytes the last maintenance applied, or nil.")
 
 (defun mevedel--gc-live-bytes ()
-  "Return the bytes live after the last collection, without collecting."
-  (let ((total 0))
-    (dolist (entry (garbage-collect-heapsize))
-      (setq total (+ total (* (nth 1 entry) (nth 2 entry)))))
-    total))
+  "Return the bytes live after the last collection, without collecting.
+Return nil when the runtime reports no heap breakdown, as Neomacs does."
+  (when-let* ((heap (garbage-collect-heapsize))
+              ((consp heap)))
+    (let ((total 0))
+      (dolist (entry heap)
+        (setq total (+ total (* (nth 1 entry) (nth 2 entry)))))
+      total)))
 
 (defun mevedel--gc-raise (variable record floor)
   "Keep VARIABLE at least FLOOR, tracking (PREVIOUS . APPLIED) in RECORD.
@@ -1756,8 +1759,9 @@ while scrolling, a 130 ms stall every few seconds."
           ;; Following the floor down lets a pause in typing run the
           ;; deferred collection.
           (mevedel--gc-raise 'gc-cons-threshold 'mevedel--gc-restore floor)
-          (mevedel--gc-raise 'gc-cons-percentage 'mevedel--gc-percentage-restore
-                             (/ (float floor) (max 1 (mevedel--gc-live-bytes))))
+          (when-let* ((live (mevedel--gc-live-bytes)))
+            (mevedel--gc-raise 'gc-cons-percentage 'mevedel--gc-percentage-restore
+                               (/ (float floor) (max 1 live))))
           (setq mevedel--gc-floor-applied floor)
           (add-hook 'pre-command-hook #'mevedel--gc-note-input)
           (unless (timerp mevedel--gc-timer)

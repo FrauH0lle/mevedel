@@ -1562,6 +1562,27 @@ rejects trailing binary operators"
           (should-not (memq #'mevedel--gc-note-input pre-command-hook)))
       (when (timerp mevedel--gc-timer) (mevedel--ui-timer-cancel mevedel--gc-timer))))
 
+  :doc "raises only the threshold when the runtime reports no heap breakdown"
+  (let ((gc-cons-threshold 800000)
+        (mevedel-gc-cons-threshold-while-busy (* 64 1024 1024))
+        (mevedel-gc-cons-threshold-while-typing nil)
+        (noninteractive nil)
+        (mevedel--gc-holds (make-hash-table :test #'eq))
+        (mevedel--gc-restore nil)
+        (mevedel--gc-percentage-restore nil)
+        (mevedel--gc-floor-applied nil)
+        (gc-cons-percentage 0.1)
+        (mevedel--gc-timer nil))
+    (unwind-protect
+        ;; Neomacs answers 0 instead of a list.
+        (cl-letf (((symbol-function 'garbage-collect-heapsize) (lambda () 0)))
+          (mevedel--gc-hold 'work #'always)
+          (should (= (* 64 1024 1024) gc-cons-threshold))
+          (should (= 0.1 gc-cons-percentage))
+          (mevedel--gc-release 'work)
+          (should (= 800000 gc-cons-threshold)))
+      (when (timerp mevedel--gc-timer) (mevedel--ui-timer-cancel mevedel--gc-timer))))
+
   :doc "changes nothing in a batch Emacs or when disabled"
   (let ((gc-cons-threshold 800000)
         (mevedel--gc-holds (make-hash-table :test #'eq))
