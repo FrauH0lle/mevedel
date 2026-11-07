@@ -523,6 +523,7 @@ Executable paths retain the restrictions of their command name."
 (defun mevedel-bash-policy--bash-prefix-for-segment
     (segment &optional permission-context)
   "Return a stable command prefix for Bash SEGMENT, or nil.
+PERMISSION-CONTEXT supplies the user's extra safe environment variables.
 
 The heuristic follows Claude Code's low-maintenance shape: derive
 `command subcommand' generically, only when the second token looks
@@ -555,6 +556,7 @@ Dangerous commands and shell/wrapper commands are not generalized."
 (defun mevedel-bash-policy--bash-allow-pattern-for-segment
     (segment &optional permission-context)
   "Return the reusable allow pattern suggested for Bash SEGMENT.
+PERMISSION-CONTEXT supplies the user's extra safe environment variables.
 
 Simple `command subcommand ...' invocations are generalized to
 Claude Code-style prefix rules such as `git log:*'.  Segments that
