@@ -202,6 +202,29 @@ filesystem.  Subsequent phases retain the ordinary carrier."
 		     (plist-get (mevedel-session-durability--lease-head
 				 (mevedel-session-durability--lease-path root)) :client-id)))))
 
+  :doc "a named lease-update decline is a lost lease: it reclaims and is no failure"
+  (test-mevedel-heartbeat--with-session
+    (let ((warnings nil)
+          (lease (mevedel-session-lease session)))
+      (test-mevedel-heartbeat--held
+        ;; Another client takes the bound generation after the program read it.
+        (let ((mevedel-session-durability--client-id (make-string 64 ?b)))
+          (mevedel-session-durability--write-plist
+           (mevedel-session-durability--generation-path
+            (mevedel-session-durability--lease-path root)
+            (plist-get lease :generation))
+           (mevedel-session-durability--lease-record
+            "*thief*" (plist-get lease :generation) 'active nil nil
+            (plist-get lease :renewed-at))))
+        (cl-letf (((symbol-function 'display-warning)
+                   (lambda (&rest arguments) (push arguments warnings))))
+          (funcall resume)
+          (test-mevedel-heartbeat--await session))
+        ;; The reclaim ran as its own program after the update's decline.
+        (should (> programs 1)))
+      (should-not warnings)
+      (should (eq 'lost (plist-get (mevedel-session-lease session) :state)))))
+
   :doc "mutation, explicit renewal and stopping drain the earlier heartbeat first"
   (dolist (operation '(latch renew release))
     (test-mevedel-heartbeat--with-session

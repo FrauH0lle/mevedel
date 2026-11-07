@@ -1580,6 +1580,13 @@ naming this client, and no quiescing or released state. Anything else fails
 the job and leaves the producer holding its output; the acknowledgement's
 error is a `user-error` naming the first cause the program observed, such as
 an unobserved lease directory, a newer generation or a recovery marker.
+The lease updates that follow, reserve, head commit and finish, name their
+declines the same way: a `user-error` naming the first unmet condition in the
+order observed, such as an invalid lease record, a lease state the update does
+not accept, a lease held by another client, a newer generation, a changed
+publication head, an expired lease, or a lease taken during the commit. Only
+a failed program or an unavailable clock keeps its own error and leaves the lease
+binding unchanged. Messages name the condition, never paths or lease bytes.
 Freeze runs only after
 admission, under the gate: it identifies the records (a record already present
 is dropped), marks the new ones `:uncommitted`, prepends them to the live
