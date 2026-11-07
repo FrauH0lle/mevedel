@@ -29,8 +29,9 @@ test('activity summaries preserve failures, children and disclosure at phone and
       await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/markdown.js'), 'utf8')});
       await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/renderer.js'), 'utf8')});
       await page.evaluate(([label, details]) => {
-        window.activity = {id: 'tool-1', summary: 'Read 2 files, searched 1 pattern, evaluated 1 form',
-          failures: '1 failed: Grep', running: 1, status: 'running'};
+        window.activity = {id: 'tool-1',
+          summary: '4 calls: read 2 files, searched 1 pattern (1 failed), evaluated 1 form',
+          running: 1, status: 'running'};
         window.render = () => {
           const target = document.getElementById('transcript');
           for (let n = 1; n <= 4; n++) {
@@ -53,8 +54,9 @@ test('activity summaries preserve failures, children and disclosure at phone and
       }, [SUMMARY_LABEL, SUMMARY_DETAILS]);
       assert.equal(await page.locator('.activity-group').count(), 1);
       assert.equal(await page.locator('.activity-group').evaluate(node => node.open), false);
-      assert.match(await page.locator('.activity-group > summary').innerText(), /1 failed: Grep/);
-      assert.match(await page.locator('.activity-group > summary').innerText(), /1 running/);
+      assert.match(await page.locator('.activity-group > summary .activity-label').innerText(),
+                   /searched 1 pattern \(1 failed\)/);
+      assert.equal(await page.locator('.activity-group > summary .activity-counts').innerText(), '1 running');
 
       const closing = page.locator('[data-record-id="summary-1"]');
       const rule = closing.locator('details.request-summary > summary');

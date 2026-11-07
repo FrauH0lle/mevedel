@@ -7092,7 +7092,9 @@ before expanding children."
 The summary grows with every kind of tool a run uses, and its running count
 comes and goes; a summary that wrapped would add or drop a row as it did.
 Room is kept for that count, the unconfined note and the disclosure
-marker, measured against the narrowest window showing the view."
+marker, measured against the narrowest window showing the view.  Failure
+counts cut off with the summary are added up after the `…', as in
+`… (2 failed)', so a folded row always shows that a call failed."
   (let* ((windows (get-buffer-window-list (current-buffer) nil t))
          (width (if windows
                     (apply #'min (mapcar #'window-body-width windows))
@@ -7104,9 +7106,37 @@ marker, measured against the narrowest window showing the view."
          ;; The marker column, a line prefix for nested rows, and the
          ;; last column, which would wrap the line in a terminal.
          (available (max 10 (- width 4 2 1 (string-width suffix)))))
-    (if (> (string-width header) available)
-        (truncate-string-to-width header available nil nil "…")
-      header)))
+    (if (<= (string-width header) available)
+        header
+      (let ((len (length header)) (pos 0) (total 0) runs)
+        (while (setq pos (text-property-any pos len 'mevedel-activity-group-part
+                                            'failure header))
+          (let* ((end (next-single-property-change
+                       pos 'mevedel-activity-group-part header len))
+                 (n (string-to-number (substring header pos end))))
+            (push (list pos end n) runs)
+            (setq total (+ total n) pos end)))
+        (if (zerop total)
+            (truncate-string-to-width header available nil nil "…")
+          (let ((cut (length (truncate-string-to-width
+                              header
+                              (max 1 (- available 1 (string-width
+                                                     (format " (%d failed)" total))))))))
+            ;; A count is shown whole or not at all: a cut inside ` (N
+            ;; failed)' ends before it instead.
+            (dolist (run runs)
+              (when (and (< (- (nth 0 run) 2) cut) (< cut (1+ (nth 1 run))))
+                (setq cut (max 0 (- (nth 0 run) 2)))))
+            (let ((hidden (cl-loop for (_start end n) in runs
+                                   unless (<= (1+ end) cut) sum n)))
+              (concat (substring header 0 cut) "…"
+                      (when (> hidden 0)
+                        (concat " "
+                                (propertize "(" 'mevedel-activity-group-part 'muted)
+                                (propertize (format "%d failed" hidden)
+                                            'mevedel-activity-group-part 'failure)
+                                (propertize ")" 'mevedel-activity-group-part
+                                            'muted)))))))))))
 
 (defun mevedel-view-render--reader-members ()
   "Return the tool rows under this view's point and its window points."

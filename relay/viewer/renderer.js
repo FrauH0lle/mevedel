@@ -584,8 +584,7 @@
       }
       group.groupLabel.textContent = activity.summary;
       group.groupLabel.title = activity.summary;
-      group.groupCounts.textContent = [activity.running ? `${activity.running} running` : '',
-        activity.failures || ''].filter(Boolean).join(' · ');
+      group.groupCounts.textContent = activity.running ? `${activity.running} running` : '';
       group.groupCounts.title = group.groupCounts.textContent;
       group.groupMarker.className = `st ${activity.status}`;
       group.groupMarker.textContent = {running: '●', failed: '✕', warning: '!'}[activity.status] || '✓';

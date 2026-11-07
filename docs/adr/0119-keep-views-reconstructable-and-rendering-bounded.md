@@ -670,8 +670,10 @@ The October tail repeated a tool the summary had already named, put the red
 text at the far end of the row, and grew with every failing tool. Each failure
 count now follows its own tool phrase, as in `ran 4 commands (2 failed),
 read 1 file`. The folded row still says which tool failed, which was
-September's objection, and only the `×` and the counts are red. The summary
-can shorten into the counts on a narrow window; the `×` stays. A group header
+September's objection, and only the `×` and the counts are red. When a narrow
+window cuts the summary, the counts it removed are added up after the `…`, as
+in `… (2 failed)`; while a call runs the marker shows `●`, so that tail is the
+only failure sign left. A group header
 also starts with its call count in the tool-name face, like a tool row's
 `Name:`, and ends with `▸`/`▾`, because a bare summary read as a stray line of
 prose with nothing showing that it expands.

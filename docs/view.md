@@ -862,7 +862,10 @@ row reads like a tool row: its call count and colon stand where a tool row's
 says it expands and turns to `▾` while it is open. A summary too long for the
 narrowest window showing the view ends in `…`, leaving room for its running
 count, unconfined note and marker, so the folded row stays one screen line as
-the count comes and goes. The header is generated from counts and tool names,
+the count comes and goes. Failure counts the cut removes are added up after
+the `…`, as in `… (2 failed) · 1 running ▸`, so a narrow folded row still
+shows that a call failed while the running marker holds the status column. A
+count is shown whole or not at all. The header is generated from counts and tool names,
 so it skips Markdown decoration; its rows decorate themselves when shown. The
 browser shows the same summary text. The
 expanded group reuses the compound-tool nested-row machinery: each tool call

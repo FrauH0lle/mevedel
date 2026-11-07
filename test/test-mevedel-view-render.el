@@ -9016,6 +9016,60 @@
                                 (mevedel-view--rendering-header-line running)))
         (should (string-match-p "· unconfined ▸\\'"
                                 (mevedel-view--rendering-header-line settled))))))
+  :doc "a narrow running row keeps failures that the summary cut off"
+  (with-temp-buffer
+    (let ((width 50))
+     (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) width)))
+      (let* ((tool (lambda (name &optional status)
+                     (list :role 'member :kind 'tool :name name
+                           :status (or status 'completed))))
+             (header
+              (lambda (&rest entries)
+                (let* ((group (car (mevedel-activity-group-partition entries nil)))
+                       (line (mevedel-view--rendering-header-line
+                              (list :header (plist-get group :summary)
+                                    :vtype 'tool-group :pending-count 1))))
+                  (should (< (string-width line) width))
+                  (should (string-suffix-p "· 1 running ▸"
+                                           (substring-no-properties line)))
+                  line)))
+             (failed (lambda (line)
+                       (cl-loop with start = 0
+                                while (string-match "\\([0-9]+\\) failed" line start)
+                                do (should (eq 'error
+                                               (get-text-property
+                                                (match-beginning 0)
+                                                'font-lock-face line)))
+                                sum (string-to-number (match-string 1 line))
+                                do (setq start (match-end 0))))))
+        ;; A failed Bash after the cut is still counted on the row.
+        (let ((line (funcall header (funcall tool "Read") (funcall tool "Read")
+                             (funcall tool "Grep") (funcall tool "Eval")
+                             (funcall tool "Bash" 'failed)
+                             (funcall tool "Read" 'running))))
+          (should-not (string-match-p "ran 1 command" line))
+          (should (string-match-p "… (1 failed) · 1 running ▸\\'"
+                                  (substring-no-properties line)))
+          (should (= 1 (funcall failed line))))
+        ;; A visible failure keeps its own count; only hidden ones join the tail.
+        (setq width 80)
+        (let ((line (funcall header (funcall tool "Grep" 'failed) (funcall tool "Read")
+                             (funcall tool "Eval") (funcall tool "WebFetch")
+                             (funcall tool "Bash" 'failed)
+                             (funcall tool "Bash" 'failed))))
+          (should (string-match-p "searched 1 pattern (1 failed)" line))
+          (should (string-match-p "… (2 failed) · 1 running ▸\\'"
+                                  (substring-no-properties line)))
+          (should (= 3 (funcall failed line))))
+        ;; A cut never leaves a count half shown.
+        (setq width 50)
+        (dotimes (n 12)
+          (let ((line (funcall header (funcall tool "Read")
+                               (funcall tool (make-string (1+ n) ?X) 'failed)
+                               (funcall tool "Grep") (funcall tool "Eval")
+                               (funcall tool "WebFetch"))))
+            (should (= 1 (funcall failed line)))
+            (should-not (string-match-p "([0-9]*\\( fa?i?l?e?\\)?…" line))))))))
   :doc "an expanded group points its disclosure marker down"
   (with-temp-buffer
     (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 80)))
