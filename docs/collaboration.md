@@ -538,13 +538,12 @@ request inside the duplicate-prompt window is dropped.
 ## Questions nobody can answer
 
 A guest may be the only one there, as on an Emacs daemon, so nothing a guest
-does waits for an answer in the minibuffer. Room frames run with
-`inhibit-interaction`, as lobby frames do, and so does the drain step that
-starts a guest's queued message as a turn. A step that would ask in Emacs
-signals instead:
+does waits for an answer in the minibuffer. Room and lobby frames run with
+`inhibit-interaction`, and so does the drain step that starts a guest's queued
+message as a turn. A step that would ask in Emacs signals instead:
 
 - a frame is refused to its sender with a notice, "This needs a decision in
-  Emacs on the host first", and the room stays up;
+  Emacs on the host first", and the room or lobby stays up;
 - a queued message is dropped with its attachments, as on a retraction; its
   sender gets the same notice, and the host a warning naming the guest.
 
@@ -579,7 +578,13 @@ removal and pause state are persisted with the session.
 A failing observer or projection preserves the room and its last good snapshot.
 The host gets one warning with the error and guests one reconnect notice until a
 publication succeeds again. A fault while handling one guest's frame warns the
-host and notifies only that guest.
+host and notifies only that guest, in a room and in the lobby alike, through
+one guest-frame error boundary. A host refusal (`user-error`) shows its text
+only to an owner-link guest; every other sender, including a peer that has not
+said hello, gets a generic sentence. The frame types both share (presence,
+session creation and models, uploads, artifact fetch and delete, discussions,
+and the store listing and actions) go through one dispatch after each kind's
+own types.
 
 Later steps of a turn run from timers and process callbacks, outside any
 binding. An Emacs daemon without a client frame reads the minibuffer on its
@@ -683,10 +688,11 @@ out. The listing is sent on join and on request; the browser asks again on
 Refresh and whenever the lobby tab returns to the foreground.
 
 Guests act while nobody may be at the keyboard, so lobby frames run with
-`inhibit-interaction`. Cold session restoration does not initialize optional
-view power monitoring or its battery/D-Bus backend. Opening a file-workspace
-session automatically reclaims
-a same-host PID lock when the host proves its PID is dead or its process
+`inhibit-interaction`, and a failing lobby frame is answered to its sender as
+in a room; the lobby keeps running. Cold session restoration does not
+initialize optional view power monitoring or its battery/D-Bus backend.
+Opening a file-workspace session automatically reclaims a same-host PID lock
+when the host proves its PID is dead or its process
 identity proves PID reuse. Replacement checks that the observed holder has not
 changed; a competing replacement refuses the open. Live, foreign-host,
 malformed or unprovable locks still need a decision in Emacs, as do portable

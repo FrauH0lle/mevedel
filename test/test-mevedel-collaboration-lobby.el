@@ -829,14 +829,20 @@ MESSAGE, when non-nil, is the refusal the guest must receive."
       ;; Another workspace's frames never reach this lobby.
       (mevedel-collaboration-lobby--on-frame "/other/" 1 '(:t "open-session"))
       (should (= 2 (length routed)))
-      ;; A failing handler is reported, and the lobby keeps working.
+      ;; A failing handler warns the host and tells only its sender, and
+      ;; the lobby keeps working.
+      (setq sent nil)
       (cl-letf (((symbol-function 'mevedel-collaboration-lobby--handle-open)
                  (lambda (&rest _) (error "Boom"))))
         (let (captured)
-          (mevedel-test--with-captured-messages captured
+          (mevedel-test--with-captured-diagnostics captured
             (mevedel-collaboration-lobby--on-frame
              "/root/" 1 '(:t "open-session")))
-          (should (string-match-p "lobby frame failed: Boom" captured))))
+          (should (string-search "A guest's open-session frame failed: Boom"
+                                 captured))))
+      (should (equal '((1 :t "notice"
+                          :message "The host could not handle this action"))
+                     sent))
       (should (eq lobby (gethash "/root/"
                                  mevedel-collaboration-lobby--lobbies))))))
 
