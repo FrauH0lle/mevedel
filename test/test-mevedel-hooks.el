@@ -3288,5 +3288,94 @@
       (with-current-buffer data-buf
         (should-not (mevedel-hooks--progress-snapshot))))))
 
+(defun mevedel-hooks-test--slow-events (prepare &optional before-slow)
+  "Run a slow PreToolUse hook and return (EVENTS OWNER STATUS).
+PREPARE runs in the view buffer before the event; BEFORE-SLOW, when
+given, runs there after the event starts and before the slow notice.  EVENTS
+is the ordered list of status-transition and slow-status telemetry."
+  (let* ((root (make-temp-file "mevedel-hooks-slow-events" t))
+         (session (mevedel-hooks-test--session root))
+         (mevedel-hooks-slow-threshold 1)
+         (mevedel-view-spinner-animate nil)
+         (mevedel-hook-rules
+          '((PreToolUse
+             ((:matcher "Read"
+               :hooks ((:type elisp :function ignore)))))))
+         slow-callback handler-finish records)
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session))
+          (with-current-buffer view-buf (funcall prepare))
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_seconds _repeat function &rest args)
+                       (setq slow-callback
+                             (lambda () (apply function args)))
+                       nil))
+                    ((symbol-function 'mevedel-hooks--run-handlers)
+                     (lambda (_event _handlers _payload _session _request
+                              _context callback _dispatch-buffer)
+                       (setq handler-finish callback)))
+                    ((symbol-function 'mevedel-telemetry-record)
+                     (lambda (_session event &rest props)
+                       (when (memq event '(status-transition
+                                           hook-slow-status-acquired
+                                           hook-slow-status-released))
+                         (push (pcase event
+                                 ('status-transition
+                                  (list event
+                                        (and (plist-get props :owner) t)
+                                        (plist-get props :status)))
+                                 ('hook-slow-status-released
+                                  (list event (plist-get props :restored)))
+                                 (_ (list event)))
+                               records)))))
+            (with-current-buffer data-buf
+              (mevedel-hooks-run-event
+               'PreToolUse '(:tool-name "Read") #'ignore session))
+            (when before-slow
+              (with-current-buffer view-buf (funcall before-slow)))
+            (funcall slow-callback)
+            (funcall handler-finish nil)
+            (with-current-buffer view-buf
+              (list (nreverse records)
+                    mevedel-view--spinner-owner
+                    mevedel-view--spinner-status))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-hooks-slow-progress-sequence (:quiet t)
+  ,test
+  (test)
+  :doc "request-owned progress is claimed, then restored, in telemetry order"
+  (let ((result (mevedel-hooks-test--slow-events
+                 (lambda () (mevedel-view--start-spinner "Working...")))))
+    (should (equal '((status-transition t "Running PreToolUse hook...")
+                     (hook-slow-status-acquired)
+                     (status-transition t "Working...")
+                     (hook-slow-status-released t))
+                   (nth 0 result)))
+    (should (equal "Working..." (nth 2 result)))
+    (should (eq 'request (nth 1 result))))
+
+  :doc "an idle view is never claimed"
+  (should (equal '(nil nil nil)
+                 (mevedel-hooks-test--slow-events #'ignore)))
+
+  :doc "a foreign owner's status is neither claimed nor restored"
+  (let ((result (mevedel-hooks-test--slow-events
+                 (lambda ()
+                   (mevedel-view--start-spinner "Working...")
+                   (mevedel-view--update-spinner
+                    "Other" (gensym "other-"))))))
+    (should (equal "Other" (nth 2 result)))
+    (should-not (assq 'hook-slow-status-acquired (nth 0 result))))
+
+  :doc "a stale generation refuses the claim"
+  (let ((result (mevedel-hooks-test--slow-events
+                 (lambda () (mevedel-view--start-spinner "Working..."))
+                 (lambda () (mevedel-view--start-spinner "Newer")))))
+    (should-not (assq 'hook-slow-status-acquired (nth 0 result)))
+    (should (equal "Newer" (nth 2 result)))))
+
 (provide 'test-mevedel-hooks)
 ;;; test-mevedel-hooks.el ends here

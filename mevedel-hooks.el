@@ -99,13 +99,15 @@
 (autoload 'mevedel-request-push-canceller "mevedel-turn")
 
 ;; `mevedel-view-stream'
-(declare-function mevedel-view--claim-spinner-status
-                  "mevedel-view-stream" (snapshot status owner))
-(declare-function mevedel-view--restore-spinner-status
-                  "mevedel-view-stream" (owner snapshot))
-(declare-function mevedel-view--spinner-active-p "mevedel-view-stream" ())
-(declare-function mevedel-view--spinner-status-snapshot
-                  "mevedel-view-stream" ())
+(declare-function mevedel-view-stream-lease-progress
+                  "mevedel-view-stream" (view))
+(declare-function mevedel-view-stream-claim-leased-progress
+                  "mevedel-view-stream" (view lease status owner))
+(declare-function mevedel-view-stream-release-progress
+                  "mevedel-view-stream" (view token))
+(autoload 'mevedel-view-stream-lease-progress "mevedel-view-stream")
+(autoload 'mevedel-view-stream-claim-leased-progress "mevedel-view-stream")
+(autoload 'mevedel-view-stream-release-progress "mevedel-view-stream")
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-state-dir
@@ -1469,39 +1471,26 @@ EVENT labels each generated hook event block."
   (message "mevedel: %s" text))
 
 (defun mevedel-hooks--progress-snapshot ()
-  "Return the active view progress snapshot and its buffer, or nil."
+  "Return the leased view progress and its buffer, or nil."
   (when-let* ((view-buffer (and (boundp 'mevedel--view-buffer)
                                 mevedel--view-buffer))
               (_ (buffer-live-p view-buffer))
-              (_ (fboundp 'mevedel-view--spinner-active-p))
-              (_ (fboundp 'mevedel-view--spinner-status-snapshot)))
-    (with-current-buffer view-buffer
-      (when (ignore-errors (mevedel-view--spinner-active-p))
-        (when-let* ((snapshot
-                     (ignore-errors
-                       (mevedel-view--spinner-status-snapshot))))
-          (when (eq (plist-get snapshot :owner) 'request)
-            (list :buffer view-buffer :status snapshot)))))))
+              (lease (mevedel-view-stream-lease-progress view-buffer)))
+    (list :buffer view-buffer :status lease)))
 
 (defun mevedel-hooks--claim-progress (lease text owner)
-  "Replace LEASE with hook progress TEXT owned by OWNER."
-  (when-let* ((view-buffer (plist-get lease :buffer))
-              (_ (buffer-live-p view-buffer))
-              (_ (fboundp 'mevedel-view--claim-spinner-status)))
-    (with-current-buffer view-buffer
-      (ignore-errors
-        (mevedel-view--claim-spinner-status
-         (plist-get lease :status) text owner)))))
+  "Replace LEASE with hook progress TEXT owned by OWNER.
+Return a release token, or nil when LEASE no longer applies."
+  (when-let* ((view-buffer (plist-get lease :buffer)))
+    (ignore-errors
+      (mevedel-view-stream-claim-leased-progress
+       view-buffer (plist-get lease :status) text owner))))
 
-(defun mevedel-hooks--restore-progress (lease owner)
-  "Restore LEASE when OWNER still owns the visible progress status."
-  (when-let* ((view-buffer (plist-get lease :buffer))
-              (_ (buffer-live-p view-buffer))
-              (_ (fboundp 'mevedel-view--restore-spinner-status)))
-    (with-current-buffer view-buffer
-      (ignore-errors
-        (mevedel-view--restore-spinner-status
-         owner (plist-get lease :status))))))
+(defun mevedel-hooks--restore-progress (lease token)
+  "Release TOKEN into LEASE's view while its owner still owns the status."
+  (when-let* ((view-buffer (plist-get lease :buffer)))
+    (ignore-errors
+      (mevedel-view-stream-release-progress view-buffer token))))
 
 (defun mevedel-hooks--decision-blocking-p (decision)
   "Return non-nil when DECISION blocks the triggering operation."
@@ -2349,7 +2338,7 @@ decision plist."
                          (when slow-surfaced
                            (let ((restored
                                   (mevedel-hooks--restore-progress
-                                   progress-lease progress-owner)))
+                                   progress-lease slow-surfaced)))
                              (when (and session
                                     (fboundp 'mevedel-telemetry-record))
                                (mevedel-telemetry-record
@@ -2382,13 +2371,14 @@ decision plist."
                        (mevedel-hooks--surface
                         (format "%s hook still running..."
                                 (mevedel-hooks-event-display-name event)))
-                       (when (mevedel-hooks--claim-progress
-                              progress-lease
-                              (format "Running %s hook..."
-                                      (mevedel-hooks-event-display-name
-                                       event))
-                              progress-owner)
-                         (setq slow-surfaced t)
+                       (when-let* ((token
+                                    (mevedel-hooks--claim-progress
+                                     progress-lease
+                                     (format "Running %s hook..."
+                                             (mevedel-hooks-event-display-name
+                                              event))
+                                     progress-owner)))
+                         (setq slow-surfaced token)
                          (when (and session
                                     (fboundp 'mevedel-telemetry-record))
                            (mevedel-telemetry-record
