@@ -1582,6 +1582,97 @@ Return the artifact's directory."
                            (mevedel-artifact-room-test--file directory "index.html"))))
         (mevedel-artifact-room-test--close consumer))))
 
+  :doc "keeps the refused hash and content when a writer commits before the room replies"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((directory (mevedel-artifact-room-test--site workspace "landing"))
+           (links (mevedel-collaboration-artifact-room-share root "landing"))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit))
+           (write (symbol-function 'mevedel-artifact-store-write-files))
+           injected reply)
+      (unwind-protect
+          (progn
+            (cl-letf (((symbol-function 'mevedel-artifact-store-write-files)
+                       (lambda (workspace id changes)
+                         (let ((outcome (funcall write workspace id changes)))
+                           (when (and (plist-get outcome :stale) (not injected))
+                             (setq injected t)
+                             (should (plist-get
+                                      (mevedel-artifact-store-write-file
+                                       workspace id "index.html" "second writer"
+                                       mevedel-artifact-room-test--page-hash)
+                                      :hash)))
+                           outcome))))
+              (setq reply (mevedel-artifact-room-test--request
+                           consumer 1 `((action . "write-file") (file . "index.html")
+                                        (hash . ,(make-string 64 ?0))
+                                        (text . "stale writer")))))
+            (should injected)
+            (should (equal "second writer"
+                           (mevedel-artifact-room-test--file directory "index.html")))
+            (should (equal "stale" (alist-get 'code reply)))
+            (should (equal mevedel-artifact-room-test--page-hash (alist-get 'hash reply)))
+            (should (equal mevedel-artifact-room-test--page (alist-get 'text reply))))
+        (mevedel-artifact-room-test--close consumer))))
+
+  :doc "preserves locked evidence for empty, binary, large, missing and create-conflict files"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((directory (mevedel-artifact-room-test--site workspace "landing"))
+           (links (mevedel-collaboration-artifact-room-share root "landing"))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit))
+           (write (symbol-function 'mevedel-artifact-store-write-files))
+           (file "assets/conflict.bin")
+           (path (file-name-concat directory file))
+           (request-id 0))
+      (unwind-protect
+          (dolist (spec (list (list "write-file" "" nil)
+                             (list "delete-file" (unibyte-string 0 #xff 1) nil)
+                             (list "write-files" (make-string (* 256 1024) ?x) nil)
+                             (list "write-file" nil nil)
+                             (list "write-file" "already exists" t)))
+            (pcase-let* ((`(,action ,bytes ,hashless) spec)
+                         (hash (and bytes (secure-hash 'sha256 bytes)))
+                         (expected (unless hashless (make-string 64 ?0)))
+                         (change `((file . ,file) (hash . ,(or expected :null))
+                                   ,@(if (equal action "delete-file")
+                                         '((delete . t)) '((text . "stale writer")))))
+                         (body (if (equal action "write-files")
+                                   `((action . ,action) (changes . ,(vector change)))
+                                 `((action . ,action) ,@change)))
+                         (injected nil)
+                         (reply nil))
+              (when (file-exists-p path) (delete-file path))
+              (when bytes
+                (let ((coding-system-for-write 'no-conversion))
+                  (write-region bytes nil path nil 'silent)))
+              (cl-letf (((symbol-function 'mevedel-artifact-store-write-files)
+                         (lambda (workspace id changes)
+                           (let ((outcome (funcall write workspace id changes)))
+                             (when (and (plist-get outcome :stale) (not injected))
+                               (setq injected t)
+                               (should (plist-get
+                                        (mevedel-artifact-store-write-file
+                                         workspace id file "second writer" hash)
+                                        :hash)))
+                             outcome))))
+                (setq reply (mevedel-artifact-room-test--request
+                             consumer (cl-incf request-id) body)))
+              (should injected)
+              (should (equal "second writer" (mevedel-artifact-room-test--file directory file)))
+              (should (equal "stale" (alist-get 'code reply)))
+              (should (equal (or hash :null) (alist-get 'hash reply)))
+              (cond
+               ((null bytes)
+                (should-not (assq 'bytes reply))
+                (should (string-search "does not exist" (alist-get 'error reply))))
+               ((= (length bytes) (* 256 1024))
+                (should (= (length bytes) (alist-get 'bytes reply)))
+                (should-not (assq 'text reply))
+                (should-not (assq 'data reply)))
+               ((equal action "delete-file")
+                (should (equal bytes (base64-decode-string (alist-get 'data reply)))))
+               (t (should (equal bytes (alist-get 'text reply)))))))
+        (mevedel-artifact-room-test--close consumer))))
+
   :doc "creates a file, and its directories, only where none exists"
   (mevedel-artifact-room-test--with-origin (root workspace state port)
     (let* ((directory (mevedel-artifact-room-test--site workspace "landing"))

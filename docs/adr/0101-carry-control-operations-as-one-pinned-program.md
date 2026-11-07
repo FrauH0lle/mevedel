@@ -37,6 +37,14 @@ proved to be that leaf, so large files are compared without transferring
 their bytes. Shared-file disposal verifies the reviewed hash and mode before
 plain deletion. It needs no blob-capture or restoration operations.
 
+For artifact writes, `verify-hash` can request a bounded conflict snapshot and
+use a nil expected hash to require absence. A mismatch returns the observed
+hash and size, plus bytes for files below the requested limit, while still
+holding the store lock. Only this complete mismatch payload is exposed as
+`:observed`; other failed operations still discard partial payloads. The store
+and artifact room pass this evidence through without rereading after unlock,
+so another writer cannot substitute a newer hash or retry content.
+
 Requests use five fields per operation and NUL framing. Arbitrary content and
 response bytes use base64; numeric limits, modes, and deadlines use validated
 digit strings. On a local target, every `write` and `create` payload travels

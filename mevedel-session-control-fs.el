@@ -385,7 +385,12 @@ before the operation ran."
    "      ;;\n"
    ;; Content hashes read through a descriptor proved to be the pinned leaf,
    ;; so a link swapped in after the type check cannot redirect the read.
-   "    hash|verify-hash)\n"
+   "    hash|verify-hash|verify-hash-snapshot)\n"
+   "      if test \"$op\" = verify-hash-snapshot; then\n"
+   "        expected=${payload%% *}; limit=${payload#* }\n"
+   "        [[ \"$limit\" =~ ^[0-9]+$ ]] || exit 67\n"
+   "        if test -z \"$expected\" && test ! -e \"$leaf\" && test ! -L \"$leaf\"; then exit 0; fi\n"
+   "      fi\n"
    "      test ! -L \"$leaf\" || exit 69\n"
    "      test -e \"$leaf\" || exit 77\n"
    "      test -f \"$leaf\" || exit 68\n"
@@ -396,8 +401,17 @@ before the operation ran."
    "      if test \"$op\" = hash; then\n"
    "        size=$(stat -L -c %s -- /proc/self/fd/8) || exit 67\n"
    "        printf '%s %s' \"$size\" \"$sum\" | base64 -w0 || exit 67\n"
-   "      else\n"
+   "      elif test \"$op\" = verify-hash; then\n"
    "        test \"$sum\" = \"$payload\" || exit 72\n"
+   "      elif test \"$sum\" != \"$expected\"; then\n"
+   "        size=$(stat -L -c %s -- /proc/self/fd/8) || exit 67\n"
+   "        (set -o pipefail; {\n"
+   "          printf '%s %s\\n' \"$size\" \"$sum\"\n"
+   "          if test \"$size\" -lt \"$limit\"; then\n"
+   "            dd if=/proc/self/fd/8 iflag=count_bytes count=\"$limit\" status=none || exit 67\n"
+   "          fi\n"
+   "        } | base64 -w0) || exit 67\n"
+   "        exit 72\n"
    "      fi\n"
    "      ;;\n"
    "    verify-latest)\n"
@@ -774,6 +788,20 @@ parent must not turn into a `Setting current directory' failure."
                (list "Portable control tree size is unavailable"
                      (plist-get op :path))))
      (string-to-number payload))
+    ((and 'verify-hash (guard (plist-member op :snapshot-bytes)))
+     (unless (string-match "\\`\\([0-9]+\\) \\([0-9a-f]\\{64\\}\\)\n" payload)
+       (signal 'file-error (list "Invalid control hash snapshot" (plist-get op :path))))
+     (let* ((size (string-to-number (match-string 1 payload)))
+            (hash (match-string 2 payload))
+            (content (substring payload (match-end 0)))
+            (included (< size (plist-get op :snapshot-bytes))))
+       (unless (if included
+                   (and (= size (length content))
+                        (equal hash (secure-hash 'sha256 content)))
+                 (string-empty-p content))
+         (signal 'file-error (list "Inconsistent control hash snapshot" (plist-get op :path))))
+       (append (list :hash hash :bytes size)
+               (when included (list :content content)))))
     ('file-hash
      (unless (string-match "\\`\\([0-9]+\\) \\([0-9a-f]\\{64\\}\\)\\'" payload)
        (signal 'file-error
@@ -800,6 +828,15 @@ parent must not turn into a `Setting current directory' failure."
          ;; strips it before comparing.
          (payload
           (cond
+           ((and (eq (plist-get op :op) 'verify-hash)
+                 (plist-member op :snapshot-bytes))
+            (unless (and (natnump (plist-get op :snapshot-bytes))
+                         (or (null content)
+                             (and (stringp content)
+                                  (string-match-p "\\`[0-9a-f]\\{64\\}\\'" content))))
+              (error "Invalid expected control hash or snapshot limit"))
+            (setq verb "verify-hash-snapshot")
+            (format "%s %d" (or content "") (plist-get op :snapshot-bytes)))
            ((plist-member op :max-bytes)
             (unless (and (eq (plist-get op :op) 'read)
                          (natnump (plist-get op :max-bytes)))
@@ -1081,14 +1118,21 @@ report why."
                   (decoded (and (eq status 'ok)
                                 (not (string-empty-p (or payload "")))
                                 (base64-decode-string payload))))
-             (list :op (plist-get op :op)
-                   :path (plist-get op :path)
-                   :status status
-                   :code code
-                   :value (and (eq status 'ok)
-                               (mevedel-session-control-fs--program-value
-                                op (or decoded "")))
-                   :diagnostic (unless (eq status 'ok) (or diagnostic "")))))
+             (append
+              (list :op (plist-get op :op)
+                    :path (plist-get op :path)
+                    :status status
+                    :code code
+                    :value (and (eq status 'ok)
+                                (not (eq (plist-get op :op) 'verify-hash))
+                                (mevedel-session-control-fs--program-value
+                                 op (or decoded "")))
+                    :diagnostic (unless (eq status 'ok) (or diagnostic "")))
+              (when (and (eq status 'mismatch)
+                         (eq (plist-get op :op) 'verify-hash)
+                         (plist-member op :snapshot-bytes))
+                (list :observed (mevedel-session-control-fs--program-value
+                                 op (base64-decode-string payload)))))))
          results)))
     (unless (or (null records) (equal records '("")))
       (error "Unexpected control operation result"))
@@ -1226,6 +1270,13 @@ transfer or decoding.  `:optional' marks an operation whose failure the caller
 interprets
 itself, such as ensuring a directory that may already exist, and which
 therefore does not end the program.
+
+A `verify-hash' with `:snapshot-bytes' also accepts nil `:content' to
+require absence.  On mismatch its result carries `:observed', the checked
+file's `:hash' and `:bytes', plus unibyte `:content' when strictly smaller
+than that limit.  These are captured before the program releases its lock;
+an absent file reports `absent' with no observation.  Other failed operations
+never expose a partial payload as a value.
 
 Every operation opens and proves its parent descriptor inside the target
 process. Up to 32 independent unbounded reads may transfer together through

@@ -880,14 +880,16 @@ An edit link may also run:
   `delete-file` answers; a stale refusal names the first file that changed.
 
 A refused write or deletion changes nothing and answers `{error, code:
-"stale", file, hash}`: the file's current hash (null when it does not exist)
-and, for a file under 256 KiB, its `bytes` and `text` or `data` as a read
-returns them, so the consumer can redo its change without reading again. There
-is no patch engine at the origin; consumers apply edits to the content they
-read and send the result. File names are relative to the artifact's directory,
-without `.` or `..` components, and no component on the way may be a symbolic
-link; anything else is refused with `Refused path ...`. Listings leave links
-out. The bookkeeping in `.state/ID/` lies beside the artifact's directory, so
+"stale", file, hash}`: the file's hash observed by the locked check (null
+when it did not exist) and, for a file under 256 KiB, its `bytes` and `text`
+or `data` as a read returns them, captured under the same lock, so the consumer
+can redo its change without reading again. A later writer cannot replace this
+refusal's evidence. There is no patch engine at the origin; consumers apply edits
+to the content they read and send the result. File names are relative to the
+artifact's directory, without `.` or `..` components, and no component on the
+way may be a symbolic link; anything else is refused with `Refused path ...`.
+Listings leave links out. The bookkeeping in `.state/ID/` lies beside the
+artifact's directory, so
 no file name reaches it. Each file read or written is at most 16 MiB, which
 is why artifact rooms derive their editing-transfer budget (`:editing-max-bytes`,
 15/8 of that limit, 30 MiB) instead of the usual 24 MiB. It is headroom for a
