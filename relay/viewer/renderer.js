@@ -686,7 +686,10 @@
     } else {
       const header = document.querySelector('body > .topbar')?.getBoundingClientRect();
       const dock = document.querySelector('.dock')?.getBoundingClientRect();
-      top = Math.max(top, header?.bottom || 0);
+      // The pinned prompt can overlay the row under the header once scrolled.
+      const pin = document.getElementById('pinned-prompt');
+      const row = pin ? parseFloat(getComputedStyle(pin).getPropertyValue('--pinned-prompt-h')) || 0 : 0;
+      top = Math.max(top, (header?.bottom || 0) + row);
       if (dock?.height > 0 && dock.bottom > top) bottom = Math.min(bottom, Math.max(top, dock.top));
     }
     const available = Math.max(0, bottom - top);

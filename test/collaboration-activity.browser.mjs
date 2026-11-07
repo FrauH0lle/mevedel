@@ -258,7 +258,9 @@ test('revealed sources use the unobscured transcript viewport', async () => {
         .dock { position:fixed; bottom:0; height:520px; width:100%; background:white; z-index:3; }
         .spacer { height:1100px; } .viewer-panel { position:fixed; inset:0; background:white; z-index:4; }
         .agent-ledger { position:absolute; top:64px; bottom:0; width:100%; overflow:auto; }
-      </style><header class="topbar">Header</header><div class="spacer"></div>
+        #pinned-prompt { --pinned-prompt-h:34px; position:fixed; top:64px; height:34px; width:100%; z-index:3; }
+      </style><header class="topbar">Header</header>
+      <button id="pinned-prompt" type="button">A prompt pinned below the header</button><div class="spacer"></div>
       <main id="transcript"></main><div class="spacer"></div><section id="history-body"></section>
       <div class="spacer"></div><aside class="dock"><textarea id="draft">exact draft</textarea></aside>
       <section class="viewer-panel" hidden><header class="topbar">Agent header</header><div id="agent-transcript" class="agent-ledger"></div></section>`);
@@ -287,7 +289,7 @@ test('revealed sources use the unobscured transcript viewport', async () => {
           const rect = node.getBoundingClientRect();
           const panel = node.closest('.viewer-panel');
           const top = panel ? panel.querySelector('.topbar').getBoundingClientRect().bottom
-            : document.querySelector('body > .topbar').getBoundingClientRect().bottom;
+            : document.getElementById('pinned-prompt').getBoundingClientRect().bottom;
           const bottom = panel ? innerHeight : document.querySelector('.dock').getBoundingClientRect().top;
           const hit = document.elementFromPoint(rect.left + 10, rect.top + 10);
           return {top: rect.top, visibleTop: top, visibleBottom: bottom,

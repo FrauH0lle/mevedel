@@ -1658,6 +1658,8 @@
   [document.body, transcript, dock].forEach(node => liveLayout.observe(node));
   window.addEventListener('resize', scheduleLiveScroll);
   window.visualViewport?.addEventListener('resize', scheduleLiveScroll);
+  window.mevedelPinnedPrompt.create({pin: document.getElementById('pinned-prompt'),
+    transcript, history: document.getElementById('history')});
   const linkFragment = notificationsApi.resolveShare(parseFragment,
                                                      window.mevedelNav.historyShare());
   const rawFragment = linkFragment.split('?')[0];

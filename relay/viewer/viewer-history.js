@@ -79,6 +79,8 @@ window.mevedelHistoryView = Object.freeze({
             if (rows.has(number)) group.append(rows.get(number).node);
           }
           if (chat.lastSegment === frame.currentSegment) {
+            // The pinned prompt continues across this chat's compactions only.
+            group.dataset.live = 'true';
             group.append(el('p', 'history-note', 'Live conversation · New messages go here.'));
           }
           return group;

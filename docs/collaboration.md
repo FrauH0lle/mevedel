@@ -359,6 +359,21 @@ A compact floating down-arrow button above the dock also jumps to the latest con
 following. It overlays the conversation without reserving a row or hiding chat
 behind a full-width bar; its accessible label and tooltip are **Jump to latest**.
 
+Once the prompt of the exchange at the top of the transcript has scrolled under
+the sticky header, a one-line preview of it is pinned there, the browser
+analogue of the view's [pinned prompt](view.md#status-strip-and-cockpit-routing).
+It is derived from the rendered prompt turns, follows the exchange at the top
+rather than the latest prompt, and truncates with an ellipsis to the
+conversation column. A prompt header within the row's height counts as visible,
+so the row never covers one. The row overlays the transcript instead of
+reserving height, which a phone such as an iPhone mini cannot spare, so it never
+moves the transcript. Clicking it scrolls the prompt back to just below the
+header. An open archived segment uses only its own prompts. Live content before
+the first live prompt continues the last prompt of the latest archived segment
+of the same chat once that segment has been loaded, unless a live prompt is on
+screen; a chat started by `/clear` carries nothing over. Revealing a source
+leaves room for the row.
+
 Room and discussion message boxes use **Enter** for a newline and **Ctrl+Enter**
 or **⌘+Enter** to send. This applies to the room composer and new discussions
 and replies on HTML artifacts, whiteboards and documents. The sending shortcut
@@ -1408,8 +1423,9 @@ owner's current or archived conversation, then loads exactly that segment.
 It opens the tool row, including a nested ToolCall child and its enclosing
 activity disclosure; child-owned rows open that child's transcript sheet.
 Source scrolling uses the unobscured transcript viewport between the sticky
-header and dock, rather than the whole window. Oversized tools start below the
-header; short sources center in the available space. Child-sheet navigation
+header, with room for its pinned prompt row, and the dock, rather than the whole
+window. Oversized tools start below the header; short sources center in the
+available space. Child-sheet navigation
 scrolls only its own transcript and leaves the parent's scroll position alone.
 The browser neither scans archives sequentially nor guesses a nearby row.
 Only a host-reported unavailable source falls back to retained execution
