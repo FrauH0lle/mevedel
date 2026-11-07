@@ -7,16 +7,21 @@
    actions that leave the heading too little room, or cut off its title while
    it holds less than half the header, fold into the head's ⋯ menu, lowest
    data-fold first and the rightmost among equals; .keep actions, such as
-   presence, never fold. */
+   presence, never fold. While a full-screen panel is open, the body carries
+   data-panel-open for the dock's styles. A body:has(...) rule would make
+   every transcript change restyle the whole page. */
 (() => {
   // The heading's least width before actions fold away.
   const MIN_HEADING = 120;
 
   function create({shared = []} = {}) {
     const heads = new Map();
+    const panels = [...document.querySelectorAll('.viewer-panel')];
     let scheduled = false;
     const observer = typeof MutationObserver === 'function'
       ? new MutationObserver(records => {
+        // Synchronously, so no frame shows a panel over an unchanged dock.
+        if (records.some(record => panels.includes(record.target))) cover();
         // Folding moves nodes; only a changed action or title refits.
         if (records.some(record => record.type !== 'childList'
                          || record.target.closest?.('.room-heading'))) schedule();
@@ -59,12 +64,19 @@
                                attributes: true, attributeFilter: ['hidden']});
     }
 
-    // The head on screen: an open full-screen panel's, else the room's. A
-    // panel docked beside the chat leaves the room's head on screen.
+    // The open full-screen panel, if any. A panel docked beside the chat
+    // covers nothing.
+    function covering() {
+      return panels.filter(panel => !panel.hidden && !panel.classList.contains('docked')).at(-1);
+    }
+
+    function cover() {
+      document.body.toggleAttribute('data-panel-open', !!covering());
+    }
+
+    // The head on screen: an open full-screen panel's, else the room's.
     function active() {
-      const panels = [...document.querySelectorAll('.viewer-panel')]
-        .filter(panel => !panel.hidden && !panel.classList.contains('docked'));
-      return panels.at(-1)?.querySelector('.topbar')
+      return covering()?.querySelector('.topbar')
         || document.querySelector('body > .topbar');
     }
 
@@ -130,7 +142,7 @@
 
     document.querySelectorAll('.topbar').forEach(setup);
     // Opening or closing a panel changes which head is on screen.
-    document.querySelectorAll('.viewer-panel').forEach(panel => observer?.observe(
+    panels.forEach(panel => observer?.observe(
       panel, {attributes: true, attributeFilter: ['hidden', 'class']}));
     window.addEventListener('resize', schedule);
     document.addEventListener('pointerdown', event => {
@@ -138,6 +150,7 @@
         if (more.open && !more.contains(event.target)) more.open = false;
       }
     });
+    cover();
     place();
     return Object.freeze({refit: schedule});
   }

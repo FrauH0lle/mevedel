@@ -38,17 +38,18 @@
    an item's own conversation runs turns that ask too. While a panel is
    open the dock rises above it with only its pending interactions and
    sheets, and lets every other pointer through to the panel. A docked
-   panel covers nothing, so the dock stays as it is. */
-body:has(.viewer-panel:not([hidden], .docked)) .dock {
+   panel covers nothing, so the dock stays as it is. viewer-header.js sets
+   data-panel-open. */
+body[data-panel-open] .dock {
   z-index: 31;
   background: none;
   pointer-events: none;
 }
-body:has(.viewer-panel:not([hidden], .docked)) .dock > :not(#requests, #editing-panel, dialog) {
+body[data-panel-open] .dock > :not(#requests, #editing-panel, dialog) {
   display: none;
 }
-body:has(.viewer-panel:not([hidden], .docked)) .dock > dialog { pointer-events: auto; }
-body:has(.viewer-panel:not([hidden], .docked)) #requests {
+body[data-panel-open] .dock > dialog { pointer-events: auto; }
+body[data-panel-open] #requests {
   position: relative;
   z-index: 31;
   pointer-events: auto;

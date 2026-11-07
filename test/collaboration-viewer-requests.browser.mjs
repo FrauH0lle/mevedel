@@ -1,7 +1,8 @@
 /* Pending interactions stay reachable over the viewer's panels.
  *
  * The real room page and stylesheets load without their scripts; a panel
- * is opened and a request card placed the way the viewer places them.
+ * is opened and a request card placed the way the viewer places them. The
+ * real header script marks an open panel for the dock's styles.
  *
  * Run: node --test test/collaboration-viewer-requests.browser.mjs
  * Requires `npm ci --prefix shared-editing` and Playwright Chromium.
@@ -71,6 +72,13 @@ async function requestRenderer(page) {
     const send = frame => window.requestSent.push(frame);
     window.requestView = window.mevedelRequestView.create({requests, el, send, state: window.requestState});
   })();`});
+}
+
+// The real header, which marks a full-screen panel open for the dock.
+async function header(page) {
+  await page.addScriptTag({content: await readFile(
+    resolve(root, 'relay/viewer/viewer-header.js'), 'utf8')});
+  await page.evaluate(() => window.mevedelHeader.create());
 }
 
 test('room composer starts at one line and grows and shrinks with its draft', async () => {
@@ -415,6 +423,7 @@ test('a pending interaction rises above every open panel', async () => {
   try {
     for (const panel of ['editing-panel', 'artifact-panel', 'agent-panel']) {
       const page = await room(browser);
+      await header(page);
       assert.equal(await reachable(page, '#composer'), true, 'the room shows its composer');
       await page.evaluate(id => { document.getElementById(id).hidden = false; }, panel);
       // Without a decision pending the panel takes every pointer.
@@ -500,6 +509,7 @@ test('a docked item leaves the chat, its decisions and a room drawer reachable',
   const browser = await chromium.launch();
   try {
     const page = await wideRoom(browser, 2560);
+    await header(page);
     await page.evaluate(() => {
       document.getElementById('room-button').hidden = false;
       const panel = document.getElementById('editing-panel');

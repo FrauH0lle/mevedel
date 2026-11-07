@@ -12,7 +12,7 @@
  *
  * Updates touch only the row's attributes and inline style. Changing its
  * text or hidden attribute would invalidate the viewer's body:has(...)
- * rules and restyle the whole transcript, about 17 ms on a long one.
+ * rules, which costs a long transcript far more than an attribute change.
  */
 'use strict';
 window.mevedelPinnedPrompt = Object.freeze({
