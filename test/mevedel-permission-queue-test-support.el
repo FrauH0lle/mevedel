@@ -28,6 +28,7 @@
 (require 'mevedel-view-interaction)
 
 (defvar mevedel--session)
+(defvar mevedel-permission-mode)
 (defvar mevedel--prompt-overlays)
 (defvar mevedel-view--interaction-overlays)
 
@@ -169,6 +170,137 @@ captured), :entry (a copy of the card's entry), :count and :text."
 (defun mevedel-pq-test--answer-captured (card outcome)
   "Answer CARD with OUTCOME through the closure it captured when rendered."
   (funcall (plist-get card :callback) outcome))
+
+;;
+;;; Scripted person
+
+;; A caller test that wants a particular answer cannot wait for a person.  The
+;; scripted person below stands where one would: it watches the real card
+;; renderer and, once a card is on screen, presses keys on that card.  The queue,
+;; the card and the key bindings stay real; only the choice of key is scripted.
+
+(defvar mevedel-pq-test--driven nil
+  "Snapshots of the cards the scripted person has answered, newest first.")
+
+(defvar mevedel-pq-test--advice nil
+  "The advice the scripted person installed.")
+
+(defvar mevedel-pq-test--last-session nil
+  "The session of the latest `mevedel-pq-test--answering' form.")
+
+(defvar mevedel-pq-test--driving nil
+  "Non-nil while the scripted person is pressing keys.")
+
+(defconst mevedel-pq-test--outcome-keys
+  '((allow-once . "a") (allow-session . "s") (always-allow . "A")
+    (deny-once . "d") (deny-session . "D"))
+  "Key that a card binds for each outcome it can offer.")
+
+(defun mevedel-pq-test--admitted-p ()
+  "Return non-nil when the latest answering form's session saw a request."
+  (and mevedel-pq-test--last-session
+       (mevedel-pq-test--requested-p mevedel-pq-test--last-session)))
+
+(defun mevedel-pq-test--prompts ()
+  "Return the entries of the cards shown so far, oldest first."
+  (mapcar (lambda (card) (plist-get card :entry))
+          (reverse mevedel-pq-test--driven)))
+
+(defun mevedel-pq-test--key-offered-p (card key)
+  "Return non-nil when CARD's own text binds KEY to a permission command."
+  (let ((overlay (plist-get card :overlay)))
+    (with-current-buffer (overlay-buffer overlay)
+      (save-excursion
+        (goto-char (text-property-any (point-min) (point-max)
+                                      'mevedel-view-interaction-overlay overlay))
+        (let ((command (key-binding (kbd key))))
+          (and (symbolp command)
+               (string-prefix-p "mevedel-permission--prompt-"
+                                (symbol-name command))))))))
+
+(defun mevedel-pq-test--step (card step)
+  "Apply STEP to CARD.
+A string is a key pressed on the card.  A function receives the card.  An
+outcome is pressed with its key; an outcome the card does not offer goes
+through the closure the card captured, and a feedback answer is typed."
+  (cond
+   ((functionp step) (funcall step card))
+   ((stringp step) (mevedel-pq-test--press card step))
+   ((eq 'feedback (car-safe step))
+    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) (cdr step))))
+      (mevedel-pq-test--press card "f")))
+   (t (let ((key (cdr (assq step mevedel-pq-test--outcome-keys))))
+        (if (and key (mevedel-pq-test--key-offered-p card key))
+            (mevedel-pq-test--press card key)
+          (mevedel-pq-test--answer-captured card step))))))
+
+(defun mevedel-pq-test--drive (script view)
+  "Answer every card in VIEW that SCRIPT has not yet answered.
+SCRIPT is a list of steps, or a function of the card's 1-based number and its
+snapshot returning that list."
+  (let ((mevedel-pq-test--driving t) card)
+    (while (setq card
+                 (cl-find-if
+                  (lambda (candidate)
+                    (not (cl-find (plist-get candidate :overlay)
+                                  mevedel-pq-test--driven
+                                  :key (lambda (done) (plist-get done :overlay)))))
+                  (mevedel-pq-test--cards view)))
+      (push card mevedel-pq-test--driven)
+      (let ((steps (if (functionp script)
+                       (funcall script (length mevedel-pq-test--driven) card)
+                     script)))
+        (dolist (step steps)
+          ;; A step can settle the card; later steps need a live one.
+          (when (or (functionp step)
+                    (overlay-buffer (plist-get card :overlay)))
+            (setq card (or (cl-find (plist-get card :id)
+                                    (mevedel-pq-test--cards view)
+                                    :key (lambda (c) (plist-get c :id))
+                                    :test #'equal)
+                           card))
+            (mevedel-pq-test--step card step)))))))
+
+(defun mevedel-pq-test--call-answering (script view thunk)
+  "Call THUNK with the scripted person answering SCRIPT in VIEW's cards."
+  (let ((mevedel-pq-test--driven nil))
+    (advice-add 'mevedel-permission-prompt-render :after
+                (let ((advice (lambda (&rest _)
+                                (unless mevedel-pq-test--driving
+                                  (mevedel-pq-test--drive script view)))))
+                  (setq mevedel-pq-test--advice advice) advice))
+    (unwind-protect (funcall thunk)
+      (advice-remove 'mevedel-permission-prompt-render mevedel-pq-test--advice))))
+
+(defmacro mevedel-pq-test--answering (spec &rest body)
+  "Run BODY with the real queue and a scripted person answering its cards.
+SPEC is (STEPS [:session SESSION] [:here BOOL] [:mode MODE]) with STEPS a list
+of steps for every card, or a function of the card number and snapshot.  The
+queue is real and so is its view; the session is SESSION, else a fresh one whose
+mode is `mevedel-permission-mode'.  With :here the current buffer is the data
+buffer; otherwise a temporary one.  BODY reads the cards answered through
+`mevedel-pq-test--prompts'.  What it leaves queued is dropped unanswered afterwards."
+  (declare (indent 1) (debug t))
+  (let ((steps (car spec))
+        (session (plist-get (cdr spec) :session))
+        (mode (plist-get (cdr spec) :mode))
+        (here (plist-get (cdr spec) :here)))
+    `(let* ((pq--session (or ,session
+                             (and (bound-and-true-p mevedel--session)
+                                  (mevedel-session-p mevedel--session)
+                                  mevedel--session)
+                             (mevedel-pq-test--make-session
+                              nil (or ,mode mevedel-permission-mode 'ask))))
+            (mevedel-permission-log-enabled t))
+       (setq mevedel-pq-test--last-session pq--session)
+       (,(if here 'progn 'with-temp-buffer)
+        (setq-local mevedel--session pq--session)
+        (mevedel-pq-test--with-view-here pq--view
+          (unwind-protect
+              (mevedel-pq-test--call-answering ,steps pq--view (lambda () ,@body))
+            ;; A card nobody answered is dropped without settling it, so
+            ;; assertions after the form still see it unanswered.
+            (setf (mevedel-session-permission-queue pq--session) nil)))))))
 
 (provide 'mevedel-permission-queue-test-support)
 ;;; mevedel-permission-queue-test-support.el ends here
