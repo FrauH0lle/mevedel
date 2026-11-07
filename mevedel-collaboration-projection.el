@@ -108,6 +108,8 @@
                   "mevedel-view-render" (summary))
 (declare-function mevedel-view--scaffolding-only-p
                   "mevedel-view-render" (data-buf seg-start seg-end))
+(declare-function mevedel-view--tool-block-bounds
+                  "mevedel-view-render" (seg-start seg-end))
 (declare-function mevedel-view--tool-call-parse
                   "mevedel-view-render" (data-buf start end &optional raw))
 (declare-function mevedel-view--tool-group-entry-p
