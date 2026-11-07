@@ -34,7 +34,10 @@ SOURCE visits `source.el' holding two functions.  The workspace has its
   (let ((tempdir (make-symbol "tempdir")))
     `(cl-destructuring-bind (,(nth 0 vars) . ,tempdir)
          (test-mevedel-session-persistence--make-tempdir-workspace)
+       ;; Pending writes other tests left behind are not this case's: a
+       ;; flush here sees only its own workspace.
        (let ((,(nth 1 vars) nil)
+             (mevedel-instruction-store--dirty nil)
              (file (file-name-concat ,tempdir "source.el")))
          (unwind-protect
              (progn
@@ -574,8 +577,13 @@ Return the new workspace struct."
          (workspace (mevedel-workspace-get-or-create 'file "plain" root "plain")))
     (unwind-protect
         (progn
+          ;; Nothing is serialized either: a record no store could hold,
+          ;; with no request yet, must not make the write fail.
+          (mevedel-workspace-set-directives
+           workspace (list (mevedel-directive--create :id "bare" :request nil)))
           (should (eq 'none (mevedel-instruction-store-sync workspace)))
           (should-not (file-exists-p (file-name-concat root ".mevedel"))))
+      (mevedel-workspace-set-directives workspace nil)
       (delete-directory root t)
       (mevedel-workspace-clear-registry)))
   :doc "a store created by another client replaces a pending one's state, exported"

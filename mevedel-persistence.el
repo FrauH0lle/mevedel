@@ -1363,104 +1363,107 @@ resolve as a workspace.  The first session saved there creates both."
              (mevedel-instruction-store--applicable-p workspace))
     (setq mevedel-instruction-store--dirty
           (delq workspace mevedel-instruction-store--dirty))
-    (let* ((key (mevedel--instruction-workspace-key workspace))
-           (observed (mevedel-instruction-store--observation workspace))
-           (mine (mevedel-instruction-store--serialize workspace))
-           (tries 0)
-           outcome)
-      (while (null outcome)
-        (let* ((theirs (mevedel-instruction-store--read workspace))
-               (data (plist-get theirs :data))
-               (stored nil)
-               (refused nil))
-          (pcase (plist-get theirs :status)
-            ((or 'corrupt 'unsupported)
-             (mevedel-instruction-store--unreadable workspace theirs))
-            ('absent
-             (cond
-              ((not (file-directory-p (mevedel-workspace-state-dir workspace)))
-               (setq outcome 'none))
-              ((mevedel-instruction-store--pending-p workspace observed own-save-path)
-                   (setf (plist-get (mevedel--instruction-state key) :store-pending) t)
-                   (mevedel-instruction-store--warn
-                    workspace 'pending
-                    (format (concat "Workspace %s has no instruction store yet; "
-                                    "instructions stay in session snapshots.  "
-                                    "Run scripts/migrate-sessions.el, or resolve its "
-                                    "staged candidates in %s with M-x mevedel-load-instructions.")
-                            (mevedel-workspace-root workspace)
-                            (mevedel-instruction-store-migration-directory workspace)))
-                   (setq outcome 'pending))
-              (t
-               (when-let* ((hash (mevedel-instruction-store--write workspace nil mine)))
-                 (setq stored (cons hash mine)
-                       outcome 'written)))))
-            ('ok
-             (cond
-              ((plist-get observed :pending)
-               ;; Another client created the store while this one was
-               ;; pending.  Keep this client's state as an export.
-               (let ((path (mevedel-instruction-store--export-unsynced workspace)))
-                 (mevedel-instruction-store--install workspace data)
-                 (mevedel-instruction-store--observe
-                  workspace (plist-get theirs :hash) data)
-                 (display-warning
-                  'mevedel
-                  (format (concat "The instruction store for %s now exists; it replaced "
-                                  "this Emacs's instructions, which were exported to %s")
-                          (mevedel-workspace-root workspace) path)
-                  :warning)
-                 (setq outcome 'replaced)))
-              ((equal (plist-get theirs :hash) (plist-get observed :hash))
-               (let ((record (plist-put (copy-sequence mine)
-                                        :rewinds (plist-get data :rewinds))))
-                 (if (equal record data)
-                     (setq outcome 'unchanged)
-                   (when-let* ((hash (mevedel-instruction-store--write
-                                      workspace (plist-get theirs :hash) record)))
+    (if (not (file-directory-p (mevedel-workspace-state-dir workspace)))
+        ;; No store can exist here, so there is nothing to serialize or read.
+        'none
+      (let* ((key (mevedel--instruction-workspace-key workspace))
+             (observed (mevedel-instruction-store--observation workspace))
+             (mine (mevedel-instruction-store--serialize workspace))
+             (tries 0)
+             outcome)
+        (while (null outcome)
+          (let* ((theirs (mevedel-instruction-store--read workspace))
+                 (data (plist-get theirs :data))
+                 (stored nil)
+                 (refused nil))
+            (pcase (plist-get theirs :status)
+              ((or 'corrupt 'unsupported)
+               (mevedel-instruction-store--unreadable workspace theirs))
+              ('absent
+               (cond
+                ((not (file-directory-p (mevedel-workspace-state-dir workspace)))
+                 (setq outcome 'none))
+                ((mevedel-instruction-store--pending-p workspace observed own-save-path)
+                 (setf (plist-get (mevedel--instruction-state key) :store-pending) t)
+                 (mevedel-instruction-store--warn
+                  workspace 'pending
+                  (format (concat "Workspace %s has no instruction store yet; "
+                                  "instructions stay in session snapshots.  "
+                                  "Run scripts/migrate-sessions.el, or resolve its "
+                                  "staged candidates in %s with M-x mevedel-load-instructions.")
+                          (mevedel-workspace-root workspace)
+                          (mevedel-instruction-store-migration-directory workspace)))
+                 (setq outcome 'pending))
+                (t
+                 (when-let* ((hash (mevedel-instruction-store--write workspace nil mine)))
+                   (setq stored (cons hash mine)
+                         outcome 'written)))))
+              ('ok
+               (cond
+                ((plist-get observed :pending)
+                 ;; Another client created the store while this one was
+                 ;; pending.  Keep this client's state as an export.
+                 (let ((path (mevedel-instruction-store--export-unsynced workspace)))
+                   (mevedel-instruction-store--install workspace data)
+                   (mevedel-instruction-store--observe
+                    workspace (plist-get theirs :hash) data)
+                   (display-warning
+                    'mevedel
+                    (format (concat "The instruction store for %s now exists; it replaced "
+                                    "this Emacs's instructions, which were exported to %s")
+                            (mevedel-workspace-root workspace) path)
+                    :warning)
+                   (setq outcome 'replaced)))
+                ((equal (plist-get theirs :hash) (plist-get observed :hash))
+                 (let ((record (plist-put (copy-sequence mine)
+                                          :rewinds (plist-get data :rewinds))))
+                   (if (equal record data)
+                       (setq outcome 'unchanged)
+                     (when-let* ((hash (mevedel-instruction-store--write
+                                        workspace (plist-get theirs :hash) record)))
+                       (setq stored (cons hash record)
+                             outcome 'written)))))
+                (t
+                 (let* ((merge (mevedel-instruction-store--merge
+                                (plist-get observed :data) mine data))
+                        (record (plist-get merge :data))
+                        (hash (if (equal record data)
+                                  (plist-get theirs :hash)
+                                (mevedel-instruction-store--write
+                                 workspace (plist-get theirs :hash) record))))
+                   (when hash
+                     (mevedel-instruction-store--install workspace record)
                      (setq stored (cons hash record)
-                           outcome 'written)))))
-              (t
-               (let* ((merge (mevedel-instruction-store--merge
-                              (plist-get observed :data) mine data))
-                      (record (plist-get merge :data))
-                      (hash (if (equal record data)
-                                (plist-get theirs :hash)
-                              (mevedel-instruction-store--write
-                               workspace (plist-get theirs :hash) record))))
-                 (when hash
-                   (mevedel-instruction-store--install workspace record)
-                   (setq stored (cons hash record)
-                         refused (plist-get merge :refused)
-                         outcome (if refused (cons 'refused refused) 'merged))))))))
-          (when stored
-            (mevedel-instruction-store--observe workspace (car stored) (cdr stored))
-            (mevedel-instruction-store--report-refused refused))
-          (when (and (null outcome) (>= (cl-incf tries) 2))
-            ;; Retried once and still stale: keep the store's record and
-            ;; refuse this client's changes, recovering request texts.
-            (let ((fresh (mevedel-instruction-store--read workspace)))
-              (when (eq 'ok (plist-get fresh :status))
-                (pcase-let ((`(,bt . ,_) (mevedel-instruction-store--units
-                                          (plist-get observed :data)))
-                            (`(,mt . ,morder) (mevedel-instruction-store--units mine)))
-                  (setq refused
-                        (delq nil
-                              (mapcar (lambda (id)
-                                        (unless (equal (gethash id mt) (gethash id bt))
-                                          (cons id (mevedel-instruction-store--request-text
-                                                    (gethash id mt)))))
-                                      morder))))
-                (mevedel-instruction-store--install workspace (plist-get fresh :data))
-                (mevedel-instruction-store--observe
-                 workspace (plist-get fresh :hash) (plist-get fresh :data))
-                (mevedel-instruction-store--report-refused refused))
-              ;; Without a readable record nothing was refused or written:
-              ;; keep the changes for the next write.
-              (unless (eq 'ok (plist-get fresh :status))
-                (cl-pushnew workspace mevedel-instruction-store--dirty))
-              (setq outcome 'stale)))))
-      outcome)))
+                           refused (plist-get merge :refused)
+                           outcome (if refused (cons 'refused refused) 'merged))))))))
+            (when stored
+              (mevedel-instruction-store--observe workspace (car stored) (cdr stored))
+              (mevedel-instruction-store--report-refused refused))
+            (when (and (null outcome) (>= (cl-incf tries) 2))
+              ;; Retried once and still stale: keep the store's record and
+              ;; refuse this client's changes, recovering request texts.
+              (let ((fresh (mevedel-instruction-store--read workspace)))
+                (when (eq 'ok (plist-get fresh :status))
+                  (pcase-let ((`(,bt . ,_) (mevedel-instruction-store--units
+                                            (plist-get observed :data)))
+                              (`(,mt . ,morder) (mevedel-instruction-store--units mine)))
+                    (setq refused
+                          (delq nil
+                                (mapcar (lambda (id)
+                                          (unless (equal (gethash id mt) (gethash id bt))
+                                            (cons id (mevedel-instruction-store--request-text
+                                                      (gethash id mt)))))
+                                        morder))))
+                  (mevedel-instruction-store--install workspace (plist-get fresh :data))
+                  (mevedel-instruction-store--observe
+                   workspace (plist-get fresh :hash) (plist-get fresh :data))
+                  (mevedel-instruction-store--report-refused refused))
+                ;; Without a readable record nothing was refused or written:
+                ;; keep the changes for the next write.
+                (unless (eq 'ok (plist-get fresh :status))
+                  (cl-pushnew workspace mevedel-instruction-store--dirty))
+                (setq outcome 'stale)))))
+        outcome))))
 
 (defun mevedel-instruction-store-touch (&optional workspace)
   "Mark WORKSPACE's instructions changed; the next flush writes them.
