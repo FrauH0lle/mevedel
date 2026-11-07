@@ -36,12 +36,54 @@ class CommitMessageTests(unittest.TestCase):
                 self.assertEqual(len(errors), 1)
                 self.assertIn('subject', errors[0])
         for body in ('', 'Explain the change.', '* file: ', '* file (): Change.',
-                     '* file (function):', '- file: Change.'):
+                     '* file (function):', '- file: Change.', '* file\nNo description.',
+                     '* file:\n\nUnrelated paragraph.', '* a.el, : Missing file.'):
             with self.subTest(body=body):
                 errors = standards.commit_message_errors('fix: Change it\n\n' + body)
                 self.assertEqual(len(errors), 1)
                 self.assertIn('GNU entry', errors[0])
         self.assertEqual(len(standards.commit_message_errors('Bad message')), 2)
+
+    def test_wrapped_and_grouped_gnu_entries(self):
+        # The wrapped entry is copied from reviewed commit 056476b69b55.
+        for entry in (
+            '* test/test-mevedel-session-durability-heartbeat.el\n'
+            '(mevedel-session-durability-heartbeat): Add the case "a named\n'
+            'lease-update decline is a lost lease: it reclaims and is no failure".',
+            '* source.el (first):\nDescribe the change on the next line.',
+            '* a.el, b.el: Share the behavior.',
+            '* a.el,\n  b.el (first, second): Share the behavior.',
+            '* a.el\n* b.el\n(first): Share the behavior.',
+            '* a.el\n* b.el:\nShare the behavior.',
+        ):
+            with self.subTest(entry=entry):
+                self.assertEqual(standards.commit_message_errors(
+                    'fix: Share the behavior\n\n' + entry), [])
+
+    def test_default_git_revert(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for arguments in (('init', '-q'), ('config', 'user.name', 'Test'),
+                              ('config', 'user.email', 'test@example.invalid')):
+                standards.git(root, *arguments)
+            (root / 'file').write_text('Initial content')
+            standards.git(root, 'add', 'file')
+            standards.git(root, 'commit', '-qm', 'fix: Add content\n\n* file: Add content.')
+            commit = standards.git(root, 'rev-parse', 'HEAD').decode().strip()
+            standards.git(root, 'revert', '--no-edit', commit)
+            message = standards.git(root, 'show', '-s', '--format=%B', 'HEAD').decode()
+            self.assertTrue(message.startswith('Revert "fix: Add content"\n'))
+            self.assertIn(f'This reverts commit {commit}.', message)
+            self.assertEqual(standards.commit_message_errors(message), [])
+            self.assertEqual(standards.commit_errors(root, commit), [])
+            for invalid in (message.replace('This reverts commit', 'Undoes'),
+                            message.replace(commit, 'not-a-commit'),
+                            message.replace('Revert "', 'Undo "', 1)):
+                with self.subTest(message=invalid):
+                    self.assertTrue(standards.commit_message_errors(invalid))
+        merge_revert = ('Revert "Merge branch"\n\nThis reverts commit ' + 'a' * 40
+                        + ', reversing\nchanges made to ' + 'b' * 40 + '.\n')
+        self.assertEqual(standards.commit_message_errors(merge_revert), [])
 
     def test_history_checks_docs_and_side_commits_but_skips_merges_and_base(self):
         with tempfile.TemporaryDirectory() as directory:

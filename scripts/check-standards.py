@@ -314,13 +314,20 @@ def changed_lisp(root, revision):
 def commit_message_errors(message):
     """Check the deterministic subject and GNU body-entry rules in docs/commits.md."""
     subject, _, body = message.partition('\n')
+    object_id = r'(?:[0-9a-f]{40}|[0-9a-f]{64})'
+    if (re.fullmatch(r'Revert ".+"', subject)
+            and re.search(rf'^This reverts commit {object_id}'
+                          rf'(?:\.|, reversing\nchanges made to {object_id}\.)$', body, re.M)):
+        return []
     errors = []
     types = 'feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|tweak'
     if not re.fullmatch(rf'(?:{types})(?:\([^\s()]+\))?!?: [A-Z][^\r\n]*', subject):
         errors.append('subject must be type(scope): Capitalized description '
                       '(scope optional; see docs/commits.md)')
-    if not re.search(r'^\* [^\s():]+(?: \([^()\n]+\)(?:\n[ \t]*\([^()\n]+\))*)?:'
-                     r'[ \t]+\S', body, re.M):
+    files = r'[^\s(),:]+(?:,[ \t]*(?:\n[ \t]*)?[^\s(),:]+)*'
+    separator = r'(?:[ \t]+|\n[ \t]*)'
+    if not re.search(rf'^\* {files}(?:{separator}\([^()\n]+\))*:'
+                     r'[ \t]*(?:\n[ \t]*)?\S', body, re.M):
         errors.append('body must contain a GNU entry: * file (function): Description '
                       'or * file: Description (see docs/commits.md)')
     return errors

@@ -245,8 +245,10 @@ Enforced invariants:
 
 - Every non-merge commit since the resolved merge base has the subject format
   and at least one GNU-style file entry required by [commits.md](commits.md).
-  Docs-only commits are included; subject length remains advisory. The pending
-  commit message is not available to this pre-commit check, so it is checked on
+  Wrapped and grouped file entries are accepted, as are Git's default revert
+  subject and body without GNU entries. Docs-only commits are included; subject
+  length remains advisory. The pending commit message is not available to this
+  pre-commit check, so it is checked on
   the next run after committing and in CI.
 - First-line `lexical-binding: t` and a matching final `;;; FILENAME.el ends
   here` footer (optional final period) in root Lisp libraries and immediate
