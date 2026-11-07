@@ -167,11 +167,12 @@ finally:
   "Run argv[3:] as a child subreaper; report the stand-in child after SIGTERM.")
 
 (mevedel-deftest mevedel-graphical-check-run
-  (:doc "reaps its child and removes private state when the batch parent gets SIGTERM")
+  (:doc "writes a lexical bootstrap and cleans its child and private state on SIGTERM")
   (let* ((root (make-temp-file "graphical-sigterm-" t))
          (tmp (file-name-concat root "tmp"))
          (bin (file-name-concat root "bin"))
          (pid-file (file-name-concat root "child.pid"))
+         (header-file (file-name-concat root "bootstrap-header.txt"))
          (process-environment (copy-sequence process-environment)))
     (unwind-protect
         (progn
@@ -181,7 +182,10 @@ finally:
           ;; Stand-in for a hung graphical child: record its PID, then hang,
           ;; ignoring the SIGHUP batch Emacs sends its processes on exit.
           (with-temp-file (file-name-concat bin "emacs")
-            (insert (format "#!/bin/sh\ntrap '' HUP\necho $$ > %s\nexec sleep 300\n"
+            (insert (format (concat "#!/bin/sh\ntrap '' HUP\n"
+                                    "head -n 1 \"$4\" > %s\n"
+                                    "echo $$ > %s\nexec sleep 300\n")
+                            (shell-quote-argument header-file)
                             (shell-quote-argument pid-file))))
           (set-file-modes (file-name-concat bin "emacs") #o755)
           (setenv "TMPDIR" tmp)
@@ -204,6 +208,9 @@ finally:
                "--funcall" "mevedel-graphical-check-run" "--"
                "--output" (file-name-concat root "out") "--timeout" "60")
               (buffer-string))))
+          (with-temp-buffer
+            (insert-file-contents header-file)
+            (should (string-match-p "lexical-binding: t" (buffer-string))))
           (should-not (directory-files tmp nil "\\`mevedel-graphical-")))
       (delete-directory root t))))
 

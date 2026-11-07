@@ -64,6 +64,14 @@ traverse buffer text and run only on paths already measuring geometry.
 Terminal geometry uses the same API in character-cell units. Batch policy tests
 model only the visibility seam; native graphical tests establish pixel geometry.
 
+When applying a changed numeric vscroll, the viewport setter also requests native
+vscroll preservation. Merely restoring its numeric value is insufficient: with
+a pending optional window start, native redisplay can reset that value and then
+relocate point after the preserving call has returned. A native graphical
+regression covers that ordering through the setter. Redundant setters remain
+avoided; a numeric no-op does not repair externally poisoned native state. This
+corrects the demonstrated setter mechanism, not the unattributed live incidents.
+
 Draft commands capture blank pixels before their first mutation and repair only
 newly created blank space after the command. Insertion-before-deletion commands
 must capture before insertion too: a temporary extra line is not the original

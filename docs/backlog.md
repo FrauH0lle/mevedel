@@ -11,7 +11,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 ## Inbox
 
 - Continue the work on the "always visible prompt" (the composer stays visible while the transcript scrolls). Two prototypes, from 2026-10-26, are in `.scratch/floating-composer/`: a child frame (`mevedel-floating-composer.el`) and a split window (`check-split.el`). Not the pinned prompt header shipped on 2026-10-31.
-- The cursor has the tendency to jump to the "  [Manage]" row of "background work" on updates/redraws even though it was on the composer or elsewhere. The scroll variant is fixed (sweep 2026-10-31, candidate 4); a redraw-only jump did not reproduce in 30 streamed chunks with status rows arriving and leaving. Reopen with a recipe if it recurs.
 
 ## Execution
 
@@ -30,6 +29,95 @@ most. Expiry would reuse the existing TERM/KILL process-group teardown and
 report a timeout outcome.
 
 ## View
+
+### Cursor jumps to background-work Manage row
+
+Still open: the user reconfirmed on 2026-11-04 that updates/redraws move point
+from the composer or elsewhere to the background-work `[Manage]` row. The
+October 31 candidate 4 fix addresses scrolling away and back, not this report.
+An expanded isolated graphical replay preserved point across 216 updates with
+changing panel sizes, multiple windows, and status/full/stream renders; its
+negative control detected lost restoration. That does not reproduce the live
+configuration or disprove the recurrence. Capture the actual command/update/
+redisplay ordering in the affected view with bounded, text-free diagnostics
+before adding another preservation layer. No redraw-only fix is verified.
+The user later reported point beside `| [full-auto]` when returning to this
+workspace by clicking the tab bar, not the conversation text. The recorder had
+already timed out; whether point moved while hidden or on activation is not
+established.
+On 2026-11-05 the user also reported a jump without input while a request ran.
+The screenshot shows point on the final `Worked for …` footer; a read-only
+inspection found that view's stored point still before the composer. Tab
+switching is therefore not required by the report. Include the entire terminal
+callback and its post-render cleanup in the capture, with an empty composer as
+well as a draft. A live capture on 2026-11-05 now brackets a completion-time
+composer exit: the full terminal wrapper returned with point at input start,
+but the next preserving-writer entry about 19 ms later already had buffer and
+window point 57 characters before the unchanged input start. Selection, focus
+and command serial stayed unchanged; later inspection found point on the
+`Worked for …` footer. The moving caller remains unidentified. Investigate the
+enclosing completion hooks and window/redisplay restoration outside that
+terminal wrapper, rather than attributing the jump to its recorded body.
+A later navigation-aware capture brackets another exit after a successful
+status-zone shrink: the next observer sample about 859 ms later has buffer and
+window point 15 characters before input, at status-start minus one. No command
+is recorded; focus, selection and window start are unchanged, while pixel
+vscroll falls from 3 to zero. The caret remained outside after capture. Trace
+the status caller and subsequent redisplay, not only request completion. A
+private graphical held-row release with 20-pixel partial scrolling retained
+the caret with and without redundant start setters; it did not reproduce this
+exit or establish a correction.
+A later status/pre-redisplay capture ends at an upward-wheel command entry with
+the caret still in the composer; its triggering snapshot is missing, so it
+does not identify a background caller. The corrected all-view capture on
+2026-11-06 retains a delayed exit after tab activation: command-post and two
+window-change callbacks leave point at input, but the next pre-redisplay hook
+entry about 19 ms later has buffer/window point 26 characters before unchanged
+input. Window start advances and pixel vscroll falls from 20 to zero. Movement
+already precedes that hook body; isolate tab/window restoration and redisplay
+between these calls rather than attributing it to the dispatcher itself.
+A private graphical replay through the real tab mouse-down handler preserves
+the caret with zero/20-pixel scrolling, empty/multiline drafts, and deliberately
+pending offscreen viewports. Its delayed-exit control detects a 26-character
+injection. Repeating with the installed runtime and personal Evil, workspace
+and view-local hooks also retains the caret; a matched clean-config control
+does too. One configured case changes window start during settling, but these
+caret checks do not establish visible viewport stability. A user-authorized
+private rendered-history copy also passes both configured seven-case replays,
+including the delayed-exit control; no natural caret exit occurs. The larger
+frame is near-live-sized, not an exact geometry match. Current rather than
+incident history, synthetic canonical DATA/status, omitted window overlays and
+controlled mouse-handler delivery still prevent full live equivalence. This
+bounded replay study establishes no cursor fix. Narrow the native restoration /
+redisplay gap with live observations rather than adding blind preservation or
+more fixture variants.
+Subsequent external sampling preserves six composer exits; two measured against
+the editable-input start lose 48 and 56 characters while partial vscroll resets
+from 20 pixels to zero, without input-counter or endpoint window-size changes.
+A paired native Emacs 31.1 experiment now demonstrates a viewport-first
+mechanism: with a static header and a fully visible bottom cursor row, an
+optional window start accepts the partial viewport, then redisplay clears
+vscroll and relocates point to the preceding row before invoking pre-redisplay
+again. The matched `set-window-vscroll` preservation control retains point and
+viewport; the earlier header-free pair only moved the viewport. No text changes
+occur in either native case. This reproduces a mechanism, not the live incident:
+its actual glyph rows, chrome heights and pending native flags were not captured.
+A bounded frozen-source comparison through the actual production viewport
+setter now reproduces the same ordering under an artificial optional-start
+stimulus: the baseline returns with point intact, then redisplay resets vscroll
+and moves point 50 characters backward. Adding only the fourth preservation
+argument retains point and the 3-pixel scroll. All eight diagnostic cases retain
+valid setup and text/draft/mark/selection/chrome invariants. The enclosing clean
+wrapper retains 3 pixels in both arms; the changed wrapper legitimately clamps
+to 2 pixels in both arms, with zero strict bottom margin, so neither establishes
+a wrapper-level benefit. An externally poisoned numeric no-op fails in both
+arms without boundary setters; retain the redundant-setter guards. This verifies
+the setter mechanism, not preserver-originated pending state or live causation.
+The viewport setter now requests native preservation when numeric vscroll changes,
+with a maintained native regression that fails after redisplay on the old call
+and passes with only the fourth argument added. This corrects the demonstrated
+setter mechanism; the archived live exits and any preserver-originated pending
+state remain unattributed. Do not treat the live incident as closed.
 
 ### Pinned prompt on the remaining surfaces
 

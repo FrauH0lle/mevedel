@@ -1364,7 +1364,7 @@ On terminals the same API uses character cells as pixels."
     (set-window-start window (car viewport) t))
   ;; Setting the start can reset vertical scrolling, so check it afterwards.
   (unless (= (window-vscroll window t) (cdr viewport))
-    (set-window-vscroll window (cdr viewport) t)))
+    (set-window-vscroll window (cdr viewport) t t)))
 
 (defun mevedel-view--composer-anchors ()
   "Return (WINDOW . Y) for each window editing the visible composer.

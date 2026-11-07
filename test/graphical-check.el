@@ -134,6 +134,7 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
               (let ((process-environment (mevedel-graphical-check--environment home))
                     (default-directory mevedel-graphical-check--root))
                 (with-temp-file bootstrap
+                  (insert ";;; Graphical bootstrap -*- lexical-binding: t -*-\n")
                   (prin1 `(condition-case err
                               (progn
                                 (setq load-path ',load-path
