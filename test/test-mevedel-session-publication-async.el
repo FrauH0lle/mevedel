@@ -2010,5 +2010,45 @@ QUEUED adds a second completion while the first job is unresolved."
        (should-not (mevedel-session-publication-busy-p session)))))
 )
 
+(mevedel-deftest mevedel-session-publication-submit/warm-admission (:quiet t)
+  ,test
+  (test)
+  :doc "a real warm admission decline reaches the acknowledgement with its cause"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let* ((directory (mevedel-session-save-path session))
+            (head (plist-get (mevedel-session-publication-read directory) :head))
+            (lease (copy-sequence (mevedel-session-lease session)))
+            (admit (symbol-function 'mevedel-session-durability-admit-async))
+            admissions acknowledgements)
+       ;; A recovery marker root on the target: the warm program observes it.
+       (make-directory (file-name-concat directory ".recovery") t)
+       ;; Record the real admission's answer; its behaviour is unchanged.
+       (cl-letf (((symbol-function 'mevedel-session-durability-admit-async)
+                  (lambda (owner callback)
+                    (funcall admit owner
+                             (lambda (ok error)
+                               (push (list ok error) admissions)
+                               (funcall callback ok error))))))
+         (mevedel-session-publication-submit
+          session
+          (lambda ()
+            (test-mevedel-publication-async--transcript-artifacts
+             session buffer "segment-9.chat.org" "declined transcript"))
+          (lambda (ok error) (push (list ok error) acknowledgements)))
+         (test-mevedel-publication-async--wait (lambda () acknowledgements)))
+       (should (= 1 (length admissions)))
+       (should-not (caar admissions))
+       (should (= 1 (length acknowledgements)))
+       (should-not (caar acknowledgements))
+       (should (eq 'user-error (car (cadar acknowledgements))))
+       (should (equal "Portable session has a pending recovery marker"
+                      (error-message-string (cadar acknowledgements))))
+       (should (equal head (plist-get (mevedel-session-publication-read directory) :head)))
+       (should (equal lease (mevedel-session-lease session)))
+       (should-not (mevedel-session-artifacts-artifact-present-p
+                    session "segment-9.chat.org" t))
+       (should-not (mevedel-session-publication-busy-p session))))))
+
 (provide 'test-mevedel-session-publication-async)
 ;;; test-mevedel-session-publication-async.el ends here

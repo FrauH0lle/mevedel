@@ -2485,12 +2485,16 @@ synchronous admission records them.
 
 CALLBACK receives SUCCESS: t when SESSION's bound lease is this client's live
 newest generation, no recovery marker exists, and no live transfer request
-names this client; nil when the warm path cannot admit -- no bound lease
-bytes, a cold directory, a stale or foreign lease, a recovery marker, a
-transfer request or quiescing state.  The caller then uses the synchronous
-admission, which raises the reasons.  ERROR reports a failed program, an
-invalid request, or a PID lock.  Local checks (pending publication, target
-incarnation, disclosure, materialization) stay with the caller."
+names this client.  A nil SUCCESS always carries ERROR, as condition data:
+a `user-error' naming the first observed cause when the warm path declines
+-- a missing save path, session ID, bound lease generation, bytes or
+ownership, a non-portable session, quiescing or released state, an
+unobserved lease directory, a lease record that is not this client's live
+lease, target bytes that differ from the bound ones, a newer generation, a
+recovery marker, or a live transfer request -- and otherwise the error of a
+failed program, an invalid request, or a PID lock.  Local checks (pending
+publication, target incarnation, disclosure, materialization) stay with the
+caller."
   (let* ((job (mevedel-session-durability--async-job callback))
          (finish (car job))
          (context (mevedel-session-durability-capture-context)))
@@ -2501,15 +2505,24 @@ incarnation, disclosure, materialization) stay with the caller."
               (session-id (mevedel-session-session-id session))
               (bound (mevedel-session-lease session))
               (generation (plist-get bound :generation))
-              (bytes (plist-get bound :bytes)))
-         (if (not (and session-dir session-id (natnump generation) bytes
-                       (eq 'owned (plist-get bound :state))
-                       (mevedel-session-durability--portable-session-p session)
-                       (not (memq (plist-get
-                                   (mevedel-session-control-transfer session)
-                                   :state)
-                                  '(quiescing released)))))
-             (funcall finish nil nil)
+              (bytes (plist-get bound :bytes))
+              (decline
+               (cond
+                ((not session-dir) "Session has no save path")
+                ((not session-id) "Session has no session ID")
+                ((not (natnump generation))
+                 "Portable session has no bound lease generation")
+                ((not bytes) "Portable session has no bound lease bytes")
+                ((not (eq 'owned (plist-get bound :state)))
+                 "Portable session lease is not owned by this client")
+                ((not (mevedel-session-durability--portable-session-p session))
+                 "Session is not a portable project session")
+                ((memq (plist-get (mevedel-session-control-transfer session)
+                                  :state)
+                       '(quiescing released))
+                 "Session is quiescing for cooperative control transfer"))))
+         (if decline
+             (funcall finish nil (list 'user-error decline))
            (let* ((directory (mevedel-session-durability--lease-path
                               session-dir))
                   (requests-directory
@@ -2547,20 +2560,26 @@ before launch; JOB and CONTEXT are as for
             (cl-some (lambda (result) (eq 'skipped (plist-get result :status)))
                      results))
         ;; An absent lease directory stops the program before its probes.
-        (funcall finish nil nil)
+        (funcall finish nil
+                 '(user-error
+                   "Portable session lease directory could not be observed"))
       (let* ((requests (pop results))
              (_ (when pid-lock
                   (mevedel-session-durability--settle-pid-lock
                    session-dir (pop results))))
              (root (car results))
-             (owned
-              (and (mevedel-session-durability--owned-lease-record-p
-                    record directory now)
-                   (equal (plist-get bound :bytes)
-                          (plist-get observed :bytes))
-                   (equal generation
-                          (mevedel-session-durability--newest-generation
-                           (plist-get observed :names))))))
+             (unowned
+              (cond
+               ((not (mevedel-session-durability--owned-lease-record-p
+                      record directory now))
+                "Portable session lease record is not this client's live lease")
+               ((not (equal (plist-get bound :bytes)
+                            (plist-get observed :bytes)))
+                "Portable session lease on the target differs from the bound lease")
+               ((not (equal generation
+                            (mevedel-session-durability--newest-generation
+                             (plist-get observed :names))))
+                "A newer portable session lease generation exists"))))
         (pcase (plist-get root :status)
           ('absent
            (mevedel-session-recovery-refresh session root))
@@ -2582,8 +2601,11 @@ before launch; JOB and CONTEXT are as for
                                   requests)))
                           #'string>)))))
           (cond
-           ((not (and owned (eq 'absent (plist-get root :status))))
-            (funcall finish nil nil))
+           (unowned (funcall finish nil (list 'user-error unowned)))
+           ((not (eq 'absent (plist-get root :status)))
+            (funcall finish nil
+                     '(user-error
+                       "Portable session has a pending recovery marker")))
            ((null newest) (funcall finish t nil))
            (t
             (mevedel-session-durability--async-program
@@ -2605,15 +2627,17 @@ before launch; JOB and CONTEXT are as for
                      (error "Invalid portable control-transfer request: %s"
                             newest))
                    ;; A request naming this client at or below its
-                   ;; generation is live: the synchronous admission raises.
-                   (funcall
-                    finish
-                    (not (and (<= (plist-get request :generation) generation)
-                              (equal session-id
-                                     (plist-get request :session-id))
-                              (equal mevedel-session-durability--client-id
-                                     (plist-get request :owner-client-id))))
-                    nil))))))))))))
+                   ;; generation is live.
+                   (if (and (<= (plist-get request :generation) generation)
+                            (equal session-id
+                                   (plist-get request :session-id))
+                            (equal mevedel-session-durability--client-id
+                                   (plist-get request :owner-client-id)))
+                       (funcall
+                        finish nil
+                        '(user-error
+                          "Portable session has a live control-transfer request"))
+                     (funcall finish t nil)))))))))))))
 
 (defun mevedel-session-durability--heartbeat-carrier-p (path)
   "Return non-nil when PATH can launch a heartbeat without synchronous fallback.
