@@ -801,7 +801,8 @@ binds t while it installs its own records, so they are not echoed back.")
 (defvar mevedel-instruction-store--warned nil
   "Workspace keys already warned about a pending or unreadable store.")
 
-(defvar mevedel-session-checkpoint-interval)
+(defconst mevedel-instruction-store--retry-seconds 30
+  "Retry delay for a failed flush before session persistence is loaded.")
 
 (defvar mevedel-instruction-store--failed nil
   "Alist of (WORKSPACE . TIME) for workspaces whose last flush failed.
@@ -1284,35 +1285,37 @@ removed; it writes a new one."
             (file-name-concat (mevedel-instruction-store-migration-directory
                                workspace)
                               "report.el"))
-           (let* ((sessions (mevedel-session-artifacts-sessions-dir workspace))
-                  (shared (file-name-absolute-p mevedel-sessions-directory))
-                  (identity (and shared
-                                 (mevedel-workspace-identity-read
-                                  (mevedel-workspace-root workspace))))
-                  (own (and own-save-path
-                            (directory-file-name (expand-file-name own-save-path)))))
-             (and (file-directory-p sessions)
-                  (cl-some (lambda (directory)
-                             (and (file-directory-p directory)
-                                  (not (equal (directory-file-name directory) own))
-                                  (or (not shared)
-                                      (and identity
-                                           (equal identity
-                                                  (mevedel-instruction-store--session-identity
-                                                   directory))))))
-                           (directory-files sessions t "\\`[^.]")))))))
+           (let ((sessions (mevedel-session-artifacts-sessions-dir workspace))
+                 (own (and own-save-path
+                           (directory-file-name (expand-file-name own-save-path)))))
+             (if (file-name-absolute-p mevedel-sessions-directory)
+                 (mevedel-instruction-store--shared-session-p workspace own)
+               (and (file-directory-p sessions)
+                    (cl-some (lambda (directory)
+                               (and (file-directory-p directory)
+                                    (not (equal (directory-file-name directory)
+                                                own))))
+                             (directory-files sessions t "\\`[^.]"))))))))
 
-(defun mevedel-instruction-store--session-identity (directory)
-  "Return the workspace identity the session at DIRECTORY records, or nil."
-  (condition-case nil
-      (plist-get (plist-get
-                  (with-temp-buffer
-                    (insert-file-contents
-                     (mevedel-session-artifacts-sidecar-path directory))
-                    (read (current-buffer)))
-                  :workspace)
-                 :workspace-id)
-    (error nil)))
+(declare-function mevedel-session-persistence-list-sessions
+                  "mevedel-session-persistence" (workspace &optional cached))
+
+(defun mevedel-instruction-store--shared-session-p (workspace own)
+  "Return non-nil when a session other than OWN belongs to WORKSPACE.
+An absolute sessions directory holds every workspace's sessions, so each
+session's authoritative sidecar, as session discovery reads it for the
+workspace's authority mode, must name WORKSPACE's identity."
+  (require 'mevedel-session-persistence)
+  (when-let* ((identity (mevedel-workspace-identity-read
+                         (mevedel-workspace-root workspace))))
+    (cl-some (lambda (session)
+               (and (equal identity
+                           (plist-get (plist-get (plist-get session :summary)
+                                                 :workspace)
+                                      :workspace-id))
+                    (not (equal (directory-file-name (plist-get session :save-path))
+                                own))))
+             (mevedel-session-persistence-list-sessions workspace))))
 
 (defun mevedel-instruction-store--export-unsynced (workspace)
   "Export WORKSPACE's in-memory instructions before the store replaces them.
@@ -1515,7 +1518,9 @@ after every command."
       (let ((failed (alist-get workspace mevedel-instruction-store--failed)))
         (unless (and failed (not force)
                      (< (float-time (time-since failed))
-                        (or mevedel-session-checkpoint-interval 30)))
+                        (or (and (boundp 'mevedel-session-checkpoint-interval)
+                                 (symbol-value 'mevedel-session-checkpoint-interval))
+                            mevedel-instruction-store--retry-seconds)))
           (condition-case err
               (progn
                 (mevedel-instruction-store-sync workspace)
