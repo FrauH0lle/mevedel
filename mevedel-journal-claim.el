@@ -295,8 +295,13 @@ Return the deletion count when the iterator completes."
           (let* ((token (list :directory directory :generation generation))
                  (claim-path (mevedel-journal-claim--path token nil))
                  (outcome-path (mevedel-journal-claim--path token t))
-                 (claim (mevedel-journal-claim--read claim-path nil))
-                 (outcome (mevedel-journal-claim--read outcome-path t)))
+                 ;; One program reads both; it is no atomic snapshot, and the
+                 ;; verify-and-delete program below re-proves both records.
+                 (observed (mevedel-session-control-fs-run-program
+                            (list (list :op 'read :optional t :path claim-path)
+                                  (list :op 'read :optional t :path outcome-path))))
+                 (claim (mevedel-journal-claim--read claim-path nil (car observed)))
+                 (outcome (mevedel-journal-claim--read outcome-path t (cadr observed))))
             (when (and outcome (= generation (plist-get outcome :generation))
                        (<= (plist-get outcome :expires-at) now)
                        (or (null claim) (equal claim (mevedel-journal-claim--record outcome))))
