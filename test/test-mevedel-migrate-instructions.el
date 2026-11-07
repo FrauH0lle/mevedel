@@ -8,6 +8,9 @@
 
 ;;; Code:
 
+(require 'mevedel-instruction-test-support
+         (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
+                           "mevedel-instruction-test-support"))
 (require 'mevedel-session-test-support
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
                            "mevedel-session-test-support"))
@@ -219,7 +222,7 @@ Its fixed `instructions/current.el' cache holds STALE, which is no authority."
       ;; The runtime then sees a pending workspace, not an empty one.
       (let ((runtime (mevedel-workspace--create :type 'project :id "w-runtime"
                                                 :root root)))
-        (should (eq 'pending (mevedel-instruction-store-state runtime)))
+        (should (eq 'pending (mevedel-instruction-test--store-state runtime)))
         ;; Loading a candidate resolves it into the store.
         (unwind-protect
             (with-temp-buffer
@@ -227,7 +230,7 @@ Its fixed `instructions/current.el' cache holds STALE, which is no authority."
               (mevedel-load-instructions
                (car (plist-get (mevedel-migrate-session--read (plist-get result :path))
                                :candidates)))
-              (should (eq 'active (mevedel-instruction-store-state runtime)))
+              (should (eq 'active (mevedel-instruction-test--store-state runtime)))
               (should (equal '("older")
                              (mapcar (lambda (d) (plist-get d :request))
                                      (plist-get (mevedel-migrate-instructions-test--store

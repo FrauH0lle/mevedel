@@ -20,6 +20,11 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-instruction-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-instruction-test-support"))
 (require 'mevedel-session-test-support
          (file-name-concat
           (file-name-directory
@@ -38,6 +43,7 @@ SOURCE visits `source.el' holding two functions.  The workspace has its
        ;; flush here sees only its own workspace.
        (let ((,(nth 1 vars) nil)
              (mevedel-instruction-store--dirty nil)
+             (mevedel-instruction-store--failed nil)
              (file (file-name-concat ,tempdir "source.el")))
          (unwind-protect
              (progn
@@ -63,6 +69,19 @@ SOURCE visits `source.el' holding two functions.  The workspace has its
     (goto-char (point-min))
     (forward-line (1- (or line 1)))
     (mevedel--create-directive-in source (point) (+ 5 (point)) nil text)))
+
+(defun test-mevedel-instruction-store--save-session (workspace name)
+  "Save a session NAME of WORKSPACE with the real session writer.
+Creating WORKSPACE's store is not under test, so its sync is stubbed."
+  (let ((session (mevedel-session-create name workspace))
+        (buffer (generate-new-buffer " *stored-session*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (org-mode)
+          (insert "Hello\n")
+          (cl-letf (((symbol-function 'mevedel-instruction-store-sync) #'ignore))
+            (mevedel-session-artifacts-save session buffer)))
+      (kill-buffer buffer))))
 
 (defun test-mevedel-instruction-store--restart (workspace)
   "Forget WORKSPACE's in-memory instructions, as a fresh Emacs would."
@@ -203,6 +222,28 @@ Return the new workspace struct."
         (should (= 1 syncs)))
       (should (equal "bas" (test-mevedel-instruction-store--stored-request
                             workspace uuid)))))
+  :doc "a failing write is retried once per checkpoint interval, not per command"
+  (test-mevedel-instruction-store--with-workspace (workspace source)
+    (let ((attempts 0)
+          (mevedel-session-checkpoint-interval 30))
+      (cl-letf (((symbol-function 'mevedel-instruction-store-sync)
+                 (lambda (&rest _) (cl-incf attempts) (error "Disk full")))
+                ((symbol-function 'message) #'ignore))
+        (test-mevedel-instruction-store--directive source "base")
+        (should (memq workspace mevedel-instruction-store--dirty))
+        (setq attempts 0)
+        (dotimes (_ 10) (mevedel-instruction-store-flush))
+        (should (= 1 attempts))
+        (should (memq workspace mevedel-instruction-store--dirty))
+        (should (memq #'mevedel-instruction-store-flush post-command-hook))
+        ;; Controls: a forced flush (exit) tries at once; so does a flush
+        ;; once the interval has passed.
+        (mevedel-instruction-store-flush t)
+        (should (= 2 attempts))
+        (setf (alist-get workspace mevedel-instruction-store--failed)
+              (time-subtract nil 31))
+        (mevedel-instruction-store-flush)
+        (should (= 3 attempts)))))
   :doc "control: without the store a restart loses the creation"
   (test-mevedel-instruction-store--with-workspace (workspace source)
     (cl-letf (((symbol-function 'mevedel-instruction-store--applicable-p) #'ignore))
@@ -538,7 +579,40 @@ Return the new workspace struct."
 
 ;;; Pending workspaces
 
-(mevedel-deftest mevedel-instruction-store-state (:quiet t)
+(mevedel-deftest mevedel-instruction-store-flush (:quiet t)
+  ,test
+  (test)
+  :doc "a failed flush backs off in an Emacs that has not loaded session persistence"
+  (let ((emacs (expand-file-name invocation-name invocation-directory))
+        (root (file-name-directory (locate-library "mevedel-persistence"))))
+    (with-temp-buffer
+      (let ((status
+             (call-process
+              emacs nil t nil "--batch" "-Q"
+              "--eval"
+              (prin1-to-string
+               `(progn
+                  (setq load-path ',(cons root load-path))
+                  (require 'mevedel-persistence)
+                  (when (featurep 'mevedel-session-persistence)
+                    (error "Session persistence must start unloaded"))
+                  (let ((workspace (mevedel-workspace--create
+                                    :type 'project :id "x" :root "/tmp/x/"
+                                    :name "x"))
+                        (attempts 0))
+                    (cl-letf (((symbol-function 'mevedel-instruction-store-sync)
+                               (lambda (&rest _)
+                                 (cl-incf attempts) (error "Disk full")))
+                              ((symbol-function 'message) #'ignore))
+                      (push workspace mevedel-instruction-store--dirty)
+                      (dotimes (_ 3) (mevedel-instruction-store-flush))
+                      (unless (= attempts 1)
+                        (error "Expected 1 attempt, got %d" attempts)))))))))
+        (ert-info ((buffer-string))
+          (should (equal 0 status)))))))
+
+
+(mevedel-deftest mevedel-instruction-store--pending-p (:quiet t)
   ,test
   (test)
   :doc "a workspace with sessions but no store is pending and creates none"
@@ -548,7 +622,7 @@ Return the new workspace struct."
       (make-directory (file-name-concat (mevedel-session-artifacts-sessions-dir workspace)
                                         "20261107T000000-aaaaaaaaaaaa")
                       t)
-      (should (eq 'pending (mevedel-instruction-store-state workspace)))
+      (should (eq 'pending (mevedel-instruction-test--store-state workspace)))
       (test-mevedel-instruction-store--directive source "one")
       (should (eq 'pending (mevedel-instruction-store-sync workspace)))
       (should-not (file-exists-p (mevedel-instruction-store-path workspace)))))
@@ -560,18 +634,75 @@ Return the new workspace struct."
                                      workspace)
                                     "report.el")
                   nil 'silent)
-    (should (eq 'pending (mevedel-instruction-store-state workspace))))
-  :doc "sessions kept in an absolute sessions directory also make it pending"
+    (should (eq 'pending (mevedel-instruction-test--store-state workspace))))
+  :doc "sessions kept in an absolute sessions directory attribute by sidecar"
   (test-mevedel-instruction-store--with-workspace (workspace _source)
     (let ((mevedel-sessions-directory
-           (file-name-concat (mevedel-workspace-root workspace) "elsewhere")))
-      (make-directory (file-name-concat mevedel-sessions-directory "s") t)
-      (should (eq 'pending (mevedel-instruction-store-state workspace)))))
+           (file-name-as-directory (make-temp-file "mevedel-shared-" t))))
+      (unwind-protect
+          (cl-destructuring-bind (foreign . foreign-dir)
+              (test-mevedel-session-persistence--make-tempdir-workspace)
+            (unwind-protect
+                (progn
+                  (test-mevedel-instruction-store--save-session foreign "foreign")
+                  (should (eq 'new (mevedel-instruction-test--store-state workspace)))
+                  ;; Control: a session of this workspace makes it pending.
+                  (test-mevedel-instruction-store--save-session workspace "own")
+                  (should (eq 'pending
+                              (mevedel-instruction-test--store-state workspace))))
+              (delete-directory foreign-dir t)))
+        (delete-directory mevedel-sessions-directory t))))
+  :doc "published portable sessions in an absolute directory are attributed by their publication"
+  :doc "an older-format session in an absolute directory still keeps the workspace pending"
+  (test-mevedel-instruction-store--with-workspace (workspace _source)
+    (let ((mevedel-sessions-directory
+           (file-name-as-directory (make-temp-file "mevedel-shared-" t))))
+      (unwind-protect
+          (progn
+            (test-mevedel-instruction-store--save-session workspace "old")
+            (should (eq 'pending (mevedel-instruction-test--store-state workspace)))
+            ;; The session becomes an older-format one; it must neither
+            ;; resume nor be dropped as evidence.
+            (dolist (sidecar (directory-files-recursively
+                              mevedel-sessions-directory "\\`session\\.meta\\.el\\'"))
+              (let ((data (with-temp-buffer
+                            (insert-file-contents sidecar)
+                            (read (current-buffer)))))
+                (setf (plist-get data :version) 0)
+                (with-temp-file sidecar (prin1 data (current-buffer)))))
+            (should (null (mevedel-session-persistence-list-sessions workspace)))
+            (should (eq 'pending (mevedel-instruction-test--store-state workspace))))
+        (delete-directory mevedel-sessions-directory t))))
+  :doc "published portable sessions in an absolute directory are attributed by their publication"
+  (let* ((shared (file-name-as-directory (make-temp-file "mevedel-shared-" t)))
+         (root-a (file-name-as-directory (make-temp-file "mevedel-ws-a-" t)))
+         (root-b (file-name-as-directory (make-temp-file "mevedel-ws-b-" t)))
+         (mevedel-sessions-directory shared)
+         (mevedel-instruction-store--dirty nil))
+    (unwind-protect
+        (let* ((a (test-mevedel-session-persistence--make-workspace root-a))
+               (b (test-mevedel-session-persistence--make-workspace root-b)))
+          ;; Store observations other tests left for this workspace key
+          ;; would make an absent store look removed rather than new.
+          (test-mevedel-session-persistence--reset-instructions)
+          (should (eq 'portable (mevedel-session-authority-mode-for-workspace a)))
+          (test-mevedel-instruction-store--save-session b "foreign")
+          (should (eq 'new (mevedel-instruction-test--store-state a)))
+          ;; Control: a published session of this workspace makes it pending.
+          (test-mevedel-instruction-store--save-session a "own")
+          ;; A portable session's fixed sidecar is only a cache; the
+          ;; committed publication is authoritative.
+          (dolist (cache (directory-files-recursively shared "\\`session\\.meta\\.el\\'"))
+            (delete-file cache))
+          (should (eq 'pending (mevedel-instruction-test--store-state a))))
+      (test-mevedel-session-persistence--reset-instructions)
+      (mevedel-workspace-clear-registry)
+      (dolist (dir (list shared root-a root-b)) (delete-directory dir t))))
   :doc "control: without sessions or a report the workspace is new"
   (test-mevedel-instruction-store--with-workspace (workspace source)
-    (should (eq 'new (mevedel-instruction-store-state workspace)))
+    (should (eq 'new (mevedel-instruction-test--store-state workspace)))
     (test-mevedel-instruction-store--directive source "one")
-    (should (eq 'active (mevedel-instruction-store-state workspace))))
+    (should (eq 'active (mevedel-instruction-test--store-state workspace))))
   :doc "without a .mevedel directory no store or directory is created"
   (let* ((root (file-name-as-directory (make-temp-file "mevedel-plain-" t)))
          (workspace (mevedel-workspace-get-or-create 'file "plain" root "plain")))
@@ -603,9 +734,23 @@ Return the new workspace struct."
                                      workspace)
                                     t "\\`unsynced-")))
       (should (= 1 (length exports)))
+      (should (string-match-p (format "-%d\\.el\\'" (emacs-pid))
+                              (car exports)))
       (should (string-match-p "only here" (with-temp-buffer
                                             (insert-file-contents (car exports))
                                             (buffer-string)))))))
+  :doc "exports of two clients in the same second do not overwrite each other"
+  (test-mevedel-instruction-store--with-workspace (workspace source)
+    (test-mevedel-instruction-store--directive source "only here")
+    (cl-letf (((symbol-function 'format-time-string)
+               (lambda (&rest _) "20261107T000000")))
+      (let ((first (cl-letf (((symbol-function 'emacs-pid) (lambda () 1111)))
+                     (mevedel-instruction-store--export-unsynced workspace)))
+            (second (cl-letf (((symbol-function 'emacs-pid) (lambda () 2222)))
+                      (mevedel-instruction-store--export-unsynced workspace))))
+        (should-not (equal first second))
+        (should (file-exists-p first))
+        (should (file-exists-p second)))))
 
 
 ;;; Export and import
@@ -637,9 +782,9 @@ Return the new workspace struct."
       (make-directory (file-name-concat (mevedel-session-artifacts-sessions-dir workspace)
                                         "s")
                       t)
-      (should (eq 'pending (mevedel-instruction-store-state workspace)))
+      (should (eq 'pending (mevedel-instruction-test--store-state workspace)))
       (with-current-buffer source (mevedel-load-instructions export))
-      (should (eq 'active (mevedel-instruction-store-state workspace)))
+      (should (eq 'active (mevedel-instruction-test--store-state workspace)))
       (should (equal "candidate"
                      (plist-get (car (plist-get (test-mevedel-instruction-store--record
                                                  workspace)
@@ -911,7 +1056,7 @@ each, both written to the store."
             (mevedel-workspace-identity-ensure root)
             ;; A session without a store makes the workspace pending.
             (make-directory (file-name-concat local ".mevedel" "sessions" "old") t)
-            (should (eq 'pending (mevedel-instruction-store-state workspace)))
+            (should (eq 'pending (mevedel-instruction-test--store-state workspace)))
             (delete-directory (file-name-concat local ".mevedel" "sessions") t)
             (setq session (mevedel-session-create "s" workspace root))
             (let ((sid (mevedel-session-session-id session)))

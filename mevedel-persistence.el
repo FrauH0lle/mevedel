@@ -801,6 +801,14 @@ binds t while it installs its own records, so they are not echoed back.")
 (defvar mevedel-instruction-store--warned nil
   "Workspace keys already warned about a pending or unreadable store.")
 
+(defconst mevedel-instruction-store--retry-seconds 30
+  "Retry delay for a failed flush before session persistence is loaded.")
+
+(defvar mevedel-instruction-store--failed nil
+  "Alist of (WORKSPACE . TIME) for workspaces whose last flush failed.
+A non-forced flush skips a workspace until the checkpoint interval has
+passed since TIME.")
+
 (defconst mevedel-instruction-store--presentation-keys
   '(:overlay-start :overlay-end :start :end :position :source-order
                    :prefix :suffix :text-hash :text)
@@ -1268,8 +1276,10 @@ LIST holding (UUID . REQUEST-TEXT) for each change of MINE refused."
   "Return non-nil when WORKSPACE, whose store is absent, awaits migration.
 A staged migration's report, or any session other than OWN-SAVE-PATH,
 means instructions may exist only in session snapshots, so creating an
-empty store would hide them.  OBSERVED with a hash means this client
-saw a store that has since been removed; it writes a new one."
+empty store would hide them.  An absolute sessions directory holds every
+workspace's sessions, so only those whose sidecar names WORKSPACE count.
+OBSERVED with a hash means this client saw a store that has since been
+removed; it writes a new one."
   (and (not (plist-get observed :hash))
        (or (file-exists-p
             (file-name-concat (mevedel-instruction-store-migration-directory
@@ -1278,18 +1288,51 @@ saw a store that has since been removed; it writes a new one."
            (let ((sessions (mevedel-session-artifacts-sessions-dir workspace))
                  (own (and own-save-path
                            (directory-file-name (expand-file-name own-save-path)))))
-             (and (file-directory-p sessions)
-                  (cl-some (lambda (directory)
-                             (and (file-directory-p directory)
-                                  (not (equal (directory-file-name directory) own))))
-                           (directory-files sessions t "\\`[^.]")))))))
+             (if (file-name-absolute-p mevedel-sessions-directory)
+                 (mevedel-instruction-store--shared-session-p workspace own)
+               (and (file-directory-p sessions)
+                    (cl-some (lambda (directory)
+                               (and (file-directory-p directory)
+                                    (not (equal (directory-file-name directory)
+                                                own))))
+                             (directory-files sessions t "\\`[^.]"))))))))
+
+(declare-function mevedel-session-persistence--enumerate-sessions
+                  "mevedel-session-persistence" (workspace &optional cached))
+
+(defun mevedel-instruction-store--shared-session-p (workspace own)
+  "Return non-nil when a session other than OWN may belong to WORKSPACE.
+An absolute sessions directory holds every workspace's sessions, so a
+compatible session counts only when its authoritative sidecar, as session
+discovery reads it for the workspace's authority mode, names WORKSPACE's
+identity.  An incompatible (older-format or unreadable) session cannot be
+attributed and may hold this workspace's instructions, so it counts too."
+  (require 'mevedel-session-persistence)
+  (when-let* ((identity (mevedel-workspace-identity-read
+                         (mevedel-workspace-root workspace))))
+    (let ((found (mevedel-session-persistence--enumerate-sessions workspace)))
+      (or (cl-some (lambda (session)
+                     (and (equal identity
+                                 (plist-get (plist-get (plist-get session :summary)
+                                                       :workspace)
+                                            :workspace-id))
+                          (not (equal (directory-file-name
+                                       (plist-get session :save-path))
+                                      own))))
+                   (plist-get found :sessions))
+          (cl-some (lambda (session)
+                     (not (equal (directory-file-name (plist-get session :save-path))
+                                 own)))
+                   (plist-get found :incompatible))))))
 
 (defun mevedel-instruction-store--export-unsynced (workspace)
   "Export WORKSPACE's in-memory instructions before the store replaces them.
 Return the export path."
   (let ((path (file-name-concat
                (mevedel-instruction-store-migration-directory workspace)
-               (format "unsynced-%s.el" (format-time-string "%Y%m%dT%H%M%S")))))
+               (format "unsynced-%s-%s-%d.el"
+                       (format-time-string "%Y%m%dT%H%M%S")
+                       (system-name) (emacs-pid)))))
     (make-directory (file-name-directory path) t)
     (with-temp-buffer
       (setq-local mevedel--workspace workspace)
@@ -1328,18 +1371,6 @@ must still be noticed."
 
 
 ;;;; Public interface
-
-(defun mevedel-instruction-store-state (workspace)
-  "Return WORKSPACE's store state: `active', `pending', `new' or nil.
-Nil means WORKSPACE keeps no store."
-  (when (mevedel-instruction-store--applicable-p workspace)
-    (if (not (eq 'absent (plist-get (mevedel-instruction-store--read workspace)
-                                    :status)))
-        'active
-      (if (mevedel-instruction-store--pending-p
-           workspace (mevedel-instruction-store--observation workspace) nil)
-          'pending
-        'new))))
 
 (defun mevedel-instruction-store-sync (workspace &optional own-save-path)
   "Write WORKSPACE's in-memory instructions to its store; return the outcome.
@@ -1485,22 +1516,36 @@ minibuffer is active it waits: editing a directive request in the
 minibuffer changes it on every keystroke, and the command that read it
 writes once when it returns.  FORCE writes even then, as at exit.  A
 failure is reported and the workspace
-stays pending for the next flush.  An unreadable store is reported once
-and left to the next observation point, so it is not re-read after every
-command."
+stays pending, but is not retried by a non-forced flush until
+`mevedel-session-checkpoint-interval' seconds have passed, so a lasting
+failure does not repeat after every command.  An unreadable store is
+reported once and left to the next observation point, so it is not re-read
+after every command."
   (unless (and (> (minibuffer-depth) 0) (not force))
     (dolist (workspace mevedel-instruction-store--dirty)
-      (condition-case err
-          (mevedel-instruction-store-sync workspace)
-        (mevedel-instruction-store-unreadable
-         (setq mevedel-instruction-store--dirty
-               (delq workspace mevedel-instruction-store--dirty))
-         (mevedel-instruction-store--warn workspace 'unreadable
-                                          (error-message-string err)))
-        (error
-         (cl-pushnew workspace mevedel-instruction-store--dirty)
-         (message "mevedel: instructions not written to the store: %s"
-                  (error-message-string err)))))
+      (let ((failed (alist-get workspace mevedel-instruction-store--failed)))
+        (unless (and failed (not force)
+                     (< (float-time (time-since failed))
+                        (or (and (boundp 'mevedel-session-checkpoint-interval)
+                                 (symbol-value 'mevedel-session-checkpoint-interval))
+                            mevedel-instruction-store--retry-seconds)))
+          (condition-case err
+              (progn
+                (mevedel-instruction-store-sync workspace)
+                (setf (alist-get workspace mevedel-instruction-store--failed
+                                 nil t)
+                      nil))
+            (mevedel-instruction-store-unreadable
+             (setq mevedel-instruction-store--dirty
+                   (delq workspace mevedel-instruction-store--dirty))
+             (mevedel-instruction-store--warn workspace 'unreadable
+                                              (error-message-string err)))
+            (error
+             (cl-pushnew workspace mevedel-instruction-store--dirty)
+             (setf (alist-get workspace mevedel-instruction-store--failed)
+                   (current-time))
+             (message "mevedel: instructions not written to the store: %s"
+                      (error-message-string err)))))))
     (unless mevedel-instruction-store--dirty
       (remove-hook 'post-command-hook #'mevedel-instruction-store-flush))))
 
