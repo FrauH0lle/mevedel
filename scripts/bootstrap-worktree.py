@@ -89,6 +89,21 @@ def prepare(root):
         raise RuntimeError(".eask must be ignored as a directory or symlink; "
                            "use `.eask`, not `.eask/`, in .gitignore.\n"
                            f"{error}") from error
+    if root != primary:
+        # Enabling worktreeConfig changes the meaning of shared core.worktree
+        # and core.bare=true.  Refuse those layouts rather than migrate the
+        # primary checkout's settings behind its owner's back.
+        configuration = run(["git", "config", "--local", "--list"], root).splitlines()
+        bare = run(["git", "config", "--local", "--type=bool", "--default=false",
+                    "--get", "core.bare"], root)
+        if bare == "true" or any(line.startswith("core.worktree=")
+                                 for line in configuration):
+            raise RuntimeError("Cannot safely enable worktree hooks with shared "
+                               "core.bare=true or core.worktree; move these settings "
+                               "to the primary checkout's config.worktree first")
+        run(["git", "config", "--local", "extensions.worktreeConfig", "true"], root)
+        run(["git", "config", "--worktree", "core.hooksPath", ".githooks"], root)
+        print("Worktree hook: .githooks (worktree-only)", flush=True)
     command = ([shutil.which("eask")] if shutil.which("eask") else
                ["npx", "--offline", "--silent", "--no-install", "@emacs-eask/cli"])
     environment = os.environ.copy()

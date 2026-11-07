@@ -25,7 +25,10 @@ class BootstrapTests(unittest.TestCase):
         self.git("config", "user.name", "Test")
         (self.root / "Eask").write_text('(depends-on "gptel")\n')
         (self.root / ".gitignore").write_text(".eask\n")
-        self.git("add", "Eask", ".gitignore")
+        hooks = self.root / ".githooks"
+        hooks.mkdir()
+        shutil.copy2(SCRIPT.parents[1] / ".githooks/pre-commit", hooks / "pre-commit")
+        self.git("add", "Eask", ".gitignore", ".githooks")
         self.git("commit", "-m", "fixture")
         (self.root / ".eask").mkdir()
         self.tree = self.base / "linked checkout"
@@ -93,7 +96,46 @@ else:
         self.assertIn("test-eask-1.0", self.bootstrap())
 
     def test_primary_checkout(self):
+        configuration = self.git("config", "--local", "--list")
         self.assertIn("(local)", self.bootstrap(self.root))
+        self.assertEqual(self.git("config", "--local", "--list"), configuration)
+
+    def test_hook_runs_only_in_bootstrapped_worktree(self):
+        self.git("config", "core.hooksPath", "primary-hooks")
+        before = self.git("config", "--local", "--list")
+        sibling = self.base / "unbootstrapped checkout"
+        self.git("worktree", "add", "--detach", str(sibling))
+        # Negative control: before bootstrap there is no installed pre-commit.
+        absent = subprocess.run(["git", "-C", str(self.tree), "hook", "run", "pre-commit"],
+                                capture_output=True)
+        self.assertNotEqual(absent.returncode, 0)
+        self.assertIn("worktree-only", self.bootstrap())
+        self.assertEqual(self.git("config", "--get", "core.hooksPath").strip(),
+                         "primary-hooks")
+        self.assertEqual(self.git("-C", str(sibling), "config", "--get",
+                                  "core.hooksPath").strip(), "primary-hooks")
+        after = self.git("config", "--local", "--list")
+        self.assertEqual(after.replace("extensions.worktreeconfig=true\n", ""), before)
+        self.assertFalse((self.root / ".git/config.worktree").exists())
+        log = self.base / "hook-command"
+        npx = self.base / "bin/npx"
+        npx.write_text('#!/bin/sh\nprintf "%s\\n" "$*" > "$COMMAND_LOG"\nexit 23\n')
+        npx.chmod(0o755)
+        result = subprocess.run(
+            ["git", "-C", str(self.tree), "commit", "--allow-empty", "-m", "Blocked"],
+            env={**self.environment, "COMMAND_LOG": str(log)}, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(log.read_text().strip(),
+                         "@emacs-eask/cli run script check -- --affected")
+
+    def test_unsafe_shared_configuration_is_not_migrated(self):
+        for key, value in (("core.worktree", str(self.root)), ("core.bare", "true")):
+            with self.subTest(key=key):
+                self.git("config", "--local", key, value)
+                before = self.git("config", "--local", "--list")
+                self.assertIn("Cannot safely enable worktree hooks", self.bootstrap(success=False))
+                self.assertEqual(self.git("config", "--local", "--list"), before)
+                self.git("config", "--local", "--unset", key)
 
     def test_missing_cache_has_install_recovery(self):
         (self.root / ".eask").rmdir()

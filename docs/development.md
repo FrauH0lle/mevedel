@@ -42,6 +42,12 @@ before tests. It reuses the primary checkout's `.eask`, validates this worktree'
 dependency versions and loading through Eask, and reports Emacs/Eask versions, paths and
 source hashes. It runs offline without installing or upgrading dependencies;
 failure prints recovery instructions. `.eask` is ignored as directory or symlink.
+For linked worktrees, bootstrap also enables Git's `extensions.worktreeConfig`
+and sets `core.hooksPath=.githooks` with `git config --worktree`. The shared
+extension flag is the only common-config change: the primary checkout and other
+worktrees keep their hooks settings. Bootstrapping the primary checkout does not
+install hooks. Shared `core.worktree` or `core.bare=true` settings are rejected
+rather than migrated, because enabling the extension would change their meaning.
 This repo's `.dir-locals.el` configures creation-time setup, requiring Emacs
 approval. The separate `mevedel-worktree-setup-enabled` flag defaults off;
 `mevedel-worktree-setup-command` holds argv. Both creation paths and the skill
@@ -164,19 +170,22 @@ runs the isolated ERT suite (or the affected tier) through the existing
 compiled files cannot shadow edits. Each failed step stops the check and returns
 a nonzero status. Dependency installation remains a separate setup step.
 
-#### Opt-in pre-commit hook
+#### Pre-commit hook
 
-To run the pre-commit tier automatically before local commits, from the
-repository root:
+Linked-worktree bootstrap installs this hook automatically for that worktree.
+To opt in manually from a repository root, without changing other checkouts:
 
 ```bash
-git config --local core.hooksPath .githooks
+git config --local extensions.worktreeConfig true
+git config --worktree core.hooksPath .githooks
 ```
 
-This replaces the repository's configured hooks path; inspect
+This replaces the current worktree's configured hooks path; inspect
 `git config --get core.hooksPath` first if you already use hooks. Installation is
-optional and is never performed by Eask or CI. To undo it, use
-`git config --local --unset core.hooksPath` (or restore your previous value).
+never performed by Eask or CI. Before manually enabling the extension, move any
+shared `core.worktree` or `core.bare=true` setting to the primary checkout's
+`config.worktree`, as required by Git. To undo the hook, use
+`git config --worktree --unset core.hooksPath` (or restore your previous value).
 The hook requires Node/npx, Python 3, Emacs and installed Eask development
 dependencies, and runs `check -- --affected`. It checks the
 working tree, not a temporary copy of the index: when partially staging files,
