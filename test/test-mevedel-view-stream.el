@@ -19,6 +19,7 @@
 (require 'mevedel-view-render)
 (require 'mevedel-view-segments)
 (require 'mevedel-view-stream)
+(require 'mevedel-telemetry)
 (require 'mevedel-agent-control)
 (require 'mevedel-collaboration)
 (require 'mevedel-collaboration-transport)
@@ -7842,4 +7843,198 @@ second line")
         (mevedel-view--stop-spinner)))))
 
 (provide 'test-mevedel-view-stream)
+(mevedel-deftest mevedel-view-stream-progress-verbs ()
+  ,test
+  (test)
+  :doc "show: sets label and owner, defaults the owner to request, and un-suppresses"
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer view-buf (mevedel-view--stop-request-progress))
+    (mevedel-view-stream-show-progress view-buf "Thinking...")
+    (with-current-buffer view-buf
+      (should (equal "Thinking..." mevedel-view--spinner-status))
+      (should (eq 'request mevedel-view--spinner-owner))
+      (should-not mevedel-view--request-progress-suppressed))
+    (mevedel-view-stream-show-progress view-buf "Compacting..." 'compaction)
+    (with-current-buffer view-buf
+      (should (equal "Compacting..." mevedel-view--spinner-status))
+      (should (eq 'compaction mevedel-view--spinner-owner))))
+
+  :doc "show: records one status transition from the previous owner to the explicit owner"
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer data-buf
+      (setq-local mevedel--session (mevedel-session--create)))
+    (let ((session (buffer-local-value 'mevedel--session data-buf))
+          records)
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-telemetry-record)
+                     (lambda (&rest args) (push args records))))
+            (mevedel-view-stream-show-progress view-buf "Thinking...")
+            (mevedel-view-stream-show-progress
+             view-buf "Compacting..." 'compaction))
+        ;; Teardown stops the view and must not see the fake session.
+        (with-current-buffer data-buf (setq-local mevedel--session nil)))
+      (should (equal `(,session status-transition
+                       :previous-owner request :previous-status "Thinking..."
+                       :owner compaction :status "Compacting...")
+                     (car records)))
+      (should (= 2 (length records)))))
+
+  :doc "ensure: redraws without changing the label or un-suppressing a hidden row"
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-show-progress view-buf "Thinking..." 'compaction)
+    (mevedel-view-stream-ensure-progress view-buf data-buf)
+    (with-current-buffer view-buf
+      (should (equal "Thinking..." mevedel-view--spinner-status))
+      (should (eq 'compaction mevedel-view--spinner-owner)))
+    (mevedel-view-stream-end-progress view-buf)
+    (mevedel-view-stream-ensure-progress view-buf data-buf)
+    (with-current-buffer view-buf
+      (should mevedel-view--request-progress-suppressed)
+      (should-not mevedel-view--spinner-status)))
+
+  :doc "end: goes idle and suppresses the row until the next show"
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-show-progress view-buf "Thinking...")
+    (mevedel-view-stream-end-progress view-buf)
+    (with-current-buffer view-buf
+      (should mevedel-view--request-progress-suppressed)
+      (should-not mevedel-view--spinner-status)
+      (should-not mevedel-view--spinner-owner)
+      (should-not mevedel-view--spinner-start-time))
+    (mevedel-view-stream-show-progress view-buf "Again...")
+    (with-current-buffer view-buf
+      (should-not mevedel-view--request-progress-suppressed)))
+
+  :doc "verbs: a nil or dead view is a silent no-op with no telemetry"
+  (let ((dead (generate-new-buffer " *dead-view*"))
+        records)
+    (kill-buffer dead)
+    (cl-letf (((symbol-function 'mevedel-telemetry-record)
+               (lambda (&rest args) (push args records))))
+      (dolist (view (list nil dead))
+        (should-not (mevedel-view-stream-show-progress view "x"))
+        (should-not (mevedel-view-stream-ensure-progress view nil))
+        (should-not (mevedel-view-stream-end-progress view))
+        (should-not (mevedel-view-stream-claim-progress view "x" 'o))
+        (should-not (mevedel-view-stream-release-progress view '(:owner o)))))
+    (should-not records))
+
+  :doc "claim and release: release restores the replaced status while the owner holds"
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-show-progress view-buf "Thinking...")
+    (let ((token (mevedel-view-stream-claim-progress
+                  view-buf "Retrying..." 'provider-retry)))
+      (with-current-buffer view-buf
+        (should (eq 'provider-retry mevedel-view--spinner-owner)))
+      (mevedel-view-stream-release-progress view-buf token)
+      (with-current-buffer view-buf
+        (should (equal "Thinking..." mevedel-view--spinner-status))
+        (should (eq 'request mevedel-view--spinner-owner)))))
+
+  :doc "claim and release: a token with nothing replaced returns to idle, not suppressed"
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer view-buf (mevedel-view--stop-spinner))
+    (let ((token (mevedel-view-stream-claim-progress
+                  view-buf "Retrying..." 'provider-retry)))
+      (mevedel-view-stream-release-progress view-buf token)
+      (with-current-buffer view-buf
+        (should-not mevedel-view--spinner-status)
+        (should-not mevedel-view--spinner-owner)
+        (should-not mevedel-view--request-progress-suppressed))))
+
+  :doc "claim and release: a newer owner is left alone with or without a snapshot"
+  (mevedel-view-stream-test--with-buffers
+    (dolist (before '("Thinking..." nil))
+      (with-current-buffer view-buf (mevedel-view--stop-spinner))
+      (when before (mevedel-view-stream-show-progress view-buf before))
+      (let ((token (mevedel-view-stream-claim-progress
+                    view-buf "Retrying..." 'provider-retry)))
+        (mevedel-view-stream-show-progress view-buf "Hook running" 'hook)
+        (mevedel-view-stream-release-progress view-buf token)
+        (with-current-buffer view-buf
+          (should (equal "Hook running" mevedel-view--spinner-status))
+          (should (eq 'hook mevedel-view--spinner-owner))))))
+
+  :doc "claim and release: release touches the view the caller resolves now, not the claimed one"
+  (mevedel-view-stream-test--with-buffers
+    (let ((view2 (generate-new-buffer " *mevedel-stream-view2*")))
+      (unwind-protect
+          (progn
+            (mevedel-view--setup view2 data-buf)
+            (mevedel-view-stream-show-progress view-buf "Thinking...")
+            (let ((token (mevedel-view-stream-claim-progress
+                          view-buf "Retrying..." 'provider-retry)))
+              ;; The replacement view does not hold the claim: untouched.
+              (mevedel-view-stream-show-progress view2 "Other" 'hook)
+              (mevedel-view-stream-release-progress view2 token)
+              (with-current-buffer view2
+                (should (equal "Other" mevedel-view--spinner-status))
+                (should (eq 'hook mevedel-view--spinner-owner)))
+              ;; The original view is still live and still holds the claim,
+              ;; yet release into the replacement leaves it alone.
+              (with-current-buffer view-buf
+                (should (eq 'provider-retry mevedel-view--spinner-owner)))
+              ;; A replacement that holds the owner is the one restored.
+              (mevedel-view-stream-show-progress view2 "Retrying..." 'provider-retry)
+              (mevedel-view-stream-release-progress view2 token)
+              (with-current-buffer view2
+                (should (equal "Thinking..." mevedel-view--spinner-status))
+                (should (eq 'request mevedel-view--spinner-owner)))
+              (with-current-buffer view-buf
+                (should (eq 'provider-retry mevedel-view--spinner-owner)))
+              ;; Finally the original, resolved again, is restored.
+              (mevedel-view-stream-release-progress view-buf token)
+              (with-current-buffer view-buf
+                (should (eq 'request mevedel-view--spinner-owner)))))
+        (when (buffer-live-p view2)
+          (with-current-buffer view2 (mevedel-view-stream-stop))
+          (kill-buffer view2)))))
+
+  :doc "progress changes keep point and the composer draft in place"
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view-stream-begin-turn
+       mevedel-view--status-marker
+       (with-current-buffer data-buf (copy-marker (point-min))))
+      (mevedel-view-stream-test--insert-composer-draft "> quoted\nsecond line" 4))
+    (dolist (step (list (lambda () (mevedel-view-stream-show-progress
+                                    view-buf "Compacting..." 'compaction))
+                        (lambda () (mevedel-view-stream-ensure-progress
+                                    view-buf data-buf))
+                        (lambda () (mevedel-view-stream-end-progress view-buf))))
+      (funcall step)
+      (with-current-buffer view-buf
+        (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4))))))
+
+  :doc "cold load: each caller module ends progress with no view in a fresh Emacs"
+  (with-temp-buffer
+    (let ((status
+           (call-process
+            (expand-file-name invocation-name invocation-directory)
+            nil t nil "--batch" "-Q" "--eval"
+            (prin1-to-string
+             `(progn
+                (setq load-path ',load-path load-prefer-newer t)
+                (require 'ert)
+                (require 'cl-lib)
+                (dolist (feature '(mevedel-compact mevedel-compact-run
+                                   mevedel-compact-target mevedel-plan-handoff
+                                   mevedel-review mevedel-gptel-retry))
+                  (require feature)
+                  (should-not (featurep 'mevedel-view-composer)))
+                (dolist (verb '(mevedel-view-stream-show-progress
+                                mevedel-view-stream-end-progress
+                                mevedel-view-stream-claim-progress
+                                mevedel-view-stream-release-progress
+                                mevedel-view-stream-ensure-progress))
+                  (should (fboundp verb)))
+                (should-not (mevedel-view-stream-end-progress nil))
+                (should-not (mevedel-view-stream-show-progress nil "x"))
+                (should-not (cl-remove-if-not
+                             (lambda (b) (buffer-local-value 'mevedel-view--spinner-status b))
+                             (buffer-list))))))))
+      (ert-info ((buffer-string))
+        (should (equal 0 status))))))
+
 ;;; test-mevedel-view-stream.el ends here

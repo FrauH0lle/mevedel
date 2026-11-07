@@ -45,11 +45,12 @@
 (declare-function mevedel-view-render-invalidate-live-tail "mevedel-view-render" ())
 
 ;; `mevedel-view-stream'
-(declare-function mevedel-view--restore-spinner-status "mevedel-view-stream" (owner snapshot))
-(declare-function mevedel-view--spinner-status-snapshot "mevedel-view-stream" ())
-(declare-function mevedel-view--stop-spinner "mevedel-view-stream" ())
-(declare-function mevedel-view--update-spinner "mevedel-view-stream" (status &optional owner))
-(defvar mevedel-view--spinner-owner)
+(declare-function mevedel-view-stream-claim-progress "mevedel-view-stream" (view status owner))
+(declare-function mevedel-view-stream-release-progress "mevedel-view-stream" (view token))
+(declare-function mevedel-view-stream-show-progress "mevedel-view-stream" (view status &optional owner))
+(autoload 'mevedel-view-stream-claim-progress "mevedel-view-stream")
+(autoload 'mevedel-view-stream-release-progress "mevedel-view-stream")
+(autoload 'mevedel-view-stream-show-progress "mevedel-view-stream")
 
 (defcustom mevedel-gptel-retry-max-retries 10
   "Maximum retries after the first attempt of an admitted native gptel sample.
@@ -158,12 +159,13 @@ Responses events carry an explicit `\"error\": null' on success."
       (if invocation
           (mevedel-agent-conversation-record-activity invocation (list :type 'status :summary text))
         (when (buffer-live-p view)
-          (with-current-buffer view
-            ;; Remember what the wait replaced, even no status, so recovery
-            ;; can hand it back.
-            (unless (plist-get state :progress)
-              (plist-put state :progress (list (mevedel-view--spinner-status-snapshot))))
-            (mevedel-view--update-spinner text 'provider-retry)))))))
+          ;; Remember what the wait replaced, even no status, so recovery
+          ;; can hand it back.
+          (if (plist-get state :progress)
+              (mevedel-view-stream-show-progress view text 'provider-retry)
+            (plist-put state :progress
+                       (list (mevedel-view-stream-claim-progress
+                              view text 'provider-retry)))))))))
 
 (defun mevedel-gptel-retry--restore-status (state)
   "Return root progress claimed by STATE's retry wait to its prior status.
@@ -173,12 +175,7 @@ A status claimed since by another owner is left alone."
     (let* ((buffer (plist-get (gptel-fsm-info (plist-get state :fsm)) :buffer))
            (view (and (buffer-live-p buffer)
                       (buffer-local-value 'mevedel--view-buffer buffer))))
-      (when (buffer-live-p view)
-        (with-current-buffer view
-          (if (car captured)
-              (mevedel-view--restore-spinner-status 'provider-retry (car captured))
-            (when (eq mevedel-view--spinner-owner 'provider-retry)
-              (mevedel-view--stop-spinner))))))))
+      (mevedel-view-stream-release-progress view (car captured)))))
 
 (defun mevedel-gptel-retry--cancel (state)
   "Cancel STATE's timer and request once, including a transport-free wait.

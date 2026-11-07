@@ -117,11 +117,12 @@
 (autoload 'mevedel-view--assert-live-tip "mevedel-view-composer")
 
 ;; `mevedel-view-stream'
-(declare-function mevedel-view--stop-request-progress
-                  "mevedel-view-stream" ())
-(declare-function mevedel-view--stop-spinner "mevedel-view-stream" ())
-(declare-function mevedel-view--update-spinner
-                  "mevedel-view-stream" (status &optional owner))
+(declare-function mevedel-view-stream-end-progress
+                  "mevedel-view-stream" (view))
+(declare-function mevedel-view-stream-show-progress
+                  "mevedel-view-stream" (view status &optional owner))
+(autoload 'mevedel-view-stream-end-progress "mevedel-view-stream")
+(autoload 'mevedel-view-stream-show-progress "mevedel-view-stream")
 
 ;; `mevedel-workspace'
 (defvar mevedel--workspace)
@@ -305,12 +306,7 @@ a request that will never reach them."
           "Auto-compaction failed; request not sent: %s")
         err)
        :warning)
-      (when-let* ((vb mevedel--view-buffer)
-                  (_ (buffer-live-p vb)))
-        (with-current-buffer vb
-          (if (fboundp 'mevedel-view--stop-request-progress)
-              (mevedel-view--stop-request-progress)
-            (mevedel-view--stop-spinner))))
+      (mevedel-view-stream-end-progress mevedel--view-buffer)
       (mevedel--compact-terminate-request fsm " Compaction failed" err))))
 
 (defun mevedel--compact-continuation-wait-p (fsm)
@@ -378,10 +374,8 @@ set already stored on FSM's info plist."
   (let ((chat-buffer (plist-get target :buffer)))
     (when (buffer-live-p chat-buffer)
       (with-current-buffer chat-buffer
-        (when-let* ((view-buffer mevedel--view-buffer)
-                    (_ (buffer-live-p view-buffer)))
-          (with-current-buffer view-buffer
-            (mevedel-view--update-spinner "Thinking...")))))))
+        (mevedel-view-stream-show-progress
+         mevedel--view-buffer "Thinking...")))))
 
 (defun mevedel--compact-target-resume (target fsm)
   "Rebuild FSM from compacted TARGET and resume its continuation once."
@@ -676,10 +670,8 @@ state machine."
                                  (with-current-buffer source-buffer
                                    (when-let* ((marker (plist-get info :position)))
                                      (set-marker marker (point-max) source-buffer)))
-                                 (when-let* ((vb mevedel--view-buffer)
-                                             (_ (buffer-live-p vb)))
-                                   (with-current-buffer vb
-                                     (mevedel-view--update-spinner "Thinking...")))
+                                 (mevedel-view-stream-show-progress
+                                  mevedel--view-buffer "Thinking...")
                                  (mevedel-compact-evidence-rebuild-prompt-buffer
                                   prompt-buffer source-buffer source-pending-text
                                   prompt-history-start prompt-pending-start)

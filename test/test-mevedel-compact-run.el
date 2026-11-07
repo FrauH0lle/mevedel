@@ -26,6 +26,7 @@
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-render)
+(require 'mevedel-view-stream)
 (require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
@@ -878,8 +879,8 @@
                     ((symbol-function 'mevedel-system-render-prompt-file)
                      (lambda (&rest _)
                        "system prompt"))
-                    ((symbol-function 'mevedel-view--update-spinner)
-                     (lambda (status)
+                    ((symbol-function 'mevedel-view-stream-show-progress)
+                     (lambda (_view status &optional _owner)
                        (setq updated-status status)))
                     ((symbol-function 'mevedel-view--stop-spinner)
                      (lambda ()

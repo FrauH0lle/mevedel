@@ -6,6 +6,10 @@
 ;; redraws.  The gptel compatibility layer and durable execution transcripts
 ;; have dedicated owners; transcript interpretation and composer editing remain
 ;; behind the view module's rendering interface.
+;;
+;; Modules outside the view package report request progress through the
+;; `mevedel-view-stream-{show,ensure,end,claim,release}-progress' verbs; see
+;; the comment above `mevedel-view-stream-show-progress' for their contracts.
 
 ;;; Code:
 
@@ -175,9 +179,6 @@
 
 (defvar-local mevedel-view--spinner-generation 0
   "Generation of the latest semantic request-progress status update.")
-
-(defvar mevedel-view--status-owner-override nil
-  "Dynamically bound subsystem owner for one status update.")
 
 (defvar-local mevedel-view--spinner-start-time nil
   "Fallback wall-clock start time for spinner elapsed display.
@@ -1501,7 +1502,7 @@ STATUS defaults to \"Thinking...\"."
      session 'status-transition
      :previous-owner mevedel-view--spinner-owner
      :previous-status mevedel-view--spinner-status
-     :owner (or owner mevedel-view--status-owner-override 'request)
+     :owner (or owner 'request)
      :status status))
   (setq mevedel-view--request-progress-suppressed nil)
   (unless mevedel-view--spinner-start-time
@@ -1511,7 +1512,7 @@ STATUS defaults to \"Thinking...\"."
   (cl-incf mevedel-view--spinner-generation)
   (setq mevedel-view--spinner-status status
         mevedel-view--spinner-owner
-        (or owner mevedel-view--status-owner-override 'request))
+        (or owner 'request))
   (mevedel-view--render-request-progress)
   (mevedel-view--start-spinner-timer))
 
@@ -1581,6 +1582,63 @@ Return non-nil when the status was restored."
   (setq mevedel-view--request-progress-suppressed t)
   (mevedel-view--stop-spinner)
   (setq mevedel-view--spinner-start-time nil))
+
+;;;; Request-progress verbs for modules outside the view package
+;;
+;; Callers resolve their own VIEW buffer and pass it; every verb does nothing
+;; unless VIEW is live, so no rendering or telemetry happens without a view.
+;; `show' updates the label and un-suppresses the row; `ensure' only redraws
+;; and keeps the current label.  `end' stops *and suppresses* the row, so it
+;; stays hidden until a later `show' or request start; `release' without a
+;; snapshot only returns the row to idle (not suppressed).  A claim token is
+;; the previous status plus the owner; release checks the owner only, never
+;; the generation, and never stops progress some other owner now holds.
+
+(defun mevedel-view-stream-show-progress (view status &optional owner)
+  "Show STATUS as request progress in VIEW, owned by OWNER (default `request').
+Un-suppresses a hidden row.  Do nothing unless VIEW is live."
+  (when (buffer-live-p view)
+    (with-current-buffer view
+      (mevedel-view--update-spinner status owner))))
+
+(defun mevedel-view-stream-ensure-progress (view data-buf)
+  "Redraw VIEW's progress row for DATA-BUF's request, keeping its label.
+Unlike `mevedel-view-stream-show-progress' this neither changes the
+label nor un-suppresses the row.  Do nothing unless VIEW is live."
+  (when (buffer-live-p view)
+    (with-current-buffer view
+      (mevedel-view--ensure-request-progress data-buf))))
+
+(defun mevedel-view-stream-end-progress (view)
+  "Stop and suppress request progress in VIEW.
+Do nothing unless VIEW is live."
+  (when (buffer-live-p view)
+    (with-current-buffer view
+      (mevedel-view--stop-request-progress))))
+
+(defun mevedel-view-stream-claim-progress (view status owner)
+  "Show STATUS owned by OWNER in VIEW and return a token for releasing it.
+The token remembers what the claim replaced (possibly nothing).  Return
+nil, with no side effects, unless VIEW is live."
+  (when (buffer-live-p view)
+    (with-current-buffer view
+      (let ((snapshot (mevedel-view--spinner-status-snapshot)))
+        (mevedel-view--update-spinner status owner)
+        (list :owner owner :snapshot snapshot)))))
+
+(defun mevedel-view-stream-release-progress (view token)
+  "Release TOKEN's claim in VIEW, which the caller resolves again now.
+With a remembered status, restore it; otherwise return to idle.  Either
+way only while TOKEN's owner still owns VIEW's progress.  Do nothing
+unless VIEW is live and TOKEN is non-nil."
+  (when (and token (buffer-live-p view))
+    (with-current-buffer view
+      (let ((owner (plist-get token :owner))
+            (snapshot (plist-get token :snapshot)))
+        (if snapshot
+            (mevedel-view--restore-spinner-status owner snapshot)
+          (when (eq mevedel-view--spinner-owner owner)
+            (mevedel-view--stop-spinner)))))))
 
 (defun mevedel-view-stream-spinner-hook (info)
   "Update spinner from `gptel-pre-tool-call-functions'.

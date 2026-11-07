@@ -181,12 +181,12 @@
 (autoload 'mevedel-view-history-add "mevedel-view-history")
 
 ;; `mevedel-view-stream'
-(declare-function mevedel-view--ensure-request-progress
-                  "mevedel-view-stream" (&optional data-buf status))
-(declare-function mevedel-view--stop-request-progress
-                  "mevedel-view-stream" ())
-(autoload 'mevedel-view--ensure-request-progress "mevedel-view-stream")
-(autoload 'mevedel-view--stop-request-progress "mevedel-view-stream")
+(declare-function mevedel-view-stream-ensure-progress
+                  "mevedel-view-stream" (view data-buf))
+(declare-function mevedel-view-stream-end-progress
+                  "mevedel-view-stream" (view))
+(autoload 'mevedel-view-stream-ensure-progress "mevedel-view-stream")
+(autoload 'mevedel-view-stream-end-progress "mevedel-view-stream")
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace
@@ -1085,8 +1085,7 @@ Dispatch only while the admitted request still owns DATA-BUFFER."
                   ((buffer-live-p view-buffer)))
         (let ((data-buffer (current-buffer)))
           (mevedel-view-rerender view-buffer)
-          (with-current-buffer view-buffer
-            (mevedel-view--ensure-request-progress data-buffer)))))))
+          (mevedel-view-stream-ensure-progress view-buffer data-buffer))))))
 
 (defun mevedel-review--verify-outcome (outcome invocation &optional report)
   "Validate verifier OUTCOME and record its verdict on INVOCATION.
@@ -1276,17 +1275,15 @@ outcome.  WORKLOAD overrides the verifier's model policy when non-nil."
              (mevedel-review--transform-command-outcome outcome command))))
          (_
           (mevedel-review--end-direct-request data-buffer)
-          (with-current-buffer view-buffer
-            (mevedel-view--stop-request-progress))
+          (mevedel-view-stream-end-progress view-buffer)
           (message "%s returned unsupported outcome: %S"
                    (mevedel-review--command-label command) outcome))))
       (_
-       (with-current-buffer view-buffer
-         (mevedel-view--stop-request-progress)
-         (message "%s failed: %s"
-                  (mevedel-review--command-label command)
-                  (or (plist-get outcome :message)
-                      "unknown error")))
+       (mevedel-view-stream-end-progress view-buffer)
+       (message "%s failed: %s"
+                (mevedel-review--command-label command)
+                (or (plist-get outcome :message)
+                    "unknown error"))
        (mevedel-review--end-direct-request data-buffer)
        (with-current-buffer data-buffer
          (gptel--update-status " Ready" 'success))))))
