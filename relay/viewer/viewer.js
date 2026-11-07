@@ -237,6 +237,7 @@
   });
   const history = window.mevedelHistoryView.create({
     send, el, onArtifacts:refreshFilter,
+    onLoaded: () => pinnedPrompt.refresh(),
     renderRecord:record => window.mevedelTranscriptRenderer.renderRecord(
       record, scopeChip, artifacts.open, null, openExecutionResult,
       path => agents.open({path}), destinationURL),

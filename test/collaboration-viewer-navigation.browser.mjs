@@ -506,6 +506,31 @@ test('pinned prompt continues across compaction but not across /clear', async ()
   } finally { await browser.close(); }
 });
 
+test('pinned prompt picks up an archived segment that loads while collapsed', async () => {
+  const browser = await chromium.launch();
+  try {
+    // No archives: the host leaves the read pending until the test answers.
+    const page = await open(browser, {viewport: {width: 375, height: 629}, archives: {}, records: [
+      {id: 'cont', kind: 'assistant', text: paragraphs('Continuing after compaction.')},
+      {id: 'p-live', kind: 'user', text: 'Live prompt.'}]});
+    await page.goto(sessionRoom.link);
+    await page.locator('#transcript [data-record-id="p-live"]').waitFor();
+    await page.push[sessionRoom.id]({t: 'history-index', currentSegment: 2, final: true,
+      records: [{kind: 'chat', number: 1, title: 'Work', firstSegment: 1, lastSegment: 2}]});
+    const segment = page.locator('#history .history-segment');
+    await segment.locator('summary').click();
+    await segment.locator('.history-collapse').click();
+    await scrollRecord(page, 'cont', -150);
+    await pinned(page, null);
+    const request = page.received.find(entry => entry.frame.t === 'history-get').frame;
+    await page.push[sessionRoom.id]({t: 'history', reqId: request.reqId, segment: 1, final: true,
+      records: [{id: 'old-p', kind: 'user', text: 'Archived prompt before compaction.'}]});
+    await pinned(page, 'Archived prompt before compaction.');
+    assert.equal(await segment.evaluate(node => node.open), false);
+    await page.close();
+  } finally { await browser.close(); }
+});
+
 test('live following survives send, streaming and delayed transcript or dock growth', async () => {
   const browser = await chromium.launch();
   try {

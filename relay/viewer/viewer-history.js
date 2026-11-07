@@ -1,7 +1,7 @@
 /* Archived segments are host-backed, read-only disclosures, separate from live state. */
 'use strict';
 window.mevedelHistoryView = Object.freeze({
-  create({send, el, renderRecord, onArtifacts}) {
+  create({send, el, renderRecord, onArtifacts, onLoaded}) {
     const root = document.getElementById('history');
     const rows = new Map();
     let sequence = 0, online = false, staging = null, catalog = [];
@@ -104,6 +104,9 @@ window.mevedelHistoryView = Object.freeze({
         row.records = [];
         row.loaded = true;
         row.reqId = null;
+        // A collapsed segment changes no observed size; its prompts still
+        // continue the live transcript's pinned prompt.
+        onLoaded?.();
         if (row.sourceReveal) finishReveal(row,
           window.mevedelTranscriptRenderer.revealTool(row.body, row.sourceReveal.id));
       }
