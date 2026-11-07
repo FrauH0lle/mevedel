@@ -1405,7 +1405,8 @@ selected operation and network authority are reused by another session"
                                              :remember-authority-cell))
                              :network)
                       (mevedel-pq-test--press card "n")))
-                  'always-allow)
+                  ;; Injected: this card offers no always key; the closure stores the rule.
+                  '(inject always-allow))
             :session first)
            (mevedel-tool-exec-permission-check-bash-async
             nil
@@ -2025,9 +2026,11 @@ an inherited escalation rule still requires one-time sandbox approval"
              :action allow)))
          entry outcome)
     (should (eq 'ask (mevedel-permission-mode-effective session)))
+    ;; Injected: this escalation card offers no session key; the case checks
+    ;; what the closure stores for a session outcome.
     (mevedel-pq-test--answering ((list (lambda (card)
                                          (let ((queued (plist-get card :entry)))
-                                           (setq entry queued))) 'allow-session) :session session)
+                                           (setq entry queued))) '(inject allow-session)) :session session)
                                 (mevedel-tool-exec-permission-check-bash-async
                                  nil
                                  `(:command "pwd"

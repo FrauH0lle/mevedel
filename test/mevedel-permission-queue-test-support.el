@@ -188,6 +188,9 @@ captured), :entry (a copy of the card's entry), :count and :text."
 (defvar mevedel-pq-test--last-session nil
   "The session of the latest `mevedel-pq-test--answering' form.")
 
+(defvar mevedel-pq-test--failure nil
+  "First error a scripted step raised, re-signalled by the answering form.")
+
 (defvar mevedel-pq-test--driving nil
   "Non-nil while the scripted person is pressing keys.")
 
@@ -221,18 +224,24 @@ captured), :entry (a copy of the card's entry), :count and :text."
 (defun mevedel-pq-test--step (card step)
   "Apply STEP to CARD.
 A string is a key pressed on the card.  A function receives the card.  An
-outcome is pressed with its key; an outcome the card does not offer goes
-through the closure the card captured, and a feedback answer is typed."
+outcome is pressed with its key and fails when the card does not offer it;
+(inject OUTCOME) deliberately calls the closure the card captured, for
+stale or repeated answers; a feedback answer is typed."
   (cond
    ((functionp step) (funcall step card))
+   ((eq 'inject (car-safe step))
+    (mevedel-pq-test--answer-captured card (cadr step)))
    ((stringp step) (mevedel-pq-test--press card step))
    ((eq 'feedback (car-safe step))
     (cl-letf (((symbol-function 'read-string) (lambda (&rest _) (cdr step))))
       (mevedel-pq-test--press card "f")))
    (t (let ((key (cdr (assq step mevedel-pq-test--outcome-keys))))
-        (if (and key (mevedel-pq-test--key-offered-p card key))
-            (mevedel-pq-test--press card key)
-          (mevedel-pq-test--answer-captured card step))))))
+        (cond
+         ((null key)
+          (ert-fail (format "unknown scripted outcome %S; use (inject OUTCOME)" step)))
+         ((not (mevedel-pq-test--key-offered-p card key))
+          (ert-fail (format "the card offers no key for %S (%s)" step key)))
+         (t (mevedel-pq-test--press card key)))))))
 
 (defun mevedel-pq-test--drive (script view)
   "Answer every card in VIEW that SCRIPT has not yet answered.
@@ -259,17 +268,25 @@ snapshot returning that list."
                                     :key (lambda (c) (plist-get c :id))
                                     :test #'equal)
                            card))
-            (mevedel-pq-test--step card step)))))))
+            ;; The renderer's caller swallows errors, so keep the first one
+            ;; and re-signal it when the answering form ends.
+            (condition-case err
+                (mevedel-pq-test--step card step)
+              (error (unless mevedel-pq-test--failure
+                       (setq mevedel-pq-test--failure err))))))))))
 
 (defun mevedel-pq-test--call-answering (script view thunk)
   "Call THUNK with the scripted person answering SCRIPT in VIEW's cards."
-  (let ((mevedel-pq-test--driven nil))
+  (let ((mevedel-pq-test--driven nil) (mevedel-pq-test--failure nil))
     (advice-add 'mevedel-permission-prompt-render :after
                 (let ((advice (lambda (&rest _)
                                 (unless mevedel-pq-test--driving
                                   (mevedel-pq-test--drive script view)))))
                   (setq mevedel-pq-test--advice advice) advice))
-    (unwind-protect (funcall thunk)
+    (unwind-protect (prog1 (funcall thunk)
+                      (when mevedel-pq-test--failure
+                        (signal (car mevedel-pq-test--failure)
+                                (cdr mevedel-pq-test--failure))))
       (advice-remove 'mevedel-permission-prompt-render mevedel-pq-test--advice))))
 
 (defmacro mevedel-pq-test--answering (spec &rest body)
