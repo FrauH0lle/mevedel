@@ -189,9 +189,14 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-attempt-checkpoint "mevedel-structs" (cl-x))
+(declare-function mevedel-directive-attempt-sequence "mevedel-structs" (cl-x))
 (declare-function mevedel-directive-attempt-untracked-effects "mevedel-structs" (cl-x))
 (declare-function mevedel-directive-attempts "mevedel-structs" (cl-x))
+(declare-function mevedel-directive-discussion "mevedel-structs" (cl-x))
+(declare-function mevedel-directive-discussion-turn-checkpoint "mevedel-structs" (cl-x))
+(declare-function mevedel-directive-discussion-turn-sequence "mevedel-structs" (cl-x))
 (declare-function mevedel-directive-id "mevedel-structs" (cl-x))
+(declare-function mevedel-directive-session-id "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x))
 (declare-function mevedel-session-chapters "mevedel-structs" (cl-x))
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x))
@@ -1663,12 +1668,43 @@ head CAS."
     (mevedel-session-rewind--commit-local-rewind
      session buffer target plan boundary)))
 
+(defun mevedel-session-rewind--rewinds-directive-p (directive session-id)
+  "Return non-nil when a Rewind of SESSION-ID can change DIRECTIVE.
+That is a directive bound to SESSION-ID, or one holding its activity."
+  (or (equal session-id (mevedel-directive-session-id directive))
+      (cl-some (lambda (checkpoint)
+                 (equal session-id (plist-get checkpoint :session-id)))
+               (append (mapcar #'mevedel-directive-attempt-checkpoint
+                               (mevedel-directive-attempts directive))
+                       (mapcar #'mevedel-directive-discussion-turn-checkpoint
+                               (mevedel-directive-discussion directive))))))
+
+(defun mevedel-session-rewind--restore-activity
+    (start current session-id checkpoint sequence)
+  "Return START's SESSION-ID activity with CURRENT's other activity.
+CHECKPOINT and SEQUENCE read an entry's checkpoint and sequence.  A
+rollback restores only what this Rewind can have pruned; entries other
+sessions appended meanwhile stay.  Without such entries START itself is
+returned, exactly as it was."
+  (let* ((own (lambda (entry)
+                (equal session-id
+                       (plist-get (funcall checkpoint entry) :session-id))))
+         (others (cl-remove-if own current)))
+    (if (equal others (cl-remove-if own start))
+        start
+      (sort (append (cl-remove-if-not own start) others)
+            (lambda (a b) (< (or (funcall sequence a) 0)
+                             (or (funcall sequence b) 0)))))))
+
 (defun mevedel-session-rewind--commit-local-rewind
     (session buffer target plan &optional boundary)
   "Commit local SESSION, BUFFER, TARGET, and file PLAN as one Rewind."
   (let* ((workspace (mevedel-session-workspace session))
          (directives (copy-sequence
                       (mevedel-workspace-directives workspace)))
+         (sid (mevedel-session-session-id session))
+         ;; Only directives this Rewind can change are restored on
+         ;; rollback; others may meanwhile change in other sessions.
          (directive-state
           (mapcar
            (lambda (directive)
@@ -1679,7 +1715,10 @@ head CAS."
                    (mevedel-directive-subdirectives directive)
                    :attempts (mevedel-directive-attempts directive)
                    :discussion (mevedel-directive-discussion directive)))
-           directives))
+           (cl-remove-if-not
+            (lambda (directive)
+              (mevedel-session-rewind--rewinds-directive-p directive sid))
+            directives)))
          (save-path (mevedel-session-save-path session))
          (parent (file-name-directory (directory-file-name save-path)))
          (temporary-root
@@ -1806,16 +1845,28 @@ head CAS."
                   (mevedel-directive-subdirectives directive)
                   (plist-get (cdr entry) :subdirectives)
                   (mevedel-directive-attempts directive)
-                  (plist-get (cdr entry) :attempts)
+                  (mevedel-session-rewind--restore-activity
+                   (plist-get (cdr entry) :attempts)
+                   (mevedel-directive-attempts directive)
+                   sid #'mevedel-directive-attempt-checkpoint
+                   #'mevedel-directive-attempt-sequence)
                   (mevedel-directive-discussion directive)
-                  (plist-get (cdr entry) :discussion))))
-        ;; Restore the records this Rewind changed and keep any another
-        ;; session added meanwhile.
+                  (mevedel-session-rewind--restore-activity
+                   (plist-get (cdr entry) :discussion)
+                   (mevedel-directive-discussion directive)
+                   sid #'mevedel-directive-discussion-turn-checkpoint
+                   #'mevedel-directive-discussion-turn-sequence))))
+        ;; Restore the records this Rewind can change; keep another
+        ;; session's additions and deletions made meanwhile.
         (mevedel-workspace-set-directives
          workspace
-         (append directives
-                 (cl-remove-if (lambda (record) (memq record directives))
-                               (mevedel-workspace-directives workspace))))
+         (let ((current (mevedel-workspace-directives workspace)))
+           (append (cl-remove-if-not
+                    (lambda (record)
+                      (or (memq record current) (assq record directive-state)))
+                    directives)
+                   (cl-remove-if (lambda (record) (memq record directives))
+                                 current))))
         (when session-installed
           (mevedel-session-rewind-copy-session-state
            original-state session))

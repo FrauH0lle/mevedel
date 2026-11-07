@@ -11,6 +11,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
+(require 'mevedel-chat)
 (require 'mevedel-session-rewind)
 
 
@@ -578,6 +579,89 @@
              buffer session)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
+  :doc "a rolled-back Rewind keeps another session's activity and deletions"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let* ((session (mevedel-session-create "main" workspace))
+           (sid (mevedel-session-session-id session))
+           (buffer (generate-new-buffer "*test-rollback-other-session*"))
+           (source-file (file-name-concat tempdir "source.el"))
+           (attempt (lambda (owner turn sequence)
+                      (mevedel-directive-attempt--create
+                       :sequence sequence :action 'implement
+                       :directive-request "x" :request "x" :result "done"
+                       :outcome 'success :patch "" :capture 'complete
+                       :captured-at "2026-11-07T00:00:00+0100"
+                       :checkpoint (list :session-id owner :turn turn))))
+           (restore (symbol-function 'mevedel-session-rewind-execute-restore))
+           source mine theirs doomed)
+      (unwind-protect
+          (progn
+            (test-mevedel-session-persistence--reset-instructions)
+            (write-region "AAAAA\nBBBBB\nCCCCC\n" nil source-file nil 'silent)
+            (setq source (find-file-noselect source-file))
+            (with-current-buffer source
+              (setq-local mevedel--workspace workspace)
+              (dolist (line '(1 2 3))
+                (goto-char (point-min))
+                (forward-line (1- line))
+                (mevedel--create-directive-in source (point) (+ 5 (point)) nil
+                                              (format "line %d" line))))
+            (setq mine (cl-find "line 1" (mevedel-workspace-directives workspace)
+                                :key #'mevedel-directive-request :test #'equal)
+                  theirs (cl-find "line 2" (mevedel-workspace-directives workspace)
+                                  :key #'mevedel-directive-request :test #'equal)
+                  doomed (cl-find "line 3" (mevedel-workspace-directives workspace)
+                                  :key #'mevedel-directive-request :test #'equal))
+            (setf (mevedel-directive-session-id mine) sid
+                  (mevedel-directive-attempts mine) (list (funcall attempt sid 1 1))
+                  (mevedel-directive-session-id theirs) "other-session"
+                  (mevedel-directive-attempts theirs)
+                  (list (funcall attempt "other-session" 1 1))
+                  (mevedel-directive-session-id doomed) "other-session")
+            (with-current-buffer buffer
+              (org-mode)
+              (setq-local mevedel--workspace workspace)
+              (setq-local mevedel--session session)
+              (mevedel-request-begin session)
+              (insert "First prompt\n")
+              (insert (propertize "First reply.\n" 'gptel 'response))
+              (setf (mevedel-session-turn-count session) 1)
+              (mevedel-session-artifacts-save session buffer t)
+              (let ((target (copy-sequence
+                             (cdar (mevedel-session-rewind--prompt-candidates
+                                    session)))))
+                (mevedel-request-end)
+                (cl-letf (((symbol-function 'display-buffer) #'ignore)
+                          ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                          ((symbol-function 'mevedel--run-session-start-hooks)
+                           #'ignore)
+                          ((symbol-function 'mevedel-session-rewind-execute-restore)
+                           (lambda (&rest args)
+                             (prog1 (apply restore args)
+                               ;; Another session settles and deletes meanwhile;
+                               ;; then this Rewind fails and rolls back.
+                               (setf (mevedel-directive-attempts theirs)
+                                     (append (mevedel-directive-attempts theirs)
+                                             (list (funcall attempt "other-session"
+                                                            2 2))))
+                               (mevedel-workspace-remove-directive workspace doomed)
+                               (error "Injected Rewind failure")))))
+                  (should-error (mevedel-session-rewind-rewind buffer target)))))
+            (should (= 1 (mevedel-session-turn-count session)))
+            (should (memq mine (mevedel-workspace-directives workspace)))
+            (should (= 1 (length (mevedel-directive-attempts mine))))
+            (should (= 2 (length (mevedel-directive-attempts theirs))))
+            (should-not (memq doomed (mevedel-workspace-directives workspace))))
+        (when-let* ((impact (get-buffer "*mevedel-rewind-impact*")))
+          (kill-buffer impact))
+        (when (buffer-live-p source)
+          (with-current-buffer source (set-buffer-modified-p nil))
+          (kill-buffer source))
+        (test-mevedel-session-persistence--release-and-kill buffer session)
+        (delete-directory tempdir t)
+        (test-mevedel-session-persistence--reset-instructions)
+        (mevedel-workspace-clear-registry))))
   :doc "keeps the selected turn and discards only what follows"
   ;; The view's Rewind names a response the user is looking at, so that
   ;; turn is the last one kept and only later turns go.

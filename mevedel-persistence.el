@@ -30,6 +30,8 @@
 ;; `mevedel-directive'
 (declare-function mevedel-workspace-set-directives "mevedel-directive"
                   (workspace directives))
+(declare-function mevedel-directive-in-flight-p "mevedel-directive" (directive))
+(autoload 'mevedel-directive-in-flight-p "mevedel-directive")
 (declare-function mevedel-workspace-rewind-directives "mevedel-directive"
                   (workspace session-id target-turn))
 (autoload 'mevedel-workspace-rewind-directives "mevedel-directive")
@@ -979,8 +981,7 @@ listing or Rewind holding it sees the merged state."
 Subdirectives keep their identity the same way.  While LIVE has a
 request in flight, its transient state and Plan stay: the store holds
 neither the running status nor the Plan's live chat buffer."
-  (let ((running (memq (mevedel-directive-state live)
-                       '(implementing discussing planning)))
+  (let ((running (mevedel-directive-in-flight-p live))
         (state (mevedel-directive-state live))
         (plan (mevedel-directive-plan live)))
     (setf (mevedel-directive-subdirectives fresh)
