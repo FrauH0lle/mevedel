@@ -882,15 +882,19 @@ PART defaults to \"overview\", the lines of `shared://ID'."
 
   :doc "refuses an image above SharedEdit's 4.7 MB limit"
   (mevedel-artifact-room-test--with-origin (root workspace state port)
-    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+    ;; Bound down to 100 kB so the refusal needs a small payload; the real
+    ;; limit is checked as the constant.
+    (should (= 4700000 mevedel-collaboration-artifact-room--image-max-bytes))
+    (let* ((mevedel-collaboration-artifact-room--image-max-bytes 100000)
+           (id (mevedel-artifact-room-test--board workspace "Pipeline"))
            (links (mevedel-collaboration-artifact-room-share root id))
            (consumer (mevedel-artifact-room-test--joined state port links 'edit)))
       (unwind-protect
           (should (string-match-p
-                   "limited to 4700000 bytes"
+                   "limited to 100000 bytes"
                    (alist-get 'error (mevedel-artifact-room-test--request
                                       consumer 1 `((action . "image") (id . ,id)
-                                                   (data . ,(make-string 6300000 ?A)))))))
+                                                   (data . ,(make-string 140000 ?A)))))))
         (mevedel-artifact-room-test--close consumer)))))
 
 (defun mevedel-artifact-room-test--withdraw-at (function withdraw)
@@ -984,24 +988,37 @@ FUNCTION is a step of the editing queue: admission or commit."
   (test)
   :doc "records one version once the room's writes pause, each write restarting the wait"
   (mevedel-artifact-room-test--with-origin (root workspace state port)
-    (let* ((mevedel-collaboration-artifact-room-version-idle 1.0)
+    ;; The idle timer is the real one, left at a long idle and fired by
+    ;; its own handler, so no wall-clock margin decides the outcome.
+    (let* ((mevedel-collaboration-artifact-room-version-idle 300)
            (id (mevedel-artifact-room-test--board workspace "Pipeline"))
            (links (mevedel-collaboration-artifact-room-share root id))
            (consumer (mevedel-artifact-room-test--joined state port links 'edit))
-           (before (mevedel-artifact-room-test--versions workspace id)))
+           (before (mevedel-artifact-room-test--versions workspace id))
+           (timer (lambda ()
+                    (plist-get (mevedel-collaboration-artifact-room--find root id)
+                               :version-timer))))
       (unwind-protect
-          (progn
+          (let (first second)
             (mevedel-artifact-room-test--rename consumer 1 id "Pipeline v2")
-            (accept-process-output nil 0.6)
+            (setq first (funcall timer))
+            (should (memq first timer-list))
             (mevedel-artifact-room-test--rename consumer 2 id "Pipeline v3")
-            (accept-process-output nil 0.6)
-            ;; Longer than the pause since the first write, not since the last.
+            (setq second (funcall timer))
+            ;; Each write restarts the wait: the first timer is gone and
+            ;; the new one ends later, so no version is due yet.
+            (should (memq second timer-list))
+            (should-not (eq first second))
+            (should-not (memq first timer-list))
+            (should (time-less-p (timer--time first) (timer--time second)))
             (should (= before (mevedel-artifact-room-test--versions workspace id)))
+            ;; The wait ends: the timer's own handler records the stretch.
+            (timer-event-handler second)
             (should (mevedel-relay-test--pump
                      (lambda () (> (mevedel-artifact-room-test--versions workspace id)
                                    before))
                      5))
-            (accept-process-output nil 1.2)
+            (should-not (funcall timer))
             ;; One version for the whole stretch, holding its last write.
             (should (= (1+ before) (mevedel-artifact-room-test--versions workspace id)))
             (should (string-search
@@ -1028,16 +1045,22 @@ FUNCTION is a step of the editing queue: admission or commit."
 
   :doc "records no version for a stretch of reads"
   (mevedel-artifact-room-test--with-origin (root workspace state port)
-    (let* ((mevedel-collaboration-artifact-room-version-idle 0.2)
+    (let* ((mevedel-collaboration-artifact-room-version-idle 300)
            (id (mevedel-artifact-room-test--board workspace "Pipeline"))
            (links (mevedel-collaboration-artifact-room-share root id))
            (consumer (mevedel-artifact-room-test--joined state port links 'edit))
            (before (mevedel-artifact-room-test--versions workspace id)))
       (should (mevedel-artifact-room-test--request
                consumer 1 `((action . "read") (id . ,id))))
-      (accept-process-output nil 0.5)
-      (mevedel-artifact-room-test--close consumer)
-      (accept-process-output nil 0.5)
+      ;; A read starts no stretch: no idle timer is waiting to record one.
+      (should-not (plist-get (mevedel-collaboration-artifact-room--find root id)
+                             :version-timer))
+      (let ((room (mevedel-collaboration-artifact-room--find root id)))
+        (should (> (hash-table-count (plist-get room :guests)) 0))
+        (mevedel-artifact-room-test--close consumer)
+        ;; The origin has settled the departure once the guest is gone.
+        (should (mevedel-relay-test--pump
+                 (lambda () (zerop (hash-table-count (plist-get room :guests)))))))
       (should (= before (mevedel-artifact-room-test--versions workspace id))))))
 
 (mevedel-deftest mevedel-collaboration-artifact-room--changed
@@ -1650,13 +1673,18 @@ Return the artifact's directory."
         (mevedel-artifact-room-test--close consumer)
         (delete-directory outside t))))
 
-  :doc "carries files up to 16 MiB and refuses larger ones"
+  :doc "carries files up to the file limit and refuses larger ones"
   (mevedel-artifact-room-test--with-origin (root workspace state port)
-    (let* ((directory (mevedel-artifact-room-test--site workspace "landing"))
+    ;; The limit is bound down to 1.5 MiB, still more than one 1 MiB frame of
+    ;; base64, so the real boundary path runs on a much smaller file.
+    (should (= (* 16 1024 1024) mevedel-artifact-store-file-max-bytes))
+    (let* ((mevedel-artifact-store-file-max-bytes (* 3 512 1024))
+           (directory (mevedel-artifact-room-test--site workspace "landing"))
            (links (mevedel-collaboration-artifact-room-share root "landing"))
            (consumer (mevedel-artifact-room-test--joined state port links 'edit))
            (largest (string-to-unibyte
-                     (make-string (* 16 1024 1024) (unibyte-char-to-multibyte #xff)))))
+                     (make-string mevedel-artifact-store-file-max-bytes
+                                  (unibyte-char-to-multibyte #xff)))))
       (unwind-protect
           (progn
             ;; A binary asset at the limit travels as base64 inside the transfer.
@@ -1672,7 +1700,7 @@ Return the artifact's directory."
                                             consumer 4 '((action . "read")
                                                          (file . "assets/large.bin"))
                                             60))))
-              (should (equal (* 16 1024 1024) (alist-get 'bytes read)))
+              (should (equal mevedel-artifact-store-file-max-bytes (alist-get 'bytes read)))
               (should (equal largest (base64-decode-string (alist-get 'data read)))))
             ;; A larger file placed at the origin is listed but not read.
             (let ((coding-system-for-write 'no-conversion))
@@ -1888,7 +1916,14 @@ Return the artifact's directory."
   (test)
   :doc "records one version for a stretch that wrote the primary file, none for assets alone"
   (mevedel-artifact-room-test--with-origin (root workspace state port)
-    (let* ((mevedel-collaboration-artifact-room-version-idle 0.3)
+    ;; Long idle; each stretch is ended by firing the real idle timer.
+    (let* ((mevedel-collaboration-artifact-room-version-idle 300)
+           (end-stretch (lambda ()
+                          (when-let* ((timer (plist-get
+                                              (mevedel-collaboration-artifact-room--find
+                                               root "landing")
+                                              :version-timer)))
+                            (timer-event-handler timer))))
            (_ (mevedel-artifact-room-test--site workspace "landing"))
            (links (mevedel-collaboration-artifact-room-share root "landing"))
            (consumer (mevedel-artifact-room-test--joined state port links 'edit)))
@@ -1898,12 +1933,14 @@ Return the artifact's directory."
                                    consumer 1 '((action . "write-file")
                                                 (file . "assets/extra.css")
                                                 (text . "p {}")))))
-            (accept-process-output nil 0.8)
+            (funcall end-stretch)
+            (accept-process-output nil 0.1)
             (should-not (mevedel-artifact-store-versions workspace "landing"))
             (should (assq 'result (mevedel-artifact-room-test--request
                                    consumer 2 `((action . "write-file") (file . "index.html")
                                                 (hash . ,mevedel-artifact-room-test--page-hash)
                                                 (text . "<p>v2</p>")))))
+            (funcall end-stretch)
             (should (mevedel-relay-test--pump
                      (lambda () (mevedel-artifact-store-versions workspace "landing"))
                      5))
