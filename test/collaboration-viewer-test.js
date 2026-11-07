@@ -755,6 +755,7 @@ function testCompletionRendering() {
     ['cancelled', 9, 'stopped'],
     ['timed-out', 124, 'timed out'],
     ['warning', null, 'ended'],
+    ['warning', null, 'lost'],
   ];
   for (const [status, exitCode, ending] of cases) {
     const verb = ending.split(' (')[0];

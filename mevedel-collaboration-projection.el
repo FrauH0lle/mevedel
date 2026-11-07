@@ -1138,7 +1138,7 @@ mailboxes are not guest completion records."
                    ('stopped "cancelled")
                    ('timed-out "timed-out")
                    ('completed "completed")
-                   ('ended "warning")
+                   ((or 'ended 'lost) "warning")
                    (_ "failed")))
          (command (mevedel-collaboration--truncate-bytes
                    (car (split-string (or (plist-get completion :command)

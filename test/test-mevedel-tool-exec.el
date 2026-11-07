@@ -354,13 +354,13 @@ A synchronous result must come with exactly one matching acknowledgement."
                   (timeout nil timed-out "timed out")
                   (timed-out failure timed-out "timed out")
                   (expired success timed-out "timed out")
-                  ;; 3. a lost termination reads as failed (disputed wording)
-                  (lost nil failed "failed")
-                  (lost success failed "failed")
+                  ;; 3. a lost termination or outcome is lost: its end was never seen
+                  (lost nil lost "lost")
+                  (lost success lost "lost")
+                  (nil lost lost "lost")
                   ;; 4. failure outcomes
                   (exited failure failed "failed")
                   (exited errored failed "failed")
-                  (nil lost failed "failed")
                   (signaled failure failed "failed")
                   ;; 5. non-failure Bash outcomes
                   (exited success completed "completed")

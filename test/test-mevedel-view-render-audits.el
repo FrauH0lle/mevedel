@@ -173,7 +173,11 @@
                  (mevedel-view-audit--breadcrumb-label
                   '(:facts (:kind monitor :description "ticker"
                             :termination exited :event-count 2)))))
-  (should (equal '("Stopped" "Timed out" "Failed" "Completed")
+  (let ((label (mevedel-view-audit--breadcrumb-label
+                '(:command "sleep" :facts (:termination lost)))))
+    (should (string-match-p "\"sleep\" lost" label))
+    (should (eq 'mevedel-view-tool-metadata (get-text-property 2 'font-lock-face label))))
+  (should (equal '("Stopped" "Timed out" "Lost" "Completed")
                  (mapcar (lambda (facts)
                            (mevedel-view-audit-breadcrumb-status
                             (list :facts facts)))
