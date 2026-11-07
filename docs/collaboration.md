@@ -370,8 +370,8 @@ so the row never covers one. The row overlays the transcript instead of
 reserving height, which a phone such as an iPhone mini cannot spare, so it never
 moves the transcript. A scroll reads only a binary search's worth of prompt
 positions, and the row changes only its attributes and inline style: changing
-its text or `hidden` attribute would restyle the whole page through the
-viewer's `body:has(...)` rules. Clicking it scrolls the prompt back to just below the
+its text or `hidden` attribute would invalidate the viewer's `body:has(...)`
+rules, which costs far more on a long page. Clicking it scrolls the prompt back to just below the
 header. An open archived segment uses only its own prompts. Live content before
 the first live prompt continues the last prompt of the latest archived segment
 of the same chat once that segment has been loaded, unless a live prompt is on
