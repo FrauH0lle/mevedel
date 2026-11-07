@@ -424,6 +424,33 @@ operation rather than a successful or semantic non-error result."
      ((and (equal exit-code 1) exit-one-outcome) exit-one-outcome)
      (t 'failure))))
 
+(defun mevedel-tool-exec-completion (termination outcome)
+  "Return (STATUS . VERB) for a completion's TERMINATION and OUTCOME.
+Each is a symbol, a string from a mailbox tag, or nil; strings are compared
+by name and never interned.  STATUS is one of `stopped', `timed-out',
+`failed', `completed' and `ended'; VERB is its display word.  The first
+matching rule wins:
+  1. a stop termination (stopped, interrupted, cancelled, owner-stopped)
+  2. a timeout termination (timeout, timed-out, expired)
+  3. termination lost: the end was never observed, and reads as failed
+  4. a failure outcome (failure, errored, lost)
+  5. a Bash outcome that is not a failure (success, no-match, different, false)
+  6. anything else, such as a monitor that exited without an outcome or an
+     unknown outcome value: `ended', which claims neither success nor failure."
+  (let ((termination (and termination (format "%s" termination)))
+        (outcome (and outcome (format "%s" outcome))))
+    (cond
+     ((member termination '("stopped" "interrupted" "cancelled" "owner-stopped"))
+      '(stopped . "stopped"))
+     ((member termination '("timeout" "timed-out" "expired"))
+      '(timed-out . "timed out"))
+     ((or (equal termination "lost")
+          (member outcome '("failure" "errored" "lost")))
+      '(failed . "failed"))
+     ((member outcome '("success" "no-match" "different" "false"))
+      '(completed . "completed"))
+     (t '(ended . "ended")))))
+
 (defun mevedel-tool-exec--pipeline-source (source marker &optional original-source)
   "Append a final outer pipeline snapshot to SOURCE using private MARKER.
 No traps or shell options change.  Explicit exit/exec may bypass the snapshot.

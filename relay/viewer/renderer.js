@@ -468,10 +468,6 @@
       const facts = record.execution || {};
       const row = el('div', 'execution-breadcrumb');
       const monitor = facts.kind === 'monitor';
-      const verb = record.status === 'cancelled' ? 'stopped'
-        : record.status === 'timed-out' ? 'timed out'
-        : record.status === 'warning' ? 'ended'
-        : record.status === 'failed' ? 'failed' : 'completed';
       const flat = value => String(value).replace(/[\n\r\t]+/g, ' ');
       const subject = flat(facts.description || facts.command || (monitor ? 'monitor' : 'Bash'));
       const detail = monitor
@@ -483,7 +479,7 @@
       const owner = facts.owner && facts.owner !== facts.ownPath ? ` · ${flat(facts.owner)}` : '';
       const label = el('span');
       label.append(el('span', `execution-status${record.status === 'failed' ? ' failed' : ''}`, '● '));
-      label.append(`${monitor ? 'Monitor' : 'Background command'} "${subject}" ${verb}${detail}${owner}  `);
+      label.append(`${monitor ? 'Monitor' : 'Background command'} "${subject}" ${flat(record.verb)}${detail}${owner}  `);
       row.append(label);
       const link = el('button', 'execution-result-link', '[Show result]');
       link.type = 'button';

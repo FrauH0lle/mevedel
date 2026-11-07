@@ -7665,7 +7665,8 @@
     (mevedel-view-test--insert-data
      data-buf
      (concat
-      "<agent-message type=\"EXECUTION\" sender=\"/root/worker\" recipient=\"/root\">\n"
+      "<agent-message type=\"EXECUTION\" sender=\"/root/worker\" recipient=\"/root\" "
+      "termination=\"exited\" outcome=\"success\">\n"
       "<bash-execution execution_id=\"exec-1\" outcome=\"success\" "
       "output_bytes=\"0\" output_lines=\"0\"/>\n"
       "</agent-message>\n"

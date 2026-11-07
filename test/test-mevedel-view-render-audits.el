@@ -17,6 +17,7 @@
 (require 'mevedel-view-disclosure)
 (require 'mevedel-view-audit)
 (require 'mevedel-view-agent)
+(require 'mevedel-view-segments)
 (require 'mevedel-view-stream)
 (require 'mevedel-transcript)
 (require 'mevedel-session-artifacts)
@@ -141,7 +142,7 @@
   (should (equal "  ● Background command \"./run-tests\" failed (exit code 1)  "
                  (mevedel-view-audit--breadcrumb-label
                   '(:command "./run-tests"
-                    :facts (:outcome error :exit-code 1)))))
+                    :facts (:outcome failure :exit-code 1)))))
   (should (string-match-p "\"sleep\" stopped"
                           (mevedel-view-audit--breadcrumb-label
                            '(:command "sleep" :facts (:termination owner-stopped)))))
@@ -165,6 +166,19 @@
                               (mevedel-view-audit--breadcrumb-label
                                '(:command "printf first\nsecond"
                                  :facts (:outcome success)))))
+  :doc "a completion without an outcome reads ended, not failed or completed"
+  (should (equal "Ended" (mevedel-view-audit-breadcrumb-status
+                          '(:facts (:kind monitor :termination exited)))))
+  (should (equal "  ● Monitor \"ticker\" ended · 2 events  "
+                 (mevedel-view-audit--breadcrumb-label
+                  '(:facts (:kind monitor :description "ticker"
+                            :termination exited :event-count 2)))))
+  (should (equal '("Stopped" "Timed out" "Failed" "Completed")
+                 (mapcar (lambda (facts)
+                           (mevedel-view-audit-breadcrumb-status
+                            (list :facts facts)))
+                         '((:termination stopped) (:termination timed-out)
+                           (:termination lost) (:outcome no-match)))))
   :doc "monitor completion reports event counts rather than an exit code"
   (dolist (count '(0 1 2))
     (let ((label (mevedel-view-audit--breadcrumb-label
@@ -200,11 +214,11 @@
                   (concat "<agent-message type=\"EXECUTION\" execution_id=\"real\" "
                           "command=\"make &gt; test\" description=\"Run tests\" "
                           "output_path=\"artifact://result\" "
-                          "outcome=\"error\" exit_code=\"1\" "
+                          "outcome=\"failure\" exit_code=\"1\" "
                           "output_bytes=\"128\" omitted_output_bytes=\"64\">"))))
     (should (equal "real" (plist-get record :execution-id)))
     (should (equal "make > test" (plist-get record :command)))
-    (should (equal 'error (plist-get (plist-get record :facts) :outcome)))
+    (should (equal 'failure (plist-get (plist-get record :facts) :outcome)))
     (should (string-match-p "Background command \"Run tests\" failed"
                             (mevedel-view-audit--breadcrumb-label record)))
     (should (equal "artifact://result" (plist-get (plist-get record :facts)

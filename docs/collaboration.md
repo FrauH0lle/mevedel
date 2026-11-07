@@ -1683,7 +1683,10 @@ line, matching the native view: `● Background command "Run checks" completed
 (exit code 0)  Show result`. The description takes precedence over the command.
 Failures, stops, and timeouts say `failed`, `stopped`, and `timed out`; only a
 failed bullet uses the error color. Missing outcome evidence says `ended`, not
-`completed`. Monitor completions say `● Monitor "Watch build" stopped · 2 events`
+`completed`. The host decides the word once, with the same classifier as the
+Emacs notice, and projects it as the record's `verb` beside its `status`; the
+browser shows `verb` as text and carries no rule of its own, and the group
+summary counts the same word. Monitor completions say `● Monitor "Watch build" stopped · 2 events`
 instead of showing an exit code. The owner suffix appears only for another
 agent's execution, not the transcript's own path.
 

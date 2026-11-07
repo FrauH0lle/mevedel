@@ -135,6 +135,18 @@
                               '(:role member :kind message))
                         nil))
                   :summary)))
+  :doc "every completion verb the classifier can give reaches the summary"
+  (should (equal "Read 1 file, 1 command completed, 1 failed, 1 stopped, 1 timed out, 1 ended"
+                 (plist-get
+                  (car (mevedel-activity-group-partition
+                        (cons (mevedel-activity-group-test--tool "Read")
+                              (mapcar (lambda (verb)
+                                        `(:role member :kind completion
+                                          :completion ((,verb "/root") . ,verb)))
+                                      '("ended" "timed out" "stopped" "failed"
+                                        "completed")))
+                        nil))
+                  :summary)))
   :doc "pending calls run; a mixed failed and running group keeps its failures"
   (let ((group (car (mevedel-activity-group-partition
                      (list (mevedel-activity-group-test--tool "Read" 'warning)

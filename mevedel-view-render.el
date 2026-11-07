@@ -160,6 +160,11 @@
                   t)
 (defvar mevedel-tool-render-summary-only)
 
+;; `mevedel-tool-exec'
+(declare-function mevedel-tool-exec-completion "mevedel-tool-exec"
+                  (termination outcome))
+(autoload 'mevedel-tool-exec-completion "mevedel-tool-exec")
+
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-block-at
                   "mevedel-tool-render-data" (start &optional limit))
@@ -5406,14 +5411,8 @@ whether a record is a terminal event."
          (termination (mevedel-view--mail-attribute open-tag "termination"))
          (outcome (mevedel-view--mail-attribute open-tag "outcome"))
          (exit (mevedel-view--mail-attribute open-tag "exit_code"))
-         (stopped (member termination '("stopped" "interrupted" "cancelled"
-                                       "owner-stopped")))
-         (timed-out (member termination '("timeout" "timed-out" "expired")))
-         (failed (and (not stopped) (not timed-out)
-                      (or (member outcome '("failure" "errored" "lost"))
-                          (equal termination "lost"))))
-         (verb (cond (stopped "stopped") (timed-out "timed out")
-                     (failed "failed") (t "completed")))
+         (completion (mevedel-tool-exec-completion termination outcome))
+         (verb (cdr completion))
          (label
           (cond
            ((eq kind 'agent-result)
@@ -5448,7 +5447,8 @@ whether a record is a terminal event."
       (cons (mevedel--truncate-display
              (replace-regexp-in-string "[\n\r\t]+" " " label)
              width "…")
-            (if failed 'error 'mevedel-view-tool-metadata)))))
+            (if (eq (car completion) 'failed)
+                'error 'mevedel-view-tool-metadata)))))
 
 (defun mevedel-view--own-completion-mail-p (open-tag sender)
   "Return non-nil when OPEN-TAG from SENDER completes this transcript's own work.
