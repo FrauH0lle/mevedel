@@ -147,7 +147,16 @@
                 (with-current-buffer view
                   (should (= 1 (how-many "2 attached skills (base, alpha)"
                                          (point-min) (mevedel-view--input-start))))
-                  (should (string-search "1 system reminder (mode-constraints)" (buffer-string)))
+                  ;; The prompt record lists the native system prompt's changed
+                  ;; observation sections beside the trailing mode constraint.
+                  (should (string-search
+                           (concat "10 system reminders (context-workspace-config, "
+                                   "context-goal-policy, context-environment, "
+                                   "context-active-goal, context-tools, "
+                                   "context-skills, context-memory, "
+                                   "context-journal, context-resources, "
+                                   "mode-constraints)")
+                           (buffer-string)))
                   (should (string-search "ALPHA ATTACHMENT BODY" (buffer-string)))
                   (should (string-search "BASE ATTACHMENT BODY" (buffer-string)))
                   (mevedel-view--full-rerender)
