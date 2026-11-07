@@ -363,30 +363,68 @@ FUNCTION receives the directory holding the stub."
   (test)
   :doc "a slow write succeeds past the timeout; a late reply is dropped"
   (test-mevedel-pin--call-with-stub-helper
-   "import json, sys, time
+   ;; Each request is answered only after the test creates `gate-OP' beside
+   ;; the stub, so no reply races the deadline and none is awaited by sleeping.
+   "import json, os, sys, time
 for line in sys.stdin:
     request = json.loads(line)
-    time.sleep(1)
+    gate = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gate-' + request['op'])
+    while not os.path.exists(gate):
+        time.sleep(.001)
     print(json.dumps({'id': request['id'], 'ok': True}), flush=True)
 "
    (lambda (directory)
      (skip-unless (executable-find "python3"))
-     (let ((mevedel-pin-timeout 0.3)
-           (path (file-name-concat directory "out")))
-       ;; A write waits while the helper lives, however long it takes.
-       (should (progn (mevedel-pin-write-file-atomically path "DATA") t))
-       ;; Other requests still give up at the deadline ...
-       (should-error (mevedel-pin--request nil (list :op "file" :path path))
-                     :type 'mevedel-pin-refused)
-       ;; ... and their late reply is not kept for anyone.
-       (let ((process (alist-get nil mevedel-pin--helpers))
-             (deadline (+ (float-time) 3)))
-         (while (and (process-get process 'mevedel-pin-pending)
-                     (< (float-time) deadline))
-           (accept-process-output process 0.05))
-         (accept-process-output process 1.5)
-         (should (zerop (hash-table-count
-                         (process-get process 'mevedel-pin-replies))))))))
+     (let* ((mevedel-pin-timeout 0.1)
+            (path (file-name-concat directory "out"))
+            (gate (lambda (op) (write-region "go" nil (file-name-concat directory (concat "gate-" op))
+                                             nil 'silent)))
+            (text "")
+            ;; True once the helper's output holds the complete, newline
+            ;; terminated reply for ID; the filter only parses such lines.
+            (consumed (lambda (id)
+                        (string-match-p (format "\"id\": %d[,}][^\n]*\n" id) text)))
+            (watch (lambda (_process output) (setq text (concat text output))))
+            (timer nil))
+       (advice-add 'mevedel-pin--filter :after watch)
+       (unwind-protect
+           (progn
+             ;; A write waits while the helper lives: the helper stays silent
+             ;; for twice the timeout, a real-clock offset the write outlasts.
+             (let ((released nil) (started (float-time)))
+               (setq timer (run-at-time (* 2 mevedel-pin-timeout) nil
+                                        (lambda () (funcall gate "write") (setq released t))))
+               (should (progn (mevedel-pin-write-file-atomically path "DATA") t))
+               (should released)
+               (should (>= (- (float-time) started) (* 2 mevedel-pin-timeout))))
+             ;; Other requests still give up at the deadline ...
+             (should-error (mevedel-pin--request nil (list :op "file" :path path))
+                           :type 'mevedel-pin-refused)
+             ;; ... and their late reply is not kept for anyone.  Release the
+             ;; helper only now, wait until the real filter has been handed that
+             ;; reply's terminating newline, then check that nothing was kept.
+             (let ((process (alist-get nil mevedel-pin--helpers))
+                   (late mevedel-pin--next-id)
+                   (deadline (+ (float-time) 10)))
+               (should (process-live-p process))
+               ;; Split-delivery control: an id seen in a partial chunk is not
+               ;; consumed until its newline arrives.
+               (mevedel-pin--filter process "{\"id\": 9999")
+               (should-not (funcall consumed 9999))
+               (should (equal "{\"id\": 9999" (process-get process 'mevedel-pin-pending)))
+               (mevedel-pin--filter process ", \"ok\": true}\n")
+               (should (funcall consumed 9999))
+               (should (equal "" (process-get process 'mevedel-pin-pending)))
+               (should-not (funcall consumed late))
+               (funcall gate "file")
+               (while (and (not (funcall consumed late))
+                           (< (float-time) deadline))
+                 (accept-process-output process 0.05))
+               (should (funcall consumed late))
+               (should (zerop (hash-table-count
+                               (process-get process 'mevedel-pin-replies))))))
+         (when timer (cancel-timer timer))
+         (advice-remove 'mevedel-pin--filter watch)))))
   :doc "a write to a helper that exits fails promptly"
   (test-mevedel-pin--call-with-stub-helper
    "import sys
