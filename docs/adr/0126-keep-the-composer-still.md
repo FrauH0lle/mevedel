@@ -242,6 +242,31 @@ focus is explicit.
 
 ## Decision history
 
+- **Anchoring cost over rendered content needs a matched control (2026-11-07).**
+  An exploratory graphical benchmark (pgtk under a private nested
+  compositor, compiled, three sessions, one CPU, 300 stream updates per run)
+  put composer capture at 1.749 ms and restoration at 1.624 ms per update when
+  an earlier turn's rendered table sat above the composer, against 0.912 and
+  0.469 ms for prose only. The fixtures were not matched. The prose fixture
+  left its window unscrolled at the buffer start; the table fixtures were
+  longer and scrolled, with the table above the window start, and their
+  medians varied between sessions. The comparison therefore does not
+  separate face-rich text from a scrolled window and a longer backward
+  traversal. On this evidence, three narrower shapes were not taken. Carrying
+  an anchor, viewport or line heights into the next update is rejected: no
+  matched evidence justifies the state, and no invalidation scheme preserves
+  user scrolling, resizing and popups. A new skip when nothing above
+  changed needs the same layout to know that; the unchanged-zone skip already
+  covers the knowable case. Measuring forward from the previous window start
+  lays out about the same window of text and would re-implement the
+  growth, end-visibility and vscroll rules above. Before revisiting, match
+  window geometry, wrapping, composer position, window start, vscroll and
+  traversal span, record whether rich content lies in the traversed range,
+  and time the visibility query and the backward traversal separately in an
+  isolated, presenting graphical Emacs. A reproducible, actionable cause
+  reopens the question; a null result closes it. The accepted anchoring
+  decision is unchanged.
+
 - **Status visits skip window-growth repair too (2026-11-01).** A live trace
   after Magit returned to the view and a consult minibuffer closed showed
   point in the status zone, not transcript history. The history-reader guard
