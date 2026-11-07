@@ -156,11 +156,10 @@
 (autoload 'mevedel-session-checkpoint-pending-message-p "mevedel-session-checkpoint")
 
 ;; `mevedel-session-durability'
-(defvar mevedel-session-durability--asserted-directories)
-(defvar mevedel-session-durability--commit-riders)
-(defvar mevedel-session-durability--final-commit)
-(defvar mevedel-session-durability--transaction-clock)
-(defvar mevedel-session-durability-async-process-function)
+(declare-function mevedel-session-durability-call-outside-transaction
+                  "mevedel-session-durability" (function))
+(autoload 'mevedel-session-durability-call-outside-transaction
+  "mevedel-session-durability")
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-cancel-deferred-agent-save
@@ -189,9 +188,6 @@
 (autoload 'mevedel-session-publication-defer "mevedel-session-publication")
 (autoload 'mevedel-session-publication-enqueue "mevedel-session-publication")
 (autoload 'mevedel-session-publication-submit "mevedel-session-publication")
-
-;; `mevedel-session-recovery'
-(defvar mevedel-session-recovery--mutation-cache)
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-root-buffer "mevedel-structs" (cl-x) t)
@@ -760,13 +756,7 @@ the whole set, backing off from 50 ms to 500 ms while publication stays busy."
         (condition-case err
             ;; Timers can run inside another session's advancing transaction.
             ;; Arbitrary waiter code must open a fresh transaction of its own.
-            (let ((mevedel-session-durability--transaction-clock nil)
-                  (mevedel-session-durability--asserted-directories nil)
-                  (mevedel-session-durability--commit-riders nil)
-                  (mevedel-session-durability--final-commit nil)
-                  (mevedel-session-durability-async-process-function nil)
-                  (mevedel-session-recovery--mutation-cache nil))
-              (funcall (cdr entry)))
+            (mevedel-session-durability-call-outside-transaction (cdr entry))
           (error
            (display-warning
             'mevedel (format "Mailbox notification failed: %s"
@@ -798,18 +788,12 @@ or teardown to discard.  A callback failure is diagnostic only."
           (mevedel-agent-control--notification-blocked-p session)
           (mevedel-session-mail-notifications session))
       (mevedel-agent-control--queue-notification session key function)
-    (let ((mevedel-session-durability--transaction-clock nil)
-          (mevedel-session-durability--asserted-directories nil)
-          (mevedel-session-durability--commit-riders nil)
-          (mevedel-session-durability--final-commit nil)
-          (mevedel-session-durability-async-process-function nil)
-          (mevedel-session-recovery--mutation-cache nil))
-      (condition-case err
-          (funcall function)
-        (error
-         (display-warning
-          'mevedel (format "Mailbox notification failed: %s"
-                           (error-message-string err)) :warning))))))
+    (condition-case err
+        (mevedel-session-durability-call-outside-transaction function)
+      (error
+       (display-warning
+        'mevedel (format "Mailbox notification failed: %s"
+                         (error-message-string err)) :warning)))))
 
 (defun mevedel-agent-control--offer-at-gate-open (session)
   "Flush SESSION's pending notifications while its gate is open between jobs.
