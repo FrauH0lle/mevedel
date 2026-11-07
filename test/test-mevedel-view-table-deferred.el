@@ -286,6 +286,81 @@
                 (mevedel-view--realign-markdown)
                 (should (string-search "│ alpha │ beta │" (buffer-string)))
                 (should (equal draft (mevedel-view--input-text))))
+            (mevedel-view--cancel-realign-timer))))))
+
+  :doc "a table closed by later streamed text formats once and stays rendered"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (let ((draft "> draft\nsecond line") response-start)
+        (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+        (with-current-buffer data-buf
+          (setq response-start (copy-marker (point-max))))
+        (with-current-buffer view-buf
+          (set-window-buffer (selected-window) view-buf)
+          (mevedel-view-stream-begin-turn
+           mevedel-view--status-marker response-start)
+          (mevedel-view-test--insert-composer-draft draft 3))
+        (mevedel-view-test--insert-data
+         data-buf "| A | B |\n|---|---|\n| alpha | beta |\n| gam" 'response)
+        (with-current-buffer view-buf
+          (unwind-protect
+              (progn
+                ;; A partial row may still extend the table.
+                (mevedel-view-render-live-update data-buf)
+                (mevedel-view--realign-markdown)
+                (should (string-search "| A | B |" (buffer-string)))
+                (should-not (string-search "│" (buffer-string)))
+                (mevedel-view-test--insert-data
+                 data-buf "ma | delta |\n\nAfter the" 'response)
+                (mevedel-view-render-live-update data-buf)
+                (goto-char (point-min))
+                (search-forward "| A | B |")
+                (should-not (get-text-property
+                             (match-beginning 0) 'mevedel-view-table-streaming))
+                (mevedel-view--realign-markdown)
+                (should (string-search "│ gamma │ delta │" (buffer-string)))
+                ;; Later chunks reapply the layout during their write.
+                (dolist (chunk '(" table" " and more.\n\nAnother" " end.\n| Next |"))
+                  (mevedel-view-test--insert-data data-buf chunk 'response)
+                  (mevedel-view-render-live-update data-buf)
+                  (should (string-search "│ gamma │ delta │" (buffer-string)))
+                  (should-not (string-search "| A | B |" (buffer-string))))
+                ;; The trailing one-row run is not a table yet.
+                (should (string-search "| Next |" (buffer-string)))
+                (should (equal draft (mevedel-view--input-text)))
+                (mevedel-view-render-settle
+                 data-buf response-start
+                 (with-current-buffer data-buf (point-max)))
+                (should (string-search "│ gamma │ delta │" (buffer-string)))
+                (should (equal draft (mevedel-view--input-text))))
+            (mevedel-view--cancel-realign-timer))))))
+
+  :doc "a table in the live paragraph stays raw until the paragraph closes"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (let (response-start)
+        (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+        (with-current-buffer data-buf
+          (setq response-start (copy-marker (point-max))))
+        (with-current-buffer view-buf
+          (set-window-buffer (selected-window) view-buf)
+          (mevedel-view-stream-begin-turn
+           mevedel-view--status-marker response-start))
+        (mevedel-view-test--insert-data
+         data-buf "| A | B |\n|---|---|\n| x | y |\nNo" 'response)
+        (with-current-buffer view-buf
+          (unwind-protect
+              (progn
+                (mevedel-view-render-live-update data-buf)
+                (mevedel-view--realign-markdown)
+                ;; Each chunk redraws the live paragraph from raw source, so
+                ;; formatting it would repeat the layout on every update.
+                (should-not (string-search "│" (buffer-string)))
+                (mevedel-view-test--insert-data data-buf "te follows.\n\nMore" 'response)
+                (mevedel-view-render-live-update data-buf)
+                (mevedel-view--realign-markdown)
+                (should (string-search "│ x │ y │" (buffer-string)))
+                (should (string-search "Note follows." (buffer-string))))
             (mevedel-view--cancel-realign-timer)))))))
 
 (provide 'test-mevedel-view-table-deferred)

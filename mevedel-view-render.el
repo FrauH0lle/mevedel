@@ -6719,6 +6719,7 @@ is inserted beside the header.  CONTINUATION-P suppresses that header."
   (unless (or directive continuation-p)
     (mevedel-view--insert-assistant-header variant-button))
   (let ((view-buf (current-buffer))
+        (last-seg (car (last segments)))
         tool-group thinking-group request-summary-group)
     (cl-labels
         ((flush-thinking ()
@@ -6770,12 +6771,13 @@ is inserted beside the header.  CONTINUATION-P suppresses that header."
                             start response-end)
                            (mevedel-view--decorate-agent-message-blocks
                             start response-end)
-                           ;; Idle table layout must not prettify an unfinished
-                           ;; streamed response: the next chunk would replace it
-                           ;; with raw source again.  Terminal reconciliation
-                           ;; redecorates without this flag.
+                           ;; Idle table layout must not prettify a table the
+                           ;; next chunk could extend.  Only the streamed turn's
+                           ;; last segment can still grow; terminal
+                           ;; reconciliation redecorates without this flag.
                            (let ((mevedel-view-table--streaming-p
-                                  (and (not mevedel-view-disclosure--settling-p)
+                                  (and (eq seg last-seg)
+                                       (not mevedel-view-disclosure--settling-p)
                                        (markerp mevedel-view--data-turn-start)
                                        (marker-position mevedel-view--data-turn-start)
                                        (mevedel-view-stream-in-flight-turn-start-position)

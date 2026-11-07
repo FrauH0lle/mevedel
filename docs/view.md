@@ -2502,10 +2502,14 @@ asks on every step. The check therefore first compares the window start with the
 end of the last unformatted table, cached per text change and width (table
 rendering, which can update a width in place, resets it): when no such table
 reaches the window, it answers without the window end.
-Tables in an unfinished streamed response stay raw even if that timer runs;
-terminal reconciliation replaces the live projection with a pending table,
-which the same idle timer then formats once. This avoids relaying out a table
-on each stream update or alternating between its raw and rendered forms.
+Tables in the live paragraph of an unfinished streamed response stay raw even
+if that timer runs: each chunk redraws that paragraph from source, so a
+formatted table would be laid out again on every update. Once a later blank
+line outside a code block ends that paragraph, the live update retains it
+instead of redrawing it, and the idle timer formats the table once while the
+response keeps streaming. Any later redraw, including terminal reconciliation,
+reapplies the cached layout, so the table does not alternate between its raw
+and rendered forms.
 
 `mevedel-view-mode` schedules that job from decoration, window size/buffer
 changes, scrolling, and commands. A current image width and no visible stale
