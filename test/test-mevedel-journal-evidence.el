@@ -12,6 +12,84 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-journal-evidence)
+(require 'mevedel-transcript)
+
+(mevedel-deftest mevedel-journal-evidence--truncate ()
+  ,test
+  (test)
+  :doc "bounds large multibyte strings at character boundaries, including the marker"
+  (let* ((source (concat (make-string 100000 #x754c) "end"))
+         (result (mevedel-journal-evidence--truncate source 32768 "[omitted]")))
+    (should (<= (string-bytes result) 32768))
+    (should (string-prefix-p (make-string 100 #x754c) result))
+    (should (string-suffix-p "[omitted]" result))
+    (should (= (% (- (string-bytes result) (string-bytes "[omitted]")) 3) 0))
+    (should-not (cl-some (lambda (char) (eq (char-charset char) 'eight-bit)) result)))
+
+  :doc "keeps exact fits unchanged and rejects a marker beyond the allowance"
+  (should (equal "abc" (mevedel-journal-evidence--truncate "abc" 3 "...")))
+  (should (equal "a..." (mevedel-journal-evidence--truncate "abcdef" 4 "...")))
+  (should-error (mevedel-journal-evidence--truncate "abcdef" 2 "...")))
+
+(mevedel-deftest mevedel-journal-evidence--turn ()
+  ,test
+  (test)
+  :doc "keeps dialogue and decisions while bounding tools and excluding system observations"
+  (with-temp-buffer
+    (org-mode)
+    (insert "User: use the private runner.\n"
+            (mevedel--format-hook-audit-record
+             '(:type injected-reminders :phase turn-start
+               :items ((:type fixture :body "Full workspace observation must not enter the digest."))))
+            (propertize "Assistant: I will isolate state.\n" 'gptel 'response))
+    (dolist (name '("Read" "Skill"))
+      (insert "#+begin_tool\n")
+      (let ((start (point)))
+        (insert (format "(:name %S :args (:name \"fixture\"))\n\n" name)
+                "Observed tool result.\n" (make-string 10000 ?x))
+        (put-text-property start (point) 'gptel (cons 'tool name)))
+      (insert "\n#+end_tool\n"))
+    (insert "User correction: batch operations first.\n"
+            (propertize "Final decision: a helper is acceptable if batching fails.\n" 'gptel 'response))
+    (let* ((full (mevedel-transcript-project-evidence (list (cons (point-min) (point-max)))))
+           (compact (mevedel-journal-evidence--turn (point-min) (point-max)))
+           (dialogue (car compact))
+           (supporting (cdr compact)))
+      (should (string-match-p "Full workspace observation" full))
+      (should (string-match-p "User: use the private runner" dialogue))
+      (should (string-match-p "User correction: batch operations first" dialogue))
+      (should (string-match-p "Final decision: a helper is acceptable" dialogue))
+      (should (string-match-p "provenance: assistant" dialogue))
+      (should-not (string-match-p "Full workspace observation" (concat dialogue supporting)))
+      (should (string-match-p "Observed tool result" supporting))
+      (should (string-match-p "digest item limit" supporting))
+      (should (<= (string-bytes supporting) 4097))
+      (should (< (string-bytes (concat dialogue supporting)) (string-bytes full))))))
+
+(mevedel-deftest mevedel-journal-evidence-digest-source ()
+  ,test
+  (test)
+  :doc "keeps small evidence unchanged, without interpreting quoted delimiters"
+  (let ((source (concat "Completed turn 1; source: segment-0001.chat.org\n"
+                        "--- evidence item; provenance: user ---\n"
+                        "Keep this quoted tool-result delimiter literally.\n"
+                        "--- evidence item; provenance: tool-result ---\n"
+                        "Assistant decision: use the isolated runner.\n")))
+    (should (equal source (mevedel-journal-evidence-digest-source source))))
+
+  :doc "bounds multibyte evidence and retains opening intent and final decisions"
+  (let* ((opening "Completed turn 1; source: segment-0001.chat.org\nUser: keep the local runner.\n")
+         (closing "\nCompleted turn 2; source: segment-0001.chat.org\nAssistant: decided to use the local runner because it isolates state.\n")
+         (source (concat opening (make-string 100000 #x754c) closing))
+         (copy (copy-sequence source))
+         (compact (mevedel-journal-evidence-digest-source source)))
+    (should (> (string-bytes source) mevedel-journal-evidence-digest-max-bytes))
+    (should (<= (string-bytes compact) mevedel-journal-evidence-digest-max-bytes))
+    (should (string-prefix-p opening compact))
+    (should (string-suffix-p closing compact))
+    (should (string-match-p "middle of capture unavailable" compact))
+    (should (equal source copy))
+    (should-not (cl-some (lambda (char) (eq (char-charset char) 'eight-bit)) compact))))
 
 (mevedel-deftest mevedel-journal-evidence-notes ()
   ,test

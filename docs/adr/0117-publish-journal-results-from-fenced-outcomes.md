@@ -241,6 +241,16 @@ validated all-none digest instead records private turn coverage and retires its
 capture without publication or a consolidation opportunity. Both paths retain
 coverage before releasing source pins and recover without replacement inference.
 
+Frozen journal evidence uses a dialogue-first lossy projection, not the general
+continuation projection: user/assistant text has its own allowance, supporting
+tool and agent evidence is tightly bounded, and reminders and reasoning are
+omitted explicitly. Tool-heavy captures otherwise spend most of the digest's
+input on operational detail rather than reusable lessons. Digest admission also
+has a byte cap independent of the selected model's context window, including for
+already-frozen captures. Original session transcripts and continuation summaries
+are unchanged; [the journal contract](../memory-journal.md#working-notes-and-completed-turn-capture)
+defines the capture and request bounds.
+
 Consolidation captures bounded memory, instructions, source observations, and
 selected digest evidence. It uses scoped read-only tools in a sessionless request.
 Only a terminal validated reply can be accepted. A published general review

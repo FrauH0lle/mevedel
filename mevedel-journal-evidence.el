@@ -35,8 +35,10 @@
 (autoload 'mevedel-tool-fs-read--binary-extension-p "mevedel-tool-fs-read")
 
 ;; `mevedel-transcript'
-(declare-function mevedel-transcript-project-evidence "mevedel-transcript" (ranges &rest keys))
-(autoload 'mevedel-transcript-project-evidence "mevedel-transcript")
+(declare-function mevedel-transcript-project-segments "mevedel-transcript" (segments &rest keys))
+(declare-function mevedel-transcript-segments "mevedel-transcript" (&optional beg end))
+(autoload 'mevedel-transcript-project-segments "mevedel-transcript")
+(autoload 'mevedel-transcript-segments "mevedel-transcript")
 
 ;; `mevedel-transcript-restore'
 (declare-function mevedel-transcript-restore-properties "mevedel-transcript-restore" (&optional only-if-missing))
@@ -44,6 +46,62 @@
 
 (defconst mevedel-journal-evidence-notes-max-bytes 32768
   "Maximum working note input size, including provenance and omissions.")
+
+(defconst mevedel-journal-evidence-digest-max-bytes (* 128 1024)
+  "Maximum frozen evidence bytes admitted to a journal digest request.")
+
+(defun mevedel-journal-evidence--truncate (text budget marker)
+  "Bound TEXT to a UTF-8 byte BUDGET, ending truncated text with MARKER.
+Search character boundaries by byte count, without display-width work on
+large transcript strings."
+  (if (<= (string-bytes text) budget)
+      text
+    (let* ((available (- budget (string-bytes marker)))
+           (low 0) (high (min (length text) available)))
+      (when (< available 0)
+        (error "Byte budget cannot hold its omission marker"))
+      (while (< low high)
+        (let ((middle (/ (+ low high 1) 2)))
+          (if (<= (string-bytes (substring text 0 middle)) available)
+              (setq low middle)
+            (setq high (1- middle)))))
+      (concat (substring text 0 low) marker))))
+
+(defun mevedel-journal-evidence-digest-source (source &optional budget)
+  "Return a compact digest view of frozen untrusted SOURCE.
+Keep the opening context and closing conclusions when the source exceeds
+the byte BUDGET (default `mevedel-journal-evidence-digest-max-bytes').
+Mark the missing middle explicitly; never interpret evidence delimiters
+in untrusted text as syntax.
+The original capture remains intact for inspection and recovery."
+  (let* ((source (substring-no-properties source))
+         (budget (or budget mevedel-journal-evidence-digest-max-bytes))
+         (marker "\n[omitted completed-work evidence: digest byte limit; middle of capture unavailable]\n")
+         (half (/ (- budget (string-bytes marker)) 2)))
+    (if (<= (string-bytes source) budget)
+        source
+      (concat (mevedel-journal-evidence--truncate source half "")
+              marker
+              (reverse (mevedel-journal-evidence--truncate (reverse source) half ""))))))
+
+(defun mevedel-journal-evidence--turn (start end)
+  "Return dialogue and supporting evidence for the completed START to END span.
+Classify canonical transcript segments, not delimiters in untrusted text.
+Keep user and assistant prose separately so tool volume cannot displace it.
+Supporting evidence keeps bounded tool results and agent messages; reminders,
+reasoning and hidden audits are represented by an explicit omission notice."
+  (let (dialogue supporting)
+    (dolist (span (mevedel-transcript-segments start end))
+      (let ((segment (list (car span) (max start (cadr span)) (min end (caddr span)))))
+        (pcase (car segment)
+          ((or 'user 'prompt 'response) (push segment dialogue))
+          ((or 'tool 'mailbox 'hook-context 'task-background)
+           (push (mevedel-journal-evidence--truncate
+                  (mevedel-transcript-project-segments (list segment) :tool-output-max 512)
+                  2048 "\n[supporting evidence truncated: digest item limit]\n")
+                 supporting)))))
+    (cons (mevedel-transcript-project-segments (nreverse dialogue))
+          (mapconcat #'identity (nreverse supporting) "\n"))))
 
 (defun mevedel-journal-evidence--note (path relative budget)
   "Return one bounded note from PATH, named RELATIVE, within input BUDGET.
@@ -124,44 +182,45 @@ numbers of turns whose indexed bounds lie outside their committed segment.
 Such a turn is named in the text as unavailable rather than failing the
 capture: its bytes are gone from the artifact, and one damaged historical
 turn otherwise blocked every later capture of the session.  Hidden
-transcript audits stay out of the neutral projection.  Inherited summaries
-are labelled as prior context.  The frozen projection is capped at 1 MiB;
-request-time admission must also apply the selected model's smaller input
-budget."
-  (let ((text "") sources unavailable)
-    (catch 'full
-      (dolist (group (seq-group-by (lambda (turn) (plist-get turn :segment)) turns))
-        (let* ((logical (format "segment-%04d.chat.org" (car group)))
-               (bytes (mevedel-session-artifacts-read-artifact session logical t)))
-          (push (list :logical logical :sha256 (secure-hash 'sha256 bytes)) sources)
-          (with-temp-buffer
-            (insert (decode-coding-string bytes 'utf-8-unix))
-            (mevedel--transcript-org-mode)
-            (mevedel-transcript-restore-properties)
-            (when-let* ((summary (mevedel-compact-evidence-previous-summary)))
-              (setq text (concat text "\nInherited summary: prior context, not independent evidence.\n"
-                                 summary "\n")))
-            (dolist (turn (cdr group))
-              (let ((start (plist-get turn :start)) (end (plist-get turn :end)))
-                (if (not (and (integerp start) (integerp end)
-                              (<= (point-min) start) (< start end) (<= end (point-max))))
-                    (progn
-                      (push (plist-get turn :number) unavailable)
-                      (setq text
-                            (concat text
-                                    (format "\nCompleted turn %d; source: %s: evidence unavailable, its indexed bounds lie outside the committed segment\n"
-                                            (plist-get turn :number) logical))))
-                  (setq text
-                        (concat text
-                                (format "\nCompleted turn %d; source: %s; fork-point: %s\n"
-                                        (plist-get turn :number) logical (plist-get turn :fork-point))
-                                (mevedel-transcript-project-evidence (list (cons start end))) "\n")))
-                (when (> (string-bytes text) (* 1024 1024))
-                  (setq text (mevedel--truncate-bytes
-                              text (* 1024 1024)
-                              "\n[remaining transcript evidence omitted: capture byte limit]\n"))
-                  (throw 'full nil))))))))
-    (list :text text :sources (nreverse sources) :unavailable (nreverse unavailable))))
+transcript audits, reminders and reasoning stay out of the projection.
+Inherited summaries are labelled as prior context.  Dialogue has a 64 KiB
+allowance and supporting evidence a separate 32 KiB allowance; omissions
+are explicit.  Request-time admission also applies the model input budget."
+  (let ((text "") (supporting "") sources unavailable)
+    (dolist (group (seq-group-by (lambda (turn) (plist-get turn :segment)) turns))
+      (let* ((logical (format "segment-%04d.chat.org" (car group)))
+             (bytes (mevedel-session-artifacts-read-artifact session logical t)))
+        (push (list :logical logical :sha256 (secure-hash 'sha256 bytes)) sources)
+        (with-temp-buffer
+          (insert (decode-coding-string bytes 'utf-8-unix))
+          (mevedel--transcript-org-mode)
+          (mevedel-transcript-restore-properties)
+          (when-let* ((summary (mevedel-compact-evidence-previous-summary)))
+            (setq text (concat text "\nInherited summary: prior context, not independent evidence.\n"
+                               summary "\n")))
+          (dolist (turn (cdr group))
+            (let ((start (plist-get turn :start)) (end (plist-get turn :end)))
+              (if (not (and (integerp start) (integerp end)
+                            (<= (point-min) start) (< start end) (<= end (point-max))))
+                  (progn
+                    (push (plist-get turn :number) unavailable)
+                    (setq text
+                          (concat text
+                                  (format "\nCompleted turn %d; source: %s: evidence unavailable, its indexed bounds lie outside the committed segment\n"
+                                          (plist-get turn :number) logical))))
+                (let ((label (format "\nCompleted turn %d; source: %s; fork-point: %s\n"
+                                     (plist-get turn :number) logical (plist-get turn :fork-point)))
+                      (projection (mevedel-journal-evidence--turn start end)))
+                  (setq text (concat text label (car projection) "\n")
+                        supporting (concat supporting label (cdr projection) "\n")))))))))
+    (list :text
+          (concat
+           (mevedel-journal-evidence-digest-source text (* 64 1024))
+           "\nSupporting evidence (reminders, reasoning and hidden audits omitted):\n"
+           (mevedel-journal-evidence--truncate
+            supporting (- (* 32 1024) 128)
+            "\n[remaining supporting evidence omitted: digest capture limit]\n"))
+          :sources (nreverse sources) :unavailable (nreverse unavailable))))
 
 (provide 'mevedel-journal-evidence)
 ;;; mevedel-journal-evidence.el ends here

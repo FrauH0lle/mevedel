@@ -222,6 +222,24 @@ as success, avoids duplicates, and proposes corrections or removal of outdated
 memories when supported. Existing notes and memories are not rewritten merely
 because the selection policy changed.
 
+New captures separate user/assistant dialogue (at most 64 KiB) from supporting
+evidence (at most 32 KiB, including section labels). Canonical transcript
+segments determine these roles; delimiters in untrusted evidence are not parsed.
+Tool results keep at most 512 characters, and each supporting item, including
+Skill results and agent messages, keeps at most 2 KiB. Reminders, reasoning and
+hidden audits are omitted with an explicit notice. Turn/source labels remain
+with both sections, and inherited summaries remain labelled prior context.
+Oversized dialogue keeps its opening and closing halves with a missing-middle
+marker; excess supporting evidence has an omission marker. Session notes retain
+their separate 32 KiB allowance.
+
+Digest requests also admit at most 128 KiB of frozen evidence, independently of
+the model's context window, bounding already-frozen captures as well. Oversized
+sources contribute their opening and closing halves with an explicit
+missing-middle marker. This is lossy: dialogue or decisions beyond the allowance
+can be omitted. Immutable captures stay intact during request preparation for
+inspection and recovery. Continuation and handoff summaries are unchanged.
+
 Processing re-resolves the exact frozen provider/model and uses the saved
 streaming, effort, and output settings. Missing policy or client-owned evidence
 stays unavailable instead of selecting a fallback. Frozen evidence is bounded
