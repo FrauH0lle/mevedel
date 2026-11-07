@@ -47,6 +47,15 @@ Unknown custom IDs deliberately retain the generic model fallback.")
   :type '(choice (const :tag "Find installed adapter" nil) file)
   :group 'mevedel)
 
+(defcustom mevedel-claude-code-agent-log-directory "~/.mevedel/claude-agent-logs"
+  "Local directory for Claude ACP adapter diagnostic logs, or nil to disable.
+Set CLAUDE_AGENT_LOGS in the adapter's process environment to this expanded
+directory unless that variable is already set in the inherited environment.
+An inherited value, including an empty string, always wins.  Nil disables
+only mevedel's default; it does not remove an inherited value."
+  :type '(choice (const :tag "Do not set a default" nil) directory)
+  :group 'mevedel)
+
 (defcustom mevedel-claude-code-directory
   (file-name-concat user-emacs-directory "mevedel" "claude-code")
   "Local adapter installation and neutral conversation working directory.
