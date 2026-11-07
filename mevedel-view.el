@@ -1311,18 +1311,28 @@ while scrolling changes properties only, so it must not invalidate them."
               mevedel-view--prompt-headers (cons tick runs))
         runs))))
 
+(defun mevedel-view--window-top (window)
+  "Return the first visible position at or after WINDOW's start.
+A start inside hidden text, such as another directive's turn in a
+filtered directive frame, displays the next visible text at the top."
+  (let ((top (window-start window))
+        (limit (or (and (markerp mevedel-view--input-marker)
+                        (marker-position mevedel-view--input-marker))
+                   (point-max))))
+    (while (and (< top limit) (invisible-p top))
+      (setq top (next-single-char-property-change top 'invisible nil limit)))
+    (min top limit)))
+
 (defun mevedel-view--pinned-prompt (window)
   "Return (POSITION . PREVIEW) for the prompt above WINDOW's top edge.
-Metadata lives on rendered prompt headers, not in the model transcript."
-  (when (and (window-live-p window)
-             (eq (window-buffer window) (current-buffer))
-             (not (get-text-property
-                   (window-start window) 'mevedel-view-prompt-preview)))
-    (let* ((top (min (window-start window)
-                     (or (and (markerp mevedel-view--input-marker)
-                              (marker-position mevedel-view--input-marker))
-                         (point-max))))
-           (runs (mevedel-view--prompt-header-runs))
+Metadata lives on rendered prompt headers, not in the model transcript.
+Hidden headers, such as other directives' in a filtered directive frame,
+are never selected."
+  (when-let* (((window-live-p window))
+              ((eq (window-buffer window) (current-buffer)))
+              (top (mevedel-view--window-top window))
+              ((not (get-text-property top 'mevedel-view-prompt-preview))))
+    (let* ((runs (mevedel-view--prompt-header-runs))
            (lo 0) (hi (length runs)))
       ;; The last header run ending at or before TOP.
       (while (< lo hi)
@@ -1330,6 +1340,11 @@ Metadata lives on rendered prompt headers, not in the model transcript."
           (if (<= (nth 1 (aref runs mid)) top)
               (setq lo (1+ mid))
             (setq hi mid))))
+      ;; Visibility is not part of the per-text-change runs: the filter
+      ;; changes it without changing the text.  Usually the nearest header
+      ;; is visible, so this checks one position.
+      (while (and (> lo 0) (invisible-p (nth 0 (aref runs (1- lo)))))
+        (setq lo (1- lo)))
       (when (> lo 0)
         (let ((run (aref runs (1- lo))))
           (cons (nth 0 run) (nth 2 run)))))))
