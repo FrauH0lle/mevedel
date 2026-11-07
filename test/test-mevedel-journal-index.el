@@ -243,6 +243,47 @@
             (should (string-match-p "Unreviewed digests: 1" (mevedel-journal-index-prompt workspace)))))
       (delete-directory root t)))
 
+  :doc "new digests preserve surviving row bytes while growing and rolling the bounded list"
+  (let* ((root (make-temp-file "journal-stable-rows-" t))
+         (workspace (mevedel-workspace--create :root root))
+         entries previous-rows)
+    (unwind-protect
+        (cl-loop
+         for n from 1 to 10
+         do
+         (push (mevedel-journal-store-publish-digest
+                root
+                (list :capture-id (secure-hash 'sha256 (number-to-string n))
+                      :session "stable-rows" :session-name (make-string 100 ?\u754c)
+                      :workspace (make-string 64 ?b) :trigger 'session-end
+                      :segment 1 :source-revision (make-string 64 ?c)
+                      :turns (list n) :turn-ids (list (secure-hash 'sha256 (format "turn-%d" n)))
+                      :created (format "2026-09-07T12:%02d:00Z" n) :model "provider:model")
+                (concat "## Done\n- none\n## Learned\n- Observed: "
+                        (make-string 1000 ?\u754c)
+                        "\n## Surprised\n- none\n## Unfinished\n- none"))
+               entries)
+         (when (mevedel-workspace-journal-observation workspace)
+           (setf (plist-get (mevedel-workspace-journal-observation workspace) :time)
+                 (- (float-time) 11)))
+         (let* ((prompt (mevedel-journal-index-prompt workspace))
+                (rows (seq-filter (lambda (line) (string-prefix-p "- " line))
+                                  (split-string prompt "\n" t)))
+                (row-bytes (mapcar (lambda (row) (encode-coding-string row 'utf-8)) rows)))
+           (should (<= (string-bytes prompt) 2048))
+           (should (string-match-p (format "Unreviewed digests: %d\n" n) prompt))
+           (should (= (length rows) (min n 5)))
+           (cl-loop for row in rows
+                    for entry in (seq-take entries 5)
+                    do (should (string-match-p
+                                (regexp-quote
+                                 (concat "memory://journal/"
+                                         (mevedel-resource-encode-component (plist-get entry :file))))
+                                row)))
+           (should (equal (cdr row-bytes) (seq-take previous-rows 4)))
+           (setq previous-rows row-bytes)))
+      (delete-directory root t)))
+
   :doc "renders at most five dated entries within 2 KiB, preserving canonical addresses"
   (let* ((root default-directory)
          (entries (cl-loop for n from 7 downto 1 collect
