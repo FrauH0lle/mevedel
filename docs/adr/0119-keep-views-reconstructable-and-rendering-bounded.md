@@ -468,6 +468,18 @@ the complete parser context without introducing a second grammar, stored
 summaries, threads, or an external worker. Synchronous callers still receive
 complete source positions before returning.
 
+One transcript-reading module shared by the view and the collaboration
+projection was rejected on November 7, 2026. The reading core, the tool parser
+with its block-bounds memo and reasoning cache, runs inside render
+preparation's parse checkpoint. Moving it would move render-cost machinery. The
+remaining readers the projection uses share no call sequence, so consumer
+entry points would only rename or thinly wrap them. The mail-attribute parsers
+also differ deliberately: the projection reads completion facts with an XML
+parser, and the Emacs notice reads them with a regular expression. A shared
+reader would either widen the projection's trusted-tag acceptance or add an XML
+parse to the render path. Revisit if a third consumer appears or the parser's
+checkpoint coupling changes.
+
 ## Consequences
 
 Rendering caches and fold state are disposable. A missing Markdown grammar gives
