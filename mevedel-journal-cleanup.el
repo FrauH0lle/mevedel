@@ -43,9 +43,6 @@
 (defconst mevedel-journal-cleanup--max-bytes (* 4 1024 1024)
   "Maximum encoded expiry manifest, including dependent file identities.")
 
-(defvar mevedel-journal-cleanup--more nil
-  "Non-nil when this batch reached a work limit and may leave more work.")
-
 (defvar mevedel-journal-cleanup--finished nil
   "Non-nil once `mevedel-journal-cleanup--apply' finishes a manifest now.
 `mevedel-journal-cleanup-recover' binds it per manifest.")
@@ -217,13 +214,14 @@ manifests are verified but not counted."
          (file-name-concat (mevedel-journal-store-state-directory root) "evidence-pins" (plist-get entry :id))
          "\\`[^.]"))))
 
-(defun mevedel-journal-cleanup--owned (workspace claim &optional limit)
+(defun mevedel-journal-cleanup--owned (workspace claim limit)
   "Recover and accept expiry for WORKSPACE under CLAIM.
-Select at most LIMIT content groups (default 50), including recovery."
+Select at most LIMIT content groups, including recovery.  Return
+\(:count DELETED :more MORE), where MORE is non-nil when LIMIT was reached."
   (let* ((workspace-root (mevedel-workspace-root workspace))
          (root (mevedel-journal-store-directory workspace-root))
          (deleted 0)
-         (remaining (or limit 50))
+         (remaining limit)
          observed unreviewed entries)
     ;; Recovery consumes the same content budget as new work.  A manifest is
     ;; indivisible: defer one that does not fit until the next idle batch.
@@ -267,9 +265,8 @@ Select at most LIMIT content groups (default 50), including recovery."
         (when (mevedel-journal-claim-settle claim 'completed (secure-hash 'sha256 text))
           (cl-incf deleted
                    (mevedel-journal-cleanup--apply root (mevedel-journal-cleanup--read root path))))))
-    (setq mevedel-journal-cleanup--more
-          (or (zerop remaining) (and entries (= (length entries) remaining))))
-    deleted))
+    (list :count deleted
+          :more (or (zerop remaining) (and entries (= (length entries) remaining))))))
 
 (defvar mevedel-journal-cleanup--journal-only nil
   "Non-nil in a worker whose editor already handled live artifact retention.")
@@ -277,11 +274,12 @@ Select at most LIMIT content groups (default 50), including recovery."
 (iter-defun mevedel-journal-cleanup--steps (workspace force)
   "Yield between WORKSPACE cleanup phases, bypassing its throttle with FORCE.
 Claims remain held across yields.  Closing the iterator settles acquired
-claims.  Live-buffer artifact retention remains an indivisible phase."
+claims.  Live-buffer artifact retention remains an indivisible phase.  A batch
+ends with (:count DELETED :more MORE); a throttled or unavailable run, or an
+error in the editor, ends with nil."
   (when (and workspace (mevedel-workspace-root workspace)
              (or force (null (mevedel-workspace-journal-cleanup-at workspace))
                  (>= (- (float-time) (mevedel-workspace-journal-cleanup-at workspace)) 3600)))
-    (setq mevedel-journal-cleanup--more nil)
     (setf (mevedel-workspace-journal-cleanup-at workspace) (float-time))
     (unless mevedel-journal-cleanup--journal-only (mevedel-state-cleanup workspace))
     (iter-yield nil)
@@ -320,16 +318,16 @@ claims.  Live-buffer artifact retention remains an indivisible phase."
                 (if (and claim digest consolidation)
                     (let* ((collected (iter-yield-from (mevedel-journal-gc workspace claim)))
                            (_ (iter-yield nil))
-                           (deleted (mevedel-journal-cleanup--owned workspace claim (plist-get collected :remaining))))
-                      ;; A short batch already inspected the remaining work.
-                      ;; Rescanning on any progress lets cleanup feed itself:
-                      ;; each pass creates claims the next pass can collect.
-                      (setq mevedel-journal-cleanup--more
-                            (and (> (+ (plist-get collected :progress) deleted) 0)
-                                 (or (plist-get collected :more) mevedel-journal-cleanup--more)))
-                      (when mevedel-journal-cleanup--more
-                        (mevedel-journal-cleanup-schedule workspace t))
-                      deleted)
+                           (owned (mevedel-journal-cleanup--owned workspace claim (plist-get collected :remaining)))
+                           (deleted (plist-get owned :count))
+                           ;; A short batch already inspected the remaining work.
+                           ;; Rescanning on any progress lets cleanup feed itself:
+                           ;; each pass creates claims the next pass can collect.
+                           (more (and (> (+ (plist-get collected :progress) deleted) 0)
+                                      (or (plist-get collected :more) (plist-get owned :more))
+                                      t)))
+                      (when more (mevedel-journal-cleanup-schedule workspace t))
+                      (list :count deleted :more more))
                   (when present (setf (mevedel-workspace-journal-cleanup-at workspace) nil))
                   nil))
             (setf (mevedel-workspace-journal-observation workspace) nil
@@ -364,7 +362,9 @@ does not grant ownership or permit cancellation of another client's cleanup."
   "Collect one batch of resolved WORKSPACE journal state synchronously.
 Throttle opportunities to once an hour unless FORCE is non-nil.  Live mutation,
 digest owners or another local cleanup postpone it.  No inference runs.  Return
-a deletion count or nil when busy, throttled, or unavailable."
+\(:count DELETED :more MORE) when a batch ran, where MORE is non-nil if it
+reached a work limit and may leave more, even for zero deletions.  Return nil
+when busy, throttled, or unavailable."
   (when (and workspace (not (mevedel-journal-cleanup-active-p workspace)))
     (let ((root (mevedel-workspace-root workspace)) (token (list 'synchronous)) guard)
       (puthash root token mevedel-journal-cleanup--active)
@@ -500,9 +500,8 @@ coalesce; a forced request received during cleanup runs after that batch."
 (defun mevedel-journal-cleanup-child (workspace payload)
   "Run journal-only retention for WORKSPACE using PAYLOAD's :force flag."
   (let* ((mevedel-journal-cleanup--journal-only t)
-         (mevedel-journal-cleanup--more nil)
-         (count (mevedel-journal-cleanup-expired workspace (plist-get payload :force))))
-    (list :ok t :count count :more mevedel-journal-cleanup--more
+         (batch (mevedel-journal-cleanup-expired workspace (plist-get payload :force))))
+    (list :ok t :count (plist-get batch :count) :more (plist-get batch :more)
           :cleanup-at (mevedel-workspace-journal-cleanup-at workspace))))
 
 (provide 'mevedel-journal-cleanup)

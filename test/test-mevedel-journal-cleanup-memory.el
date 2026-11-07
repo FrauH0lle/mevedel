@@ -226,7 +226,7 @@
 		     (mevedel-test-cleanup-memory-step root)
 		     (setq after-queued (mevedel-journal-cleanup-active-p ws)))
 		   (funcall state-cleanup ws))))
-	(should (= 1 (mevedel-journal-cleanup-expired workspace t))))
+	(should (= 1 (plist-get (mevedel-journal-cleanup-expired workspace t) :count))))
       (should injected)
       (should seen-active)
       (should (eq seen-active after-queued))

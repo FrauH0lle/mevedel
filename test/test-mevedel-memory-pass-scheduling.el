@@ -330,7 +330,7 @@
                    (digest 1 30)
                    (setf (mevedel-workspace-type workspace) 'file
                          (mevedel-workspace-id workspace) root)
-                   (should (= 0 (mevedel-journal-cleanup-expired workspace t)))
+                   (should (= 0 (plist-get (mevedel-journal-cleanup-expired workspace t) :count)))
                    (dolist (mode '(manual propose))
                      (let ((mevedel-memory-consolidation-mode mode)
                            buffer view)

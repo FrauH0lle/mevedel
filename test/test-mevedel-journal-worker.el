@@ -93,6 +93,7 @@
                  (accept-process-output nil .01)))
              (should (plist-get result :ok))
              (should (numberp (plist-get result :cleanup-at)))
+             (should (= 0 (plist-get result :count)))
              (should (mevedel-journal-capture-list workspace))
              (should (mevedel-journal-pins-present-p (mevedel-session-save-path session))))
          (when (and process (process-live-p process)) (delete-process process)))))))

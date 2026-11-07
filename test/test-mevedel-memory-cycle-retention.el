@@ -131,7 +131,7 @@
          (pass (plist-get entry :pass-id))
          (mevedel-memory-history-max-age-days 0))
     (should (mevedel-memory-cycle-pins-pass-p workspace pass))
-    (should (= 0 (mevedel-journal-cleanup-expired workspace t)))
+    (should (= 0 (plist-get (mevedel-journal-cleanup-expired workspace t) :count)))
     (should-not (mevedel-journal-cleanup-pass-retired-p root pass))
     (should (= 1 (length (plist-get (mevedel-memory-store-accepted workspace pass) :admitted-notes))))
     (let ((cycle (recover)))
@@ -140,7 +140,7 @@
       (should-not (plist-get cycle :inflight)))
     (should (mevedel-journal-claim-settle successor 'completed ""))
     ;; Retirement deletes the review and its terminal rejection decision.
-    (should (= 2 (mevedel-journal-cleanup-expired workspace t)))
+    (should (= 2 (plist-get (mevedel-journal-cleanup-expired workspace t) :count)))
     (should (mevedel-journal-cleanup-pass-retired-p root pass))
     (should-error (mevedel-memory-store-accepted workspace pass))
     (should (equal "A temporary finding.\n" (mevedel-session-control-fs-read-file path)))))

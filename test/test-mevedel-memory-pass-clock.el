@@ -101,7 +101,7 @@
       (should (= 1 (length (plist-get accepted :proposals))))
       (should (eq 'note-delete (plist-get proposal :action)))
       ;; Pending disposal independently prevents expiry even without a cycle.
-      (should (= 0 (mevedel-journal-cleanup-expired workspace t)))
+      (should (= 0 (plist-get (mevedel-journal-cleanup-expired workspace t) :count)))
       (should-not (mevedel-journal-cleanup-pass-retired-p root pass))
       (cl-letf (((symbol-function 'mevedel-journal-store-timestamp) (lambda (_) date)))
         (should (eq 'rejected (plist-get (mevedel-memory-decision-reject
