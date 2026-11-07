@@ -209,6 +209,17 @@ collections, so they are allocated and validated against the union."
               (_ 'failed))))))
     (setf (mevedel-directive-state directive) state)))
 
+(defconst mevedel-directive-settled-states
+  '(nil ready discussed implemented failed aborted)
+  "Directive states that describe settled activity.
+`mevedel-directive-recompute-state' derives exactly these; any other
+state is set while a request for the directive is in flight.")
+
+(defun mevedel-directive-in-flight-p (directive)
+  "Return non-nil when DIRECTIVE has a request in flight."
+  (not (memq (mevedel-directive-state directive)
+             mevedel-directive-settled-states)))
+
 (defun mevedel-workspace-rewind-directives
     (workspace session-id target-turn)
   "Discard directive activity in WORKSPACE from SESSION-ID TARGET-TURN onward."

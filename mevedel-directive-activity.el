@@ -60,6 +60,11 @@
 (declare-function mevedel--topmost-instruction
                   "mevedel-overlays" (instruction &optional of-type pred))
 
+;; `mevedel-persistence'
+(declare-function mevedel-instruction-store-observe
+                  "mevedel-persistence" (workspace))
+(autoload 'mevedel-instruction-store-observe "mevedel-persistence")
+
 ;; `mevedel-session-rewind'
 (declare-function mevedel-session-rewind-rewind-checkpoint
                   "mevedel-session-rewind"
@@ -660,6 +665,12 @@
 (defun mevedel-directive-activity--choose-directive (workspace archived-p)
   "Choose a directive in WORKSPACE whose archive state is ARCHIVED-P."
   (let* ((workspace (or workspace (mevedel-workspace)))
+         ;; Opening a listing observes the store, so it shows what other
+         ;; sessions and Emacs instances wrote since the last observation.
+         (_ (condition-case err
+                (mevedel-instruction-store-observe workspace)
+              (mevedel-instruction-store-unreadable
+               (display-warning 'mevedel (error-message-string err) :warning))))
          (_ (unless archived-p
               (mevedel--reconcile-directive-sources workspace)))
          (directives

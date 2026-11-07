@@ -55,6 +55,12 @@ Rewind neither copy nor roll them back. See
 [shared editing](shared-editing.md) for item leases, pending browser drafts,
 operation retries, and native exports.
 
+References and directives likewise live in the workspace's instruction store,
+`<workspace>/.mevedel/instructions.el`
+([ADR 0130](adr/0130-keep-instructions-in-a-workspace-store.md)). A session
+keeps `instructions/turn-NNNNNN.el` snapshots as history and, for now,
+`instructions/current.el`; neither is the current set once the store exists.
+
 Conversation compaction has its own doc in
 [`compaction.md`](compaction.md). This page describes the session
 persistence contract that compaction relies on.
@@ -2298,6 +2304,37 @@ An active persisted Goal is restored `paused`, with an explicit session-resumed
 reason; opening a session never dispatches Goal work. `/goal resume` is required
 to continue. Rewind preserves session preset settings but clears Goal state.
 
+Resume restores the workspace's instructions from its instruction store. It
+first settles any Rewind intent the session left there (see [Rewind](#rewind)),
+then merges the store into the workspace, so instructions created by other
+sessions or Emacs instances stay. Only a workspace still waiting for its store
+restores the session's `current.el`. That is a workspace with sessions but no
+store, or one whose migration staged candidates. While waiting, it never
+creates a store automatically and warns once. An unreadable store is reported;
+resume continues without clearing the instructions already loaded. The session
+then counts as owing a Rewind resolution, so request admission keeps trying to
+settle and refuses while the store stays unreadable.
+
+Resume is not the only time the store is read. The instructions are available
+as soon as a workspace is first activated in an Emacs, before any session
+resumes. Opening a directive listing observes the store again, costing one
+target-side hash when nothing changed. Activation skips a remote root without
+a live connection.
+
+The store is written through the pinned control-file programs under
+`.mevedel/leases/instructions/`, each write naming the hash it was based on:
+
+- a creation is written at once;
+- other changes are written after the command, at each session save, and at
+  exit;
+- a stale write merges per instruction UUID and refuses an edit to an
+  instruction another client changed, keeping its request text on the kill
+  ring.
+
+A store is created automatically only where `.mevedel/` already exists, and an
+import does not create one either. While a minibuffer is active, writes wait
+until the command that read it returns.
+
 ### Explicit session migration
 
 The standalone [migration script](https://github.com/FrauH0lle/mevedel/blob/master/scripts/migrate-sessions.el)
@@ -2424,6 +2461,42 @@ legacy source. A changed source or imported artifact, or a missing imported
 payload, refuses the retry rather than overwriting either copy or attaching
 stale content. Resolve that difference before retrying. Interrupted individual
 imports remove their incomplete new item.
+
+#### Workspace instructions
+
+A project run also builds the workspace's
+[instruction store](adr/0130-keep-instructions-in-a-workspace-store.md) from
+every session's instruction snapshots, after the sessions themselves. It never
+changes a session. A workspace that already has a store reports `current` and
+is not read.
+
+Snapshots are merged by instruction UUID; display ids are only numbers:
+
+- Identical copies collapse.
+- A display id two instructions share is renumbered above every used and
+  retired id, and that session's links follow it.
+- An instruction missing from some sessions is kept and reported, since
+  dropping it could not be undone.
+- An activity entry is kept only when its checkpoint session's own turn
+  snapshot holds the same entry. Rewind deletes discarded turn snapshots, so a
+  reused turn number is not evidence.
+
+Portable sessions are read from their published head, never from fixed caches.
+
+These stage the workspace instead of writing a store:
+
+- the same UUID with differing authored fields, since a later session save can
+  carry stale data;
+- one activity sequence with different contents;
+- activity without turn evidence, including any from a deleted session;
+- a missing parent, a cycle, or a subdirective owned twice.
+
+Staging writes `.mevedel/instruction-migration/report.el` and one complete
+`candidate-SESSION.el` per session in the export format, each preferring that
+session's version on conflicts. It reports `staged` with a nonzero exit status.
+Until resolved, the workspace waits for its store as described in the
+[resume contract](#resume-contract). Install a candidate with
+`M-x mevedel-load-instructions`, which creates the store.
 
 ### Incompatible session inspection
 
@@ -2587,8 +2660,32 @@ the lifecycle from what survives. A surviving request edit remains Ready with
 a request-changed qualifier. Subdirectives consumed by discarded successful
 attempts return to their parent from immutable attempt snapshots; subdirectives
 authored later remain current, and neither receives independent activity.
-Historical instruction snapshots restore source presentation only; a source
-file restored by Rewind uses the normal safe anchor reattachment path. The
+In a workspace with an instruction store, the store changes only after the
+commit point:
+
+- Before its first irreversible step, Rewind records an intent in the store:
+  session, turn count before, surviving turn count, and first discarded turn.
+- After the commit point it prunes that activity from the fresh store record
+  and takes source presentations from the store. The live directive records
+  stay the ones it pruned in memory.
+- A rollback drops the intent; the existing in-memory rollback restores the
+  records, so nothing needs re-inserting.
+- If the prune does not land, the session's committed turn count settles the
+  intent at resume or at the next request admission in that session.
+  Admission is refused until it does, including while the store is
+  unreadable, so a new turn cannot reuse a discarded turn number. Equal to the
+  surviving count, it prunes; equal to the count before, it drops the intent.
+- Until the commit point Rewind holds back only its own workspace's store
+  writes. Other workspaces keep writing, and changes in its own are written
+  afterwards.
+
+Another client re-reading the store in between still sees the discarded
+activity. Actions that resolve its checkpoint find no such turn, and actions
+that run in the session need its lease, whose acquisition settles the intent
+first. Rewind therefore no longer rolls back references created by other
+sessions. A workspace still waiting for its store restores historical snapshot
+presentations as before. A source file restored by Rewind uses the normal safe
+anchor reattachment path. The
 directive turn or read-only inspector's Rewind action resolves an
 effectful attempt's exact execution session and pre-turn checkpoint, then uses
 this same Rewind transaction and impact confirmation.

@@ -97,12 +97,18 @@
 (declare-function mevedel--restore-preserved-directives "mevedel-persistence" (workspace))
 (declare-function mevedel--serialize-instructions "mevedel-persistence" (&optional base-directory include-original-content))
 (declare-function mevedel--write-instructions-file "mevedel-persistence" (path &optional base-directory write-empty quiet include-original-content))
+(declare-function mevedel-instruction-store-restore "mevedel-persistence" (session))
+(declare-function mevedel-instruction-store-sync "mevedel-persistence" (workspace &optional own-save-path))
+(declare-function mevedel-instruction-store-touch "mevedel-persistence" (&optional workspace))
 (autoload 'mevedel--load-instructions-file "mevedel-persistence")
 (autoload 'mevedel--reset-instructions-preserving-directives
   "mevedel-persistence")
 (autoload 'mevedel--restore-preserved-directives "mevedel-persistence")
 (autoload 'mevedel--serialize-instructions "mevedel-persistence")
 (autoload 'mevedel--write-instructions-file "mevedel-persistence")
+(autoload 'mevedel-instruction-store-restore "mevedel-persistence")
+(autoload 'mevedel-instruction-store-sync "mevedel-persistence")
+(autoload 'mevedel-instruction-store-touch "mevedel-persistence")
 
 ;; `mevedel-session-codec'
 (declare-function mevedel-session-codec-portable-authority-p "mevedel-session-codec" (session))
@@ -2250,7 +2256,8 @@ cannot leave stale request configuration behind."
   "Persist current instruction state for SESSION and BUFFER.
 
 Writes `instructions/current.el' and, unless CURRENT-ONLY is non-nil, a
-turn-specific snapshot used by rewind/fork when the session has a turn count."
+turn-specific snapshot used by rewind/fork when the session has a turn count.
+Then writes the workspace instruction store, which owns the current set."
   (when-let* ((save-path (mevedel-session-save-path session)))
     (let ((dir (mevedel-session-artifacts-instructions-dir save-path))
           (workspace-root (mevedel-workspace-root
@@ -2264,7 +2271,25 @@ turn-specific snapshot used by rewind/fork when the session has a turn count."
         (when (and (not current-only) (integerp turn))
           (mevedel--write-instructions-file
            (mevedel-session-artifacts-instructions-turn-path save-path turn)
-           workspace-root t t nil))))))
+           workspace-root t t nil)))
+      (mevedel-session-artifacts--sync-instruction-store session save-path))))
+
+(defun mevedel-session-artifacts--sync-instruction-store (session own-save-path)
+  "Write SESSION's workspace instructions to the workspace store.
+OWN-SAVE-PATH names SESSION, which does not by itself make the workspace
+wait for migration: while waiting, its instructions were restored from
+its own snapshot, so as the only session it holds the whole set.  A
+failure is reported; the session save itself already succeeded."
+  (condition-case err
+      (mevedel-instruction-store-sync
+       (mevedel-session-workspace session) own-save-path)
+    (mevedel-instruction-store-unreadable
+     ;; Reported once; re-reading it at every save would not repair it.
+     (message "mevedel: %s" (error-message-string err)))
+    (error
+     (mevedel-instruction-store-touch (mevedel-session-workspace session))
+     (message "mevedel: instructions not written to the store: %s"
+              (error-message-string err)))))
 
 (defun mevedel-session-artifacts-load-instructions
     (session buffer &optional turn directive-records preserve-directives-p)
@@ -2274,8 +2299,26 @@ When TURN is non-nil, restore the turn-specific snapshot; otherwise restore
 `instructions/current.el'.  DIRECTIVE-RECORDS preserves current authored
 directive identity and activity while replacing historical presentations.
 PRESERVE-DIRECTIVES-P applies that behavior even when the record list is empty.
-Missing snapshots clear presentations only in preservation mode."
-  (when-let* ((save-path (mevedel-session-save-path session)))
+Missing snapshots clear presentations only in preservation mode.
+
+Without TURN or preservation, this is resume: a workspace with an
+instruction store loads the store instead, and only a workspace still
+waiting for its store restores the session snapshot."
+  (when-let* ((save-path (mevedel-session-save-path session))
+              (store (if (or turn directive-records preserve-directives-p)
+                         'pending
+                       (condition-case err
+                           (or (mevedel-instruction-store-restore session)
+                               'pending)
+                         (error
+                          (display-warning
+                           'mevedel
+                           (format "Could not restore workspace instructions: %s"
+                                   (error-message-string err))
+                           :warning)
+                          nil)))))
+   (if (not (eq store 'pending))
+       store
     (let* ((path (if turn
                      (mevedel-session-artifacts-instructions-turn-path
                       save-path turn)
@@ -2333,7 +2376,7 @@ Missing snapshots clear presentations only in preservation mode."
            (mevedel-session-workspace session) directive-records)
           (mevedel--restore-preserved-directives
            (mevedel-session-workspace session))
-          (list :restored 0 :lost 0 :total 0))))))
+          (list :restored 0 :lost 0 :total 0)))))))
 
 
 ;;
@@ -2881,6 +2924,9 @@ Edits made after capture remain modified.  Nothing is published here."
                  (error-message-string err))))))
          ;; Input history is diagnostic UI state, not critical publication.
          (mevedel-session-persistence-notify-session-event session 'save-history)
+         (when (buffer-live-p buffer)
+           (mevedel-session-artifacts--sync-instruction-store
+            session (mevedel-session-save-path session)))
          (mevedel-session-save-path session))))))
 
 (defun mevedel-session-artifacts--remote-save

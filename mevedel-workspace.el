@@ -13,6 +13,12 @@
 ;; Keeps a workspace registry so that distinct buffers under the
 ;; same project share a single workspace struct (and therefore a
 ;; single state directory and additional-roots list).
+;;
+;; Registering a workspace (`mevedel-workspace-get-or-create' creating a
+;; struct) observes its instruction store: a state-directory check and at
+;; most one store read, or one target-side hash, skipped for a remote root
+;; without a live connection.  It is bounded I/O, but I/O: avoid creating
+;; workspaces on hot paths such as redisplay, timers or process filters.
 
 ;;; Code:
 
@@ -31,6 +37,11 @@
 (autoload 'mevedel-execution-target-create "mevedel-execution-target")
 (autoload 'mevedel-execution-target-environment "mevedel-execution-target")
 (autoload 'mevedel-execution-target-expand-path "mevedel-execution-target")
+
+;; `mevedel-persistence'
+(declare-function mevedel-instruction-store-activate
+                  "mevedel-persistence" (workspace))
+(autoload 'mevedel-instruction-store-activate "mevedel-persistence")
 
 ;; `mevedel-structs'
 (declare-function mevedel-file-cache--create "mevedel-structs" (&rest slots))
@@ -220,18 +231,23 @@ and NAME arguments)."
          (root (mevedel-workspace--normalize-root root))
          (key (cons type id)))
     (or (gethash key mevedel-workspace--registry)
-        (puthash key
-                 (mevedel-workspace--create
-                  :type type
-                  :id id
-                  :root root
-                  :name name
-                  :file-cache (mevedel-file-cache--create
-                               :table (make-hash-table :test #'equal)
-                               :order nil
-                               :total-bytes 0)
-                  :directives nil)
-                 mevedel-workspace--registry))))
+        (let ((workspace
+               (puthash key
+                        (mevedel-workspace--create
+                         :type type
+                         :id id
+                         :root root
+                         :name name
+                         :file-cache (mevedel-file-cache--create
+                                      :table (make-hash-table :test #'equal)
+                                      :order nil
+                                      :total-bytes 0)
+                         :directives nil)
+                        mevedel-workspace--registry)))
+          ;; The workspace owns its instructions: make them available as
+          ;; soon as it is activated, not only when a session resumes.
+          (mevedel-instruction-store-activate workspace)
+          workspace))))
 
 (defun mevedel-workspace-clear-registry ()
   "Remove all workspaces from the global registry.

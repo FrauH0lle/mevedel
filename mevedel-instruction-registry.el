@@ -63,7 +63,8 @@
   "Workspace-keyed instruction state table.
 
 Each value is a plist with keys `:instructions', `:id-counter',
-`:id-usage-map', and `:retired-ids'.")
+`:id-usage-map', and `:retired-ids', plus the instruction store's
+`:store-observation' and `:store-pending' once the store is used.")
 
 (defvar-local mevedel--instruction-current-state-key nil
   "Workspace key selected for this buffer's instruction operations.")
@@ -215,6 +216,12 @@ Each value is a plist with keys `:instructions', `:id-counter',
     (setf (mevedel--instruction-id-counter) 0)
     (setf (mevedel--instruction-id-usage-map) (make-hash-table))
     (setf (mevedel--instruction-retired-ids) nil)
+    ;; Cleared state no longer matches the last observed instruction store,
+    ;; so the next store write merges instead of overwriting it.
+    (setf (plist-get (mevedel--instruction-state
+                      (mevedel--instruction-operation-state-key))
+                     :store-observation)
+          nil)
     (when workspace
       (mevedel-workspace-set-directives workspace nil))))
 

@@ -199,7 +199,7 @@ Chat / view
   mevedel-overlay-ui.el       instruction overlay actions and rendering
   mevedel-mentions.el         @ref and @file mention expansion
   mevedel-directive-persistence.el  workspace directive record codec
-  mevedel-persistence.el      save/load instructions
+  mevedel-persistence.el      workspace instruction store, export/import, restore
   mevedel-session-codec.el    closed session sidecar codec and validation
   mevedel-session-checkpoint.el committed root projection, conversation consumption, and deferred ToolCall retirement
   mevedel-session-artifacts.el  paths, artifacts, snapshots, and segment writes

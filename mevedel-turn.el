@@ -156,6 +156,14 @@
                   "mevedel-permission-queue"
                   (request-id &optional session no-render))
 
+;; `mevedel-persistence'
+(declare-function mevedel-instruction-store-owes-p
+                  "mevedel-persistence" (session))
+(declare-function mevedel-instruction-store-settle-session
+                  "mevedel-persistence" (session))
+(autoload 'mevedel-instruction-store-owes-p "mevedel-persistence")
+(autoload 'mevedel-instruction-store-settle-session "mevedel-persistence")
+
 ;; `mevedel-plan-handoff'
 (declare-function mevedel-plan-handoff-settle-request
                   "mevedel-plan-handoff"
@@ -470,6 +478,13 @@ recovery state alone."
     (mevedel-request-assert-target-ready session)
     (mevedel-session-artifacts-assert-mutation-authority
      session (current-buffer))
+    ;; A committed Rewind may still owe the workspace instruction store its
+    ;; prune.  A new turn reuses the discarded turn numbers, which would
+    ;; then look like evidence for the discarded activity, so resolve it
+    ;; first and refuse the request while that fails.
+    (when (and (not mevedel--agent-invocation)
+               (mevedel-instruction-store-owes-p session))
+      (mevedel-instruction-store-settle-session session))
     ;; Target checks can yield before stale-request teardown.  A request
     ;; admitted there is not the stale request this caller came to replace.
     (unless (eq entry-request mevedel--current-request)

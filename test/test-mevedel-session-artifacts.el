@@ -1922,6 +1922,11 @@
               (make-directory (file-name-directory path) t)
               (write-region "(:files ((\"source.el\" . #<marker>)))"
                             nil path nil 'silent)
+              ;; Only a workspace without an instruction store restores the
+              ;; session snapshot: remove the store the save created and
+              ;; restart, so the session's own snapshot is the source again.
+              (delete-file (mevedel-instruction-store-path workspace))
+              (test-mevedel-session-persistence--reset-instructions)
               (should-not
                (mevedel-session-artifacts-load-instructions
                 session data-buf))))

@@ -187,3 +187,7 @@ to the decision bearing that ID.
 - [ADR 0129: Fetch Git over SSH through a host broker](0129-fetch-git-over-ssh-through-a-host-broker.md)
   lets confined Git fetch over SSH through a fetch-only host broker and hides
   the ssh-agent from local confinement.
+
+- [ADR 0130: Keep instructions in a workspace store](0130-keep-instructions-in-a-workspace-store.md)
+  amends where ADR 0072's Rewind prunes directive activity and ends ADR 0091's
+  per-session copies as the durable record.
