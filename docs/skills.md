@@ -336,8 +336,24 @@ Plugin management:
   installs under `~/.mevedel/plugins/` or `~/.agents/plugins/`.
   If the update changes an enabled plugin's executable hook surface, the
   update result reports that hook consent is pending.
-  mevedel never updates plugins by itself and does not check for upstream
-  changes; updating is always this explicit command or the cockpit action.
+  mevedel never updates plugins by itself; updating is always this explicit
+  command or the cockpit action.
+- Update notifications are opt-in. With the default
+  `mevedel-plugins-update-check-interval` of nil nothing checks. Set it to a
+  number of days and, once the registry is first used in a session and Emacs
+  is idle, mevedel runs `git ls-remote origin HEAD` asynchronously, one
+  managed Git clone at a time, and compares the result with local `HEAD`.
+  Nothing touches the network at load or startup, and the last check time is
+  stored in `plugin-update-check.el` under `mevedel-user-dir`, so restarts
+  inside the interval do not check again. Results are cached per plugin:
+  the cockpit shows "update available" (or "check failed") after the source
+  path, and one echo-area message ("updates available for N plugins;
+  /plugin to review") appears per newly seen upstream commit, never again
+  for the same commit. A check never updates anything, and an offline or
+  failed check is silent apart from the row note. The cockpit's `U` key
+  ("Check managed plugins for updates") runs the same check on demand
+  regardless of the interval, reports its outcome, and refreshes the rows
+  in place when it finishes. A successful update clears the cached result.
 - `/plugin remove NAME` and `/plugin uninstall NAME` delete a
   global managed installed plugin. If the current workspace activation
   points at that source, mevedel clears that activation. Workspace plugin

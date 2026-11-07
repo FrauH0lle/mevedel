@@ -966,5 +966,59 @@
 
 
 
+(mevedel-deftest mevedel-plugins-list-check-updates
+  (:vars* ((user-dir (file-name-as-directory
+                      (make-temp-file "mevedel-plugins-upd-ui-" t)))
+           (workspace-root (file-name-as-directory
+                            (make-temp-file "mevedel-plugins-upd-ws-" t)))
+           (workspace (mevedel-plugins-test--workspace workspace-root))
+           (mevedel-user-dir user-dir)
+           (mevedel-plugin-install-directory
+            (file-name-concat user-dir ".agents" "plugins"))
+           (mevedel-plugins--update-cache :unloaded)
+           (mevedel-plugins--update-check-busy nil))
+   :after-each (progn
+                 (when-let* ((buffer (get-buffer
+                                      mevedel-plugins-list-buffer-name)))
+                   (kill-buffer buffer))
+                 (mapc (lambda (buffer)
+                         (when (buffer-live-p buffer)
+                           (kill-buffer buffer)))
+                       mevedel-plugins-test--owner-buffers)
+                 (setq mevedel-plugins-test--owner-buffers nil)
+                 (delete-directory user-dir t)
+                 (delete-directory workspace-root t)))
+  ,test
+  (test)
+  :doc "the action runs an on-demand check and shows its result in the rows"
+  (let ((plugin-root (mevedel-plugins-test--github-install-root "o" "demo"))
+        (args nil))
+    (mevedel-plugins-test--write-manifest plugin-root "{\"name\":\"demo\"}")
+    (make-directory (file-name-concat plugin-root ".git") t)
+    (mevedel-plugins-test--list-open workspace)
+    (cl-letf (((symbol-function 'mevedel-plugins-check-updates)
+               (lambda (&optional on-demand done)
+                 (setq args on-demand)
+                 (mevedel-plugins--update-set-entry
+                  plugin-root (list :local "aaa" :remote "bbb"))
+                 (funcall done))))
+      (with-current-buffer mevedel-plugins-list-buffer-name
+        (let ((before (mevedel-test-tabulated-entries-cells)))
+          (should-not (string-match-p "update available"
+                                      (car (last (cdar before)))))
+          (mevedel-test--with-captured-messages nil
+            (mevedel-plugins-list-check-updates))
+          (should (eq t args))
+          (should (string-match-p
+                   "update available\\'"
+                   (car (last (cdar (mevedel-test-tabulated-entries-cells)))))))))
+    ;; A failed check is a row note, not a message.
+    (mevedel-plugins--update-set-entry plugin-root (list :error "offline"))
+    (with-current-buffer mevedel-plugins-list-buffer-name
+      (mevedel-plugins-list-refresh)
+      (should (string-match-p
+               "check failed\\'"
+               (car (last (cdar (mevedel-test-tabulated-entries-cells)))))))))
+
 (provide 'test-mevedel-plugin-ui)
 ;;; test-mevedel-plugin-ui.el ends here
