@@ -156,6 +156,32 @@ protocol, extraction directory, or generic resolver cache is needed.
 
 ## Decision history
 
+- **Re-measurement points at caller program counts, not startup (2026-11-07).**
+  Exploratory probes, not matched measurements: local target, interpreted
+  Lisp, concurrent load present. One run of
+  `test/test-mevedel-memory-pass-notes.el` (29 tests) spent 49.7 of 53.2
+  seconds in 9,005 programs carrying 16,142 operations. 5,821 programs
+  carried one operation, and no caller pair accounted for more than 12% of
+  program time. The largest was the ownership proof before each memory-store
+  mutation (607 programs). In three rounds of 100 single-operation and
+  50 ten-operation programs, a program cost about 3.1 ms with one operation
+  and about 8.5 ms with ten, against about 30.5 ms for the same ten as
+  separate programs. A bare `bash -c true` took about 1.0 ms, and parsing
+  the whole script plus an empty dispatch about 0.27 ms more (three
+  shell-loop rounds of 200). Script or startup trimming is therefore excluded
+  on current evidence; it is not disproved, and the diagnostic encoder and
+  its NUL-byte coverage stay. The proposed next step is caller-side
+  coalescing of adjacent independent reads into existing programs, decoded
+  through per-operation observations. It starts with claim pruning, which
+  reads each generation's claim and outcome as two programs before its
+  verify-and-delete program. Pinned-parent proofs, absent and malformed
+  record handling, and fresh guards at each write stay; a shared program is
+  not an atomic snapshot, and nothing is cached across operations. Savings
+  count only once matched before/after runs on the same base establish them.
+  A persistent helper process was raised. It would change what runs under
+  confinement and how long it lives, so it remains unresolved pending the
+  user's decision and is not part of this decision.
+
 - **Domain tests keep the real carrier (2026-10-31).** An architecture review
   found memory and journal fixtures spending 97-98% of their wall time inside
   control programs (about 5.7 ms per program, interpreted, one run per
