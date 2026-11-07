@@ -94,7 +94,7 @@
       ("delete-file"
        (cond
         ((equal file primary)
-         (list :error (format "%s is the artifact's primary file; an artifact link cannot delete it" file)))
+         (list :error (format "%s is the artifact's primary file; delete the artifact instead" file)))
         ((not (and current (equal (plist-get body :hash) (mevedel-remote-artifact-test--hash current))))
          (funcall stale))
         (t (plist-put origin :files (assoc-delete-all file (copy-sequence files)))
@@ -113,7 +113,7 @@
           ((cl-find-if (lambda (change) (and (plist-get change :delete)
                                              (equal (plist-get change :file) primary)))
                        changes)
-           (list :error (format "%s is the artifact's primary file; an artifact link cannot delete it"
+           (list :error (format "%s is the artifact's primary file; delete the artifact instead"
                                 primary)))
           (refused
            (mevedel-remote-artifact-test--file-answer

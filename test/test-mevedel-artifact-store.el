@@ -3,7 +3,8 @@
 ;;; Commentary:
 
 ;; Tests the store layout, metadata, versions with their caps, duplicate,
-;; delete, attachment, and the bookkeeping of settled ApplyPatch writes.
+;; delete, attachment, the bookkeeping of settled ApplyPatch writes, and the
+;; file operations of an HTML artifact: path, size, hash and atomicity rules.
 
 ;;; Code:
 
@@ -45,6 +46,34 @@
   "Report a settled ApplyPatch write of PATH for SESSION."
   (mevedel-artifact-store-note-writes
    session (list (list :action 'write :path path))))
+
+(defconst mevedel-artifact-store-test--page "<!doctype html>\n<h1>Hello</h1>\n"
+  "The primary file of the HTML artifact `mevedel-artifact-store-test--site' makes.")
+
+(defconst mevedel-artifact-store-test--logo (unibyte-string #x89 ?P ?N ?G 0 #xff 1 2)
+  "The bytes of the binary asset `mevedel-artifact-store-test--site' makes.")
+
+(defun mevedel-artifact-store-test--site (workspace store)
+  "Create HTML artifact \"a\" in WORKSPACE, whose artifact store is STORE.
+It has a page, its primary file, and a binary asset.  Return its directory."
+  (mevedel-artifact-store-create-meta workspace "a" "index.html" nil "Landing")
+  (mevedel-artifact-store-test--write
+   store "a/index.html" mevedel-artifact-store-test--page)
+  (mevedel-artifact-store-test--write
+   store "a/assets/logo.png" mevedel-artifact-store-test--logo)
+  (file-name-concat store "a"))
+
+(defun mevedel-artifact-store-test--hash (bytes)
+  "Return the SHA-256 of BYTES as hex."
+  (secure-hash 'sha256 bytes))
+
+(defun mevedel-artifact-store-test--bytes (directory file)
+  "Return the bytes of FILE in DIRECTORY, or nil when it is absent."
+  (mevedel-artifact-store--read-bytes (file-name-concat directory file)))
+
+(defun mevedel-artifact-store-test--refusal (thunk)
+  "Call THUNK, which must signal, and return the message it signals."
+  (error-message-string (should-error (funcall thunk))))
 
 (mevedel-deftest mevedel-artifact-store--with-changes ()
   ,test
@@ -977,6 +1006,269 @@
     (should-error (mevedel-artifact-store-update-meta workspace "a" :file "../../victim"))
     (should (equal "Renamed" (plist-get (mevedel-artifact-store-meta workspace "a") :title)))
     (should (equal "x.md" (plist-get (mevedel-artifact-store-meta workspace "a") :file)))))
+
+(mevedel-deftest mevedel-artifact-store-write-files ()
+  ,test
+  (test)
+  :doc "refuses hostile paths for every file verb, changing nothing"
+  (mevedel-artifact-store-test--with-workspace
+    (let* ((directory (mevedel-artifact-store-test--site workspace store))
+           (outside (make-temp-file "mevedel-store-outside-" t))
+           (bookkeeping (mevedel-artifact-store-bookkeeping-directory workspace "a"))
+           (meta (mevedel-artifact-store-test--bytes bookkeeping "meta.el"))
+           (page-hash (mevedel-artifact-store-test--hash mevedel-artifact-store-test--page)))
+      (unwind-protect
+          (progn
+            (make-symbolic-link (file-name-concat outside "secret.html")
+                                (file-name-concat directory "linked.html"))
+            (make-symbolic-link outside (file-name-concat directory "linked"))
+            (mevedel-artifact-store-test--write outside "secret.html" "secret")
+            (dolist (file (list "../.state/a/meta.el" "../a/index.html"
+                                (file-name-concat bookkeeping "meta.el") "/etc/passwd"
+                                "assets/../index.html" "./index.html" "assets/" ""
+                                "linked.html" "linked/secret.html" "linked/new.html"))
+              (dolist (call
+                       (list (lambda () (mevedel-artifact-store-read-file workspace "a" file))
+                             (lambda () (mevedel-artifact-store-write-file
+                                         workspace "a" file "x" nil))
+                             (lambda () (mevedel-artifact-store-delete-file
+                                         workspace "a" file page-hash))
+                             (lambda () (mevedel-artifact-store-write-files
+                                         workspace "a" (list (list :file file :content "x"))))
+                             (lambda () (mevedel-artifact-store-write-files
+                                         workspace "a" (list (list :file "ok.css" :content "x")
+                                                             (list :file file :hash page-hash
+                                                                   :delete t))))))
+                (should (string-prefix-p "Refused path"
+                                         (mevedel-artifact-store-test--refusal call)))))
+            ;; Nothing outside the artifact changed, nor its bookkeeping, nor the
+            ;; valid change that shared a batch with a refused one.
+            (should (equal "secret" (mevedel-artifact-store-test--bytes outside "secret.html")))
+            (should-not (file-exists-p (file-name-concat outside "new.html")))
+            (should (equal meta (mevedel-artifact-store-test--bytes bookkeeping "meta.el")))
+            (should (equal mevedel-artifact-store-test--page
+                           (mevedel-artifact-store-test--bytes directory "index.html")))
+            (should-not (file-exists-p (file-name-concat directory "ok.css")))
+            ;; Links are left out of the listing.
+            (should (equal '("assets/logo.png" "index.html")
+                           (mapcar (lambda (row) (plist-get row :file))
+                                   (mevedel-artifact-store-files workspace "a")))))
+        (delete-directory outside t))))
+
+  :doc "carries a file of the largest size and refuses larger ones"
+  (mevedel-artifact-store-test--with-workspace
+    (let* ((mevedel-artifact-store-file-max-bytes 4096)
+           (directory (mevedel-artifact-store-test--site workspace store))
+           (largest (make-string mevedel-artifact-store-file-max-bytes ?z))
+           (page-hash (mevedel-artifact-store-test--hash mevedel-artifact-store-test--page)))
+      ;; At the limit, a write reads back whole.
+      (should (eq t (plist-get (mevedel-artifact-store-write-file
+                                workspace "a" "assets/large.bin" largest nil)
+                               :created)))
+      (should (equal largest (mevedel-artifact-store-read-file workspace "a" "assets/large.bin")))
+      ;; One byte more is refused, creating or replacing, and leaves the file as it was.
+      (should (string-search "would be larger than"
+                             (mevedel-artifact-store-test--refusal
+                              (lambda () (mevedel-artifact-store-write-file
+                                          workspace "a" "assets/huge.bin" (concat largest "x") nil)))))
+      (should-not (file-exists-p (file-name-concat directory "assets/huge.bin")))
+      (should (string-search "would be larger than"
+                             (mevedel-artifact-store-test--refusal
+                              (lambda () (mevedel-artifact-store-write-file
+                                          workspace "a" "index.html" (concat largest "x")
+                                          page-hash)))))
+      (should (equal mevedel-artifact-store-test--page
+                     (mevedel-artifact-store-test--bytes directory "index.html")))
+      ;; A larger file placed at the origin is listed but not read.
+      (mevedel-artifact-store-test--write
+       store "a/assets/huge.bin" (concat largest "x"))
+      (should (equal (1+ mevedel-artifact-store-file-max-bytes)
+                     (plist-get (cl-find "assets/huge.bin" (mevedel-artifact-store-files workspace "a")
+                                         :key (lambda (row) (plist-get row :file)) :test #'equal)
+                                :bytes)))
+      (should (string-search "larger than"
+                             (mevedel-artifact-store-test--refusal
+                              (lambda () (mevedel-artifact-store-read-file
+                                          workspace "a" "assets/huge.bin")))))))
+
+  :doc "replaces a file whose hash matches, once, and tells the observers"
+  (mevedel-artifact-store-test--with-workspace
+    (let* ((directory (mevedel-artifact-store-test--site workspace store))
+           (changed nil)
+           (mevedel-artifact-store-changed-functions
+            (list (lambda (changed-workspace) (push changed-workspace changed))))
+           (new "<p>replaced</p>")
+           (outcome (mevedel-artifact-store-write-files
+                     workspace "a"
+                     (list (list :file "index.html" :content new
+                                 :hash (mevedel-artifact-store-test--hash
+                                        mevedel-artifact-store-test--page))))))
+      (should (equal (list :files (list (list :file "index.html"
+                                              :hash (mevedel-artifact-store-test--hash new)
+                                              :created nil)))
+                     outcome))
+      (should (equal new (mevedel-artifact-store-test--bytes directory "index.html")))
+      (should (equal (list workspace) changed))))
+
+  :doc "changes nothing when a hash is stale, naming the first such file with its current hash"
+  (mevedel-artifact-store-test--with-workspace
+    (let* ((directory (mevedel-artifact-store-test--site workspace store))
+           (changed nil)
+           (mevedel-artifact-store-changed-functions
+            (list (lambda (changed-workspace) (push changed-workspace changed))))
+           (page-hash (mevedel-artifact-store-test--hash mevedel-artifact-store-test--page)))
+      ;; A file that changed since it was read; the fixture is quiescent, so the
+      ;; hash returned is that of the file's bytes.
+      (should (equal (list :stale t :file "assets/logo.png"
+                           :hash (mevedel-artifact-store-test--hash
+                                  mevedel-artifact-store-test--logo))
+                     (mevedel-artifact-store-write-files
+                      workspace "a"
+                      (list (list :file "index.html" :hash page-hash :content "<p>mine</p>")
+                            (list :file "new.css" :content "p {}")
+                            (list :file "assets/logo.png" :hash page-hash :delete t)))))
+      ;; A created file that exists already, and a changed file that is gone.
+      (should (equal (list :stale t :file "index.html" :hash page-hash)
+                     (mevedel-artifact-store-write-files
+                      workspace "a" (list (list :file "index.html" :content "x")))))
+      (should (equal (list :stale t :file "gone.css" :hash nil)
+                     (mevedel-artifact-store-write-files
+                      workspace "a" (list (list :file "gone.css" :hash page-hash :content "x")))))
+      (should (equal mevedel-artifact-store-test--page
+                     (mevedel-artifact-store-test--bytes directory "index.html")))
+      (should (equal mevedel-artifact-store-test--logo
+                     (mevedel-artifact-store-test--bytes directory "assets/logo.png")))
+      (should-not (file-exists-p (file-name-concat directory "new.css")))
+      (should-not changed)))
+
+  :doc "creates a file, with its missing directories, only where none exists"
+  (mevedel-artifact-store-test--with-workspace
+    (let ((directory (mevedel-artifact-store-test--site workspace store))
+          (css "h1 { color: teal; }\n"))
+      (should (equal (list :hash (mevedel-artifact-store-test--hash css) :created t)
+                     (mevedel-artifact-store-write-file
+                      workspace "a" "new/nested/site.css" css nil)))
+      (should (equal css (mevedel-artifact-store-test--bytes directory "new/nested/site.css")))
+      (should (plist-get (mevedel-artifact-store-write-file
+                          workspace "a" "new/nested/site.css" "other" nil)
+                         :stale))
+      (should (equal css (mevedel-artifact-store-test--bytes directory "new/nested/site.css")))))
+
+  :doc "refuses a file changed twice, a malformed hash, text and a hashless deletion"
+  (mevedel-artifact-store-test--with-workspace
+    (let* ((directory (mevedel-artifact-store-test--site workspace store))
+           (cases (list
+                   (list "changed twice" (list (list :file "new.css" :content "a")
+                                               (list :file "new.css" :content "b")))
+                   (list "64 lowercase hex"
+                         (list (list :file "index.html" :hash "abc" :content "x")))
+                   (list "64 lowercase hex"
+                         (list (list :file "index.html" :hash 42 :content "x")))
+                   (list "64 lowercase hex"
+                         (list (list :file "index.html" :content "x"
+                                     :hash (upcase (mevedel-artifact-store-test--hash
+                                                    mevedel-artifact-store-test--page)))))
+                   (list "must be bytes" (list (list :file "new.css" :content "café")))
+                   (list "must be bytes" (list (list :file "new.css")))
+                   (list "needs the hash"
+                         (list (list :file "assets/logo.png" :delete t))))))
+      (pcase-dolist (`(,message ,changes) cases)
+        (should (string-search message
+                               (downcase (mevedel-artifact-store-test--refusal
+                                          (lambda () (mevedel-artifact-store-write-files
+                                                      workspace "a" changes)))))))
+      (should (equal mevedel-artifact-store-test--logo
+                     (mevedel-artifact-store-test--bytes directory "assets/logo.png")))
+      (should (equal mevedel-artifact-store-test--page
+                     (mevedel-artifact-store-test--bytes directory "index.html")))
+      (should-not (file-exists-p (file-name-concat directory "new.css")))))
+
+  :doc "refuses deleting the primary file, even in a batch, but replaces it"
+  (mevedel-artifact-store-test--with-workspace
+    (let* ((directory (mevedel-artifact-store-test--site workspace store))
+           (page-hash (mevedel-artifact-store-test--hash mevedel-artifact-store-test--page))
+           ;; `error' may curl the apostrophe.
+           (message "\\`index\\.html is the artifact.s primary file; delete the artifact instead\\'"))
+      (should (string-match-p message
+                              (mevedel-artifact-store-test--refusal
+                               (lambda () (mevedel-artifact-store-delete-file
+                                           workspace "a" "index.html" page-hash)))))
+      (should (string-match-p message
+                              (mevedel-artifact-store-test--refusal
+                               (lambda ()
+                                 (mevedel-artifact-store-write-files
+                                  workspace "a"
+                                  (list (list :file "new.css" :content "p {}")
+                                        (list :file "index.html" :hash page-hash
+                                              :delete t)))))))
+      (should (equal mevedel-artifact-store-test--page
+                     (mevedel-artifact-store-test--bytes directory "index.html")))
+      (should-not (file-exists-p (file-name-concat directory "new.css")))
+      ;; Other files, and the primary file's replacement, are not affected.
+      (should (eq t (mevedel-artifact-store-delete-file
+                     workspace "a" "assets/logo.png"
+                     (mevedel-artifact-store-test--hash mevedel-artifact-store-test--logo))))
+      (should-not (file-exists-p (file-name-concat directory "assets/logo.png")))
+      (should (plist-get (mevedel-artifact-store-write-file
+                          workspace "a" "index.html" "<p>v2</p>" page-hash)
+                         :hash))
+      (should (equal "<p>v2</p>" (mevedel-artifact-store-test--bytes directory "index.html")))))
+
+  :doc "rolls back a batch when a later file's directory is unwritable"
+  (mevedel-artifact-store-test--with-workspace
+    (let* ((directory (mevedel-artifact-store-test--site workspace store))
+           (assets (file-name-concat directory "assets"))
+           (changed nil)
+           (mevedel-artifact-store-changed-functions
+            (list (lambda (_workspace) (setq changed t))))
+           (versions (mevedel-artifact-store-versions workspace "a")))
+      (unwind-protect
+          (progn
+            (set-file-modes assets #o555)
+            (should-not (file-writable-p assets))
+            (should (string-search
+                     "all changes rolled back"
+                     (mevedel-artifact-store-test--refusal
+                      (lambda ()
+                        (mevedel-artifact-store-write-files
+                         workspace "a"
+                         (list (list :file "index.html" :content "<p>must roll back</p>"
+                                     :hash (mevedel-artifact-store-test--hash
+                                            mevedel-artifact-store-test--page))
+                               (list :file "assets/new.css" :content "p {}")))))))
+            (should (equal mevedel-artifact-store-test--page
+                           (mevedel-artifact-store-test--bytes directory "index.html")))
+            (should-not (file-exists-p (file-name-concat assets "new.css")))
+            (should-not changed)
+            (should (equal versions (mevedel-artifact-store-versions workspace "a"))))
+        (set-file-modes assets #o755))))
+
+  :doc "also restores deleted bytes and modes, and removes created directories"
+  (mevedel-artifact-store-test--with-workspace
+    (let* ((directory (mevedel-artifact-store-test--site workspace store))
+           (blocked (file-name-concat directory "blocked"))
+           (logo (file-name-concat directory "assets/logo.png")))
+      (unwind-protect
+          (progn
+            (make-directory blocked)
+            (set-file-modes blocked #o555)
+            (set-file-modes logo #o640)
+            (should (string-search
+                     "all changes rolled back"
+                     (mevedel-artifact-store-test--refusal
+                      (lambda ()
+                        (mevedel-artifact-store-write-files
+                         workspace "a"
+                         (list (list :file "new/nested/site.css" :content "p {}")
+                               (list :file "assets/logo.png" :delete t
+                                     :hash (mevedel-artifact-store-test--hash
+                                            mevedel-artifact-store-test--logo))
+                               (list :file "blocked/new.css" :content "p {}")))))))
+            (should (equal mevedel-artifact-store-test--logo
+                           (mevedel-artifact-store-test--bytes directory "assets/logo.png")))
+            (should (= #o640 (file-modes logo)))
+            (should-not (file-exists-p (file-name-concat directory "new"))))
+        (set-file-modes blocked #o755)))))
 
 (ert-deftest mevedel-artifact-store-record-version/concurrent-processes ()
   "Two Emacs writers retain both versions when their first index reads race."

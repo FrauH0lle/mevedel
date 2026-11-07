@@ -1004,14 +1004,16 @@ the file is deleted, which needs its hash; otherwise it is replaced by,
 or created with its missing directories as, `:content', a unibyte
 string of at most `mevedel-artifact-store-file-max-bytes'.  Every check
 and then every change run as one program under the store's lock, so
-either all changes are made or none.
+either all changes are made or none.  The artifact's primary file is
+never deleted, only replaced: without it the artifact is gone.
 
 Return (:files RESULTS), a result per change in order: (:file FILE :hash
 NEW :created CREATED) or (:file FILE :deleted t).  When a file no longer
 matches, change nothing and return (:stale t :file FILE :hash CURRENT)
 for the first such FILE, CURRENT being nil for an absent file.  Signal
 when a change is refused.  A change notifies the store's observers."
-  (let (files prepare checks operations)
+  (let ((primary (plist-get (mevedel-artifact-store-meta workspace id) :file))
+        files prepare checks operations)
     (dolist (change changes)
       (let* ((file (plist-get change :file))
              (hash (plist-get change :hash))
@@ -1021,7 +1023,9 @@ when a change is refused.  A change notifies the store's observers."
           (error "%s is changed twice; give each file one change" file))
         (push file files)
         (unless (or (null hash)
-                    (and (stringp hash) (string-match-p "\\`[0-9a-f]\\{64\\}\\'" hash)))
+                    (and (stringp hash)
+                         (let ((case-fold-search nil))
+                           (string-match-p "\\`[0-9a-f]\\{64\\}\\'" hash))))
           (error "A file's hash is the SHA-256 of its bytes, as 64 lowercase hex digits"))
         (push (if hash
                   (list :op 'verify-hash :path path :content hash)
@@ -1029,6 +1033,8 @@ when a change is refused.  A change notifies the store's observers."
               checks)
         (if (plist-get change :delete)
             (progn
+              (when (equal file primary)
+                (error "%s is the artifact's primary file; delete the artifact instead" file))
               (unless hash
                 (error "Deleting %s needs the hash it was read with" file))
               (push (list :op 'delete-file :path path) operations))
@@ -1099,7 +1105,9 @@ for an absent file.  Signal when FILE is refused."
   "Delete FILE of WORKSPACE's artifact ID if it still has HASH.
 HASH is the SHA-256 of the bytes the deleter last saw, as hex.  Return
 t, or (:stale t :hash CURRENT) without deleting, as
-`mevedel-artifact-store-write-file' does."
+`mevedel-artifact-store-write-file' does.  Signal when FILE is refused,
+as for `mevedel-artifact-store-write-files', which names the primary
+file's deletion among them."
   (let ((outcome (mevedel-artifact-store-write-files
                   workspace id (list (list :file file :hash hash :delete t)))))
     (if (plist-get outcome :stale)
