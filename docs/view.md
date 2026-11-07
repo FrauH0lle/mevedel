@@ -2060,7 +2060,8 @@ descending priority and caller order. Unknown zone names and malformed
 descriptors are programming errors; stale disposable UI state is rebuilt.
 When rendered text and all its properties already match a fully owned region,
 with no stale namespace text outside it, reconciliation returns without capturing
-or restoring window state. Property-only updates and stale-region cleanup retain
+or restoring window state. So does a zone with no fragments, no live region and
+no text in its namespace. Property-only updates and stale-region cleanup retain
 the normal mutation transaction.
 
 Fragment metadata lives in `mevedel-view-zone-*` text properties. Those

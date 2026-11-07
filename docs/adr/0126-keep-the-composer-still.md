@@ -48,6 +48,8 @@ A genuinely unchanged zone does not capture or restore a viewport. It first
 compares the rendered text including properties, verifies complete live-region
 ownership, and checks for stale namespace text outside the region. Property-only
 changes and stale text still take the ordinary reconciliation path.
+An absent zone, with no fragments, no live region and no namespace text, returns
+the same way.
 
 Anchors measure body-relative pixels through Emacs's native visibility query,
 not a row loop. Native backward display traversal restores the window start and
@@ -242,7 +244,7 @@ focus is explicit.
 
 ## Decision history
 
-- **Anchoring cost over rendered content; stream updates anchor twice (2026-11-07).**
+- **Anchoring cost over rendered content; stream updates anchored twice (2026-11-07).**
   An exploratory graphical benchmark (pgtk under a private nested
   compositor, compiled, three sessions, one CPU, 300 stream updates per run)
   put composer capture at 1.749 ms and restoration at 1.624 ms per update when
@@ -287,20 +289,29 @@ focus is explicit.
   would then apply once to the combined change instead of to each mutation.
   For example, transcript growth that uses free space followed by a status
   shrink would leave the composer elsewhere than today. The proposed
-  alternative is a bounded prototype limited to that live-then-status pair:
-  where the live restoration applied the exact anchored viewport, the
-  immediately following status capture may take that position instead of
-  measuring it again. The handoff is single-use. It holds the window and
-  buffer identity, window start, vscroll, body geometry, modification tick
-  and composer start. Any later viewport change, intervening writer or
-  mismatch discards it, and a fresh capture follows. It lands only if three
-  conditions hold. Native graphical regressions must show identical final
-  starts, vscroll, composer position and point across the cases above,
-  including partial lines, rendered tables and mixed windows. An audit must
-  show that nothing between the restoration and the capture can change
-  overlays, face remapping or display parameters, run arbitrary Lisp or
-  re-enter. A matched graphical re-run must show the saving. Otherwise it is
-  dropped. Full renders and other writer pairs keep fresh captures.
+  alternative was a single-use handoff of the live restoration's exact
+  placement to the immediately following status capture. It was not built.
+  A probe of the measured fixture showed that the second pair came from an
+  empty status zone: no fragments and no live region. Reconciliation still
+  captured, scanned for stale text, found none, and restored. A status zone
+  with unchanged fragments already returned before any capture, so the
+  handoff would only have helped in the empty case, and only by one capture.
+  Instead, a zone with no fragments, no live region and no text in its
+  namespace now returns before the viewport transaction, like an unchanged
+  zone. Its stale-text check is the same buffer scan that cleanup ran
+  before (0.14 ms on a 218,000-character compiled view, batch, median of
+  500). Stale text still takes the full transaction. Native graphical
+  regressions over growth, free space, the last-page fill, a history
+  reader, visited status and interaction rows, a partial-pixel vscroll,
+  wrapped text under a remapped face, a rendered table, mixed windows and
+  stale text showed identical starts, vscroll, composer rows and points
+  after every update. Their observations also matched base exactly. In the
+  same matched harness, under higher load (5.8 to 6.4) and with sessions
+  alternating base and change, four sessions each, a stream update fell
+  from 2.89 to 1.75 ms with prose before the composer and from 4.14 to
+  2.43 ms with a rendered table there. With a table above the window start
+  it fell from 2.82 to 1.72 ms. Session ranges were disjoint. Capture and
+  restoration now run once per update.
 
 - **Status visits skip window-growth repair too (2026-11-01).** A live trace
   after Magit returned to the view and a consult minibuffer closed showed
