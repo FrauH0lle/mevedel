@@ -48,6 +48,8 @@ A genuinely unchanged zone does not capture or restore a viewport. It first
 compares the rendered text including properties, verifies complete live-region
 ownership, and checks for stale namespace text outside the region. Property-only
 changes and stale text still take the ordinary reconciliation path.
+An absent zone, with no fragments, no live region and no namespace text, returns
+the same way.
 
 Anchors measure body-relative pixels through Emacs's native visibility query,
 not a row loop. Native backward display traversal restores the window start and
@@ -242,7 +244,7 @@ focus is explicit.
 
 ## Decision history
 
-- **Anchoring cost over rendered content needs a matched control (2026-11-07).**
+- **Anchoring cost over rendered content; stream updates anchored twice (2026-11-07).**
   An exploratory graphical benchmark (pgtk under a private nested
   compositor, compiled, three sessions, one CPU, 300 stream updates per run)
   put composer capture at 1.749 ms and restoration at 1.624 ms per update when
@@ -266,6 +268,50 @@ focus is explicit.
   isolated, presenting graphical Emacs. A reproducible, actionable cause
   reopens the question; a null result closes it. The accepted anchoring
   decision is unchanged.
+
+  The matched control was then run the same day: pgtk under a private nested
+  compositor with completed frame callbacks, compiled, four alternating
+  sessions, every fixture with the same composer position, window start,
+  vscroll and 640-pixel traversal span. Per stream update, capture and
+  restoration took 0.78 and 0.98 ms with prose between the window start and
+  the composer, and 1.29 and 1.56 ms with a rendered table there. With the
+  same table above the window start they took 0.76 and 0.90 ms, no more
+  than prose; session spread was at most 0.2 ms. A static probe was costlier
+  with prose carrying 167 face runs than with prose carrying one, so face
+  runs in the traversed span are implicated. Only those levels were
+  compared; no scaling law in run count is established. That cost belongs
+  to the rendered content and is not addressed here.
+  The same run found a content-independent duplication: one stream update
+  runs two capture/restore pairs in one projection-writer drain, first in the
+  live-turn writer's preservation transaction and then in the queued
+  status-zone reconciliation. Merging them into one pair per drain is
+  rejected, because the free-space, last-page and visited-row rules above
+  would then apply once to the combined change instead of to each mutation.
+  For example, transcript growth that uses free space followed by a status
+  shrink would leave the composer elsewhere than today. The proposed
+  alternative was a single-use handoff of the live restoration's exact
+  placement to the immediately following status capture. It was not built.
+  A probe of the measured fixture showed that the second pair came from an
+  empty status zone: no fragments and no live region. Reconciliation still
+  captured, scanned for stale text, found none, and restored. A status zone
+  with unchanged fragments already returned before any capture, so the
+  handoff would only have helped in the empty case, and only by one capture.
+  Instead, a zone with no fragments, no live region and no text in its
+  namespace now returns before the viewport transaction, like an unchanged
+  zone. Its stale-text check is the same buffer scan that cleanup ran
+  before (0.14 ms on a 218,000-character compiled view, batch, median of
+  500). Stale text still takes the full transaction. Native graphical
+  regressions over growth, free space, the last-page fill, a history
+  reader, visited status and interaction rows, a partial-pixel vscroll,
+  wrapped text under a remapped face, a rendered table, mixed windows and
+  stale text showed identical starts, vscroll, composer rows and points
+  after every update. Their observations also matched base exactly. In the
+  same matched harness, under higher load (5.8 to 6.4) and with sessions
+  alternating base and change, four sessions each, a stream update fell
+  from 2.89 to 1.75 ms with prose before the composer and from 4.14 to
+  2.43 ms with a rendered table there. With a table above the window start
+  it fell from 2.82 to 1.72 ms. Session ranges were disjoint. Capture and
+  restoration now run once per update.
 
 - **Status visits skip window-growth repair too (2026-11-01).** A live trace
   after Magit returned to the view and a consult minibuffer closed showed

@@ -513,6 +513,15 @@ label, takes that path anyway, without scanning the whole buffer here."
          (not (text-property-any end (point-max)
                                 'mevedel-view-zone-namespace namespace)))))
 
+(defun mevedel-view-zone--absent-p (zone region fragments)
+  "Return non-nil if ZONE has no FRAGMENTS, live REGION or stale text.
+Such a zone has nothing to reconcile, so it needs no viewport transaction.
+Stale text, such as text that outlived lost local state, still needs one."
+  (and (null fragments)
+       (null region)
+       (not (text-property-any (point-min) (point-max)
+                               'mevedel-view-zone-namespace zone))))
+
 (defun mevedel-view-zone--reconcile (region namespace text)
   "Reconcile rendered TEXT for NAMESPACE inside managed REGION."
   (let* ((region-id (mevedel-view-zone--region-id region))
@@ -988,7 +997,8 @@ live zone text keeps its current bounds until reconciliation finishes."
              (region (mevedel-view-zone--live-region zone))
              (text (and region (mevedel-view-zone--render-fragments
                                 region zone fragments))))
-        (if (and region (mevedel-view-zone--unchanged-p region zone text))
+        (if (or (mevedel-view-zone--absent-p zone region fragments)
+                (and region (mevedel-view-zone--unchanged-p region zone text)))
             region
           (let* ((composer-anchors (and (mevedel-view-zone--composer-live-p)
 					(mevedel-view--composer-anchors)))
