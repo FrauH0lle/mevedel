@@ -86,7 +86,7 @@
     (let ((mevedel-memory-history-max-age-days 0)
           (now (mevedel-session-control-fs-target-time remote)))
       (cl-letf (((symbol-function 'mevedel-session-control-fs-target-time) (lambda (_) (+ now 1))))
-        (should (= 3 (mevedel-journal-cleanup-expired workspace)))))
+        (should (= 3 (plist-get (mevedel-journal-cleanup-expired workspace) :count)))))
     (should-not (mevedel-journal-store-entries remote))
     (should-not (mevedel-memory-write--list workspace))
     (mevedel-memory-decision-recover-pending workspace)

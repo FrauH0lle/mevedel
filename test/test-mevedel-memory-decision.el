@@ -151,9 +151,9 @@
     (should (file-exists-p pin)))
   :doc "completed rejection releases evidence for ordinary journal expiry"
   (let ((mevedel-journal-max-age-days 0))
-    (should (= 0 (mevedel-journal-cleanup-expired workspace t)))
+    (should (= 0 (plist-get (mevedel-journal-cleanup-expired workspace t) :count)))
     (plist-get (mevedel-memory-decision-reject workspace pass (plist-get proposal :id)) :decision)
-    (should (= 1 (mevedel-journal-cleanup-expired workspace t)))
+    (should (= 1 (plist-get (mevedel-journal-cleanup-expired workspace t) :count)))
     (mevedel-memory-decision-recover workspace)
     (should (eq 'rejected (plist-get (mevedel-memory-decision-status workspace (plist-get proposal :id)) :status))))
   :doc "recent rejection reasons and original suggestions reach the next bounded request"

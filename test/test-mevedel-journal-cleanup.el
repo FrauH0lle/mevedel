@@ -87,7 +87,7 @@
           (mevedel-test-journal-cleanup--entry root "another-old")
           (should-not (mevedel-journal-cleanup-expired workspace))
           (should (= 2 (length (mevedel-test-journal-cleanup--digests root))))
-          (should (= 1 (mevedel-journal-cleanup-expired workspace t))))
+          (should (= 1 (plist-get (mevedel-journal-cleanup-expired workspace t) :count))))
       (delete-directory root t)))
 
   :doc "recovery and fresh expiry share the fifty-group batch limit"
@@ -104,18 +104,16 @@
                        (lambda (claim status payload)
                          (unless (and (eq status 'completed) (not (string-empty-p payload)))
                            (funcall settle claim status payload)))))
-              (should (= 0 (mevedel-journal-cleanup-expired workspace)))))
+              (should (= 0 (plist-get (mevedel-journal-cleanup-expired workspace) :count)))))
           (mevedel-test--with-captured-messages nil
             (cl-letf (((symbol-function 'mevedel-journal-cleanup--apply)
                        (lambda (&rest _) (error "Interrupted before deletion"))))
               (should-not (mevedel-journal-cleanup-expired workspace t))))
-          (should (= 50 (mevedel-journal-cleanup-expired workspace t)))
-          (should mevedel-journal-cleanup--more)
+          (should (equal '(:count 50 :more t) (mevedel-journal-cleanup-expired workspace t)))
           (should (= 1 (length (mevedel-test-journal-cleanup--digests root))))
           (should-not (mevedel-journal-cleanup-expired workspace))
           (should (= 51 (length (mevedel-journal-store-covered-turns root))))
-          (should (= 1 (mevedel-journal-cleanup-expired workspace t)))
-          (should-not mevedel-journal-cleanup--more))
+          (should (equal '(:count 1 :more nil) (mevedel-journal-cleanup-expired workspace t))))
       (delete-directory root t)))
 
   :doc "preserves pending capture pins and review evidence while collecting retired payloads"
@@ -137,7 +135,7 @@
           (make-directory capture t)
           (write-region "published" nil (file-name-concat capture "retired") nil 'silent)
           (write-region "retired accepted payload" nil (file-name-concat capture "capture.json") nil 'silent)
-          (should (= 1 (mevedel-journal-cleanup-expired workspace)))
+          (should (= 1 (plist-get (mevedel-journal-cleanup-expired workspace) :count)))
           (should (= 2 (length (mevedel-test-journal-cleanup--digests root))))
           (should (mevedel-journal-pins-present-p source))
           (should (file-exists-p pin-directory))
@@ -175,24 +173,36 @@
               (should-not (mevedel-journal-cleanup-expired workspace t))
               (should (mevedel-journal-store-read root (plist-get entry :file)))
               (mevedel-journal-claim-settle claim 'completed "")
-              (should (= 1 (mevedel-journal-cleanup-expired workspace t))))))
+              (should (= 1 (plist-get (mevedel-journal-cleanup-expired workspace t) :count))))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-journal-cleanup--owned ()
   ,test
   (test)
-  :doc "a short batch clears a continuation flag left by another workspace"
-  (let* ((root (make-temp-file "mevedel-cleanup-local-budget-" t))
-         (workspace (mevedel-workspace--create :root root))
-         (claim (mevedel-journal-claim-acquire
-                 (mevedel-journal-store-claim-directory (mevedel-journal-store-directory root) 'mutation) 120))
-         (mevedel-journal-cleanup--more t))
+  :doc "one workspace's continuation does not leak into another workspace's short batch"
+  (let* ((root-a (make-temp-file "mevedel-cleanup-budget-a-" t))
+         (root-b (make-temp-file "mevedel-cleanup-budget-b-" t))
+         (workspace-a (mevedel-workspace--create :root root-a))
+         (workspace-b (mevedel-workspace--create :root root-b))
+         (mevedel-journal-max-age-days 365)
+         claim-a claim-b)
     (unwind-protect
         (progn
-          (should (= 0 (mevedel-journal-cleanup--owned workspace claim)))
-          (should-not mevedel-journal-cleanup--more))
-      (mevedel-journal-claim-settle claim 'completed "")
-      (delete-directory root t))))
+          (mevedel-test-journal-cleanup--entry root-a "first")
+          (mevedel-test-journal-cleanup--entry root-a "second")
+          (setq claim-a (mevedel-journal-claim-acquire
+                         (mevedel-journal-store-claim-directory (mevedel-journal-store-directory root-a) 'mutation) 120)
+                claim-b (mevedel-journal-claim-acquire
+                         (mevedel-journal-store-claim-directory (mevedel-journal-store-directory root-b) 'mutation) 120))
+          ;; A's budget of one group is exhausted with work left over.
+          (let ((result-a (mevedel-journal-cleanup--owned workspace-a claim-a 1))
+                (result-b (mevedel-journal-cleanup--owned workspace-b claim-b 50)))
+            (should (equal '(:count 1 :more t) result-a))
+            (should (equal '(:count 0 :more nil) result-b))))
+      (when claim-a (mevedel-journal-claim-settle claim-a 'completed ""))
+      (when claim-b (mevedel-journal-claim-settle claim-b 'completed ""))
+      (delete-directory root-a t)
+      (delete-directory root-b t))))
 
 (mevedel-deftest mevedel-journal-cleanup-recover ()
   ,test
@@ -221,10 +231,10 @@
                                                         (concat (plist-get claim :owner) ".json")))))
             (cl-letf (((symbol-function 'mevedel-session-control-fs-target-time)
                        (lambda (_path) (1+ (plist-get claim :expires-at)))))
-              (should (= 1 (mevedel-journal-cleanup-expired workspace t))))
+              (should (= 1 (plist-get (mevedel-journal-cleanup-expired workspace t) :count))))
             (should (= 0 (mevedel-journal-cleanup--apply directory manifest))))
           (should-not (file-exists-p path))
-          (should (= 0 (mevedel-journal-cleanup-expired workspace t)))
+          (should (= 0 (plist-get (mevedel-journal-cleanup-expired workspace t) :count)))
           (should (equal (plist-get entry :turn-ids) (mevedel-journal-store-covered-turns root))))
       (delete-directory root t)))
   :doc "counts only manifests it finishes now, so a steady-state recovery reports none"
@@ -269,7 +279,7 @@
           (mevedel-session-control-fs-write-file
            (mevedel-journal-claim--path claim nil)
            (json-serialize (mevedel-journal-claim--record claim)))
-          (should (= 0 (mevedel-journal-cleanup--owned workspace claim)))
+          (should (= 0 (plist-get (mevedel-journal-cleanup--owned workspace claim 50) :count)))
           (should-not (mevedel-journal-claim-outcome claim))
           (setq successor (mevedel-journal-claim-acquire scope 120))
           (should successor)
@@ -280,7 +290,7 @@
             (should (= 0 (mevedel-journal-cleanup--apply directory manifest)))
             (should (mevedel-journal-store-read root (plist-get entry :file))))
           (mevedel-journal-claim-settle successor 'completed "")
-          (should (= 1 (mevedel-journal-cleanup-expired workspace t)))
+          (should (= 1 (plist-get (mevedel-journal-cleanup-expired workspace t) :count)))
           (should-not (file-exists-p (file-name-concat (mevedel-journal-store-state-directory directory) "expiry"
                                                      (concat (plist-get claim :owner) ".json")))))
       (delete-directory root t)))

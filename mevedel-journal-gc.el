@@ -131,19 +131,29 @@ references instead of guessing that their claim can be removed."
         (push generation protected)))
     (delete-dups protected)))
 
+(defconst mevedel-journal-gc--claim-pair-limit 200
+  "Most obsolete claim and outcome pairs one batch deletes across directories.
+Tests bind it small to cross a batch boundary without hundreds of files.")
+
+(defconst mevedel-journal-gc--content-group-limit 50
+  "Most content groups one batch deletes, including recovery and expiry.
+Tests bind it small to cross a batch boundary without dozens of groups.")
+
 (iter-defun mevedel-journal-gc (workspace mutation)
   "Yield while collecting WORKSPACE state under live MUTATION ownership.
 The caller also holds digest and consolidation admission.  Return progress
-and the remaining content budget.  Delete at most 200 claim pairs and 50
-content groups across all directories in one batch."
+and the remaining content budget.  Delete at most
+`mevedel-journal-gc--claim-pair-limit' claim pairs and
+`mevedel-journal-gc--content-group-limit' content groups across all
+directories in one batch."
   (let* ((root (mevedel-journal-store-directory (mevedel-workspace-root workspace)))
          (now (mevedel-session-control-fs-target-time (plist-get mutation :directory)))
-         (manifests (iter-yield-from (mevedel-journal-gc--manifests root now 50)))
+         (manifests (iter-yield-from (mevedel-journal-gc--manifests root now mevedel-journal-gc--content-group-limit)))
          (groups (plist-get manifests :removed))
-         (groups (+ groups (iter-yield-from (mevedel-journal-gc--passes workspace mutation now (- 50 groups)))))
+         (groups (+ groups (iter-yield-from (mevedel-journal-gc--passes workspace mutation now (- mevedel-journal-gc--content-group-limit groups)))))
          (removed groups)
          (references (iter-yield-from (mevedel-journal-gc--references workspace)))
-         (remaining 200)
+         (remaining mevedel-journal-gc--claim-pair-limit)
          (directories (list (cons (mevedel-journal-store-claim-directory root 'mutation) (plist-get manifests :protected))
                             (cons (mevedel-journal-store-claim-directory root 'digest-run) nil)
                             (cons (mevedel-journal-store-claim-directory root 'consolidation) references))))
@@ -170,11 +180,11 @@ content groups across all directories in one batch."
     (dolist (directory (mevedel-session-control-fs-list-directory
                         (file-name-concat (mevedel-journal-store-state-directory root) "evidence-pins") mevedel-journal-store-id-regexp))
       (iter-yield nil)
-      (when (and (< groups 50) (mevedel-journal-gc--empty directory))
+      (when (and (< groups mevedel-journal-gc--content-group-limit) (mevedel-journal-gc--empty directory))
         (cl-incf groups)
         (cl-incf removed)))
-    (list :progress removed :remaining (- 50 groups)
-          :more (or (zerop remaining) (= groups 50)))))
+    (list :progress removed :remaining (- mevedel-journal-gc--content-group-limit groups)
+          :more (or (zerop remaining) (= groups mevedel-journal-gc--content-group-limit)))))
 
 (provide 'mevedel-journal-gc)
 ;;; mevedel-journal-gc.el ends here
