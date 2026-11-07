@@ -350,10 +350,12 @@ only after an unescaped, unquoted `>' or `<'.  Descriptor copies such as
                  (substitution t)
                  ((memq char '(?> ?<))
                   (setq redirect t)
-                  (not (and (eq next ?&)
-                            (< (+ index 2) length)
-                            (or (eq (aref text (+ index 2)) ?-)
-                                (<= ?0 (aref text (+ index 2)) ?9)))))
+                  ;; Only `>&N', `>&N-' and `>&-' copy or close a descriptor;
+                  ;; any other word after `&' names a file.
+                  (not (eq (string-match
+                            "&\\(?:[0-9]+-?\\|-\\)\\(?:[ \t\n;|&()<>]\\|\\'\\)"
+                            text (1+ index))
+                           (1+ index))))
                  ((memq char '(?\; ?| ?\n ?\( ?\))) t)
                  ((eq char ?&) (not (or after-redirect (eq next ?>))))))))
         (push (if mask (+ mevedel-permission--shell-syntax-marker char) char)

@@ -237,9 +237,12 @@ capability; `cd DIR && npx ...` receives the `npx` rule's profile, while
 
 A Bash allow pattern's `*`, `?`, and trailing `:*` stand for ordinary
 arguments only. They never cover an unquoted `;`, `|`, `&` (other than
-descriptor copies such as `2>&1`), `>` or `<` that opens a file, newline,
+descriptor copies), `>` or `<` that opens a file, newline,
 parenthesis, or a backtick or `$(`, even inside double quotes. `git status:*`
-therefore does not match `git status > notes`. `npx @emacs-eask/cli *` matches
+therefore does not match `git status > notes`. A descriptor copy is `>&` or
+`<&` followed only by digits (optionally followed by `-`) or a lone `-`, such
+as `2>&1`, `>&2` or `2>&-`; `>&1foo` writes a file and is not one.
+`npx @emacs-eask/cli *` matches
 `npx @emacs-eask/cli eval '(load "x")'` but not
 `npx @emacs-eask/cli test $(rm -rf build)`. Syntax written literally in a
 pattern still matches itself, so `make -j$(nproc) *` authorizes that form.
