@@ -68,6 +68,17 @@ roots below it."
   :type 'directory
   :group 'mevedel)
 
+(defcustom mevedel-plugins-update-check-interval nil
+  "Days between background checks for upstream plugin updates, or nil.
+Nil (the default) never checks.  A number enables an asynchronous
+`git ls-remote' against each managed plugin's origin once that many
+days have passed since the last check, started on an idle timer after
+the registry is first used.  A check only notifies; it never updates a
+plugin.  The cockpit's \"Check for updates\" action ignores this setting."
+  :type '(choice (const :tag "Never check" nil)
+                 (number :tag "Days between checks"))
+  :group 'mevedel)
+
 
 ;;
 ;;; Structs
@@ -323,6 +334,7 @@ Shadowed entries are retained in the winner's `shadowed' slot."
 
 (defun mevedel-plugins--collect (&optional workspace)
   "Return discovered plugin metadata for WORKSPACE."
+  (mevedel-plugins--schedule-update-check)
   (let (plugins errors)
     (dolist (root (mevedel-plugins--plugin-roots workspace))
       (let ((item (mevedel-plugins--read-manifest-result root workspace)))
@@ -836,6 +848,140 @@ Relative identities are requalified through the live WORKSPACE root."
   (cl-remove-if-not
    (lambda (plugin) (mevedel-plugins-hooks-stale-p plugin workspace))
    (mevedel-plugins-enabled workspace)))
+
+
+;;
+;;; Update-check state
+
+;; The check itself runs in `mevedel-plugin-lifecycle'; this section owns the
+;; setting, the idle scheduling and the cached results.  The state is global
+;; (managed plugins are global), so it lives beside the other user-level
+;; files rather than in a workspace's `plugins.el'.
+
+(declare-function mevedel-plugins-check-updates
+                  "mevedel-plugin-lifecycle" (&optional on-demand done))
+(autoload 'mevedel-plugins-check-updates "mevedel-plugin-lifecycle")
+
+(defconst mevedel-plugins--update-check-idle-delay 30
+  "Seconds of idle time before a scheduled update check starts.")
+
+(defvar mevedel-plugins--update-cache :unloaded
+  "Cached update-check state plist, or `:unloaded' before the first read.
+Holds `:last-check' (`float-time') and `:plugins', an alist of source
+root to a plist of `:local', `:remote', `:error' and `:notified'.")
+
+(defvar mevedel-plugins--update-check-timer nil
+  "Pending idle timer for a scheduled update check, or nil.")
+
+(defvar mevedel-plugins--update-check-busy nil
+  "Non-nil while an update check is running.")
+
+(defun mevedel-plugins--update-state-file ()
+  "Return the global update-check state file."
+  (file-name-concat mevedel-user-dir "plugin-update-check.el"))
+
+(defun mevedel-plugins--update-state ()
+  "Return the update-check state, reading it once per session."
+  (when (eq mevedel-plugins--update-cache :unloaded)
+    (setq mevedel-plugins--update-cache
+          (let ((file (mevedel-plugins--update-state-file)))
+            (and (file-readable-p file)
+                 (condition-case nil
+                     (with-temp-buffer
+                       (insert-file-contents file)
+                       (let ((read-eval nil))
+                         (let ((state (read (current-buffer))))
+                           (and (listp state) state))))
+                   (error nil))))))
+  mevedel-plugins--update-cache)
+
+(defun mevedel-plugins--update-save (state)
+  "Cache and persist update-check STATE."
+  (setq mevedel-plugins--update-cache state)
+  (mevedel--write-file-atomically
+   (mevedel-plugins--update-state-file)
+   (with-temp-buffer
+     (insert ";; Mevedel plugin update-check state\n")
+     (insert ";; Auto-generated, safe to delete\n\n")
+     (pp state (current-buffer))
+     (buffer-string))))
+
+(defun mevedel-plugins--update-entry-for-root (root)
+  "Return the cached update-check plist for source ROOT, or nil."
+  (cdr (assoc (mevedel-plugins-source-root root)
+              (plist-get (mevedel-plugins--update-state) :plugins))))
+
+(defun mevedel-plugins--update-set-entry (root plist)
+  "Cache PLIST for source ROOT, keeping its `:notified' commit."
+  (let* ((state (copy-tree (mevedel-plugins--update-state)))
+         (key (mevedel-plugins-source-root root))
+         (plugins (assoc-delete-all key (plist-get state :plugins))))
+    (when-let* (((not (plist-member plist :notified)))
+                (notified
+                 (plist-get (mevedel-plugins--update-entry-for-root root)
+                            :notified)))
+      (setq plist (plist-put (copy-sequence plist) :notified notified)))
+    (mevedel-plugins--update-save
+     (plist-put state :plugins (cons (cons key plist) plugins)))))
+
+(defun mevedel-plugins--update-mark-notified (root)
+  "Record that the cached upstream commit of ROOT was announced."
+  (when-let* ((entry (mevedel-plugins--update-entry-for-root root)))
+    (mevedel-plugins--update-set-entry
+     root (plist-put (copy-sequence entry) :notified
+                     (plist-get entry :remote)))))
+
+(defun mevedel-plugins-forget-update (root)
+  "Drop the cached update-check result for ROOT after it was updated."
+  (when (mevedel-plugins--update-entry-for-root root)
+    (let ((state (copy-tree (mevedel-plugins--update-state))))
+      (mevedel-plugins--update-save
+       (plist-put state :plugins
+                  (assoc-delete-all (mevedel-plugins-source-root root)
+                                    (plist-get state :plugins)))))))
+
+(defun mevedel-plugins-update-available-p (plugin)
+  "Return the upstream commit when the cache says PLUGIN has an update."
+  (let ((entry (mevedel-plugins--update-entry-for-root
+                (mevedel-plugin-root plugin))))
+    (and entry
+         (not (plist-get entry :error))
+         (plist-get entry :remote)
+         (not (equal (plist-get entry :remote) (plist-get entry :local)))
+         (plist-get entry :remote))))
+
+(defun mevedel-plugins-update-check-error (plugin)
+  "Return the cached update-check failure message for PLUGIN, or nil."
+  (plist-get (mevedel-plugins--update-entry-for-root
+              (mevedel-plugin-root plugin))
+             :error))
+
+(defun mevedel-plugins--update-check-due-p ()
+  "Return non-nil when the interval setting asks for a check now."
+  (and (numberp mevedel-plugins-update-check-interval)
+       (> mevedel-plugins-update-check-interval 0)
+       (let ((last (plist-get (mevedel-plugins--update-state) :last-check)))
+         (or (not (numberp last))
+             (>= (- (float-time) last)
+                 (* mevedel-plugins-update-check-interval 86400))))))
+
+(defun mevedel-plugins--run-scheduled-update-check ()
+  "Start the check an idle timer was set for, if it is still due."
+  (setq mevedel-plugins--update-check-timer nil)
+  (when (mevedel-plugins--update-check-due-p)
+    (mevedel-plugins-check-updates)))
+
+(defun mevedel-plugins--schedule-update-check ()
+  "Schedule an idle update check when the interval says one is due.
+Does nothing with the default nil interval, while a check is pending or
+running, and never touches the network itself."
+  (when (and (not mevedel-plugins--update-check-timer)
+             (not mevedel-plugins--update-check-busy)
+             (mevedel-plugins--update-check-due-p))
+    (setq mevedel-plugins--update-check-timer
+          (run-with-idle-timer
+           mevedel-plugins--update-check-idle-delay nil
+           #'mevedel-plugins--run-scheduled-update-check))))
 
 
 

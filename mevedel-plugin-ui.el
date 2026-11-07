@@ -54,9 +54,12 @@
                   "mevedel-plugin-lifecycle" (name &optional workspace))
 (declare-function mevedel-plugins-update
                   "mevedel-plugin-lifecycle" (name &optional workspace))
+(declare-function mevedel-plugins-check-updates
+                  "mevedel-plugin-lifecycle" (&optional on-demand done))
 (autoload 'mevedel-plugins-install "mevedel-plugin-lifecycle")
 (autoload 'mevedel-plugins-remove "mevedel-plugin-lifecycle")
 (autoload 'mevedel-plugins-update "mevedel-plugin-lifecycle")
+(autoload 'mevedel-plugins-check-updates "mevedel-plugin-lifecycle")
 
 ;; `mevedel-plugin-registry'
 (declare-function mevedel-plugin-description
@@ -113,6 +116,10 @@
                   "mevedel-plugin-registry" (root))
 (declare-function mevedel-plugins-pending-consent
                   "mevedel-plugin-registry" (&optional workspace))
+(declare-function mevedel-plugins-update-available-p
+                  "mevedel-plugin-registry" (plugin))
+(declare-function mevedel-plugins-update-check-error
+                  "mevedel-plugin-registry" (plugin))
 (declare-function mevedel-plugins-plugin-data-dir
                   "mevedel-plugin-registry"
                   (plugin-name &optional workspace))
@@ -206,6 +213,20 @@ starts log it quietly to *Messages*."
     ((or "off" "none") (propertize status 'face 'shadow))
     (_ status)))
 
+(defun mevedel-plugins--update-note (plugin)
+  "Return the cached update-check note for PLUGIN, or nil."
+  (cond
+   ((mevedel-plugins-update-available-p plugin)
+    (propertize "update available" 'face 'warning))
+   ((mevedel-plugins-update-check-error plugin)
+    (propertize "check failed" 'face 'shadow))))
+
+(defun mevedel-plugins--source-cell (plugin)
+  "Return PLUGIN's source label followed by its update note, if any."
+  (if-let* ((note (mevedel-plugins--update-note plugin)))
+      (concat (mevedel-plugins--plugin-source-label plugin) "  " note)
+    (mevedel-plugins--plugin-source-label plugin)))
+
 (defun mevedel-plugins--shadowed-lines (plugin &optional workspace)
   "Return shadowed-source lines for PLUGIN in WORKSPACE."
   (let ((active-shadow (mevedel-plugins-active-shadowed-source
@@ -248,7 +269,7 @@ starts log it quietly to *Messages*."
              (mevedel-plugins--status-cell enabled)
              (mevedel-plugins--status-cell hooks)
              (number-to-string (mevedel-plugins-skill-count plugin))
-             (mevedel-plugins--plugin-source-label plugin))))))
+             (mevedel-plugins--source-cell plugin))))))
 
 (defun mevedel-plugins-list--root-label (context)
   "Return CONTEXT's plugin cockpit workspace root label."
@@ -362,6 +383,19 @@ starts log it quietly to *Messages*."
     (mevedel-plugins-refresh-session context)
     (mevedel-cockpit-surface-refresh name)
     (message "%s" message)))
+
+(defun mevedel-plugins-list-check-updates ()
+  "Check managed plugins for upstream updates now, ignoring the interval.
+The check runs in the background; the cockpit refreshes in place when it
+finishes, keeping the selected row."
+  (interactive)
+  (let ((buffer (current-buffer)))
+    (mevedel-plugins-check-updates
+     t (lambda ()
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer
+             (mevedel-cockpit-surface-refresh)))))
+    (message "mevedel: checking plugins for updates...")))
 
 (defun mevedel-plugins-list-remove ()
   "Remove the plugin at point."
@@ -496,6 +530,8 @@ starts log it quietly to *Messages*."
             mevedel-plugins-list-install)
            ("u" "Update selected plugin"
             mevedel-plugins-list-update)
+           ("U" "Check managed plugins for updates"
+            mevedel-plugins-list-check-updates)
            ("r" "Reload plugin-visible session skills"
             mevedel-plugins-list-reload)
            ("x" "Remove selected managed plugin"
