@@ -493,8 +493,16 @@ under its origin id."
           (cl-labels ((cell (column)
                         (aref (cadr (assoc "pipeline" tabulated-list-entries)) column))
                       (settle ()
-                        (let ((deadline (+ (float-time) 1)))
-                          (while (< (float-time) deadline) (accept-process-output nil 0.02)))))
+                        ;; The listing's check has landed once the status it
+                        ;; seeded as reachable turns unreachable.
+                        (let ((deadline (+ (float-time) 5))
+                              (ref (mevedel-remote-artifact--ref
+                                    mevedel-remote-artifact-test--link)))
+                          (while (and (< (float-time) deadline)
+                                      (not (eq 'no (plist-get
+                                                    (gethash ref mevedel-remote-artifact--status)
+                                                    :reachable))))
+                            (accept-process-output nil 0.02)))))
             (with-current-buffer
                 (mevedel-artifacts-list-open
                  (list :session session :view-buffer view :data-buffer buffer
