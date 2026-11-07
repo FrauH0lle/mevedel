@@ -100,10 +100,16 @@
 ;; `mevedel-persistence'
 (declare-function mevedel--setup-buffer-hooks
                   "mevedel-persistence" (buffer))
+(declare-function mevedel-instruction-store-sync
+                  "mevedel-persistence" (workspace &optional own-save-path))
+(declare-function mevedel-instruction-store-touch
+                  "mevedel-persistence" (&optional workspace))
 (declare-function mevedel-persistence-resolve-instruction-anchor
                   "mevedel-persistence"
                   (overlay-start overlay-end anchor parent-range))
 (autoload 'mevedel--setup-buffer-hooks "mevedel-persistence")
+(autoload 'mevedel-instruction-store-sync "mevedel-persistence")
+(autoload 'mevedel-instruction-store-touch "mevedel-persistence")
 (autoload 'mevedel-persistence-resolve-instruction-anchor
   "mevedel-persistence")
 
@@ -1006,6 +1012,7 @@ SPAN is `line' or `char'; when nil, infer it from the selection bounds."
     (overlay-put ov 'mevedel-instruction-type 'reference)
     (overlay-put ov 'evaporate t)
     (mevedel--update-instruction-overlay ov t)
+    (mevedel--instruction-store-write (overlay-buffer ov))
     ov))
 
 (defun mevedel--create-directive-in (buffer start end &optional bodyless directive-text span)
@@ -1023,10 +1030,23 @@ be non-nil prevents the opening of a prompt buffer.  SPAN explicitly selects
     (overlay-put ov 'mevedel-instruction-type 'directive)
     (mevedel--register-directive ov (or directive-text ""))
     (mevedel--update-instruction-overlay ov (not bodyless))
+    (mevedel--instruction-store-write (overlay-buffer ov))
     (unless directive-text
       (deactivate-mark)
       (mevedel--read-directive ov))
     ov))
+
+(defun mevedel--instruction-store-write (buffer)
+  "Write BUFFER's workspace instructions to its store after a creation.
+A creation is written at once, so it survives an Emacs exit before any
+session saves.  A failure is reported and retried by the next flush."
+  (when-let* ((workspace (mevedel--instruction-buffer-workspace buffer)))
+    (condition-case err
+        (mevedel-instruction-store-sync workspace)
+      (error
+       (mevedel-instruction-store-touch workspace)
+       (message "mevedel: instruction not yet written to the store: %s"
+                (error-message-string err))))))
 
 (defun mevedel--retire-instruction-identity (id workspace)
   "Retire ID and remove its live and durable links in WORKSPACE."
@@ -1122,6 +1142,7 @@ BUFFER is required in order to perform cleanup on a dead instruction."
     (let ((id (mevedel--instruction-id instruction)))
       (with-current-buffer instruction-buffer
         (mevedel--retire-instruction-identity id workspace)))
+    (mevedel-instruction-store-touch workspace)
     (setf (cdr (assoc instruction-buffer (mevedel--instruction-alist)))
           (delq instruction
                 (cdr (assoc instruction-buffer
@@ -1140,6 +1161,9 @@ Returns an empty string if there is no directive text."
 
 (defun mevedel--set-directive-request (directive request)
   "Set DIRECTIVE's current REQUEST without changing its identity."
+  (when-let* ((buffer (overlay-buffer directive)))
+    (mevedel-instruction-store-touch
+     (mevedel--instruction-buffer-workspace buffer)))
   (let ((record (mevedel--directive-source-record directive)))
     (cond
      ((mevedel-directive-p record)

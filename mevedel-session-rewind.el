@@ -55,9 +55,14 @@
 ;; `mevedel-persistence'
 (declare-function mevedel--reset-instructions-preserving-directives "mevedel-persistence" (workspace directives))
 (declare-function mevedel--restore-preserved-directives "mevedel-persistence" (workspace))
+(declare-function mevedel-instruction-store-rewind-begin "mevedel-persistence" (session surviving-turn prune-from))
+(declare-function mevedel-instruction-store-rewind-end "mevedel-persistence" (session committed))
 (autoload 'mevedel--reset-instructions-preserving-directives
   "mevedel-persistence")
 (autoload 'mevedel--restore-preserved-directives "mevedel-persistence")
+(autoload 'mevedel-instruction-store-rewind-begin "mevedel-persistence")
+(autoload 'mevedel-instruction-store-rewind-end "mevedel-persistence")
+(defvar mevedel-instruction-store--inhibit)
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts--live-sidecar "mevedel-session-artifacts" (session &optional data-buffer))
@@ -1430,6 +1435,8 @@ head CAS."
            session target boundary))
          (staging-buffer
           (generate-new-buffer " *mevedel-remote-rewind-staging*"))
+         (mevedel-instruction-store--inhibit t)
+         store-intent
          file-backups
          project-restore-started
          publish-attempted
@@ -1443,6 +1450,10 @@ head CAS."
               (with-current-buffer staging-buffer
                 (funcall (buffer-local-value 'major-mode buffer)))
               (make-directory file-backup-dir t)
+              (setq store-intent
+                    (mevedel-instruction-store-rewind-begin
+                     session (or (mevedel-session-turn-count candidate) 0)
+                     (plist-get target :cum-turn)))
               ;; Materialization, project backup, recheck, and restore are one
               ;; synchronous target operation.  Timer renewal stays off-target
               ;; until the wrapper proves the same generation still owns it.
@@ -1532,31 +1543,48 @@ head CAS."
                       (error-message-string install-error))
                      (and install-backtrace (concat "\n" install-backtrace)))
                     :warning))))
-              (condition-case instruction-error
-                  (unless
-                      (mevedel-session-artifacts-load-instructions
-                       session buffer nil directives t)
-                    (error "Published instruction snapshot is unavailable"))
-                (error
-                 (display-warning
-                  'mevedel
-                  (format
-                   "Portable project Rewind committed, but instructions did not refresh: %s"
-                   (error-message-string instruction-error))
-                  :warning)))
-              (condition-case directive-error
-                  (progn
-                    (mevedel-workspace-rewind-directives
-                     workspace (mevedel-session-session-id session)
-                     (plist-get target :cum-turn))
-                    (mevedel--restore-preserved-directives workspace))
-                (error
-                 (display-warning
-                  'mevedel
-                  (format
-                   "Portable project Rewind committed, but directives did not refresh: %s"
-                   (error-message-string directive-error))
-                  :warning)))
+              (if store-intent
+                  ;; The workspace store owns the current set: prune the
+                  ;; records here and in the store, and take presentations
+                  ;; from the store instead of the historical snapshot.
+                  (condition-case store-error
+                      (progn
+                        (mevedel-workspace-rewind-directives
+                         workspace (mevedel-session-session-id session)
+                         (plist-get target :cum-turn))
+                        (mevedel-instruction-store-rewind-end session t))
+                    (error
+                     (display-warning
+                      'mevedel
+                      (format
+                       "Portable project Rewind committed, but the instruction store still holds the discarded activity; it is pruned before the next request or at resume: %s"
+                       (error-message-string store-error))
+                      :warning)))
+                (condition-case instruction-error
+                    (unless
+                        (mevedel-session-artifacts-load-instructions
+                         session buffer nil directives t)
+                      (error "Published instruction snapshot is unavailable"))
+                  (error
+                   (display-warning
+                    'mevedel
+                    (format
+                     "Portable project Rewind committed, but instructions did not refresh: %s"
+                     (error-message-string instruction-error))
+                    :warning)))
+                (condition-case directive-error
+                    (progn
+                      (mevedel-workspace-rewind-directives
+                       workspace (mevedel-session-session-id session)
+                       (plist-get target :cum-turn))
+                      (mevedel--restore-preserved-directives workspace))
+                  (error
+                   (display-warning
+                    'mevedel
+                    (format
+                     "Portable project Rewind committed, but directives did not refresh: %s"
+                     (error-message-string directive-error))
+                    :warning))))
               (condition-case refresh-error
                   (mevedel-session-rewind--refresh-restored-buffers
                    plan (list :succeeded (length plan)))
@@ -1569,6 +1597,14 @@ head CAS."
                   :warning))))
           (error (setq operation-error err)))
       (unless committed
+        (when store-intent
+          (condition-case store-error
+              (mevedel-instruction-store-rewind-end session nil)
+            (error
+             (display-warning
+              'mevedel
+              (format "Rewind rolled back; its instruction store intent is dropped later: %s"
+                      (error-message-string store-error))))))
         (when project-restore-started
           (condition-case rollback-error
               (setq rollback-failures
@@ -1667,6 +1703,10 @@ head CAS."
           (with-current-buffer buffer (buffer-modified-p)))
          (original-point (with-current-buffer buffer (point)))
          (original-turn (mevedel-session-turn-count session))
+         ;; The workspace store changes only after the commit point; until
+         ;; then a durable intent lets recovery finish or drop the prune.
+         (mevedel-instruction-store--inhibit t)
+         store-intent store-reloaded
          file-backups source-moved published session-installed
          file-restore-started buffer-install-started committed
          rollback-failures)
@@ -1690,6 +1730,10 @@ head CAS."
                      (mevedel-session-rewind--sorted-file-plan plan)
                      (mevedel-session-rewind--sorted-file-plan rechecked))
               (error "Captured files changed after Rewind confirmation")))
+          (setq store-intent
+                (mevedel-instruction-store-rewind-begin
+                 session (or (mevedel-session-turn-count candidate) 0)
+                 (plist-get target :cum-turn)))
           (setq file-restore-started t)
           (let ((result
                  (mevedel-session-rewind-execute-restore session plan)))
@@ -1719,6 +1763,16 @@ head CAS."
           (delete-directory rollback-path t)
           (setq source-moved nil
                 committed t)
+          (when store-intent
+            (condition-case err
+                (progn
+                  (mevedel-instruction-store-rewind-end session t)
+                  (setq store-reloaded t))
+              (error
+               (display-warning
+                'mevedel
+                (format "Rewind committed, but the instruction store still holds the discarded activity; it is pruned before the next request or at resume: %s"
+                        (error-message-string err))))))
           (condition-case err
               (mevedel-session-rewind--refresh-restored-buffers
                plan (list :succeeded (length plan)))
@@ -1729,7 +1783,8 @@ head CAS."
                       (error-message-string err)))))
           (condition-case err
               (progn
-                (mevedel--restore-preserved-directives workspace)
+                (unless store-reloaded
+                  (mevedel--restore-preserved-directives workspace))
                 (mevedel-session-artifacts-save-instructions
                  session buffer t))
             (error
@@ -1755,6 +1810,16 @@ head CAS."
         (when session-installed
           (mevedel-session-rewind-copy-session-state
            original-state session))
+        (when store-intent
+          (condition-case err
+              (mevedel-instruction-store-rewind-end session nil)
+            (error
+             ;; An intent left behind names the original turn count, so
+             ;; the next resolution drops it without pruning anything.
+             (display-warning
+              'mevedel
+              (format "Rewind rolled back; its instruction store intent is dropped later: %s"
+                      (error-message-string err))))))
         (when published
           (condition-case err
               (progn

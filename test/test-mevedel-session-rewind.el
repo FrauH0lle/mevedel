@@ -957,6 +957,7 @@
               (setf (mevedel-directive-attempts early)
                     (list
                      (mevedel-directive-attempt--create
+                      :sequence 1 :action 'implement
                       :directive-request "Early" :request "Early prompt"
                       :result "Done" :outcome 'success :patch ""
                       :capture 'complete
@@ -998,6 +999,7 @@
                 (setf (mevedel-directive-attempts later)
                       (list
                        (mevedel-directive-attempt--create
+                        :sequence 1 :action 'implement
                         :directive-request "Later" :request "Later prompt"
                         :result "Deleted" :outcome 'success
                         :patch "deleted source.el" :capture 'complete

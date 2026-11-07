@@ -2,17 +2,16 @@
 
 ;;; Commentary:
 
-;; Instruction state is per workspace in memory but persisted only by session
-;; saves (`mevedel-session-artifacts-save-instructions') and restored by
-;; resume (`mevedel-session-artifacts-load-instructions').  Each case below is
-;; a reproduction of one suspected consequence.  The real save and load
-;; producers run against real files in a temporary workspace.
+;; Instruction state is per workspace in memory.  It used to be persisted only
+;; by session saves (`mevedel-session-artifacts-save-instructions') and
+;; restored by resume (`mevedel-session-artifacts-load-instructions'), so
+;; resuming one session replaced the workspace set.  Each case below
+;; reproduces one consequence of that; the workspace instruction store fixes
+;; all three.  The real save and load producers run against real files in a
+;; temporary workspace.
 ;;
-;; Each case asserts the DESIRED behaviour (workspace-owned instructions) and
-;; carries `:expected-result :failed', so it passes the suite while the defect
-;; stands and turns into an unexpected pass, and a red suite, once the defect
-;; is fixed; remove the marker then.  Every case first asserts a control: the
-;; data the failing assertion expects was really written by a session save.
+;; Every case first asserts a control: the session snapshot really holds
+;; (or lacks) the data, so the store, not the snapshot, carries the result.
 
 ;;; Code:
 
@@ -77,7 +76,7 @@ Returns the session."
     session))
 
 (defun test-mevedel-instruction-ws--resume (session workspace data)
-  "Restore SESSION's instruction snapshot the way resume does.
+  "Restore SESSION's instructions into WORKSPACE from DATA as resume does.
 Mirrors the call in `mevedel-session-persistence--restore-buffer'."
   (with-current-buffer data
     (setq-local mevedel--workspace workspace)
@@ -110,7 +109,7 @@ Mirrors the call in `mevedel-session-persistence--restore-buffer'."
     (buffer-string)))
 
 (mevedel-deftest test-mevedel-instruction-ws-resume-drops-other-session
-  (:expected-result :failed :quiet t)
+  (:quiet t)
   ,test
   (test)
   :doc "case 1: resuming session A keeps directives and references saved by B"
@@ -139,7 +138,7 @@ Mirrors the call in `mevedel-session-persistence--restore-buffer'."
                       workspace source)))))))
 
 (mevedel-deftest test-mevedel-instruction-ws-unsaved-lost-on-restart
-  (:expected-result :failed :quiet t)
+  (:quiet t)
   ,test
   (test)
   :doc "case 2: directives created after the last session save survive a restart"
@@ -152,13 +151,13 @@ Mirrors the call in `mevedel-session-persistence--restore-buffer'."
       (with-current-buffer source
         (mevedel--create-directive-in source (+ 6 (point-min)) (+ 9 (point-min))
                                       nil "created, then Emacs exits"))
-      ;; Control: the live workspace has both, the only file has one.
+      ;; Control: the live workspace has both, the only session snapshot
+      ;; has one; the workspace store is the other carrier.
       (should (= 2 (length (mevedel-workspace-directives workspace))))
       (should-not (string-match-p
                    "then Emacs exits"
                    (test-mevedel-instruction-ws--snapshot-text a)))
-      (should-not (directory-files-recursively
-                   (mevedel-workspace-root workspace) "\\`instructions\\.el\\'"))
+      (should (file-exists-p (mevedel-instruction-store-path workspace)))
       ;; Restart: fresh registry, then resume the only session.
       (with-current-buffer source (set-buffer-modified-p nil))
       (mevedel--clear-instruction-state workspace)
@@ -168,7 +167,7 @@ Mirrors the call in `mevedel-session-persistence--restore-buffer'."
                      (test-mevedel-instruction-ws--requests workspace))))))
 
 (mevedel-deftest test-mevedel-instruction-ws-activity-follows-last-saver
-  (:expected-result :failed :quiet t)
+  (:quiet t)
   ,test
   (test)
   :doc "case 3: directive activity is the same whichever session resumes"

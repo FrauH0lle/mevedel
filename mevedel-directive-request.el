@@ -125,6 +125,11 @@
 (declare-function mevedel--topmost-instruction
                   "mevedel-overlays" (instruction &optional of-type pred))
 
+;; `mevedel-persistence'
+(declare-function mevedel-instruction-store-touch
+                  "mevedel-persistence" (&optional workspace))
+(autoload 'mevedel-instruction-store-touch "mevedel-persistence")
+
 ;; `mevedel-plan-handoff'
 (declare-function mevedel-plan-handoff-append-implementation-input
                   "mevedel-plan-handoff" (prompt selection))
@@ -906,6 +911,8 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
 			    (mevedel--record-directive-terminal-activity
 			     record action directive-text prompt result outcome
 			     checkpoint info options submitted-subdirectives)))
+                      ;; The turn's settlement save writes it to the store.
+                      (mevedel-instruction-store-touch workspace)
                       ;; Retain the old attempt, but do not reset the status
                       ;; of a replacement request operating on this record.
                       (unless (funcall current-p)
