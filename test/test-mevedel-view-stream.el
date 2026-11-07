@@ -8020,21 +8020,69 @@ second line")
                 (require 'cl-lib)
                 (dolist (feature '(mevedel-compact mevedel-compact-run
                                    mevedel-compact-target mevedel-plan-handoff
-                                   mevedel-review mevedel-gptel-retry))
+                                   mevedel-review mevedel-gptel-retry
+                                   mevedel-hooks))
                   (require feature)
                   (should-not (featurep 'mevedel-view-composer)))
                 (dolist (verb '(mevedel-view-stream-show-progress
                                 mevedel-view-stream-end-progress
                                 mevedel-view-stream-claim-progress
                                 mevedel-view-stream-release-progress
-                                mevedel-view-stream-ensure-progress))
+                                mevedel-view-stream-ensure-progress
+                                mevedel-view-stream-lease-progress
+                                mevedel-view-stream-claim-leased-progress))
                   (should (fboundp verb)))
                 (should-not (mevedel-view-stream-end-progress nil))
+                (should-not (mevedel-view-stream-lease-progress nil))
+                (should-not (mevedel-hooks--progress-snapshot))
                 (should-not (mevedel-view-stream-show-progress nil "x"))
                 (should-not (cl-remove-if-not
                              (lambda (b) (buffer-local-value 'mevedel-view--spinner-status b))
                              (buffer-list))))))))
       (ert-info ((buffer-string))
         (should (equal 0 status))))))
+
+(mevedel-deftest mevedel-view-stream-lease-progress ()
+  ,test
+  (test)
+  :doc "lease: only active request-owned progress can be leased"
+  (mevedel-view-stream-test--with-buffers
+    (should-not (mevedel-view-stream-lease-progress nil))
+    (should-not (mevedel-view-stream-lease-progress view-buf))
+    (mevedel-view-stream-show-progress view-buf "Thinking...")
+    (should (equal "Thinking..."
+                   (plist-get (mevedel-view-stream-lease-progress view-buf)
+                              :status)))
+    (mevedel-view-stream-show-progress view-buf "Other" 'other)
+    (should-not (mevedel-view-stream-lease-progress view-buf)))
+
+  :doc "claim-leased: claims a current lease and release restores it"
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-show-progress view-buf "Thinking...")
+    (let* ((lease (mevedel-view-stream-lease-progress view-buf))
+           (token (mevedel-view-stream-claim-leased-progress
+                   view-buf lease "Hook..." 'hook)))
+      (should token)
+      (with-current-buffer view-buf
+        (should (equal "Hook..." mevedel-view--spinner-status))
+        (should (eq 'hook mevedel-view--spinner-owner)))
+      (should (mevedel-view-stream-release-progress view-buf token))
+      (with-current-buffer view-buf
+        (should (equal "Thinking..." mevedel-view--spinner-status))
+        (should (eq 'request mevedel-view--spinner-owner)))))
+
+  :doc "claim-leased: refuses a stale lease, a nil lease and a dead view"
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-show-progress view-buf "Thinking...")
+    (let ((lease (mevedel-view-stream-lease-progress view-buf)))
+      (should-not (mevedel-view-stream-claim-leased-progress
+                   view-buf nil "Hook..." 'hook))
+      (should-not (mevedel-view-stream-claim-leased-progress
+                   nil lease "Hook..." 'hook))
+      (mevedel-view-stream-show-progress view-buf "Newer")
+      (should-not (mevedel-view-stream-claim-leased-progress
+                   view-buf lease "Hook..." 'hook))
+      (with-current-buffer view-buf
+        (should (equal "Newer" mevedel-view--spinner-status))))))
 
 ;;; test-mevedel-view-stream.el ends here

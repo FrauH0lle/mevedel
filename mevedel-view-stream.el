@@ -1593,6 +1593,9 @@ Return non-nil when the status was restored."
 ;; snapshot only returns the row to idle (not suppressed).  A claim token is
 ;; the previous status plus the owner; release checks the owner only, never
 ;; the generation, and never stops progress some other owner now holds.
+;; `lease' and `claim-leased' are the stricter pair for a status taken later:
+;; only request-owned progress can be leased, and the claim is refused unless
+;; the progress is unchanged since the lease; release is the same.
 
 (defun mevedel-view-stream-show-progress (view status &optional owner)
   "Show STATUS as request progress in VIEW, owned by OWNER (default `request').
@@ -1639,6 +1642,30 @@ unless VIEW is live and TOKEN is non-nil."
             (mevedel-view--restore-spinner-status owner snapshot)
           (when (eq mevedel-view--spinner-owner owner)
             (mevedel-view--stop-spinner)))))))
+
+(defun mevedel-view-stream-lease-progress (view)
+  "Return a lease on VIEW's request-owned progress, or nil.
+Only an active status owned by `request' can be leased, so a lease never
+covers another owner's temporary status.  Take it early, then pass it to
+`mevedel-view-stream-claim-leased-progress'.  Do nothing unless VIEW is
+live."
+  (when (buffer-live-p view)
+    (with-current-buffer view
+      (when (ignore-errors (mevedel-view--spinner-active-p))
+        (let ((snapshot (ignore-errors
+                          (mevedel-view--spinner-status-snapshot))))
+          (when (eq (plist-get snapshot :owner) 'request)
+            snapshot))))))
+
+(defun mevedel-view-stream-claim-leased-progress (view lease status owner)
+  "Show STATUS owned by OWNER in VIEW if LEASE is still current.
+Unlike `mevedel-view-stream-claim-progress' this refuses, returning nil,
+when LEASE is nil or the progress changed since it was leased.  On
+success return a token for `mevedel-view-stream-release-progress'."
+  (when (and lease (buffer-live-p view))
+    (with-current-buffer view
+      (when (mevedel-view--claim-spinner-status lease status owner)
+        (list :owner owner :snapshot lease)))))
 
 (defun mevedel-view-stream-spinner-hook (info)
   "Update spinner from `gptel-pre-tool-call-functions'.
