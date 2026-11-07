@@ -1927,12 +1927,6 @@ found without scanning the rest of the buffer."
                    (set-marker (car region) nil)
                    (set-marker (cdr region) nil)))))))
 
-(defmacro mevedel-view--preserving-window-state (&rest body)
-  "Execute BODY while preserving point and window positions."
-  (declare (indent 0) (debug t))
-  `(mevedel-view--call-preserving-window-state
-    (lambda () ,@body)))
-
 (defun mevedel-view-call-preserving-window-configuration (thunk)
   "Call THUNK, restoring the frame layout and semantic view positions.
 Unlike a raw window configuration, view anchors survive text replaced by
