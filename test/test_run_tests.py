@@ -42,6 +42,35 @@ LIBRARIES = {
 
 
 class RunnerTests(unittest.TestCase):
+    def test_affected_base_explicit_then_environment_then_master(self):
+        for environment, arguments, expected in (
+            ({}, ['--affected'], 'master'),
+            ({'MEVEDEL_AFFECTED_BASE': 'branch-point'}, ['--affected'], 'branch-point'),
+            ({'MEVEDEL_AFFECTED_BASE': 'branch-point'},
+             ['--affected', 'explicit-revision'], 'explicit-revision'),
+            ({'MEVEDEL_AFFECTED_BASE': ''}, ['--affected'], 'master'),
+        ):
+            with self.subTest(environment=environment, arguments=arguments), \
+                 patch.dict(os.environ, environment, clear=True), \
+                 patch.object(sys, 'argv', ['run_tests.py', *arguments]), \
+                 patch.object(affected_tests, 'changed_files',
+                              side_effect=ValueError('stop after base selection')) as changed, \
+                 contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                run_tests.main()
+            self.assertEqual(error.exception.code, 2)
+            changed.assert_called_once_with(run_tests.ROOT, expected)
+
+    def test_affected_environment_does_not_enable_affected_mode(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.dict(os.environ, {'MEVEDEL_AFFECTED_BASE': 'branch-point'}), \
+             patch.object(sys, 'argv', ['run_tests.py', '--output', directory + '/reports',
+                                       'test/test-mevedel-test-runner.el']), \
+             patch.object(affected_tests, 'changed_files') as changed, \
+             patch.object(run_tests, 'run_logged', return_value=(23, 0)), \
+             contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(run_tests.main(), 23)
+            changed.assert_not_called()
+
     def test_same_timestamp_runs_get_distinct_sortable_reports_and_replay(self):
         with tempfile.TemporaryDirectory() as directory:
             reports = Path(directory) / 'reports'

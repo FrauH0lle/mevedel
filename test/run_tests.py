@@ -154,9 +154,11 @@ def main():
     parser.add_argument('--durations', type=Path, default=REPORTS / 'latest-durations.csv')
     parser.add_argument('--output', type=Path)
     parser.add_argument('files', nargs='*', help='test files or quoted glob patterns (default: all)')
-    parser.add_argument('--affected', nargs='?', const='master', metavar='REV',
+    parser.add_argument('--affected', nargs='?',
+                        const=os.environ.get('MEVEDEL_AFFECTED_BASE') or 'master', metavar='REV',
                         help='fast tier: test files for changes since the merge base with '
-                             'REV (default master), including uncommitted and untracked files')
+                             'REV (default MEVEDEL_AFFECTED_BASE or master), including '
+                             'uncommitted and untracked files')
     lane = parser.add_mutually_exclusive_group()
     lane.add_argument('--fresh-files', action='store_true',
                       help='run each selected file in its own fresh Emacs')

@@ -151,7 +151,8 @@ fast tier decides on its own when a change needs the full suite.
   avoid a failure.
 
 After installing the Eask development dependencies, run the fail-fast check
-(`--affected` and `--jobs` pass through to the test runner):
+(`--affected`, `--jobs` and the `MEVEDEL_AFFECTED_BASE` environment variable
+pass through to the test runner):
 
 ```bash
 npx @emacs-eask/cli run script check
@@ -159,6 +160,8 @@ npx @emacs-eask/cli run script check
 eask run script check
 # The pre-commit tier:
 eask run script check -- --affected
+# Pin the default affected base for a long-lived branch (or export it once):
+MEVEDEL_AFFECTED_BASE=BASE eask run script check -- --affected
 # Limit test concurrency on smaller machines:
 npx @emacs-eask/cli run script check -- --jobs 4
 ```
@@ -422,9 +425,19 @@ the ordinary ERT command. Conditional skips remain visible in reports.
 #### Affected tier
 
 `--affected [REV]` selects test files for the changes since `git merge-base REV
-HEAD` (default `master`): committed changes, staged and unstaged edits,
+HEAD`: committed changes, staged and unstaged edits,
 deletions, and untracked files that are not ignored. It reads the repository's
 own `require` and `provide` forms; there is no hand-maintained mapping.
+An explicit `REV` wins; without one, the runner uses `MEVEDEL_AFFECTED_BASE`
+when nonempty, otherwise `master`. The variable also passes through
+`eask run script check -- --affected` and the pre-commit hook. It does not enable
+affected mode on its own, and does not replace the standards check's independent
+`CHECK_BASE` setting. For example:
+
+```bash
+MEVEDEL_AFFECTED_BASE=BASE python3 test/run_tests.py --affected --jobs 4
+CHECK_BASE=BASE MEVEDEL_AFFECTED_BASE=BASE eask run script check -- --affected
+```
 
 - A changed root or `test/` library selects the test files that require one of
   its features directly, the test files it owns by name (`test-STEM.el` and
