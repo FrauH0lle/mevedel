@@ -610,9 +610,21 @@
     });
     while (transcript.children.length > desired.length) transcript.lastElementChild.remove();
     // One layout read per render, once the groups are attached.
-    for (const group of failing) {
-      group.groupFailed.hidden = group.groupLabel.scrollWidth <= group.groupLabel.clientWidth;
-    }
+    failing.forEach(group => fitFailure(group.groupFailed));
+  }
+
+  // Show a group's failure total only while its label's ellipsis hides the
+  // inline counts.  A detached or closed container measures zero, so callers
+  // that attach or open one later re-check it with fitActivityFailures.
+  function fitFailure(failed) {
+    if (!failed.textContent) return;
+    failed.hidden = true;
+    const label = failed.previousElementSibling;
+    failed.hidden = label.scrollWidth <= label.clientWidth;
+  }
+
+  function fitActivityFailures(scope) {
+    scope.querySelectorAll('.activity-failed').forEach(fitFailure);
   }
 
   function renderRecord(record, scopeChip, onArtifactOpen, previous, onExecutionOpen, onAgentOpen, href) {
@@ -710,5 +722,5 @@
   }
 
   window.mevedelTranscriptRenderer = Object.freeze(
-    {renderRecord, markContinuations, groupActivity, revealTool, renderDiff, renderMarkdown, formatBytes, scopeKey});
+    {renderRecord, markContinuations, groupActivity, fitActivityFailures, revealTool, renderDiff, renderMarkdown, formatBytes, scopeKey});
 })();
