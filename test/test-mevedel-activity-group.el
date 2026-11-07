@@ -109,20 +109,21 @@
                          (plist-put (mevedel-activity-group-test--tool "Read" nil 3)
                                     :scope 'directive))
                    1))))
-  :doc "summaries count tools by verb in first-appearance order"
+  :doc "summaries count calls, then tools by verb in first-appearance order"
   (let ((summary (lambda (&rest names)
                    (plist-get (car (mevedel-activity-group-partition
                                     (mapcar #'mevedel-activity-group-test--tool names)
                                     nil))
                               :summary))))
-    (should (equal "Searched 2 patterns, read 1 file, ran 2 commands"
+    (should (equal "5 calls: searched 2 patterns, read 1 file, ran 2 commands"
                    (funcall summary "Grep" "Grep" "Read" "Bash" "Bash")))
-    (should (equal "mcp_linear ×2, read 1 file"
+    (should (equal "3 calls: mcp_linear ×2, read 1 file"
                    (funcall summary "mcp_linear" "mcp_linear" "Read")))
-    (should (equal "Read 2 files, LspRename"
-                   (funcall summary "Read" "LspRename" "Read"))))
+    (should (equal "3 calls: read 2 files, LspRename"
+                   (funcall summary "Read" "LspRename" "Read")))
+    (should (equal "1 call: read 1 file" (funcall summary "Read"))))
   :doc "distinct completions count by outcome, then messages"
-  (should (equal "Read 1 file, 1 command completed, 1 failed, received 1 message"
+  (should (equal "1 call: read 1 file, 1 command completed, 1 failed, received 1 message"
                  (plist-get
                   (car (mevedel-activity-group-partition
                         (list (mevedel-activity-group-test--tool "Read")
@@ -136,7 +137,7 @@
                         nil))
                   :summary)))
   :doc "every completion verb the classifier can give reaches the summary"
-  (should (equal "Read 1 file, 1 command completed, 1 failed, 1 stopped, 1 timed out, 1 ended, 1 lost"
+  (should (equal "1 call: read 1 file, 1 command completed, 1 failed, 1 stopped, 1 timed out, 1 ended, 1 lost"
                  (plist-get
                   (car (mevedel-activity-group-partition
                         (cons (mevedel-activity-group-test--tool "Read")
@@ -159,7 +160,41 @@
     (should (= 2 (plist-get group :running)))
     (should (= 2 (plist-get group :failed)))
     (should (plist-get group :warning))
-    (should (equal "2 failed: Grep" (plist-get group :failure-label))))
+    (should (equal "5 calls: read 2 files, searched 2 patterns (2 failed), ran 1 command"
+                   (plist-get group :summary))))
+  :doc "failures count beside each tool phrase, marked for styling"
+  (let ((summary (plist-get
+                  (car (mevedel-activity-group-partition
+                        (list (mevedel-activity-group-test--tool "Bash" 'failed)
+                              (mevedel-activity-group-test--tool "Bash")
+                              (mevedel-activity-group-test--tool "ApplyPatch" 'failed)
+                              (mevedel-activity-group-test--tool "ApplyPatch")
+                              (mevedel-activity-group-test--tool "Grep" 'failed)
+                              (mevedel-activity-group-test--tool "Read"))
+                        nil))
+                  :summary))
+        (part (lambda (summary text)
+                (get-text-property (string-search text summary)
+                                   'mevedel-activity-group-part summary))))
+    (should (equal (concat "6 calls: ran 2 commands (1 failed), ApplyPatch ×2 (1 failed), "
+                           "searched 1 pattern (1 failed), read 1 file")
+                   summary))
+    (should-not (string-search "failed:" summary))
+    (should (eq 'count (funcall part summary "6 calls")))
+    (should-not (funcall part summary ": ran"))
+    (should (eq 'failure (funcall part summary "1 failed")))
+    (should (eq 'muted (funcall part summary "(")))
+    (should-not (funcall part summary "ran 2 commands")))
+  :doc "a group is unconfined when any tool ran without confinement"
+  (let ((group (lambda (&rest flags)
+                 (car (mevedel-activity-group-partition
+                       (mapcar (lambda (flag)
+                                 (plist-put (mevedel-activity-group-test--tool "Bash")
+                                            :unconfined flag))
+                               flags)
+                       nil)))))
+    (should (plist-get (funcall group nil t nil) :unconfined))
+    (should-not (plist-get (funcall group nil nil) :unconfined)))
   :doc "status falls from failed to warning to completed"
   (should (equal '(failed warning completed)
                  (mapcar (lambda (status)
@@ -168,20 +203,7 @@
                                                    "Read" status))
                                             nil))
                                       :status))
-                         '(failed warning completed))))
-  :doc "a long list of failed names ends in an ellipsis within its budget"
-  (let ((label (plist-get
-                (car (mevedel-activity-group-partition
-                      (list (mevedel-activity-group-test--tool
-                             "mcp__server__first_long_tool" 'failed)
-                            (mevedel-activity-group-test--tool
-                             "mcp__server__second_long_tool" 'failed))
-                      nil))
-                :failure-label)))
-    (should (string-suffix-p "…" label))
-    (should (<= (string-width label)
-                (+ (string-width "2 failed: ")
-                   mevedel-activity-group--failed-names-width)))))
+                         '(failed warning completed)))))
 
 (defun mevedel-activity-group-test--part (label kind &optional name status)
   "Return transcript text for part LABEL of KIND.
@@ -291,7 +313,7 @@ PENDING labels in-flight calls, which a group header counts as running."
   ,test
   (test)
   :doc "mailbox labels match exactly, not a shorter label's prefix"
-  (let ((activity '(:id "group" :summary "Read 3 files, received 1 message")))
+  (let ((activity '(:id "group" :summary "3 calls: read 3 files, received 1 message")))
     (should (equal (list (list '("part10") activity))
                    (mevedel-activity-group-test--projection-groups
                     (list (list :kind "agent-notice" :text "part10" :activity activity))
@@ -448,22 +470,18 @@ calls that follow PARTS in a turn without a final response."
              (view (car surfaces))
              (projection (cadr surfaces)))
         (unless (and (equal (mapcar #'car view) (mapcar #'car projection))
-                     ;; Each browser summary and failure label appears in
-                     ;; the matching Emacs group row.
+                     ;; Each browser summary, failure counts included,
+                     ;; appears in the matching Emacs group row.
                      (cl-every (lambda (pair)
                                  (let ((activity (cadr (cdr pair)))
                                        (header (cdr (car pair))))
-                                   (and (string-search (plist-get activity :summary) header)
-                                        (or (null (plist-get activity :failures))
-                                            (string-search (plist-get activity :failures)
-                                                           header)))))
+                                   (string-search (plist-get activity :summary) header)))
                                (cl-mapcar #'cons view projection)))
           (push (car case) disagreements)
           (push (list (car case) :view view
                       :projection (mapcar (lambda (group)
                                             (list (car group)
-                                                  (plist-get (cadr group) :summary)
-                                                  (plist-get (cadr group) :failures)))
+                                                  (plist-get (cadr group) :summary)))
                                           projection))
                 details))))
     (ert-info ((prin1-to-string (nreverse details)))

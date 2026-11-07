@@ -494,7 +494,7 @@ count, and expands in place.  Zero disables folding."
   :type 'integer
   :group 'mevedel)
 
-(defcustom mevedel-view-tool-group-collapse-threshold 3
+(defcustom mevedel-view-tool-group-collapse-threshold 2
   "Runs of more than this many consecutive tool rows fold into one group.
 The group renders as a one-line activity summary that expands into the
 individual tool rows.  Zero disables grouping."
@@ -2153,7 +2153,8 @@ Execution outcome remains independent of lifecycle and disclosure state."
 (defun mevedel-view--rendering-header-line (rendering)
   "Return the propertized collapsed header line for RENDERING."
   (let* ((vtype (or (plist-get rendering :vtype) 'tool-summary))
-         (header (if (eq vtype 'tool-group)
+         (group-p (eq vtype 'tool-group))
+         (header (if group-p
                      (mevedel-view--fit-group-header
                       (or (plist-get rendering :header) "Tool") rendering)
                    (or (plist-get rendering :header) "Tool")))
@@ -2192,19 +2193,25 @@ Execution outcome remains independent of lifecycle and disclosure state."
                        (t 'mevedel-view-tool-marker)))
          (tool-split
           (and (not agent-p)
+               (not group-p)
                (mevedel-view--split-rendering-tool-header header))))
     (if (memq vtype '(system-reminder-summary thinking-summary))
         header
       (let ((line
-             (if tool-split
-                 (mevedel-view--tool-call-line
-                  marker marker-face
-                  (nth 0 tool-split)
-                  (nth 1 tool-split)
-                  (nth 2 tool-split))
+             (cond
+              (group-p
+               (mevedel-view--group-header-text
+                marker marker-face header (plist-get rendering :unconfined)))
+              (tool-split
+               (mevedel-view--tool-call-line
+                marker marker-face
+                (nth 0 tool-split)
+                (nth 1 tool-split)
+                (nth 2 tool-split)))
+              (t
                (mevedel-view--operation-line
                 marker marker-face header nil nil
-                (mevedel-view--rendering-header-face rendering)))))
+                (mevedel-view--rendering-header-face rendering))))))
         (when-let* ((agent-path (plist-get rendering :agent-path)))
           (setq line (mevedel-view--buttonize-agent-header-label
                       line agent-path)))
@@ -2223,19 +2230,44 @@ Execution outcome remains independent of lifecycle and disclosure state."
                           (plist-get rendering :permission-approval-reason))))
           (setq line (concat line "  " hint)))
         (let* ((count (plist-get rendering :pending-count))
-               (pending-failed (plist-get rendering :pending-failed))
-               (failures (plist-get rendering :failure-label)))
-          (cond
-           ((or count pending-failed)
-            (mevedel-view--running-header
-             line count (plist-get rendering :pending-virtual) failures))
-           ;; A settled group keeps the count its running form showed, so
-           ;; settling neither unfolds nor reshapes it.
-           (failures
-            (concat line
-                    (propertize " · " 'font-lock-face 'mevedel-view-tool-metadata)
-                    (propertize failures 'font-lock-face 'error)))
-           (t line)))))))
+               (pending-failed (plist-get rendering :pending-failed)))
+          (when (or count pending-failed)
+            (setq line (mevedel-view--running-header
+                        line count (plist-get rendering :pending-virtual))))
+          ;; The disclosure marker follows the running count, so stopping a
+          ;; turn removes the count without moving the marker's text.
+          (if group-p
+              (concat line " "
+                      (propertize
+                       (if (plist-get rendering :disclosure-open) "▾" "▸")
+                       'font-lock-face 'mevedel-view-tool-metadata))
+            line))))))
+
+(defun mevedel-view--group-header-text (marker marker-face summary unconfined)
+  "Return an activity group's header from MARKER, MARKER-FACE and SUMMARY.
+SUMMARY comes from `mevedel-activity-group-partition': its call count
+takes the tool-name face, like the `Name:' of a tool row, and its failure
+counts take the error face.  UNCONFINED adds `· unconfined' once for the
+members whose own rows say they ran without confinement."
+  (let ((text (propertize summary 'font-lock-face 'mevedel-view-tool-summary))
+        (pos 0))
+    (while (< pos (length text))
+      (let ((part (get-text-property pos 'mevedel-activity-group-part text))
+            (next (next-single-property-change
+                   pos 'mevedel-activity-group-part text (length text))))
+        (when part
+          (put-text-property pos next 'font-lock-face
+                             (pcase part
+                               ('count '(mevedel-view-tool-name bold))
+                               ('failure 'error)
+                               (_ 'mevedel-view-tool-metadata))
+                             text))
+        (setq pos next)))
+    (concat (propertize (concat "  " marker " ") 'font-lock-face marker-face)
+            text
+            (when unconfined
+              (propertize " · unconfined"
+                          'font-lock-face 'mevedel-view-tool-metadata)))))
 
 (defun mevedel-view--sandbox-summary-line (summary)
   "Return the durable disclosure line for material sandbox SUMMARY.
@@ -2308,6 +2340,14 @@ every row."
        nil
        'mevedel-view-tool-metadata))))
 
+(defun mevedel-view--sandbox-unconfined-p (summary)
+  "Return non-nil when sandbox SUMMARY says the call ran without confinement.
+These are the rows whose disclosure reads `ran without confinement'; an
+activity group shows the fact once on its header."
+  (and summary
+       (memq (plist-get summary :sandbox) '(off unavailable))
+       (> (or (plist-get summary :started-count) 0) 0)))
+
 (defun mevedel-view--rendering-header-block (rendering)
   "Return RENDERING's header plus any durable sandbox disclosure."
   (let ((header (mevedel-view--rendering-header-line rendering))
@@ -2356,7 +2396,10 @@ RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
        mevedel-view-rendered t))
     (when (eq vtype 'agent-handle)
       (mevedel-view--stamp-agent-handle ins-start (point) rendering))
-    (mevedel-view--decorate-markdown-in-range ins-start (point))
+    ;; A group header is generated from counts and tool names, so it has no
+    ;; Markdown, links or paths to decorate.
+    (unless (eq vtype 'tool-group)
+      (mevedel-view--decorate-markdown-in-range ins-start (point)))
     (mevedel-view--apply-rendering-indent ins-start (point))))
 
 (defun mevedel-view--render-expanded-body (rendering source)
@@ -2365,7 +2408,11 @@ RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
          (body-mode (plist-get rendering :body-mode))
          (vtype (or (plist-get rendering :vtype) 'tool-summary))
          (fontified (mevedel-view--fontify-as body body-mode))
-         (header-line (mevedel-view--rendering-header-block rendering))
+         (header-line (mevedel-view--rendering-header-block
+                       ;; Only an expanded group header points its marker down.
+                       (if (eq vtype 'tool-group)
+                           (plist-put (copy-sequence rendering) :disclosure-open t)
+                         rendering)))
          (ins-start (point))
          body-start)
     (insert header-line "\n")
@@ -2398,7 +2445,8 @@ RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
                              rear-nonsticky (line-prefix wrap-prefix)))
       ;; Thinking uses the same fontification-only body as an explicit
       ;; disclosure expansion, preserving the exact reasoning payload.
-      (unless (eq vtype 'thinking-summary)
+      ;; A group's own rows follow and decorate themselves.
+      (unless (memq vtype '(thinking-summary tool-group))
         (mevedel-view--decorate-markdown-in-range ins-start (point)))
       (add-text-properties body-start (point)
                            `(line-prefix ,inset
@@ -3993,11 +4041,11 @@ once its call settles."
                               (selected-frame))))
     text))
 
-(defun mevedel-view--running-header (line count &optional virtual failures)
+(defun mevedel-view--running-header (line count &optional virtual)
   "Return group header LINE marked running with COUNT calls in flight.
 The settled marker gives way to the running one, and `· N running'
-follows the summary; the FAILURES label follows it, since a folded group
-cannot show the failed rows.  With no call left
+follows the summary, whose failure counts stay beside their tools.  With
+no call left
 running, a failure takes the `×' marker.  Unless VIRTUAL, the replaced
 marker is kept on the new one so a stopped turn can restore it in place."
   (let ((marker (if count
@@ -4010,16 +4058,14 @@ marker is kept on the new one so a stopped turn can restore it in place."
                  'mevedel-view-settled-marker
                  (and (not virtual) (substring line 0 4)))
      (substring line 4)
-     (propertize
-      (concat (when count
-                (concat sep
-                        (mevedel-view--pending-label
-                         (propertize (format "%d running" count)
-                                     'font-lock-face 'mevedel-view-tool-metadata)
-                         'pending-run)))
-              (when failures
-                (concat sep (propertize failures 'font-lock-face 'error))))
-      'mevedel-view-pending-tool-live t))))
+     (when count
+       (propertize
+        (concat sep
+                (mevedel-view--pending-label
+                 (propertize (format "%d running" count)
+                             'font-lock-face 'mevedel-view-tool-metadata)
+                 'pending-run))
+        'mevedel-view-pending-tool-live t)))))
 
 (defun mevedel-view--pending-children (entries)
   "Return activity group children for in-flight tool ENTRIES."
@@ -4124,7 +4170,7 @@ header, so that row stays on screen."
                   :vtype 'tool-group
                   :pending-count (mevedel-view--pending-running-count entries)
                   :pending-failed (mevedel-view--pending-failed-count entries)
-                  :failure-label (plist-get group :failure-label)
+                  :disclosure-open open
                   :pending-virtual t))
            '(mevedel-view-type tool-pending
 			       mevedel-view-pending-tool-live t))
@@ -6583,6 +6629,8 @@ and standalone audits are boundaries."
                        ('warning 'warning)
                        ('running 'running)
                        (_ 'completed))
+             :unconfined (mevedel-view--sandbox-unconfined-p
+                          (plist-get rendering :sandbox-summary))
              :view entry)))
     ('completion
      (let ((record (plist-get (plist-get (plist-get entry :group-child) :rendering)
@@ -7021,7 +7069,7 @@ before expanding children."
             :child-calls children
             :pending-count (mevedel-view--pending-running-count pending)
             :pending-failed (mevedel-view--pending-failed-count pending)
-            :failure-label (plist-get group :failure-label)
+            :unconfined (plist-get group :unconfined)
             :status (cond ((> (plist-get group :failed) 0) 'error)
                           ((plist-get group :warning) 'warning))
             :reader-open reader-p
@@ -7041,18 +7089,18 @@ before expanding children."
 
 (defun mevedel-view--fit-group-header (header rendering)
   "Return HEADER shortened so RENDERING's folded group row is one screen line.
-The summary grows with every kind of tool a run uses, and its running and
-failed counts come and go; a summary that wrapped would add or drop a row
-as they did.  Room is kept for those counts, measured against the
-narrowest window showing the view."
+The summary grows with every kind of tool a run uses, and its running count
+comes and goes; a summary that wrapped would add or drop a row as it did.
+Room is kept for that count, the unconfined note and the disclosure
+marker, measured against the narrowest window showing the view."
   (let* ((windows (get-buffer-window-list (current-buffer) nil t))
          (width (if windows
                     (apply #'min (mapcar #'window-body-width windows))
                   (window-body-width)))
          (count (plist-get rendering :pending-count))
-         (failures (plist-get rendering :failure-label))
          (suffix (concat (and count (format " · %d running" count))
-                         (and failures (concat " · " failures))))
+                         (and (plist-get rendering :unconfined) " · unconfined")
+                         " ▸"))
          ;; The marker column, a line prefix for nested rows, and the
          ;; last column, which would wrap the line in a terminal.
          (available (max 10 (- width 4 2 1 (string-width suffix)))))

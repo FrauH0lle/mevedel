@@ -102,7 +102,7 @@
       (mevedel-view--full-rerender)
       (should-not (string-search "Thinking" (buffer-string)))
       (should-not (string-search "opaque-provider-signature" (buffer-string)))
-      (should (string-search "Read 4 files" (buffer-string)))))
+      (should (string-search "4 calls: read 4 files" (buffer-string)))))
   :doc "compound tools nested in reasoning retain children without hiding surrounding thoughts"
   (mevedel-view-test--with-buffers
     (mevedel-tool-ptc--register)

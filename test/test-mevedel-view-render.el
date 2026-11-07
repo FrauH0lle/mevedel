@@ -3239,7 +3239,7 @@
            (with-current-buffer data-buf (copy-marker (point-min))))
           (mevedel-view-render-live-update data-buf)
           (goto-char (point-min))
-          (search-forward "Read 4 files")
+          (search-forward "read 4 files")
           (mevedel-view-toggle-section)
           (goto-char (point-min))
           (search-forward "f0.el")
@@ -3266,7 +3266,7 @@
             (if (eq refresh 'mevedel-view--full-rerender)
                 (funcall refresh)
               (funcall refresh data-buf))
-            (should (string-match-p "Read 4 files" (buffer-string)))
+            (should (string-match-p "read 4 files" (buffer-string)))
             (should (string-match-p "tool input repaired" (buffer-string)))
             (should (equal "content 0"
                            (buffer-substring-no-properties
@@ -3305,7 +3305,7 @@
          (with-current-buffer data-buf (copy-marker (point-min))))
         (mevedel-view-render-live-update data-buf)
         (goto-char (point-min))
-        (search-forward (if (equal name "Read") "Read 5 files" "ApplyPatch"))
+        (search-forward (if (equal name "Read") "read 5 files" "ApplyPatch"))
         (mevedel-view-toggle-section)
         (goto-char (point-min))
         (search-forward (if (equal name "Read") "f4.el" "ApplyPatch:"))
@@ -3327,7 +3327,7 @@
             (if (eq refresh 'mevedel-view--full-rerender)
                 (funcall refresh)
               (funcall refresh data-buf))
-            (should (string-match-p "Read 4 files" (buffer-string)))
+            (should (string-match-p "read 4 files" (buffer-string)))
             (should (string-match-p "tool input repaired" (buffer-string)))
             (should (= column (current-column)))
             (should (equal line (buffer-substring-no-properties
@@ -4301,7 +4301,7 @@
                    :calls ((:id "outer/1" :source ptc :tool "Eval"
                             :status success :args (:expression "(+ 1 2)")
                             :result "audit preview"))))
-           (heading "Read 1 file, searched 1 pattern, evaluated 1 form")
+           (heading "read 1 file, searched 1 pattern, evaluated 1 form")
            eval-start eval-end original)
       (mevedel-view-test--insert-data
        data-buf "(:name \"Read\" :args (:file_path \"file.el\"))\n\nfile body\n"
@@ -6061,8 +6061,34 @@
                                     (list :sandbox-summary summary)))))
                  nil))
            (current-buffer))))
-    (should (equal "Ran 1 command" (plist-get rendering :header)))
-    (should-not (plist-get rendering :status))))
+    (should (equal "1 call: ran 1 command" (plist-get rendering :header)))
+    (should-not (plist-get rendering :status))
+    (should-not (plist-get rendering :unconfined)))
+  :doc "a call that ran without confinement marks the group once"
+  (let* ((summary '(:attempt-count 1 :started-count 1 :refused-count 0
+                    :sandbox off :filesystem unrestricted
+                    :network unrestricted :proc nil
+                    :additional-read-count 0 :additional-write-count 0))
+         (entry (lambda (sandbox)
+                  (mevedel-view--activity-group-entry
+                   (list :kind 'tool :count 1
+                         :rendering (list :status 'success :group-tool "Bash"
+                                          :sandbox-summary sandbox)
+                         :group-child (list :tool "Bash" :status 'success)))))
+         (rendering
+          (mevedel-view--tool-group-rendering
+           (car (mevedel-activity-group-partition
+                 (list (funcall entry summary) (funcall entry nil)) nil))
+           (current-buffer)))
+         (line (substring-no-properties
+                (mevedel-view--rendering-header-line rendering))))
+    (should (plist-get rendering :unconfined))
+    (should-not (plist-get rendering :status))
+    (should (string-suffix-p "2 calls: ran 2 commands · unconfined ▸" line))
+    (should (= 1 (mevedel-view-test--count-substring "unconfined" line))))
+  :doc "a refused call did not run, so it is not unconfined"
+  (should-not (mevedel-view--sandbox-unconfined-p
+               '(:attempt-count 1 :started-count 0 :refused-count 1 :sandbox off))))
 
 (mevedel-deftest mevedel-view--insert-child-calls ()
   ,test
@@ -8807,7 +8833,7 @@
           (when rebuild (mevedel-view--full-rerender))
           (let ((text (buffer-substring-no-properties
                        (point-min) mevedel-view--input-marker)))
-            (should (string-match-p "Read 4 files" text))
+            (should (string-match-p "read 4 files" text))
             (should-not (string-match-p "terminal output\\|Background command\\|Monitor\\|received" text)))))
       (with-current-buffer data-buf
         (should (string-match-p "terminal output" (buffer-string)))))))
@@ -8844,14 +8870,14 @@
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p
-                   "Read 4 files, 1 command completed, 1 failed" text))
+                   "read 4 files, 1 command completed, 1 failed" text))
           (should-not (string-match-p "Background command" text)))
         ;; The folded group still counts as projecting its completions.
         (should (mevedel-view-audit-breadcrumb-present-p
                  '(:execution-id "b" :owner "/root")
                  mevedel-view--input-marker))
         (goto-char (point-min))
-        (search-forward "Read 4 files")
+        (search-forward "read 4 files")
         (mevedel-view-toggle-section)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
@@ -8859,7 +8885,7 @@
           (should (string-match-p "● Background command \"make b\" failed (exit code 1)  \\[Show result\\]"
                                   text)))
         (goto-char (point-min))
-        (search-forward "Read 4 files")
+        (search-forward "read 4 files")
         (mevedel-view-toggle-section)
         (should-not (string-match-p
                      "Background command" (buffer-substring-no-properties
@@ -8891,12 +8917,12 @@
       (let ((folded (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
         (goto-char (point-min))
-        (search-forward "Read 4 files")
+        (search-forward "read 4 files")
         (mevedel-view-toggle-section)
         (should (string-match-p "f3.el" (buffer-substring-no-properties
                                          (point-min) mevedel-view--input-marker)))
         (goto-char (point-min))
-        (search-forward "Read 4 files")
+        (search-forward "read 4 files")
         (mevedel-view-toggle-section)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
@@ -8971,42 +8997,40 @@
 (mevedel-deftest mevedel-view--fit-group-header ()
   ,test
   (test)
-  :doc "keeps a folded group row to one line with room for its counts"
+  :doc "keeps a folded group row to one line with room for its suffixes"
   (with-temp-buffer
     (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 50)))
-      (let* ((header (concat "Read 5 files, searched 3 patterns, ran 2 commands, "
-                             "fetched 1 page, queried 4 symbols"))
+      (let* ((header (concat "15 calls: read 5 files, searched 3 patterns, "
+                             "ran 2 commands, fetched 1 page, queried 4 symbols"))
              (running (list :header header :vtype 'tool-group :pending-count 2))
              (settled (list :header header :vtype 'tool-group
-                            :failure-label "1 failed")))
+                            :unconfined t)))
         (dolist (rendering (list running settled))
           (let ((fitted (mevedel-view--fit-group-header header rendering))
                 (line (substring-no-properties
                        (mevedel-view--rendering-header-line rendering))))
             (should (string-suffix-p "…" fitted))
-            (should (< (string-width line) 50))))
-        (should (string-match-p "· 2 running"
+            (should (< (string-width line) 50))
+            (should (string-suffix-p " ▸" line))))
+        (should (string-match-p "· 2 running ▸\\'"
                                 (mevedel-view--rendering-header-line running)))
-        (should (string-match-p "· 1 failed"
+        (should (string-match-p "· unconfined ▸\\'"
                                 (mevedel-view--rendering-header-line settled))))))
-  :doc "a folded row naming its failures still fits one line"
+  :doc "an expanded group points its disclosure marker down"
   (with-temp-buffer
-    (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 60)))
-      (let* ((rendering (list :header (concat "Read 5 files, searched 3 patterns, "
-                                              "ran 2 commands, fetched 1 page")
-                              :vtype 'tool-group :status 'error
-                              :failure-label "2 failed: Grep, WebFetch"))
-             (line (substring-no-properties
-                    (mevedel-view--rendering-header-line rendering))))
-        (should (string-suffix-p "· 2 failed: Grep, WebFetch" line))
-        (should (string-match-p "…" line))
-        (should (< (string-width line) 60)))))
+    (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 80)))
+      (should (string-suffix-p
+               "4 calls: read 4 files ▾"
+               (substring-no-properties
+                (mevedel-view--rendering-header-line
+                 '(:header "4 calls: read 4 files" :vtype tool-group
+                   :disclosure-open t)))))))
   :doc "leaves a header that fits unchanged"
   (with-temp-buffer
     (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 80)))
-      (should (equal "Read 4 files"
+      (should (equal "read 4 files"
                      (mevedel-view--fit-group-header
-                      "Read 4 files" '(:vtype tool-group :pending-count 1)))))))
+                      "read 4 files" '(:vtype tool-group :pending-count 1)))))))
 
 (mevedel-deftest mevedel-view--activity-group-entry ()
   ,test
@@ -9058,6 +9082,79 @@
 (mevedel-deftest mevedel-view--insert-tool-group ()
   ,test
   (test)
+  :doc "unconfined rows fold like any row; the group names it once and keeps each disclosure"
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
+          (mevedel-view-tool-group-collapse-threshold 2)
+          (summary '(:attempt-count 1 :started-count 1 :refused-count 0
+                     :sandbox off :filesystem unrestricted :network unrestricted
+                     :proc nil :additional-read-count 0 :additional-write-count 0))
+          (sandbox "◇ Sandbox:  sandbox disabled · ran without confinement"))
+      (mevedel-tool-register
+       (mevedel-tool--create :name "Bash" :category "mevedel"
+                             :renderer #'mevedel-tool-exec--render-bash))
+      (cl-flet ((tool (id name args)
+                  (with-current-buffer data-buf
+                    (goto-char (point-max))
+                    (insert "#+begin_tool\n"
+                            (propertize (format "(:name %S :args %S)\n\nout\n" name args)
+                                        'gptel (cons 'tool id)))
+                    (when (equal name "Bash")
+                      (let ((start (point)))
+                        (insert (substring-no-properties
+                                 (mevedel-tool-render-data-format
+                                  (list :kind 'bash :command (plist-get args :command)
+                                        :state 'completed :termination 'exited
+                                        :exit-code 0 :outcome 'success
+                                        :wall-time-seconds 1.0 :status 'success
+                                        :sandbox-summary summary)
+                                  id)))
+                        (put-text-property start (point) 'mevedel-render-data t)))
+                    (insert "#+end_tool\n"))))
+        (tool "r1" "Read" '(:file_path "/tmp/a.el"))
+        (tool "b1" "Bash" '(:command "echo one"))
+        (tool "b2" "Bash" '(:command "echo two"))
+        (mevedel-view-test--insert-data data-buf "Then two more.\n\n" 'response)
+        (tool "b3" "Bash" '(:command "echo three"))
+        (tool "b4" "Bash" '(:command "echo four"))
+        (mevedel-view-test--insert-data data-buf "Done.\n" 'response))
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 3))
+      (with-current-buffer data-buf
+        (mevedel-view-stream-render-response (point-min) (point-max)))
+      (with-current-buffer view-buf
+        (dotimes (_ 2)
+          (let ((lines (split-string (buffer-substring-no-properties
+                                      (point-min) mevedel-view--input-marker)
+                                     "\n")))
+            (should (= 1 (cl-count
+                          "  ✓ 3 calls: read 1 file, ran 2 commands · unconfined ▸"
+                          lines :test #'equal)))
+            ;; The run below the threshold keeps its rows and their notes.
+            (should (equal (list "  ✓ Bash: echo three · finished · 1s" (concat "  " sandbox)
+                                 "  ✓ Bash: echo four · finished · 1s" (concat "  " sandbox))
+                           (seq-filter (lambda (line)
+                                         (string-match-p "Bash:\\|Sandbox:" line))
+                                       lines))))
+          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+          (mevedel-view--full-rerender))
+        (goto-char (point-min))
+        (search-forward "3 calls:")
+        (mevedel-view-toggle-section)
+        (let ((lines (split-string (buffer-substring-no-properties
+                                    (point-min) mevedel-view--input-marker)
+                                   "\n")))
+          (should (member "  ✓ 3 calls: read 1 file, ran 2 commands · unconfined ▾" lines))
+          (should (= 4 (cl-count-if (lambda (line) (string-search sandbox line))
+                                    lines))))
+        (goto-char (point-min))
+        (search-forward "echo one")
+        (should (eq 'tool-child (get-text-property (point) 'mevedel-view-type)))
+        (forward-line 1)
+        (should (string-search sandbox (buffer-substring-no-properties
+                                        (line-beginning-position)
+                                        (line-end-position))))
+        (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
   :doc "a run past the threshold folds into one expandable activity row"
   (mevedel-view-test--with-buffers
     (dotimes (i 4)
@@ -9090,11 +9187,11 @@
     (with-current-buffer view-buf
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "Read 4 files" text))
+        (should (string-match-p "read 4 files" text))
         (should-not (string-match-p "f0\\.el" text)))
       ;; Expand the group: rows are compound-tool nested rows.
       (goto-char (point-min))
-      (search-forward "Read 4 files")
+      (search-forward "read 4 files")
       (goto-char (match-beginning 0))
       (should (eq 'tool-group
                   (get-text-property (point) 'mevedel-view-type)))
@@ -9117,12 +9214,12 @@
         (should-not (string-match-p "content 1" text)))
       ;; Collapsing the group takes every row with it.
       (goto-char (point-min))
-      (search-forward "Read 4 files")
+      (search-forward "read 4 files")
       (goto-char (match-beginning 0))
       (mevedel-view-toggle-section)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "Read 4 files" text))
+        (should (string-match-p "read 4 files" text))
         (should-not (string-match-p "f0\\.el\\|content 0" text)))))
   :doc "thinking partitions long tool runs and stays visible through either group fold"
   (mevedel-view-test--with-buffers
@@ -9168,23 +9265,23 @@
                                     thought (buffer-string)))))))
           (check-thinking)
           (should (= 2 (mevedel-view-test--count-substring
-                        "Read 4 files" (buffer-string))))
+                        "read 4 files" (buffer-string))))
           (should-not (string-search "thought 1 time" (buffer-string)))
           (dolist (group '(0 1))
             (dotimes (_ 2)
               (save-excursion
                 (goto-char (point-min))
-                (dotimes (_ (1+ group)) (search-forward "Read 4 files"))
+                (dotimes (_ (1+ group)) (search-forward "read 4 files"))
                 (mevedel-view-toggle-section))
               (check-thinking)
               (should (equal "> keep\nsecond line" (mevedel-view--input-text)))
               (should (= (point) (+ 4 (mevedel-view--input-start))))))
           ;; Expand both groups to prove every tool remains on its own side.
           (goto-char (point-min))
-          (search-forward "Read 4 files")
+          (search-forward "read 4 files")
           (mevedel-view-toggle-section)
           (search-forward thought)
-          (search-forward "Read 4 files")
+          (search-forward "read 4 files")
           (mevedel-view-toggle-section)
           (goto-char (point-min))
           (dotimes (i 8)
@@ -9224,7 +9321,7 @@
       (search-forward "f1.el")
       (should-not (save-excursion
                     (goto-char (point-min))
-                    (search-forward "Read 2 files" nil t)))))
+                    (search-forward "read 2 files" nil t)))))
   :doc "hidden tool rows stay hidden inside mixed activity groups"
   (mevedel-view-test--with-buffers
     (let* ((hidden-tool
@@ -9291,14 +9388,14 @@
           (should (= 1 (cl-count-if
                         (lambda (line)
                           (string-match-p
-                           "× Read 8 files, ran 1 command · 1 failed: Bash$" line))
+                           "× 9 calls: read 8 files, ran 1 command (1 failed) ▸$" line))
                         (split-string text "\n"))))
           (should-not (string-match-p "Bash:" text))
           (should-not (string-match-p "Error: command failed" text)))
         (mevedel-view--full-rerender)
         (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
       (goto-char (point-min))
-      (search-forward "Read 8 files")
+      (search-forward "read 8 files")
       (mevedel-view-toggle-section)
       (goto-char (point-min))
       (search-forward "Bash:")
@@ -9327,7 +9424,7 @@
       (with-current-buffer view-buf
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-          (should-not (string-match-p "Read 4 files" text))
+          (should-not (string-match-p "read 4 files" text))
           (should (string-match-p "Read: .*f0\\.el" text))
           (should (string-match-p "Read: .*f3\\.el" text))))))
 
@@ -9346,7 +9443,7 @@
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
       (goto-char (point-min))
-      (search-forward "Read 4 files, received 1 message")
+      (search-forward "read 4 files, received 1 message")
       (mevedel-view-toggle-section)
       (search-forward "message from /root/reviewer")
       (should (get-text-property (point) 'mevedel-view-collapsed))
@@ -9359,7 +9456,7 @@
         (should (looking-back "Review complete\\." (line-beginning-position)))
         (should-not (invisible-p (point))))
       (goto-char (point-min))
-      (search-forward "Read 4 files, received 1 message")
+      (search-forward "read 4 files, received 1 message")
       (mevedel-view-toggle-section)
       (mevedel-view--full-rerender)
       (should-not (string-match-p "Review complete" (buffer-string)))
@@ -9391,7 +9488,7 @@
       (should (equal "> keep\ndraft" (mevedel-view--input-text)))
       (should (= (point) (+ (mevedel-view--input-start) 3)))
       (goto-char (point-min))
-      (search-forward "Read 4 files, received 2 messages")
+      (search-forward "read 4 files, received 2 messages")
       (mevedel-view-toggle-section)
       (search-forward "message from /root/reviewer")
       (should (eq 'link (get-text-property (1- (point)) 'font-lock-face)))
@@ -9820,6 +9917,37 @@
   (let ((running (mevedel-view--running-header "  ✓ Read 4 files" 4 t)))
     (should-not (get-text-property 0 'mevedel-view-settled-marker running))))
 
+(mevedel-deftest mevedel-view--group-header-text ()
+  ,test
+  (test)
+  :doc "styles the call count like a tool name and failure counts as errors"
+  (let* ((summary (plist-get
+                   (car (mevedel-activity-group-partition
+                         (list '(:role member :kind tool :name "Bash" :status failed)
+                               '(:role member :kind tool :name "Bash" :status completed)
+                               '(:role member :kind tool :name "Read" :status completed))
+                         nil))
+                   :summary))
+         (line (mevedel-view--group-header-text "×" 'error summary nil))
+         (face (lambda (text)
+                 (get-text-property (string-search text line) 'font-lock-face line))))
+    (should (equal "  × 3 calls: ran 2 commands (1 failed), read 1 file"
+                   (substring-no-properties line)))
+    (should (equal '(mevedel-view-tool-name bold) (funcall face "3 calls")))
+    (should (eq 'error (funcall face "1 failed")))
+    (should (eq 'mevedel-view-tool-metadata (funcall face "(1")))
+    (should (eq 'mevedel-view-tool-summary (funcall face "ran 2")))
+    (should (eq 'mevedel-view-tool-summary (funcall face "read 1")))
+    (should (eq 'error (funcall face "×"))))
+  :doc "adds the unconfined note once, in the metadata face"
+  (let ((line (mevedel-view--group-header-text "✓" 'mevedel-view-tool-marker
+                                               "2 calls: ran 2 commands" t)))
+    (should (string-suffix-p "ran 2 commands · unconfined"
+                             (substring-no-properties line)))
+    (should (eq 'mevedel-view-tool-metadata
+                (get-text-property (string-search "unconfined" line)
+                                   'font-lock-face line)))))
+
 (mevedel-deftest mevedel-view--pending-children ()
   ,test
   (test)
@@ -9854,7 +9982,7 @@
           (mevedel-view-tool-group-collapse-threshold 2))
       (mevedel-view--insert-pending-run
        '(("a" "Read" "x") ("b" "Read" "y") ("c" "Grep" "z")))
-      (should (equal "  ● Read 2 files, searched 1 pattern · 3 running\n"
+      (should (equal "  ● 3 calls: read 2 files, searched 1 pattern · 3 running ▸\n"
                      (buffer-string)))
       (should-not (text-property-not-all (point-min) (point-max)
                                          'mevedel-view-pending-tool-live t))))

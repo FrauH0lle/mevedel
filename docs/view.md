@@ -853,13 +853,18 @@ turn before it. Activity that ends a turn is closed by the turn's rule.
 
 `mevedel-activity-group.el` alone decides which activity folds, for this view
 and the browser projection alike. Runs of more than
-`mevedel-view-tool-group-collapse-threshold` (default 3; zero disables)
+`mevedel-view-tool-group-collapse-threshold` (default 2; zero disables)
 plain tool rows fold into one grouped activity row such as
-`Searched 5 patterns, read 1 file, ran 5 commands`; tools
-without a verb mapping — MCP tools included — appear as `NAME ×N`. A summary
-too long for the narrowest window showing the view ends in `…`, leaving room for
-its running and failed counts, so the folded row stays one screen line as they
-come and go. The
+`✓ 11 calls: searched 5 patterns, read 1 file, ran 5 commands ▸`; tools
+without a verb mapping — MCP tools included — appear as `NAME ×N`. The
+row reads like a tool row: its call count and colon stand where a tool row's
+`Name:` stands, the count in the tool-name face, bold. A muted `▸` at the end
+says it expands and turns to `▾` while it is open. A summary too long for the
+narrowest window showing the view ends in `…`, leaving room for its running
+count, unconfined note and marker, so the folded row stays one screen line as
+the count comes and goes. The header is generated from counts and tool names,
+so it skips Markdown decoration; its rows decorate themselves when shown. The
+browser shows the same summary text. The
 expanded group reuses the compound-tool nested-row machinery: each tool call
 is a `tool-child` row in chronological
 order with its own collapse state, and collapsing the group takes its rows
@@ -884,6 +889,10 @@ its children's states. Rows that demand individual presentation — agent
 handles, compound tools, rows carrying hook audits, rows their renderer wants expanded or
 compact, and coalescing rows — never fold into a group; they split the run
 around themselves. A standalone hook audit row splits the run the same way.
+A row's own sandbox disclosure (`◇ Sandbox: …`) is not a hook audit: it stays
+with the row inside the group, so Bash folds like Read and Grep. When a member
+ran without confinement, the folded header says so once, as `· unconfined`
+after the summary; each expanded row keeps its own disclosure line.
 Hidden rows such as routine polls, the transcript's own completion delivery
 and request summaries, which render after the activity they close, neither
 join nor split it. In-flight calls join the trailing run as running members. Substantive thinking also splits surrounding tool runs:
@@ -905,17 +914,18 @@ transcript are drawn in the same grammar, as running calls of the turn's
 trailing activity run. They count toward the run's grouping threshold
 together with its settled calls, so a parallel batch has the shape it will
 keep: above the threshold one group row such as
-`● Read 9 files, searched 1 pattern · 2 running`, otherwise one
+`● 10 calls: read 9 files, searched 1 pattern · 2 running ▸`, otherwise one
 `● Read: path` row per call. When the batch settles, the next render draws
-`✓` in place of `●` and drops the running count; nothing else moves. Calls
+`✓` in place of `●` and drops the running count, which the `▸` follows;
+nothing else moves. Calls
 after assistant prose, a reminder, or a row that cannot fold start their own
 run rather than joining the earlier one, inside the turn where they will
 settle. A call the pipeline reports finished keeps its place until its
 result reaches the transcript (for a gptel batch, after the whole batch):
 its row shows `✓`, or `×` for a failure, and it leaves the running count,
 so one early finisher never reshapes the run. A folded running group cannot
-show those rows, so its header adds `· N failed: TOOL` naming the failed tools;
-once no call is left
+show those rows, so its summary counts each failure beside its tool, as in
+`read 4 files (1 failed)`; once no call is left
 running, a failure takes the group's marker as `×`. The ID-less post-tool hook
 that precedes the result retires such a finished call first and never a
 bound sibling still running. A response that opens with tool
@@ -945,10 +955,11 @@ rows. If that redraw fails, the running decorations are still removed and a
 running group's settled marker is restored in place.
 
 Failed calls stay in their run, so a call failing never reshapes it. A folded
-group containing one takes the red `×` marker in the `error` face and ends its
-summary with `· N failed: Grep`, the same text its running form showed: each
-failed tool is named once, and a long list of names ends in `…` so the row stays
-one line. The failed row inside the group carries its own `×`. Warning rows stay groupable; a group containing
+group containing one takes the red `×` marker in the `error` face, and its
+summary counts the failures beside the tool phrase they belong to, as in
+`× 5 calls: ran 4 commands (2 failed), read 1 file ▸`, the same text its
+running form showed. Only the `×` and each `N failed` are red; the folded row
+still says which tool failed without a separate tail. The failed row inside the group carries its own `×`. Warning rows stay groupable; a group containing
 a warning carries `!`, and the warning stays visible on its nested row.
 Failed tool rows, including nested calls inside compound tools, start collapsed.
 Only the marker uses warning or error highlighting; the tool name, argument,

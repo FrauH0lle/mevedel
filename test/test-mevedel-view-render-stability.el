@@ -46,7 +46,7 @@
 
   :doc "full and retained redraws preserve group readers and composer windows"
   (dolist (retained '(nil t))
-    (dolist (target '("Read 4 files" "f0.el" "content 0"))
+    (dolist (target '("4 calls" "f0.el" "content 0"))
       (save-window-excursion
         (mevedel-view-test--with-buffers
           (mevedel-view-test--insert-data data-buf "Inspecting files.\n" 'response)
@@ -66,7 +66,7 @@
              (with-current-buffer data-buf (copy-marker (point-min))))
             (mevedel-view-render-live-update data-buf)
             (goto-char (point-min))
-            (search-forward "Read 4 files")
+            (search-forward "4 calls: read 4 files")
             (mevedel-view-toggle-section)
             (when (equal target "content 0")
               (search-forward "f0.el")
@@ -98,8 +98,8 @@
                     (mevedel-view--full-rerender)
                   (mevedel-view-render-live-update data-buf))
                 (should (looking-at-p
-                         (if (equal target "Read 4 files")
-                             "Read [0-9]+ files"
+                         (if (equal target "4 calls")
+                             "[0-9]+ calls: read [0-9]+ files"
                            (regexp-quote target))))
                 (should (= column (current-column)))
                 (should (= (mark) (+ (point) 2)))

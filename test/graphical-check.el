@@ -23,6 +23,8 @@
 (declare-function mevedel-view--spinner-tick "mevedel-view-stream" ())
 (declare-function mevedel-view-table-rerender "mevedel-view-table" (&optional window))
 (declare-function mevedel-view--input-text "mevedel-view-composer" ())
+(declare-function mevedel-tool-exec--register "mevedel-tool-exec-registration" ())
+(declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
 
 (defconst mevedel-graphical-check--root
   (file-name-directory
@@ -334,6 +336,91 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
                   (insert (x-export-frames nil 'png)))))
           (set-frame-width nil width))))))
 
+(defun mevedel-graphical-check--capture-tool-groups (output)
+  "Render activity groups and save collapsed and expanded exports under OUTPUT.
+One run mixes Read with Bash calls that ran without confinement; another
+holds failures."
+  (require 'mevedel-tool-exec-registration)
+  (require 'mevedel-view-disclosure)
+  (mevedel-view-test--with-buffers
+    (mevedel-tool-exec--register)
+    (let ((sandbox '(:attempt-count 1 :started-count 1 :refused-count 0
+                     :sandbox off :filesystem unrestricted :network unrestricted
+                     :proc nil :additional-read-count 0 :additional-write-count 0))
+          (id 0))
+      (cl-flet ((tool (name args &optional failed)
+                  (let ((tool-id (format "graphical-%d" (cl-incf id))))
+                    (with-current-buffer data-buf
+                      (goto-char (point-max))
+                      (insert "#+begin_tool\n"
+                              (propertize
+                               (format "(:name %S :args %S)\n\n%s\n" name args
+                                       (if failed "Error: failed" "done"))
+                               'gptel (cons 'tool tool-id)))
+                      (when (equal name "Bash")
+                        (let ((start (point)))
+                          (insert (substring-no-properties
+                                   (mevedel-tool-render-data-format
+                                    (list :kind 'bash :command (plist-get args :command)
+                                          :state 'completed :termination 'exited
+                                          :exit-code (if failed 2 0)
+                                          :outcome (if failed 'failure 'success)
+                                          :wall-time-seconds 3.0
+                                          :status (if failed 'error 'success)
+                                          :sandbox-summary sandbox)
+                                    tool-id)))
+                          (put-text-property start (point) 'mevedel-render-data t)))
+                      (insert "#+end_tool\n")))))
+        (mevedel-view-test--insert-data data-buf "Check the build.\n\n" nil)
+        (mevedel-view-test--insert-data data-buf "Reading the build files.\n\n" 'response)
+        (tool "Read" '(:file_path "Eask"))
+        (tool "Bash" '(:command "make check"))
+        (tool "Bash" '(:command "git status --short"))
+        (mevedel-view-test--insert-data data-buf "Now the failing cases.\n\n" 'response)
+        (tool "Bash" '(:command "make test") t)
+        (tool "Bash" '(:command "make lint") t)
+        (tool "Bash" '(:command "ls test"))
+        (tool "Read" '(:file_path "test/helpers.el"))
+        (tool "Grep" '(:pattern "defun mevedel-view--group") t)
+        (mevedel-view-test--insert-data data-buf "Done.\n" 'response))
+      (switch-to-buffer view-buf)
+      (rename-buffer "*mevedel graphical tool groups*" t)
+      (delete-other-windows)
+      ;; The narrow export resized the frame asynchronously; fit group
+      ;; headers to the settled width.
+      (redisplay t)
+      (sit-for 0.2)
+      (mevedel-view--full-rerender)
+      (setq-local font-lock-defaults '(nil t))
+      (font-lock-mode 1)
+      (cl-flet ((export (name)
+                  (font-lock-ensure)
+                  (goto-char (point-min))
+                  (set-window-start nil (point-min))
+                  (message nil)
+                  (redisplay t)
+                  (write-region (point-min) (point-max)
+                                (file-name-concat output (concat name ".txt"))
+                                nil 'silent)
+                  (let ((coding-system-for-write 'no-conversion))
+                    (with-temp-file (file-name-concat output (concat name ".png"))
+                      (set-buffer-multibyte nil)
+                      (insert (x-export-frames nil 'png))))))
+        (export "tool-groups")
+        (let (groups (pos (point-min)))
+          (while (setq pos (text-property-any pos (point-max)
+                                              'mevedel-view-type 'tool-group))
+            (push pos groups)
+            (setq pos (or (next-single-property-change pos 'mevedel-view-type)
+                          (point-max))))
+          (unless groups
+            (error "Tool group fixture folded no activity group"))
+          ;; Last first, so expanding one leaves earlier positions valid.
+          (dolist (group groups)
+            (goto-char group)
+            (mevedel-view-toggle-section)))
+        (export "tool-groups-expanded")))))
+
 (defun mevedel-graphical-check--child (output)
   "Run the graphical checks, save diagnostics in OUTPUT, and always exit."
   (let ((status 1))
@@ -343,6 +430,7 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
           (set-frame-size nil 110 42)
           (sit-for 0.2)
           (mevedel-graphical-check--capture output)
+          (mevedel-graphical-check--capture-tool-groups output)
           (require 'ert)
           (dolist (file mevedel-graphical-check--files)
             (load (file-name-concat mevedel-graphical-check--root "test" file) nil t))

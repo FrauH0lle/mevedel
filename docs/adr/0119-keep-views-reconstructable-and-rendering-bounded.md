@@ -127,8 +127,11 @@ programs and invalid/failed envelopes retain the outer presentation.
 Nested compound rows retain their own metadata and
 depth, so disclosure replacement removes descendants without consuming siblings.
 Failed tool calls stay in their activity group, which takes a red `×` and
-counts and names them as `· N failed: Grep`; their own rows start
-collapsed with a red `×`. Warning rows remain groupable and mark their group
+counts them beside their tool, as in `ran 4 commands (2 failed)`; their own
+rows start collapsed with a red `×`. A group header begins with its call count,
+as in `5 calls:`, and ends with a disclosure marker. A row's sandbox disclosure
+travels with the row, and the header notes `· unconfined` once.
+Warning rows remain groupable and mark their group
 with `!`. Only markers receive severity highlighting, and an accompanying
 sandbox warning cannot downgrade an error. Full rerender is the correctness
 fallback. One scheduler coalesces redraws;
@@ -660,6 +663,33 @@ tools answers September's objection that a folded row hid which call failed;
 the names are deduplicated and end in `…` past 30 columns, and the summary
 before them shortens first, so the row stays one line. A preparing result is a
 running member of its group.
+
+### November 2026: count failures beside their tools; fold from three calls
+
+The October tail repeated a tool the summary had already named, put the red
+text at the far end of the row, and grew with every failing tool. Each failure
+count now follows its own tool phrase, as in `ran 4 commands (2 failed),
+read 1 file`. The folded row still says which tool failed, which was
+September's objection, and only the `×` and the counts are red. The summary
+can shorten into the counts on a narrow window; the `×` stays. A group header
+also starts with its call count in the tool-name face, like a tool row's
+`Name:`, and ends with `▸`/`▾`, because a bare summary read as a stray line of
+prose with nothing showing that it expands.
+
+In the 2026-11-07 sweep session, Bash rows almost never folded. A read-only
+check of that live view found 202 `◇ Sandbox:` lines, none of them hook-audit
+rows: the disclosure already travelled with its row, as it does for Read and
+Grep. The Bash rows stood alone because their runs between reasoning, prose,
+reminder and agent-handle boundaries held one to three calls, at or below the
+old threshold of three. The default threshold is now two, so a run of three
+folds. The header shows `· unconfined` once for members that ran without
+confinement, and each expanded row keeps its own disclosure line. The longer
+header first cost about 3% of a compiled full rerender at an equal threshold,
+nearly all of it in Markdown decoration of the extra text. A generated group
+header has no Markdown, links or paths, so it now skips that pass. Matched
+compiled runs then showed no difference at an equal threshold, and the more
+frequent folding made the default full rerender of a 150-turn fixture about 20%
+faster.
 
 ### October 2026: refresh only the newest turn after a settled save
 
