@@ -42,6 +42,17 @@
    :permission-mode (or mode 'ask) :permission-queue nil
    :pending-plan-approval nil))
 
+(defun mevedel-pq-test--requested-p (session)
+  "Return non-nil when SESSION's permission log records a queue admission.
+Reads the log the real queue wrote, so it needs `mevedel-permission-log-enabled'.
+It tells a caller that must not prompt apart from one that reached the queue."
+  (cl-some (lambda (event) (eq 'permission-enqueued (plist-get event :event)))
+           (mevedel-session-permission-log-pending session)))
+
+(defun mevedel-pq-test--forget-requests (session)
+  "Clear SESSION's pending permission log so the next probe starts fresh."
+  (setf (mevedel-session-permission-log-pending session) nil))
+
 (defmacro mevedel-pq-test--with-queue (vars &rest body)
   "Run BODY with the real queue, a session and a live view.
 VARS is (SESSION DATA VIEW), bound to the session and its buffers.  Optional
@@ -61,6 +72,23 @@ keywords before BODY are `:rules' and `:mode', evaluated for the session."
          (setf (mevedel-session-root-buffer ,(nth 0 vars)) data-buf)
          (with-current-buffer data-buf
            ,@body)))))
+
+(defmacro mevedel-pq-test--with-view-here (view &rest body)
+  "Run BODY with a live view, bound to VIEW, for the current buffer.
+For a test that owns its data buffer and session and needs the real card the
+queue renders there.  The view is killed afterwards."
+  (declare (indent 1) (debug t))
+  `(let ((,view (generate-new-buffer " *pq-test-view*")))
+     (unwind-protect
+         (progn
+           (mevedel-view--setup ,view (current-buffer))
+           (cl-letf (((symbol-function 'mevedel-recovery-save) #'ignore)
+                     ((symbol-function 'mevedel-view--position-screen-y)
+                      (if noninteractive
+                          #'mevedel-view-test--position-screen-y
+                        (symbol-function 'mevedel-view--position-screen-y))))
+             ,@body))
+       (when (buffer-live-p ,view) (kill-buffer ,view)))))
 
 (defun mevedel-pq-test--card-text (overlay)
   "Return the displayed text of the card owning OVERLAY."

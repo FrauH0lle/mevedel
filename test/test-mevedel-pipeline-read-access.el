@@ -22,6 +22,11 @@
 (require 'mevedel-workspace)
 (require 'mevedel-hooks)
 (require 'mevedel-permission-queue)
+(require 'mevedel-permission-queue-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-permission-queue-test-support"))
 
 (defun mevedel-test--run-read-access-tool (args spec session)
   "Run a mutating tool declaring ARG SPEC with ARGS in SESSION.
@@ -90,19 +95,24 @@ Return a plist with the `:attempt' its handler saw for the source address."
 Return (:queued QUEUED :result RESULT); a queued prompt is left unanswered."
   (let (queued result)
     (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-               (lambda (_event _payload callback &rest _) (funcall callback nil)))
-              ((symbol-function 'mevedel-permission-request)
-               (lambda (entry &optional _session) (setq queued entry))))
+               (lambda (_event _payload callback &rest _) (funcall callback nil))))
       (with-temp-buffer
         (setq-local mevedel--session session)
         (setq default-directory directory)
-        (mevedel-pipeline-run-tool
-         (mevedel-tool-get "Read") (lambda (value) (setq result value))
-         (list :file_path path))
-        (let ((deadline (+ (float-time) 5)))
-          (while (and (not (or queued result)) (< (float-time) deadline))
-            (accept-process-output nil 0.02)))))
-    (list :queued (and queued t) :result result)))
+        (mevedel-pq-test--with-view-here view
+          (mevedel-pipeline-run-tool
+           (mevedel-tool-get "Read") (lambda (value) (setq result value))
+           (list :file_path path))
+          (let ((deadline (+ (float-time) 5)))
+            (while (and (not (or (mevedel-pq-test--cards view) result))
+                        (< (float-time) deadline))
+              (accept-process-output nil 0.02)))
+          (setq queued (and (mevedel-pq-test--cards view) t))
+          ;; Leave the prompt unanswered, and keep nothing on the session.
+          (let ((settled result))
+            (mevedel-permission-queue-abort-all session)
+            (setq result settled)))))
+    (list :queued queued :result result)))
 
 (mevedel-deftest mevedel-tool-permission-paths ()
   ,test

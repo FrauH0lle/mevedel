@@ -18,6 +18,11 @@
 (require 'mevedel-permission-prompt)
 (require 'mevedel-permission-queue)
 (require 'mevedel-permission-review)
+(require 'mevedel-permission-queue-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-permission-queue-test-support"))
 (require 'mevedel-permissions)
 (require 'mevedel-tool-exec-permission)
 (require 'mevedel-tool-exec-registration)
@@ -78,14 +83,12 @@
         '(("Bash" :action deny) ("Monitor" :action allow)))
   (setq args '(:command "printf monitor-secret-token" :description "Watch output")
         context (plist-put context :args args))
-  (cl-letf (((symbol-function 'mevedel-permission-request)
-             (lambda (&rest _) (setq queued t))))
-    (mevedel-tool-permission-step
-     context (lambda (_) (setq allowed t))
-     (lambda (&rest _) (setq denied t))))
+  (mevedel-tool-permission-step
+   context (lambda (_) (setq allowed t))
+   (lambda (&rest _) (setq denied t)))
   (should denied)
   (should-not allowed)
-  (should-not queued)
+  (should-not (mevedel-pq-test--requested-p session))
   (let ((entry (car (last (mevedel-session-permission-log-pending session)))))
     (should (equal "Monitor" (plist-get entry :tool-name)))
     (should (eq 'deny (plist-get entry :outcome)))
@@ -97,32 +100,31 @@
   (setf (mevedel-session-permission-rules session) '(("Bash" :action ask))
         (mevedel-request-skill-permission-rules request)
         '(("Bash" :pattern "make test" :action allow)))
-  (cl-letf (((symbol-function 'mevedel-permission-request)
-             (lambda (&rest _) (setq queued t))))
-    (mevedel-tool-permission-step
-     context (lambda (_) (setq allowed t))
-     (lambda (&rest _) (setq denied t)))
-    (should allowed)
-    (should-not denied)
-    (should-not queued)
-    ;; Invocation rules are nearer than request rules, not the ambient turn.
-    (setf (mevedel-request-skill-permission-rules request)
-          '(("Bash" :action ask))
-          (mevedel-agent-invocation-skill-permission-rules invocation)
-          '(("Bash" :pattern "make test" :action allow)))
-    (setq allowed nil)
-    (mevedel-tool-permission-step
-     context (lambda (_) (setq allowed t))
-     (lambda (&rest _) (setq denied t)))
-    (should allowed)
-    (should-not denied)
-    (should-not queued)))
+  (mevedel-tool-permission-step
+   context (lambda (_) (setq allowed t))
+   (lambda (&rest _) (setq denied t)))
+  (should allowed)
+  (should-not denied)
+  (should-not (mevedel-pq-test--requested-p session))
+  ;; Invocation rules are nearer than request rules, not the ambient turn.
+  (setf (mevedel-request-skill-permission-rules request)
+        '(("Bash" :action ask))
+        (mevedel-agent-invocation-skill-permission-rules invocation)
+        '(("Bash" :pattern "make test" :action allow)))
+  (setq allowed nil)
+  (mevedel-tool-permission-step
+   context (lambda (_) (setq allowed t))
+   (lambda (&rest _) (setq denied t)))
+  (should allowed)
+  (should-not denied)
+  (should-not (mevedel-pq-test--requested-p session)))
 
   :doc "Monitor: checker and one-shot card retain captured request and invocation"
   (progn
   (setf (mevedel-request-one-shot-mutations-p request) t
         (mevedel-request-skill-permission-rules request)
         '(("Bash" :pattern "make test" :action allow)))
+  (mevedel-pq-test--with-view-here view
   (let ((checker (symbol-function 'mevedel-tool-exec-permission-check-bash-async))
         checker-context
         (admissions 0))
@@ -133,9 +135,7 @@
               ((symbol-function 'mevedel-hooks-run-event)
                (lambda (event _payload callback &rest _)
                  (when (eq event 'PermissionRequest) (cl-incf admissions))
-                 (funcall callback nil)))
-              ((symbol-function 'mevedel-permission-request)
-               (lambda (entry &optional _session) (setq queued entry))))
+                 (funcall callback nil))))
       (mevedel-tool-permission-step
        context (lambda (_) (setq allowed t))
        (lambda (&rest _) (setq denied t)))
@@ -148,19 +148,25 @@
       (should (= 1 admissions))
       (should-not allowed)
       (should-not denied)
-      (should (equal "Monitor" (plist-get queued :tool-name)))
-      (should (eq request (plist-get queued :request)))
-      (should (eq invocation (plist-get queued :invocation)))
-      (should (equal "monitor-request" (plist-get queued :request-id)))
-      (should (equal "monitor/1" (plist-get queued :tool-use-id)))
-      (should (plist-get queued :once-only))
-      (should-not (plist-get queued :include-always))
-      (should-not (plist-get queued :reusable-operation-p))
-      (funcall (plist-get queued :callback) 'allow-session)
+      (let* ((card (mevedel-pq-test--card view))
+             (queued (plist-get card :entry)))
+        (should (equal "Monitor" (plist-get queued :tool-name)))
+        (should (eq request (plist-get queued :request)))
+        (should (eq invocation (plist-get queued :invocation)))
+        (should (equal "monitor-request" (plist-get queued :request-id)))
+        (should (equal "monitor/1" (plist-get queued :tool-use-id)))
+        (should (plist-get queued :once-only))
+        (should-not (plist-get queued :include-always))
+        (should-not (plist-get queued :reusable-operation-p))
+        ;; A one-shot card binds no session key, so a person cannot grant more
+        ;; than this call; a late session answer on its own closure still does.
+        (should-error (mevedel-pq-test--press card "s") :type 'text-read-only)
+        (should-not allowed)
+        (mevedel-pq-test--answer-captured card 'allow-session))
       (should allowed)
       (should-not denied)
       (should-not (mevedel-session-permission-rules session))
-      (should-not (mevedel-session-resource-grants session)))))
+      (should-not (mevedel-session-resource-grants session))))))
 
   :doc "Monitor: PermissionRequest hook denial blocks queue and automatic reviewer"
   (progn
@@ -176,8 +182,6 @@
                        (funcall callback '(:permission-decision deny
                                           :permission-reason "Watcher not authorized")))
                    (funcall callback nil))))
-              ((symbol-function 'mevedel-permission-request)
-               (lambda (&rest _) (setq queued t)))
               ((symbol-function 'mevedel-permission-review--model)
                (lambda (&rest _) (setq reviewed t))))
       (mevedel-tool-permission-step
@@ -187,7 +191,7 @@
     (should (equal "Monitor" hook-tool))
     (should denied)
     (should-not allowed)
-    (should-not queued)
+    (should-not (mevedel-pq-test--requested-p session))
     (should-not reviewed)))
 
   :doc "Monitor: generic hook card rechecks live Bash denies before late approval"
@@ -195,22 +199,22 @@
   (setf (mevedel-request-skill-permission-rules request)
         '(("Bash" :pattern "make test" :action allow)))
   (setq context (plist-put context :hook-permission-decision 'ask))
-  (cl-letf (((symbol-function 'mevedel-permission-request)
-             (lambda (entry &optional owner)
-               (setq queued (plist-put entry :session owner)))))
+  (mevedel-pq-test--with-view-here view
     (mevedel-tool-permission-step
      context (lambda (_) (setq allowed t))
      (lambda (&rest _) (setq denied t)))
-    (should queued)
-    (should (eq 'generic (plist-get queued :kind)))
-    (should (equal "Monitor" (plist-get queued :tool-name)))
-    (should (eq 'ask (mevedel-permission-queue--reevaluate queued)))
-    (setf (mevedel-session-permission-rules session)
-          '(("Bash" :pattern "make test" :action deny)))
-    (should (eq 'deny (mevedel-permission-queue--reevaluate queued)))
-    (funcall (plist-get queued :callback) 'allow-once)
-    (should denied)
-    (should-not allowed)))
+    (let* ((card (mevedel-pq-test--card view))
+           (queued (plist-get card :entry)))
+      (should queued)
+      (should (eq 'generic (plist-get queued :kind)))
+      (should (equal "Monitor" (plist-get queued :tool-name)))
+      (should (eq 'ask (mevedel-permission-queue--reevaluate queued)))
+      (setf (mevedel-session-permission-rules session)
+            '(("Bash" :pattern "make test" :action deny)))
+      (should (eq 'deny (mevedel-permission-queue--reevaluate queued)))
+      (mevedel-pq-test--press card "a")
+      (should denied)
+      (should-not allowed))))
 
   :doc "Monitor: queued human card retains the actual tool name in its title"
   (progn
@@ -292,30 +296,30 @@
                      '(:command "make test" :description "Watch tests"
                        :sandbox_permissions "require_escalated"
                        :justification "Run the build outside confinement")))
-    (cl-letf (((symbol-function 'mevedel-permission-request)
-               (lambda (&rest _) (setq queued t))))
-      (dolist (name '("Bash" "Monitor"))
-        (ert-info ((format "Plan authority for %s" name))
-          (setq allowed nil denied nil queued nil
-                context (plist-put context :tool (mevedel-tool-ensure name)))
-          (mevedel-tool-permission-step
-           context (lambda (_) (setq allowed t))
-           (lambda (&rest _) (setq denied t)))
-          (should denied)
-          (should-not allowed)
-          (should-not queued)))
-      (setq context (plist-put context :args
-                               '(:command "pwd" :description "Watch location")))
-      (dolist (name '("Bash" "Monitor"))
-        (ert-info ((format "Plan read-only authority for %s" name))
-          (setq allowed nil denied nil queued nil
-                context (plist-put context :tool (mevedel-tool-ensure name)))
-          (mevedel-tool-permission-step
-           context (lambda (_) (setq allowed t))
-           (lambda (&rest _) (setq denied t)))
-          (should allowed)
-          (should-not denied)
-          (should-not queued)))))
+    (dolist (name '("Bash" "Monitor"))
+      (ert-info ((format "Plan authority for %s" name))
+        (setq allowed nil denied nil
+              context (plist-put context :tool (mevedel-tool-ensure name)))
+        (mevedel-pq-test--forget-requests session)
+        (mevedel-tool-permission-step
+         context (lambda (_) (setq allowed t))
+         (lambda (&rest _) (setq denied t)))
+        (should denied)
+        (should-not allowed)
+        (should-not (mevedel-pq-test--requested-p session))))
+    (setq context (plist-put context :args
+                             '(:command "pwd" :description "Watch location")))
+    (dolist (name '("Bash" "Monitor"))
+      (ert-info ((format "Plan read-only authority for %s" name))
+        (setq allowed nil denied nil
+              context (plist-put context :tool (mevedel-tool-ensure name)))
+        (mevedel-pq-test--forget-requests session)
+        (mevedel-tool-permission-step
+         context (lambda (_) (setq allowed t))
+         (lambda (&rest _) (setq denied t)))
+        (should allowed)
+        (should-not denied)
+        (should-not (mevedel-pq-test--requested-p session)))))
 
   :doc "Monitor: unrelated ambient Plan stamps cannot restrict the owning request"
   (progn
@@ -323,24 +327,23 @@
     (setq-local mevedel--agent-invocation
                 (mevedel-agent-invocation--create
                  :path "/root/unrelated" :parent-session session))
-    (cl-letf (((symbol-function 'mevedel-permission-request)
-               (lambda (&rest _) (setq queued t))))
-      (dolist (stamp '(request invocation))
-        (setf (mevedel-request-plan-read-only mevedel--current-request)
-              (eq stamp 'request)
-              (mevedel-agent-invocation-plan-read-only mevedel--agent-invocation)
-              (eq stamp 'invocation))
-        (dolist (name '("Bash" "Monitor"))
-          (ert-info ((format "Unrelated %s Plan authority for %s" stamp name))
-            (setq allowed nil denied nil queued nil
-                  context (plist-put context :tool (mevedel-tool-ensure name)))
-            (mevedel-tool-permission-step
-             context (lambda (_) (setq allowed t))
-             (lambda (reason &rest _) (setq denied reason)))
-            (ert-info ((format "Denial: %S" denied))
-              (should allowed))
-            (should-not denied)
-            (should-not queued))))))
+    (dolist (stamp '(request invocation))
+      (setf (mevedel-request-plan-read-only mevedel--current-request)
+            (eq stamp 'request)
+            (mevedel-agent-invocation-plan-read-only mevedel--agent-invocation)
+            (eq stamp 'invocation))
+      (dolist (name '("Bash" "Monitor"))
+        (ert-info ((format "Unrelated %s Plan authority for %s" stamp name))
+          (setq allowed nil denied nil
+                context (plist-put context :tool (mevedel-tool-ensure name)))
+          (mevedel-pq-test--forget-requests session)
+          (mevedel-tool-permission-step
+           context (lambda (_) (setq allowed t))
+           (lambda (reason &rest _) (setq denied reason)))
+          (ert-info ((format "Denial: %S" denied))
+            (should allowed))
+          (should-not denied)
+          (should-not (mevedel-pq-test--requested-p session))))))
 
   :doc "Monitor: captured request or invocation Plan stamps survive ambient drift"
   (let (outcomes)
@@ -350,20 +353,20 @@
                      '(:command "make test" :description "Watch tests"
                        :sandbox_permissions "require_escalated"
                        :justification "Run the build outside confinement")))
-    (cl-letf (((symbol-function 'mevedel-permission-request)
-               (lambda (&rest _) (setq queued t))))
-      (dolist (stamp '(request invocation))
-        (setf (mevedel-request-plan-read-only request) (eq stamp 'request)
-              (mevedel-agent-invocation-plan-read-only invocation)
-              (eq stamp 'invocation))
-        (dolist (name '("Bash" "Monitor"))
-          (setq allowed nil denied nil queued nil
-                context (plist-put context :tool (mevedel-tool-ensure name)))
-          (mevedel-tool-permission-step
-           context (lambda (_) (setq allowed t))
-           (lambda (&rest _) (setq denied t)))
-          (push (list stamp name :denied denied :allowed allowed :queued queued)
-                outcomes))))
+    (dolist (stamp '(request invocation))
+      (setf (mevedel-request-plan-read-only request) (eq stamp 'request)
+            (mevedel-agent-invocation-plan-read-only invocation)
+            (eq stamp 'invocation))
+      (dolist (name '("Bash" "Monitor"))
+        (setq allowed nil denied nil
+              context (plist-put context :tool (mevedel-tool-ensure name)))
+        (mevedel-pq-test--forget-requests session)
+        (mevedel-tool-permission-step
+         context (lambda (_) (setq allowed t))
+         (lambda (&rest _) (setq denied t)))
+        (push (list stamp name :denied denied :allowed allowed
+                    :queued (and (mevedel-pq-test--requested-p session) t))
+              outcomes)))
     (should (equal '((request "Bash" :denied t :allowed nil :queued nil)
                      (request "Monitor" :denied t :allowed nil :queued nil)
                      (invocation "Bash" :denied t :allowed nil :queued nil)

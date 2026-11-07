@@ -18,6 +18,11 @@
           "helpers"))
 (require 'mevedel-hooks)
 (require 'mevedel-permission-queue)
+(require 'mevedel-permission-queue-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-permission-queue-test-support"))
 (require 'mevedel-pin)
 (require 'mevedel-pipeline)
 (require 'mevedel-resource)
@@ -67,20 +72,25 @@ handler.  Return (:queued QUEUED :result RESULT)."
     (advice-add handler :before advice)
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-                   (lambda (_event _payload callback &rest _) (funcall callback nil)))
-                  ((symbol-function 'mevedel-permission-request)
-                   (lambda (entry &optional _session) (setq queued entry))))
+                   (lambda (_event _payload callback &rest _) (funcall callback nil))))
           (with-temp-buffer
             (setq-local mevedel--session session)
             (setq default-directory
                   (mevedel-workspace-root (mevedel-session-workspace session)))
-            (mevedel-pipeline-run-tool (mevedel-tool-get tool)
-                                       (lambda (value) (setq result value)) args)
-            (let ((deadline (+ (float-time) 10)))
-              (while (and (not (or queued result)) (< (float-time) deadline))
-                (accept-process-output nil 0.02)))))
+            (mevedel-pq-test--with-view-here view
+              (mevedel-pipeline-run-tool (mevedel-tool-get tool)
+                                         (lambda (value) (setq result value)) args)
+              (let ((deadline (+ (float-time) 10)))
+                (while (and (not (or (mevedel-pq-test--cards view) result))
+                            (< (float-time) deadline))
+                  (accept-process-output nil 0.02)))
+              (setq queued (and (mevedel-pq-test--cards view) t))
+              ;; Leave the prompt unanswered, and keep nothing on the session.
+              (let ((settled result))
+                (mevedel-permission-queue-abort-all session)
+                (setq result settled)))))
       (advice-remove handler advice))
-    (list :queued (and queued t) :result (format "%s" result))))
+    (list :queued queued :result (format "%s" result))))
 
 (defun test-mevedel-pin--swap (directory target)
   "Return a function replacing DIRECTORY with a symlink to TARGET."
