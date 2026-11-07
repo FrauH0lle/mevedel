@@ -21,6 +21,7 @@
 (require 'mevedel-view-execution)
 (require 'mevedel-ptc-interpreter)
 (require 'mevedel-tool-registry)
+(require 'mevedel-view-render)
 (require 'mevedel-view-zone)
 
 ;; `cl-extra'
