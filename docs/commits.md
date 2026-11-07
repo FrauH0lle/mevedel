@@ -34,7 +34,20 @@ or variables. Separate distinct changes in the same file with a blank line:
 ```
 
 A long affected-item list can continue by closing one parenthesis and opening
-another on the next line. Use “Ditto” for an identical change in another file
+another on the next line. The function list may start on the line after the
+filename, and the description may start on the line after the colon. Files that
+share a change may be grouped with commas or separate `* file` lines before one
+function list and description:
+
+```text
+* a.el, b.el: Share the helper.
+
+* longer-name.el
+* other-long-name.el
+(shared-function): Describe the shared change.
+```
+
+Use “Ditto” for an identical change in another file
 when its meaning remains clear. Include relevant validation, limitations, and
 compatibility effects; avoid claims unsupported by the actual checks.
 
@@ -57,6 +70,13 @@ understandable without requiring the reader to reconstruct the conversation.
 | chore | Maintenance |
 | revert | Reverting a change |
 | tweak | Small user-facing default changes |
+
+## Reverts
+
+Git's default `Revert "..."` subject and `This reverts commit HASH.` body are
+accepted without rewording or GNU file entries. The default merge-revert body
+also qualifies. A custom revert message follows the ordinary format, using the
+`revert` type and GNU entries.
 
 ## Trailers
 

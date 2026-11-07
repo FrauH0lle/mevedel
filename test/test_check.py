@@ -110,6 +110,29 @@ class CheckTests(unittest.TestCase):
             self.assertEqual(log.read_text().splitlines(),
                              [tmp, '@emacs-eask/cli run script check -- --affected'])
 
+    def test_check_forwards_affected_environment_and_explicit_arguments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            for name, content in (
+                ('eask', 'printf "%s|%s\\n" "$*" "$MEVEDEL_AFFECTED_BASE" >> "$COMMAND_LOG"\n'),
+                ('python3', '[ "$*" = "scripts/check-standards.py" ]\n'),
+            ):
+                executable = directory / name
+                executable.write_text('#!/bin/sh\n' + content)
+                executable.chmod(0o755)
+            for arguments in (['--affected'], ['--affected', 'explicit-revision']):
+                with self.subTest(arguments=arguments):
+                    log = directory / 'commands'
+                    log.write_text('')
+                    subprocess.run(
+                        ['sh', str(ROOT / 'scripts/check.sh'), *arguments, '--jobs', '2'],
+                        env={**os.environ, 'PATH': f'{directory}:{os.environ["PATH"]}',
+                             'MEVEDEL_AFFECTED_BASE': 'branch-point', 'COMMAND_LOG': str(log)},
+                        check=True, capture_output=True)
+                    self.assertEqual(log.read_text().splitlines(), [
+                        'clean elc|branch-point', 'compile --strict|branch-point',
+                        'run script test -- ' + ' '.join(arguments) + ' --jobs 2|branch-point'])
+
 
 if __name__ == '__main__':
     unittest.main()

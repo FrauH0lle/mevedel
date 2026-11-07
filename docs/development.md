@@ -42,6 +42,12 @@ before tests. It reuses the primary checkout's `.eask`, validates this worktree'
 dependency versions and loading through Eask, and reports Emacs/Eask versions, paths and
 source hashes. It runs offline without installing or upgrading dependencies;
 failure prints recovery instructions. `.eask` is ignored as directory or symlink.
+For linked worktrees, bootstrap also enables Git's `extensions.worktreeConfig`
+and sets `core.hooksPath=.githooks` with `git config --worktree`. The shared
+extension flag is the only common-config change: the primary checkout and other
+worktrees keep their hooks settings. Bootstrapping the primary checkout does not
+install hooks. Shared `core.worktree` or `core.bare=true` settings are rejected
+rather than migrated, because enabling the extension would change their meaning.
 This repo's `.dir-locals.el` configures creation-time setup, requiring Emacs
 approval. The separate `mevedel-worktree-setup-enabled` flag defaults off;
 `mevedel-worktree-setup-command` holds argv. Both creation paths and the skill
@@ -145,7 +151,8 @@ fast tier decides on its own when a change needs the full suite.
   avoid a failure.
 
 After installing the Eask development dependencies, run the fail-fast check
-(`--affected` and `--jobs` pass through to the test runner):
+(`--affected`, `--jobs` and the `MEVEDEL_AFFECTED_BASE` environment variable
+pass through to the test runner):
 
 ```bash
 npx @emacs-eask/cli run script check
@@ -153,6 +160,8 @@ npx @emacs-eask/cli run script check
 eask run script check
 # The pre-commit tier:
 eask run script check -- --affected
+# Pin the default affected base for a long-lived branch (or export it once):
+MEVEDEL_AFFECTED_BASE=BASE eask run script check -- --affected
 # Limit test concurrency on smaller machines:
 npx @emacs-eask/cli run script check -- --jobs 4
 ```
@@ -164,19 +173,22 @@ runs the isolated ERT suite (or the affected tier) through the existing
 compiled files cannot shadow edits. Each failed step stops the check and returns
 a nonzero status. Dependency installation remains a separate setup step.
 
-#### Opt-in pre-commit hook
+#### Pre-commit hook
 
-To run the pre-commit tier automatically before local commits, from the
-repository root:
+Linked-worktree bootstrap installs this hook automatically for that worktree.
+To opt in manually from a repository root, without changing other checkouts:
 
 ```bash
-git config --local core.hooksPath .githooks
+git config --local extensions.worktreeConfig true
+git config --worktree core.hooksPath .githooks
 ```
 
-This replaces the repository's configured hooks path; inspect
+This replaces the current worktree's configured hooks path; inspect
 `git config --get core.hooksPath` first if you already use hooks. Installation is
-optional and is never performed by Eask or CI. To undo it, use
-`git config --local --unset core.hooksPath` (or restore your previous value).
+never performed by Eask or CI. Before manually enabling the extension, move any
+shared `core.worktree` or `core.bare=true` setting to the primary checkout's
+`config.worktree`, as required by Git. To undo the hook, use
+`git config --worktree --unset core.hooksPath` (or restore your previous value).
 The hook requires Node/npx, Python 3, Emacs and installed Eask development
 dependencies, and runs `check -- --affected`. It checks the
 working tree, not a temporary copy of the index: when partially staging files,
@@ -231,6 +243,13 @@ removed from branch history by a force-push.
 
 Enforced invariants:
 
+- Every non-merge commit since the resolved merge base has the subject format
+  and at least one GNU-style file entry required by [commits.md](commits.md).
+  Wrapped and grouped file entries are accepted, as are Git's default revert
+  subject and body without GNU entries. Docs-only commits are included; subject
+  length remains advisory. The pending commit message is not available to this
+  pre-commit check, so it is checked on
+  the next run after committing and in CI.
 - First-line `lexical-binding: t` and a matching final `;;; FILENAME.el ends
   here` footer (optional final period) in root Lisp libraries and immediate
   `test/`, `benchmark/`, and `scripts/` Lisp files. Dotfiles, data, and nested
@@ -288,6 +307,7 @@ that overwrites a test stub (with the preloaded-owner variant as its control):
 
 ```bash
 python3 -m unittest test/test_check_standards.py test/test_check.py
+python3 -m unittest discover -s scripts -p 'test_check_commit_messages.py'
 ```
 
 Full-tree checkdoc remains available as an advisory inventory:
@@ -407,9 +427,19 @@ the ordinary ERT command. Conditional skips remain visible in reports.
 #### Affected tier
 
 `--affected [REV]` selects test files for the changes since `git merge-base REV
-HEAD` (default `master`): committed changes, staged and unstaged edits,
+HEAD`: committed changes, staged and unstaged edits,
 deletions, and untracked files that are not ignored. It reads the repository's
 own `require` and `provide` forms; there is no hand-maintained mapping.
+An explicit `REV` wins; without one, the runner uses `MEVEDEL_AFFECTED_BASE`
+when nonempty, otherwise `master`. The variable also passes through
+`eask run script check -- --affected` and the pre-commit hook. It does not enable
+affected mode on its own, and does not replace the standards check's independent
+`CHECK_BASE` setting. For example:
+
+```bash
+MEVEDEL_AFFECTED_BASE=BASE python3 test/run_tests.py --affected --jobs 4
+CHECK_BASE=BASE MEVEDEL_AFFECTED_BASE=BASE eask run script check -- --affected
+```
 
 - A changed root or `test/` library selects the test files that require one of
   its features directly, the test files it owns by name (`test-STEM.el` and
