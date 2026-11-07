@@ -237,7 +237,7 @@
     (should (eq #'ignore (nth 2 seen))))
   :doc "falls back to direct queue admission outside the pipeline"
   (let ((mevedel-permission-mode 'ask) seen)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional session)
                  (setq seen (list entry session)))))
       (mevedel-tool-exec-permission--request-permission
@@ -249,7 +249,7 @@
   (let ((cell (list nil))
         queued
         settled)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional _session)
                  (setq queued entry))))
       (mevedel-tool-exec-permission--request-permission
@@ -272,7 +272,7 @@
   (let ((remember-cell (list '(:operation t)))
         queued
         settled)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional _session)
                  (setq queued entry))))
       (mevedel-tool-exec-permission--request-permission
@@ -963,7 +963,7 @@ additive child permissions are available only to batch Eval"
           (write-region "file" nil path nil 'silent)
           (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                      (lambda (_event _payload callback &rest _) (funcall callback nil)))
-                    ((symbol-function 'mevedel-permission--enqueue)
+                    ((symbol-function 'mevedel-permission-request)
                      (lambda (entry &optional owner)
                        (mevedel-permission-queue--set
                         (list (plist-put entry :session owner)) owner))))
@@ -1184,7 +1184,7 @@ additive child permissions are available only to batch Eval"
         (mevedel-permission-rules nil)
         (mevedel-permission-reviewer 'user)
         logged outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (queued &optional _session)
                  (funcall (plist-get queued :callback) 'allow-once)))
               ((symbol-function 'mevedel-tool-exec-permission--log-permission-decision)
@@ -1208,7 +1208,7 @@ recognized command authority is followed by a once-only network prompt"
   (let ((mevedel-permission-mode 'ask)
         (mevedel-permission-rules nil)
         entry outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (queued &optional _session)
                  (setq entry queued)
                  (funcall (plist-get queued :callback) 'allow-once))))
@@ -1234,7 +1234,7 @@ the default selection remembers the complete requested profile"
          (mevedel-permission-rules nil)
          outcome)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+        (cl-letf (((symbol-function 'mevedel-permission-request)
                    (lambda (entry &optional _session)
                      (should
                       (equal '(:operation t :network t)
@@ -1274,7 +1274,7 @@ selecting network stores qualified authority and reuses it without prompting"
          outcome)
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+          (cl-letf (((symbol-function 'mevedel-permission-request)
                      (lambda (entry &optional _session)
                        (cl-incf prompts)
                        (setcar
@@ -1299,7 +1299,7 @@ selecting network stores qualified authority and reuses it without prompting"
                    (plist-get (cdr rule) :network)))
             (mevedel-session-permission-rules session)))
           (setq outcome nil)
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+          (cl-letf (((symbol-function 'mevedel-permission-request)
                      (lambda (&rest _) (cl-incf prompts))))
             (mevedel-tool-exec-permission-check-bash-async
              nil
@@ -1316,7 +1316,7 @@ additive network authority still prompts in edits mode"
   (let ((mevedel-permission-mode 'edits)
         (mevedel-permission-rules nil)
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional _session)
                  (setq enqueued t)
                  (funcall (plist-get entry :callback) 'deny-once))))
@@ -1334,7 +1334,7 @@ network authority proceeds without a prompt"
   (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules nil)
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _args) (setq enqueued t))))
       (mevedel-tool-exec-permission-check-bash-async
        nil
@@ -1359,7 +1359,7 @@ the matching command and its network request proceed without a prompt"
          (mevedel-permission-mode 'ask)
          (mevedel-permission-rules nil)
          enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _) (setq enqueued t))))
       (mevedel-tool-exec-permission-check-bash-async
        nil
@@ -1389,7 +1389,7 @@ selected operation and network authority are reused by another session"
          outcome)
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+          (cl-letf (((symbol-function 'mevedel-permission-request)
                      (lambda (entry &optional _session)
                        (cl-incf prompts)
                        (setcar
@@ -1408,7 +1408,7 @@ selected operation and network authority are reused by another session"
              (lambda (result) (setq outcome result))))
           (setq outcome nil
                 mevedel--session second)
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+          (cl-letf (((symbol-function 'mevedel-permission-request)
                      (lambda (&rest _) (cl-incf prompts))))
             (mevedel-tool-exec-permission-check-bash-async
              nil
@@ -1432,7 +1432,7 @@ network authority changes no boundary and does not prompt"
          (mevedel-permission-mode 'ask)
          (mevedel-permission-rules nil)
          enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _args) (setq enqueued t))))
       (mevedel-tool-exec-permission-check-bash-async
        nil
@@ -1459,7 +1459,7 @@ an ungranted exact filesystem path still prompts and stores session authority"
     (unwind-protect
         (progn
           (with-temp-file path (insert "secret"))
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+          (cl-letf (((symbol-function 'mevedel-permission-request)
                      (lambda (queued &optional _session)
                        (setq entry queued)
                        (setcar
@@ -1507,7 +1507,7 @@ the complete requested path profile is selected by default"
     (unwind-protect
         (progn
           (with-temp-file path (insert "secret"))
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+          (cl-letf (((symbol-function 'mevedel-permission-request)
                      (lambda (entry &optional _session)
                        (should-not
                         (null
@@ -1554,7 +1554,7 @@ an exact session grant skips only the filesystem prompt"
     (unwind-protect
         (progn
           (with-temp-file path (insert "secret"))
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+          (cl-letf (((symbol-function 'mevedel-permission-request)
                      (lambda (&rest _) (setq enqueued t))))
             (mevedel-tool-exec-permission-check-bash-async
              nil
@@ -1599,7 +1599,7 @@ the session command survives but its filesystem profile requires fresh approval"
                            :permission-context
                            (:mode ask :session ,session :workspace ,workspace))
                 (lambda (result) (setq outcome result)))))
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+          (cl-letf (((symbol-function 'mevedel-permission-request)
                      (lambda (entry &optional _session)
                        (cl-incf prompts)
                        (setq prompt-kind (plist-get entry :kind))
@@ -1635,7 +1635,7 @@ an exact ask rule remains authoritative over the stored grant"
     (unwind-protect
         (progn
           (with-temp-file path (insert "secret"))
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+          (cl-letf (((symbol-function 'mevedel-permission-request)
                      (lambda (queued &optional _session)
                        (setq entry queued)
                        (funcall (plist-get queued :callback) 'deny-once))))
@@ -1670,7 +1670,7 @@ an explicit exact path deny prevents filesystem escalation"
     (unwind-protect
         (progn
           (with-temp-file path (insert "secret"))
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+          (cl-letf (((symbol-function 'mevedel-permission-request)
                      (lambda (&rest _) (setq enqueued t))))
             (mevedel-tool-exec-permission-check-bash-async
              nil
@@ -1689,7 +1689,7 @@ command denial prevents network authority even in full-auto"
   (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules '(("Bash" :pattern "pwd" :action deny)))
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _args) (setq enqueued t))))
       (mevedel-tool-exec-permission-check-bash-async
        nil
@@ -1705,7 +1705,7 @@ one prompt approves both Eval and additive network authority"
   (let ((mevedel-permission-mode 'ask)
         (mevedel-permission-rules nil)
         entries outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional _session)
                  (push entry entries)
                  (funcall (plist-get entry :callback) 'allow-once))))
@@ -1737,7 +1737,7 @@ the exact expression and selected network authority are reused together"
          outcome)
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+          (cl-letf (((symbol-function 'mevedel-permission-request)
                      (lambda (entry &optional _session)
                        (cl-incf prompts)
                        (setcar
@@ -1760,7 +1760,7 @@ the exact expression and selected network authority are reused together"
             '("Eval" :expression "(+ 1 2)" :network t :action allow)
             (mevedel-session-permission-rules session)))
           (setq outcome nil)
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+          (cl-letf (((symbol-function 'mevedel-permission-request)
                      (lambda (&rest _) (cl-incf prompts))))
             (mevedel-tool-exec-permission-check-eval-async
              nil
@@ -1780,7 +1780,7 @@ the exact expression and selected network authority are reused together"
          (mevedel-permission-rules nil)
          origins
          outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional _session)
                  (push (plist-get entry :origin) origins)
                  (with-temp-buffer
@@ -1814,7 +1814,7 @@ the exact expression and selected network authority are reused together"
          outcome)
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+          (cl-letf (((symbol-function 'mevedel-permission-request)
                      (lambda (entry &optional _session)
                        (setq queued entry))))
             (with-temp-buffer
@@ -1847,7 +1847,7 @@ the exact expression and selected network authority are reused together"
          (mevedel-permission-rules nil)
          entries
          outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional _session)
                  (push (cons (plist-get entry :kind)
                              (plist-get entry :origin))
@@ -1872,7 +1872,7 @@ both Eval and network authority proceed without prompts"
   (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules nil)
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _args) (setq enqueued t))))
       (mevedel-tool-exec-permission-check-eval-async
        nil
@@ -1893,7 +1893,7 @@ both Eval and network authority proceed without prompts"
          (mevedel-permission-mode 'full-auto)
          (mevedel-permission-rules nil)
          entry outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (queued &optional _session) (setq entry queued))))
       (mevedel-tool-exec-permission-check-bash-async
        nil
@@ -1910,7 +1910,7 @@ both Eval and network authority proceed without prompts"
            `(("Bash" :pattern ,command :action ask)
              ("Bash" :pattern ,command :sandbox-permissions require-escalated :action allow)))
           entry outcome)
-      (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+      (cl-letf (((symbol-function 'mevedel-permission-request)
                  (lambda (queued &optional _session) (setq entry queued))))
         (mevedel-tool-exec-permission-check-bash-async
          nil `(:command ,command :sandbox_permissions "require_escalated"
@@ -1928,7 +1928,7 @@ full escalation prompts without a directly authored qualified rule"
   (let ((mevedel-permission-mode 'edits)
         (mevedel-permission-rules nil)
         entry outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (queued &optional _session)
                  (setq entry queued)
                  (funcall (plist-get queued :callback) 'allow-once))))
@@ -1953,7 +1953,7 @@ full escalation prompts without a directly authored qualified rule"
                          :sandbox_permissions "require_escalated"
                          :justification "Confirmed system SSH owner UID mapping failure"))
          entries outcomes)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional _session)
                  (push entry entries)
                  (funcall (plist-get entry :callback)
@@ -1978,7 +1978,7 @@ full escalation adds no boundary prompt but ordinary command authority remains"
          (mevedel-permission-mode 'ask)
          (mevedel-permission-rules nil)
          entries outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional _session)
                  (push entry entries)
                  (funcall (plist-get entry :callback) 'allow-once))))
@@ -1999,7 +1999,7 @@ an exact user-authored escalation rule skips the prompt"
             :sandbox-permissions require-escalated
             :action allow)))
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _) (setq enqueued t))))
       (mevedel-tool-exec-permission-check-bash-async
        nil
@@ -2023,7 +2023,7 @@ an inherited escalation rule still requires one-time sandbox approval"
              :action allow)))
          entry outcome)
     (should (eq 'ask (mevedel-permission-mode-effective session)))
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (queued &optional _session)
                  (setq entry queued)
                  (funcall (plist-get queued :callback) 'allow-session))))
@@ -2047,7 +2047,7 @@ an unqualified command rule cannot authorize full escalation"
         (mevedel-permission-rules
          '(("Bash" :pattern "pwd" :action allow)))
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional _session)
                  (setq enqueued t)
                  (funcall (plist-get entry :callback) 'deny-once))))
@@ -2064,7 +2064,7 @@ an invocation-qualified rule cannot grant full escalation"
   (let ((mevedel-permission-mode 'edits)
         (mevedel-permission-rules nil)
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional _session)
                  (setq enqueued t)
                  (funcall (plist-get entry :callback) 'deny-once))))
@@ -2087,7 +2087,7 @@ an explicit command deny prevents escalation without prompting"
         (mevedel-permission-rules
          '(("Bash" :pattern "pwd" :action deny)))
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _) (setq enqueued t))))
       (mevedel-tool-exec-permission-check-bash-async
        nil
@@ -2105,7 +2105,7 @@ a denied segment cannot hide behind a broad full-escalation allow"
            ("Bash" :pattern "rm *"
             :sandbox-permissions require-escalated :action deny)))
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _) (setq enqueued t))))
       (mevedel-tool-exec-permission-check-bash-async
        nil
@@ -2123,7 +2123,7 @@ a harvested command substitution cannot hide behind a broad allow"
            ("Bash" :pattern "rm *"
             :sandbox-permissions require-escalated :action deny)))
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _) (setq enqueued t))))
       (mevedel-tool-exec-permission-check-bash-async
        nil
@@ -2140,7 +2140,7 @@ the prompt stores an exact execution-level-qualified pattern rule"
          (mevedel-permission-mode 'ask)
          (mevedel-permission-rules nil)
          outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional _session)
                  (funcall (plist-get entry :callback) 'allow-session))))
       (mevedel-tool-exec-permission-check-bash-async
@@ -2165,7 +2165,7 @@ trust-literal execution cannot use even a matching direct escalation rule"
             :sandbox-permissions require-escalated
             :action allow)))
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _) (setq enqueued t))))
       (mevedel-tool-exec-permission-check-bash-async
        nil
@@ -2196,7 +2196,7 @@ literal dangerous Bash offers reusable full-escalation authority"
   (let ((mevedel-permission-mode 'ask)
         (mevedel-permission-rules nil)
         entry outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (queued &optional _session)
                  (setq entry queued)
                  (funcall (plist-get queued :callback) 'deny-once))))
@@ -2213,7 +2213,7 @@ literal batch Eval offers reusable full-escalation authority"
   (let ((mevedel-permission-mode 'ask)
         (mevedel-permission-rules nil)
         entry outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (queued &optional _session)
                  (setq entry queued)
                  (funcall (plist-get queued :callback) 'deny-once))))
@@ -2232,7 +2232,7 @@ a broad qualified Eval rule authorizes unconfined batch execution"
         (mevedel-permission-rules
          '(("Eval" :sandbox-permissions require-escalated :action allow)))
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _) (setq enqueued t))))
       (mevedel-tool-exec-permission-check-eval-async
        nil
@@ -2355,7 +2355,7 @@ default Bash keeps bare dot inspection automatic"
                   (edits (("Bash" :pattern "make *" :action ask)) rule)))
     (pcase-let ((`(,mode ,rules ,via) case))
       (let ((mevedel-permission-reviewer 'user) entry outcome)
-        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+        (cl-letf (((symbol-function 'mevedel-permission-request)
                    (lambda (queued &optional _session)
                      (setq entry queued)
                      (funcall (plist-get entry :callback) 'deny-once))))
@@ -2456,7 +2456,7 @@ default Bash keeps bare dot inspection automatic"
          (target (file-name-concat temporary-file-directory
                                    "mevedel-exact-target"))
          entry outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (queued &optional _session)
                  (setq entry queued)
                  (funcall (plist-get queued :callback) 'allow-session))))
@@ -2479,7 +2479,7 @@ default Bash keeps bare dot inspection automatic"
         (mevedel-bash-dangerous-commands '("rm"))
         enqueued
         outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _)
                  (setq enqueued t))))
       (mevedel-tool-exec-permission-check-bash-async
@@ -2490,7 +2490,7 @@ default Bash keeps bare dot inspection automatic"
   (let ((mevedel-permission-rules nil)
         (mevedel-bash-dangerous-commands nil)
         captured)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional _session)
                  (setq captured entry))))
       (mevedel-tool-exec-permission-check-bash-async
@@ -2508,7 +2508,7 @@ default Bash keeps bare dot inspection automatic"
   (let ((mevedel-permission-rules nil)
         (mevedel-bash-dangerous-commands '("sudo"))
         outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional _session)
                  (funcall (plist-get entry :callback) 'allow-once))))
       (mevedel-tool-exec-permission-check-bash-async
@@ -2518,7 +2518,7 @@ default Bash keeps bare dot inspection automatic"
   (let ((mevedel-permission-rules nil)
         (mevedel-bash-dangerous-commands '("sudo"))
         outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional _session)
                  (funcall (plist-get entry :callback) 'deny-once))))
       (mevedel-tool-exec-permission-check-bash-async
@@ -2531,7 +2531,7 @@ default Bash keeps bare dot inspection automatic"
   (let ((mevedel-permission-rules nil)
         (mevedel-bash-dangerous-commands '("sudo"))
         outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional _session)
                  (funcall (plist-get entry :callback)
                           '(feedback . "use git instead")))))
@@ -2551,7 +2551,7 @@ default Bash keeps bare dot inspection automatic"
          (mevedel-bash-dangerous-commands nil)
          outcome)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+        (cl-letf (((symbol-function 'mevedel-permission-request)
                    (lambda (entry &optional _session)
                      (funcall (plist-get entry :callback)
                               'allow-session))))
@@ -2675,7 +2675,7 @@ default Bash keeps bare dot inspection automatic"
                            ('escalated '(:sandbox_permissions "require_escalated"
                                          :justification "Test full escalation"))))
                         (lambda (result) (setq outcome result)))))
-                  (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                  (cl-letf (((symbol-function 'mevedel-permission-request)
                              (lambda (entry &optional _session)
                                (cl-incf prompts)
                                (when (eq authority 'network)
@@ -2690,7 +2690,7 @@ default Bash keeps bare dot inspection automatic"
                   (when (eq scope 'always-allow)
                     (setf (mevedel-session-permission-rules session) nil)
                     (clrhash mevedel-permission--store-cache))
-                  (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                  (cl-letf (((symbol-function 'mevedel-permission-request)
                              (lambda (entry &optional _session)
                                (cl-incf prompts)
                                (funcall (plist-get entry :callback) 'deny-once))))
@@ -2736,7 +2736,7 @@ default Bash keeps bare dot inspection automatic"
       (delete-directory dir t)))
   :doc "returns allow when user approves"
   (let (outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry)
                  (funcall (plist-get entry :callback) 'allow-once))))
       (mevedel-tool-exec-permission-check-eval-async
@@ -2744,7 +2744,7 @@ default Bash keeps bare dot inspection automatic"
     (should (eq outcome 'allow)))
   :doc "enqueues requested mode and preserve_ui metadata"
   (let (entry)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (queued)
                  (setq entry queued))))
       (mevedel-tool-exec-permission-check-eval-async
@@ -2772,7 +2772,7 @@ default Bash keeps bare dot inspection automatic"
                    :working-directory "/ssh:user@host:/srv/project/"))
          outcome
          enqueued)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _)
                  (setq enqueued t))))
       (mevedel-tool-exec-permission-check-eval-async
@@ -2788,7 +2788,7 @@ default Bash keeps bare dot inspection automatic"
                      (cdr outcome))))
   :doc "returns deny when user denies"
   (let (outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry)
                  (funcall (plist-get entry :callback) 'deny-once))))
       (mevedel-tool-exec-permission-check-eval-async
@@ -2796,7 +2796,7 @@ default Bash keeps bare dot inspection automatic"
     (should (eq outcome 'deny)))
   :doc "feedback maps to (deny . REASON) with the historical message"
   (let (outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry)
                  (funcall (plist-get entry :callback)
                           '(feedback . "too dangerous")))))
@@ -2810,7 +2810,7 @@ default Bash keeps bare dot inspection automatic"
   :doc "trusted Eval with active allow bypasses prompt"
   (let ((mevedel-permission-rules '(("Eval" :action allow)))
         outcome enqueued)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _)
                  (setq enqueued t))))
       (mevedel-tool-exec-permission-check-eval-async
@@ -2823,7 +2823,7 @@ default Bash keeps bare dot inspection automatic"
   (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules nil)
         outcome enqueued)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _)
                  (setq enqueued t))))
       (mevedel-tool-exec-permission-check-eval-async
@@ -2851,7 +2851,7 @@ default Bash keeps bare dot inspection automatic"
                   (edits (("Eval" :action ask)) rule)))
     (pcase-let ((`(,mode ,rules ,via) case))
       (let (entry outcome)
-        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+        (cl-letf (((symbol-function 'mevedel-permission-request)
                    (lambda (queued &optional _session)
                      (setq entry queued)
                      (funcall (plist-get entry :callback) 'deny-once))))
@@ -2868,7 +2868,7 @@ default Bash keeps bare dot inspection automatic"
   (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules '(("Eval" :action deny)))
         outcome enqueued)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _)
                  (setq enqueued t))))
       (mevedel-tool-exec-permission-check-eval-async
@@ -2880,7 +2880,7 @@ default Bash keeps bare dot inspection automatic"
   :doc "trusted Eval without active allow denies without prompting"
   (let ((mevedel-permission-rules nil)
         outcome enqueued)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _)
                  (setq enqueued t))))
       (mevedel-tool-exec-permission-check-eval-async
@@ -2916,7 +2916,7 @@ default Bash keeps bare dot inspection automatic"
   :doc "direct Eval allow authorizes model-generated Eval without prompting"
   (let ((mevedel-permission-rules '(("Eval" :action allow)))
         outcome enqueued)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry)
                  (setq enqueued t)
                  (funcall (plist-get entry :callback) 'allow-once))))
@@ -2929,7 +2929,7 @@ default Bash keeps bare dot inspection automatic"
   (let ((mevedel-permission-mode 'edits)
         (mevedel-permission-rules '(("Eval" :action ask)))
         outcome enqueued)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry)
                  (setq enqueued t)
                  (funcall (plist-get entry :callback) 'deny-once))))

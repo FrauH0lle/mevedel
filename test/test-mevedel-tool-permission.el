@@ -183,7 +183,7 @@ Return the outcome and the logged entry."
     (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                (lambda (_event _payload callback &rest _)
                  (funcall callback nil)))
-              ((symbol-function 'mevedel-permission--enqueue)
+              ((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional _session) (setq queued entry))))
       (mevedel-tool-permission--request
        (list :progress-callback (lambda (event) (setq progress event))
@@ -211,7 +211,7 @@ Return the outcome and the logged entry."
       (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                  (lambda (_event _payload callback &rest _)
                    (funcall callback decision)))
-                ((symbol-function 'mevedel-permission--enqueue)
+                ((symbol-function 'mevedel-permission-request)
                  (lambda (&rest _) (setq queued t))))
         (mevedel-tool-permission--request
          nil '(:kind generic :callback ignore) nil
@@ -258,7 +258,7 @@ Return the outcome and the logged entry."
                             (pcase source
                               ('hook '(:permission-decision allow))
                               ('denied '(:permission-decision deny))))))
-                ((symbol-function 'mevedel-permission--enqueue)
+                ((symbol-function 'mevedel-permission-request)
                  (lambda (value &optional _session) (setq queued value))))
         (mevedel-tool-permission--request
          nil entry nil
@@ -285,7 +285,7 @@ Return the outcome and the logged entry."
     (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                (lambda (_event _payload callback &rest _)
                  (funcall callback nil)))
-              ((symbol-function 'mevedel-permission--enqueue)
+              ((symbol-function 'mevedel-permission-request)
                (lambda (&rest _) (setq queued t))))
       (mevedel-tool-permission--request
        nil '(:kind generic :callback ignore) nil
@@ -298,7 +298,7 @@ Return the outcome and the logged entry."
     (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                (lambda (_event _payload callback &rest _)
                  (funcall callback '(:permission-decision ask))))
-              ((symbol-function 'mevedel-permission--enqueue)
+              ((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional _session) (setq queued entry))))
       (mevedel-tool-permission--request
        nil '(:kind generic :callback ignore) nil
@@ -313,7 +313,7 @@ Return the outcome and the logged entry."
         (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                    (lambda (_event _payload callback &rest _)
                      (funcall callback nil)))
-                  ((symbol-function 'mevedel-permission--enqueue)
+                  ((symbol-function 'mevedel-permission-request)
                    (lambda (entry &optional _session) (setq queued entry))))
           (mevedel-tool-permission--request
            `(:one-shot-mutations-p t :buffer ,side-buffer)
@@ -358,7 +358,7 @@ Return the outcome and the logged entry."
          (mevedel-protected-paths (list (cons path 'inaccessible)))
          allowed queued denied)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+        (cl-letf (((symbol-function 'mevedel-permission-request)
                    (lambda (&rest _) (setq queued t))))
           (mevedel-permission-persistence-write-store
            file `(:rules nil :resource-grants ((:path ,path :access read))))
@@ -893,7 +893,7 @@ Return the outcome and the logged entry."
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel--all-allowed-roots)
                    (lambda (&optional _buffer) (list root extra)))
-                  ((symbol-function 'mevedel-permission--enqueue)
+                  ((symbol-function 'mevedel-permission-request)
                    (lambda (&rest _args) (setq enqueued t))))
           (mevedel-tool-permission-step
            ctx (lambda (_c) (setq called t)) #'ignore)
@@ -923,7 +923,7 @@ Return the outcome and the logged entry."
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel--all-allowed-roots)
                    (lambda (&optional _buffer) (list root)))
-                  ((symbol-function 'mevedel-permission--enqueue)
+                  ((symbol-function 'mevedel-permission-request)
                    (lambda (&rest _args) (setq enqueued t))))
           (mevedel-tool-permission-step
            ctx (lambda (_c) (setq called t)) #'ignore)
@@ -957,7 +957,7 @@ Return the outcome and the logged entry."
                    (ctx (list :tool tool :args (list key path)
                               :session session :workspace ws))
                    called enqueued)
-              (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+              (cl-letf (((symbol-function 'mevedel-permission-request)
                          (lambda (&rest _args) (setq enqueued t))))
                 (mevedel-tool-permission-step
                  ctx (lambda (_c) (setq called t)) #'ignore))
@@ -974,7 +974,7 @@ Return the outcome and the logged entry."
            (mevedel-permission-rules nil)
            (mevedel-protected-paths nil)
            called enqueued)
-      (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+      (cl-letf (((symbol-function 'mevedel-permission-request)
                  (lambda (&rest _args) (setq enqueued t))))
         (mevedel-tool-permission-step
          ctx (lambda (_c) (setq called t)) #'ignore))
@@ -1008,7 +1008,7 @@ Return the outcome and the logged entry."
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel--all-allowed-roots)
                    (lambda (&optional _buffer) (list root)))
-                  ((symbol-function 'mevedel-permission--enqueue)
+                  ((symbol-function 'mevedel-permission-request)
                    (lambda (&rest _args) (setq enqueued t))))
           (mevedel-tool-permission-step
            ctx (lambda (_c) (setq called t)) #'ignore)
@@ -1043,7 +1043,7 @@ Return the outcome and the logged entry."
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel--all-allowed-roots)
                    (lambda (&optional _buffer) (list root)))
-                  ((symbol-function 'mevedel-permission--enqueue)
+                  ((symbol-function 'mevedel-permission-request)
                    (lambda (entry &optional _session)
                      (setq captured-entry entry))))
           (mevedel-tool-permission-step
@@ -1099,7 +1099,7 @@ Return the outcome and the logged entry."
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel--all-allowed-roots)
                    (lambda (&optional _buffer) (list root)))
-                  ((symbol-function 'mevedel-permission--enqueue)
+                  ((symbol-function 'mevedel-permission-request)
                    (lambda (entry &optional _session)
                      (setq captured-entry entry))))
           (mevedel-tool-permission-step
@@ -1140,7 +1140,7 @@ Return the outcome and the logged entry."
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel--all-allowed-roots)
                    (lambda (&optional _buffer) (list root)))
-                  ((symbol-function 'mevedel-permission--enqueue)
+                  ((symbol-function 'mevedel-permission-request)
                    (lambda (entry &optional _session)
                      (setq captured-entry entry))))
           (mevedel-tool-permission-step
@@ -1172,7 +1172,7 @@ Return the outcome and the logged entry."
          (mevedel-protected-paths nil)
          captured-entry)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+        (cl-letf (((symbol-function 'mevedel-permission-request)
                    (lambda (entry &optional _session)
                      (setq captured-entry entry))))
           (mevedel-tool-permission-step ctx #'ignore #'ignore)
@@ -1310,7 +1310,7 @@ Return the outcome and the logged entry."
                  (lambda (event _payload callback &rest _)
                    (push event events)
                    (funcall callback nil)))
-                ((symbol-function 'mevedel-permission--enqueue)
+                ((symbol-function 'mevedel-permission-request)
                  (lambda (&rest _) (setq enqueued t))))
         (mevedel-tool-permission-step
          (list :tool tool :args args :session session
@@ -1324,7 +1324,7 @@ Return the outcome and the logged entry."
     (let ((session (mevedel-session--create :permission-mode 'full-auto))
           (mevedel-permission-rules nil)
           enqueued allowed denied)
-      (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+      (cl-letf (((symbol-function 'mevedel-permission-request)
                  (lambda (&rest _) (setq enqueued t))))
         (mevedel-tool-permission-step
          (list :tool (mevedel-tool--create :name "HookProbe")
@@ -1357,7 +1357,7 @@ Return the outcome and the logged entry."
                  (lambda (_event _payload callback &rest _)
                    (funcall callback
                             '(:permission-decision allow))))
-                ((symbol-function 'mevedel-permission--enqueue)
+                ((symbol-function 'mevedel-permission-request)
                  (lambda (&rest _) (setq enqueued t))))
         (mevedel-tool-permission-step
          (list :tool tool :args args :session session)
@@ -1396,7 +1396,7 @@ Return the outcome and the logged entry."
                             (and (eq event 'PermissionRequest)
                                  '(:permission-decision deny
                                                         :permission-reason "hook denied")))))
-                ((symbol-function 'mevedel-permission--enqueue)
+                ((symbol-function 'mevedel-permission-request)
                  (lambda (&rest _) (setq enqueued t))))
         (mevedel-tool-permission-step
          (list :tool tool :args args :session session)
@@ -1436,7 +1436,7 @@ Return the outcome and the logged entry."
                    (setq provenance
                          (plist-get payload :permission-provenance)))
                  (funcall callback nil)))
-              ((symbol-function 'mevedel-permission--enqueue)
+              ((symbol-function 'mevedel-permission-request)
                (lambda (queued &optional _session)
                  (setq entry queued))))
       (mevedel-tool-permission-step

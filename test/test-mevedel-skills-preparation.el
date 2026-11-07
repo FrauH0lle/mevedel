@@ -19,6 +19,7 @@
 (require 'mevedel-skills-core)
 (require 'mevedel-skills-preparation)
 (require 'mevedel-structs)
+(require 'mevedel-permission-queue)
 (require 'mevedel-tools)
 (require 'mevedel-workspace)
 
@@ -459,7 +460,7 @@ Return the outcome plist produced by the async helper."
   :doc "missing Eval allow denies without prompting"
   (let ((mevedel-permission-rules nil)
         enqueued)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _)
                  (setq enqueued t))))
       (let ((outcome (mevedel-skills-test--shell-injections-sync

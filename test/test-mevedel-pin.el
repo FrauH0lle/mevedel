@@ -68,7 +68,7 @@ handler.  Return (:queued QUEUED :result RESULT)."
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                    (lambda (_event _payload callback &rest _) (funcall callback nil)))
-                  ((symbol-function 'mevedel-permission--enqueue)
+                  ((symbol-function 'mevedel-permission-request)
                    (lambda (entry &optional _session) (setq queued entry))))
           (with-temp-buffer
             (setq-local mevedel--session session)

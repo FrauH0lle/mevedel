@@ -64,7 +64,7 @@ GET-PATH, when non-nil, names a path the tool also writes."
          (mevedel-protected-paths nil)
          allowed queued)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+        (cl-letf (((symbol-function 'mevedel-permission-request)
                    (lambda (&rest _) (setq queued t))))
           (mevedel-tool-permission-step
            (list :tool (mevedel-test--read-access-tool)
@@ -93,7 +93,7 @@ GET-PATH, when non-nil, names a path the tool also writes."
          (mevedel-protected-paths (list (cons source 'inaccessible)))
          allowed queued)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+        (cl-letf (((symbol-function 'mevedel-permission-request)
                    (lambda (&rest _) (setq queued t))))
           (let ((context (list :tool (mevedel-test--read-access-tool)
                                :session session :workspace workspace
@@ -129,7 +129,7 @@ GET-PATH, when non-nil, names a path the tool also writes."
          (mevedel-protected-paths nil)
          entries)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+        (cl-letf (((symbol-function 'mevedel-permission-request)
                    (lambda (entry &rest _) (push entry entries))))
           (dolist (get-path (list nil (lambda (args) (plist-get args :source))))
             (mevedel-tool-permission-step

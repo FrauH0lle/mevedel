@@ -1994,7 +1994,7 @@
            (push (mevedel-request-cancelled-p request) observed)
            (mevedel-request-push-canceller
             request (lambda () (push 'nested observed)))
-           (mevedel-permission--enqueue
+           (mevedel-permission-request
             (list :kind 'generic :tool-name "Read" :request request
                   :callback (lambda (outcome) (push outcome outcomes))) session)))
         (unwind-protect

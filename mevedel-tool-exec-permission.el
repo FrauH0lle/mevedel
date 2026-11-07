@@ -77,9 +77,9 @@
                   "mevedel-permission-log" (session event &rest props))
 
 ;; `mevedel-permission-queue'
-(declare-function mevedel-permission--enqueue "mevedel-permission-queue"
+(declare-function mevedel-permission-request "mevedel-permission-queue"
                   (entry &optional session))
-(autoload 'mevedel-permission--enqueue "mevedel-permission-queue")
+(autoload 'mevedel-permission-request "mevedel-permission-queue")
 
 ;; `mevedel-permission-persistence'
 (declare-function mevedel-permission-persistence-load-resource-grants
@@ -308,8 +308,8 @@ Fall back to direct queue admission for callers outside the tool pipeline."
   (if-let* ((request (plist-get permission-context :permission-request)))
       (funcall request entry session (plist-get entry :callback))
     (if session
-        (mevedel-permission--enqueue entry session)
-      (mevedel-permission--enqueue entry))))
+        (mevedel-permission-request entry session)
+      (mevedel-permission-request entry))))
 
 (defun mevedel-tool-exec-permission--permission-decision-result
     (metadata-p outcome via &rest props)

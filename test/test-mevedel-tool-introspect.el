@@ -10,6 +10,7 @@
 (require 'mevedel-tool-registry)
 (require 'gptel-request)
 (require 'mevedel-tool-introspect)
+(require 'mevedel-permission-queue)
 (require 'mevedel-tools)
 (require 'helpers
          (file-name-concat
@@ -423,7 +424,7 @@ Return the delivered text; omitted optional arguments are nil."
       (setq-local mevedel--session session)
       (setq-local fill-column 13)
       (mevedel-test--with-captured-diagnostics nil
-        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+        (cl-letf (((symbol-function 'mevedel-permission-request)
                    (lambda (queued &optional _session) (setq entry queued))))
           (funcall (gptel-tool-function
                     (mevedel-tool-gptel-tool (mevedel-tool-get "EmacsDescribe" "mevedel")))

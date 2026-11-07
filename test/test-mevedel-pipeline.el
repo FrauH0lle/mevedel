@@ -2203,7 +2203,7 @@ cover, so the permission step's warning about it is captured here."
               (setq-local mevedel--workspace workspace)
               (setq-local mevedel--session session)
               (cl-letf
-                  (((symbol-function 'mevedel-permission--enqueue)
+                  (((symbol-function 'mevedel-permission-request)
                     (lambda (&rest _)
                       (ert-fail "Same-target additional root prompted"))))
                 (setq result
@@ -2790,7 +2790,7 @@ cover, so the permission step's warning about it is captured here."
 		   (with-temp-buffer
 		     (setq-local mevedel--session session)
 		     (setq-local mevedel--current-request request)
-		     (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+		     (cl-letf (((symbol-function 'mevedel-permission-request)
 				(lambda (queued &optional _session)
 				  (setq entry queued)
 				  ;; Even a non-UI reusable outcome must collapse to once.
@@ -3569,7 +3569,7 @@ cover, so the permission step's warning about it is captured here."
 		   (unwind-protect
 		       (let ((tool (mevedel-tool-get "Bash")))
 			 (cl-letf
-			     (((symbol-function 'mevedel-permission--enqueue)
+			     (((symbol-function 'mevedel-permission-request)
 			       (lambda (entry &optional _session)
 				 (push (plist-get entry :kind) enqueued-kinds)
 				 (funcall (plist-get entry :callback) 'deny-once)))

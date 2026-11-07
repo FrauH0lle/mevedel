@@ -50,7 +50,7 @@
 (defun test-pqa--enqueue (session &optional kind callback)
   "Enqueue a KIND entry on SESSION settling through CALLBACK; return its cell."
   (let ((cell (list '(:source user))))
-    (mevedel-permission--enqueue
+    (mevedel-permission-request
      (list :kind (or kind 'generic) :tool-name "Read" :command "ls"
            :origin "/root" :approval-decision-cell cell
            :callback (or callback #'ignore))

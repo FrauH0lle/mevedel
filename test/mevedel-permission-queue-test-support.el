@@ -33,7 +33,7 @@
 
 (defun mevedel-pq-test--request (entry &optional session)
   "Run the real permission queue entry point for ENTRY in SESSION."
-  (mevedel-permission--enqueue entry session))
+  (mevedel-permission-request entry session))
 
 (defun mevedel-pq-test--make-session (&optional rules mode)
   "Return a fresh fixture session with permission RULES and MODE."

@@ -499,7 +499,7 @@ live Eval and hook cards.  It is quoted explanation, never authorization."
          (not (string-empty-p (string-trim text)))
          (string-trim text))))
 
-(defun mevedel-permission--enqueue (entry &optional session)
+(defun mevedel-permission-request (entry &optional session)
   "Resolve automatic review for ENTRY before human admission to SESSION."
   (let* ((session (or session (mevedel-queue--current-session)))
          (entry (plist-put (copy-sequence entry) :session session))

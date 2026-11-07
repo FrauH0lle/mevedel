@@ -78,7 +78,7 @@
         '(("Bash" :action deny) ("Monitor" :action allow)))
   (setq args '(:command "printf monitor-secret-token" :description "Watch output")
         context (plist-put context :args args))
-  (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+  (cl-letf (((symbol-function 'mevedel-permission-request)
              (lambda (&rest _) (setq queued t))))
     (mevedel-tool-permission-step
      context (lambda (_) (setq allowed t))
@@ -97,7 +97,7 @@
   (setf (mevedel-session-permission-rules session) '(("Bash" :action ask))
         (mevedel-request-skill-permission-rules request)
         '(("Bash" :pattern "make test" :action allow)))
-  (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+  (cl-letf (((symbol-function 'mevedel-permission-request)
              (lambda (&rest _) (setq queued t))))
     (mevedel-tool-permission-step
      context (lambda (_) (setq allowed t))
@@ -134,7 +134,7 @@
                (lambda (event _payload callback &rest _)
                  (when (eq event 'PermissionRequest) (cl-incf admissions))
                  (funcall callback nil)))
-              ((symbol-function 'mevedel-permission--enqueue)
+              ((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional _session) (setq queued entry))))
       (mevedel-tool-permission-step
        context (lambda (_) (setq allowed t))
@@ -176,7 +176,7 @@
                        (funcall callback '(:permission-decision deny
                                           :permission-reason "Watcher not authorized")))
                    (funcall callback nil))))
-              ((symbol-function 'mevedel-permission--enqueue)
+              ((symbol-function 'mevedel-permission-request)
                (lambda (&rest _) (setq queued t)))
               ((symbol-function 'mevedel-permission-review--model)
                (lambda (&rest _) (setq reviewed t))))
@@ -195,7 +195,7 @@
   (setf (mevedel-request-skill-permission-rules request)
         '(("Bash" :pattern "make test" :action allow)))
   (setq context (plist-put context :hook-permission-decision 'ask))
-  (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+  (cl-letf (((symbol-function 'mevedel-permission-request)
              (lambda (entry &optional owner)
                (setq queued (plist-put entry :session owner)))))
     (mevedel-tool-permission-step
@@ -292,7 +292,7 @@
                      '(:command "make test" :description "Watch tests"
                        :sandbox_permissions "require_escalated"
                        :justification "Run the build outside confinement")))
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _) (setq queued t))))
       (dolist (name '("Bash" "Monitor"))
         (ert-info ((format "Plan authority for %s" name))
@@ -323,7 +323,7 @@
     (setq-local mevedel--agent-invocation
                 (mevedel-agent-invocation--create
                  :path "/root/unrelated" :parent-session session))
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _) (setq queued t))))
       (dolist (stamp '(request invocation))
         (setf (mevedel-request-plan-read-only mevedel--current-request)
@@ -350,7 +350,7 @@
                      '(:command "make test" :description "Watch tests"
                        :sandbox_permissions "require_escalated"
                        :justification "Run the build outside confinement")))
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (&rest _) (setq queued t))))
       (dolist (stamp '(request invocation))
         (setf (mevedel-request-plan-read-only request) (eq stamp 'request)

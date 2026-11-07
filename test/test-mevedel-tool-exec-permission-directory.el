@@ -171,7 +171,7 @@
              (mevedel-permission-rules-path-in-allowed-roots-p
               (file-name-concat root "marker")
               (mevedel--all-allowed-roots (current-buffer))))
-            (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+            (cl-letf (((symbol-function 'mevedel-permission-request)
                        (lambda (entry &optional _session)
                          (push entry prompts)
                          (funcall (plist-get entry :callback) 'deny))))
