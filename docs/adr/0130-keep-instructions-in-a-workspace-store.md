@@ -35,6 +35,13 @@ observed:
 A write is retried once; if the store changed again, this client keeps the
 store's record and refuses its own changes.
 
+Installing a merged or observed record keeps directive record identity. A
+record already live under the same UUID takes the merged fields in place, and
+subdirectives likewise. A record the store no longer holds leaves the
+workspace's list. Running requests, open listings and Rewind hold record
+objects, so they see the merged state. While a request is in flight on a
+record, its transient status and Plan stay as they are.
+
 **Observation points.** The store is observed when a workspace is first
 activated in an Emacs, when a directive listing opens, at resume, and on every
 write. There is no watcher: a listing left open may show state another client

@@ -1197,9 +1197,8 @@
                           (with-current-buffer (overlay-buffer overlay)
                             (buffer-substring-no-properties
                              (overlay-start overlay) (overlay-end overlay)))))
-                ;; Last, because a merged write reinstalls records: the
-                ;; other session's activity, held back during the Rewind,
-                ;; reaches the store once the Rewind is over.
+                ;; The other session's activity, held back during the
+                ;; Rewind, reaches the store once the Rewind is over.
                 (mevedel-instruction-store-flush)
                 (let ((same (cl-find "same workspace"
                                      (plist-get (plist-get (mevedel-instruction-store--read

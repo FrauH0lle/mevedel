@@ -84,7 +84,10 @@
 (declare-function mevedel-directive-discussion "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-discussion-turn-checkpoint
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-plan "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-planning "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-subdirectives
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
@@ -92,6 +95,7 @@
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-subdirective-anchor "mevedel-structs" (cl-x) t)
+(declare-function mevedel-subdirective-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
@@ -949,13 +953,59 @@ same files from every client of the workspace."
 
 (defun mevedel-instruction-store--install (workspace data &optional lazy)
   "Make store record DATA WORKSPACE's in-memory instructions.
-LAZY restores presentations only in files already visited."
-  (let ((mevedel-instruction-store--inhibit t))
+LAZY restores presentations only in files already visited.  Directive
+records keep their identity: a record already live under the same UUID
+takes the installed fields in place, so a running request, an open
+listing or Rewind holding it sees the merged state."
+  (let ((mevedel-instruction-store--inhibit t)
+        (live (mevedel-workspace-directives workspace)))
     (with-temp-buffer
       (setq-local mevedel--workspace workspace)
       (mevedel--install-instructions
        data (mevedel-instruction-store--root workspace) nil t workspace
-       nil nil nil lazy))))
+       nil nil nil lazy))
+    ;; A record absent from DATA is dropped from the list, as removal does.
+    (mevedel-workspace-set-directives
+     workspace
+     (mapcar (lambda (fresh)
+               (if-let* ((old (cl-find (mevedel-directive-id fresh) live
+                                       :key #'mevedel-directive-id :test #'equal)))
+                   (mevedel-instruction-store--adopt old fresh)
+                 fresh))
+             (mevedel-workspace-directives workspace)))))
+
+(defun mevedel-instruction-store--adopt (live fresh)
+  "Copy directive record FRESH's fields into LIVE and return LIVE.
+Subdirectives keep their identity the same way.  While LIVE has a
+request in flight, its transient state and Plan stay: the store holds
+neither the running status nor the Plan's live chat buffer."
+  (let ((running (memq (mevedel-directive-state live)
+                       '(implementing discussing planning)))
+        (state (mevedel-directive-state live))
+        (plan (mevedel-directive-plan live)))
+    (setf (mevedel-directive-subdirectives fresh)
+          (mapcar (lambda (sub)
+                    (if-let* ((old (cl-find (mevedel-subdirective-id sub)
+                                            (mevedel-directive-subdirectives live)
+                                            :key #'mevedel-subdirective-id
+                                            :test #'equal)))
+                        (mevedel-instruction-store--copy-slots
+                         'mevedel-subdirective old sub)
+                      sub))
+                  (mevedel-directive-subdirectives fresh)))
+    (mevedel-instruction-store--copy-slots 'mevedel-directive live fresh)
+    (when running
+      (setf (mevedel-directive-state live) state
+            (mevedel-directive-plan live) plan))
+    live))
+
+(defun mevedel-instruction-store--copy-slots (type live fresh)
+  "Copy every slot of struct TYPE from FRESH into LIVE and return LIVE."
+  (dolist (slot (cl-struct-slot-info type))
+    (unless (eq (car slot) 'cl-tag-slot)
+      (setf (cl-struct-slot-value type (car slot) live)
+            (cl-struct-slot-value type (car slot) fresh))))
+  live)
 
 
 ;;;; Merging a stale write

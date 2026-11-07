@@ -249,6 +249,44 @@ Return the new workspace struct."
                                   workspace second-id)))
       (should (equal '("one by them" "two by me")
                      (test-mevedel-instruction-store--requests workspace)))))
+  :doc "a merged write keeps the live directive record a holder references"
+  (test-mevedel-instruction-store--with-workspace (workspace source)
+    (let* ((first (test-mevedel-instruction-store--directive source "one" 1))
+           (second (test-mevedel-instruction-store--directive source "two" 2))
+           (uuid (overlay-get first 'mevedel-uuid))
+           ;; A running request holds its record, as the directive callback does.
+           (held (mevedel--directive-record first)))
+      (setf (mevedel-directive-session-id held) "s1")
+      (mevedel-instruction-store-sync workspace)
+      (test-mevedel-instruction-store--other-client
+       workspace (lambda (record)
+                   (test-mevedel-instruction-store--edit-record
+                    record uuid :request "changed elsewhere")))
+      (mevedel--set-directive-request second "two by me")
+      (should (eq 'merged (mevedel-instruction-store-sync workspace)))
+      ;; The holder's object is still the workspace's record, now merged.
+      (should (eq held (cl-find uuid (mevedel-workspace-directives workspace)
+                                :key #'mevedel-directive-id :test #'equal)))
+      (should (equal "changed elsewhere" (mevedel-directive-request held)))
+      ;; Activity the holder records afterwards is written, not lost.
+      (setf (mevedel-directive-attempts held)
+            (list (test-mevedel-instruction-store--attempt "s1" 1 1)))
+      (mevedel-instruction-store-sync workspace)
+      (should (equal '(1) (test-mevedel-instruction-store--attempt-turns workspace uuid)))))
+  :doc "a merged write drops a directive another client deleted"
+  (test-mevedel-instruction-store--with-workspace (workspace source)
+    (let* ((first (test-mevedel-instruction-store--directive source "one" 1))
+           (second (test-mevedel-instruction-store--directive source "two" 2))
+           (uuid (overlay-get first 'mevedel-uuid)))
+      (test-mevedel-instruction-store--other-client
+       workspace (lambda (record)
+                   (plist-put record :directives
+                              (cl-remove uuid (plist-get record :directives)
+                                         :key (lambda (r) (plist-get r :id))
+                                         :test #'equal))))
+      (mevedel--set-directive-request second "two by me")
+      (should (eq 'merged (mevedel-instruction-store-sync workspace)))
+      (should (equal '("two by me") (test-mevedel-instruction-store--requests workspace)))))
   :doc "a creation after a concurrent write is retried and renumbers a taken id"
   (test-mevedel-instruction-store--with-workspace (workspace source)
     (let* ((first (test-mevedel-instruction-store--directive source "one" 1))
