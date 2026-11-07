@@ -63,7 +63,9 @@ version, so two installations of different versions share one workspace. An
 unknown format or an unreadable record refuses without clearing live state or
 writing. An absent store is told apart from a corrupt one. An unreadable store
 is reported once and read again only at the next observation point, not after
-every command. Exports and session snapshots carry the same `:format`, so a
+every command. A failed write is likewise not retried after every command: a
+workspace waits `mevedel-session-checkpoint-interval` seconds, while exit and
+session saves still try. Exports and session snapshots carry the same `:format`, so a
 candidate staged on the other machine's installation imports here. A file
 written before they carried it imports only on the version that wrote it.
 

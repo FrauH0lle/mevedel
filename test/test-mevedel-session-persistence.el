@@ -17,6 +17,10 @@
 (require 'mevedel-resource)
 (require 'mevedel-tool-exec-permission)
 (require 'mevedel-journal-pins)
+(require 'mevedel-session-persistence)
+(require 'mevedel-session-publication)
+(require 'mevedel-execution)
+(require 'mevedel-journal-capture)
 (require 'mevedel-journal-test-support
          (file-name-concat
           (file-name-directory
@@ -743,6 +747,26 @@
       (should-not swept)
       (let ((noninteractive nil)) (mevedel-session-persistence--kill-emacs-hook))
       (should (equal (list workspace) swept))))
+  :doc "the exit sweep skips a remote root without a live connection"
+  (let* ((remote (mevedel-workspace--create
+                  :type 'project :id "/ssh:sleeping-host:/p/"
+                  :root "/ssh:sleeping-host:/p/" :name "remote"))
+         (local (mevedel-workspace--create
+                 :type 'project :id default-directory
+                 :root default-directory :name "local"))
+         (mevedel-workspace--registry (make-hash-table :test #'equal))
+         swept)
+    (puthash (cons 'project "r") remote mevedel-workspace--registry)
+    (puthash (cons 'project "l") local mevedel-workspace--registry)
+    ;; Any remote file operation here would contact the host.
+    (cl-letf (((symbol-function 'mevedel-session-persistence-cleanup-expired)
+               (lambda (ws &rest _) (push ws swept) 0))
+              ((symbol-function 'file-remote-p)
+               (lambda (file &optional identification connected)
+                 (and (string-prefix-p "/ssh:" file)
+                      (if connected nil (or identification "/ssh:sleeping-host:"))))))
+      (let ((noninteractive nil)) (mevedel-session-persistence--kill-emacs-hook))
+      (should (equal (list local) swept))))
   :doc "flushes retained agent text before its idle save timer fires"
   (dolist (type '(file project))
     (let* ((root (make-temp-file "mevedel-exit-agent-" t))

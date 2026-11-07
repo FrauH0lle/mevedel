@@ -3401,8 +3401,13 @@ remains possible; execution teardown still runs."
                  (hash-table-p mevedel-workspace--registry))
         (maphash
          (lambda (_ workspace)
-           (ignore-errors
-             (mevedel-session-persistence-cleanup-expired workspace)))
+           ;; Like activation, never open a connection here: C-g is
+           ;; inhibited, so an unreachable host would hang the exit.
+           (let ((root (mevedel-workspace-root workspace)))
+             (unless (and (stringp root) (file-remote-p root)
+                          (not (file-remote-p root nil t)))
+               (ignore-errors
+                 (mevedel-session-persistence-cleanup-expired workspace)))))
          mevedel-workspace--registry))
       (mevedel-session-persistence--wait-async)
       (dolist (dir lock-dirs)
