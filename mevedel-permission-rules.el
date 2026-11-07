@@ -310,11 +310,13 @@ distinct while no ordinary argument text can contain them.")
 (defun mevedel-permission--mask-shell-syntax (text)
   "Return TEXT with unquoted command-forming shell syntax masked.
 Separators, pipes, background `&', parentheses, backticks, and `$(' become
-private marker characters; see `mevedel-permission--shell-syntax-marker'.
+private marker characters, as do unquoted `>' and `<' that open a file;
+see `mevedel-permission--shell-syntax-marker'.
 Single-quoted, ANSI-C quoted (`$\\='...\\='') and escaped text stays ordinary.
 Inside double quotes, only command substitution is masked, because the shell
 still runs it there.  Redirections such as `2>&1' and `&>' keep their `&'
-only after an unescaped, unquoted `>' or `<'."
+only after an unescaped, unquoted `>' or `<'.  Descriptor copies such as
+`2>&1' and `>&2' stay ordinary: they open no file."
   (let ((length (length text))
         (state nil)
         (escaped nil)
@@ -346,7 +348,12 @@ only after an unescaped, unquoted `>' or `<'."
                  ((eq char ?\") (setq state 'double) nil)
                  ((and (eq char ?$) (eq next ?')) (setq state 'ansi-open) nil)
                  (substitution t)
-                 ((memq char '(?> ?<)) (setq redirect t) nil)
+                 ((memq char '(?> ?<))
+                  (setq redirect t)
+                  (not (and (eq next ?&)
+                            (< (+ index 2) length)
+                            (or (eq (aref text (+ index 2)) ?-)
+                                (<= ?0 (aref text (+ index 2)) ?9)))))
                  ((memq char '(?\; ?| ?\n ?\( ?\))) t)
                  ((eq char ?&) (not (or after-redirect (eq next ?>))))))))
         (push (if mask (+ mevedel-permission--shell-syntax-marker char) char)
@@ -449,7 +456,8 @@ DOMAIN, or NAME.  Eval `:expression' rules compare PATTERN literally;
 A Bash allow rule grants authority, so its pattern matches with
 `mevedel-permission--match-command-grant': wildcards cover ordinary
 arguments, never shell syntax that forms another command.  Deny and ask
-rules restrict, so their wildcards keep matching any text.
+rules restrict, so their wildcards keep matching any text.  A path allow
+rule matches case-sensitively; deny and ask path rules keep folding case.
 Unqualified rules match unconditionally.  Return a list of
 matching rules in order (later entries = higher priority)."
   (let ((matches nil)
@@ -474,6 +482,12 @@ matching rules in order (later entries = higher priority)."
                    (equal tool-name "Bash")
                    (eq (plist-get (cdr rule) :action) 'allow))
               (when (mevedel-permission--match-command-grant rule-value pattern)
+                (push rule matches)))
+             ((and (eq kind :path)
+                   (eq (plist-get (cdr rule) :action) 'allow))
+              (when (let ((case-fold-search nil))
+                      (mevedel-permission--match-specifier
+                       kind rule-value path))
                 (push rule matches)))
              ;; Specifier present: compare against the corresponding value
              ((mevedel-permission--match-specifier
