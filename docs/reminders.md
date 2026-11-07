@@ -124,7 +124,10 @@ remain isolated.
 Every delivery writes one trusted hidden record (`:type injected-reminders`,
 phase `turn-start` or `mid-turn`) containing each entry's type and complete
 body: a gptel injection when its payload is realized, a Claude delivery only on
-exact SDK receipt. Bodies are not truncated: the record supplies reconstruction
+exact SDK receipt. A Claude prompt record also lists the selected observation
+sections its native system prompt delivered whose bodies differ from the
+transcript's last delivered state, so a turn shows the same context a gptel turn
+records; the wire never repeats those bodies. Bodies are not truncated: the record supplies reconstruction
 as well as inspection. Missing insertion markers or recording failures prevent
 committing delivery; injection failures retain pending state. A Claude record
 states delivered guidance, not that a gptel payload exists; mail delivered in

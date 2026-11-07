@@ -185,22 +185,35 @@ retained native history already holds that delivery."
 Claude measures JavaScript string units, not codepoints: emoji count twice."
   (<= (/ (string-bytes (encode-coding-string text 'utf-16le)) 2) 10000))
 
-(defun mevedel-claude-code-context--batch (entries phase)
+(defun mevedel-claude-code-context--batch (entries phase &optional delivered)
   "Return (BODY . TRANSCRIPT) delivering typed ENTRIES in PHASE.
 BODY carries a unique receipt marker for the native wire only.  TRANSCRIPT is
-the shared hidden injection record, empty without ENTRIES."
+the shared hidden injection record of DELIVERED and ENTRIES, empty without
+either.  DELIVERED entries already reached the model another way, such as the
+native system prompt, so BODY omits them."
   (cons (concat (format "<!-- mevedel-delivery:%s -->\n"
                         (md5 (format "%s:%s:%s" (emacs-pid) (current-time) (random))))
                 (mapconcat (lambda (entry)
                              (concat (mevedel-reminders-format-block (plist-get entry :body)) "\n"))
                            entries))
-        (if entries
-            (mevedel--format-hook-audit-record (mevedel-reminders--injection-record entries phase))
+        (if (or delivered entries)
+            (mevedel--format-hook-audit-record
+             (mevedel-reminders--injection-record (append delivered entries) phase))
           "")))
 
 (defun mevedel-claude-code-context--observation-entries (observations)
   "Return typed reminder entries for selected OBSERVATIONS."
   (mapcar (lambda (item) (list :type (car item) :body (cdr item))) observations))
+
+(defun mevedel-claude-code-context--unrecorded-baseline (info)
+  "Return INFO's system observations absent from its transcript's last delivery.
+The native system prompt delivered them; recording each changed section once
+keeps the transcript and view equal to a gptel turn's delivered context."
+  (let ((baseline (plist-get info :mevedel-claude-system-observations)))
+    (with-current-buffer (plist-get info :buffer)
+      (let ((previous (mevedel-context-delivery--previous (mapcar #'car baseline))))
+        (cl-remove-if (lambda (item) (equal (cdr item) (alist-get (car item) previous)))
+                      baseline)))))
 
 (defun mevedel-claude-code-context--selected-key (owner)
   "Return OWNER's selected-context dedup key in its native conversation, or nil."
@@ -325,8 +338,9 @@ every tool, so its absence fails closed.  Oversized whole messages and changes
 require a prompt continuation before more effects; no preview counts as full
 delivery.  With PROMPT-P, also collect configured reminders and pending hook
 context, and include complete mail without the hook limit.  The selected
-observation baseline is already in the system prompt.  EXTRA is an optional
-plist of further typed `:entries' and their `:commits'."
+observation baseline is already in the system prompt; its sections not yet in
+the transcript join the receipt's record without reaching the wire.  EXTRA is
+an optional plist of further typed `:entries' and their `:commits'."
   (let* ((info (mevedel-engine-info owner))
          (pending (plist-get info :mevedel-claude-context-pending)))
     (unless (eq 'hook (plist-get pending :route))
@@ -342,6 +356,7 @@ plist of further typed `:entries' and their `:commits'."
              (events (mevedel-reminders--stage-turn-events (plist-get info :buffer)))
              (roster (and context (mevedel-tools-agent-roster owner)))
              (reminders (when prompt-p (mevedel-reminders-collect owner)))
+             (baseline (when prompt-p (mevedel-claude-code-context--unrecorded-baseline info)))
              (steering (unless pending (mevedel-claude-code-context--steering owner)))
              (entries (append (mevedel-claude-code-context--observation-entries changed)
                               (plist-get events :entries)
@@ -352,7 +367,9 @@ plist of further typed `:entries' and their `:commits'."
         (when (and pending entries)
           (error "Claude's unacknowledged delivery prevents required context updates"))
         (unless pending
-          (let* ((batch (mevedel-claude-code-context--batch entries (if prompt-p 'turn-start 'mid-turn)))
+          (let* ((batch (mevedel-claude-code-context--batch
+                         entries (if prompt-p 'turn-start 'mid-turn)
+                         (mevedel-claude-code-context--observation-entries baseline)))
                  (body (car batch))
                  (transcript (concat (cdr batch) (plist-get steering :transcript)))
                  ;; Authored steering needs a user prompt, never hook context.
@@ -376,7 +393,7 @@ plist of further typed `:entries' and their `:commits'."
                                            (car messages) block)))
                             t)))
               (push (pop messages) selected))
-            (when (or entries steering selected (plist-get reminders :commits))
+            (when (or entries baseline steering selected (plist-get reminders :commits))
               (setf (mevedel-engine-info owner)
                     (plist-put info :mevedel-claude-context-pending
                                (list :context context :messages (nreverse selected) :body body
