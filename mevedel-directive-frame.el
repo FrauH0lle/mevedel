@@ -463,11 +463,12 @@ display type, and recreates it otherwise."
       (set-window-dedicated-p window t)
       ;; Window parameters rather than buffer-local settings: the view buffer
       ;; is shared with the main view, which keeps its own mode line and its
-      ;; full-width status strip.
+      ;; full-width status strip.  The condensed header takes the strip's tab
+      ;; line; the buffer's pinned prompt row stays below it, as in the view.
       (set-window-parameter window 'mode-line-format 'none)
-      (set-window-parameter window 'header-line-format
+      (set-window-parameter window 'tab-line-format
                             '(:eval (mevedel-directive-frame--header)))
-      (set-window-parameter window 'tab-line-format 'none)
+      (set-window-parameter window 'header-line-format nil)
       (set-window-fringes window 0 0))
     (mevedel-directive-frame--paint-border frame)
     frame))

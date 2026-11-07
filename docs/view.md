@@ -1337,11 +1337,17 @@ directive scope hint line advertises both keys while the frame is showing.
 The frame carries its own chrome through **window parameters**, not buffer-local
 settings, because the view buffer is shared with the main view: the main view
 keeps its mode line and its full-width status strip. In the frame the mode line
-is suppressed, fringes are zero, and the header line is a condensed variant
-leading with directive identity, then composer scope, a filter marker, request
-state, model, and tool count. Session facts the parent already shows — session
-name, workspace root, execution target, preset — are deliberately absent,
-because this header has a fraction of the width.
+is suppressed, fringes are zero, and the tab line is a condensed variant of the
+status strip leading with directive identity, then composer scope, a filter
+marker, request state, model, and tool count. Session facts the parent already
+shows — session name, workspace root, execution target, preset — are
+deliberately absent, because this header has a fraction of the width. The frame
+does not override the header line, so the buffer's
+[pinned prompt row](#status-strip-and-cockpit-routing) appears below the
+condensed header exactly as in the main view: always reserved, empty while the
+prompt's own header is on screen, and following follow-ups, compaction, and
+`/clear` the same way. The frame spends that one line so the prompt survives
+scrolling without displacing the operational state or shifting the transcript.
 
 The border is painted by setting a background on `internal-border` and
 `child-frame-border` for that frame. A border width alone draws nothing: without
@@ -1402,7 +1408,12 @@ row stays reserved (empty when the original prompt header is visible), so
 scrolling never shifts the transcript vertically. The preview
 follows the exchange at the top of each window independently, not the buffer
 point or the most recent submission. A visible prompt header does not pin
-itself; scrolling to a different exchange changes the preview. The preview
+itself; scrolling to a different exchange changes the preview. A window start
+inside hidden text, such as another directive's turn in a filtered directive
+frame, counts from the first visible position, so a hidden prompt is never
+pinned and a visible header at the top pins nothing. Hidden prompt headers are
+skipped as well, so a top reached past a trailing hidden turn pins the last
+visible prompt above it. The preview
 is at most `mevedel-view-sticky-prompt-max-width` columns (80 by default; nil
 uses the window width), so a long prompt does not run across a wide window. In
 tight windows, it truncates to its own row's width, without taking
