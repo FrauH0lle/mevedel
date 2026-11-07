@@ -840,7 +840,9 @@ An edit link may also run:
   lock, as for every store mutation. Success answers `{result: {file, hash,
   bytes, created}}` with the new hash.
 - `delete-file` (`file`, `hash`): delete the file if it still has `hash`. The
-  primary file is refused, since without it the artifact is gone.
+  store refuses deleting the primary file, here or in `write-files`, since
+  without it the artifact is gone; delete the artifact instead. Replacing it
+  is allowed.
 - `write-files` (`changes`, each a `write-file` change or `{file, hash,
   delete: true}`): make several such changes at once. Every hash is checked
   before any file changes, in one program under the store's lock, so either
@@ -862,9 +864,11 @@ without `.` or `..` components, and no component on the way may be a symbolic
 link; anything else is refused with `Refused path ...`. Listings leave links
 out. The bookkeeping in `.state/ID/` lies beside the artifact's directory, so
 no file name reaches it. Each file read or written is at most 16 MiB, which
-is why artifact rooms accept editing transfers of up to 30 MiB of base64
-(`:editing-max-bytes`) instead of the usual 24 MiB. No action deletes the
-artifact or creates another one.
+is why artifact rooms derive their editing-transfer budget (`:editing-max-bytes`,
+15/8 of that limit, 30 MiB) instead of the usual 24 MiB. It is headroom for a
+file's two base64 layers and the request's envelope, not an exact bound: JSON
+escapes in `text` and batches of several files count against it too. No action
+deletes the artifact or creates another one.
 
 A committed file change fires the store's change notification
 (`mevedel-artifact-store-changed-functions`), so origin session rooms, the

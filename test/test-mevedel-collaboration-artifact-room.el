@@ -1623,6 +1623,13 @@ Return the artifact's directory."
                                      (hash . ,mevedel-artifact-room-test--page-hash)
                                      (text . "<p>defaced</p>")))))
             (should (equal "This artifact link is view-only" (alist-get 'error reply)))
+            ;; A batch is a write too.
+            (should (equal "This artifact link is view-only"
+                           (alist-get 'error (mevedel-artifact-room-test--request
+                                              consumer 2 `((action . "write-files")
+                                                           (changes . [((file . "new.css")
+                                                                        (text . "p {}"))]))))))
+            (should-not (file-exists-p (file-name-concat directory "new.css")))
             (should (equal mevedel-artifact-room-test--page
                            (mevedel-artifact-room-test--file directory "index.html"))))
         (mevedel-artifact-room-test--close consumer)))))
@@ -1631,52 +1638,40 @@ Return the artifact's directory."
   ()
   ,test
   (test)
-  :doc "refuses paths outside the artifact directory, through links or into bookkeeping"
+  :doc "carries the store's refusal of a path, for each action"
+  ;; The store proves its path rules itself; the room only relays the refusal.
   (mevedel-artifact-room-test--with-origin (root workspace state port)
-    (let* ((directory (mevedel-artifact-room-test--site workspace "landing"))
-           (outside (make-temp-file "mevedel-artifact-outside-" t))
+    (let* ((_ (mevedel-artifact-room-test--site workspace "landing"))
            (bookkeeping (mevedel-artifact-store-bookkeeping-directory workspace "landing"))
-           (_ (make-symbolic-link (file-name-concat outside "secret.html")
-                                  (file-name-concat directory "linked.html")))
-           (_ (make-symbolic-link outside (file-name-concat directory "linked")))
-           (_ (with-temp-file (file-name-concat outside "secret.html") (insert "secret")))
            (links (mevedel-collaboration-artifact-room-share root "landing"))
            (consumer (mevedel-artifact-room-test--joined state port links 'edit))
            (meta (mevedel-artifact-room-test--file bookkeeping "meta.el"))
            (req-id 0))
+      ;; With the store's real limit, the budget is the 30 MiB it always was.
+      (should (= (* 30 1024 1024)
+                 (plist-get (mevedel-collaboration-artifact-room--find root "landing")
+                            :editing-max-bytes)))
       (unwind-protect
           (progn
-            (dolist (file (list "../.state/landing/meta.el" "../landing/index.html"
-                                (file-name-concat bookkeeping "meta.el") "/etc/passwd"
-                                "assets/../index.html" "./index.html" "assets/" ""
-                                "linked.html" "linked/secret.html" "linked/new.html"))
-              (dolist (body `(((action . "read") (file . ,file))
-                              ((action . "write-file") (file . ,file) (text . "x"))
-                              ((action . "delete-file") (file . ,file)
-                               (hash . ,mevedel-artifact-room-test--page-hash))))
-                (let ((reply (mevedel-artifact-room-test--request
-                              consumer (cl-incf req-id) body)))
-                  (should (string-prefix-p "Refused path" (or (alist-get 'error reply) "")))
-                  (should-not (assq 'result reply)))))
-            ;; Nothing outside the artifact changed, nor its bookkeeping.
-            (should (equal "secret" (mevedel-artifact-room-test--file outside "secret.html")))
-            (should-not (file-exists-p (file-name-concat outside "new.html")))
-            (should (equal meta (mevedel-artifact-room-test--file bookkeeping "meta.el")))
-            ;; Links are left out of the listing.
-            (should (equal ["assets/logo.png" "index.html"]
-                           (cl-map 'vector (lambda (row) (alist-get 'file row))
-                                   (alist-get 'files
-                                              (alist-get 'result
-                                                         (mevedel-artifact-room-test--request
-                                                          consumer (cl-incf req-id)
-                                                          '((action . "files")))))))))
-        (mevedel-artifact-room-test--close consumer)
-        (delete-directory outside t))))
+            (dolist (body `(((action . "read") (file . "../.state/landing/meta.el"))
+                            ((action . "write-file") (file . "../.state/landing/meta.el")
+                             (text . "x"))
+                            ((action . "delete-file") (file . "../.state/landing/meta.el")
+                             (hash . ,mevedel-artifact-room-test--page-hash))
+                            ((action . "write-files")
+                             (changes . [((file . "../.state/landing/meta.el") (text . "x"))]))))
+              (let ((reply (mevedel-artifact-room-test--request
+                            consumer (cl-incf req-id) body)))
+                (should (string-prefix-p "Refused path" (or (alist-get 'error reply) "")))
+                (should-not (assq 'result reply))))
+            (should (equal meta (mevedel-artifact-room-test--file bookkeeping "meta.el"))))
+        (mevedel-artifact-room-test--close consumer))))
 
-  :doc "carries files up to the file limit and refuses larger ones"
+  :doc "carries a file of the store's largest size as base64 data, both ways"
   (mevedel-artifact-room-test--with-origin (root workspace state port)
     ;; The limit is bound down to 1.5 MiB, still more than one 1 MiB frame of
-    ;; base64, so the real boundary path runs on a much smaller file.
+    ;; base64, so the real transfer runs on a much smaller file.  The room's
+    ;; transfer budget derives from the limit at its creation.
     (should (= (* 16 1024 1024) mevedel-artifact-store-file-max-bytes))
     (let* ((mevedel-artifact-store-file-max-bytes (* 3 512 1024))
            (directory (mevedel-artifact-room-test--site workspace "landing"))
@@ -1685,9 +1680,11 @@ Return the artifact's directory."
            (largest (string-to-unibyte
                      (make-string mevedel-artifact-store-file-max-bytes
                                   (unibyte-char-to-multibyte #xff)))))
+      (should (= (ceiling (* 15 mevedel-artifact-store-file-max-bytes) 8)
+                 (plist-get (mevedel-collaboration-artifact-room--find root "landing")
+                            :editing-max-bytes)))
       (unwind-protect
           (progn
-            ;; A binary asset at the limit travels as base64 inside the transfer.
             (should (assq 'result (mevedel-artifact-room-test--request
                                    consumer 1 `((action . "write-file")
                                                 (file . "assets/large.bin")
@@ -1695,30 +1692,12 @@ Return the artifact's directory."
                                    60)))
             (should (equal largest (mevedel-artifact-room-test--file directory
                                                                      "assets/large.bin")))
-            ;; And reads back whole through the link.
             (let ((read (alist-get 'result (mevedel-artifact-room-test--request
-                                            consumer 4 '((action . "read")
+                                            consumer 2 '((action . "read")
                                                          (file . "assets/large.bin"))
                                             60))))
               (should (equal mevedel-artifact-store-file-max-bytes (alist-get 'bytes read)))
-              (should (equal largest (base64-decode-string (alist-get 'data read)))))
-            ;; A larger file placed at the origin is listed but not read.
-            (let ((coding-system-for-write 'no-conversion))
-              (write-region (concat largest "x") nil
-                            (file-name-concat directory "assets/huge.bin") nil 'silent))
-            (should (string-search
-                     "larger than"
-                     (alist-get 'error (mevedel-artifact-room-test--request
-                                        consumer 2 '((action . "read")
-                                                     (file . "assets/huge.bin"))))))
-            (delete-file (file-name-concat directory "assets/huge.bin"))
-            (let ((reply (mevedel-artifact-room-test--request
-                          consumer 3 `((action . "write-file") (file . "assets/huge.bin")
-                                       (data . ,(base64-encode-string
-                                                 (concat largest "x") t)))
-                          60)))
-              (should (string-search "larger than" (alist-get 'error reply))))
-            (should-not (file-exists-p (file-name-concat directory "assets/huge.bin"))))
+              (should (equal largest (base64-decode-string (alist-get 'data read))))))
         (mevedel-artifact-room-test--close consumer)))))
 
 (mevedel-deftest mevedel-collaboration-artifact-room--html-delete
@@ -1750,7 +1729,9 @@ Return the artifact's directory."
             (should (equal logo (alist-get 'hash stale)))
             (should (assq 'result deleted))
             (should-not (file-exists-p (file-name-concat directory "assets/logo.png")))
-            (should (string-search "primary file" (alist-get 'error primary)))
+            ;; The store's refusal, as it words it.
+            (should (string-search "primary file; delete the artifact instead"
+                                   (alist-get 'error primary)))
             (should (stringp (alist-get 'error artifact)))
             (should (equal mevedel-artifact-room-test--page
                            (mevedel-artifact-room-test--file directory "index.html")))
@@ -1815,99 +1796,14 @@ Return the artifact's directory."
             (should (equal mevedel-artifact-room-test--page
                            (mevedel-artifact-room-test--file directory "index.html")))
             (should-not (file-exists-p (file-name-concat directory "new.css")))
-            (should (file-exists-p (file-name-concat directory "assets/logo.png"))))
-        (mevedel-artifact-room-test--close consumer))))
-
-  :doc "refuses the primary file's deletion and a view link, changing nothing"
-  (mevedel-artifact-room-test--with-origin (root workspace state port)
-    (let* ((directory (mevedel-artifact-room-test--site workspace "landing"))
-           (links (mevedel-collaboration-artifact-room-share root "landing"))
-           (editor (mevedel-artifact-room-test--joined state port links 'edit))
-           (viewer (mevedel-artifact-room-test--joined state port links 'view))
-           (changes `[((file . "new.css") (text . "p {}"))
-                      ((file . "index.html")
-                       (hash . ,mevedel-artifact-room-test--page-hash) (delete . t))]))
-      (unwind-protect
-          (progn
-            (should (string-search "primary file"
-                                   (alist-get 'error (mevedel-artifact-room-test--request
-                                                      editor 1 `((action . "write-files")
-                                                                 (changes . ,changes))))))
-            (should (equal "This artifact link is view-only"
-                           (alist-get 'error (mevedel-artifact-room-test--request
-                                              viewer 1 `((action . "write-files")
-                                                         (changes . ,changes))))))
-            (should-not (file-exists-p (file-name-concat directory "new.css")))
-            (should (file-exists-p (file-name-concat directory "index.html"))))
-        (mevedel-artifact-room-test--close editor)
-        (mevedel-artifact-room-test--close viewer)))))
-
-(mevedel-deftest mevedel-collaboration-artifact-room--html-write-files-rollback
-  ()
-  ,test
-  (test)
-  :doc "rolls back a batch when a later file's directory is unwritable"
-  (mevedel-artifact-room-test--with-origin (root workspace state port)
-    (let* ((directory (mevedel-artifact-room-test--site workspace "landing"))
-           (assets (file-name-concat directory "assets"))
-           (links (mevedel-collaboration-artifact-room-share root "landing"))
-           (consumer (mevedel-artifact-room-test--joined state port links 'edit))
-           (changed nil)
-           (mevedel-artifact-store-changed-functions
-            (cons (lambda (_workspace) (setq changed t))
-                  mevedel-artifact-store-changed-functions))
-           (versions (mevedel-artifact-store-versions workspace "landing")))
-      (unwind-protect
-          (progn
-            (set-file-modes assets #o555)
-            (should-not (file-writable-p assets))
-            (let ((reply (mevedel-artifact-room-test--request
-                          consumer 1 `((action . "write-files")
-                                       (changes . [((file . "index.html")
-                                                    (hash . ,mevedel-artifact-room-test--page-hash)
-                                                    (text . "<p>must roll back</p>"))
-                                                   ((file . "assets/new.css")
-                                                    (text . "p {}"))])))))
-              (should (string-search "all changes rolled back" (alist-get 'error reply)))
-              (should-not (assq 'result reply)))
-            (should (equal mevedel-artifact-room-test--page
-                           (mevedel-artifact-room-test--file directory "index.html")))
-            (should-not (file-exists-p (file-name-concat assets "new.css")))
-            (should-not changed)
+            (should (file-exists-p (file-name-concat directory "assets/logo.png")))
+            ;; A refused batch is announced to no one and starts no version.
             (accept-process-output nil 0.1)
             (should-not (cl-find "event" (mevedel-artifact-room-test--frames consumer)
                                  :key (lambda (frame) (alist-get 'reqId frame))
                                  :test #'equal))
             (mevedel-artifact-room-test--close consumer)
-            (should (equal versions (mevedel-artifact-store-versions workspace "landing"))))
-        (set-file-modes assets #o755)
-        (mevedel-artifact-room-test--close consumer))))
-
-  :doc "also restores deleted bytes and modes, and removes created directories"
-  (mevedel-artifact-room-test--with-origin (root workspace state port)
-    (let* ((directory (mevedel-artifact-room-test--site workspace "landing"))
-           (blocked (file-name-concat directory "blocked"))
-           (logo (file-name-concat directory "assets/logo.png"))
-           (bytes (mevedel-artifact-room-test--file directory "assets/logo.png"))
-           (links (mevedel-collaboration-artifact-room-share root "landing"))
-           (consumer (mevedel-artifact-room-test--joined state port links 'edit)))
-      (unwind-protect
-          (progn
-            (make-directory blocked)
-            (set-file-modes blocked #o555)
-            (set-file-modes logo #o640)
-            (let ((reply (mevedel-artifact-room-test--request
-                          consumer 1 `((action . "write-files")
-                                       (changes . [((file . "new/nested/site.css") (text . "p {}"))
-                                                   ((file . "assets/logo.png")
-                                                    (hash . ,(secure-hash 'sha256 bytes))
-                                                    (delete . t))
-                                                   ((file . "blocked/new.css") (text . "p {}"))])))))
-              (should (string-search "all changes rolled back" (alist-get 'error reply))))
-            (should (equal bytes (mevedel-artifact-room-test--file directory "assets/logo.png")))
-            (should (= #o640 (file-modes logo)))
-            (should-not (file-exists-p (file-name-concat directory "new"))))
-        (set-file-modes blocked #o755)
+            (should-not (mevedel-artifact-store-versions workspace "landing")))
         (mevedel-artifact-room-test--close consumer)))))
 
 (mevedel-deftest mevedel-collaboration-artifact-room--html-versions

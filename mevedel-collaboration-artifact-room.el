@@ -476,20 +476,15 @@ observers hear of the change as of a local write."
 (defun mevedel-collaboration-artifact-room--delete-file (room _guest args _authorize reply)
   "Delete the file ARGS name in ROOM's HTML artifact, if its hash still matches.
 ARGS carry the relative `:file' and the `:hash' it was read with.  The
-primary file is refused: without it the artifact is gone, and a link
-never deletes its artifact.  REPLY receives (:result (:file :deleted t))
-or a stale refusal as a write gets."
-  (let* ((workspace (plist-get room :workspace))
-         (id (plist-get room :artifact))
-         (file (plist-get args :file)))
+store refuses the artifact's primary file, as it refuses a path outside
+the artifact.  REPLY receives (:result (:file :deleted t)) or a stale
+refusal as a write gets."
+  (let ((file (plist-get args :file)))
     (unless (stringp file)
       (error "A file is named by its path in the artifact"))
-    ;; The guard first, so a refused path is reported as such.
-    (mevedel-artifact-store-file-path workspace id file)
-    (when (equal file (plist-get (mevedel-artifact-store-meta workspace id) :file))
-      (error "%s is the artifact's primary file; an artifact link cannot delete it" file))
     (let ((outcome (mevedel-artifact-store-delete-file
-                    workspace id file (plist-get args :hash))))
+                    (plist-get room :workspace) (plist-get room :artifact)
+                    file (plist-get args :hash))))
       (funcall reply
                (if (plist-get outcome :stale)
                    (mevedel-collaboration-artifact-room--stale
@@ -508,7 +503,6 @@ changes as `write-file' and `delete-file' answer them, or the stale
 refusal of the first file that changed since it was read."
   (let* ((workspace (plist-get room :workspace))
          (id (plist-get room :artifact))
-         (primary (plist-get (mevedel-artifact-store-meta workspace id) :file))
          (changes (plist-get args :changes)))
     (unless (and (vectorp changes) (> (length changes) 0))
       (error "'write-files' needs changes: the files to write or delete"))
@@ -518,14 +512,8 @@ refusal of the first file that changed since it was read."
                             (hash (plist-get change :hash)))
                         (unless (stringp file)
                           (error "A file is named by its path in the artifact"))
-                        ;; The guard first, so a refused path is reported as such.
-                        (mevedel-artifact-store-file-path workspace id file)
                         (if (eq t (plist-get change :delete))
-                            (progn
-                              (when (equal file primary)
-                                (error "%s is the artifact's primary file; an artifact link cannot delete it"
-                                       file))
-                              (list :file file :hash hash :delete t))
+                            (list :file file :hash hash :delete t)
                           (list :file file :hash hash
                                 :content (mevedel-collaboration-artifact-room--content change)))))
                     changes))
@@ -946,9 +934,13 @@ Return the live room when one is already running."
                        :room-id (plist-get credentials :room-id)
                        :key (plist-get credentials :key)
                        :write-token (plist-get credentials :write-token)
-                       ;; A largest HTML file, base64 in the JSON request,
-                       ;; then the transfer's own base64.
-                       :editing-max-bytes (* 30 1024 1024)
+                       ;; A transfer budget, not an exact bound: a largest
+                       ;; HTML file is base64 in the JSON request, then in the
+                       ;; transfer (16/9 of its size), and 15/8 leaves room for
+                       ;; the request's envelope.  `:text' with JSON escapes
+                       ;; or several files in a batch may still exceed it.
+                       :editing-max-bytes
+                       (ceiling (* 15 mevedel-artifact-store-file-max-bytes) 8)
                        :guests (make-hash-table :test #'eql))
                  (mevedel-collaboration-artifact-room--links
                   (cdr origins) credentials))))
