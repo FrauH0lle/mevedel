@@ -59,7 +59,7 @@ function fileOrigin(files) {
         created: current === null } };
     }
     if (file === 'index.html') {
-      return { error: 'index.html is the artifact\'s primary file; an artifact link cannot delete it' };
+      return { error: 'index.html is the artifact\'s primary file; delete the artifact instead' };
     }
     if (files[file] === undefined || sha256(files[file]) !== body.hash) return stale(file, body.hash);
     delete files[file];
@@ -405,7 +405,7 @@ test('delete_artifact_file\'s refusals: unread, primary, stale and deleted since
     'Read old.html with read_artifact first');
   await callTool('read_artifact', { name: 'landing', file: 'index.html' }, ctx);
   assert.equal(await refused(ctx, 'delete_artifact_file', { file: 'index.html' }),
-    'index.html is the artifact\'s primary file; an artifact link cannot delete it');
+    'index.html is the artifact\'s primary file; delete the artifact instead');
   await callTool('read_artifact', { name: 'landing', file: 'old.html' }, ctx);
   files['old.html'] = '<p>newer</p>';
   assert.equal(await refused(ctx, 'delete_artifact_file', { file: 'old.html' }),

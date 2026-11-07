@@ -1023,7 +1023,9 @@ when a change is refused.  A change notifies the store's observers."
           (error "%s is changed twice; give each file one change" file))
         (push file files)
         (unless (or (null hash)
-                    (and (stringp hash) (string-match-p "\\`[0-9a-f]\\{64\\}\\'" hash)))
+                    (and (stringp hash)
+                         (let ((case-fold-search nil))
+                           (string-match-p "\\`[0-9a-f]\\{64\\}\\'" hash))))
           (error "A file's hash is the SHA-256 of its bytes, as 64 lowercase hex digits"))
         (push (if hash
                   (list :op 'verify-hash :path path :content hash)

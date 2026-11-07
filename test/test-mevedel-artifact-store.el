@@ -1164,6 +1164,10 @@ It has a page, its primary file, and a binary asset.  Return its directory."
                          (list (list :file "index.html" :hash "abc" :content "x")))
                    (list "64 lowercase hex"
                          (list (list :file "index.html" :hash 42 :content "x")))
+                   (list "64 lowercase hex"
+                         (list (list :file "index.html" :content "x"
+                                     :hash (upcase (mevedel-artifact-store-test--hash
+                                                    mevedel-artifact-store-test--page)))))
                    (list "must be bytes" (list (list :file "new.css" :content "café")))
                    (list "must be bytes" (list (list :file "new.css")))
                    (list "needs the hash"
