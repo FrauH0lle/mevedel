@@ -3120,14 +3120,17 @@ The returned data is temporary; it can contain large hidden result payloads."
   "Render PREPARED source data using the current view's presentation state.
 DATA-BUF supplies live execution metadata; COLLAPSED-ONLY requests summaries."
   (if-let* ((request-data (plist-get prepared :request-failure)))
-      (let ((backend (or (plist-get request-data :backend) "Provider"))
-            (status (plist-get request-data :status))
-            (type (plist-get request-data :error-type))
-            (code (plist-get request-data :error-code))
-            (error-data (plist-get request-data :error-data))
-            (retry-errors (plist-get request-data :retry-errors))
-            (retry-exhausted (plist-get request-data :retry-exhausted))
-            (message-text (plist-get request-data :message)))
+      (let* ((backend (or (plist-get request-data :backend) "Provider"))
+             (status (plist-get request-data :status))
+             (type (plist-get request-data :error-type))
+             (code (plist-get request-data :error-code))
+             (error-data (plist-get request-data :error-data))
+             (retry-errors (plist-get request-data :retry-errors))
+             (retry-exhausted (plist-get request-data :retry-exhausted))
+             (message-text (plist-get request-data :message))
+             (extra-data (and (listp error-data)
+                              (mevedel-view--request-failure-extra-data
+                               error-data message-text type code))))
         (list
          :header (concat backend " request failed"
                          (if type (format " · %s" type) "")
@@ -3138,8 +3141,7 @@ DATA-BUF supplies live execution metadata; COLLAPSED-ONLY requests summaries."
                 (list (and status (format "Status: %s" status))
                       (and type (format "Type: %s" type))
                       (and code (format "Code: %s" code))
-                      (and (listp error-data)
-                           (format "Provider data: %S" error-data))
+                      (and extra-data (format "Provider data: %S" extra-data))
                       ""
                       (and message-text (format "%s" message-text))
                       (and retry-exhausted
@@ -3174,6 +3176,22 @@ DATA-BUF supplies live execution metadata; COLLAPSED-ONLY requests summaries."
          :status 'error
          :initially-collapsed-p nil))
     (mevedel-view--render-tool-call (plist-get prepared :call) data-buf collapsed-only)))
+
+(defun mevedel-view--request-failure-extra-data (error-data message type code)
+  "Return ERROR-DATA without the fields a failure block already shows.
+A plist's :message, :type and :code equal to MESSAGE, TYPE or CODE are
+dropped: the block states those on their own lines, and repeating them
+under \"Provider data\" printed an agent's error twice.  Return nil when
+nothing else remains, and other list data unchanged."
+  (if (not (and (consp error-data) (proper-list-p error-data)
+                (zerop (% (length error-data) 2))
+                (cl-loop for key in error-data by #'cddr always (keywordp key))))
+      error-data
+    (cl-loop for (key value) on error-data by #'cddr
+             unless (or (and (eq key :message) (equal value message))
+                        (and (eq key :type) (equal value type))
+                        (and (eq key :code) (equal value code)))
+             append (list key value))))
 
 (defun mevedel-view--retire-tool-renderings (data-buf start end)
   "Discard renderings overlapping DATA-BUF START..END before a local refresh.
