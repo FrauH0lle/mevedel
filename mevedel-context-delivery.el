@@ -44,7 +44,8 @@
 (defvar mevedel--hook-audit-open)
 
 (defvar-local mevedel-context-delivery--cache nil
-  "Derived transcript observations: (SCANNED-END . MESSAGE-RECORD-ALIST).")
+  "Derived transcript deliveries: (SCANNED-END . MESSAGE-RECORD-ALIST).
+Records are newest first.")
 
 (defvar-local mevedel-context-delivery--edit-tick nil
   "Last character modification tick observed through normal edit hooks.")
@@ -62,11 +63,11 @@
     (set-marker (car mevedel-context-delivery--cache) nil)
     (setq mevedel-context-delivery--cache nil)))
 
-(defun mevedel-context-delivery--previous (types &optional data)
-  "Return latest trusted delivered bodies for TYPES in this buffer.
-When DATA is supplied, acknowledge only complete user messages in that payload.
-Scan appended history incrementally.  Editing scanned history invalidates the
-cache; cold restore and compaction reconstruct solely from retained records."
+(defun mevedel-context-delivery--records ()
+  "Return this buffer's trusted injection records as (TEXT . RECORD), newest first.
+TEXT is the record's realized user message.  Scan appended history
+incrementally.  Editing scanned history invalidates the cache; cold restore
+and compaction reconstruct solely from retained records."
   (add-hook 'before-change-functions #'mevedel-context-delivery--invalidate nil t)
   (add-hook 'after-change-functions #'mevedel-context-delivery--record-edit nil t)
   (unless (equal mevedel-context-delivery--edit-tick (buffer-chars-modified-tick))
@@ -94,9 +95,14 @@ cache; cold restore and compaction reconstruct solely from retained records."
                             (format "<system-reminder>\n%s\n</system-reminder>"
                                     (plist-get item :body)))
                           items "\n")))
-              (push (cons text items) (cdr mevedel-context-delivery--cache)))))))
+              (push (cons text record) (cdr mevedel-context-delivery--cache)))))))
     (set-marker (car mevedel-context-delivery--cache) (point-max)))
-  (let* ((records (cdr mevedel-context-delivery--cache))
+  (cdr mevedel-context-delivery--cache))
+
+(defun mevedel-context-delivery--previous (types &optional data)
+  "Return latest trusted delivered bodies for TYPES in this buffer.
+When DATA is supplied, acknowledge only complete user messages in that payload."
+  (let* ((records (mevedel-context-delivery--records))
          (key (cl-find-if (lambda (key) (plist-member data key))
                           '(:messages :input :contents)))
          (messages (if data
@@ -106,12 +112,26 @@ cache; cold restore and compaction reconstruct solely from retained records."
          (index (make-hash-table :test #'equal))
          result)
     (dolist (record (reverse records))
-      (puthash (car record) (cdr record) index))
+      (puthash (car record) (plist-get (cdr record) :items) index))
     (dolist (text messages)
       (dolist (item (gethash text index))
         (when (memq (plist-get item :type) types)
           (setf (alist-get (plist-get item :type) result) (plist-get item :body)))))
     result))
+
+(defun mevedel-context-delivery-native (id)
+  "Return latest trusted delivered bodies for native conversation ID.
+Derive the alist solely from retained receipt records, in transcript order.
+Records of other conversations, such as isolated turns, never count.
+A nil ID starts without acknowledged observations."
+  (when id
+    (let (latest)
+      (dolist (entry (reverse (mevedel-context-delivery--records)))
+        (let ((record (cdr entry)))
+          (when (equal id (plist-get record :native))
+            (dolist (item (plist-get record :items))
+              (setf (alist-get (plist-get item :type) latest) (plist-get item :body))))))
+      latest)))
 
 (defun mevedel-context-delivery--message-text (message)
   "Return MESSAGE's plain user text, excluding tool results and other roles."

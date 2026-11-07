@@ -132,10 +132,13 @@
                        (audits (mevedel-view--user-turn-hook-audits
                                 (plist-get (car turns) :segments) buffer)))
                   (should (eq 'user (plist-get (car turns) :role)))
-                  (should (member typed (mapcar (lambda (r)
-                                                 (list :type (plist-get r :type)
-                                                       :phase (plist-get r :phase)
-                                                       :items (plist-get r :items))) audits))))))
+                  (should (member (list :type (plist-get typed :type)
+                                        :phase (plist-get typed :phase)
+                                        :items (plist-get typed :items))
+                                  (mapcar (lambda (r)
+                                            (list :type (plist-get r :type)
+                                                  :phase (plist-get r :phase)
+                                                  :items (plist-get r :items))) audits))))))
             (should (= (if receipt 2 0) (how-many "^#\\+begin_tool" (point-min) (point-max))))
             (should (= (if (memq receipt '(t late compact)) 1 0)
                        (mevedel-engine-test--count-evidence "REVISED-PATCH-7194")))
@@ -671,6 +674,11 @@
     (mevedel-engine-test--with-session
       (setf (mevedel-engine-info request) (list :buffer buffer))
       (mevedel-claude-code-context-system request "sys")
+      ;; Establish the normal first-prompt receipt before testing a tool boundary.
+      (let ((content (mevedel-claude-code-context-prompt
+                      request [((type . "text") (text . "hi"))])))
+        (mevedel-claude-code-context-observe
+         request (mevedel-claude-code-context-test--user-receipt content)))
       (mevedel-claude-code-context-test--steer session request "HELD-STEER")
       (let ((entry (car (mevedel-session-pending-steering session))) view)
         (unwind-protect

@@ -100,6 +100,9 @@ A trigger that mutates state has no commit channel, so a reminder
 whose trigger consumes still reports once per attempt rather than once
 per delivery.
 
+At Roland's request for cache stability and engine parity, Claude delivers
+the same selected observations as gptel through conversation reminders, starting
+after the first user input, rather than rebuilding its native system prompt.
 The Claude engine collects configured reminders once at prompt submission,
 using the same session or invocation context and firing policy as gptel. Pending
 root hook context joins that delivery. Like gptel's dispatch, root startup first
@@ -124,11 +127,14 @@ remain isolated.
 Every delivery writes one trusted hidden record (`:type injected-reminders`,
 phase `turn-start` or `mid-turn`) containing each entry's type and complete
 body: a gptel injection when its payload is realized, a Claude delivery only on
-exact SDK receipt. A Claude prompt record also lists the selected observation
-sections its native system prompt delivered whose bodies differ from the
-transcript's last delivered state, so a turn shows the same context a gptel turn
-records; the wire never repeats those bodies. Bodies are not truncated: the record supplies reconstruction
-as well as inspection. Missing insertion markers or recording failures prevent
+exact SDK receipt. Claude records carry `:native`, the receiving resumable
+conversation ID, so later adapter starts compare observations only against what
+that conversation actually received. Isolated deliveries have no such ID and
+cannot acknowledge observations for another conversation. All recorded
+observation bodies travel on the wire as reminders, including the first turn;
+native compaction restores every current observation. Bodies are not truncated:
+the record supplies reconstruction as well as inspection. Missing insertion
+markers or recording failures prevent
 committing delivery; injection failures retain pending state. A Claude record
 states delivered guidance, not that a gptel payload exists; mail delivered in
 the same batch follows it as ordinary mailbox blocks. The Claude wire

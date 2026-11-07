@@ -736,17 +736,25 @@ delivery until Resume or another explicit user action.
 
 ### Native context delivery
 
-Each launched Claude turn puts the recipient's complete selected observations
-into the native system prompt and disables the SDK's first-prompt snapshot, so a
-resumed launch uses the newly composed baseline. The prompt receipt's
-[injection record](reminders.md#the-injection-record) lists baseline sections
-that differ from the transcript's last delivery, without resending them.
-Everything else reaches native
-history through one of two receipt boundaries. Transmission, ACP send
-completion, a hook preview or an offloaded file never counts as delivery.
+At Roland's request for cache stability and engine parity, Claude uses the same
+static system instructions and system-placement selected context as gptel.
+Workspace configuration, environment, Goal facts and policy, tools, skills,
+memory, journal and resources reach the conversation as reminders from the
+first prompt, after the user's input. Later prompts and tool boundaries deliver
+only changed observations, using gptel's shared context renderer and trusted
+[injection records](reminders.md#the-injection-record). Records tagged with the
+native conversation ID establish what that conversation received; isolated and
+other native conversations cannot suppress its observations. No observation
+change rebuilds the system prompt across adapter starts. Authored system
+instructions or system-placement selected context can still change that prompt,
+as on gptel. The SDK's first-prompt snapshot remains disabled.
+Context reaches native history through one of two receipt boundaries.
+Transmission, ACP send completion, a hook preview or an offloaded file never
+counts as delivery.
 
-- **Prompt.** A submitted prompt carries the user's text and images, configured
-  reminders collected once with pending root hook context, the initial
+- **Prompt.** A submitted prompt carries the user's text and images, changed
+  observations, configured reminders collected once with pending root hook
+  context, the initial
   direct-child roster, queued mail in full, recovery guidance for an uncertain
   history, path instructions whose current contents differ from their
   acknowledged hash, and user-placement selected context. User-placement text
@@ -812,9 +820,9 @@ turn settles once. Pause, a user boundary stop and cancellation take precedence:
 they discard the unsent continuation while its underlying events stay queued. A
 failed native prompt is not retried.
 
-Native compaction keeps the system baseline. A `SessionStart(compact)` hook
-restores, through the hook receipt, the observations that differ from that
-baseline (including updates acknowledged before compaction), user-placement
+Native compaction keeps the static system prompt. A `SessionStart(compact)` hook
+restores, through the hook receipt, all current observations (including
+unchanged ones whose reminders compaction may have retired), user-placement
 selected text, the full direct-child roster, a child's current sample-limit
 guidance, active root Plan guidance, eligible accepted-plan references and the
 current contents of path instructions already learned by that conversation,
@@ -912,7 +920,7 @@ that admission reports.
 The full probe also reports the target's container, VM or WSL kind from
 `/.dockerenv`, `/run/.containerenv`, `/proc/version` and, when installed,
 `systemd-detect-virt`. It is one extra shell command per probe, cached with
-readiness, so the system prompt's `<env>` block shows a `Virtualization:`
+readiness, so the Environment observation's `<env>` block shows a `Virtualization:`
 line for local and remote targets without probing per request. A failed or
 unexpected answer omits the line and never blocks readiness.
 

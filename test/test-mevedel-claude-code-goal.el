@@ -8,6 +8,7 @@
 (require 'mevedel-engine-test-support
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
                            "mevedel-engine-test-support"))
+(require 'mevedel-claude-code)
 (require 'mevedel-claude-code-session)
 
 (mevedel-deftest mevedel--send-request/claude-goal-unknown-usage (:quiet t)
@@ -206,6 +207,50 @@
               (should (= 45 (mevedel-goal-tokens-used goal)))
               (should (= 3 (mevedel-session-turn-count session)))))
         (when (buffer-live-p view) (kill-buffer view))))))
+
+(mevedel-deftest mevedel-goal-start/claude-stable-system-prompt (:quiet t)
+  ,test
+  (test)
+  :doc "Goal turns resume Claude with an unchanged system prompt"
+  (mevedel-engine-test--with-claude-session
+    (mevedel-request-end)
+    (let* ((file (file-name-concat root "evidence.txt"))
+           (launches 0) systems goal
+           (mevedel-post-tool-use-functions
+            (list (lambda (_event)
+                    (when (= launches 2)
+                      (with-current-buffer buffer (mevedel-goal-pause)))
+                    nil))))
+      (write-region "Evidence" nil file nil 'silent)
+      (setq-local gptel-system-prompt "Goal stable prompt fixture"
+                  gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
+      (mevedel-chat-install-request-hooks)
+      (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+                 (mevedel-engine-test--claude-launch
+                  (lambda (system _mcp _model _effort &optional _id hook)
+                    (cl-incf launches)
+                    (push system systems)
+                    (list :meta `((hookCommand . ,hook)
+                                  (toolBatches . [[((name . "Read")
+                                                    (id . ,(format "read-%d" launches))
+                                                    (args . ((file_path . ,file))))]])
+                                  (promptResponse . ((stopReason . "end_turn")
+                                                     (usage . ((inputTokens . 10) (outputTokens . 5)
+                                                               (cachedWriteTokens . 0)))))))))))
+        (setq goal (mevedel-goal-start "Continue until paused"))
+        (mevedel-test--await 8 "Goal continuation did not pause"
+          (not (or (< (mevedel-goal-turns-run goal) 2) (mevedel-turn-busy-p buffer))))
+        (should (= 2 launches))
+        (should (equal (car systems) (cadr systems)))
+        (should-not (string-search "Continue until paused" (cadr systems)))
+        (let ((goals (cl-loop for record in (mevedel-transcript-audit-records
+                                            (buffer-string) 'injected-reminders)
+                              append (cl-loop for item in (plist-get record :items)
+                                              when (and (eq 'context-active-goal (plist-get item :type))
+                                                        (string-search "Continue until paused" (plist-get item :body)))
+                                              collect (plist-get item :body)))))
+          (should (= 1 (length goals)))
+          (should-not (string-search "Turns run:" (car goals))))))))
 
 (mevedel-deftest mevedel-agent-control-spawn/claude-goal-usage (:quiet t)
   (mevedel-engine-test--with-claude-session

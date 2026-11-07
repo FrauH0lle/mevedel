@@ -854,12 +854,15 @@ requirement. Named workspace configuration, environment, memory indexes, skill
 catalogs, resource availability, the main journal map and root Goal context are
 delivered after current input through the existing reminder transaction.
 
-The Claude engine puts the complete selected observations into the native
-system prompt and delivers changes, queued turn events, configured reminders,
-rosters and compaction restoration through SDK receipts rather than a realized
-gptel payload; see [native context delivery](sessions.md#native-context-delivery).
-Unchanged sections are omitted; a change back to the baseline is still an
-update.
+At Roland's request for cache stability and engine parity, Claude keeps the same
+static system instructions as gptel and delivers all selected observations as
+conversation reminders from the first turn. Changes, queued turn events,
+configured reminders, rosters and compaction restoration use SDK receipts
+rather than a realized gptel payload; see
+[native context delivery](sessions.md#native-context-delivery). Native-ID-tagged
+injection records establish which observations that conversation received.
+Unchanged sections are omitted; a change back to an earlier value is still an
+update. Native compaction restores every current observation.
 
 Environment context identifies the execution target as `local` or a TRAMP
 method and destination, such as `ssh:alice@build` or `podman:dev`, before the

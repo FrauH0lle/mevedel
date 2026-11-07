@@ -85,11 +85,12 @@ cannot be resumed.
 ## Request context and authority
 
 Before an active root request, mevedel derives current Goal facts from the
-durable record: objective, token budget, turns run, and accepted-plan
-reference. Live token usage is left out because it moves with every charge and
-each change would re-send the whole block; crossing reminders and `GetGoal`
-report it. Changed facts are delivered as retained context updates, hidden from
-ordinary chat presentation but preserved in transcript audit records. Unchanged
+durable record: objective, token budget, and accepted-plan reference. Live
+token usage and the turn count are left out because they move with every charge
+or turn and each change would re-send the whole block. Crossing reminders report
+usage; `GetGoal` reports both usage and turns run. Changed facts are delivered as
+retained context updates, hidden from ordinary chat presentation but preserved
+in transcript audit records. Unchanged
 facts remain in selected history; loss of that context causes delivery again.
 The durable record supplies current authority, not the old observations.
 The Goal's session must match the
@@ -375,7 +376,7 @@ checks independently of `plan-implementation` and `verifier`. Invalid review
 policy leaves the Goal active and reports an error rather than falling back.
 
 The installed `prompts/goals/active-context.md` formats current objective,
-accepted-plan reference, budget, and turns run. `prompts/goals/policy.md` separately
+accepted-plan reference, and budget. `prompts/goals/policy.md` separately
 supplies the completion contract. It requires evidence for the full requested outcome; passing a
 narrower set of checks does not establish completion. A model-reported block
 requires the same impasse across at least three consecutive Goal turns with

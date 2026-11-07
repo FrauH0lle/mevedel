@@ -202,7 +202,7 @@ An omitted policy resolves through the common request model resolver."
      (lambda (mcp hook-command)
        (mevedel-claude-code-launch
         (with-current-buffer buffer
-          (mevedel-claude-code-context-system request system-prompt selected))
+          (mevedel-claude-code-context-system request system-prompt selected (plist-get history :id)))
         mcp model effort (plist-get history :id) hook-command))
      (lambda ()
        (mevedel-claude-code-context-prompt

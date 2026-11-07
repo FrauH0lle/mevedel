@@ -42,11 +42,15 @@ further tool effects and successful settlement. A delivery beyond Claude's
 inline hook limit continues the same admitted turn with a new prompt carrying
 the complete body; because `SessionStart(compact)` cannot stop the prompt, a
 `PreToolUse` hook denies and stops calls while that continuation is pending.
-The complete observation baseline stays in Claude's system prompt with the
-SDK's first-prompt snapshot disabled, so a resumed launch cannot keep stale
-mevedel instructions; restoration after native compaction supplies current
-differences. Prompts re-send path instructions and selected context only when
-the native conversation lacks their current form. The gptel payload rule
+At Roland's request for cache stability and engine parity, Claude's system
+prompt now contains only gptel's static instructions and system-placement
+selected context. The SDK's first-prompt snapshot remains disabled. Selected
+observations use the shared context-delivery renderer and receipt-backed
+conversation reminders from the first prompt, not a per-launch system baseline.
+Trusted injection records tagged with the receiving native ID supply the last
+delivered state; isolated and other conversations do not count. Native
+compaction restores all current observations. Prompts re-send path instructions
+and selected context only when the native conversation lacks their current form. The gptel payload rule
 remains in [ADR 0115](0115-retain-delivered-conversation-fragments.md);
 behavior is described under
 [native context delivery](../sessions.md#native-context-delivery).
@@ -266,6 +270,16 @@ Receipt establishes SDK acceptance, not model understanding or retention
 through later compaction.
 
 ## Decision history
+
+- **Static native prefix, 2026-11-07:** the previous design placed complete
+  current observations in the system prompt on every adapter start and restored
+  only differences after compaction. New journal digests changed that prompt
+  while the one-hour cache was warm: four rebuilds accounted for about 72% of
+  cache writes in the investigated session. Roland requested gptel parity
+  instead of freezing a separate baseline. Observations now arrive as retained
+  reminders after input, keeping the static prompt byte-identical when only
+  observations change. First turns and native compaction carry all observations;
+  large restorations can therefore require the existing continuation prompt.
 
 - **Native retry scope:** the first bounded controller admitted only Codex
   OAuth requests, interpreting Responses-specific error handling as a provider

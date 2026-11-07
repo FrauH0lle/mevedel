@@ -4,8 +4,11 @@
 ;; Submitted prompt or hook mail stays queued until the SDK echoes that exact
 ;; complete text in its user-message or successful hook receipt.  At native
 ;; tool boundaries, changed selected observations use the same receipt boundary
-;; before further effects.  Native compaction retains the full system baseline
-;; and restores its current differences, even if delivered before compaction.
+;; before further effects.  As on gptel, the native system prompt carries only
+;; static instructions, so resumed launches keep the provider's cached prefix;
+;; observations reach the conversation as reminders whenever they differ from
+;; what that native conversation last received.  Native compaction retires
+;; those reminders, so restoration delivers all current observations again.
 ;; Receipts reach the transcript as the shared typed injection record and mail
 ;; blocks, never as wire markers.
 
@@ -139,23 +142,27 @@ user attachment."
             (mevedel-session-workspace session)
             (mevedel-conversation-working-directory session) session (current-buffer)))))
 
-(defun mevedel-claude-code-context-system (owner system &optional selected)
-  "Compose OWNER's SYSTEM with its complete selected observation baseline.
-The native system prompt is re-sent by Claude after compaction.  Only changed
-observations need the bounded restoration hook, never a truncated baseline.
-SELECTED is this turn's formatted gptel context."
+(defun mevedel-claude-code-context-system (owner system &optional selected resumed)
+  "Compose OWNER's native system prompt from SYSTEM and SELECTED context.
+Like gptel's, it carries only static instructions and system-placement
+selected context, so a resumed launch re-sends identical text and keeps the
+provider's cached prefix.  Observations reach the conversation as prompt
+reminders.  SELECTED is this turn's formatted gptel context.  RESUMED is the
+native conversation ID this launch resumes; its transcript records which
+observations that conversation already received."
   (unless (or (null (plist-get selected :text)) (stringp (plist-get selected :text)))
     (error "Context formatter must return text"))
-  (let ((observations (mevedel-claude-code-context--observations owner)))
-    (setf (mevedel-engine-info owner)
-          (plist-put (mevedel-engine-info owner) :mevedel-claude-selected-context selected))
-    (setf (mevedel-engine-info owner)
-          (plist-put
-           (plist-put (mevedel-engine-info owner) :mevedel-claude-system-observations observations)
-           :mevedel-claude-observations observations))
-    (string-join (append (when (eq 'system (plist-get selected :mode))
-                           (list (or (plist-get selected :text) "")))
-                         (cons (or system "") (mapcar #'cdr observations))) "\n\n")))
+  (setf (mevedel-engine-info owner)
+        (plist-put
+         (plist-put (mevedel-engine-info owner) :mevedel-claude-selected-context selected)
+         :mevedel-claude-observations
+         (and resumed
+              (with-current-buffer (plist-get (mevedel-engine-info owner) :buffer)
+                (mevedel-context-delivery-native resumed)))))
+  (string-join (append (when (eq 'system (plist-get selected :mode))
+                         (list (or (plist-get selected :text) "")))
+                       (list (or system "")))
+               "\n\n"))
 
 (defun mevedel-claude-code-context--workspace-context (owner &optional changed)
   "Prepare the path instructions learned by OWNER's conversation.
@@ -185,35 +192,30 @@ retained native history already holds that delivery."
 Claude measures JavaScript string units, not codepoints: emoji count twice."
   (<= (/ (string-bytes (encode-coding-string text 'utf-16le)) 2) 10000))
 
-(defun mevedel-claude-code-context--batch (entries phase &optional delivered)
+(defun mevedel-claude-code-context--batch (entries phase &optional native)
   "Return (BODY . TRANSCRIPT) delivering typed ENTRIES in PHASE.
 BODY carries a unique receipt marker for the native wire only.  TRANSCRIPT is
-the shared hidden injection record of DELIVERED and ENTRIES, empty without
-either.  DELIVERED entries already reached the model another way, such as the
-native system prompt, so BODY omits them."
+the shared hidden injection record of ENTRIES, empty without them.  NATIVE is
+the receiving native conversation's ID, recorded so its later launches can
+find what it received."
   (cons (concat (format "<!-- mevedel-delivery:%s -->\n"
                         (md5 (format "%s:%s:%s" (emacs-pid) (current-time) (random))))
                 (mapconcat (lambda (entry)
                              (concat (mevedel-reminders-format-block (plist-get entry :body)) "\n"))
                            entries))
-        (if (or delivered entries)
-            (mevedel--format-hook-audit-record
-             (mevedel-reminders--injection-record (append delivered entries) phase))
+        (if entries
+            (let ((record (mevedel-reminders--injection-record entries phase)))
+              (mevedel--format-hook-audit-record
+               (if native (plist-put record :native native) record)))
           "")))
 
 (defun mevedel-claude-code-context--observation-entries (observations)
   "Return typed reminder entries for selected OBSERVATIONS."
   (mapcar (lambda (item) (list :type (car item) :body (cdr item))) observations))
 
-(defun mevedel-claude-code-context--unrecorded-baseline (info)
-  "Return INFO's system observations absent from its transcript's last delivery.
-The native system prompt delivered them; recording each changed section once
-keeps the transcript and view equal to a gptel turn's delivered context."
-  (let ((baseline (plist-get info :mevedel-claude-system-observations)))
-    (with-current-buffer (plist-get info :buffer)
-      (let ((previous (mevedel-context-delivery--previous (mapcar #'car baseline))))
-        (cl-remove-if (lambda (item) (equal (cdr item) (alist-get (car item) previous)))
-                      baseline)))))
+(defun mevedel-claude-code-context--native-id (info)
+  "Return INFO's resumable native conversation ID, or nil for isolated turns."
+  (plist-get (plist-get info :mevedel-claude-history) :id))
 
 (defun mevedel-claude-code-context--selected-key (owner)
   "Return OWNER's selected-context dedup key in its native conversation, or nil."
@@ -223,12 +225,12 @@ keeps the transcript and view equal to a gptel turn's delivered context."
 (defun mevedel-claude-code-context-restore (owner)
   "Restore OWNER's selected context, observations and guidance after compaction.
 An oversized update requires a prompt continuation, never a preview accepted
-as full restoration.  The native system already retains the complete baseline."
+as full restoration.  Compaction retires earlier observation reminders, so
+every current observation is delivered again."
   (let* ((info (mevedel-engine-info owner))
          (selected (plist-get info :mevedel-claude-selected-context))
          (selected-text (and (eq 'user (plist-get selected :mode))
                              (plist-get selected :text)))
-         (baseline (plist-get info :mevedel-claude-system-observations))
          (observations (mevedel-claude-code-context--observations owner))
          (roster (unless (and (mevedel-request-p owner)
                               (or (mevedel-request-directive-uuid owner)
@@ -244,10 +246,7 @@ as full restoration.  The native system already retains the complete baseline."
                              when (funcall (mevedel-reminder-trigger reminder) session)
                              collect (list :type (mevedel-reminder-type reminder)
                                            :body (funcall (mevedel-reminder-content reminder) session))))))
-         (entries (append (mevedel-claude-code-context--observation-entries
-                           (cl-remove-if
-                            (lambda (item) (equal (cdr item) (alist-get (car item) baseline)))
-                            observations))
+         (entries (append (mevedel-claude-code-context--observation-entries observations)
                           (when (and selected-text (not (string-empty-p selected-text)))
                             (list (list :type 'selected-context :body selected-text)))
                           (when roster (list (list :type 'agent-roster :body (plist-get roster :body))))
@@ -255,13 +254,14 @@ as full restoration.  The native system already retains the complete baseline."
                           plans (plist-get instructions :entries))))
     ;; Earlier hook updates may have been retired by native compaction.
     (setf (mevedel-engine-info owner)
-          (setq info (plist-put info :mevedel-claude-observations baseline)))
+          (setq info (plist-put info :mevedel-claude-observations nil)))
     ;; Restoration cannot carry selected images; the next prompt re-sends them.
     (when-let* ((key (mevedel-claude-code-context--selected-key owner))
                 (shown (mevedel-session-mentions-shown (mevedel-claude-code-context--session owner))))
       (remhash key shown))
     (when entries
-      (let ((batch (mevedel-claude-code-context--batch entries 'mid-turn)))
+      (let ((batch (mevedel-claude-code-context--batch
+                    entries 'mid-turn (mevedel-claude-code-context--native-id info))))
         (setf (mevedel-engine-info owner)
               (plist-put info :mevedel-claude-restoration-pending
                          (list :route (if (mevedel-claude-code-context-hook-fits-p (car batch))
@@ -337,10 +337,11 @@ arrives, everything else stays queued for a later one.  A prompt echo precedes
 every tool, so its absence fails closed.  Oversized whole messages and changes
 require a prompt continuation before more effects; no preview counts as full
 delivery.  With PROMPT-P, also collect configured reminders and pending hook
-context, and include complete mail without the hook limit.  The selected
-observation baseline is already in the system prompt; its sections not yet in
-the transcript join the receipt's record without reaching the wire.  EXTRA is
-an optional plist of further typed `:entries' and their `:commits'."
+context, and include complete mail without the hook limit.  Observations that
+changed since the native conversation last received them join tool-boundary
+batches and, when PROMPT-P is `start', the turn's first prompt; a
+continuation prompt leaves them to its pending delivery or the next boundary.
+EXTRA is an optional plist of further typed `:entries' and their `:commits'."
   (let* ((info (mevedel-engine-info owner))
          (pending (plist-get info :mevedel-claude-context-pending)))
     (unless (eq 'hook (plist-get pending :route))
@@ -348,7 +349,8 @@ an optional plist of further typed `:entries' and their `:commits'."
                         (unless (or (mevedel-request-directive-uuid owner)
                                     (plist-get info :mevedel-native-isolated))
                           (mevedel-request-session owner))))
-             (observations (unless prompt-p (mevedel-claude-code-context--observations owner)))
+             (observations (unless (eq prompt-p t)
+                             (mevedel-claude-code-context--observations owner)))
              (previous (plist-get info :mevedel-claude-observations))
              (changed (cl-remove-if
                        (lambda (item) (equal (cdr item) (alist-get (car item) previous)))
@@ -356,7 +358,6 @@ an optional plist of further typed `:entries' and their `:commits'."
              (events (mevedel-reminders--stage-turn-events (plist-get info :buffer)))
              (roster (and context (mevedel-tools-agent-roster owner)))
              (reminders (when prompt-p (mevedel-reminders-collect owner)))
-             (baseline (when prompt-p (mevedel-claude-code-context--unrecorded-baseline info)))
              (steering (unless pending (mevedel-claude-code-context--steering owner)))
              (entries (append (mevedel-claude-code-context--observation-entries changed)
                               (plist-get events :entries)
@@ -369,7 +370,7 @@ an optional plist of further typed `:entries' and their `:commits'."
         (unless pending
           (let* ((batch (mevedel-claude-code-context--batch
                          entries (if prompt-p 'turn-start 'mid-turn)
-                         (mevedel-claude-code-context--observation-entries baseline)))
+                         (mevedel-claude-code-context--native-id info)))
                  (body (car batch))
                  (transcript (concat (cdr batch) (plist-get steering :transcript)))
                  ;; Authored steering needs a user prompt, never hook context.
@@ -393,7 +394,7 @@ an optional plist of further typed `:entries' and their `:commits'."
                                            (car messages) block)))
                             t)))
               (push (pop messages) selected))
-            (when (or entries baseline steering selected (plist-get reminders :commits))
+            (when (or entries steering selected (plist-get reminders :commits))
               (setf (mevedel-engine-info owner)
                     (plist-put info :mevedel-claude-context-pending
                                (list :context context :messages (nreverse selected) :body body
@@ -510,7 +511,7 @@ The native user-message echo, not submission, confirms delivery."
                                                                    " Never replay a prior tool call merely because its result is missing."))))
                         ;; Nothing is consumed, but tools still wait for receipt.
                         :commits (cons #'ignore (plist-get extra :commits)))))
-    (when (mevedel-claude-code-context-prepare owner t extra)
+    (when (mevedel-claude-code-context-prepare owner 'start extra)
       (setq content
             (vconcat content
                      (mevedel-claude-code-context--prompt-parts

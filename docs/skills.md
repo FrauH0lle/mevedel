@@ -223,7 +223,7 @@ directories change. A configured directory that does not exist yet is
 watched through its nearest existing ancestor, such as `.mevedel/` or the
 workspace root, where a change counts only on the path to that directory;
 the files a turn writes there do not mark buffers dirty. Completion,
-reminders and the skills section of the system prompt rescan on demand when
+reminders and the retained skills observation rescan on demand when
 a buffer is dirty.
 
 `skill://NAME@SOURCE-KEY[/RELATIVE-PATH]` is the read-only resource address

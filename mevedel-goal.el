@@ -370,9 +370,9 @@ never discloses session storage paths."
   "Render request-local active Goal context for SESSION, or nil."
   (when-let* ((goal (mevedel-session-goal session))
               ((eq (mevedel-goal-status goal) 'active)))
-    ;; Live usage stays out: it moves with every charge, and each change
-    ;; would re-deliver the whole block.  Crossing reminders and GetGoal
-    ;; report usage instead.
+    ;; Live usage and the turn count stay out: they move with every charge
+    ;; or turn, and each change would re-deliver the whole block.  Crossing
+    ;; reminders report usage; GetGoal reports both usage and turns run.
     (let* ((budget (mevedel-goal-token-budget goal))
            (plan-address (mevedel-goal--resolve-plan-reference goal session)))
       (mevedel-system-render-prompt-file
@@ -381,7 +381,6 @@ never discloses session storage paths."
          ("token-budget" . ,(if budget
                                 (format "%d tokens" budget)
                               "unbounded"))
-         ("turns-run" . ,(number-to-string (mevedel-goal-turns-run goal)))
          ("plan-reference-line" .
           ,(if plan-address
                (format "Accepted plan: %s. Its outcomes, constraints, and achievement criteria are binding except where amended by the current objective; its implementation mechanics are revisable."
