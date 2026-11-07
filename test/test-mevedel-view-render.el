@@ -2996,6 +2996,38 @@
       (should (search-forward "Raw provider failure"
                               mevedel-view--input-marker t))))
 
+  :doc "an agent process exit renders one block that states its message once"
+  (mevedel-view-test--with-buffers
+    (let ((message (concat "Agent process ended before completing request: "
+                           "exited abnormally with code 1; agent stderr is in "
+                           "~/.mevedel/agent-stderr.log")))
+      (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
+      ;; The record ACP turns persist when the agent process exits mid-prompt.
+      (mevedel-view-test--insert-data
+       data-buf
+       (mevedel-tool-render-data-format
+        `(:kind request-summary :elapsed-seconds 4693 :outcome error
+          :backend "Claude Code" :status nil :error-type nil :error-code -32603
+          :error-data (:message ,message :code -32603)
+          :message ,message :retry-errors nil :retry-exhausted nil
+          :retry manual))
+       'ignore)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker))
+              (count (lambda (needle text)
+                       (let ((start 0) (n 0))
+                         (while (setq start (string-search needle text start))
+                           (setq n (1+ n) start (1+ start)))
+                         n))))
+          (should (= 1 (funcall count "Claude Code request failed" text)))
+          (should (= 1 (funcall count message text)))
+          (should (string-search "Code: -32603" text))
+          ;; Provider data restating the message and code adds nothing.
+          (should-not (string-search "Provider data" text))
+          (should (= 1 (funcall count "Retry the request manually." text)))))))
+
   :doc "a failure after partial prose hangs below it like other activity"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
@@ -5552,6 +5584,25 @@
         (if attempts
             (should (string-search "Attempt 1: Connection interrupted" body))
           (should-not (string-search "Attempt history" body)))))))
+
+(mevedel-deftest mevedel-view--request-failure-extra-data ()
+  ,test
+  (test)
+  :doc "fields the block already states are dropped, leaving nothing to show"
+  (should-not (mevedel-view--request-failure-extra-data
+               '(:message "Ended" :code -32603) "Ended" nil -32603))
+  :doc "provider-only fields stay, without the restated ones"
+  (should (equal '(:request_id "r-1")
+                 (mevedel-view--request-failure-extra-data
+                  '(:type "server_error" :code "x" :message "Failed" :request_id "r-1")
+                  "Failed" "server_error" "x")))
+  :doc "a field that differs from the shown value is provider evidence"
+  (should (equal '(:message "Raw detail")
+                 (mevedel-view--request-failure-extra-data
+                  '(:message "Raw detail" :code 7) "Summary" nil 7)))
+  :doc "data that is not a keyword plist is shown unchanged"
+  (dolist (data '((("code" . 1)) (:message) ("a" "b")))
+    (should (eq data (mevedel-view--request-failure-extra-data data "a" nil nil)))))
 
 (mevedel-deftest mevedel-view--segment-rendering/generic-fallback
   (:before-each (mevedel-tool-clear-registry)
