@@ -1534,11 +1534,19 @@ inside a yielding finalizer. The next gate-open opportunity offers notifications
 before starting the successor. Each target phase is a pinned control program launched without
 waiting; its result is stored by the sentinel and the next phase is scheduled
 from a timer through the idle transport, never from the sentinel. The
-transaction's clock, asserted-directory and recovery cells are job-owned and
-rebound only while that job advances, so the bounded clock freshness check
-applies across event-loop turns instead of becoming an authority cache; the
-job's own bounded lease proofs run between phases and fail closed after expiry
-or ownership loss.
+job keeps one durability transaction context
+(`mevedel-session-durability-fresh-context`), entered only while that job
+advances (`mevedel-session-durability-call-in-context`). Its clock,
+asserted-directory and recovery cells are the job's own, never joined to a
+surrounding transaction, so the bounded clock freshness check applies across
+event-loop turns instead of becoming an authority cache; the job's own bounded
+lease proofs run between phases and fail closed after expiry or ownership loss.
+The context carries no commit riders: a phase advanced from a timer inside
+another publisher's rider binding commits only riders it binds itself, never
+that publisher's pending writes.
+The acknowledgement runs outside every transaction
+(`mevedel-session-durability-call-outside-transaction`), with no inherited
+cells, riders, final commit or process owner.
 
 Local control-program jobs retain their staged payload files until their
 delivery timer cleans up, before invoking the callback. The sentinel performs
@@ -1771,7 +1779,8 @@ monitors each emitting one line every two seconds kept publication busy for
 99% of samples, and the timer alone offered no root wake in 40 seconds. A
 waiter
 callback can resume tool code and gated operations, so it runs with no token
-and fresh transaction observations, and defers or drains like any other
+and outside every transaction (`mevedel-session-durability-call-outside-transaction`),
+and defers or drains like any other
 caller. A failing notification warns and does not stop the rest. Temporary
 stopping during a close query retains actual suppressed offers without a
 timer. If the close is vetoed, reopening admissions re-arms that same FIFO

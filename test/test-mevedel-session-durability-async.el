@@ -136,6 +136,100 @@ run while it is pending."
                    mevedel-session-durability-async-process-function))))
     (should-not mevedel-session-durability-async-process-function)))
 
+(mevedel-deftest mevedel-session-durability-fresh-context ()
+  ,test
+  (test)
+  :doc "never joins a surrounding transaction, unlike a captured context"
+  (let (fresh captured outer)
+    (mevedel-session-durability-with-transaction
+      (setq outer (list mevedel-session-durability--transaction-clock
+                        mevedel-session-durability--asserted-directories
+                        mevedel-session-recovery--mutation-cache)
+            captured (mevedel-session-durability-capture-context)
+            fresh (mevedel-session-durability-fresh-context #'ignore)))
+    ;; Discriminating control: the captured composition shares every cell.
+    (dotimes (index 3)
+      (should (eq (nth index outer) (nth index captured)))
+      (should (consp (nth index fresh)))
+      (should-not (eq (nth index outer) (nth index fresh)))))
+  :doc "shares one real target clock reading and its proofs across phases only"
+  (let* ((directory (make-temp-file "mevedel-fresh-context-" t))
+         (read (symbol-function 'mevedel-session-control-fs-target-time))
+         (first (mevedel-session-durability-fresh-context #'ignore))
+         (second (mevedel-session-durability-fresh-context #'ignore))
+         (reads 0)
+         (phase (lambda (context)
+                  (mevedel-session-durability-call-in-context
+                   context
+                   (lambda ()
+                     (list (mevedel-session-durability--target-time directory)
+                           (car mevedel-session-durability--asserted-directories)
+                           mevedel-session-recovery--mutation-cache))))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-session-control-fs-target-time)
+                   (lambda (path) (cl-incf reads) (funcall read path))))
+          (let ((one (funcall phase first)))
+            (should (numberp (car one)))
+            (should (= 1 reads))
+            (mevedel-session-durability-call-in-context
+             first
+             (lambda () (mevedel-session-durability-note-no-pid-lock directory)))
+            ;; A later phase of the same job reuses the reading and proof.
+            (let ((two (funcall phase first)))
+              (should (= 1 reads))
+              (should (equal (car one) (car two)))
+              (should (cadr two))
+              (should (eq (nth 2 one) (nth 2 two))))
+            ;; Another job's context reads and proves for itself.
+            (let ((other (funcall phase second)))
+              (should (= 2 reads))
+              (should-not (cadr other))
+              (should-not (eq (nth 2 one) (nth 2 other))))))
+      (delete-directory directory t)))
+  :doc "carries no riders or validity predicate, inheriting the remaining flags"
+  (let* ((owner (lambda (_process) nil))
+         (context (mevedel-session-durability-fresh-context owner)))
+    (should-not (nth 3 context))
+    (should-not (nth 5 context))
+    (should
+     (equal (list nil nil owner 42 t t)
+            (let ((mevedel-session-durability--commit-riders (list :before nil))
+                  (mevedel-session-durability--async-valid-p #'always)
+                  (mevedel-session-durability--observed-time 42)
+                  (mevedel-session-durability--final-commit t)
+                  (mevedel-session-control-fs--async-wait t))
+              (mevedel-session-durability-call-in-context
+               context
+               (lambda ()
+                 (list mevedel-session-durability--commit-riders
+                       mevedel-session-durability--async-valid-p
+                       mevedel-session-durability-async-process-function
+                       mevedel-session-durability--observed-time
+                       mevedel-session-durability--final-commit
+                       mevedel-session-control-fs--async-wait))))))))
+
+(mevedel-deftest mevedel-session-durability-call-outside-transaction ()
+  ,test
+  (test)
+  :doc "calls with every transaction cell of the caller cleared, then restores them"
+  (let ((mevedel-session-durability--transaction-clock '(sentinel))
+        (mevedel-session-durability--asserted-directories '(sentinel))
+        (mevedel-session-durability--commit-riders '(sentinel))
+        (mevedel-session-durability--final-commit 'sentinel)
+        (mevedel-session-durability-async-process-function 'sentinel)
+        (mevedel-session-recovery--mutation-cache '(sentinel)))
+    (should (equal '(nil nil nil nil nil nil)
+                   (mevedel-session-durability-call-outside-transaction
+                    (lambda ()
+                      (list mevedel-session-durability--transaction-clock
+                            mevedel-session-durability--asserted-directories
+                            mevedel-session-durability--commit-riders
+                            mevedel-session-durability--final-commit
+                            mevedel-session-durability-async-process-function
+                            mevedel-session-recovery--mutation-cache)))))
+    (should (equal '(sentinel) mevedel-session-durability--commit-riders))
+    (should (eq 'sentinel mevedel-session-durability--final-commit))))
+
 (mevedel-deftest mevedel-session-durability--update-owned-lease-async ()
   ,test
   (test)

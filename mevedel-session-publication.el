@@ -92,8 +92,14 @@
                   "mevedel-session-durability" (path))
 (declare-function mevedel-session-durability-call-with-reserved-lease
                   "mevedel-session-durability" (session function &optional token))
+(declare-function mevedel-session-durability-call-in-context
+                  "mevedel-session-durability" (context function))
+(declare-function mevedel-session-durability-call-outside-transaction
+                  "mevedel-session-durability" (function))
 (declare-function mevedel-session-durability-commit-publication-head
                   "mevedel-session-durability" (session head))
+(declare-function mevedel-session-durability-fresh-context
+                  "mevedel-session-durability" (process-function))
 (declare-function mevedel-session-durability-lease-owned-p
                   "mevedel-session-durability" (session))
 (declare-function mevedel-session-durability-lease-renew
@@ -103,7 +109,6 @@
 (defvar mevedel-session-durability--asserted-directories)
 (defvar mevedel-session-durability--final-commit)
 (defvar mevedel-session-durability--transaction-clock)
-(defvar mevedel-session-recovery--mutation-cache)
 
 ;; `mevedel-session-recovery'
 (declare-function mevedel-session-recovery--abandon
@@ -142,8 +147,10 @@
 
 (cl-defstruct (mevedel-session-publication--job
                (:constructor mevedel-session-publication--job-create))
+  ;; CONTEXT is the job's own durability transaction context, entered by
+  ;; every phase.
   session path epoch prepare acknowledge mail-ids batch batches candidate
-  expected-lease expected-head clock assertions recovery riders phase process error
+  expected-lease expected-head context riders phase process error
   retain-failure checkpoint
   ;; Raw frozen artifacts awaiting staging, the staged batch as first built,
   ;; and the optional selector run once digests are known.
@@ -323,8 +330,11 @@ until acknowledgement."
                        :retain-failure retain-failure :selector select-staged
                        :expected-lease (copy-sequence (mevedel-session-lease session))
                        :expected-head (plist-get (mevedel-session-publication session) :head)
-                       :clock (list nil) :assertions (list nil) :recovery (list nil)
                        :phase 'admission)))
+             (setf (mevedel-session-publication--job-context job)
+                   (mevedel-session-durability-fresh-context
+                    (lambda (process)
+                      (setf (mevedel-session-publication--job-process job) process))))
              (setf (mevedel-session-publication-job session) job
                    (mevedel-session-publication-active-p session) t)
              (mevedel-session-publication--advance-soon job)))))
@@ -387,18 +397,14 @@ ABANDONED explicitly discards recovery instead of retaining a failed checkpoint.
             ;; Arbitrary producer callbacks inherit no transaction observations
             ;; or explicit preparation ownership token.
             (unwind-protect
-                (let ((mevedel-session-durability--transaction-clock nil)
-                      (mevedel-session-durability--asserted-directories nil)
-                      (mevedel-session-durability--commit-riders nil)
-                      (mevedel-session-durability--final-commit nil)
-                      (mevedel-session-durability-async-process-function nil)
-                      (mevedel-session-recovery--mutation-cache nil))
-                  (condition-case callback-error
-                      (funcall (mevedel-session-publication--job-acknowledge job) success err)
-                    ((error quit)
-                     (display-warning
-                      'mevedel (format "Publication acknowledgement failed: %s"
-                                       (error-message-string callback-error)) :warning))))
+                (mevedel-session-durability-call-outside-transaction
+                 (lambda ()
+                   (condition-case callback-error
+                       (funcall (mevedel-session-publication--job-acknowledge job) success err)
+                     ((error quit)
+                      (display-warning
+                       'mevedel (format "Publication acknowledgement failed: %s"
+                                        (error-message-string callback-error)) :warning)))))
               (condition-case cleanup
                   (if success
                       (progn
@@ -486,17 +492,14 @@ Optional operations do not stop the program; skipped results follow its cause."
                                 (plist-get result :code)))))
 
 (defun mevedel-session-publication--advance (job)
-  "Advance one phase of JOB with only its transaction cells rebound."
-  (let* ((session (mevedel-session-publication--job-session job))
-         (mevedel-session-durability--transaction-clock
-          (mevedel-session-publication--job-clock job))
-         (mevedel-session-durability--asserted-directories
-          (mevedel-session-publication--job-assertions job))
-         (mevedel-session-durability-async-process-function
-          (lambda (process)
-            (setf (mevedel-session-publication--job-process job) process)))
-         (mevedel-session-recovery--mutation-cache
-          (mevedel-session-publication--job-recovery job)))
+  "Advance one phase of JOB inside the job's own transaction context."
+  (mevedel-session-durability-call-in-context
+   (mevedel-session-publication--job-context job)
+   (lambda () (mevedel-session-publication--advance-phase job))))
+
+(defun mevedel-session-publication--advance-phase (job)
+  "Advance one phase of JOB; the caller has entered the job's context."
+  (let ((session (mevedel-session-publication--job-session job)))
     (when (eq job (mevedel-session-publication-job session))
       (condition-case err
           (progn

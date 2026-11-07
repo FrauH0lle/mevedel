@@ -2029,6 +2029,37 @@ do the same for its own continuations."
           (and (null (nth 5 context)) mevedel-session-control-fs--async-wait)))
     (funcall function)))
 
+(defun mevedel-session-durability-fresh-context (process-function)
+  "Return a new transaction context for a job that advances over many turns.
+
+Unlike `mevedel-session-durability-capture-context' inside
+`mevedel-session-durability-with-transaction', it never joins a surrounding
+transaction: the clock, PID-lock, and recovery cells are its own, shared by
+every `mevedel-session-durability-call-in-context' with it.  It carries no
+commit riders, so a phase sees only riders it binds itself, never ones of a
+publisher whose binding a timer happened to run inside.  PROCESS-FUNCTION
+owns each process a lease step launches; see
+`mevedel-session-durability-async-process-function'.  With no async validity
+predicate, observed time, final commit, and the drain flag stay inherited."
+  (list (list nil) (list nil) (list nil) nil process-function nil))
+
+(defun mevedel-session-durability-call-outside-transaction (function)
+  "Call FUNCTION with no transaction state of the caller in effect.
+
+The clock, PID-lock and recovery cells, commit riders, final commit, and
+process function are all nil, so arbitrary code called back from inside a
+job or a timer opens its own transactions.  Callers, to audit whenever these
+cells change: the publication acknowledgement in
+`mevedel-session-publication--job-complete', and
+`mevedel-agent-control-notify' and `mevedel-agent-control--flush-notifications'."
+  (dlet ((mevedel-session-durability--transaction-clock nil)
+         (mevedel-session-durability--asserted-directories nil)
+         (mevedel-session-durability--commit-riders nil)
+         (mevedel-session-durability--final-commit nil)
+         (mevedel-session-durability-async-process-function nil)
+         (mevedel-session-recovery--mutation-cache nil))
+    (funcall function)))
+
 (defun mevedel-session-durability--async-job (callback)
   "Return (FINISH . GUARD) delivering one asynchronous result to CALLBACK.
 FINISH calls CALLBACK with (SUCCESS ERROR) the first time only.  GUARD runs

@@ -10,6 +10,7 @@
 
 (require 'mevedel-agent-control)
 (require 'mevedel-session-checkpoint)
+(require 'mevedel-session-collection)
 (require 'mevedel-session-durability)
 (require 'mevedel-session-publication)
 (require 'mevedel-transport)
@@ -62,6 +63,63 @@
        (should (equal (list (secure-hash 'sha256 "/root:retry-id"))
                       (test-mevedel-publication-async--ids
                        (test-mevedel-publication-async--restored-mail session))))))))
+
+;; Timers fired while a publisher waits inside its rider binding inherit it.
+(defun test-mevedel-publication-async--foreign-riders (refuse-reservation)
+  "Publish while waiting inside a foreign commit-rider binding.
+With REFUSE-RESERVATION the committed reservation is refused, so the rollback
+phase commits the lease back to `active' without riders of its own."
+  (test-mevedel-publication-async--fixture
+   (lambda (session _buffer)
+     (let* ((foreign (list :before nil
+                           :after (list (list :op 'path-exists-p
+                                              :path (mevedel-session-save-path session)
+                                              :optional t))
+                           :consumed nil :before-results nil :after-results nil))
+            (submit (symbol-function 'mevedel-session-publication-submit))
+            (advance (symbol-function 'mevedel-session-publication--advance))
+            (reserve (symbol-function
+                      'mevedel-session-durability-reserve-publication-lease-async))
+            job phases acknowledgements)
+       (cl-letf (((symbol-function 'mevedel-session-publication-submit)
+                  (lambda (&rest arguments)
+                    (prog1 (apply submit arguments)
+                      (setq job (mevedel-session-publication-job session)))))
+                 ;; Observe that each phase really starts inside the binding.
+                 ((symbol-function 'mevedel-session-publication--advance)
+                  (lambda (current)
+                    (when (eq foreign mevedel-session-durability--commit-riders)
+                      (push (mevedel-session-publication--job-phase current) phases))
+                    (funcall advance current)))
+                 ((symbol-function
+                   'mevedel-session-durability-reserve-publication-lease-async)
+                  (lambda (owner callback)
+                    (funcall reserve owner
+                             (if refuse-reservation
+                                 (lambda (_success _error)
+                                   (funcall callback nil '(error "Injected refusal")))
+                               callback)))))
+         (let ((mevedel-session-durability--commit-riders foreign))
+           (test-mevedel-publication-async--send
+            session "foreign-rider" (lambda (ok err) (push (list ok err) acknowledgements)))
+           (test-mevedel-publication-async--wait (lambda () acknowledgements))))
+       (should job)
+       (should (memq (if refuse-reservation 'rollback 'generation) phases))
+       (should-not (plist-get foreign :consumed))
+       (should-not (plist-get foreign :after-results))
+       ;; The job's own reserve riders ran inside the same binding.
+       (should (plist-get (mevedel-session-publication--job-riders job) :consumed))
+       (should (plist-get (mevedel-session-publication--job-riders job) :after-results))
+       (if refuse-reservation
+           (progn
+             (should (equal '((nil (error "Injected refusal"))) acknowledgements))
+             (should (eq 'active (plist-get (mevedel-session-lease session) :status)))
+             (should-not (test-mevedel-publication-async--restored-mail session)))
+         ;; The head commit's generation riders published the mail.
+         (should (equal '((t nil)) acknowledgements))
+         (should (equal (list (secure-hash 'sha256 "/root:foreign-rider"))
+                        (test-mevedel-publication-async--ids
+                         (test-mevedel-publication-async--restored-mail session)))))))))
 
 (defun test-mevedel-publication-async--transcript-artifacts
     (session buffer logical content &optional checkpoint)
@@ -292,6 +350,11 @@ a missing directory chain, and the sidecar commit marker carrying CHECKPOINT."
        (should (equal "ACK staged transcript"
                       (mevedel-session-artifacts-read-artifact session logical t)))
        (should (= 1 (length (test-mevedel-publication-async--restored-mail session)))))))
+
+  :doc "a phase advanced inside another publisher's rider binding runs only its own riders"
+  (test-mevedel-publication-async--foreign-riders nil)
+  :doc "a rollback commit advanced inside another publisher's rider binding leaves them alone"
+  (test-mevedel-publication-async--foreign-riders t)
 
   :doc "cleanup failure after authoritative adoption cannot change a success acknowledgement"
   (test-mevedel-publication-async--fixture
