@@ -15,10 +15,22 @@
                load-file-name
                byte-compile-current-file))
           "helpers"))
+(require 'mevedel-collaboration-relay-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name
+               load-file-name
+               byte-compile-current-file))
+          "mevedel-collaboration-relay-test-support"))
 (require 'cl-lib)
 (require 'gptel)
 (require 'mevedel-agent-control)
 (require 'mevedel-collaboration-agent)
+(require 'mevedel-collaboration-artifact)
+(require 'mevedel-collaboration-discussions)
+(require 'mevedel-collaboration-files)
+(require 'mevedel-collaboration-history)
+(require 'mevedel-collaboration-presence)
 (require 'mevedel-collaboration-projection)
 (require 'mevedel-collaboration-task)
 (require 'mevedel-collaboration-transport)
@@ -30,6 +42,7 @@
 (require 'mevedel-prompt-submission)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-persistence)
+(require 'mevedel-sleep)
 (require 'mevedel-structs)
 (require 'mevedel-transcript)
 (require 'mevedel-transcript-audit)
@@ -1320,6 +1333,339 @@
         (should (equal (list (cons 5 (list :t "notice"
                                            :message mevedel-collaboration-needs-host-message)))
                        sent))))))
+
+(defvar test-mevedel-collaboration-guest--sockets nil
+  "Guest sockets the current relay-backed surface opened, to close after it.")
+
+(defconst test-mevedel-collaboration-guest--shared-handlers
+  '(("viewing" . mevedel-collaboration-presence-handle)
+    ("new-session" . mevedel-collaboration--handle-new-session)
+    ("session-models" . mevedel-collaboration--handle-session-models)
+    ("file-upload" . mevedel-collaboration-files-handle-upload)
+    ("artifact-get" . mevedel-collaboration--handle-artifact-get)
+    ("artifact-delete" . mevedel-collaboration--handle-artifact-delete)
+    ("discussion" . mevedel-collaboration-discussions-handle)
+    ("store-list" . mevedel-collaboration--handle-store-list)
+    ("store-action" . mevedel-collaboration--handle-store-action))
+  "The frame types rooms and lobbies share, with their handlers.")
+
+(mevedel-deftest mevedel-collaboration--dispatch-shared-frame
+  (:doc "routes every shared type from a room and a lobby, after their own types")
+  (with-temp-buffer
+    (let* ((room (list :data-buffer (current-buffer)
+                       :guests (make-hash-table :test #'eql)
+                       :session (mevedel-session--create
+                                 :name "s"
+                                 :workspace (mevedel-workspace--create
+                                             :root "/proj/"))))
+           (lobby (list :guests (make-hash-table :test #'eql)))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+           (mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+           (saved (mapcar (lambda (entry)
+                            (cons (cdr entry) (symbol-function (cdr entry))))
+                          test-mevedel-collaboration-guest--shared-handlers))
+           routed)
+      (puthash "/lobby/" lobby mevedel-collaboration-lobby--lobbies)
+      (unwind-protect
+          (progn
+            ;; Each handler records its call and returns nil.
+            (pcase-dolist (`(,type . ,handler)
+                           test-mevedel-collaboration-guest--shared-handlers)
+              (fset handler
+                    (if (equal type "file-upload")
+                        (lambda (owner _peer _frame root)
+                          (push (list type owner root) routed)
+                          nil)
+                      (lambda (owner &rest _)
+                        (push (list type owner nil) routed)
+                        nil))))
+              ;; Every shared type reaches its handler from both kinds, a
+              ;; room's uploads landing in its session's root and a lobby's
+              ;; in its own.
+              (pcase-dolist (`(,type . ,_) test-mevedel-collaboration-guest--shared-handlers)
+                (setq routed nil)
+                (mevedel-collaboration--on-frame (current-buffer) 5 (list :t type))
+                (mevedel-collaboration-lobby--on-frame "/lobby/" 5 (list :t type))
+                (should (equal (list (list type lobby (and (equal type "file-upload")
+                                                           "/lobby/"))
+                                     (list type room (and (equal type "file-upload")
+                                                          "/proj/")))
+                               routed))
+                ;; Handled is reported even though each handler returned nil.
+                (should (eq 'handled (mevedel-collaboration--dispatch-shared-frame
+                                      room 5 (list :t type) "/proj/")))
+                (should (eq 'handled (mevedel-collaboration--dispatch-frame
+                                      room 5 (list :t type))))
+                (should (eq 'handled (mevedel-collaboration-lobby--dispatch-frame
+                                      lobby 5 (list :t type) "/lobby/"))))
+              ;; Unknown frames fall through unhandled and touch nothing.
+              (setq routed nil)
+              (dolist (type '("future-frame" "files" "prompt"))
+                (should (eq 'unhandled (mevedel-collaboration--dispatch-shared-frame
+                                        room 5 (list :t type) "/proj/"))))
+              (should (eq 'unhandled (mevedel-collaboration--dispatch-frame
+                                      room 5 (list :t "future-frame"))))
+              (should (eq 'unhandled (mevedel-collaboration-lobby--dispatch-frame
+                                      lobby 5 (list :t "future-frame") "/lobby/")))
+              (should-not routed))
+        (pcase-dolist (`(,handler . ,definition) saved)
+          (fset handler definition)))
+      ;; Each kind's own types are dispatched first and never fall through.
+      (let (fell)
+        (cl-letf (((symbol-function 'mevedel-collaboration--dispatch-shared-frame)
+                   (lambda (_room _peer frame _root) (push (plist-get frame :t) fell)))
+                  ((symbol-function 'mevedel-collaboration--handle-history-get) #'ignore)
+                  ((symbol-function 'mevedel-collaboration-lobby--handle-open) #'ignore)
+                  ((symbol-function 'mevedel-collaboration-files-handle-list) #'ignore))
+          (mevedel-collaboration--on-frame (current-buffer) 5 (list :t "history-get"))
+          (mevedel-collaboration--on-frame (current-buffer) 5 (list :t "set-name"))
+          (mevedel-collaboration-lobby--on-frame "/lobby/" 5 (list :t "open-session"))
+          (mevedel-collaboration-lobby--on-frame "/lobby/" 5 (list :t "files"))
+          (should-not fell)
+          (mevedel-collaboration--on-frame (current-buffer) 5 (list :t "files"))
+          (mevedel-collaboration-lobby--on-frame "/lobby/" 5 (list :t "prompt"))
+          (should (equal '("prompt" "files") fell)))))))
+
+(defun test-mevedel-collaboration-guest--with-surface (kind body)
+  "Call BODY with a relay-backed guest surface of KIND, `room' or `lobby'.
+A lobby is started for real; a room is a session room whose sealed
+transport dials the same in-process stub relay.  BODY receives the room
+or lobby plist and the stub relay's port."
+  (mevedel-relay-test--with-stub-relay (state port _server)
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-guest-frame-" t)))
+           (mevedel-user-dir (file-name-as-directory
+                              (file-name-concat root "user")))
+           (mevedel-collaboration-relay-url (format "ws://127.0.0.1:%d" port))
+           (mevedel-collaboration-relay-host-token nil)
+           (mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+           (mevedel-collaboration--rooms (make-hash-table :test #'eq))
+           (kill-emacs-hook nil)
+           (workspace (mevedel-workspace--create
+                       :type 'project :id root :root root :name "proj"
+                       :file-cache (mevedel-file-cache--create
+                                    :table (make-hash-table :test #'equal)
+                                    :order nil :total-bytes 0)))
+           (data-buffer (and (eq kind 'room)
+                             (generate-new-buffer " *guest-frame-room*")))
+           (test-mevedel-collaboration-guest--sockets nil)
+           room)
+      (cl-letf (((symbol-function 'mevedel-sleep-update) #'ignore)
+                ((symbol-function 'mevedel-collaboration--announce-lobby) #'ignore)
+                ((symbol-function 'mevedel-collaboration-lobby--workspace)
+                 (lambda (_directory) workspace))
+                ;; A room's hello also sends the transcript snapshot, which
+                ;; this bare room has none of; admission is what matters.
+                ((symbol-function 'mevedel-collaboration--handle-hello)
+                 (lambda (room peer frame)
+                   (mevedel-collaboration--admit-hello room peer frame))))
+        (unwind-protect
+            (progn
+              (if (eq kind 'lobby)
+                  (setq room (mevedel-collaboration-lobby-start root))
+                (setq room (list :data-buffer data-buffer
+                                 :guests (make-hash-table :test #'eql)
+                                 :session (mevedel-session--create
+                                           :name "s" :workspace workspace)
+                                 :room-id "roomroomroomroom"
+                                 :key (make-string 32 5)
+                                 :write-token (make-string 16 ?w)
+                                 :owner-token (make-string 16 ?o)))
+                (puthash data-buffer room mevedel-collaboration--rooms)
+                (plist-put
+                 room :transport
+                 (mevedel-collaboration--transport-open
+                  (format "ws://127.0.0.1:%d/r/%s?role=host" port
+                          (plist-get room :room-id))
+                  (plist-get room :key)
+                  :on-frame (lambda (peer frame)
+                              (mevedel-collaboration--on-frame
+                               data-buffer peer frame)))))
+              (should (mevedel-relay-test--pump
+                       (lambda () (plist-get (car state) :host))))
+              (funcall body room port))
+          (dolist (ws test-mevedel-collaboration-guest--sockets)
+            (let ((process (websocket-conn ws)))
+              (set-process-sentinel process #'ignore)
+              (delete-process process)))
+          (if (eq kind 'lobby)
+              (when room (mevedel-collaboration-lobby--stop room 'emacs-exit))
+            (when-let* ((transport (plist-get room :transport)))
+              (mevedel-collaboration--transport-stop transport)))
+          (when data-buffer (kill-buffer data-buffer))
+          (delete-directory root t))))))
+
+(defun test-mevedel-collaboration-guest--connect (room port &optional tokens)
+  "Connect a guest to ROOM through the stub relay at PORT.
+TOKENS is nil for no hello, or a list of `write' and `owner' (or
+`forged-owner') naming the tokens its hello proves.  Return a plist
+whose `:frames' are the decoded frames it received."
+  (let* ((key (plist-get room :key))
+         (guest (list :key key :frames nil :ws nil)))
+    (plist-put
+     guest :ws
+     (websocket-open
+      (format "ws://127.0.0.1:%d/r/%s?role=guest" port (plist-get room :room-id))
+      :on-message
+      (lambda (_ws frame)
+        (when (eq 'binary (websocket-frame-opcode frame))
+          (when-let* ((text (mevedel-collaboration--unseal
+                             key (cdr (mevedel-collaboration--envelope-unpack
+                                       (websocket-frame-payload frame))))))
+            (plist-put guest :frames
+                       (append (plist-get guest :frames)
+                               (list (mevedel-collaboration--frame-decode
+                                      text)))))))))
+    (push (plist-get guest :ws) test-mevedel-collaboration-guest--sockets)
+    (should (mevedel-relay-test--pump
+             (lambda () (websocket-openp (plist-get guest :ws)))))
+    (when tokens
+      (let ((guests (plist-get room :guests))
+            (before (hash-table-count (plist-get room :guests))))
+        (test-mevedel-collaboration-guest--send
+         guest
+         (append (list :t "hello" :proto mevedel-collaboration--protocol-version
+                       :name "Guest")
+                 (when (memq 'write tokens)
+                   (list :writeToken (mevedel-collaboration--base64url
+                                      (plist-get room :write-token))))
+                 (cond
+                  ((memq 'owner tokens)
+                   (list :ownerToken (mevedel-collaboration--base64url
+                                      (plist-get room :owner-token))))
+                  ((memq 'forged-owner tokens)
+                   (list :ownerToken (mevedel-collaboration--base64url
+                                      (make-string 16 ?x)))))))
+        (should (mevedel-relay-test--pump
+                 (lambda () (> (hash-table-count guests) before))))))
+    guest))
+
+(defun test-mevedel-collaboration-guest--send (guest frame)
+  "Send FRAME from GUEST, sealed in an envelope, as a browser does."
+  (websocket-send
+   (plist-get guest :ws)
+   (make-websocket-frame
+    :opcode 'binary :completep t
+    :payload (mevedel-collaboration--envelope-pack
+              0 (mevedel-collaboration--seal
+                 (plist-get guest :key) (json-serialize frame))))))
+
+(defun test-mevedel-collaboration-guest--exchange (guest frame)
+  "Send FRAME then a store listing request from GUEST.
+Return the notices GUEST received before the listing: frames on one
+connection arrive in order, so the listing reply proves that FRAME's own
+replies have all arrived and that the room still works.  Broadcasts such
+as presence may interleave, so only notices are returned."
+  (let ((start (length (plist-get guest :frames))))
+    (test-mevedel-collaboration-guest--send guest frame)
+    (test-mevedel-collaboration-guest--send guest (list :t "store-list"))
+    (should (mevedel-relay-test--pump
+             (lambda ()
+               (cl-find "store-artifacts"
+                        (nthcdr start (plist-get guest :frames))
+                        :key (lambda (frame) (plist-get frame :t))
+                        :test #'equal))))
+    (test-mevedel-collaboration-guest--notices
+     (cl-subseq (plist-get guest :frames) start
+                (cl-position "store-artifacts" (plist-get guest :frames)
+                             :key (lambda (frame) (plist-get frame :t))
+                             :test #'equal :start start)))))
+
+(defun test-mevedel-collaboration-guest--notices (frames)
+  "Return the notice frames among FRAMES."
+  (cl-remove-if-not (lambda (frame) (equal "notice" (plist-get frame :t)))
+                    frames))
+
+(mevedel-deftest mevedel-collaboration--guard-guest-frame
+  ()
+  ,test
+  (test)
+  :doc "a failing shared frame answers only its sender, in a room and a lobby alike"
+  (dolist (kind '(room lobby))
+    (dolist (case
+             (list (list 'owner-user-error '(write owner)
+                         (lambda () (user-error "Artifact /secret/path is locked"))
+                         "Artifact /secret/path is locked" nil)
+                   (list 'writer-user-error '(write)
+                         (lambda () (user-error "Artifact /secret/path is locked"))
+                         "The host could not complete this action; the owner can review session status"
+                         nil)
+                   ;; A real question under `inhibit-interaction' signals
+                   ;; instead of prompting, without naming itself ...
+                   (list 'inhibited '(write owner)
+                         (lambda () (read-string "Overwrite /secret/path? "))
+                         mevedel-collaboration-needs-host-message
+                         "needed a decision in Emacs and was refused")
+                   ;; ... while the daemon's unseen-question refusal names
+                   ;; it, for the host's warning only.
+                   (list 'inhibited-question '(write owner)
+                         (lambda () (signal 'inhibited-interaction
+                                            (list "Overwrite /secret/path?")))
+                         mevedel-collaboration-needs-host-message
+                         "refused: Overwrite /secret/path?")
+                   (list 'fault '(write owner)
+                         (lambda () (error "Disk fault at /secret/path"))
+                         "The host could not handle this action"
+                         "Disk fault at /secret/path")))
+      (pcase-let ((`(,name ,tokens ,producer ,notice ,warning) case))
+        (ert-info ((format "%s in a %s" name kind))
+          (test-mevedel-collaboration-guest--with-surface
+           kind
+           (lambda (room port)
+             (let ((guest (test-mevedel-collaboration-guest--connect
+                           room port tokens))
+                   captured replies)
+               (cl-letf (((symbol-function
+                           'mevedel-collaboration--handle-artifact-delete)
+                          (lambda (&rest _) (funcall producer))))
+                 (mevedel-test--with-captured-diagnostics captured
+                   (setq replies (test-mevedel-collaboration-guest--exchange
+                                  guest (list :t "artifact-delete" :reqId 1)))))
+               ;; Exactly one notice, and the room answers the next frame.
+               (should (equal (list (list :t "notice" :message notice))
+                              replies))
+               (if warning
+                   (should (string-search warning captured))
+                 (should (string-empty-p captured)))
+               (should (eq room (if (eq kind 'lobby)
+                                    (gethash (plist-get room :directory)
+                                             mevedel-collaboration-lobby--lobbies)
+                                  (mevedel-collaboration--room-for-buffer
+                                   (plist-get room :data-buffer))))))))))))
+
+  :doc "pre-hello and forged-owner peers get only the generic sentence"
+  (dolist (kind '(room lobby))
+    (ert-info ((format "%s" kind))
+      (test-mevedel-collaboration-guest--with-surface
+       kind
+       (lambda (room port)
+         (let ((stranger (test-mevedel-collaboration-guest--connect room port))
+               (forger (test-mevedel-collaboration-guest--connect
+                        room port '(write forged-owner)))
+               (no-write (test-mevedel-collaboration-guest--connect
+                          room port '(owner)))
+               (generic "The host could not complete this action; the owner can review session status"))
+           (cl-letf (((symbol-function 'mevedel-collaboration--handle-artifact-delete)
+                      (lambda (&rest _) (user-error "Artifact /secret/path is locked"))))
+             ;; The forger and the owner token without a write token are
+             ;; admitted but never as owners.
+             (should-not (mevedel-collaboration--owner room 2))
+             (should-not (mevedel-collaboration--owner room 3))
+             (dolist (guest (list forger no-write))
+               (should (equal (list (list :t "notice" :message generic))
+                              (test-mevedel-collaboration-guest--exchange
+                               guest (list :t "artifact-delete" :reqId 1)))))
+             ;; A peer that never said hello is not a guest: its frame
+             ;; meets the same generic sentence and nothing else.
+             (test-mevedel-collaboration-guest--send
+              stranger (list :t "artifact-delete" :reqId 1))
+             (should (mevedel-relay-test--pump
+                      (lambda ()
+                        (test-mevedel-collaboration-guest--notices
+                         (plist-get stranger :frames)))))
+             (should (equal (list (list :t "notice" :message generic))
+                            (test-mevedel-collaboration-guest--notices
+                             (plist-get stranger :frames)))))))))))
 
 (mevedel-deftest mevedel-collaboration--on-control
   (:doc "drops a guest on peer-left and waits for hello on peer-joined")

@@ -1275,48 +1275,84 @@ the failed-enqueue cleanup."
             (mevedel-view--abort-data-buffer data-buffer)))))))
 
 (defun mevedel-collaboration--on-frame (data-buffer peer frame)
-  "Dispatch decoded guest FRAME from PEER for DATA-BUFFER's room.
+  "Dispatch decoded guest FRAME from PEER for DATA-BUFFER's room."
+  (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
+    (mevedel-collaboration--guard-guest-frame
+     room peer frame #'mevedel-collaboration--dispatch-frame)))
+
+(defun mevedel-collaboration--guard-guest-frame (room peer frame dispatch)
+  "Call DISPATCH with ROOM, PEER and FRAME, answering its failure to PEER.
+ROOM is a session room or a lobby.
 
 Failure isolation mirrors the gptel observers: a fault in guest input
 handling preserves the room, warns the host with the error and tells only
-the sending guest.  Guests act
-while nobody may be at the keyboard, so frames run with
-`inhibit-interaction': a step that would ask in Emacs is refused to the
-sending guest instead of waiting for an answer."
-  (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
-    (condition-case fault
-        (condition-case err
-            (let ((inhibit-interaction t))
-              (mevedel-collaboration--dispatch-frame room peer frame))
-          (user-error
-           (mevedel-collaboration--transport-send
-            (plist-get room :transport) peer
-            (list :t "notice" :message
-                  (if (mevedel-collaboration--owner room peer)
-                      (error-message-string err)
-                    "The host could not complete this action; the owner can review session status"))))
-          (inhibited-interaction
-           (mevedel-collaboration--transport-send
-            (plist-get room :transport) peer
-            (list :t "notice" :message mevedel-collaboration-needs-host-message))
+the sending guest.  A `user-error' tells an owner-link guest its text and
+anyone else a generic sentence.  Guests act while nobody may be at the
+keyboard, so frames run with `inhibit-interaction': a step that would ask
+in Emacs is refused to the sending guest instead of waiting for an
+answer, and only the host's warning names the question."
+  (condition-case fault
+      (condition-case err
+          (let ((inhibit-interaction t))
+            (funcall dispatch room peer frame))
+        (user-error
+         (mevedel-collaboration--transport-send
+          (plist-get room :transport) peer
+          (list :t "notice" :message
+                (if (mevedel-collaboration--owner room peer)
+                    (error-message-string err)
+                  "The host could not complete this action; the owner can review session status"))))
+        (inhibited-interaction
+         (mevedel-collaboration--transport-send
+          (plist-get room :transport) peer
+          (list :t "notice" :message mevedel-collaboration-needs-host-message))
+         (display-warning
+          'mevedel
+          (format "A guest's %s request needed a decision in Emacs and was refused%s"
+                  (plist-get frame :t) (mevedel-view--refused-question err)))))
+    (error
+     (condition-case nil
+         (progn
            (display-warning
-            'mevedel
-            (format "A guest's %s request needed a decision in Emacs and was refused%s"
-                    (plist-get frame :t) (mevedel-view--refused-question err)))))
-      (error
-       (condition-case nil
-           (progn
-             (display-warning
-              'mevedel (format "A guest's %s frame failed: %s"
-                               (plist-get frame :t) (error-message-string fault))
-              :warning)
-             (mevedel-collaboration--transport-send
-              (plist-get room :transport) peer
-              (list :t "notice" :message "The host could not handle this action")))
-         (error nil))))))
+            'mevedel (format "A guest's %s frame failed: %s"
+                             (plist-get frame :t) (error-message-string fault))
+            :warning)
+           (mevedel-collaboration--transport-send
+            (plist-get room :transport) peer
+            (list :t "notice" :message "The host could not handle this action")))
+       (error nil)))))
+
+(defun mevedel-collaboration--dispatch-shared-frame (room peer frame root)
+  "Handle guest FRAME from PEER if its type is one rooms and lobbies share.
+ROOM is a session room or a lobby; ROOT is the workspace root that file
+uploads land in.  Return `handled' or `unhandled', never a handler's
+value, so each kind dispatches its own types first and falls through."
+  (pcase (plist-get frame :t)
+    ("viewing" (mevedel-collaboration-presence-handle room peer frame) 'handled)
+    ("new-session"
+     (mevedel-collaboration--handle-new-session room peer frame) 'handled)
+    ("session-models"
+     (mevedel-collaboration--handle-session-models room peer) 'handled)
+    ("file-upload"
+     (mevedel-collaboration-files-handle-upload room peer frame root) 'handled)
+    ;; The workspace's artifacts, reached by store identity.
+    ("artifact-get"
+     (mevedel-collaboration--handle-artifact-get room peer frame) 'handled)
+    ("artifact-delete"
+     (mevedel-collaboration--handle-artifact-delete room peer frame) 'handled)
+    ("discussion"
+     (mevedel-collaboration-discussions-handle room peer frame) 'handled)
+    ("store-list"
+     (mevedel-collaboration--handle-store-list room peer frame) 'handled)
+    ("store-action"
+     (mevedel-collaboration--handle-store-action room peer frame) 'handled)
+    (_ 'unhandled)))
 
 (defun mevedel-collaboration--dispatch-frame (room peer frame)
-  "Handle guest FRAME from PEER in ROOM."
+  "Handle guest FRAME from PEER in session ROOM.
+Types a lobby shares fall through to
+`mevedel-collaboration--dispatch-shared-frame', whose status this
+returns; for the room's own types the value is unspecified."
   (pcase (plist-get frame :t)
     ("recovery" (mevedel-collaboration-recovery-handle room peer frame))
     ("hello" (mevedel-collaboration--handle-hello room peer frame))
@@ -1327,7 +1363,6 @@ sending guest instead of waiting for an answer."
                   (mevedel-collaboration--sanitize-guest-name
                    (plist-get frame :name)))
        (mevedel-collaboration-presence-publish room)))
-    ("viewing" (mevedel-collaboration-presence-handle room peer frame))
     ((or "push-subscribe" "push-unsubscribe" "push-state")
      (mevedel-collaboration--handle-push-subscription
       room peer frame))
@@ -1341,21 +1376,6 @@ sending guest instead of waiting for an answer."
      (mevedel-collaboration--handle-fetch-agent room peer frame))
     ("execution-result-get"
      (mevedel-collaboration--handle-execution-result-get room peer frame))
-    ("artifact-get"
-     (mevedel-collaboration--handle-artifact-get room peer frame))
-    ("artifact-delete"
-     (mevedel-collaboration--handle-artifact-delete room peer frame))
-    ("discussion"
-     (mevedel-collaboration-discussions-handle room peer frame))
-    ("store-list"
-     (mevedel-collaboration--handle-store-list room peer frame))
-    ("store-action"
-     (mevedel-collaboration--handle-store-action room peer frame))
-    ("file-upload"
-     (mevedel-collaboration-files-handle-upload
-      room peer frame
-      (mevedel-workspace-root
-       (mevedel-session-workspace (plist-get room :session)))))
     ("history-get"
      (mevedel-collaboration--handle-history-get room peer frame))
     ((or "editing" "editing-presence")
@@ -1365,11 +1385,12 @@ sending guest instead of waiting for an answer."
      (mevedel-collaboration--handle-ui-response room peer frame))
     ("set-mode"
      (mevedel-collaboration--handle-set-mode room peer frame))
-    ("new-session"
-     (mevedel-collaboration--handle-new-session room peer frame))
     ("fork" (mevedel-collaboration--handle-fork room peer frame))
-    ("session-models"
-     (mevedel-collaboration--handle-session-models room peer))))
+    (_
+     (mevedel-collaboration--dispatch-shared-frame
+      room peer frame
+      (when-let* ((workspace (mevedel-collaboration--room-workspace room)))
+        (mevedel-workspace-root workspace))))))
 
 (defun mevedel-collaboration--on-control (data-buffer event peer)
   "Handle relay control EVENT for PEER in DATA-BUFFER's room."

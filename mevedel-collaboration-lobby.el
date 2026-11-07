@@ -37,33 +37,15 @@
 (declare-function mevedel-session-dedicated-artifact "mevedel-structs" (cl-x))
 (autoload 'mevedel--workspace-sessions "mevedel-chat")
 
-;; `mevedel-collaboration-artifact'
-(declare-function mevedel-collaboration--handle-artifact-delete
-                  "mevedel-collaboration-artifact" (room peer frame))
-(declare-function mevedel-collaboration--handle-artifact-get
-                  "mevedel-collaboration-artifact" (room peer frame))
-(declare-function mevedel-collaboration--handle-store-action
-                  "mevedel-collaboration-artifact" (room peer frame))
-(declare-function mevedel-collaboration--handle-store-list
-                  "mevedel-collaboration-artifact" (room peer frame))
-;; Starting a lobby loads them; a frame from a peer it never admitted
-;; must still find them.
-(autoload 'mevedel-collaboration--handle-artifact-delete "mevedel-collaboration-artifact")
-(autoload 'mevedel-collaboration--handle-artifact-get "mevedel-collaboration-artifact")
-(autoload 'mevedel-collaboration--handle-store-action "mevedel-collaboration-artifact")
-(autoload 'mevedel-collaboration--handle-store-list "mevedel-collaboration-artifact")
-
-;; `mevedel-collaboration-discussions'
-(declare-function mevedel-collaboration-discussions-handle
-                  "mevedel-collaboration-discussions" (room peer frame))
-(autoload 'mevedel-collaboration-discussions-handle
-  "mevedel-collaboration-discussions")
-
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--admit-hello
                   "mevedel-collaboration-guest" (room peer frame))
 (declare-function mevedel-collaboration--announce-lobby
                   "mevedel-collaboration-guest" (workspace))
+(declare-function mevedel-collaboration--dispatch-shared-frame
+                  "mevedel-collaboration-guest" (room peer frame root))
+(declare-function mevedel-collaboration--guard-guest-frame
+                  "mevedel-collaboration-guest" (room peer frame dispatch))
 (declare-function mevedel-collaboration--model-labels
                   "mevedel-collaboration-guest" ())
 (declare-function mevedel-collaboration--project-name
@@ -73,21 +55,17 @@
 (declare-function mevedel-collaboration--workspace-key
                   "mevedel-collaboration-guest" (room))
 (autoload 'mevedel-collaboration--admit-hello "mevedel-collaboration-guest")
+;; Loading it loads the shared frame handlers too, so a frame from a peer
+;; the lobby never admitted still finds them.
+(autoload 'mevedel-collaboration--dispatch-shared-frame
+  "mevedel-collaboration-guest")
+(autoload 'mevedel-collaboration--guard-guest-frame
+  "mevedel-collaboration-guest")
 (autoload 'mevedel-collaboration--model-labels "mevedel-collaboration-guest")
 (autoload 'mevedel-collaboration--request-id-p "mevedel-collaboration-guest")
 (autoload 'mevedel-collaboration--workspace-key "mevedel-collaboration-guest")
 
-;; `mevedel-collaboration-owner'
-(declare-function mevedel-collaboration--handle-new-session
-                  "mevedel-collaboration-owner" (room peer frame))
-(declare-function mevedel-collaboration--handle-session-models
-                  "mevedel-collaboration-owner" (room peer))
-(autoload 'mevedel-collaboration--handle-new-session "mevedel-collaboration-owner")
-(autoload 'mevedel-collaboration--handle-session-models "mevedel-collaboration-owner")
-
 ;; `mevedel-collaboration-presence'
-(declare-function mevedel-collaboration-presence-handle
-                  "mevedel-collaboration-presence" (room peer frame))
 (declare-function mevedel-collaboration-presence-publish
                   "mevedel-collaboration-presence" (room))
 
@@ -119,8 +97,6 @@
 (declare-function mevedel-collaboration-files-handle-list
                   "mevedel-collaboration-files" (owner peer frame root))
 (declare-function mevedel-collaboration-files-handle-remove
-                  "mevedel-collaboration-files" (owner peer frame root))
-(declare-function mevedel-collaboration-files-handle-upload
                   "mevedel-collaboration-files" (owner peer frame root))
 
 ;; `mevedel-session-naming'
@@ -566,55 +542,40 @@ Every guest of LOBBY receives the new listing after a deletion."
 
 (defun mevedel-collaboration-lobby--on-frame (root peer frame)
   "Dispatch guest FRAME from PEER for the lobby of workspace ROOT.
-A fault in one frame is reported and dropped; it never ends the lobby,
-whose link is meant to keep working."
+A failing frame is answered to its sender as in a session room; it never
+ends the lobby, whose link is meant to keep working."
   (when-let* ((lobby (gethash root mevedel-collaboration-lobby--lobbies)))
-    (condition-case err
-        (let ((inhibit-interaction t))
-          (pcase (plist-get frame :t)
-            ("hello"
-             (when (mevedel-collaboration--admit-hello lobby peer frame)
-               (mevedel-collaboration-lobby--send-listing lobby peer)
-               (mevedel-collaboration-presence-publish lobby)))
-            ("viewing"
-             (mevedel-collaboration-presence-handle lobby peer frame))
-            ("lobby-refresh"
-             (when (mevedel-collaboration--guest lobby peer)
-               (mevedel-collaboration-lobby--send-listing lobby peer)))
-            ("open-session"
-             (mevedel-collaboration-lobby--handle-open lobby peer frame))
-            ("new-session"
-             (mevedel-collaboration--handle-new-session lobby peer frame))
-            ("session-models"
-             (mevedel-collaboration--handle-session-models lobby peer))
-            ("delete-session"
-             (mevedel-collaboration-lobby--handle-delete lobby peer frame))
-            ("rename-session"
-             (mevedel-collaboration-lobby--handle-rename lobby peer frame))
-            ("files"
-             (mevedel-collaboration-files-handle-list lobby peer frame root))
-            ("file-get"
-             (mevedel-collaboration-files-handle-get lobby peer frame root))
-            ("file-upload"
-             (mevedel-collaboration-files-handle-upload
-              lobby peer frame root))
-            ("file-remove"
-             (mevedel-collaboration-files-handle-remove
-              lobby peer frame root))
-            ;; The workspace's artifacts, reached by store identity.
-            ("artifact-get"
-             (mevedel-collaboration--handle-artifact-get lobby peer frame))
-            ("artifact-delete"
-             (mevedel-collaboration--handle-artifact-delete lobby peer frame))
-            ("discussion"
-             (mevedel-collaboration-discussions-handle lobby peer frame))
-            ("store-list"
-             (mevedel-collaboration--handle-store-list lobby peer frame))
-            ("store-action"
-             (mevedel-collaboration--handle-store-action lobby peer frame))))
-      (error
-       (message "mevedel: lobby frame failed: %s"
-                (error-message-string err))))))
+    (mevedel-collaboration--guard-guest-frame
+     lobby peer frame
+     (lambda (lobby peer frame)
+       (mevedel-collaboration-lobby--dispatch-frame lobby peer frame root)))))
+
+(defun mevedel-collaboration-lobby--dispatch-frame (lobby peer frame root)
+  "Handle guest FRAME from PEER in LOBBY of workspace ROOT.
+Types a session room shares fall through to
+`mevedel-collaboration--dispatch-shared-frame', whose status this
+returns; for the lobby's own types the value is unspecified."
+  (pcase (plist-get frame :t)
+    ("hello"
+     (when (mevedel-collaboration--admit-hello lobby peer frame)
+       (mevedel-collaboration-lobby--send-listing lobby peer)
+       (mevedel-collaboration-presence-publish lobby)))
+    ("lobby-refresh"
+     (when (mevedel-collaboration--guest lobby peer)
+       (mevedel-collaboration-lobby--send-listing lobby peer)))
+    ("open-session"
+     (mevedel-collaboration-lobby--handle-open lobby peer frame))
+    ("delete-session"
+     (mevedel-collaboration-lobby--handle-delete lobby peer frame))
+    ("rename-session"
+     (mevedel-collaboration-lobby--handle-rename lobby peer frame))
+    ("files"
+     (mevedel-collaboration-files-handle-list lobby peer frame root))
+    ("file-get"
+     (mevedel-collaboration-files-handle-get lobby peer frame root))
+    ("file-remove"
+     (mevedel-collaboration-files-handle-remove lobby peer frame root))
+    (_ (mevedel-collaboration--dispatch-shared-frame lobby peer frame root))))
 
 (defun mevedel-collaboration-lobby--on-control (root event peer)
   "Forget PEER in ROOT's lobby when relay control EVENT says it left."
