@@ -462,14 +462,28 @@ Normalize a reserved lease asynchronously before releasing the mutation gate."
         (progn
           (setf (mevedel-session-publication--job-phase job) next)
           (mevedel-session-publication--advance-soon job))
+      (setq err (or err (list 'user-error
+                              (format "Portable session publication %s failed (cause unavailable)"
+                                      (mevedel-session-publication--job-phase job)))))
       (if (memq next '(adopt))
           (progn
             (setf (mevedel-session-publication--job-error job)
-                  (or err '(user-error "Portable session lease was lost before publication commit"))
+                  err
                   (mevedel-session-publication--job-phase job) 'reconcile)
             (mevedel-session-publication--advance-soon job))
         (mevedel-session-publication--job-failed
-         job (or err '(user-error "Portable session publication admission failed")))))))
+         job err)))))
+
+(defun mevedel-session-publication--fixed-write-error (operations results)
+  "Return the blocking fixed-artifact error from OPERATIONS and RESULTS.
+Optional operations do not stop the program; skipped results follow its cause."
+  (cl-loop for operation in operations for result in results
+           unless (or (plist-get operation :optional)
+                      (memq (plist-get result :status) '(ok skipped)))
+           return (list 'file-error
+                        (format "Portable session publication reserve failed: operation=%s status=%s code=%s"
+                                (plist-get result :op) (plist-get result :status)
+                                (plist-get result :code)))))
 
 (defun mevedel-session-publication--advance (job)
   "Advance one phase of JOB with only its transaction cells rebound."
@@ -555,15 +569,18 @@ Normalize a reserved lease asynchronously before releasing the mutation gate."
                  (mevedel-session-durability-reserve-publication-lease-async
                   session
                   (lambda (success error)
-                    (mevedel-session-publication--job-result
-                     job 'generation
-                     (and success
-                          (cl-every
-                           (lambda (index)
-                             (eq 'ok (plist-get (nth index (plist-get riders :after-results))
-                                                :status)))
-                           writes))
-                     error)))))
+                    (let* ((results (plist-get riders :after-results))
+                           (written (and success
+                                         (cl-every (lambda (index)
+                                                     (eq 'ok (plist-get (nth index results)
+                                                                        :status)))
+                                                   writes))))
+                      (mevedel-session-publication--job-result
+                       job 'generation written
+                       (or error
+                           (and success (not written)
+                                (mevedel-session-publication--fixed-write-error
+                                 (car plan) results)))))))))
               ('generation
                (mevedel-session-publication--job-generation job))
               ('head

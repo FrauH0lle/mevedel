@@ -9,6 +9,7 @@
 ;;; Code:
 
 (require 'mevedel-agent-control)
+(require 'mevedel-session-checkpoint)
 (require 'mevedel-session-durability)
 (require 'mevedel-session-publication)
 (require 'mevedel-transport)
@@ -72,6 +73,32 @@ a missing directory chain, and the sidecar commit marker carrying CHECKPOINT."
           (list :path (file-name-concat save-path "notes/deep/extra.txt")
                 :content "extra")
           (mevedel-session-artifacts--sidecar-artifact session buffer checkpoint))))
+
+(mevedel-deftest mevedel-session-publication--fixed-write-error ()
+  ,test
+  (test)
+  :doc "optional conflicts are benign and a skipped write names its blocking proof"
+  (should
+   (equal '(file-error "Portable session publication reserve failed: operation=verify-latest status=mismatch code=72")
+          (mevedel-session-publication--fixed-write-error
+           '((:op make-directory :optional t) (:op verify-latest) (:op write))
+           '((:op make-directory :status conflict :code 73)
+             (:op verify-latest :status mismatch :code 72 :diagnostic "private payload")
+             (:op write :status skipped))))))
+
+(mevedel-deftest mevedel-session-publication--job-result ()
+  ,test
+  (test)
+  :doc "an unexplained refusal names its actual phase without inventing a cause"
+  (dolist (case '((admission freeze rollback) (reserve generation rollback) (head adopt reconcile)))
+    (let* ((session (mevedel-session--create))
+           (job (mevedel-session-publication--job-create :session session :phase (car case))))
+      (setf (mevedel-session-publication-job session) job)
+      (cl-letf (((symbol-function 'mevedel-session-publication--advance-soon) #'ignore))
+        (mevedel-session-publication--job-result job (nth 1 case) nil nil))
+      (should (eq (nth 2 case) (mevedel-session-publication--job-phase job)))
+      (should (equal (format "Portable session publication %s failed (cause unavailable)" (car case))
+                     (error-message-string (mevedel-session-publication--job-error job)))))))
 
 (mevedel-deftest mevedel-agent-control-enqueue-execution-result/async (:quiet t)
   ,test
@@ -354,6 +381,37 @@ a missing directory chain, and the sidecar commit marker carrying CHECKPOINT."
        (test-mevedel-publication-async--wait
         (lambda () (not (mevedel-session-publication-busy-p session))))
        (should-not (mevedel-session-pending-publication session)))))
+
+  :doc "a real fixed write failure reports its cause while rolling back a healthy reservation"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let* ((head (plist-get (mevedel-session-publication session) :head))
+            (directory (mevedel-session-save-path session))
+            (reserve (symbol-function 'mevedel-session-durability-reserve-publication-lease-async))
+            reservation acknowledgements)
+       (make-directory (file-name-concat directory "notes/deep/extra.txt") t)
+       (cl-letf (((symbol-function 'mevedel-session-durability-reserve-publication-lease-async)
+                  (lambda (owner callback)
+                    (funcall reserve owner
+                             (lambda (ok error)
+                               (setq reservation (list ok error))
+                               (funcall callback ok error))))))
+         (mevedel-session-publication-submit
+          session
+          (lambda ()
+            (test-mevedel-publication-async--transcript-artifacts
+             session buffer "segment-9.chat.org" "refused transcript"))
+          (lambda (ok error) (push (list ok error) acknowledgements)))
+         (test-mevedel-publication-async--wait (lambda () acknowledgements)))
+       (should (equal '(t nil) reservation))
+       (should (= 1 (length acknowledgements)))
+       (should-not (caar acknowledgements))
+       (should (equal "Portable session publication reserve failed: operation=write status=failed code=67"
+                      (error-message-string (cadar acknowledgements))))
+       (should (equal head (plist-get (mevedel-session-publication-read directory) :head)))
+       (should (eq 'active (plist-get (mevedel-session-lease session) :status)))
+       (should (mevedel-session-durability-lease-owned-p session))
+       (should-not (mevedel-session-publication-busy-p session)))))
 
   :doc "a nil preparation is a clean no-op success"
   (test-mevedel-publication-async--fixture
