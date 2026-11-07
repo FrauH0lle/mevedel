@@ -28,6 +28,7 @@ code, pre { font-family: var(--font-mono); }
 .activity-group > summary::before { content: '▸'; flex: none; }
 .activity-group[open] > summary::before { content: '▾'; }
 .activity-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-failed { flex: none; color: var(--failed); white-space: nowrap; }
 .activity-counts { max-width: 65%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-group > .turn { padding-inline: 0; }
 

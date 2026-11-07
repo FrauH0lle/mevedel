@@ -86,7 +86,16 @@
     (should (equal "4 calls: read 2 files, searched 1 pattern (1 failed), evaluated 1 form"
                    (plist-get activity :summary)))
     (should-not (plist-member activity :failures))
+    (should (= 1 (plist-get activity :failed)))
     (should-not (text-properties-at 0 (plist-get activity :summary)))
+    (let ((clean (plist-get
+                  (car (mevedel-collaboration--activity-records
+                        (mapcar (lambda (record)
+                                  (plist-put (copy-sequence record) :status "completed"))
+                                records)))
+                  :activity)))
+      (should (equal "completed" (plist-get clean :status)))
+      (should-not (plist-member clean :failed)))
     (should (equal "failed" (plist-get activity :status)))
     (should (cl-every (lambda (record) (equal activity (plist-get record :activity))) grouped))
     (should-not (plist-get (car (mevedel-collaboration--activity-records (cl-subseq records 0 2)))

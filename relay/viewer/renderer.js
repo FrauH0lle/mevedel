@@ -551,6 +551,7 @@
     const current = new Set(turns.map(node => node.activity?.id).filter(Boolean));
     for (const key of groups.keys()) if (!current.has(key)) groups.delete(key);
     const desired = [];
+    const failing = [];
     for (let index = 0; index < turns.length;) {
       const first = turns[index];
       const activity = !first.hidden && first.activity;
@@ -568,14 +569,16 @@
         const summary = el('summary');
         const marker = el('span');
         const label = el('span', 'activity-label');
+        const failed = el('span', 'activity-failed');
         const counts = el('span', 'activity-counts');
-        summary.append(marker, label, counts);
+        summary.append(marker, label, failed, counts);
         details.append(summary);
         content.append(details);
         group.append(el('div', 'rail'), content);
         group.groupDetails = details;
         group.groupLabel = label;
         group.groupCounts = counts;
+        group.groupFailed = failed;
         group.groupMarker = marker;
         groups.set(activity.id, group);
         details.open = members.some(node => [...(node.disclosures?.values() || [])].some(d => d.open)
@@ -585,6 +588,11 @@
       group.groupLabel.textContent = activity.summary;
       group.groupLabel.title = activity.summary;
       group.groupCounts.textContent = activity.running ? `${activity.running} running` : '';
+      // The label keeps each failure beside its tool; the total appears only
+      // when the label's ellipsis cut those counts off.
+      group.groupFailed.textContent = activity.failed ? `(${activity.failed} failed)` : '';
+      group.groupFailed.hidden = true;
+      if (activity.failed) failing.push(group);
       group.groupCounts.title = group.groupCounts.textContent;
       group.groupMarker.className = `st ${activity.status}`;
       group.groupMarker.textContent = {running: '●', failed: '✕', warning: '!'}[activity.status] || '✓';
@@ -601,6 +609,10 @@
       if (transcript.children[index] !== node) transcript.insertBefore(node, transcript.children[index] || null);
     });
     while (transcript.children.length > desired.length) transcript.lastElementChild.remove();
+    // One layout read per render, once the groups are attached.
+    for (const group of failing) {
+      group.groupFailed.hidden = group.groupLabel.scrollWidth <= group.groupLabel.clientWidth;
+    }
   }
 
   function renderRecord(record, scopeChip, onArtifactOpen, previous, onExecutionOpen, onAgentOpen, href) {

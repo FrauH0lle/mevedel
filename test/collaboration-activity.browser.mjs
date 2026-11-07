@@ -144,6 +144,57 @@ test('activity summaries preserve failures, children and disclosure at phone and
   } finally { await browser.close(); }
 });
 
+test('a cut activity label still shows its failure total, without repeating it when it fits', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const width of [375, 1200]) {
+      const touch = width < 600;
+      const page = await browser.newPage({viewport: {width, height: 812}, hasTouch: touch, isMobile: touch});
+      await page.setContent('<meta name="viewport" content="width=device-width"><main id="transcript"></main>');
+      await page.addStyleTag({content: await readFile(resolve(root, 'relay/viewer/viewer-theme.css'), 'utf8')});
+      await page.addStyleTag({content: await readFile(resolve(root, 'relay/viewer/viewer.css'), 'utf8')});
+      await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/markdown.js'), 'utf8')});
+      await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/renderer.js'), 'utf8')});
+      await page.evaluate(() => {
+        const activity = {id: 'tool-1', failed: 1, running: 1, status: 'running',
+          summary: '9 calls: read 4 files, searched 2 patterns, evaluated 1 form, ran 2 commands (1 failed)'};
+        const target = document.getElementById('transcript');
+        for (let n = 1; n <= 3; n++) {
+          target.append(window.mevedelTranscriptRenderer.renderRecord({id: `tool-${n}`, kind: 'tool',
+            toolUseId: `source-${n}`, activity, presentation: {name: 'Read', body: 'ok', collapsed: true}},
+          null, null, null));
+        }
+        window.mevedelTranscriptRenderer.groupActivity(target);
+      });
+      const label = page.locator('.activity-group > summary .activity-label');
+      const total = page.locator('.activity-group > summary .activity-failed');
+      const cut = await label.evaluate(node => node.scrollWidth > node.clientWidth);
+      if (width === 375) {
+        assert.equal(cut, true, 'the phone label cuts the inline failure count');
+        assert.equal(await total.isVisible(), true);
+        assert.equal(await total.innerText(), '(1 failed)');
+        assert.equal(await total.evaluate(node => getComputedStyle(node).color),
+                     await page.evaluate(() => {
+                       const probe = document.createElement('span');
+                       probe.style.color = 'var(--failed)';
+                       document.body.append(probe);
+                       return getComputedStyle(probe).color;
+                     }));
+        const box = await total.boundingBox();
+        assert.ok(box && box.x + box.width <= width, 'the total stays on screen');
+      } else {
+        assert.equal(cut, false);
+        assert.equal(await total.isVisible(), false, 'a fitting label is not repeated');
+        assert.match(await label.innerText(), /ran 2 commands \(1 failed\)/);
+      }
+      await capture(page, `activity-failure-total-${width}`);
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
 test('thinking disclosure keeps native toggles, draft and fit at phone and desktop widths', async () => {
   const browser = await chromium.launch();
   try {
