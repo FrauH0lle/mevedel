@@ -242,7 +242,7 @@ focus is explicit.
 
 ## Decision history
 
-- **Anchoring cost over rendered content needs a matched control (2026-11-07).**
+- **Anchoring cost over rendered content; stream updates anchor twice (2026-11-07).**
   An exploratory graphical benchmark (pgtk under a private nested
   compositor, compiled, three sessions, one CPU, 300 stream updates per run)
   put composer capture at 1.749 ms and restoration at 1.624 ms per update when
@@ -266,6 +266,41 @@ focus is explicit.
   isolated, presenting graphical Emacs. A reproducible, actionable cause
   reopens the question; a null result closes it. The accepted anchoring
   decision is unchanged.
+
+  The matched control was then run the same day: pgtk under a private nested
+  compositor with completed frame callbacks, compiled, four alternating
+  sessions, every fixture with the same composer position, window start,
+  vscroll and 640-pixel traversal span. Per stream update, capture and
+  restoration took 0.78 and 0.98 ms with prose between the window start and
+  the composer, and 1.29 and 1.56 ms with a rendered table there. With the
+  same table above the window start they took 0.76 and 0.90 ms, no more
+  than prose; session spread was at most 0.2 ms. A static probe was costlier
+  with prose carrying 167 face runs than with prose carrying one, so face
+  runs in the traversed span are implicated. Only those levels were
+  compared; no scaling law in run count is established. That cost belongs
+  to the rendered content and is not addressed here.
+  The same run found a content-independent duplication: one stream update
+  runs two capture/restore pairs in one projection-writer drain, first in the
+  live-turn writer's preservation transaction and then in the queued
+  status-zone reconciliation. Merging them into one pair per drain is
+  rejected, because the free-space, last-page and visited-row rules above
+  would then apply once to the combined change instead of to each mutation.
+  For example, transcript growth that uses free space followed by a status
+  shrink would leave the composer elsewhere than today. The proposed
+  alternative is a bounded prototype limited to that live-then-status pair:
+  where the live restoration applied the exact anchored viewport, the
+  immediately following status capture may take that position instead of
+  measuring it again. The handoff is single-use. It holds the window and
+  buffer identity, window start, vscroll, body geometry, modification tick
+  and composer start. Any later viewport change, intervening writer or
+  mismatch discards it, and a fresh capture follows. It lands only if three
+  conditions hold. Native graphical regressions must show identical final
+  starts, vscroll, composer position and point across the cases above,
+  including partial lines, rendered tables and mixed windows. An audit must
+  show that nothing between the restoration and the capture can change
+  overlays, face remapping or display parameters, run arbitrary Lisp or
+  re-enter. A matched graphical re-run must show the saving. Otherwise it is
+  dropped. Full renders and other writer pairs keep fresh captures.
 
 - **Status visits skip window-growth repair too (2026-11-01).** A live trace
   after Magit returned to the view and a consult minibuffer closed showed
