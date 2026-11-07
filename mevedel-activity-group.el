@@ -83,7 +83,7 @@ outcome, then messages."
                (dolist (completion completions)
                  (setf (alist-get (cdr completion) statuses 0 nil #'equal)
                        (1+ (alist-get (cdr completion) statuses 0 nil #'equal))))
-               (dolist (status '("completed" "failed" "stopped" "timed out" "ended")
+               (dolist (status '("completed" "failed" "stopped" "timed out" "ended" "lost")
                                (nreverse parts))
                  (when-let* ((count (alist-get status statuses nil nil #'equal)))
                    (push (if parts

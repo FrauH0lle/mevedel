@@ -308,12 +308,12 @@ into the word every surface shows (the Emacs notice and breadcrumb, the
 browser record and its group summary); the first matching rule wins:
 a stop termination (stopped, interrupted, cancelled, owner-stopped) says
 `stopped`; a timeout termination (timeout, timed-out, expired) says `timed
-out`; termination `lost`, or a failure outcome (failure, errored, lost), says
-`failed`; a Bash outcome that is not a failure (success, no-match, different,
+out`; termination or outcome `lost` says `lost`; a failure outcome (failure,
+errored) says `failed`; a Bash outcome that is not a failure (success, no-match, different,
 false) says `completed`. Anything else, such as a monitor that exited without an
 outcome or an unrecognized outcome value, says `ended`, which claims neither
-success nor failure. A lost completion reads `failed` although its end was never
-observed, to avoid a fifth word. Inside an activity group the
+success nor failure. `lost` and `ended` use the muted notice color, not the
+error color, because neither end was observed as a failure. Inside an activity group the
 line folds into the group and is counted there, as in
 `ran 2 commands, 1 command completed, 1 failed`. Foreground commands have no
 breadcrumb. The breadcrumb repeats neither output nor a metadata summary;

@@ -850,14 +850,14 @@ Emacs notice, the projected record and its group-summary entry then read it."
                    "completed")
                   ((:kind bash :termination exited :exit-code 2 :outcome failure)
                    "failed")
-                  ((:kind bash :termination lost) "failed")))
+                  ((:kind bash :termination lost) "lost")))
     (let ((facts (append (car case)
                          '(:execution-id "exec-1" :description "Watch build"
                            :state completed :event-count 2
                            :command "make test"))))
       (should (equal (make-list 3 (cadr case))
                      (mevedel-test--completion-verbs facts)))))
-  :doc "a lost record's record keeps the failed styling"
+  :doc "a lost record is styled as non-error, like an ended one"
   (let ((record (with-temp-buffer
                   (mevedel--transcript-org-mode)
                   (insert "<agent-message type=\"EXECUTION\" sender=\"/root\" "
@@ -865,7 +865,8 @@ Emacs notice, the projected record and its group-summary entry then read it."
                           "</agent-message>\n")
                   (car (mevedel-collaboration--canonical-records
                         (current-buffer) nil nil nil "/root")))))
-    (should (equal "failed" (plist-get record :status)))))
+    (should (equal "warning" (plist-get record :status)))
+    (should (equal "lost" (plist-get record :verb)))))
 
 (provide 'test-mevedel-collaboration-projection)
 ;;; test-mevedel-collaboration-projection.el ends here

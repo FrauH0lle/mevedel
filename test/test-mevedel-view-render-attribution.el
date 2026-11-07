@@ -145,7 +145,8 @@
   (dolist (case '(("exited" "success" "0" "completed" mevedel-view-tool-metadata)
                   ("exited" "failure" "2" "failed" error)
                   ("stopped" "failure" "15" "stopped" mevedel-view-tool-metadata)
-                  ("timed-out" "failure" nil "timed out" mevedel-view-tool-metadata)))
+                  ("timed-out" "failure" nil "timed out" mevedel-view-tool-metadata)
+                  ("lost" nil nil "lost" mevedel-view-tool-metadata)))
     (pcase-let ((`(,termination ,outcome ,exit ,verb ,face) case))
       (let* ((block (mevedel-tools--message-delivery-block
                      (list :type 'EXECUTION :sender "/root" :recipient "/root"
