@@ -173,11 +173,17 @@ protocol, extraction directory, or generic resolver cache is needed.
   its NUL-byte coverage stay. The proposed next step is caller-side
   coalescing of adjacent independent reads into existing programs, decoded
   through per-operation observations. It starts with claim pruning, which
-  reads each generation's claim and outcome as two programs before its
-  verify-and-delete program. Pinned-parent proofs, absent and malformed
-  record handling, and fresh guards at each write stay; a shared program is
-  not an atomic snapshot, and nothing is cached across operations. Savings
-  count only once matched before/after runs on the same base establish them.
+  read each generation's claim and outcome as two programs before its
+  verify-and-delete program and now reads both in one. Pinned-parent proofs,
+  absent and malformed record handling, and fresh guards at each write stay;
+  a shared program is not an atomic snapshot, and nothing is cached across
+  operations. Claim pruning went from three programs per pruned generation
+  to two (a test counts them on the real carrier). Matched runs, pruning 40
+  settled generations byte-compiled and pinned to one CPU, alternating old
+  and new code, six each at a load average near 4: 123 programs and a mean
+  0.79 s (0.77 to 0.81 s) before, 83 programs and a mean 0.64 s (0.62 to
+  0.66 s) after, about 3.9 ms saved per generation. This covers claim
+  pruning only; other single-read sites need their own evidence.
   A persistent helper process was raised. It would change what runs under
   confinement and how long it lives, so it remains unresolved pending the
   user's decision and is not part of this decision.

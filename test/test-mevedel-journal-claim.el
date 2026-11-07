@@ -395,5 +395,66 @@
             (plist-put (copy-tree claim) :owner (make-string 64 ?0)))))
       (delete-directory directory t))))
 
+
+(defun mevedel-test-claim-prune-fixture (directory)
+  "Settle generations 1 and 2 in DIRECTORY, leave 3 current; return 1 and 2."
+  (let* ((first (mevedel-journal-claim-acquire directory 120))
+         (_ (mevedel-journal-claim-settle first 'completed "one"))
+         (second (mevedel-journal-claim-acquire directory 120))
+         (_ (mevedel-journal-claim-settle second 'completed "two")))
+    (mevedel-journal-claim-acquire directory 120)
+    (list first second)))
+
+(defun mevedel-test-claim-files (directory)
+  "Return DIRECTORY's claim and outcome file names."
+  (directory-files directory nil "\\.\\(?:claim\\|outcome\\)\\'"))
+
+(mevedel-deftest mevedel-journal-claim-prune/programs ()
+  ,test
+  (test)
+  :doc "each pruned generation costs two control programs"
+  (let ((directory (make-temp-file "mevedel-claim-programs-" t)))
+    (unwind-protect
+        (let* ((expired (mevedel-test-claim-prune-fixture directory))
+               (run (symbol-function 'mevedel-session-control-fs-run-program))
+               (calls 0) (marks nil))
+          (mevedel-test-journal-with-expired-claims expired
+            (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                       (lambda (&rest args) (cl-incf calls) (apply run args))))
+              ;; Each generation's work lies between its yield and the next.
+              (should (= 2 (iter-do (_ (mevedel-journal-claim-prune directory nil 200))
+                             (push calls marks))))
+              (push calls marks)))
+          (setq marks (nreverse marks))
+          (should (= 3 (length marks)))
+          (should (equal '(2 2) (cl-mapcar #'- (cdr marks) marks))))
+      (delete-directory directory t)))
+
+  :doc "absent and malformed records keep their results and delete nothing unintended"
+  (dolist (case '((:absent-outcome nil 1 ("1.claim" "3.claim"))
+                  (:absent-claim nil 2 ("3.claim"))
+                  (:malformed-outcome error 0 ("1.claim" "1.outcome" "2.claim" "2.outcome" "3.claim"))
+                  (:malformed-claim error 0 ("1.claim" "1.outcome" "2.claim" "2.outcome" "3.claim"))))
+    (let ((directory (make-temp-file "mevedel-claim-edges-" t)))
+      (unwind-protect
+          (let* ((expired (mevedel-test-claim-prune-fixture directory))
+                 (claim (mevedel-journal-claim--path (car expired) nil))
+                 (outcome (mevedel-journal-claim--path (car expired) t)))
+            (pcase (car case)
+              (:absent-outcome (delete-file outcome))
+              (:absent-claim (delete-file claim))
+              (:malformed-outcome (write-region "{}" nil outcome nil 'silent))
+              (:malformed-claim (write-region "garbage" nil claim nil 'silent)))
+            (mevedel-test-journal-with-expired-claims expired
+              (let ((run (lambda ()
+                           (iter-do (_ (mevedel-journal-claim-prune directory nil 200))))))
+                (if (eq (nth 1 case) 'error)
+                    (should-error (funcall run))
+                  (should (= (nth 2 case) (funcall run))))))
+            (should (equal (mapcar (lambda (name) (replace-regexp-in-string "\\`0+" "" name))
+                                   (mevedel-test-claim-files directory))
+                           (nth 3 case))))
+        (delete-directory directory t)))))
+
 (provide 'test-mevedel-journal-claim)
 ;;; test-mevedel-journal-claim.el ends here
