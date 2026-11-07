@@ -121,7 +121,29 @@
                    ("npx a *" "npx a $'x;y'" t)
                    ("npx a *" "npx a test \\; rm b" t)
                    ("npx a *" "npx a test 2>&1" t)
-                   ("npx a *" "npx a test &>log" t)
+                   ("npx a *" "npx a test >&2" t)
+                   ("npx a *" "npx a test 2>&-" t)
+                   ("npx a *" "npx a test >&2-" t)
+                   ("npx a *" "npx a test 2>&1 >&2" t)
+                   ("npx a *" "npx a test >&1foo" nil)
+                   ("npx a *" "npx a test >&2\"q\"" nil)
+                   ("npx a *" "npx a test >&0z" nil)
+                   ("git status:*" "git status >&1foo" nil)
+                   ("npx a *" "npx a test 2>&1 | cat" nil)
+                   ("npx a *" "npx a test &>log" nil)
+                   ("npx a *" "npx a test > out" nil)
+                   ("npx a *" "npx a test >> out" nil)
+                   ("npx a *" "npx a test 2> out" nil)
+                   ("npx a *" "npx a test < in" nil)
+                   ("npx a *" "npx a test >&out" nil)
+                   ("npx a *" "npx a test '>' x \">\" y \\> z" t)
+                   ("git status:*" "git status" t)
+                   ("git status:*" "git status 2>&1" t)
+                   ("git status:*" "git status > /home/u/.bashrc" nil)
+                   ("git status:*" "git status > src/main.el" nil)
+                   ("git status:*" "git status >> ~/.profile" nil)
+                   ("git status > *" "git status > out" t)
+                   ("git status > out" "git status > out" t)
                    ("npx a *" "npx a test && rm b" nil)
                    ("npx a *" "npx a test; rm b" nil)
                    ("npx a *" "npx a test | sh" nil)
@@ -189,6 +211,20 @@
     (should-not (mevedel-permission-rules-find
                  '(("*" :expression "(message \"*\")" :action allow))
                  "Bash" :pattern "(message \"*\")")))
+  :doc "path allow rules are case-sensitive; deny and ask rules still fold"
+  (let ((allow '(("Write" :path "/home/u/proj/**" :action allow)))
+        (deny '(("Write" :path "/home/u/proj/**" :action deny)))
+        (ask '(("Write" :path "/home/u/proj/**" :action ask))))
+    (should (null (mevedel-permission-rules-find
+                   allow "Write" :path "/home/u/PROJ/x")))
+    (should (null (mevedel-permission-rules-action
+                   allow "Write" :path "/home/u/PROJ/x")))
+    (should (eq 'allow (mevedel-permission-rules-action
+                        allow "Write" :path "/home/u/proj/x")))
+    (should (= 1 (length (mevedel-permission-rules-find
+                          deny "Write" :path "/home/u/PROJ/x"))))
+    (should (= 1 (length (mevedel-permission-rules-find
+                          ask "Write" :path "/home/u/PROJ/x")))))
   :doc "exact tool name match"
   (let ((rules '(("Read" :action allow))))
     (should (equal (length (mevedel-permission-rules-find rules "Read")) 1))

@@ -36,7 +36,7 @@
 
 ;; `mevedel-bash-policy'
 (declare-function mevedel-bash-policy-allow-patterns
-                  "mevedel-bash-policy" (command))
+                  "mevedel-bash-policy" (command &optional permission-context))
 (declare-function mevedel-bash-policy-buckets
                   "mevedel-bash-policy" (&optional permission-context))
 (declare-function mevedel-bash-policy-check-permission
@@ -848,7 +848,7 @@ OPERATION-PATTERN is the exact Bash command or Eval expression."
                (and reusable
                     (if (equal tool-name "Bash")
                         (mevedel-bash-policy-allow-patterns
-                         operation-pattern)
+                         operation-pattern permission-context)
                       (list operation-pattern)))))
         (setq copy
               (plist-put copy :remember-cell
@@ -1321,7 +1321,7 @@ optional automatic review before any human card is displayed."
          (analysis (mevedel-bash-analysis-analyze command))
          (class (plist-get analysis :class))
          (commands (mevedel-bash-policy-command-names analysis))
-         (patterns (mevedel-bash-policy-allow-patterns command))
+         (patterns (mevedel-bash-policy-allow-patterns command context))
          (reusable (mevedel-bash-policy-reusable-operation-p command)))
     (mevedel-tool-exec-permission--request-permission
      (list :kind 'bash :permission-via via :command command

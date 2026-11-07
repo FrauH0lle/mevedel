@@ -429,18 +429,6 @@ REQUEST may supply exact additive filesystem grants for this invocation."
 ;;
 ;;; Command Execution
 
-(defconst mevedel-bash-policy--bash-safe-env-vars
-  '("GOEXPERIMENT" "GOOS" "GOARCH" "CGO_ENABLED" "GO111MODULE"
-    "RUST_BACKTRACE" "RUST_LOG"
-    "NODE_ENV"
-    "PYTHONUNBUFFERED" "PYTHONDONTWRITEBYTECODE"
-    "PYTEST_DISABLE_PLUGIN_AUTOLOAD" "PYTEST_DEBUG"
-    "LANG" "LANGUAGE" "LC_ALL" "LC_CTYPE" "LC_TIME" "CHARSET"
-    "TERM" "COLORTERM" "NO_COLOR" "FORCE_COLOR" "TZ"
-    "LS_COLORS" "LSCOLORS" "GREP_COLOR" "GREP_COLORS" "GCC_COLORS"
-    "TIME_STYLE" "BLOCK_SIZE" "BLOCKSIZE")
-  "Environment variables safe to skip before suggesting Bash prefix rules.")
-
 (defconst mevedel-bash-policy--bash-never-prefix-commands
   '("sh" "bash" "zsh" "fish" "csh" "tcsh" "ksh" "dash"
     "env" "xargs"
@@ -492,26 +480,30 @@ REQUEST may supply exact additive filesystem grants for this invocation."
   (and (stringp word)
        (string-match-p "\\`[A-Za-z_][A-Za-z0-9_]*=" word)))
 
-(defun mevedel-bash-policy--bash-safe-env-assignment-p (word)
-  "Return non-nil when WORD is a safe env assignment for prefix matching."
+(defun mevedel-bash-policy--bash-safe-env-assignment-p (word names)
+  "Return non-nil when WORD assigns one of the safe variable NAMES."
   (and (mevedel-bash-policy--bash-env-assignment-p word)
-       (member (car (split-string word "=" t))
-               mevedel-bash-policy--bash-safe-env-vars)))
+       (member (car (split-string word "=" t)) names)))
 
-(defun mevedel-bash-policy--bash-strip-safe-env-assignments (words)
+(defun mevedel-bash-policy--bash-strip-safe-env-assignments
+    (words permission-context)
   "Strip safe leading env assignments from WORDS.
+Safe names come from `mevedel-bash-policy-safe-env-vars' under
+PERMISSION-CONTEXT.
 
 Return nil if a leading env assignment is not known safe.  This
 avoids saving prefix rules that will not match later permission
 checks, and avoids hiding environment-controlled behavior behind a
 general rule."
-  (catch 'unsafe
-    (while (and words
-                (mevedel-bash-policy--bash-env-assignment-p (car words)))
-      (unless (mevedel-bash-policy--bash-safe-env-assignment-p (car words))
-        (throw 'unsafe nil))
-      (setq words (cdr words)))
-    words))
+  (let ((names (mevedel-bash-policy-safe-env-vars permission-context)))
+    (catch 'unsafe
+      (while (and words
+                  (mevedel-bash-policy--bash-env-assignment-p (car words)))
+        (unless (mevedel-bash-policy--bash-safe-env-assignment-p
+                 (car words) names)
+          (throw 'unsafe nil))
+        (setq words (cdr words)))
+      words)))
 
 (defun mevedel-bash-policy--bash-subcommand-token-p (word)
   "Return non-nil for stable shell subcommand WORD."
@@ -528,7 +520,8 @@ Executable paths retain the restrictions of their command name."
     (or (member command commands)
         (member (file-name-nondirectory command) commands))))
 
-(defun mevedel-bash-policy--bash-prefix-for-segment (segment)
+(defun mevedel-bash-policy--bash-prefix-for-segment
+    (segment &optional permission-context)
   "Return a stable command prefix for Bash SEGMENT, or nil.
 
 The heuristic follows Claude Code's low-maintenance shape: derive
@@ -538,7 +531,7 @@ Dangerous commands and shell/wrapper commands are not generalized."
   (let* ((parsed (mevedel-bash-policy--bash-segment-words segment))
          (words (and parsed
                      (mevedel-bash-policy--bash-strip-safe-env-assignments
-                      parsed)))
+                      parsed permission-context)))
          (command (car words))
          (subcommand (cadr words)))
     (when (and command
@@ -559,7 +552,8 @@ Dangerous commands and shell/wrapper commands are not generalized."
                        (memq (aref segment (length source-prefix)) '(?\s ?\t ?\n))))
           (string-join (list command subcommand) " "))))))
 
-(defun mevedel-bash-policy--bash-allow-pattern-for-segment (segment)
+(defun mevedel-bash-policy--bash-allow-pattern-for-segment
+    (segment &optional permission-context)
   "Return the reusable allow pattern suggested for Bash SEGMENT.
 
 Simple `command subcommand ...' invocations are generalized to
@@ -567,20 +561,25 @@ Claude Code-style prefix rules such as `git log:*'.  Segments that
 do not have a stable subcommand, or that start with a dangerous
 command/wrapper, stay exact."
   (let* ((trimmed (string-trim segment))
-         (prefix (mevedel-bash-policy--bash-prefix-for-segment trimmed)))
+         (prefix (mevedel-bash-policy--bash-prefix-for-segment
+                  trimmed permission-context)))
     (if prefix
         (concat prefix ":*")
       trimmed)))
 
-(defun mevedel-bash-policy-allow-patterns (command)
+(defun mevedel-bash-policy-allow-patterns (command &optional permission-context)
   "Return reusable allow patterns to store when approving COMMAND.
+Leading safe environment assignments, including the `:safe-env-vars' of
+PERMISSION-CONTEXT, are skipped as rule matching skips them.
 
 Compound commands produce one pattern per command segment.  This
 avoids saving a brittle whole-chain string such as
 `pwd && git log --oneline' when the useful reusable rule is
 `git log:*'."
   (mevedel-bash-policy--dedupe-strings
-   (mapcar #'mevedel-bash-policy--bash-allow-pattern-for-segment
+   (mapcar (lambda (segment)
+             (mevedel-bash-policy--bash-allow-pattern-for-segment
+              segment permission-context))
            (plist-get (mevedel-bash-analysis-analyze command) :segments))))
 
 (defun mevedel-bash-policy-reusable-operation-p (command)

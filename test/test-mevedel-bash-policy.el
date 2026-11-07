@@ -306,6 +306,18 @@
   (should (equal '("DOCKER_HOST=tcp://example docker ps")
                  (mevedel-bash-policy-allow-patterns
                   "DOCKER_HOST=tcp://example docker ps")))
+  :doc "context safe env vars:
+`mevedel-bash-policy-allow-patterns' honours the context's :safe-env-vars"
+  (progn
+    (should (equal '("make test:*")
+                   (mevedel-bash-policy-allow-patterns
+                    "CI=1 make test" '(:safe-env-vars ("CI")))))
+    (should (equal '("CI=1 make test")
+                   (mevedel-bash-policy-allow-patterns
+                    "CI=1 make test" '(:safe-env-vars nil))))
+    (should (equal '("make test:*")
+                   (mevedel-bash-policy-allow-patterns
+                    "LANG=C make test" '(:safe-env-vars nil)))))
   :doc "dangerous commands:
 `mevedel-bash-policy-allow-patterns' does not generalize dangerous commands"
   (let ((mevedel-bash-dangerous-commands '("curl")))
@@ -353,6 +365,27 @@
           (should (eq 'allow (mevedel-bash-policy-check-permission
                              command :permission-context context)))
           (should (equal patterns (list command))))))))
+
+(mevedel-deftest mevedel-bash-policy-remembered-prefix-redirects ()
+  ,test
+  (test)
+  :doc "a remembered prefix rule never authorizes an output redirection"
+  (let* ((mevedel-permission-rules nil)
+         (context
+          (list :mode 'ask
+                :execution-directory default-directory
+                :allowed-roots (list default-directory)
+                :buckets
+                '((:session ("Bash" :pattern "git status:*" :action allow))))))
+    (dolist (command '("git status > /home/u/.bashrc" "git status > src/main.el"
+                       "git status >> ~/.profile"))
+      (ert-info (command)
+        (should (eq 'ask (mevedel-bash-policy-check-permission
+                          command :permission-context context)))))
+    (should (eq 'allow (mevedel-bash-policy-check-permission
+                        "git status" :permission-context context)))
+    (should (eq 'allow (mevedel-bash-policy-check-permission
+                        "git status 2>&1" :permission-context context)))))
 
 (mevedel-deftest mevedel-bash-policy-reusable-operation-p ()
   ,test

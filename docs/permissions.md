@@ -237,14 +237,20 @@ capability; `cd DIR && npx ...` receives the `npx` rule's profile, while
 
 A Bash allow pattern's `*`, `?`, and trailing `:*` stand for ordinary
 arguments only. They never cover an unquoted `;`, `|`, `&` (other than
-redirections such as `2>&1`), newline, parenthesis, or a backtick or `$(`, even
-inside double quotes. `npx @emacs-eask/cli *` therefore matches
+descriptor copies), `>` or `<` that opens a file, newline,
+parenthesis, or a backtick or `$(`, even inside double quotes. `git status:*`
+therefore does not match `git status > notes`. A descriptor copy is `>&` or
+`<&` followed only by digits (optionally followed by `-`) or a lone `-`, such
+as `2>&1`, `>&2` or `2>&-`; `>&1foo` writes a file and is not one.
+`npx @emacs-eask/cli *` matches
 `npx @emacs-eask/cli eval '(load "x")'` but not
 `npx @emacs-eask/cli test $(rm -rf build)`. Syntax written literally in a
 pattern still matches itself, so `make -j$(nproc) *` authorizes that form.
 This applies wherever an allow rule grants something: the Ask decision,
 execution profiles, and full-escalation rules. Deny and ask patterns keep
-matching any text, because over-matching there only restricts.
+matching any text, because over-matching there only restricts. A `:path`
+allow rule compares case-sensitively; deny, ask and protected-path rules
+keep folding case.
 
 Before Bash rules match, leading `NAME=value` assignments are removed from
 each command segment when `NAME` is a safe environment variable and the value
