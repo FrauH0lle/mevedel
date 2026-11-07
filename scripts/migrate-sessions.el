@@ -20,6 +20,9 @@
 (require 'mevedel-artifact-store)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-shared-editing)
+(require 'mevedel-persistence)
+(require 'mevedel-directive)
+(require 'mevedel-directive-persistence)
 
 (defvar mevedel-migrate-session--changed nil
   "Non-nil when a staged conversion changes a sidecar or retained manifest.")
@@ -771,12 +774,345 @@ The caller owns serialization and reports ordinary failures per session."
           (when (file-directory-p container)
             (delete-directory container t)))))))
 
-(defun mevedel-migrate-sessions (directory)
+
+;;;; Workspace instruction store
+
+;; Sessions used to persist the workspace's instructions as their own
+;; `instructions/current.el', so sessions of one workspace disagree.  This
+;; step merges every session's snapshot by instruction UUID into the
+;; workspace store.  It never guesses: an instruction whose authored fields
+;; differ between sessions, activity that conflicts or lacks durable turn
+;; evidence, and an inconsistent tree stage the workspace instead.  Staging
+;; writes one complete candidate per session in the export format, preferring
+;; that session on conflicts, and a report; the sessions stay untouched.  The
+;; user installs a candidate with `mevedel-load-instructions'.
+
+(defun mevedel-migrate-instructions--snapshot-files (directory lease)
+  "Return (LOGICAL . FILE) for closed session DIRECTORY's instruction snapshots.
+LEASE is its `mevedel-migrate-session--closed' snapshot.  A portable session's
+snapshots are read from its published head, never from fixed caches."
+  (if (file-directory-p (file-name-concat directory ".lease"))
+      (when-let* ((head (mevedel-migrate-session--head lease directory)))
+        (cl-loop for (logical . properties)
+                 in (plist-get (mevedel-session-publication-read directory head)
+                               :artifacts)
+                 when (string-match-p "\\`instructions/\\(current\\|turn-[0-9]+\\)\\.el\\'"
+                                      logical)
+                 collect (cons logical (plist-get properties :published))))
+    (let ((folder (file-name-concat directory "instructions")))
+      (when (file-directory-p folder)
+        (mapcar (lambda (file)
+                  (cons (concat "instructions/" (file-name-nondirectory file)) file))
+                (directory-files folder t "\\`\\(current\\|turn-[0-9]+\\)\\.el\\'"))))))
+
+(defun mevedel-migrate-instructions--source (directory)
+  "Return the instruction source of closed session DIRECTORY, or nil.
+The plist holds :name, :session-id, :current (the current snapshot) and
+:turns, a hash table from turn numbers to turn snapshots."
+  (let* ((lease (mevedel-migrate-session--closed directory))
+         (data (mevedel-migrate-session--authoritative-data directory lease))
+         (turns (make-hash-table))
+         current)
+    (when data
+      (dolist (entry (mevedel-migrate-instructions--snapshot-files directory lease))
+        (let ((snapshot (mevedel-migrate-session--read (cdr entry))))
+          (if (equal (car entry) "instructions/current.el")
+              (setq current snapshot)
+            (puthash (string-to-number
+                      (substring (file-name-base (car entry)) (length "turn-")))
+                     snapshot turns))))
+      (list :name (file-name-nondirectory directory)
+            :session-id (plist-get data :session-id)
+            :current current
+            :turns turns))))
+
+(defun mevedel-migrate-instructions--authored (unit)
+  "Return what UNIT's author decided, for comparing it across sessions.
+Activity, display ids and links are compared separately or renumbered."
+  (let* ((record (plist-get unit :record))
+         (instr (plist-get unit :instr))
+         (properties (plist-get instr :properties)))
+    (mevedel-instruction-store--authored
+     (list :record (mevedel-instruction-store--without
+                    record mevedel-instruction-store--activity-keys)
+           :file (plist-get unit :file)
+           :instr (and instr
+                       (plist-put (copy-sequence instr) :properties
+                                  (cl-loop for (key value) on properties by #'cddr
+                                           unless (memq key '(mevedel-id mevedel-links))
+                                           append (list key value))))))))
+
+(defun mevedel-migrate-instructions--evidence-p (sources uuid key entry)
+  "Return non-nil when ENTRY's turn survives in its session's durable history.
+ENTRY is activity under KEY of directive UUID.  Its checkpoint names a session
+among SOURCES and a turn; that session's own turn snapshot must hold the same
+entry.  Rewind
+deletes discarded turn snapshots and a re-run turn writes a new one, so a
+reused turn number is not evidence."
+  (let* ((checkpoint (plist-get entry :checkpoint))
+         (source (cl-find (plist-get checkpoint :session-id) sources
+                          :key (lambda (source) (plist-get source :session-id))
+                          :test #'equal))
+         (snapshot (and source (gethash (plist-get checkpoint :turn)
+                                        (plist-get source :turns))))
+         (record (cl-find uuid (plist-get snapshot :directives)
+                          :key (lambda (record) (plist-get record :id))
+                          :test #'equal)))
+    (and record (member entry (plist-get record key)) t)))
+
+(defun mevedel-migrate-instructions--merge (sources &optional prefer)
+  "Merge SOURCES' current snapshots by instruction UUID.
+PREFER names the source whose variant a conflict keeps; otherwise the first
+source in name order.  Return (:data RECORD :unresolved LIST :ambiguous LIST
+:renumbered LIST), where RECORD is a store record and each LIST entry starts
+with the instruction UUID."
+  (let* ((sources (cl-remove-if-not (lambda (source) (plist-get source :current))
+                                    sources))
+         (tables (mapcar (lambda (source)
+                           (cons source (mevedel-instruction-store--units
+                                         (plist-get source :current))))
+                         sources))
+         (order (delete-dups (cl-loop for (_ . (_ . ids)) in tables append ids)))
+         units origins unresolved ambiguous renumbered)
+    (dolist (id order)
+      (let* ((variants (cl-loop for (source . (table . _)) in tables
+                                for unit = (gethash id table)
+                                when unit collect (cons source unit)))
+             (chosen (or (cl-find prefer variants
+                                  :key (lambda (variant) (plist-get (car variant) :name))
+                                  :test #'equal)
+                         (car variants)))
+             (authored (delete-dups
+                        (mapcar (lambda (variant)
+                                  (mevedel-migrate-instructions--authored (cdr variant)))
+                                variants)))
+             (unit (copy-sequence (cdr chosen))))
+        (when (< (length variants) (length sources))
+          (push (list id :absent-from
+                      (cl-loop for source in sources
+                               unless (assq source variants)
+                               collect (plist-get source :name)))
+                ambiguous))
+        (when (cdr authored)
+          (push (list id :authored-conflict
+                      (mapcar (lambda (variant) (plist-get (car variant) :name)) variants))
+                unresolved))
+        (when-let* ((record (plist-get unit :record)))
+          (setq record (copy-sequence record))
+          (let (sequences)
+            (dolist (key mevedel-instruction-store--activity-keys)
+              (let (entries)
+                (dolist (variant (cons chosen (remq chosen variants)))
+                  (dolist (entry (plist-get (plist-get (cdr variant) :record) key))
+                    (let ((existing (cl-find (plist-get entry :sequence) entries
+                                             :key (lambda (item) (plist-get item :sequence)))))
+                      (cond ((null existing) (push entry entries))
+                            ((not (equal existing entry))
+                             (push (list id :activity-conflict key (plist-get entry :sequence))
+                                   unresolved))))))
+                (setq entries (sort entries (lambda (a b) (< (plist-get a :sequence)
+                                                             (plist-get b :sequence)))))
+                (dolist (entry entries)
+                  (if (memql (plist-get entry :sequence) sequences)
+                      (push (list id :sequence-collision (plist-get entry :sequence))
+                            unresolved)
+                    (push (plist-get entry :sequence) sequences))
+                  (unless (mevedel-migrate-instructions--evidence-p sources id key entry)
+                    (push (list id :missing-evidence key (plist-get entry :sequence)
+                                (plist-get entry :checkpoint))
+                          unresolved)))
+                (setq record (plist-put record key entries)))))
+          (setq unit (plist-put unit :record record)))
+        (push (cons id (car chosen)) origins)
+        (push (cons id unit) units)))
+    (setq units (nreverse units))
+    ;; Trees: every parent present, no cycles, one owner per subdirective.
+    (let ((parents (make-hash-table :test #'equal))
+          (owners (make-hash-table :test #'equal)))
+      (dolist (unit units)
+        (when-let* ((parent (plist-get (plist-get (plist-get (cdr unit) :instr) :anchor)
+                                       :parent-uuid)))
+          (puthash (car unit) parent parents)
+          (unless (assoc parent units)
+            (push (list (car unit) :missing-parent parent) unresolved)))
+        (dolist (subdirective (plist-get (plist-get (cdr unit) :record) :subdirectives))
+          (let ((sid (plist-get subdirective :id)))
+            (when (or (gethash sid owners)
+                      (plist-get (cdr (assoc sid units)) :record))
+              (push (list sid :duplicate-subdirective (car unit)) unresolved))
+            (puthash sid (car unit) owners))))
+      (dolist (unit units)
+        (let ((seen (list (car unit)))
+              (cursor (gethash (car unit) parents)))
+          (while cursor
+            (if (member cursor seen)
+                (progn (push (list (car unit) :cycle) unresolved)
+                       (setq cursor nil))
+              (push cursor seen)
+              (setq cursor (gethash cursor parents)))))))
+    ;; Display ids: keep the first owner of each, renumber later ones above
+    ;; every used and retired id, and remap the renumbered source's links.
+    (let* ((retired (delete-dups
+                     (cl-loop for source in sources
+                              append (copy-sequence
+                                      (plist-get (plist-get (plist-get source :current) :ids)
+                                                 :retired-ids)))))
+           (counter (apply #'max 0
+                           (append retired
+                                   (cl-loop for source in sources
+                                            for ids = (plist-get (plist-get source :current) :ids)
+                                            collect (or (plist-get ids :id-counter) 0)
+                                            append (copy-sequence (plist-get ids :used-ids))))))
+           (taken (make-hash-table))
+           (remap (make-hash-table :test #'equal)))
+      (dolist (unit units)
+        (when-let* ((instr (plist-get (cdr unit) :instr))
+                    (old (plist-get (plist-get instr :properties) 'mevedel-id)))
+          (if (and (gethash old taken) (not (equal (gethash old taken) (car unit))))
+              (let ((new (cl-incf counter))
+                    (source (cdr (assoc (car unit) origins))))
+                (puthash (cons source old) new remap)
+                (push (list (car unit) :renumbered old new (plist-get source :name)) renumbered)
+                (puthash new (car unit) taken)
+                (setcdr unit (plist-put (copy-sequence (cdr unit)) :instr
+                                        (plist-put (copy-sequence instr) :properties
+                                                   (plist-put (copy-sequence
+                                                               (plist-get instr :properties))
+                                                              'mevedel-id new)))))
+            (puthash old (car unit) taken))))
+      (when (> (hash-table-count remap) 0)
+        (dolist (unit units)
+          (when-let* ((instr (plist-get (cdr unit) :instr))
+                      (links (plist-get (plist-get instr :properties) 'mevedel-links)))
+            (let* ((source (cdr (assoc (car unit) origins)))
+                   (map (lambda (id) (gethash (cons source id) remap id)))
+                   (new (list :from (mapcar map (plist-get links :from))
+                              :to (mapcar map (plist-get links :to)))))
+              (setcdr unit (plist-put (copy-sequence (cdr unit)) :instr
+                                      (plist-put (copy-sequence instr) :properties
+                                                 (plist-put (copy-sequence
+                                                             (plist-get instr :properties))
+                                                            'mevedel-links new))))))))
+      (let ((used (sort (hash-table-keys taken) #'<))
+            files)
+        (dolist (unit units)
+          (when-let* ((instr (plist-get (cdr unit) :instr)))
+            (let ((cell (assoc (plist-get (cdr unit) :file) files)))
+              (if cell (push (cons (car unit) instr) (cdr cell))
+                (push (list (plist-get (cdr unit) :file) (cons (car unit) instr)) files)))))
+        (list
+         :data
+         (list :format mevedel-instruction-store-format-version
+               :ids (list :id-counter counter :used-ids used
+                          :retired-ids (sort (cl-set-difference retired used) #'<))
+               :directives (delq nil (mapcar (lambda (unit) (plist-get (cdr unit) :record))
+                                             units))
+               :files
+               (mapcar
+                (lambda (cell)
+                  (let* ((pairs (reverse (cdr cell)))
+                         (instrs (mapcar #'cdr pairs))
+                         (source (cdr (assoc (caar pairs) origins))))
+                    (cons (car cell)
+                          (append (or (mevedel-instruction-store--file-metadata
+                                       (car cell) instrs (plist-get source :current))
+                                      (list :anchor-schema 1))
+                                  (list :instructions instrs)))))
+                (nreverse files))
+               :rewinds nil)
+         :unresolved (nreverse unresolved)
+         :ambiguous (nreverse ambiguous)
+         :renumbered (nreverse renumbered))))))
+
+(defun mevedel-migrate-instructions--candidate (record workspace path)
+  "Write store RECORD for WORKSPACE as an export-format file at PATH.
+File names become relative to PATH's directory, where
+`mevedel-load-instructions' resolves them."
+  (let* ((root (mevedel-instruction-store--root workspace))
+         (base (file-name-directory path))
+         (scratch (mevedel-workspace--create :type 'project :id "migration-candidate"
+                                              :root root)))
+    (mevedel-workspace-set-directives
+     scratch (mevedel--deserialize-directives (plist-get record :directives) root))
+    (mevedel-migrate-session--write
+     path
+     (list :version (mevedel-version)
+           :ids (plist-get record :ids)
+           :directives (mevedel--serialize-directives scratch base)
+           :files (mapcar (lambda (entry)
+                            (cons (file-relative-name (expand-file-name (car entry) root)
+                                                      base)
+                                  (cdr entry)))
+                          (plist-get record :files))))))
+
+(defun mevedel-migrate-instructions (directories)
+  "Merge the instruction snapshots of closed session DIRECTORIES into a store.
+DIRECTORIES are all sessions of one project.  Return (:status STATUS ...):
+`current' when the project already has a store, `none' without sessions,
+`written' with the store path, or `staged' with the report path and the
+unresolved count when conflicts need the user.  Sessions are never changed."
+  (let* ((workspace (mevedel-migrate-session--workspace (car directories)))
+         (store (mevedel-instruction-store-path workspace))
+         (staging (mevedel-instruction-store-migration-directory workspace)))
+    (cond
+     ((file-exists-p store) (list :status 'current :path store))
+     (t
+      (let* ((sources (delq nil (mapcar #'mevedel-migrate-instructions--source
+                                        (sort (copy-sequence directories) #'string<))))
+             (merge (mevedel-migrate-instructions--merge sources)))
+        (cond
+         ((null (cl-remove-if-not (lambda (source) (plist-get source :current)) sources))
+          (list :status 'none))
+         ((null (plist-get merge :unresolved))
+          (let ((record (plist-get merge :data)))
+            ;; The runtime decoder is the schema the store must satisfy.
+            (let ((check (mevedel-instruction-store--decode
+                          (mevedel-instruction-store--print record) workspace)))
+              (unless (eq 'ok (plist-get check :status))
+                (error "Merged instructions are invalid: %s" (plist-get check :reason))))
+            (make-directory (file-name-directory store) t)
+            (let ((coding-system-for-write 'no-conversion))
+              (write-region (mevedel-instruction-store--print record) nil store nil
+                            'silent nil 'excl))
+            (list :status 'written :path store
+                  :ambiguous (plist-get merge :ambiguous)
+                  :renumbered (plist-get merge :renumbered))))
+         (t
+          (make-directory staging t)
+          (let ((candidates
+                 (cl-loop for source in sources
+                          when (plist-get source :current)
+                          collect
+                          (let ((path (file-name-concat
+                                       staging (format "candidate-%s.el"
+                                                       (plist-get source :name)))))
+                            (mevedel-migrate-instructions--candidate
+                             (plist-get (mevedel-migrate-instructions--merge
+                                         sources (plist-get source :name))
+                                        :data)
+                             workspace path)
+                            path)))
+                (report (file-name-concat staging "report.el")))
+            (mevedel-migrate-session--write
+             report
+             (list :format 1
+                   :store store
+                   :unresolved (plist-get merge :unresolved)
+                   :ambiguous (plist-get merge :ambiguous)
+                   :renumbered (plist-get merge :renumbered)
+                   :candidates candidates))
+            (list :status 'staged :path report
+                  :unresolved (length (plist-get merge :unresolved)))))))))))
+
+(defun mevedel-migrate-sessions (directory &optional instructions)
   "Migrate supported sessions under local DIRECTORY to the current format.
 DIRECTORY is a session, project, or `.mevedel/sessions' directory.  Return
 rows (NAME :status STATUS :backup PATH :artifacts IDS :reason TEXT), where
 STATUS is migrated, current, empty, or failed.  Failed sessions stay in place;
-independent sessions continue.  Unsafe ownership aborts before any writes."
+independent sessions continue.  Unsafe ownership aborts before any writes.
+With INSTRUCTIONS, a project or sessions directory also gets a last row
+named \"instructions\" for the workspace instruction store step: written,
+staged, current, none, or failed."
   (let ((directories (mevedel-migrate-session--directories directory)))
     (when directories
       ;; Closed-state preflight is global: never write a project's store while
@@ -801,6 +1137,18 @@ independent sessions continue.  Unsafe ownership aborts before any writes."
                                   (mevedel-migrate-session--one source)
                                 (error (list :status 'failed :reason (error-message-string err)))))
                         report)))
+              ;; The store belongs to the whole project, so only a run over
+              ;; every session of a project builds it.
+              (when (and instructions
+                         (mevedel-migrate-session--workspace (car directories))
+                         (not (member (directory-file-name (expand-file-name directory))
+                                      directories)))
+                (push (cons "instructions"
+                            (condition-case err
+                                (mevedel-migrate-instructions directories)
+                              (error (list :status 'failed
+                                           :reason (error-message-string err)))))
+                      report))
               (nreverse report))
           (delete-directory lock))))))
 
@@ -813,8 +1161,10 @@ independent sessions continue.  Unsafe ownership aborts before any writes."
     (if (equal args '("--help"))
         (princ usage)
       (unless (= (length args) 1) (error "%s" (string-trim-right usage)))
-      (let* ((report (mevedel-migrate-sessions (car args)))
-             (failed (cl-count 'failed report :key (lambda (row) (plist-get (cdr row) :status)))))
+      (let* ((report (mevedel-migrate-sessions (car args) t))
+             (failed (cl-count-if (lambda (row)
+                                    (memq (plist-get (cdr row) :status) '(failed staged)))
+                                  report)))
         (dolist (row report)
           (let* ((result (cdr row))
                  (status (plist-get result :status)))
@@ -822,11 +1172,16 @@ independent sessions continue.  Unsafe ownership aborts before any writes."
                            (pcase status
                              ('migrated (format " (backup: %s)" (plist-get result :backup)))
                              ('failed (format " (%s)" (plist-get result :reason)))
+                             ('written (format " (%s)" (plist-get result :path)))
+                             ('staged (format " (%d unresolved; see %s, then M-x mevedel-load-instructions on a candidate)"
+                                              (plist-get result :unresolved)
+                                              (plist-get result :path)))
                              (_ ""))))))
         (princ (format "%d sessions checked; %d failed; target %s.\n"
-                       (length report) failed mevedel-session-codec-format-version))
+                       (cl-count-if-not (lambda (row) (equal (car row) "instructions")) report)
+                       failed mevedel-session-codec-format-version))
         (when (> failed 0)
-          (error "%d sessions failed to migrate; see above" failed))))))
+          (error "%d migration steps failed or need resolution; see above" failed))))))
 
 (provide 'mevedel-migrate-session)
 ;;; migrate-sessions.el ends here

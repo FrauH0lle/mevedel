@@ -370,7 +370,34 @@ SOURCE visits `source.el' holding two functions.  The workspace has its
   (test-mevedel-instruction-store--with-workspace (workspace source)
     (let ((overlay (test-mevedel-instruction-store--directive source "one")))
       (mevedel--set-directive-request overlay "changed")
-      (should (eq 'written (mevedel-instruction-store-sync workspace))))))
+      (should (eq 'written (mevedel-instruction-store-sync workspace)))))
+  :doc "the carrier reads, creates and refuses stale writes over a TRAMP path"
+  (mevedel-test--with-local-shell-tramp '("instruction-store")
+    (let* ((local (file-name-as-directory (make-temp-file "mevedel-remote-store-" t)))
+           (root (format "/mevedelmock:instruction-store:%s" local))
+           (workspace (mevedel-workspace-get-or-create 'project root root "remote-store"))
+           (record (list :format mevedel-instruction-store-format-version
+                         :ids (list :id-counter 0 :used-ids nil :retired-ids nil)
+                         :directives nil :files nil :rewinds nil)))
+      (unwind-protect
+          (progn
+            (mevedel-workspace-identity-ensure root)
+            (should (eq 'absent (plist-get (mevedel-instruction-store--read workspace)
+                                           :status)))
+            (let ((hash (mevedel-instruction-store--write workspace nil record)))
+              (should hash)
+              (should (file-exists-p (file-name-concat local ".mevedel"
+                                                       "instructions.el")))
+              (let ((observation (mevedel-instruction-store--read workspace)))
+                (should (eq 'ok (plist-get observation :status)))
+                (should (equal hash (plist-get observation :hash))))
+              ;; Control: both preconditions refuse once they no longer hold.
+              (should-not (mevedel-instruction-store--write workspace nil record))
+              (should-not (mevedel-instruction-store--write
+                           workspace (make-string 64 ?0) record))
+              (should (mevedel-instruction-store--write workspace hash record))))
+        (delete-directory local t)
+        (mevedel-workspace-clear-registry)))))
 
 
 ;;; Pending workspaces

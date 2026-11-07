@@ -3,11 +3,13 @@
 ;;; Commentary:
 
 ;; Saves and restores source-bound references and workspace-owned directives
-;; across Emacs sessions.  The save format records directive identity and
-;; authored state separately from file-specific overlay presentations.  When a
-;; save file is loaded against a buffer whose contents have changed, native
-;; buffer replacement reconciles overlay positions.  Save files must match the
-;; current mevedel version and directive schema.
+;; across Emacs sessions.  The workspace instruction store at the end of this
+;; file is their durable record; session snapshots and exported save files
+;; share its shape.  The format records directive identity and authored state
+;; separately from file-specific overlay presentations.  When instructions
+;; are restored against a buffer whose contents have changed, native buffer
+;; replacement reconciles overlay positions.  Exported save files must match
+;; the current mevedel version; the store carries its own format version.
 
 ;;; Code:
 
