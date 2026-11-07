@@ -185,6 +185,14 @@ automatic checks. Package-manager CLI binaries and a custom
 conversation directory used for resume. Claude runs on the Emacs host, also for
 remote project tools.
 
+Adapter diagnostic logs default to `~/.mevedel/claude-agent-logs` on the Emacs
+host. Customize `mevedel-claude-code-agent-log-directory` to change the directory,
+or set it to nil to stop mevedel from enabling logging. Mevedel expands the path
+and sets `CLAUDE_AGENT_LOGS` only in the adapter's launch environment; an inherited
+value (even an empty string) always wins, including when the option is nil.
+After an adapter crash, check this directory for diagnostics. Changes apply to
+new adapter processes, not already running conversations.
+
 Select `Claude Code:sonnet`, `Claude Code:opus`, `Claude Code:fable` or
 `Claude Code:haiku` in a session's model menu. Mevedel supplies its tools over
 MCP; no API key or MCP configuration is needed. Use mevedel's model and tools

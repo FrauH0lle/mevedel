@@ -717,6 +717,10 @@ automatically granting them. Direct acquisition of an unheld or expired lease
 preserves native identities just as ordinary resume does. The next send checks
 the native installation and history, so recovery after an Emacs crash does not
 require copying or discarding native history. Read-only following remains available.
+For adapter crashes, diagnostic logs default to `~/.mevedel/claude-agent-logs`
+on the Emacs host, controlled by `mevedel-claude-code-agent-log-directory`;
+an inherited `CLAUDE_AGENT_LOGS` value takes precedence. See
+[Claude subscription setup](../README.md#claude-promax-subscriptions) for configuration.
 
 The gptel HTTP request-controls menu is unavailable for a selected external
 provider, including direct `gptel-menu`, prefixed send and mevedel's bridge menu.

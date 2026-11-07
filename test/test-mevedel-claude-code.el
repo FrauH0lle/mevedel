@@ -250,6 +250,52 @@
       (should (string-search "node --version" (error-message-string failure)))
       (should-not (string-search "PRIVATE-DIAGNOSTIC" (error-message-string failure))))))
 
+(mevedel-deftest mevedel-claude-code-launch/agent-logs ()
+  (mevedel-claude-code-test--with-cli
+    (let ((mevedel-claude-code-agent-log-directory ,setting))
+      (setenv "CLAUDE_AGENT_LOGS" ,inherited)
+      (let* ((launch (mevedel-claude-code-launch "Log environment fixture" [] "sonnet" nil))
+             (capture (file-name-concat directory "agent-environment.json"))
+             ready failure connection)
+        (should (equal ,inherited (getenv "CLAUDE_AGENT_LOGS")))
+        ;; Capture inside the child, then run the real stdio handshake.  A
+        ;; different ambient value proves ACP uses the prepared environment.
+        (setenv "CLAUDE_AGENT_LOGS" "not-the-launch-environment")
+        (plist-put launch :command (executable-find "python3"))
+        (plist-put launch :args
+                   (list "-c" (concat "import json, os, runpy, sys; "
+                                      "open(sys.argv[1], 'w').write("
+                                      "json.dumps(os.getenv('CLAUDE_AGENT_LOGS'))); "
+                                      "runpy.run_path(sys.argv[2], run_name='__main__')")
+                         capture mevedel-test--acp-peer))
+        (plist-put launch :initialize-only t)
+        (unwind-protect
+            (progn
+              (setq connection
+                    (mevedel-acp-open launch (lambda (_) (setq ready t))
+                                      (lambda (message _code) (setq failure message))))
+              (mevedel-test--await 5 "Log environment handshake did not settle" (or ready failure))
+              (should-not failure)
+              (should ready)
+              (with-temp-buffer
+                (insert-file-contents capture)
+                (should (equal ,expected (json-parse-buffer :null-object nil))))
+              (should (equal "not-the-launch-environment" (getenv "CLAUDE_AGENT_LOGS"))))
+          (when connection (mevedel-acp-close connection))))))
+  (setting inherited expected)
+  :doc "adapter receives the expanded default log directory without shell setup"
+  mevedel-claude-code-agent-log-directory nil (expand-file-name "~/.mevedel/claude-agent-logs")
+  :doc "adapter receives a custom expanded log directory"
+  "~/custom agent logs" nil (expand-file-name "~/custom agent logs")
+  :doc "an inherited log directory wins without rewriting its value"
+  "~/custom agent logs" "~/inherited agent logs" "~/inherited agent logs"
+  :doc "an inherited empty value still wins"
+  "~/custom agent logs" "" ""
+  :doc "nil leaves adapter logging unset when nothing is inherited"
+  nil nil nil
+  :doc "nil does not remove an inherited log directory"
+  nil "~/inherited agent logs" "~/inherited agent logs")
+
 (mevedel-deftest mevedel-claude-code-unavailable-reason ()
   ,test
   (test)

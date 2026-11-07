@@ -586,6 +586,9 @@ Return the generic ACP launch plist; no model request is made here."
          (default-directory temporary-file-directory))
     (dolist (name mevedel-claude-code--api-environment) (setenv name nil))
     (setenv "CLAUDE_CODE_EXECUTABLE" cli)
+    (when (and mevedel-claude-code-agent-log-directory
+               (not (getenv "CLAUDE_AGENT_LOGS")))
+      (setenv "CLAUDE_AGENT_LOGS" (expand-file-name mevedel-claude-code-agent-log-directory)))
     ;; The adapter also resolves a model from settings before session/new
     ;; completes.  Its environment pin must agree with the SDK option.
     (setenv "ANTHROPIC_MODEL" model)
