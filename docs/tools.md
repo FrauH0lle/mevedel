@@ -641,6 +641,24 @@ Malformed responses, network errors and timeouts return explicit tool failures.
 A caption failure retains any retrieved video description alongside the transcript
 error.
 
+`SubscriptionUsage` gives the model the account-wide quotas the `/usage` report
+shows, as plain data. It takes no arguments and is a read-only, asynchronous
+`util` specialist. It reads the session's backend and every other backend in
+`gptel--known-backends` that is a Codex OAuth or Claude Code backend, in
+parallel, through `mevedel-subscription-usage-provider-readings`. That verb
+shares the report's transport, timeouts and validation and returns windows
+instead of display text. The result is a JSON array with one object per
+backend: `backend`, `current`, and either `error` or `readings`. Each reading
+has exactly `quota`, `window`, `used_percent` and `resets`. Codex resets are
+ISO 8601 times. Claude resets keep the adapter's text. Unknown values are
+`null`. The tool serializes only these fields, so accounts, plan, credits,
+tokens and other payload fields never reach the model, even though the report
+shows the Codex account. One failed backend does not hide the others' readings.
+A recognized response without quota windows yields empty `readings`, not an
+error. The handler returns `(:cancel FUNCTION)`; cancelling the call cancels
+every pending HTTP request and isolated Claude ACP inspection and suppresses
+late delivery.
+
 Preset application also resolves its tool specs from the current registry.
 Reloading a native tool therefore updates the next request's schema and
 handler instead of leaving a stale `gptel-tool` captured by an older preset.

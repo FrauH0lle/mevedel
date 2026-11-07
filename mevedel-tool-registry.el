@@ -149,6 +149,7 @@ created as a side effect of registration and handles serialization."
     ("Imenu" "Treesitter" "XrefDefinitions" "XrefReferences"
      mevedel-tool-code mevedel-tool-code--register)
     ("ListSkills" "Skill" mevedel-tool-skills mevedel-tool-skills--register)
+    ("SubscriptionUsage" mevedel-tool-usage mevedel-tool-usage--register)
     ("TaskList" "TaskWrite"
      mevedel-tool-task mevedel-tool-task--register)
     ("WebFetch" "WebSearch"
