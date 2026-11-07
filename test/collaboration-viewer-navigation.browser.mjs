@@ -360,7 +360,10 @@ function scrollRecord(page, id, offset) {
 function pinned(page, text) {
   return page.waitForFunction(text => {
     const pin = document.getElementById('pinned-prompt');
-    return text === null ? pin.hidden : !pin.hidden && pin.textContent.startsWith(text);
+    // What a reader sees: the row's computed visibility and rendered label.
+    const visible = getComputedStyle(pin).visibility === 'visible';
+    const rendered = getComputedStyle(pin, '::before').content.replace(/^"|"$/g, '');
+    return text === null ? !visible : visible && rendered.startsWith(text);
   }, text);
 }
 
@@ -412,6 +415,23 @@ test('pinned prompt follows the exchange at the top without moving the transcrip
         return height;
       });
       assert.equal(hiddenHeight, shown.scrollHeight);
+
+      // A host update can replace the governing prompt without resizing
+      // anything; the row follows the new element and its text.
+      const replaced = EXCHANGES[2].text.replace('**parser**', '**lexer!**');
+      await page.push[sessionRoom.id]({t: 'record', record: {...EXCHANGES[2], text: replaced}});
+      await page.waitForFunction(() => document.querySelector('[data-record-id="p2"]')
+        .textContent.includes('lexer!'));
+      assert.equal(await page.evaluate(() => document.documentElement.scrollHeight), shown.scrollHeight,
+                   `${size}: the replacement keeps the transcript's size`);
+      await pinned(page, 'Second prompt: refactor the lexer! and keep');
+      await page.locator('#pinned-prompt').click();
+      await page.waitForFunction(() => {
+        const edge = document.querySelector('body > .topbar').getBoundingClientRect().bottom;
+        const top = document.querySelector('[data-record-id="p2"]').getBoundingClientRect().top;
+        return top >= edge && top <= edge + 24;
+      });
+      await pinned(page, null);
 
       // A visible later prompt does not replace the exchange at the top.
       await scrollRecord(page, 'p3', 150);

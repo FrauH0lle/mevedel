@@ -83,6 +83,7 @@ class Element {
     if (index >= 0) this.parent.children[index] = other;
   }
   setAttribute(name, value) { this.attributes[name] = value; }
+  hasAttribute(name) { return name in this.attributes; }
   removeAttribute(name) {
     delete this.attributes[name];
     if (name === 'href') this.href = '';

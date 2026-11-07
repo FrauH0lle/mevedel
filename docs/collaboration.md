@@ -363,11 +363,15 @@ Once the prompt of the exchange at the top of the transcript has scrolled under
 the sticky header, a one-line preview of it is pinned there, the browser
 analogue of the view's [pinned prompt](view.md#status-strip-and-cockpit-routing).
 It is derived from the rendered prompt turns, follows the exchange at the top
-rather than the latest prompt, and truncates with an ellipsis to the
+rather than the latest prompt, refreshes after every transcript, filter or
+archive update, and truncates with an ellipsis to the
 conversation column. A prompt header within the row's height counts as visible,
 so the row never covers one. The row overlays the transcript instead of
 reserving height, which a phone such as an iPhone mini cannot spare, so it never
-moves the transcript. Clicking it scrolls the prompt back to just below the
+moves the transcript. A scroll reads only a binary search's worth of prompt
+positions, and the row changes only its attributes and inline style: changing
+its text or `hidden` attribute would restyle the whole page through the
+viewer's `body:has(...)` rules. Clicking it scrolls the prompt back to just below the
 header. An open archived segment uses only its own prompts. Live content before
 the first live prompt continues the last prompt of the latest archived segment
 of the same chat once that segment has been loaded, unless a live prompt is on
