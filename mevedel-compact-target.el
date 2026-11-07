@@ -187,12 +187,12 @@
                   "mevedel-view-disclosure" (states data-buffer))
 
 ;; `mevedel-view-stream'
-(declare-function mevedel-view--stop-request-progress
-                  "mevedel-view-stream" ())
-(declare-function mevedel-view--stop-spinner "mevedel-view-stream" ())
-(declare-function mevedel-view--update-spinner
-                  "mevedel-view-stream" (status &optional owner))
-(defvar mevedel-view--status-owner-override)
+(declare-function mevedel-view-stream-end-progress
+                  "mevedel-view-stream" (view))
+(declare-function mevedel-view-stream-show-progress
+                  "mevedel-view-stream" (view status &optional owner))
+(autoload 'mevedel-view-stream-end-progress "mevedel-view-stream")
+(autoload 'mevedel-view-stream-show-progress "mevedel-view-stream")
 
 (defcustom mevedel-compact-target-file-reference-reminder-limit 20
   "Maximum number of compacted file references to cite in one reminder."
@@ -529,11 +529,8 @@ HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
 
 (defun mevedel-compact-target--main-start (_target)
   "Show main-session compaction progress for TARGET."
-  (when-let* ((view-buffer mevedel--view-buffer)
-              (_ (buffer-live-p view-buffer)))
-    (with-current-buffer view-buffer
-      (let ((mevedel-view--status-owner-override 'compaction))
-        (mevedel-view--update-spinner "Compacting...")))))
+  (mevedel-view-stream-show-progress
+   mevedel--view-buffer "Compacting..." 'compaction))
 
 (defun mevedel-compact-target--agent-start (target)
   "Show agent TARGET compaction progress."
@@ -570,9 +567,7 @@ AUTO is non-nil for automatic compaction."
     (with-current-buffer view-buffer
       (mevedel-view--full-rerender)
       (unless auto
-        (if (fboundp 'mevedel-view--stop-request-progress)
-            (mevedel-view--stop-request-progress)
-          (mevedel-view--stop-spinner))))))
+        (mevedel-view-stream-end-progress view-buffer)))))
 
 (defun mevedel-compact-target--agent-complete (target _auto)
   "Restore ordinary continuation status for agent TARGET.

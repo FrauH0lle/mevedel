@@ -166,12 +166,12 @@
                   "mevedel-view-interaction" (chat-buffer))
 
 ;; `mevedel-view-stream'
-(declare-function mevedel-view--stop-request-progress
-                  "mevedel-view-stream" nil)
-(declare-function mevedel-view--stop-spinner
-                  "mevedel-view-stream" nil)
-(declare-function mevedel-view--update-spinner
-                  "mevedel-view-stream" (status &optional owner))
+(declare-function mevedel-view-stream-end-progress
+                  "mevedel-view-stream" (view))
+(declare-function mevedel-view-stream-show-progress
+                  "mevedel-view-stream" (view status &optional owner))
+(autoload 'mevedel-view-stream-end-progress "mevedel-view-stream")
+(autoload 'mevedel-view-stream-show-progress "mevedel-view-stream")
 (defvar mevedel-view--spinner-owner)
 
 ;; `mevedel-worktree'
@@ -617,12 +617,9 @@ would copy transcripts into the retry record and the echo area."
   "Keep SESSION retryable after REASON from CHAT-BUFFER.
 REASON is a string or an error value; it is recorded in bounded form."
   (setq reason (mevedel-plan-handoff--failure-reason reason))
-  (when-let* ((view-buffer
-               (ignore-errors
-                 (mevedel-view--interaction-target-buffer chat-buffer)))
-              ((fboundp 'mevedel-view--stop-request-progress)))
-    (with-current-buffer view-buffer
-      (mevedel-view--stop-request-progress)))
+  (mevedel-view-stream-end-progress
+   (ignore-errors
+     (mevedel-view--interaction-target-buffer chat-buffer)))
   (when-let* ((record (copy-tree
                        (plist-get (mevedel-session-plan-metadata session)
                                   :implementation-retry))))
@@ -937,13 +934,10 @@ the durable retry was retained"
 
 (defun mevedel-plan-handoff--begin (session chat-buffer)
   "Show preparation progress and dispatch SESSION's handoff from CHAT-BUFFER."
-  (when-let* ((view-buffer
-               (ignore-errors
-                 (mevedel-view--interaction-target-buffer chat-buffer)))
-              ((fboundp 'mevedel-view--update-spinner)))
-    (with-current-buffer view-buffer
-      (mevedel-view--update-spinner
-       "Preparing implementation..." 'plan-preparation)))
+  (mevedel-view-stream-show-progress
+   (ignore-errors
+     (mevedel-view--interaction-target-buffer chat-buffer))
+   "Preparing implementation..." 'plan-preparation)
   (mevedel-plan-handoff--dispatch-accepted session chat-buffer))
 
 (defun mevedel-retry-plan-implementation (&optional session chat-buffer)

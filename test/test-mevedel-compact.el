@@ -26,6 +26,7 @@
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-render)
+(require 'mevedel-view-stream)
 (require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
@@ -923,11 +924,12 @@
         (progn
           (with-current-buffer chat-buffer
             (setq-local mevedel--view-buffer view-buffer))
-          (cl-letf (((symbol-function 'mevedel-view--update-spinner)
-                     (lambda (text) (setq spinner text))))
+          (cl-letf (((symbol-function 'mevedel-view-stream-show-progress)
+                     (lambda (view text &optional owner)
+                       (setq spinner (list view text owner)))))
             (mevedel--compact-main-resume-status
              (list :buffer chat-buffer)))
-          (should (equal "Thinking..." spinner)))
+          (should (equal (list view-buffer "Thinking..." nil) spinner)))
       (kill-buffer chat-buffer)
       (kill-buffer view-buffer))))
 

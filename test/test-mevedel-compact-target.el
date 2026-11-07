@@ -29,6 +29,7 @@
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-render)
+(require 'mevedel-view-stream)
 (require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
@@ -565,10 +566,12 @@
         spinner)
     (unwind-protect
         (let ((mevedel--view-buffer view-buffer))
-          (cl-letf (((symbol-function 'mevedel-view--update-spinner)
-                     (lambda (text) (setq spinner text))))
+          (cl-letf (((symbol-function 'mevedel-view-stream-show-progress)
+                     (lambda (view text &optional owner)
+                       (setq spinner (list view text owner)))))
             (mevedel-compact-target--main-start nil))
-          (should (equal "Compacting..." spinner)))
+          (should (equal (list view-buffer "Compacting..." 'compaction)
+                         spinner)))
       (kill-buffer view-buffer)))
 
   :doc "starting compaction keeps expanded tools open and preserves the draft"
@@ -675,8 +678,10 @@
         (let ((mevedel--view-buffer view-buffer))
           (cl-letf (((symbol-function 'mevedel-view--full-rerender)
                      (lambda () (cl-incf renders)))
-                    ((symbol-function 'mevedel-view--stop-request-progress)
-                     (lambda () (cl-incf stops))))
+                    ((symbol-function 'mevedel-view-stream-end-progress)
+                     (lambda (view)
+                       (should (eq view view-buffer))
+                       (cl-incf stops))))
             (mevedel-compact-target--main-complete nil nil)
             (mevedel-compact-target--main-complete nil t))
           (should (= 2 renders))

@@ -101,9 +101,9 @@
                   "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-view-stream'
-(declare-function mevedel-view--stop-request-progress
-                  "mevedel-view-stream" ())
-(declare-function mevedel-view--stop-spinner "mevedel-view-stream" ())
+(declare-function mevedel-view-stream-end-progress
+                  "mevedel-view-stream" (view))
+(autoload 'mevedel-view-stream-end-progress "mevedel-view-stream")
 
 (defcustom mevedel-compact-run-warn-on-completion t
   "Whether to show a one-shot accuracy message after compaction."
@@ -247,12 +247,7 @@ the persistent failure counter unchanged."
         (cl-incf mevedel-compact-run-failure-count))
       (display-warning 'mevedel err :warning)
       (unless (mevedel-compact-run--state-auto state)
-        (when-let* ((vb mevedel--view-buffer)
-                    (_ (buffer-live-p vb)))
-          (with-current-buffer vb
-            (if (fboundp 'mevedel-view--stop-request-progress)
-                (mevedel-view--stop-request-progress)
-              (mevedel-view--stop-spinner)))))
+        (mevedel-view-stream-end-progress mevedel--view-buffer))
       (mevedel-compact-run--finish state err))))
 
 (defun mevedel-compact-run--finish-success (state summary)
