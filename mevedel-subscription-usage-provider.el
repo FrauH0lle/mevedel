@@ -3,8 +3,10 @@
 ;;; Commentary:
 ;; Fetch display-ready account quotas without entering the conversation engine.
 ;; Codex uses gptel OAuth and HTTP; Claude uses an isolated advertised ACP command.
-;; Callbacks receive (TEXT ERROR), exactly once unless cancelled.  Cancellation
-;; owns transport cleanup; callers own presentation and freshness.
+;; `-fetch' yields display text and `-readings' yields plain quota windows; both
+;; share one transport and validation.  Callbacks receive (RESULT ERROR), exactly
+;; once unless cancelled.  Cancellation owns transport cleanup; callers own
+;; presentation and freshness.
 
 ;;; Code:
 
@@ -22,23 +24,32 @@
         ((or (stringp value) (numberp value)) (format "%s" value))
         (t (error "Invalid quota value"))))
 
-(defun mevedel-subscription-usage-provider--window (label window)
-  "Format Codex WINDOW with LABEL, a usage bar, duration and reset time."
+(defun mevedel-subscription-usage-provider--duration (seconds)
+  "Format a window length of SECONDS in its largest whole unit."
+  (setq seconds (round seconds))
+  (cond ((zerop (% seconds 86400)) (format "%s days" (/ seconds 86400)))
+        ((zerop (% seconds 3600)) (format "%s hours" (/ seconds 3600)))
+        ((zerop (% seconds 60)) (format "%s minutes" (/ seconds 60)))
+        (t (format "%s seconds" seconds))))
+
+(defun mevedel-subscription-usage-provider--window-fields (window)
+  "Return validated (USED SECONDS RESET) of Codex WINDOW; nil means missing."
   (let ((used (alist-get 'used_percent window))
         (seconds (alist-get 'limit_window_seconds window))
         (reset (alist-get 'reset_at window)))
     (dolist (value (list used seconds reset))
       (unless (or (null value) (and (numberp value) (>= value 0)))
         (error "Invalid quota window")))
-    (when seconds (setq seconds (round seconds)))
+    (list used seconds reset)))
+
+(defun mevedel-subscription-usage-provider--window (label window)
+  "Format Codex WINDOW with LABEL, a usage bar, duration and reset time."
+  (pcase-let ((`(,used ,seconds ,reset)
+               (mevedel-subscription-usage-provider--window-fields window)))
     (format "%s: %s used; window: %s; resets: %s\n%s"
             label
             (if used (format "%s%%" used) "Unavailable")
-            (if seconds
-                (cond ((zerop (% seconds 86400)) (format "%s days" (/ seconds 86400)))
-                      ((zerop (% seconds 3600)) (format "%s hours" (/ seconds 3600)))
-                      ((zerop (% seconds 60)) (format "%s minutes" (/ seconds 60)))
-                      (t (format "%s seconds" seconds)))
+            (if seconds (mevedel-subscription-usage-provider--duration seconds)
               "Unavailable")
             (if reset (format-time-string "%Y-%m-%d %H:%M:%S %Z" (seconds-to-time reset))
               "Unavailable")
@@ -49,20 +60,24 @@
                           (make-string (- 20 filled) ?\u2591) "\n\n"))
               ""))))
 
-(defun mevedel-subscription-usage-provider--codex-text (payload account)
-  "Normalize the Codex HTTP PAYLOAD and selected ACCOUNT for display."
+(defun mevedel-subscription-usage-provider--codex-buckets (payload)
+  "Return the named rate-limit buckets of Codex PAYLOAD, or signal."
   (unless (and (listp payload)
                (seq-some (lambda (key) (assq key payload))
                          '(plan_type rate_limit additional_rate_limits credits)))
     (error "Unrecognized Codex usage response"))
-  (let ((buckets (cons (cons "Codex" (alist-get 'rate_limit payload))
-                       (mapcar
-                        (lambda (bucket)
-                          (cons (or (alist-get 'limit_name bucket)
-                                    (alist-get 'metered_feature bucket)
-                                    "Additional quota")
-                                (alist-get 'rate_limit bucket)))
-                        (alist-get 'additional_rate_limits payload))))
+  (cons (cons "Codex" (alist-get 'rate_limit payload))
+        (mapcar
+         (lambda (bucket)
+           (cons (or (alist-get 'limit_name bucket)
+                     (alist-get 'metered_feature bucket)
+                     "Additional quota")
+                 (alist-get 'rate_limit bucket)))
+         (alist-get 'additional_rate_limits payload))))
+
+(defun mevedel-subscription-usage-provider--codex-text (payload account)
+  "Normalize the Codex HTTP PAYLOAD and selected ACCOUNT for display."
+  (let ((buckets (mevedel-subscription-usage-provider--codex-buckets payload))
         (credits (alist-get 'credits payload)))
     (concat
      (format "Account: %s\nPlan: %s\n\n"
@@ -81,8 +96,28 @@
              (mevedel-subscription-usage-provider--value (alist-get 'balance credits))
              (mevedel-subscription-usage-provider--value (alist-get 'unlimited credits))))))
 
-(defun mevedel-subscription-usage-provider--codex (backend callback)
+(defun mevedel-subscription-usage-provider--codex-readings (payload _account)
+  "Return (ok . WINDOWS), the plain quota windows of Codex PAYLOAD.
+The success tag keeps an empty list distinct from a failed parse.  The
+account is never included."
+  (let (readings)
+    (pcase-dolist (`(,name . ,limit)
+                   (mevedel-subscription-usage-provider--codex-buckets payload))
+      (dolist (key '(primary_window secondary_window))
+        (when-let* ((window (alist-get key limit)))
+          (pcase-let ((`(,used ,seconds ,reset)
+                       (mevedel-subscription-usage-provider--window-fields window)))
+            (push (list :quota name
+                        :window (and seconds (mevedel-subscription-usage-provider--duration seconds))
+                        :used-percent used
+                        :resets (and reset (format-time-string
+                                            "%FT%T%z" (seconds-to-time reset))))
+                  readings)))))
+    (cons 'ok (nreverse readings))))
+
+(defun mevedel-subscription-usage-provider--codex (backend parse callback)
   "Fetch BACKEND's Codex quotas, delivering CALLBACK; return a canceller.
+PARSE receives the decoded payload and selected account.
 Keep gptel's private authentication API here, renewing before HTTP dispatch.
 Neither authentication errors nor HTTP bodies are included in diagnostics."
   (let (headers failure)
@@ -114,7 +149,8 @@ Neither authentication errors nor HTTP bodies are included in diagnostics."
                                      code))))))
        headers
        (lambda ()
-         (mevedel-subscription-usage-provider--codex-text
+         (funcall
+          parse
           (json-parse-buffer :object-type 'alist :array-type 'list
                              :null-object nil :false-object :false)
           (cdr (assoc "ChatGPT-Account-Id" headers))))))))
@@ -141,8 +177,23 @@ Preserve native Markdown formatting.  Session totals and behavior are omitted."
             (or limits "Subscription quotas: Unavailable")
             "\n\nAccount identity and fields omitted by the adapter (including extra-usage credits): Unavailable\n")))
 
-(defun mevedel-subscription-usage-provider--claude (callback)
-  "Inspect native Claude subscription usage through CALLBACK; return a canceller."
+(defun mevedel-subscription-usage-provider--claude-readings (text)
+  "Return (ok . WINDOWS) from validated native Claude usage TEXT."
+  (let ((validated (mevedel-subscription-usage-provider--claude-text text))
+        (start 0) readings)
+    (while (string-match "^\\*\\*\\(5-hour limit\\|Weekly \u00b7 [^*\n]+\\)\\*\\* \u2014 \\*\\*\\([0-9.]+\\)%\\*\\*\\(?: \u00b7 Resets \\(.+\\)\\)?$"
+                         validated start)
+      (let ((label (match-string 1 validated)))
+        (push (list :quota label
+                    :window (if (string-prefix-p "5-hour" label) "5 hours" "7 days")
+                    :used-percent (string-to-number (match-string 2 validated))
+                    :resets (match-string 3 validated))
+              readings))
+      (setq start (match-end 0)))
+    (cons 'ok (nreverse readings))))
+
+(defun mevedel-subscription-usage-provider--claude (parse callback)
+  "Inspect native Claude usage for CALLBACK via PARSE; return a canceller."
   (let ((launch (mevedel-claude-code-usage-launch (gptel--model-name gptel-model))))
     (mevedel-acp-text-request
      launch "/usage"
@@ -152,22 +203,39 @@ Preserve native Markdown formatting.  Session totals and behavior are omitted."
              (funcall callback nil (or (plist-get info :error) "Claude usage inspection failed"))
            (let (text failure)
              (condition-case err
-                 (setq text (mevedel-subscription-usage-provider--claude-text response))
+                 (setq text (funcall parse response))
                (error (setq failure (error-message-string err))))
              (funcall callback text failure))))))))
+
+(defun mevedel-subscription-usage-provider--dispatch (backend codex claude callback)
+  "Fetch BACKEND quotas, parsing with CODEX or CLAUDE, for CALLBACK."
+  (condition-case err
+      (cond ((gptel-openai-oauth-p backend)
+             (mevedel-subscription-usage-provider--codex backend codex callback))
+            ((mevedel-claude-code-backend-p backend)
+             (mevedel-subscription-usage-provider--claude claude callback))
+            (t (funcall callback nil "Subscription usage is available for Codex OAuth and Claude Code backends. Select one in the session and refresh.")
+               #'ignore))
+    (error (funcall callback nil (error-message-string err)) #'ignore)))
 
 (defun mevedel-subscription-usage-provider-fetch (backend callback)
   "Retrieve BACKEND subscription information and return a canceller.
 CALLBACK receives display-ready text and nil, or nil and an actionable error.
 The caller binds its selected `gptel-model'.  No conversation is admitted."
-  (condition-case err
-      (cond ((gptel-openai-oauth-p backend)
-             (mevedel-subscription-usage-provider--codex backend callback))
-            ((mevedel-claude-code-backend-p backend)
-             (mevedel-subscription-usage-provider--claude callback))
-            (t (funcall callback nil "Subscription usage is available for Codex OAuth and Claude Code backends. Select one in the session and refresh.")
-               #'ignore))
-    (error (funcall callback nil (error-message-string err)) #'ignore)))
+  (mevedel-subscription-usage-provider--dispatch
+   backend #'mevedel-subscription-usage-provider--codex-text
+   #'mevedel-subscription-usage-provider--claude-text callback))
+
+(defun mevedel-subscription-usage-provider-readings (backend callback)
+  "Retrieve BACKEND quota windows as plain data and return a canceller.
+CALLBACK receives a list of plists and nil, or nil and an actionable error.
+Each plist has :quota, :window, :used-percent and :resets; values may be nil.
+Readings carry no account, plan, credit or credential field.  The caller
+binds its selected `gptel-model'."
+  (mevedel-subscription-usage-provider--dispatch
+   backend #'mevedel-subscription-usage-provider--codex-readings
+   #'mevedel-subscription-usage-provider--claude-readings
+   (lambda (result error) (funcall callback (cdr result) error))))
 
 (provide 'mevedel-subscription-usage-provider)
 ;;; mevedel-subscription-usage-provider.el ends here

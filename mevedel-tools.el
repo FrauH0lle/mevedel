@@ -38,6 +38,7 @@
 (require 'mevedel-tool-task)
 (require 'mevedel-tool-editing)
 (require 'mevedel-tool-ui)
+(require 'mevedel-tool-usage)
 (require 'mevedel-tool-web-registration)
 (require 'xml)
 
@@ -121,7 +122,8 @@
   (mevedel-tool-task--register)
   (mevedel-tool-editing--register)
   (mevedel-tool-ptc--register)
-  (mevedel-tool-introspect--register))
+  (mevedel-tool-introspect--register)
+  (mevedel-tool-usage--register))
 
 (defun mevedel-tools-active-count (&optional buffer)
   "Return the number of active gptel tools in BUFFER."

@@ -900,6 +900,10 @@ source, location, manual section, or global value; values always ask),
 `EmacsFind` (function, command, variable, and library name search),
 `EmacsManual` (Info manuals)
 
+**Subscription quotas:** `SubscriptionUsage` (used percentage and reset time
+of each 5-hour and weekly window for the session's and other configured Codex
+OAuth or Claude Code backends, without account or credential fields)
+
 Specialist tools are not native schemas. Each conversation receives a short
 listing of the ones it may call, with their argument shapes; the model calls
 them through `ToolCall` and uses `ToolSearch` for full contracts.
@@ -1399,6 +1403,7 @@ subscription quotas for the session's Codex OAuth or Claude Code backend.
 The read-only report fetches on opening and on `g`; `q` cancels any pending
 retrieval and returns to the session. `/tokens` still estimates conversation
 context size. Quotas include activity outside mevedel.
+The model reads the same quotas as plain data through `SubscriptionUsage`.
 
 Project and user skills add `$<skill-name>` invocations by name.
 

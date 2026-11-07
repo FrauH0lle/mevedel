@@ -186,7 +186,7 @@ Chat / view
   mevedel-window.el           temporary surface display, origin and exact frame restoration
   mevedel-report.el           read-only sections, memory navigation, report windows
   mevedel-subscription-usage.el session-owned quota report, freshness and cancellation
-  mevedel-subscription-usage-provider.el isolated Codex HTTP and native Claude ACP quota retrieval
+  mevedel-subscription-usage-provider.el isolated Codex HTTP and native Claude ACP quota retrieval, as display text or plain readings
   mevedel-menu.el             session cockpit transient and model selection
   mevedel-gptel-bridge.el     view-launched gptel menu, restoration, and steering routing
   mevedel-background-list.el  background-work cockpit: agents and all live executions, user controls
@@ -287,6 +287,7 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-editing.el     SharedCreate/Edit/SaveImage tools, shared:// views
   mevedel-tool-skills.el      Skill and ListSkills tool schemas
   mevedel-tool-introspect.el  EmacsDescribe/EmacsFind/EmacsManual introspection
+  mevedel-tool-usage.el       SubscriptionUsage: plain quota readings across subscription backends
   mevedel-buddy.el            edit recording, diff assembly, briefs, review requests
   mevedel-buddy-feed.el       /buddy: feed a session's plan, Goal, or exchange to Buddy
   mevedel-buddy-note.el       ephemeral note overlays and their model tools
