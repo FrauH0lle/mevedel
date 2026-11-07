@@ -20,6 +20,11 @@
 (require 'mevedel-skills-preparation)
 (require 'mevedel-structs)
 (require 'mevedel-permission-queue)
+(require 'mevedel-permission-queue-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-permission-queue-test-support"))
 (require 'mevedel-tools)
 (require 'mevedel-workspace)
 
@@ -458,16 +463,14 @@ Return the outcome plist produced by the async helper."
       (should (eq 'elisp-failure (plist-get outcome :reason)))))
 
   :doc "missing Eval allow denies without prompting"
-  (let ((mevedel-permission-rules nil)
-        enqueued)
-    (cl-letf (((symbol-function 'mevedel-permission-request)
-               (lambda (&rest _)
-                 (setq enqueued t))))
-      (let ((outcome (mevedel-skills-test--shell-injections-sync
+  (let ((mevedel-permission-rules nil))
+    (mevedel-pq-test--with-queue (session _data _view)
+      (let ((mevedel-permission-log-enabled t)
+            (outcome (mevedel-skills-test--shell-injections-sync
                       "!el`(+ 1 2)`")))
         (should (eq 'error (plist-get outcome :status)))
         (should (eq 'permission-denied (plist-get outcome :reason)))
-        (should-not enqueued))))
+        (should-not (mevedel-pq-test--requested-p session)))))
   :doc "caller-provided inline elisp markers are not trusted"
   (mevedel-skills-test--with-eval-allowed
     (let* ((skill (mevedel-skill--create :name "x"))

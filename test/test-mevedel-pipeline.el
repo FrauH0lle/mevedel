@@ -34,6 +34,11 @@
 (require 'mevedel-permission-rules)
 (require 'mevedel-permission-prompt)
 (require 'mevedel-permission-queue)
+(require 'mevedel-permission-queue-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-permission-queue-test-support"))
 (require 'mevedel-telemetry)
 ;; gptel-request needed for mevedel-define-tool tests
 (require 'gptel-request nil t)
@@ -2202,13 +2207,11 @@ cover, so the permission step's warning about it is captured here."
               (setq-local default-directory remote-root)
               (setq-local mevedel--workspace workspace)
               (setq-local mevedel--session session)
-              (cl-letf
-                  (((symbol-function 'mevedel-permission-request)
-                    (lambda (&rest _)
-                      (ert-fail "Same-target additional root prompted"))))
+              (let ((mevedel-permission-log-enabled t))
                 (setq result
                       (test-mevedel-pipeline--run-tool-and-wait
-                       tool (list :file_path native-path))))))
+                       tool (list :file_path native-path)))
+                (should-not (mevedel-pq-test--requested-p session)))))
           (should (equal "same-target" result))
           (should (equal remote-path seen-path)))
       (delete-directory root t)
@@ -2790,14 +2793,13 @@ cover, so the permission step's warning about it is captured here."
 		   (with-temp-buffer
 		     (setq-local mevedel--session session)
 		     (setq-local mevedel--current-request request)
-		     (cl-letf (((symbol-function 'mevedel-permission-request)
-				(lambda (queued &optional _session)
-				  (setq entry queued)
-				  ;; Even a non-UI reusable outcome must collapse to once.
-				  (funcall (plist-get queued :callback)
-					   'allow-session))))
+		     (mevedel-pq-test--with-view-here view
 		       (mevedel-pipeline-run-tool
-			tool (lambda (value) (setq result value)) nil)))
+			tool (lambda (value) (setq result value)) nil)
+		       (let ((card (mevedel-pq-test--card view)))
+			 (setq entry (plist-get card :entry))
+			 ;; Even a non-UI reusable outcome must collapse to once.
+			 (mevedel-pq-test--answer-captured card 'allow-session))))
 		   (should (plist-get entry :once-only))
 		   (should (equal "changed" result))
 		   (should-not (mevedel-session-permission-rules session)))
@@ -3569,23 +3571,21 @@ cover, so the permission step's warning about it is captured here."
 		   (unwind-protect
 		       (let ((tool (mevedel-tool-get "Bash")))
 			 (cl-letf
-			     (((symbol-function 'mevedel-permission-request)
-			       (lambda (entry &optional _session)
-				 (push (plist-get entry :kind) enqueued-kinds)
-				 (funcall (plist-get entry :callback) 'deny-once)))
-			      ((symbol-function
-				'mevedel-execution-start-one-shot)
+			     (((symbol-function 'mevedel-execution-start-one-shot)
 			       (lambda (&rest _args) (setq launched t))))
-			   (mevedel-pipeline-run-tool
-			    tool (lambda (value) (setq result value))
-			    (list :command (format "custom-reader %s" secret)
-					  :description "Probe Bash resource authority"
-				  :sandbox_permissions
-				  "with_additional_permissions"
-				  :additional_permissions
-				  (list :file_system
-					(list :read (vector secret)))
-				  :justification "Read the requested secret?")))
+			   (mevedel-pq-test--with-session-view session view
+			     (mevedel-pipeline-run-tool
+			      tool (lambda (value) (setq result value))
+			      (list :command (format "custom-reader %s" secret)
+				    :description "Probe Bash resource authority"
+				    :sandbox_permissions "with_additional_permissions"
+				    :additional_permissions
+				    (list :file_system (list :read (vector secret)))
+				    :justification "Read the requested secret?"))
+			     (let ((card (mevedel-pq-test--card view)))
+			       (setq enqueued-kinds
+				     (list (plist-get (plist-get card :entry) :kind)))
+			       (mevedel-pq-test--press card "d"))))
 			 (should (equal '(bash) enqueued-kinds))
 			 (should-not launched)
 			 (should (string-match-p "Permission denied" result)))
