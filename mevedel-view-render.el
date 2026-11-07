@@ -7234,6 +7234,8 @@ Keys are (SEG-START SEG-END TICK) integers with TICK from
 `buffer-modified-tick': bounds depend on buffer text and gptel text
 properties, and transcript restoration stamps properties without
 character changes, so the chars tick would serve stale bounds.
+Outside a projection the buffer itself keys the boundary index of
+`mevedel-transcript--tool-block-bounds-for-run'.
 Bounded through `mevedel-view--cache-put'.")
 
 (defvar-local mevedel-view--tool-block-bounds-memo-entries 0
@@ -7247,9 +7249,11 @@ past `#+end_tool' when older transcripts are opened.  The org block
 markers remain structural anchors, so use them to recover the whole
 tool block before parsing the tool plist and render-data side channel.
 
-The underlying search is unbounded in both directions, so the result
-is memoized per segment and buffer tick; segment text parsing asks for
-the same bounds several times per redraw."
+The result is memoized per segment and buffer tick; segment text parsing
+asks for the same bounds several times per redraw.  Outside a projection
+the memo also holds the canonical boundary index, which validates itself
+against the buffer tick and narrowing.  Unindexed recovery scans all earlier
+history for every tool, so cold renders outside a projection were cubic."
   (let* ((key (list (mevedel-view--source-position seg-start)
                     (mevedel-view--source-position seg-end)
                     (buffer-modified-tick)))
@@ -7261,7 +7265,9 @@ the same bounds several times per redraw."
         cached
       (mevedel-view--cache-put
        memo key
-       (mevedel-transcript--tool-block-bounds-for-run seg-start seg-end)
+       (let ((mevedel-transcript--tool-block-index
+              (or mevedel-transcript--tool-block-index memo)))
+         (mevedel-transcript--tool-block-bounds-for-run seg-start seg-end))
        'mevedel-view--tool-block-bounds-memo-entries))))
 
 (defun mevedel-view--tool-segment-text (seg-start seg-end &optional raw)

@@ -5445,6 +5445,35 @@
                                       data-buf (car range) (cdr range) t)
                                      :header))))
             (should (= reads 0)))))))
+  :doc "cold renders outside a projection share one boundary index"
+  (mevedel-view-test--with-buffers
+    (let (ranges (scans 0) (builds 0))
+      (with-current-buffer data-buf
+        (dotimes (i 40)
+          (let ((start (point)))
+            (insert "#+begin_tool\n"
+                    (propertize
+                     (format "(:name \"Read\" :args (:file_path \"file-%d.el\"))\n\nbody\n" i)
+                     'gptel (cons 'tool (format "cold-%d" i)))
+                    "#+end_tool\n\n")
+            (push (cons start (1- (point))) ranges))))
+      (let ((scan (symbol-function 'mevedel-transcript--tool-block-start-for-run))
+            (build (symbol-function 'mevedel-transcript--org-tool-blocks-overlapping)))
+        (cl-letf (((symbol-function 'mevedel-transcript--tool-block-start-for-run)
+                   (lambda (&rest args) (cl-incf scans) (apply scan args)))
+                  ((symbol-function 'mevedel-transcript--org-tool-blocks-overlapping)
+                   (lambda (&rest args) (cl-incf builds) (apply build args))))
+          (with-current-buffer view-buf
+            (cl-loop for range in (nreverse ranges) for i from 0
+                     do (should (string-match-p
+                                 (format "file-%d\\.el" i)
+                                 (plist-get (mevedel-view--segment-rendering
+                                             data-buf (car range) (cdr range) t)
+                                            :header)))))))
+      ;; Each unindexed recovery scans all earlier history backward, which
+      ;; made a cold render cubic in the number of tools.
+      (should (= scans 0))
+      (should (= builds 1))))
   :doc "property-only restoration of a request failure precedes cached tool display"
   (mevedel-view-test--with-buffers
     (let (metadata-start end)
