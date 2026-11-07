@@ -227,8 +227,29 @@ An initial :file-workspace FORM selects file storage for policy-only cases."
            (info (gptel-fsm-info fsm)))
       (cl-letf (((symbol-function 'mevedel-sleep-update)
                  (lambda (&rest _) (error "Post-admission failure"))))
-        (should (equal "Post-admission failure"
-                       (cadr (should-error (funcall resume))))))
+        ;; An intermittent failure here left no trace of why `resume' did not
+        ;; signal.  Report the FSM's settlement state with the failure; the
+        ;; assertion itself is unchanged.
+        (condition-case failure
+            (should (equal "Post-admission failure"
+                           (cadr (should-error (funcall resume)))))
+          (ert-test-failed
+           (let ((current (gptel-fsm-info fsm)))
+             (ert-fail
+              (list (cadr failure)
+                    ;; One string: ERT truncates nested printed lists.
+                    (format
+                     "%S"
+                     (list :fsm-state (gptel-fsm-state fsm)
+                           :fsm-history (plist-get current :history)
+                           :preparation-rejected
+                           (plist-get current :mevedel-preparation-rejected)
+                           :error (plist-get current :error)
+                           :request-id (plist-get current :mevedel-request-id)
+                           :request-begun
+                           (plist-get current :mevedel-request-begun)
+                           :current-request
+                           (and mevedel--current-request t)))))))))
       (should-not (plist-get info :mevedel-preparation-rejected))
       (should mevedel--current-request)
       (should (eq mevedel--current-request (plist-get info :mevedel-request)))
