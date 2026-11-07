@@ -1297,25 +1297,33 @@ removed; it writes a new one."
                                                 own))))
                              (directory-files sessions t "\\`[^.]"))))))))
 
-(declare-function mevedel-session-persistence-list-sessions
+(declare-function mevedel-session-persistence--enumerate-sessions
                   "mevedel-session-persistence" (workspace &optional cached))
 
 (defun mevedel-instruction-store--shared-session-p (workspace own)
-  "Return non-nil when a session other than OWN belongs to WORKSPACE.
-An absolute sessions directory holds every workspace's sessions, so each
-session's authoritative sidecar, as session discovery reads it for the
-workspace's authority mode, must name WORKSPACE's identity."
+  "Return non-nil when a session other than OWN may belong to WORKSPACE.
+An absolute sessions directory holds every workspace's sessions, so a
+compatible session counts only when its authoritative sidecar, as session
+discovery reads it for the workspace's authority mode, names WORKSPACE's
+identity.  An incompatible (older-format or unreadable) session cannot be
+attributed and may hold this workspace's instructions, so it counts too."
   (require 'mevedel-session-persistence)
   (when-let* ((identity (mevedel-workspace-identity-read
                          (mevedel-workspace-root workspace))))
-    (cl-some (lambda (session)
-               (and (equal identity
-                           (plist-get (plist-get (plist-get session :summary)
-                                                 :workspace)
-                                      :workspace-id))
-                    (not (equal (directory-file-name (plist-get session :save-path))
-                                own))))
-             (mevedel-session-persistence-list-sessions workspace))))
+    (let ((found (mevedel-session-persistence--enumerate-sessions workspace)))
+      (or (cl-some (lambda (session)
+                     (and (equal identity
+                                 (plist-get (plist-get (plist-get session :summary)
+                                                       :workspace)
+                                            :workspace-id))
+                          (not (equal (directory-file-name
+                                       (plist-get session :save-path))
+                                      own))))
+                   (plist-get found :sessions))
+          (cl-some (lambda (session)
+                     (not (equal (directory-file-name (plist-get session :save-path))
+                                 own)))
+                   (plist-get found :incompatible))))))
 
 (defun mevedel-instruction-store--export-unsynced (workspace)
   "Export WORKSPACE's in-memory instructions before the store replaces them.

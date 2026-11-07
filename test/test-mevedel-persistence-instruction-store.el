@@ -653,6 +653,27 @@ Return the new workspace struct."
               (delete-directory foreign-dir t)))
         (delete-directory mevedel-sessions-directory t))))
   :doc "published portable sessions in an absolute directory are attributed by their publication"
+  :doc "an older-format session in an absolute directory still keeps the workspace pending"
+  (test-mevedel-instruction-store--with-workspace (workspace _source)
+    (let ((mevedel-sessions-directory
+           (file-name-as-directory (make-temp-file "mevedel-shared-" t))))
+      (unwind-protect
+          (progn
+            (test-mevedel-instruction-store--save-session workspace "old")
+            (should (eq 'pending (mevedel-instruction-test--store-state workspace)))
+            ;; The session becomes an older-format one; it must neither
+            ;; resume nor be dropped as evidence.
+            (dolist (sidecar (directory-files-recursively
+                              mevedel-sessions-directory "\\`session\\.meta\\.el\\'"))
+              (let ((data (with-temp-buffer
+                            (insert-file-contents sidecar)
+                            (read (current-buffer)))))
+                (setf (plist-get data :version) 0)
+                (with-temp-file sidecar (prin1 data (current-buffer)))))
+            (should (null (mevedel-session-persistence-list-sessions workspace)))
+            (should (eq 'pending (mevedel-instruction-test--store-state workspace))))
+        (delete-directory mevedel-sessions-directory t))))
+  :doc "published portable sessions in an absolute directory are attributed by their publication"
   (let* ((shared (file-name-as-directory (make-temp-file "mevedel-shared-" t)))
          (root-a (file-name-as-directory (make-temp-file "mevedel-ws-a-" t)))
          (root-b (file-name-as-directory (make-temp-file "mevedel-ws-b-" t)))
