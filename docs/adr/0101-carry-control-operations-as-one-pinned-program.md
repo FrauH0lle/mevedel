@@ -182,8 +182,19 @@ protocol, extraction directory, or generic resolver cache is needed.
   settled generations byte-compiled and pinned to one CPU, alternating old
   and new code, six each at a load average near 4: 123 programs and a mean
   0.79 s (0.77 to 0.81 s) before, 83 programs and a mean 0.64 s (0.62 to
-  0.66 s) after, about 3.9 ms saved per generation. This covers claim
-  pruning only; other single-read sites need their own evidence.
+  0.66 s) after, about 3.9 ms saved per generation. Reading a prepared
+  memory pass without supplied observations then probed retirement and read
+  the record as two programs; one program now does both, and retirement is
+  still decided before the record is used. Each such read went from three
+  programs to two, and the pass-notes file from 9,005 programs to 8,626.
+  Matched runs, byte-compiled and pinned to one CPU, alternating old and new
+  code, three each under concurrent load: 60 reads of one pass took a mean
+  0.84 s (0.83 to 0.85 s) before and 0.62 s (0.57 to 0.65 s) after, about
+  3.6 ms saved per read; the pass-notes file took a mean 60.7 s (60.5 to
+  61.0 s) before and 55.4 s (54.8 to 55.8 s) after. That file saved more per
+  removed program than the isolated reads did, so only the direction is
+  attributed to this change. These two sites are the measured ones; other
+  single-read sites need their own evidence.
   A persistent helper process was raised. It would change what runs under
   confinement and how long it lives, so it remains unresolved pending the
   user's decision and is not part of this decision.
