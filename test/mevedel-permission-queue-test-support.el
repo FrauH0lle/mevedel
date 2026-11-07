@@ -90,6 +90,18 @@ queue renders there.  The view is killed afterwards."
              ,@body))
        (when (buffer-live-p ,view) (kill-buffer ,view)))))
 
+(defmacro mevedel-pq-test--with-session-view (session view &rest body)
+  "Run BODY in a data buffer for SESSION with a live view bound to VIEW.
+The permission log is on, so `mevedel-pq-test--requested-p' works, and
+whatever BODY leaves queued is aborted afterwards."
+  (declare (indent 2) (debug t))
+  `(let ((mevedel-permission-log-enabled t))
+     (with-temp-buffer
+       (setq-local mevedel--session ,session)
+       (mevedel-pq-test--with-view-here ,view
+         (unwind-protect (progn ,@body)
+           (mevedel-permission-queue-abort-all ,session))))))
+
 (defun mevedel-pq-test--card-text (overlay)
   "Return the displayed text of the card owning OVERLAY."
   (with-current-buffer (overlay-buffer overlay)
