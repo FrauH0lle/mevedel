@@ -29,8 +29,9 @@ test('activity summaries preserve failures, children and disclosure at phone and
       await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/markdown.js'), 'utf8')});
       await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/renderer.js'), 'utf8')});
       await page.evaluate(([label, details]) => {
-        window.activity = {id: 'tool-1', summary: 'Read 2 files, searched 1 pattern, evaluated 1 form',
-          failures: '1 failed: Grep', running: 1, status: 'running'};
+        window.activity = {id: 'tool-1',
+          summary: '4 calls: read 2 files, searched 1 pattern (1 failed), evaluated 1 form',
+          running: 1, status: 'running'};
         window.render = () => {
           const target = document.getElementById('transcript');
           for (let n = 1; n <= 4; n++) {
@@ -53,8 +54,9 @@ test('activity summaries preserve failures, children and disclosure at phone and
       }, [SUMMARY_LABEL, SUMMARY_DETAILS]);
       assert.equal(await page.locator('.activity-group').count(), 1);
       assert.equal(await page.locator('.activity-group').evaluate(node => node.open), false);
-      assert.match(await page.locator('.activity-group > summary').innerText(), /1 failed: Grep/);
-      assert.match(await page.locator('.activity-group > summary').innerText(), /1 running/);
+      assert.match(await page.locator('.activity-group > summary .activity-label').innerText(),
+                   /searched 1 pattern \(1 failed\)/);
+      assert.equal(await page.locator('.activity-group > summary .activity-counts').innerText(), '1 running');
 
       const closing = page.locator('[data-record-id="summary-1"]');
       const rule = closing.locator('details.request-summary > summary');
@@ -140,6 +142,122 @@ test('activity summaries preserve failures, children and disclosure at phone and
       await page.close();
     }
   } finally { await browser.close(); }
+});
+
+test('a cut activity label still shows its failure total, without repeating it when it fits', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const width of [375, 1200]) {
+      const touch = width < 600;
+      const page = await browser.newPage({viewport: {width, height: 812}, hasTouch: touch, isMobile: touch});
+      await page.setContent('<meta name="viewport" content="width=device-width"><main id="transcript"></main>');
+      await page.addStyleTag({content: await readFile(resolve(root, 'relay/viewer/viewer-theme.css'), 'utf8')});
+      await page.addStyleTag({content: await readFile(resolve(root, 'relay/viewer/viewer.css'), 'utf8')});
+      await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/markdown.js'), 'utf8')});
+      await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/renderer.js'), 'utf8')});
+      await page.evaluate(() => {
+        const activity = {id: 'tool-1', failed: 1, running: 1, status: 'running',
+          summary: '9 calls: read 4 files, searched 2 patterns, evaluated 1 form, ran 2 commands (1 failed)'};
+        const target = document.getElementById('transcript');
+        for (let n = 1; n <= 3; n++) {
+          target.append(window.mevedelTranscriptRenderer.renderRecord({id: `tool-${n}`, kind: 'tool',
+            toolUseId: `source-${n}`, activity, presentation: {name: 'Read', body: 'ok', collapsed: true}},
+          null, null, null));
+        }
+        window.mevedelTranscriptRenderer.groupActivity(target);
+      });
+      const label = page.locator('.activity-group > summary .activity-label');
+      const total = page.locator('.activity-group > summary .activity-failed');
+      const cut = await label.evaluate(node => node.scrollWidth > node.clientWidth);
+      if (width === 375) {
+        assert.equal(cut, true, 'the phone label cuts the inline failure count');
+        assert.equal(await total.isVisible(), true);
+        assert.equal(await total.innerText(), '(1 failed)');
+        assert.equal(await total.evaluate(node => getComputedStyle(node).color),
+                     await page.evaluate(() => {
+                       const probe = document.createElement('span');
+                       probe.style.color = 'var(--failed)';
+                       document.body.append(probe);
+                       return getComputedStyle(probe).color;
+                     }));
+        const box = await total.boundingBox();
+        assert.ok(box && box.x + box.width <= width, 'the total stays on screen');
+      } else {
+        assert.equal(cut, false);
+        assert.equal(await total.isVisible(), false, 'a fitting label is not repeated');
+        assert.match(await label.innerText(), /ran 2 commands \(1 failed\)/);
+      }
+      await capture(page, `activity-failure-total-${width}`);
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test('an archived segment measures its failure total once attached and when reopened', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({viewport: {width: 375, height: 812}, hasTouch: true, isMobile: true});
+    await page.setContent('<meta name="viewport" content="width=device-width"><section id="history" class="history" hidden></section>');
+    await page.addStyleTag({content: await readFile(resolve(root, 'relay/viewer/viewer-theme.css'), 'utf8')});
+    await page.addStyleTag({content: await readFile(resolve(root, 'relay/viewer/viewer.css'), 'utf8')});
+    await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/markdown.js'), 'utf8')});
+    await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/renderer.js'), 'utf8')});
+    await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/viewer-history.js'), 'utf8')});
+    await page.evaluate(() => {
+      const el = (tag, className, text) => {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
+      };
+      window.sent = [];
+      window.archive = window.mevedelHistoryView.create({
+        send: async frame => { window.sent.push(frame); return true; }, el,
+        renderRecord: record => window.mevedelTranscriptRenderer.renderRecord(record, null, null, null),
+        onArtifacts: () => {}, onLoaded: () => {}});
+      window.archive.connection(true);
+      window.archiveIndex = current => window.archive.handle({t: 'history-index', currentSegment: current,
+        final: true, records: [{kind: 'chat', number: 1, title: 'Sweep', firstSegment: 1, lastSegment: current}]});
+      window.archiveIndex(2);
+      const activity = {id: 'old-1', failed: 1, running: 0, status: 'failed',
+        summary: '9 calls: read 4 files, searched 2 patterns, evaluated 1 form, ran 2 commands (1 failed)'};
+      window.reply = () => window.archive.handle({t: 'history', reqId: window.sent.at(-1).reqId, segment: 1,
+        final: true, records: [1, 2, 3].map(n => ({id: `old-${n}`, kind: 'tool', toolUseId: `old-source-${n}`,
+          activity, presentation: {name: 'Read', body: 'ok', collapsed: true}}))});
+    });
+    const segment = page.locator('#history .history-segment');
+    const total = segment.locator('.activity-group > summary .activity-failed');
+    // The ledger is grouped detached and attached while the segment is open.
+    await segment.locator('summary').first().click();
+    await page.waitForFunction(() => window.sent.length === 1);
+    await page.evaluate(() => window.reply());
+    assert.equal(await total.isVisible(), true, 'the attached ledger measured its cut label');
+    assert.equal(await total.innerText(), '(1 failed)');
+    // A ledger that arrives while its segment is closed shows the total once opened.
+    await page.evaluate(() => window.archiveIndex(3));
+    const second = page.locator('#history .history-segment').nth(1);
+    await second.locator('summary').first().click();
+    await page.waitForFunction(() => window.sent.length === 2);
+    await second.evaluate(node => { node.open = false; });
+    await page.evaluate(() => window.archive.handle({t: 'history', reqId: window.sent.at(-1).reqId, segment: 2,
+      final: true, records: [1, 2, 3].map(n => ({id: `older-${n}`, kind: 'tool', toolUseId: `older-source-${n}`,
+        activity: {id: 'older-1', failed: 2, running: 0, status: 'failed',
+          summary: '9 calls: read 4 files, searched 2 patterns, evaluated 1 form, ran 2 commands (2 failed)'},
+        presentation: {name: 'Read', body: 'ok', collapsed: true}}))}));
+    const secondTotal = second.locator('.activity-group > summary .activity-failed');
+    await second.locator('summary').first().click();
+    await page.waitForFunction(() => {
+      const node = document.querySelectorAll('#history .history-segment')[1]
+        .querySelector('.activity-failed');
+      return node && !node.hidden;
+    });
+    assert.equal(await secondTotal.innerText(), '(2 failed)');
+    await capture(page, 'activity-failure-total-history-375');
+  } finally {
+    await browser.close();
+  }
 });
 
 test('thinking disclosure keeps native toggles, draft and fit at phone and desktop widths', async () => {

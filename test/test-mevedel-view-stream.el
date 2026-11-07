@@ -2534,7 +2534,7 @@ turn's later text, live and after reconstruction."
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (= 1 (mevedel-view-stream-test--count-substring
-                        "Read 3 files, searched 2 patterns · 5 running" text)))
+                        "5 calls: read 3 files, searched 2 patterns · 5 running" text)))
           (should-not (string-match-p "Read: a" text))))
       ;; gptel writes every result after the batch's post-tool hooks.
       (with-current-buffer data-buf
@@ -2546,7 +2546,7 @@ turn's later text, live and after reconstruction."
       (with-current-buffer view-buf
         (let ((settled (buffer-substring-no-properties
                         (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "✓ Read 3 files, searched 2 patterns" settled))
+          (should (string-match-p "✓ 5 calls: read 3 files, searched 2 patterns" settled))
           (should-not (string-match-p "running" settled))
           (should-not (text-property-any (point-min) mevedel-view--input-marker
                                          'mevedel-view-pending-tool-live t))
@@ -2801,12 +2801,12 @@ turn's later text, live and after reconstruction."
       (mevedel-view-stream-test--batch data-buf second)
       (let ((text (mevedel-view-stream-test--history view-buf)))
         (should (= 1 (mevedel-view-stream-test--count-substring
-                      "● Read 3 files, searched 1 pattern · 2 running" text)))
+                      "● 4 calls: read 3 files, searched 1 pattern · 2 running" text)))
         (should-not (string-match-p "Read: a" text)))
       (mevedel-view-stream-test--batch data-buf second t)
       (let ((text (mevedel-view-stream-test--history view-buf)))
         (should (= 1 (mevedel-view-stream-test--count-substring
-                      "✓ Read 3 files, searched 1 pattern" text)))
+                      "✓ 4 calls: read 3 files, searched 1 pattern" text)))
         (should-not (string-match-p "running" text)))))
 
   :doc "identical parallel calls each count as running"
@@ -2844,7 +2844,7 @@ turn's later text, live and after reconstruction."
         (mevedel-view-stream-test--batch data-buf fourth)
         (with-current-buffer view-buf
           (let ((text (mevedel-view-stream-test--history view-buf)))
-            (should (string-match-p "Read 4 files · 1 running" text))
+            (should (string-match-p "4 calls: read 4 files · 1 running" text))
             (should (string-match-p "Read: c" text)))
           (should-not (mevedel-view--position-in-input-region-p (point)))
           (should (string-match-p
@@ -2857,7 +2857,7 @@ turn's later text, live and after reconstruction."
           (set-window-point (selected-window) (point)))
         (mevedel-view-stream-test--batch data-buf fourth t)
         (let ((text (mevedel-view-stream-test--history view-buf)))
-          (should (string-match-p "✓ Read 4 files" text))
+          (should (string-match-p "✓ 4 calls: read 4 files" text))
           (should (string-match-p "Read: c" text))))))
 
   :doc "a running-only group keeps its visited member and remembers expansion"
@@ -2887,7 +2887,7 @@ turn's later text, live and after reconstruction."
             (set-window-point (selected-window) (point)))
           (mevedel-view-stream-test--batch data-buf (last calls))
           (with-current-buffer view-buf
-            (should (string-match-p "Read 4 files · 4 running"
+            (should (string-match-p "4 calls: read 4 files · 4 running"
                                     (mevedel-view-stream-test--history view-buf)))
             (should (string-suffix-p
                      "Read: c" (buffer-substring-no-properties
@@ -2921,7 +2921,7 @@ turn's later text, live and after reconstruction."
                      (append (list :tool-use-id id) call)))))))
           (mevedel-view--flush-scheduled-render view-buf t)
           (with-current-buffer view-buf
-            (should (string-match-p "✓ Read 4 files"
+            (should (string-match-p "✓ 4 calls: read 4 files"
                                     (mevedel-view-stream-test--history view-buf)))
             (should (string-match-p "Read: c"
                                     (mevedel-view-stream-test--history view-buf)))
@@ -2970,7 +2970,7 @@ turn's later text, live and after reconstruction."
         (mevedel-view-stream-test--batch data-buf calls)
         (with-current-buffer view-buf
           (let ((text (mevedel-view-stream-test--history view-buf)))
-            (should (string-match-p "Read 4 files · 4 running" text))
+            (should (string-match-p "4 calls: read 4 files · 4 running" text))
             (should-not (string-match-p "Read: c" text)))
           (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
           (should (= (point) (+ (mevedel-view--input-start) 4)))))))
@@ -2998,7 +2998,7 @@ turn's later text, live and after reconstruction."
       (mevedel-view-stream-test--batch
        data-buf '((:name "Read" :args (:file_path "d"))))
       (let ((text (mevedel-view-stream-test--history view-buf)))
-        (should (string-match-p "Read 4 files · 1 running" text))
+        (should (string-match-p "4 calls: read 4 files · 1 running" text))
         (should (string-match-p "Read: c" text))
         (should (string-match-p "result" text)))
       (with-current-buffer view-buf
@@ -3025,7 +3025,7 @@ turn's later text, live and after reconstruction."
         (mevedel-view-stream-post-tool (car (last calls))))
       (let ((text (mevedel-view-stream-test--history view-buf)))
         (should (string-match-p
-                 "× Read 3 files, searched 1 pattern · 1 failed: Grep$" text))
+                 "× 4 calls: read 3 files, searched 1 pattern (1 failed) ▸$" text))
         (should-not (string-match-p "Read: a\\|Grep: x" text)))
       (with-current-buffer view-buf
         (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
@@ -3067,19 +3067,19 @@ turn's later text, live and after reconstruction."
       (mevedel-view-stream-test--batch data-buf settled t)
       (mevedel-view-stream-test--batch
        data-buf (list '(:name "Grep" :args (:pattern "x"))))
-      (should (string-match-p "● Read 4 files, searched 1 pattern · 1 running"
+      (should (string-match-p "● 5 calls: read 4 files, searched 1 pattern · 1 running"
                               (mevedel-view-stream-test--history view-buf)))
       (with-current-buffer view-buf
         (mevedel-view-stream-stop)
         (let ((text (mevedel-view-stream-test--history view-buf)))
           ;; The Grep never reached the transcript, so it no longer counts.
-          (should (string-match-p "✓ Read 4 files\n" text))
+          (should (string-match-p "✓ 4 calls: read 4 files ▸\n" text))
           (should-not (string-match-p "searched" text))
           (should-not (string-match-p "running" text))
           (should-not (text-property-any (point-min) (point-max)
                                          'mevedel-view-pending-tool-live t))
           (goto-char (point-min))
-          (search-forward "✓ Read 4 files")
+          (search-forward "✓ 4 calls: read 4 files")
           ;; The restored marker still belongs to the group's section.
           (should (eq 'tool-group
                       (get-text-property (match-beginning 0)
@@ -3126,11 +3126,11 @@ turn's later text, live and after reconstruction."
        t)
       (with-current-buffer view-buf
         (goto-char (point-min))
-        (search-forward "Read 4 files")
+        (search-forward "read 4 files")
         (mevedel-view-toggle-section))
       (mevedel-view-stream-test--batch data-buf running)
       (let ((text (mevedel-view-stream-test--history view-buf)))
-        (should (string-match-p "Read 4 files, searched 2 patterns · 2 running"
+        (should (string-match-p "6 calls: read 4 files, searched 2 patterns · 2 running"
                                 text))
         ;; Settled children and the running calls are all listed.
         (should (string-match-p "Read: a" text))
@@ -3138,7 +3138,7 @@ turn's later text, live and after reconstruction."
         (should (string-match-p "● Grep: y" text)))
       (mevedel-view-stream-test--batch data-buf running t)
       (let ((text (mevedel-view-stream-test--history view-buf)))
-        (should (string-match-p "✓ Read 4 files, searched 2 patterns" text))
+        (should (string-match-p "✓ 6 calls: read 4 files, searched 2 patterns" text))
         (should-not (string-match-p "running" text))
         ;; Still expanded: the settled calls are listed as children.
         (should (string-match-p "Grep: y" text))
@@ -3244,25 +3244,25 @@ turn's later text, live and after reconstruction."
                            call))))
         (cl-loop for call in calls for i from 1
                  do (event 'started call (format "id-%d" i)))
-        (should (string-match-p "● Read 4 files · 4 running"
+        (should (string-match-p "● 4 calls: read 4 files · 4 running"
                                 (mevedel-view-stream-test--history view-buf)))
         ;; The pipeline reports one call finished; gptel writes the
         ;; batch's results only once all four are done.
         (event 'settled (car calls) "id-1")
         (let ((text (mevedel-view-stream-test--history view-buf)))
-          (should (string-match-p "● Read 4 files · 3 running" text))
+          (should (string-match-p "● 4 calls: read 4 files · 3 running" text))
           (should-not (string-match-p "Read: b" text)))
         (dolist (call (cdr calls))
           (event 'settled call (format "id-%d" (1+ (cl-position call calls)))))
         ;; Every call finished, results still due: a finished group row.
         (let ((text (mevedel-view-stream-test--history view-buf)))
-          (should (string-match-p "✓ Read 4 files\n" text))
+          (should (string-match-p "✓ 4 calls: read 4 files ▸\n" text))
           (should-not (string-match-p "running\\|●" text)))
         (mevedel-view-stream-test--batch data-buf calls t)
         (with-current-buffer view-buf
           (should-not mevedel-view--pending-tool-calls))
         (should (= 1 (mevedel-view-stream-test--count-substring
-                      "✓ Read 4 files" (mevedel-view-stream-test--history
+                      "✓ 4 calls: read 4 files" (mevedel-view-stream-test--history
                                         view-buf)))))))
 
   :doc "a folded running group counts calls that failed before their results"
@@ -3281,13 +3281,13 @@ turn's later text, live and after reconstruction."
         (cl-loop for call in calls for i from 1
                  do (event 'started call (format "id-%d" i)))
         (event 'settled (car calls) "id-1" :status 'error)
-        (should (string-match-p "● Read 4 files · 3 running · 1 failed: Read\n"
+        (should (string-match-p "● 4 calls: read 4 files (1 failed) · 3 running ▸\n"
                                 (mevedel-view-stream-test--history view-buf)))
         (cl-loop for call in (cdr calls) for i from 2
                  do (event 'settled call (format "id-%d" i)))
         ;; Nothing left running: the failure takes the marker.
         (let ((text (mevedel-view-stream-test--history view-buf)))
-          (should (string-match-p "× Read 4 files · 1 failed: Read\n" text))
+          (should (string-match-p "× 4 calls: read 4 files (1 failed) ▸\n" text))
           (should-not (string-match-p "running\\|●" text)))
         ;; A stop restores the group's own header.
         (with-current-buffer view-buf (mevedel-view-stream-stop))
@@ -3319,7 +3319,7 @@ turn's later text, live and after reconstruction."
   (mevedel-view-stream-test--with-buffers
     (let ((mevedel-view-tool-boundary-render-delay 0)
           (mevedel-view-tool-group-collapse-threshold 3)
-          (header "● Read 4 files, searched 2 patterns · 2 running"))
+          (header "● 6 calls: read 4 files, searched 2 patterns · 2 running"))
       (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
       (with-current-buffer view-buf
         (mevedel-view-stream-test--insert-composer-draft "> quoted\nsecond line" 4))
@@ -3329,7 +3329,7 @@ turn's later text, live and after reconstruction."
        t)
       (with-current-buffer view-buf
         (goto-char (point-min))
-        (search-forward "Read 4 files")
+        (search-forward "read 4 files")
         (mevedel-view-toggle-section))
       (mevedel-view-stream-test--batch
        data-buf '((:name "Grep" :args (:pattern "x"))
@@ -3337,7 +3337,7 @@ turn's later text, live and after reconstruction."
       (cl-flet ((toggle ()
                   (with-current-buffer view-buf
                     (goto-char (point-min))
-                    (search-forward "Read 4 files")
+                    (search-forward "read 4 files")
                     (mevedel-view-toggle-section)
                     (mevedel-view-stream-test--history view-buf))))
         ;; Fold: one running header, no running rows left behind.
@@ -3382,10 +3382,10 @@ turn's later text, live and after reconstruction."
                          (lambda () "Viewing archived segment\n\n")))
                 (mevedel-view-render--full-now)
                 (let ((before (mevedel-view-stream-test--history view-buf)))
-                  (should (string-match-p "Read 4 files" before))
+                  (should (string-match-p "read 4 files" before))
                   ;; Toggle a section of the archive while calls still run.
                   (goto-char (point-min))
-                  (search-forward "Read 4 files")
+                  (search-forward "read 4 files")
                   (mevedel-view-toggle-section)
                   (mevedel-view-toggle-section)
                   ;; A live update arriving now leaves the archive alone too.
@@ -4976,30 +4976,32 @@ turn's later text, live and after reconstruction."
 
   :doc "complete same-id Bash blocks render as separate handles"
   (mevedel-view-stream-test--with-buffers
-    (dolist (call '(("test 1 = 2" . "<bash-execution exit_code=\"1\" outcome=\"false\"/>")
-                    ("rg missing mevedel.el" . "<bash-execution exit_code=\"1\" outcome=\"no-match\"/>")
-                    ("diff /dev/null mevedel.el" . "Error: Filesystem authority required")))
-      (mevedel-view-stream-test--insert-data
-       data-buf
-       (format "#+begin_tool (Bash :command %S)\n" (car call))
-       nil)
-      (mevedel-view-stream-test--insert-data
-       data-buf
-       (format "(:name \"Bash\" :args (:command %S))\n\n%s\n"
-               (car call) (cdr call))
-       '(tool . "duplicate-call-id"))
-      (mevedel-view-stream-test--insert-data data-buf "#+end_tool\n" nil))
-    (with-current-buffer data-buf
-      (mevedel-view-stream-render-response (point-min) (point-max)))
-    (with-current-buffer view-buf
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
-        (should (= 3 (mevedel-view-stream-test--count-substring
-                      "Bash:" text)))
-        (dolist (command '("test 1 = 2"
-                           "rg missing mevedel.el"
-                           "diff /dev/null mevedel.el"))
-          (should (string-match-p (regexp-quote command) text))))))
+    ;; Each block is its own row; three of them stay below the fold.
+    (let ((mevedel-view-tool-group-collapse-threshold 3))
+      (dolist (call '(("test 1 = 2" . "<bash-execution exit_code=\"1\" outcome=\"false\"/>")
+                      ("rg missing mevedel.el" . "<bash-execution exit_code=\"1\" outcome=\"no-match\"/>")
+                      ("diff /dev/null mevedel.el" . "Error: Filesystem authority required")))
+        (mevedel-view-stream-test--insert-data
+         data-buf
+         (format "#+begin_tool (Bash :command %S)\n" (car call))
+         nil)
+        (mevedel-view-stream-test--insert-data
+         data-buf
+         (format "(:name \"Bash\" :args (:command %S))\n\n%s\n"
+                 (car call) (cdr call))
+         '(tool . "duplicate-call-id"))
+        (mevedel-view-stream-test--insert-data data-buf "#+end_tool\n" nil))
+      (with-current-buffer data-buf
+        (mevedel-view-stream-render-response (point-min) (point-max)))
+      (with-current-buffer view-buf
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (= 3 (mevedel-view-stream-test--count-substring
+                        "Bash:" text)))
+          (dolist (command '("test 1 = 2"
+                             "rg missing mevedel.el"
+                             "diff /dev/null mevedel.el"))
+            (should (string-match-p (regexp-quote command) text)))))))
 
   :doc "restored stale tool bounds render and expand without garbled fragments"
   (mevedel-view-stream-test--with-buffers

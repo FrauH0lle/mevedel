@@ -1622,10 +1622,14 @@ first tool retain their standalone presentation."
       (let ((activity
              (list :id (car (plist-get item :ids))
                    :summary (mevedel-collaboration--truncate-bytes
-                             (plist-get item :summary) 600)
+                             (substring-no-properties (plist-get item :summary))
+                             600)
                    :running (plist-get item :running)
-                   :failures (plist-get item :failure-label)
                    :status (symbol-name (plist-get item :status)))))
+        ;; The browser shows this total only when its label cuts the
+        ;; summary's own failure counts off.
+        (when (> (plist-get item :failed) 0)
+          (setq activity (nconc activity (list :failed (plist-get item :failed)))))
         (dolist (entry (plist-get item :entries))
           (let ((record (plist-get entry :record)))
             (if (plist-member record :activity)

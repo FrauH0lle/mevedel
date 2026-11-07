@@ -83,12 +83,22 @@
          (grouped (mevedel-collaboration--activity-records records))
          (activity (plist-get (car grouped) :activity)))
     (should (equal "tool-1" (plist-get activity :id)))
-    (should (equal "Read 2 files, searched 1 pattern, evaluated 1 form"
+    (should (equal "4 calls: read 2 files, searched 1 pattern (1 failed), evaluated 1 form"
                    (plist-get activity :summary)))
-    (should (equal "1 failed: Grep" (plist-get activity :failures)))
+    (should-not (plist-member activity :failures))
+    (should (= 1 (plist-get activity :failed)))
+    (should-not (text-properties-at 0 (plist-get activity :summary)))
+    (let ((clean (plist-get
+                  (car (mevedel-collaboration--activity-records
+                        (mapcar (lambda (record)
+                                  (plist-put (copy-sequence record) :status "completed"))
+                                records)))
+                  :activity)))
+      (should (equal "completed" (plist-get clean :status)))
+      (should-not (plist-member clean :failed)))
     (should (equal "failed" (plist-get activity :status)))
     (should (cl-every (lambda (record) (equal activity (plist-get record :activity))) grouped))
-    (should-not (plist-get (car (mevedel-collaboration--activity-records (cl-subseq records 0 3)))
+    (should-not (plist-get (car (mevedel-collaboration--activity-records (cl-subseq records 0 2)))
                            :activity))
     (should-not (plist-get (car (mevedel-collaboration--activity-records
                                 (append (cl-subseq records 0 2)
@@ -107,7 +117,8 @@
       (let ((running (plist-get (car (mevedel-collaboration--activity-records records)) :activity)))
         (should (= 1 (plist-get running :running)))
         (should (equal "running" (plist-get running :status)))
-        (should (equal "1 failed: Grep" (plist-get running :failures)))))))
+        (should (string-search "searched 1 pattern (1 failed)"
+                               (plist-get running :summary)))))))
 
 (mevedel-deftest mevedel-collaboration-tool-presentation/approval ()
   ,test

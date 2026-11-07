@@ -67,7 +67,12 @@ window.mevedelHistoryView = Object.freeze({
           node.append(body);
           const row = {number, node, body, loaded:false, reqId:null, records:[]};
           rows.set(number, row);
-          node.addEventListener('toggle', () => { if (node.open) load(row); });
+          node.addEventListener('toggle', () => {
+            if (!node.open) return;
+            // A segment loaded while closed may have measured without layout.
+            if (row.loaded) window.mevedelTranscriptRenderer.fitActivityFailures(row.body);
+            else load(row);
+          });
         }
         // The host's native chat descriptors distinguish /clear from a
         // compaction. Move existing disclosure nodes, preserving loaded bodies
@@ -101,6 +106,8 @@ window.mevedelHistoryView = Object.freeze({
         window.mevedelTranscriptRenderer.groupActivity(ledger);
         window.mevedelTranscriptRenderer.markContinuations(ledger);
         row.body.append(ledger);
+        // Grouping ran detached; measure failure totals now that it is shown.
+        window.mevedelTranscriptRenderer.fitActivityFailures(ledger);
         row.records = [];
         row.loaded = true;
         row.reqId = null;

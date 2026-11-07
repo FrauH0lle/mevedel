@@ -26,9 +26,15 @@
 ;;                In-flight calls enter as running tools.
 ;;   :completion  For a completion, (KEY . STATUS): KEY identifies the
 ;;                execution, STATUS is its outcome word.
+;;   :unconfined  Non-nil for a tool that ran without sandbox confinement.
 ;;   :scope       Compared with `equal'; a change ends the run.
 ;;
 ;; Callers may add their own keys; entries are returned unchanged.
+;;
+;; A group's summary is one plain string for every surface.  Its call count
+;; and failure counts carry the `mevedel-activity-group-part' text property
+;; (`count', `failure' or `muted'), so a surface that styles them needs no
+;; second parse; one that ignores properties shows the same text.
 
 ;;; Code:
 
@@ -46,14 +52,16 @@
 Each entry is (NAME SINGULAR PLURAL) with a `%d' count slot.  Tools
 without an entry -- MCP tools included -- fall back to \"NAME xN\".")
 
-(defconst mevedel-activity-group--failed-names-width 30
-  "Most columns a failure label spends naming its failed tools.")
+(defun mevedel-activity-group--part (text part)
+  "Return TEXT marked as summary PART for surfaces that style it."
+  (propertize text 'mevedel-activity-group-part part))
 
 (defun mevedel-activity-group--summary (entries)
   "Return the one-line summary of member ENTRIES.
-Tools count by name in first-appearance order, then distinct completions by
-outcome, then messages."
-  (let (names counts completions (messages 0))
+It starts with the call count, as in `5 calls:'.  Tools count by name in
+first-appearance order, each followed by its failures, as in `ran 4
+commands (2 failed)'; then distinct completions by outcome, then messages."
+  (let (names counts failures completions (messages 0) (tools 0))
     (dolist (entry entries)
       (pcase (plist-get entry :kind)
         ('message (setq messages (1+ messages)))
@@ -63,83 +71,80 @@ outcome, then messages."
              (push completion completions))))
         (_
          (let ((name (or (plist-get entry :name) "Tool")))
+           (setq tools (1+ tools))
            (unless (member name names)
              (push name names))
            (setf (alist-get name counts 0 nil #'equal)
-                 (1+ (alist-get name counts 0 nil #'equal)))))))
+                 (1+ (alist-get name counts 0 nil #'equal)))
+           (when (eq (plist-get entry :status) 'failed)
+             (setf (alist-get name failures 0 nil #'equal)
+                   (1+ (alist-get name failures 0 nil #'equal))))))))
     (setq names (nreverse names))
-    (let* ((parts
-            (append
-             (mapcar
-              (lambda (name)
-                (let ((count (alist-get name counts 0 nil #'equal))
-                      (verb (assoc name mevedel-activity-group--verbs)))
-                  (cond
-                   (verb (format (if (= count 1) (nth 1 verb) (nth 2 verb)) count))
-                   ((= count 1) name)
-                   (t (format "%s ×%d" name count)))))
-              names)
-             (let (statuses parts)
-               (dolist (completion completions)
-                 (setf (alist-get (cdr completion) statuses 0 nil #'equal)
-                       (1+ (alist-get (cdr completion) statuses 0 nil #'equal))))
-               (dolist (status '("completed" "failed" "stopped" "timed out" "ended" "lost")
-                               (nreverse parts))
-                 (when-let* ((count (alist-get status statuses nil nil #'equal)))
-                   (push (if parts
-                             (format "%d %s" count status)
-                           (format "%d command%s %s" count
-                                   (if (= count 1) "" "s") status))
-                         parts))))
-             (when (> messages 0)
-               (list (format (if (= messages 1) "received %d message"
-                               "received %d messages")
-                             messages)))))
-           (summary (string-join parts ", ")))
-      ;; Capitalize only a verb phrase; a leading tool name keeps its casing.
-      (if (and (not (string-empty-p summary))
-               (assoc (car names) mevedel-activity-group--verbs))
-          (concat (upcase (substring summary 0 1)) (substring summary 1))
-        summary))))
-
-(defun mevedel-activity-group--failure-label (count names)
-  "Return `N failed' for COUNT failures, naming the failed tools in NAMES.
-NAMES are shown once each, in order, and end in `…' past
-`mevedel-activity-group--failed-names-width' columns, so a folded row can
-still say which call failed without growing past one line."
-  (let ((label (format "%d failed" count))
-        (names (delete-dups (copy-sequence names))))
-    (if (not names)
-        label
-      (concat label ": "
-              (truncate-string-to-width
-               (string-join names ", ") mevedel-activity-group--failed-names-width
-               nil nil "…")))))
+    (concat
+     (mevedel-activity-group--part
+      (format (if (= tools 1) "%d call" "%d calls") tools) 'count)
+     ": "
+     (string-join
+      (append
+       (mapcar
+        (lambda (name)
+          (let ((count (alist-get name counts 0 nil #'equal))
+                (failed (alist-get name failures nil nil #'equal))
+                (verb (assoc name mevedel-activity-group--verbs)))
+            (concat
+             (cond
+              (verb (format (if (= count 1) (nth 1 verb) (nth 2 verb)) count))
+              ((= count 1) name)
+              (t (format "%s ×%d" name count)))
+             (when failed
+               (concat " "
+                       (mevedel-activity-group--part "(" 'muted)
+                       (mevedel-activity-group--part
+                        (format "%d failed" failed) 'failure)
+                       (mevedel-activity-group--part ")" 'muted))))))
+        names)
+       (let (statuses parts)
+         (dolist (completion completions)
+           (setf (alist-get (cdr completion) statuses 0 nil #'equal)
+                 (1+ (alist-get (cdr completion) statuses 0 nil #'equal))))
+         (dolist (status '("completed" "failed" "stopped" "timed out" "ended" "lost")
+                         (nreverse parts))
+           (when-let* ((count (alist-get status statuses nil nil #'equal)))
+             (push (if parts
+                       (format "%d %s" count status)
+                     (format "%d command%s %s" count
+                             (if (= count 1) "" "s") status))
+                   parts))))
+       (when (> messages 0)
+         (list (format (if (= messages 1) "received %d message"
+                         "received %d messages")
+                       messages))))
+      ", "))))
 
 (defun mevedel-activity-group--group (entries)
   "Return the group of run ENTRIES, which start and end with members."
-  (let ((running 0) failed warning members)
+  (let ((running 0) (failed 0) warning unconfined members)
     (dolist (entry entries)
       (unless (eq (plist-get entry :role) 'transparent)
         (push entry members)
         (when (eq (plist-get entry :kind) 'tool)
+          (when (plist-get entry :unconfined)
+            (setq unconfined t))
           (pcase (plist-get entry :status)
             ('running (setq running (1+ running)))
-            ('failed (push (or (plist-get entry :name) "Tool") failed))
+            ('failed (setq failed (1+ failed)))
             ('warning (setq warning t))))))
-    (setq members (nreverse members)
-          failed (nreverse failed))
+    (setq members (nreverse members))
     (list :group t
           :entries entries
           :ids (mapcar (lambda (entry) (plist-get entry :id)) entries)
           :summary (mevedel-activity-group--summary members)
           :running running
-          :failed (length failed)
+          :failed failed
           :warning warning
-          :failure-label (and failed (mevedel-activity-group--failure-label
-                                      (length failed) failed))
+          :unconfined unconfined
           :status (cond ((> running 0) 'running)
-                        (failed 'failed)
+                        ((> failed 0) 'failed)
                         (warning 'warning)
                         (t 'completed)))))
 
@@ -157,10 +162,10 @@ stay single.
 A group is a plist: `:group' t, `:entries' its member and enclosed
 transparent entries, `:ids' their `:id's, `:summary', `:running' (running
 tools), `:failed' (failed tools), `:warning' (non-nil when a tool warned),
-`:failure-label' (nil without failures),
-and `:status', which is `running', `failed', `warning' or `completed'.
-Running and failure facts are independent: a running group keeps its
-failure count and label."
+`:unconfined' (non-nil when a tool ran without sandbox confinement), and
+`:status', which is `running', `failed', `warning' or `completed'.  The
+summary counts each tool's failures beside it.  Running and failure facts
+are independent: a running group keeps its failure counts."
   (let (out run tail tools scope)
     (cl-flet ((close ()
                 (when run

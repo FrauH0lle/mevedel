@@ -234,6 +234,8 @@ finally:
         (progn
           (cl-letf (((symbol-function 'mevedel-graphical-check--preflight) #'ignore)
                     ((symbol-function 'mevedel-graphical-check--capture) #'ignore)
+                    ((symbol-function 'mevedel-graphical-check--capture-tool-groups)
+                     #'ignore)
                     ((symbol-function 'set-frame-size) #'ignore)
                     ((symbol-function 'sit-for) #'ignore)
                     ((symbol-function 'ert-run-tests-batch) (lambda (_) stats))
