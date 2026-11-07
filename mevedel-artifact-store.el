@@ -947,6 +947,9 @@ versioned now."
 (defconst mevedel-artifact-store-file-max-bytes (* 16 1024 1024)
   "Largest file read or written through the file operations below.")
 
+(defconst mevedel-artifact-store-stale-content-bytes (* 256 1024)
+  "Files smaller than this accompany a stale refusal with their bytes.")
+
 (defun mevedel-artifact-store-file-path (workspace id file)
   "Return FILE of WORKSPACE's artifact ID as a path, or signal why not.
 FILE is relative to the artifact's directory, without `.' or `..'
@@ -988,13 +991,6 @@ explains, or larger than `mevedel-artifact-store-file-max-bytes'."
           (error "%s is larger than %d bytes" file mevedel-artifact-store-file-max-bytes))
         bytes))))
 
-(defun mevedel-artifact-store--file-hash (path)
-  "Return the SHA-256 of the file at PATH as hex, or nil when it is absent."
-  (let ((result (car (mevedel-session-control-fs-run-program
-                      (list (list :op 'file-hash :path path :optional t))))))
-    (unless (eq (plist-get result :status) 'absent)
-      (plist-get (mevedel-session-control-fs-program-value result) :sha256))))
-
 (defun mevedel-artifact-store-write-files (workspace id changes)
   "Make CHANGES to the files of WORKSPACE's artifact ID if each still matches.
 Each change is a plist naming a `:file' relative to the artifact's
@@ -1010,7 +1006,10 @@ never deleted, only replaced: without it the artifact is gone.
 Return (:files RESULTS), a result per change in order: (:file FILE :hash
 NEW :created CREATED) or (:file FILE :deleted t).  When a file no longer
 matches, change nothing and return (:stale t :file FILE :hash CURRENT)
-for the first such FILE, CURRENT being nil for an absent file.  Signal
+for the first such FILE, CURRENT being nil for an absent file.  The hash
+and, for an existing file, `:bytes' size are observed under the lock.
+Files smaller than `mevedel-artifact-store-stale-content-bytes' also
+carry their unibyte `:content' from that observation.  Signal
 when a change is refused.  A change notifies the store's observers."
   (let ((primary (plist-get (mevedel-artifact-store-meta workspace id) :file))
         files prepare checks operations)
@@ -1027,9 +1026,8 @@ when a change is refused.  A change notifies the store's observers."
                          (let ((case-fold-search nil))
                            (string-match-p "\\`[0-9a-f]\\{64\\}\\'" hash))))
           (error "A file's hash is the SHA-256 of its bytes, as 64 lowercase hex digits"))
-        (push (if hash
-                  (list :op 'verify-hash :path path :content hash)
-                (list :op 'absent :path path))
+        (push (list :op 'verify-hash :path path :content hash
+                    :snapshot-bytes mevedel-artifact-store-stale-content-bytes)
               checks)
         (if (plist-get change :delete)
             (progn
@@ -1065,11 +1063,11 @@ when a change is refused.  A change notifies the store's observers."
            (stale (cl-loop for change in changes
                            for result in (nthcdr (1+ (length prepare)) results)
                            when (memq (plist-get result :status) '(mismatch absent))
-                           return (plist-get change :file))))
+                           return (append (list :stale t :file (plist-get change :file))
+                                          (or (plist-get result :observed)
+                                              (list :hash nil))))))
       (if stale
-          (list :stale t :file stale
-                :hash (mevedel-artifact-store--file-hash
-                       (mevedel-artifact-store-file-path workspace id stale)))
+          stale
         ;; An optional step, such as a directory that exists already, may fail.
         (cl-mapc (lambda (operation result)
                    (unless (plist-get operation :optional)
@@ -1092,26 +1090,26 @@ CONTENT is a unibyte string of at most
 bytes the writer last saw, as hex, or nil to create FILE, which must not
 exist yet; its missing directories are created.  The check and the write
 are one step under the store's lock.  Return (:hash NEW :created
-CREATED), or (:stale t :hash CURRENT) without writing, CURRENT being nil
-for an absent file.  Signal when FILE is refused."
+CREATED), or a stale outcome as `mevedel-artifact-store-write-files'
+returns, without writing.  Signal when FILE is refused."
   (let ((outcome (mevedel-artifact-store-write-files
                   workspace id (list (list :file file :hash hash :content content)))))
     (if (plist-get outcome :stale)
-        (list :stale t :hash (plist-get outcome :hash))
+        outcome
       (let ((result (car (plist-get outcome :files))))
         (list :hash (plist-get result :hash) :created (plist-get result :created))))))
 
 (defun mevedel-artifact-store-delete-file (workspace id file hash)
   "Delete FILE of WORKSPACE's artifact ID if it still has HASH.
 HASH is the SHA-256 of the bytes the deleter last saw, as hex.  Return
-t, or (:stale t :hash CURRENT) without deleting, as
+t, or a stale outcome without deleting, as
 `mevedel-artifact-store-write-file' does.  Signal when FILE is refused,
 as for `mevedel-artifact-store-write-files', which names the primary
 file's deletion among them."
   (let ((outcome (mevedel-artifact-store-write-files
                   workspace id (list (list :file file :hash hash :delete t)))))
     (if (plist-get outcome :stale)
-        (list :stale t :hash (plist-get outcome :hash))
+        outcome
       t)))
 
 (provide 'mevedel-artifact-store)

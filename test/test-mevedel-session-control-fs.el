@@ -1168,7 +1168,25 @@ streams over stdin."
     (dolist (output (list "eA==\0" (concat "eA==\0" "1 0")
                           (concat "eA==\0" "2 0\0")
                           (concat "eA==\0" "1 0\0extra\0" "2 0\0")))
-      (should-error (mevedel-session-control-fs--program-results ops output)))))
+      (should-error (mevedel-session-control-fs--program-results ops output))))
+  :doc "only a complete hash-mismatch snapshot exposes failed-operation evidence"
+  (let* ((op (list :op 'verify-hash :path "/tmp/snapshot" :snapshot-bytes 2))
+         (hash (secure-hash 'sha256 "x"))
+         (snapshot (concat "1 " hash "\nx"))
+         (encoded (base64-encode-string snapshot t)))
+    (let ((result (car (mevedel-session-control-fs--program-results
+                        (list op) (concat encoded "\0" "1 72\0")))))
+      (should (equal (list :hash hash :bytes 1 :content "x")
+                     (plist-get result :observed)))
+      (should-not (plist-get result :value)))
+    (dolist (payload (list "" "partial" (concat "1 " hash "\n")
+                          (concat "1 " hash "\ny") (concat "2 " hash "\nxx")))
+      (should-error (mevedel-session-control-fs--program-results
+                     (list op) (concat (base64-encode-string payload t) "\0" "1 72\0"))))
+    (let ((result (car (mevedel-session-control-fs--program-results
+                        (list op) (concat "partial\0" "1 67\0")))))
+      (should-not (plist-get result :observed))
+      (should-not (plist-get result :value)))))
 
 (mevedel-deftest mevedel-session-control-fs--archive-results
   (:doc "decodes native binary members and long UTF-8 names while rejecting mismatched or corrupt archives")
@@ -2433,6 +2451,58 @@ streams over stdin."
                                   (list (list :op 'verify-hash :path source :content hash)
                                         (list :op 'delete-file :path source))))))
           (should-not (file-exists-p source)))
+      (delete-directory root t)))
+
+  :doc "captures bounded binary conflict evidence in the hash guard, not after unlocking"
+  (let* ((root (make-temp-file "mevedel-hash-snapshot-" t))
+         (source (file-name-concat root "image.bin"))
+         (missing (file-name-concat root "missing"))
+         (bytes (apply #'unibyte-string (number-sequence 0 255)))
+         (hash (secure-hash 'sha256 bytes)))
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write 'no-conversion))
+            (write-region bytes nil source nil 'silent))
+          (dolist (limit '(0 255 256 257))
+            (dolist (expected (list nil (make-string 64 ?0)))
+              (let* ((results (mevedel-session-control-fs-run-program
+                               (list (list :op 'verify-hash :path source :content expected
+                                           :snapshot-bytes limit)
+                                     (list :op 'delete-file :path source))
+                               root))
+                     (observed (plist-get (car results) :observed)))
+                (should (equal '(mismatch skipped)
+                               (mapcar (lambda (result) (plist-get result :status)) results)))
+                (should-not (plist-get (car results) :value))
+                (should (equal hash (plist-get observed :hash)))
+                (should (= 256 (plist-get observed :bytes)))
+                (if (> limit 256)
+                    (should (equal bytes (plist-get observed :content)))
+                  (should-not (plist-member observed :content))))))
+          (should (file-exists-p source))
+          (dolist (case (list (list source hash 'ok) (list missing nil 'ok)
+                             (list missing hash 'absent)))
+            (let ((result (car (mevedel-session-control-fs-run-program
+                                (list (list :op 'verify-hash :path (car case)
+                                            :content (cadr case) :snapshot-bytes 257)) root))))
+              (should (eq (caddr case) (plist-get result :status)))
+              (should-not (plist-get result :observed))))
+          ;; Empty content is included, not confused with an absent file.
+          (write-region "" nil source nil 'silent)
+          (let ((observed (plist-get
+                           (car (mevedel-session-control-fs-run-program
+                                 (list (list :op 'verify-hash :path source
+                                             :content hash :snapshot-bytes 1)) root))
+                           :observed)))
+            (should (equal (list :hash (secure-hash 'sha256 "") :bytes 0 :content "")
+                           observed)))
+          (make-symbolic-link source (file-name-concat root "linked"))
+          (should (eq 'failed
+                      (plist-get (car (mevedel-session-control-fs-run-program
+                                       (list (list :op 'verify-hash
+                                                   :path (file-name-concat root "linked")
+                                                   :snapshot-bytes 257)) root))
+                                 :status))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-control-fs-observation-time ()

@@ -357,9 +357,6 @@ MESSAGE)."
 ;;
 ;;; HTML files
 
-(defconst mevedel-collaboration-artifact-room--stale-content-bytes (* 256 1024)
-  "Largest current file a refused write sends back with its hash.")
-
 (defun mevedel-collaboration-artifact-room--file-fields (file bytes)
   "Return the reply fields of FILE holding the unibyte string BYTES.
 They name the file and give its SHA-256 `:hash' and size `:bytes', and
@@ -405,18 +402,16 @@ The result names the `:primary' file and lists `:files' as (:file NAME
                    (list :primary (plist-get (mevedel-artifact-store-meta workspace id) :file)
                          :files (vconcat (mevedel-artifact-store-files workspace id)))))))
 
-(defun mevedel-collaboration-artifact-room--stale (room file current expected)
-  "Return the refusal of a change to FILE of ROOM's artifact.
-CURRENT is the file's hash now and EXPECTED the one the change named,
-each nil for an absent file.  A file under
-`mevedel-collaboration-artifact-room--stale-content-bytes' comes with
-its content, so the consumer can redo its change without reading again."
-  (let ((bytes (and current
-                    (mevedel-artifact-store-read-file
-                     (plist-get room :workspace) (plist-get room :artifact) file))))
+(defun mevedel-collaboration-artifact-room--stale (outcome expected)
+  "Return the refusal from the store's locked OUTCOME and EXPECTED hash.
+Small files come with their observed content, so the consumer can redo
+its change without reading again.  Nothing is reread after the lock."
+  (let ((file (plist-get outcome :file))
+        (current (plist-get outcome :hash))
+        (bytes (plist-get outcome :content)))
     (append
      (list :error (cond
-                   ((null bytes)
+                   ((null current)
                     (format "%s does not exist; write it without a hash to create it" file))
                    ((null expected)
                     (format "%s already exists; redo the change on its current content" file))
@@ -424,10 +419,10 @@ its content, so the consumer can redo its change without reading again."
                               file)))
            :code "stale")
      (cond
-      ((null bytes) (list :file file :hash nil))
-      ((< (length bytes) mevedel-collaboration-artifact-room--stale-content-bytes)
+      ((null current) (list :file file :hash nil))
+      (bytes
        (mevedel-collaboration-artifact-room--file-fields file bytes))
-      (t (list :file file :hash (secure-hash 'sha256 bytes) :bytes (length bytes)))))))
+      (t (list :file file :hash current :bytes (plist-get outcome :bytes)))))))
 
 (defun mevedel-collaboration-artifact-room--changed-file (room file)
   "Note a consumer's committed change to FILE of ROOM's artifact.
@@ -465,7 +460,7 @@ observers hear of the change as of a local write."
                     file content (plist-get args :hash))))
       (if (plist-get outcome :stale)
           (funcall reply (mevedel-collaboration-artifact-room--stale
-                          room file (plist-get outcome :hash) (plist-get args :hash)))
+                          outcome (plist-get args :hash)))
         (mevedel-collaboration-artifact-room--changed-file room file)
         (funcall reply
                  (list :result (list :file file :hash (plist-get outcome :hash)
@@ -488,7 +483,7 @@ refusal as a write gets."
       (funcall reply
                (if (plist-get outcome :stale)
                    (mevedel-collaboration-artifact-room--stale
-                    room file (plist-get outcome :hash) (plist-get args :hash))
+                    outcome (plist-get args :hash))
                  (list :result (list :file file :deleted t)))))))
 
 (defun mevedel-collaboration-artifact-room--write-files (room _guest args _authorize reply)
@@ -520,7 +515,7 @@ refusal of the first file that changed since it was read."
            (outcome (mevedel-artifact-store-write-files workspace id requested)))
       (if-let* ((stale (and (plist-get outcome :stale) (plist-get outcome :file))))
           (funcall reply (mevedel-collaboration-artifact-room--stale
-                          room stale (plist-get outcome :hash)
+                          outcome
                           (plist-get (cl-find stale requested
                                               :key (lambda (change) (plist-get change :file))
                                               :test #'equal)

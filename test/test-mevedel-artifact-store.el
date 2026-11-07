@@ -10,6 +10,7 @@
 
 (require 'mevedel-artifact-store)
 (require 'mevedel-artifact-lease)
+(require 'mevedel-session-control-fs)
 (require 'mevedel-chat)
 (require 'mevedel-session-test-support
          (file-name-concat
@@ -1121,14 +1122,18 @@ It has a page, its primary file, and a binary asset.  Return its directory."
       ;; hash returned is that of the file's bytes.
       (should (equal (list :stale t :file "assets/logo.png"
                            :hash (mevedel-artifact-store-test--hash
-                                  mevedel-artifact-store-test--logo))
+                                  mevedel-artifact-store-test--logo)
+                           :bytes (length mevedel-artifact-store-test--logo)
+                           :content mevedel-artifact-store-test--logo)
                      (mevedel-artifact-store-write-files
                       workspace "a"
                       (list (list :file "index.html" :hash page-hash :content "<p>mine</p>")
                             (list :file "new.css" :content "p {}")
                             (list :file "assets/logo.png" :hash page-hash :delete t)))))
       ;; A created file that exists already, and a changed file that is gone.
-      (should (equal (list :stale t :file "index.html" :hash page-hash)
+      (should (equal (list :stale t :file "index.html" :hash page-hash
+                           :bytes (length mevedel-artifact-store-test--page)
+                           :content mevedel-artifact-store-test--page)
                      (mevedel-artifact-store-write-files
                       workspace "a" (list (list :file "index.html" :content "x")))))
       (should (equal (list :stale t :file "gone.css" :hash nil)
@@ -1140,6 +1145,40 @@ It has a page, its primary file, and a binary asset.  Return its directory."
                      (mevedel-artifact-store-test--bytes directory "assets/logo.png")))
       (should-not (file-exists-p (file-name-concat directory "new.css")))
       (should-not changed)))
+
+  :doc "reports the locked hash when another writer commits before refusal decoding"
+  (mevedel-artifact-store-test--with-workspace
+    (let* ((directory (mevedel-artifact-store-test--site workspace store))
+           (observed (mevedel-artifact-store-test--hash mevedel-artifact-store-test--page))
+           (run (symbol-function 'mevedel-session-control-fs-run-program))
+           injected released later-programs outcome)
+      (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                 (lambda (operations &optional lock)
+                   (when released (push operations later-programs))
+                   (let ((results (funcall run operations lock)))
+                     ;; The real locked program has ended.  A second real writer
+                     ;; takes the same lock before the first decodes its refusal.
+                     (when (and lock (not injected)
+                                (cl-find 'mismatch results
+                                         :key (lambda (result) (plist-get result :status))))
+                       (setq injected t)
+                       (should (plist-get
+                                (mevedel-artifact-store-write-file
+                                 workspace "a" "index.html" "second writer" observed)
+                                :hash))
+                       (setq released t))
+                     results))))
+        (setq outcome (mevedel-artifact-store-write-files
+                       workspace "a" (list (list :file "index.html"
+                                                  :hash (make-string 64 ?0)
+                                                  :content "stale writer")))))
+      (should injected)
+      (should (equal "second writer"
+                     (mevedel-artifact-store-test--bytes directory "index.html")))
+      (should (plist-get outcome :stale))
+      (should (equal observed (plist-get outcome :hash)))
+      (should (equal mevedel-artifact-store-test--page (plist-get outcome :content)))
+      (should-not later-programs)))
 
   :doc "creates a file, with its missing directories, only where none exists"
   (mevedel-artifact-store-test--with-workspace
