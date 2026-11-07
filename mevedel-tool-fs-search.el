@@ -871,7 +871,20 @@ and optional :path."
                             paths)
             (error "Path %s is not a readable directory"
                    (mevedel-tool-fs-search--visible-path (car paths))))
-          (unless resource-roots
+          (if resource-roots
+              ;; Narrow each root by the pattern's literal directory prefix;
+              ;; rg matches --iglob relative to the searched path, so an
+              ;; unnarrowed prefix such as "dir/**/*.md" never matches.  Every
+              ;; root yields the same narrowed pattern.
+              (let (narrowed narrowed-pattern)
+                (dolist (root paths)
+                  (when-let* ((normalized
+                               (mevedel-tool-fs-search--normalize-rg-glob
+                                root pattern)))
+                    (push (car normalized) narrowed)
+                    (setq narrowed-pattern (cdr normalized))))
+                (setq paths (nreverse narrowed)
+                      pattern (or narrowed-pattern pattern)))
             (let ((path (car paths)))
               (if-let* ((normalized
                          (and (not (mevedel-tool-fs-search--vcs-metadata-path-p path))
