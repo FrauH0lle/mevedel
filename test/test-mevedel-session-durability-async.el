@@ -622,26 +622,33 @@ run while it is pending."
       (should (= 1 programs))))
   :doc "declines without a program when no lease bytes are bound"
   (test-mevedel-durability-async--with-lease (root session)
-    (setf (mevedel-session-lease session)
-          (mevedel-session-durability--strip-assumption
-           (mevedel-session-lease session)))
-    (should (equal '(nil nil)
-                   (test-mevedel-durability-async--call
-                    #'mevedel-session-durability-admit-async session))))
+    (let ((programs 0)
+          (run (symbol-function 'mevedel-session-control-fs-run-program-async)))
+      (setf (mevedel-session-lease session)
+            (mevedel-session-durability--strip-assumption
+             (mevedel-session-lease session)))
+      (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program-async)
+                 (lambda (operations callback)
+                   (cl-incf programs)
+                   (funcall run operations callback))))
+        (should (equal '(nil (user-error "Portable session has no bound lease bytes"))
+                       (test-mevedel-durability-async--call
+                        #'mevedel-session-durability-admit-async session))))
+      (should (= 0 programs))))
   :doc "declines when the bytes on the target differ from the bound ones"
   (test-mevedel-durability-async--with-lease (root session)
     (progn
       (setf (mevedel-session-lease session)
             (plist-put (copy-sequence (mevedel-session-lease session))
                        :bytes "(:stale t)"))
-      (should (equal '(nil nil)
+      (should (equal '(nil (user-error "Portable session lease on the target differs from the bound lease"))
                      (test-mevedel-durability-async--call
                       #'mevedel-session-durability-admit-async session)))))
   :doc "declines while a recovery marker root exists"
   (test-mevedel-durability-async--with-lease (root session)
     (progn
       (make-directory (file-name-concat root ".recovery") t)
-      (should (equal '(nil nil)
+      (should (equal '(nil (user-error "Portable session has a pending recovery marker"))
                      (test-mevedel-durability-async--call
                       #'mevedel-session-durability-admit-async session)))))
   :doc "reports a PID lock as an error"
@@ -655,9 +662,52 @@ run while it is pending."
   :doc "declines while the session is quiescing for control transfer"
   (test-mevedel-durability-async--with-lease (root session)
     (setf (mevedel-session-control-transfer session) '(:state quiescing))
-    (should (equal '(nil nil)
+    (should (equal '(nil (user-error "Session is quiescing for cooperative control transfer"))
                    (test-mevedel-durability-async--call
-                    #'mevedel-session-durability-admit-async session)))))
+                    #'mevedel-session-durability-admit-async session))))
+  :doc "declines when the lease directory cannot be observed"
+  (test-mevedel-durability-async--with-lease (root session)
+    (progn
+      (delete-directory (mevedel-session-durability--lease-path root) t)
+      (should (equal '(nil (user-error "Portable session lease directory could not be observed"))
+                     (test-mevedel-durability-async--call
+                      #'mevedel-session-durability-admit-async session)))))
+  :doc "declines when a newer lease generation exists beside the owned one"
+  (test-mevedel-durability-async--with-lease (root session)
+    (let ((directory (mevedel-session-durability--lease-path root))
+          (lease (mevedel-session-lease session)))
+      (let ((mevedel-session-durability--client-id (make-string 64 ?b)))
+        (mevedel-session-durability--create-plist
+         (mevedel-session-durability--generation-path
+          directory (1+ (plist-get lease :generation)))
+         (mevedel-session-durability--lease-record
+          "*thief*" (1+ (plist-get lease :generation)) 'active nil nil
+          (plist-get lease :renewed-at))))
+      (should (equal '(nil (user-error "A newer portable session lease generation exists"))
+                     (test-mevedel-durability-async--call
+                      #'mevedel-session-durability-admit-async session)))))
+  :doc "declines when another client rewrote the bound generation's record"
+  (test-mevedel-durability-async--with-lease (root session)
+    (let ((directory (mevedel-session-durability--lease-path root))
+          (lease (mevedel-session-lease session)))
+      (let ((mevedel-session-durability--client-id (make-string 64 ?b)))
+        (mevedel-session-durability--write-plist
+         (mevedel-session-durability--generation-path
+          directory (plist-get lease :generation))
+         (mevedel-session-durability--lease-record
+          "*thief*" (plist-get lease :generation) 'active nil nil
+          (plist-get lease :renewed-at))))
+      (should (equal '(nil (user-error "Portable session lease record is not this client's live lease"))
+                     (test-mevedel-durability-async--call
+                      #'mevedel-session-durability-admit-async session)))))
+  :doc "declines while a live control-transfer request names this client"
+  (test-mevedel-durability-async--with-lease (root session)
+    (progn
+      (let ((mevedel-session-durability--client-id (make-string 64 ?b)))
+        (should (mevedel-session-transfer-request session "requester")))
+      (should (equal '(nil (user-error "Portable session has a live control-transfer request"))
+                     (test-mevedel-durability-async--call
+                      #'mevedel-session-durability-admit-async session))))))
 
 (defmacro test-mevedel-durability-async--gated (session gated &rest body)
   "Run BODY with the publication barrier stubbed to record its arguments.

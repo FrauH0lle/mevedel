@@ -1552,8 +1552,10 @@ generation's record, the transfer-request listing and the PID-lock and
 recovery-root probes. It admits only the warm case: an owned, newest
 generation with remembered bytes, no recovery marker, no live transfer request
 naming this client, and no quiescing or released state. Anything else fails
-the job, acknowledges the failure, and leaves the producer holding its output;
-a later synchronous attempt reports the reason. Freeze runs only after
+the job and leaves the producer holding its output; the acknowledgement's
+error is a `user-error` naming the first cause the program observed, such as
+an unobserved lease directory, a newer generation or a recovery marker.
+Freeze runs only after
 admission, under the gate: it identifies the records (a record already present
 is dropped), marks the new ones `:uncommitted`, prepends them to the live
 queue and captures the fresh sidecar. The
