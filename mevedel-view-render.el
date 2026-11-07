@@ -5168,15 +5168,6 @@ Empty string when the turn contains only whitespace or markers."
                        body-start (match-beginning 0)))))))))
       events)))
 
-(defun mevedel-view--segments-raw-text (segments data-buf)
-  "Return raw DATA-BUF text covered by SEGMENTS."
-  (with-current-buffer data-buf
-    (mapconcat
-     (lambda (seg)
-       (buffer-substring-no-properties (cadr seg) (caddr seg)))
-     segments
-     "")))
-
 (defun mevedel-view--user-turn-hook-contexts (segments data-buf)
   "Return hook context blocks found in user SEGMENTS from DATA-BUF."
   (with-current-buffer data-buf

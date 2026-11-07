@@ -81,18 +81,24 @@ export class Room {
   /* Handle sealed ENVELOPE from the origin. */
   receive(envelope) {
     this.#inbound = this.#inbound.then(async () => {
-      const frame = await unseal(this.#key, envelope);
-      if (!frame) return;
-      if (frame.t === 'editing' && frame.reqId !== 'event') {
-        const body = this.#assembler.add(frame);
-        const pending = body !== undefined && this.#pending.get(frame.reqId);
-        if (pending) {
-          this.#pending.delete(frame.reqId);
-          pending.resolve(body);
+      try {
+        const frame = await unseal(this.#key, envelope);
+        if (!frame) return;
+        if (frame.t === 'editing' && frame.reqId !== 'event') {
+          const body = this.#assembler.add(frame);
+          const pending = body !== undefined && this.#pending.get(frame.reqId);
+          if (pending) {
+            this.#pending.delete(frame.reqId);
+            pending.resolve(body);
+          }
         }
+        if (frame.t === 'bye') this.end(goodbye(frame.reason));
+        this.onFrame?.(frame);
+      } catch (error) {
+        // A bad frame must not stop the chain or, as an unhandled
+        // rejection, the process: drop it and keep handling later frames.
+        process.stderr.write(`remote-artifact: dropped a bad frame from the origin: ${error?.message ?? error}\n`);
       }
-      if (frame.t === 'bye') this.end(goodbye(frame.reason));
-      this.onFrame?.(frame);
     });
   }
 

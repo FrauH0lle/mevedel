@@ -494,8 +494,8 @@ override a better default, such as a new group staying open over an open row."
   "Toggle sections in FROM..TO so collapse state matches STATES.
 STATES is an alist from `mevedel-view-disclosure-capture-state'.
 Sections whose current state already matches are left alone; only
-mismatches are toggled, via `mevedel-view-disclosure--expand-section' /
-`--collapse-section' or the mailbox card toggle.  Upper bound is held as
+mismatches are toggled, via `mevedel-view-disclosure--expand-now' /
+`--collapse-now' or the mailbox card toggle.  Upper bound is held as
 a marker so toggles that change buffer length do not invalidate the walk.
 Return non-nil when at least one section was toggled, so the caller
 knows the freshly rendered span was rewritten after insertion."
@@ -958,11 +958,6 @@ from signalling `args-out-of-range' on stale source coordinates."
                            (= in-flight-pos view-end))
                   (mevedel-view-stream-set-in-flight-turn-start (point))))
             (set-marker-insertion-type mevedel-view--input-marker nil)))))))
-
-(defun mevedel-view-disclosure--collapse-section (source vtype)
-  "Collapse an expanded SOURCE section of VTYPE to its rendered summary."
-  (mevedel-view-disclosure--intent
-   source vtype t #'mevedel-view-disclosure--collapse-now))
 
 (defun mevedel-view-disclosure--collapse-now (source vtype)
   "Collapse SOURCE of VTYPE while holding projection ownership."
