@@ -2113,5 +2113,44 @@ QUEUED adds a second completion while the first job is unresolved."
                     session "segment-9.chat.org" t))
        (should-not (mevedel-session-publication-busy-p session))))))
 
+(mevedel-deftest mevedel-session-publication-submit/lease-update-decline (:quiet t)
+  ,test
+  (test)
+  :doc "a real lease-update decline reaches the acknowledgement with its cause"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let* ((directory (mevedel-session-save-path session))
+            (reserve (symbol-function
+                      'mevedel-session-durability-reserve-publication-lease-async))
+            acknowledgements)
+       ;; Another client takes the bound generation after admission, before
+       ;; the reservation reads it.
+       (cl-letf (((symbol-function
+                   'mevedel-session-durability-reserve-publication-lease-async)
+                  (lambda (owner callback)
+                    (let* ((lease (mevedel-session-lease owner))
+                           (mevedel-session-durability--client-id
+                            (make-string 64 ?b)))
+                      (mevedel-session-durability--write-plist
+                       (mevedel-session-durability--generation-path
+                        (mevedel-session-durability--lease-path directory)
+                        (plist-get lease :generation))
+                       (mevedel-session-durability--lease-record
+                        "*thief*" (plist-get lease :generation) 'active nil nil
+                        (plist-get lease :renewed-at))))
+                    (funcall reserve owner callback))))
+         (mevedel-session-publication-submit
+          session
+          (lambda ()
+            (test-mevedel-publication-async--transcript-artifacts
+             session buffer "segment-9.chat.org" "declined transcript"))
+          (lambda (ok error) (push (list ok error) acknowledgements)))
+         (test-mevedel-publication-async--wait (lambda () acknowledgements)))
+       (should-not (caar acknowledgements))
+       (should (equal "Portable session lease belongs to another client"
+                      (error-message-string (cadar acknowledgements))))
+       (should (eq 'user-error (car (cadar acknowledgements))))
+       (should-not (mevedel-session-publication-busy-p session))))))
+
 (provide 'test-mevedel-session-publication-async)
 ;;; test-mevedel-session-publication-async.el ends here

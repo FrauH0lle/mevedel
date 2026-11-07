@@ -296,7 +296,7 @@ run while it is pending."
       (should (equal '(t nil) settled))))
   :doc "declines a head other than the expected publication head"
   (test-mevedel-durability-async--with-lease (root session)
-    (should (equal '(nil nil)
+    (should (equal '(nil (user-error "Portable session publication head changed"))
                    (test-mevedel-durability-async--launch
                     (lambda (callback)
                       (mevedel-session-durability--update-owned-lease-async
@@ -314,7 +314,7 @@ run while it is pending."
          (mevedel-session-durability--lease-record
           "*thief*" (plist-get lease :generation) 'active nil nil
           (plist-get lease :renewed-at))))
-      (should (equal '(nil nil)
+      (should (equal '(nil (user-error "Portable session lease belongs to another client"))
                      (test-mevedel-durability-async--call
                       #'mevedel-session-durability--update-owned-lease-async
                       session '(active) 'active 90)))
@@ -602,7 +602,7 @@ run while it is pending."
         (setf (mevedel-session-lease session)
               (plist-put (copy-sequence bound) :publication-head
                          ".publications/stale/manifest.el")))
-      (should (equal '(nil nil)
+      (should (equal '(nil (user-error "Portable session publication head changed"))
                      (test-mevedel-durability-async--call
                       #'mevedel-session-durability-commit-publication-head-async
                       session ".publications/0003/manifest.el"))))))

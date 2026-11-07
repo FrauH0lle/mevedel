@@ -2214,6 +2214,28 @@ NAMES is an observed listing, as for `mevedel-session-durability--lease-head'."
                        (mevedel-session-durability--parse-records
                         results))))))))))
 
+(defconst mevedel-session-durability--lease-declines
+  '((directory . "Portable session has no save directory")
+    (record . "Portable session lease record is not valid")
+    (status . "Portable session lease is not in a state this update accepts")
+    (client . "Portable session lease belongs to another client")
+    (head . "Portable session has a newer lease generation")
+    (publication-head . "Portable session publication head changed")
+    (expired . "Portable session lease has expired")
+    (lost . "Portable session lease was taken by another client"))
+  "Named causes of an asynchronous lease update's decline.
+Messages name the condition only, never paths or lease bytes.")
+
+(defun mevedel-session-durability--lease-decline (cause)
+  "Return the `user-error' condition data naming decline CAUSE."
+  (list 'user-error
+        (alist-get cause mevedel-session-durability--lease-declines)))
+
+(defun mevedel-session-durability--lease-decline-p (error)
+  "Return non-nil when ERROR names a lease-update decline, not a failure."
+  (and (eq 'user-error (car-safe error))
+       (rassoc (cadr error) mevedel-session-durability--lease-declines)))
+
 (defun mevedel-session-durability--update-async
     (session accepted-status status seconds publication-head
              expected-head-p expected-head job context)
@@ -2265,7 +2287,8 @@ JOB and CONTEXT are as for `mevedel-session-durability--async-program'."
               (funcall decide nil)
             (mevedel-session-durability--observe-lease-async
              directory generation nil job context decide)))
-      (funcall finish nil nil))))
+      (funcall finish nil (mevedel-session-durability--lease-decline
+                           'directory)))))
 
 (defun mevedel-session-durability--update-async-decide
     (session accepted-status status seconds publication-head
@@ -2291,24 +2314,37 @@ assumption that no longer held.  The rest is as for
               ;; activated has not won.  See the synchronous update.
               ((eq 'claiming (plist-get latest :status)) 'contested)
               (t 'lost)))
-            (funcall finish nil nil)))
+            (funcall finish nil (mevedel-session-durability--lease-decline
+                                 'lost))))
          (drop-assumption
           (lambda ()
             (mevedel-session-durability--bind-lease
              session (mevedel-session-durability--strip-assumption bound)
              (plist-get bound :state))
             (funcall retry)))
+         (cause nil)
          (proceed
           (lambda (head)
-            (if (and (mevedel-session-durability--valid-lease-p existing)
-                     (memq (plist-get existing :status) accepted-status)
-                     (equal mevedel-session-durability--client-id
-                            (plist-get existing :client-id))
-                     (equal existing head)
-                     (or (not expected-head-p)
-                         (equal expected-head
-                                (plist-get existing :publication-head)))
-                     (> (plist-get existing :expires-at) now))
+            (if (null (setq cause
+                            ;; The first unmet condition, in the order observed.
+                            (cond
+                             ((not (mevedel-session-durability--valid-lease-p
+                                    existing))
+                              'record)
+                             ((not (memq (plist-get existing :status)
+                                         accepted-status))
+                              'status)
+                             ((not (equal mevedel-session-durability--client-id
+                                          (plist-get existing :client-id)))
+                              'client)
+                             ((not (equal existing head)) 'head)
+                             ((not (or (not expected-head-p)
+                                       (equal expected-head
+                                              (plist-get existing
+                                                         :publication-head))))
+                              'publication-head)
+                             ((not (> (plist-get existing :expires-at) now))
+                              'expired))))
                 (let* ((record
                         (let ((mevedel-session-lease-seconds seconds))
                           (mevedel-session-durability--lease-record
@@ -2372,7 +2408,9 @@ assumption that no longer held.  The rest is as for
                         latest directory now)
                        'owned
                      'lost))
-                  (funcall finish nil nil)))))))
+                  (funcall finish nil
+                           (mevedel-session-durability--lease-decline
+                            cause))))))))
     (if read-head
         (mevedel-session-durability--lease-head-async
          directory nil job context proceed)
@@ -2386,9 +2424,13 @@ assumption that no longer held.  The rest is as for
 As `mevedel-session-durability--update-owned-lease' with the arguments of the
 same names: CALLBACK receives SUCCESS, non-nil only when the update
 committed, and ERROR, condition data when a program failed, the commit's
-prelude failed, or no target clock could be had.  An error leaves the lease
-binding unchanged.  Commit riders and the transaction cells in effect at
-launch stay in effect across the asynchronous steps."
+prelude failed, or no target clock could be had.  Such an error leaves the
+lease binding unchanged.  A decline carries a `user-error' naming the first
+condition observed (see `mevedel-session-durability--lease-declines'); the
+binding is then rebound as the synchronous update does when the lease is
+lost.  A nil SUCCESS always carries ERROR.  Commit riders and the
+transaction cells in effect at launch stay in effect across the asynchronous
+steps."
   (let ((job (mevedel-session-durability--async-job callback))
         (context (mevedel-session-durability-capture-context)))
     (funcall (cdr job)
@@ -2853,7 +2895,10 @@ and synchronous-drain contexts skip a tick instead of blocking the editor."
                               shadow (lambda (error)
                                        (mevedel-session-durability--heartbeat-finish job error)))))
                    (finish (lambda (success error)
-                             (if error
+                             ;; A named decline is a lost lease, not a failure.
+                             (if (and error
+                                      (not (mevedel-session-durability--lease-decline-p
+                                            error)))
                                  (mevedel-session-durability--heartbeat-finish job error)
                                (if success (funcall verify)
                                  (mevedel-session-durability--heartbeat-reclaim
