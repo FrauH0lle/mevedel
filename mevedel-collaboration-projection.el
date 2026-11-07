@@ -52,6 +52,11 @@
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-for-call "mevedel-tool-registry" (name))
 
+;; `mevedel-tool-exec'
+;; `mevedel-view-render' autoloads it before this library loads.
+(declare-function mevedel-tool-exec-completion "mevedel-tool-exec"
+                  (termination outcome))
+
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-direct-call
                   "mevedel-tool-render-data" (name data))
@@ -293,6 +298,7 @@ an artifact only by its record id, never by a filesystem path."
                        :truncated :guest :directive :item :detail :details :diff
                        :artifact :title :store :size :artifactRevision :missing
                        :presentation :shared
+                       :verb
                        :execution :description :number :firstSegment :lastSegment
                        :sender :mailType :outcome :activity :toolUseId :forkPoint))
       (when (plist-member record key)
@@ -1125,13 +1131,13 @@ mailboxes are not guest completion records."
          (facts (plist-get completion :facts))
          (outcome (plist-get facts :outcome))
          (termination (plist-get facts :termination))
-         (status (cond ((memq termination '(stopped interrupted
-                                          cancelled owner-stopped)) "cancelled")
-                       ((memq termination '(timeout timed-out expired)) "timed-out")
-                       ((memq outcome '(success no-match different false))
-                        "completed")
-                       ((null outcome) "warning")
-                       (t "failed")))
+         (class (mevedel-tool-exec-completion termination outcome))
+         (status (pcase (car class)
+                   ('stopped "cancelled")
+                   ('timed-out "timed-out")
+                   ('completed "completed")
+                   ('ended "warning")
+                   (_ "failed")))
          (command (mevedel-collaboration--truncate-bytes
                    (car (split-string (or (plist-get completion :command)
                                           (plist-get facts :command) "Bash") "\n")) 200)))
@@ -1139,6 +1145,7 @@ mailboxes are not guest completion records."
      (concat "forwarded-execution-"
              (substring (secure-hash 'sha256 (concat owner "\0" id)) 0 24))
      "execution" :revision 0 :identity-fixed t :status status
+     :verb (cdr class)
      :execution (list :owner owner :ownPath (or own-path "/root")
                       :id id :command command
                       :description (plist-get facts :description)
@@ -1588,11 +1595,7 @@ transparent rows."
                    (list :role (or role 'member) :kind 'completion
                          :completion
                          (cons (list (plist-get facts :id) (plist-get facts :owner))
-                               (pcase (plist-get record :status)
-                                 ("completed" "completed")
-                                 ("cancelled" "stopped")
-                                 ("timed-out" "timed out")
-                                 (_ "failed"))))
+                               (plist-get record :verb)))
                  (list :role 'boundary))))
             (_ (list :role (or role 'boundary))))))
     (cons (nconc entry (list :id (plist-get record :id) :record record

@@ -16,6 +16,8 @@
 (require 'mevedel-collaboration-guest)
 (require 'mevedel-tool-ptc)
 (require 'mevedel-tool-render-data)
+(require 'mevedel-tool-exec)
+(require 'mevedel-tools)
 (require 'mevedel-gptel-stream-bridge)
 
 (mevedel-deftest mevedel-collaboration--agent-mailbox ()
@@ -93,6 +95,7 @@
                                         (list '(:id "result" :kind "agent-notice" :mailType "result"))
                                         (cl-subseq records 2)))) :activity))
     (let* ((completion (list :id "completion" :kind "execution" :status "completed"
+                             :verb "completed"
                              :execution '(:owner "/root" :ownPath "/root" :id "bash-1")))
            (message (list :id "message" :kind "agent-notice" :mailType "message"))
            (with-notices (mevedel-collaboration--activity-records
@@ -795,6 +798,74 @@ Small value ranges repeat texts, so occurrence-numbered ids are exercised."
       (should (equal "user" (plist-get
                              (car (mevedel-collaboration--canonical-records
                                    (current-buffer))) :kind))))))
+
+(defun mevedel-test--completion-verbs (facts)
+  "Return (NOTICE RECORD SUMMARY) verbs three consumers show for FACTS.
+The mailbox opener is built from the real facts XML and delivery block; the
+Emacs notice, the projected record and its group-summary entry then read it."
+  (let* ((monitor (eq (plist-get facts :kind) 'monitor))
+         (xml (mevedel-tool-exec--execution-facts-xml facts))
+         (attributes
+          (with-temp-buffer
+            (insert xml)
+            (cadr (car (xml-parse-region (point-min) (point-max))))))
+         (meta (cl-loop for (key . name) in `(,@(unless monitor
+                                                  '((:execution-id . execution_id)))
+                                              (:command . command)
+                                              (:event-count . event_count)
+                                              (:termination . termination)
+                                              (:outcome . outcome)
+                                              (:exit-code . exit_code))
+                        for value = (alist-get name attributes)
+                        when value append (list key value)))
+         (block (mevedel-tools--message-delivery-block
+                 (list :type (if monitor 'MONITOR_TERMINAL 'EXECUTION)
+                       :sender "/root" :recipient "/root"
+                       :execution-id (plist-get facts :execution-id)
+                       :description (plist-get facts :description)
+                       :meta meta :payload "output")))
+         (notice (mevedel-view--mail-notice
+                  (substring block 0 (1+ (string-search ">" block)))
+                  'agent-message "/root" ""))
+         (record (with-temp-buffer
+                   (mevedel--transcript-org-mode)
+                   (insert block "\n")
+                   (car (mevedel-collaboration--canonical-records
+                         (current-buffer) nil nil nil "/root")))))
+    (should (equal "execution" (plist-get record :kind)))
+    (list (and (string-match "\" \\(.+?\\)\\(?: ·\\| (\\|\\'\\)" (car notice))
+               (match-string 1 (car notice)))
+          (plist-get record :verb)
+          (cdr (plist-get (car (mevedel-collaboration--activity-entries record))
+                          :completion)))))
+
+(mevedel-deftest mevedel-completion-verb ()
+  ,test
+  (test)
+  :doc "one completion reads the same verb in the notice, record and group summary"
+  (dolist (case '(((:kind monitor :termination exited :exit-code 0) "ended")
+                  ((:kind monitor :termination stopped :exit-code 15) "stopped")
+                  ((:kind monitor :termination timed-out) "timed out")
+                  ((:kind bash :termination exited :exit-code 0 :outcome success)
+                   "completed")
+                  ((:kind bash :termination exited :exit-code 2 :outcome failure)
+                   "failed")
+                  ((:kind bash :termination lost) "failed")))
+    (let ((facts (append (car case)
+                         '(:execution-id "exec-1" :description "Watch build"
+                           :state completed :event-count 2
+                           :command "make test"))))
+      (should (equal (make-list 3 (cadr case))
+                     (mevedel-test--completion-verbs facts)))))
+  :doc "a lost record's record keeps the failed styling"
+  (let ((record (with-temp-buffer
+                  (mevedel--transcript-org-mode)
+                  (insert "<agent-message type=\"EXECUTION\" sender=\"/root\" "
+                          "execution_id=\"e\" termination=\"lost\">\nx\n"
+                          "</agent-message>\n")
+                  (car (mevedel-collaboration--canonical-records
+                        (current-buffer) nil nil nil "/root")))))
+    (should (equal "failed" (plist-get record :status)))))
 
 (provide 'test-mevedel-collaboration-projection)
 ;;; test-mevedel-collaboration-projection.el ends here

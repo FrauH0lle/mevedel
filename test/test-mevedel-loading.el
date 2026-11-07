@@ -93,5 +93,31 @@ A child that outlives two minutes is killed and fails the test."
       (should (equal 0 status))
       (should (string-match-p "5 results as expected, 0 unexpected" output)))))
 
+(ert-deftest mevedel-loading/completion-verb ()
+  "The completion classifier loads on first use from the notice, breadcrumb and projection."
+  (pcase-let ((`(,status ,output)
+               (mevedel-loading--emacs
+                `(progn
+                   (setq load-path ',load-path)
+                   (require 'mevedel-collaboration-projection)
+                   (require 'mevedel-view-audit)
+                   (when (featurep 'mevedel-tool-exec)
+                     (error "Classifier module loaded before first use"))
+                   (let ((notice (mevedel-view--mail-notice
+                                  "<agent-message type=\"MONITOR_TERMINAL\" description=\"w\" termination=\"exited\">"
+                                  'agent-message "/root" ""))
+                         (record (mevedel-collaboration--forwarded-execution-record
+                                  '(:owner "/root" :execution-id "e"
+                                    :facts (:kind monitor :termination exited)))))
+                     (unless (and (string-prefix-p "Monitor \"w\" ended" (car notice))
+                                  (equal "ended" (plist-get record :verb))
+                                  (equal "Ended" (mevedel-view-audit-breadcrumb-status
+                                                  '(:facts (:termination exited)))))
+                       (error "Unexpected verbs: %S %S" notice record)))
+                   (princ "ok")))))
+    (ert-info (output)
+      (should (equal 0 status))
+      (should (equal "ok" output)))))
+
 (provide 'test-mevedel-loading)
 ;;; test-mevedel-loading.el ends here

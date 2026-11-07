@@ -40,6 +40,11 @@
                   (start end))
 (autoload 'mevedel-transcript--mailbox-any-block-at-point "mevedel-transcript")
 
+;; `mevedel-tool-exec'
+(declare-function mevedel-tool-exec-completion "mevedel-tool-exec"
+                  (termination outcome))
+(autoload 'mevedel-tool-exec-completion "mevedel-tool-exec")
+
 ;; `mevedel-tool-repair'
 (declare-function mevedel-tool-repair-format-path
                   "mevedel-tool-repair" (path))
@@ -457,14 +462,9 @@ rewrite the retained live tail and force a whole-turn rebuild per update."
 (defun mevedel-view-audit-breadcrumb-status (record)
   "Return execution breadcrumb RECORD's terminal status word."
   (let* ((facts (plist-get record :facts))
-         (termination (plist-get facts :termination)))
-    (cond ((memq termination '(stopped interrupted cancelled owner-stopped))
-           "Stopped")
-          ((memq termination '(timeout timed-out expired)) "Timed out")
-          ((not (memq (plist-get facts :outcome)
-                      '(success no-match different false)))
-           "Failed")
-          (t "Completed"))))
+         (verb (cdr (mevedel-tool-exec-completion
+                     (plist-get facts :termination) (plist-get facts :outcome)))))
+    (concat (upcase (substring verb 0 1)) (substring verb 1))))
 
 (defun mevedel-view-audit--breadcrumb-label (record)
   "Return the one completion line for execution breadcrumb RECORD.

@@ -745,7 +745,8 @@ function testCompletionRendering() {
     record, null, null, null, onExecutionOpen);
   const execution = {owner: '/root', ownPath: '/root', id: 'exec-1', kind: 'bash',
     command: 'make check', description: 'Run checks', eventCount: null, exitCode: 0};
-  const record = {id: 'completion', kind: 'execution', status: 'completed', execution};
+  const record = {id: 'completion', kind: 'execution', status: 'completed', verb: 'completed',
+    execution};
   const cases = [
     ['completed', 0, 'completed (exit code 0)'],
     ['completed', 1, 'completed (exit code 1)'],
@@ -756,7 +757,8 @@ function testCompletionRendering() {
     ['warning', null, 'ended'],
   ];
   for (const [status, exitCode, ending] of cases) {
-    const turn = render({...record, status, execution: {...execution, exitCode}});
+    const verb = ending.split(' (')[0];
+    const turn = render({...record, status, verb, execution: {...execution, exitCode}});
     assert.equal(textOf(findByClass(turn, 'execution-breadcrumb')),
                  `● Background command "Run checks" ${ending}  [Show result]`);
     assert.equal(!!findByClass(turn, 'failed'), status === 'failed');
@@ -775,8 +777,9 @@ function testCompletionRendering() {
   }
   // All lifecycle words apply to monitors, but exit codes never do.
   for (const [status, , ending] of cases) {
+    const verb = ending.split(' (')[0];
     for (const eventCount of [0, 1, 2, null]) {
-      const turn = render({...record, status, execution: {
+      const turn = render({...record, status, verb, execution: {
         ...execution, kind: 'monitor', description: 'Watch checks', eventCount, exitCode: 7,
       }});
       const events = eventCount === null ? '' : ` · ${eventCount} event${eventCount === 1 ? '' : 's'}`;
@@ -785,6 +788,10 @@ function testCompletionRendering() {
       assert.equal(!!findByClass(turn, 'failed'), status === 'failed');
     }
   }
+  // The row shows the host's verb, not one derived from the status, and escapes it.
+  assert.equal(textOf(findByClass(render({...record, status: 'warning', verb: 'lost <b>',
+    execution}), 'execution-breadcrumb')),
+    '● Background command "Run checks" lost <b> (exit code 0)  [Show result]');
   const hostile = '<img src=x onerror="alert(1)">';
   const facts = {...execution, description: `${hostile}\nRun\tchecks`,
     owner: '/root/<script>bad()</script>'};
@@ -2887,7 +2894,7 @@ async function main() {
 
   // Forwarded completion stays one compact line; result bytes travel only
   // after an explicit read-only fetch, including the missing-evidence case.
-  const execution = {id: 'forwarded-1', kind: 'execution', status: 'failed',
+  const execution = {id: 'forwarded-1', kind: 'execution', status: 'failed', verb: 'failed',
     execution: {id: 'exec-1', owner: '/root/child', ownPath: '/root', kind: 'bash',
       command: 'exit 2', description: 'Run failing command', eventCount: null, exitCode: 2}};
   await deliverTo(sockets[1], {t: 'record', record: execution});

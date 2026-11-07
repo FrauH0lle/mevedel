@@ -764,7 +764,9 @@ Execution labels prefer the model-written description, falling back to the
 truncated command. A command's own completion appears once, as its breadcrumb
 worded like these notices with a `[Show result]` link; its delivery adds no
 second line. Command notices and breadcrumbs share the terminal
-vocabulary completed, failed, stopped, or timed out; an agent result uses
+vocabulary completed, failed, stopped, timed out, or ended (no outcome
+recorded), chosen by one classifier (see
+[execution](tools/execution.md)); an agent result uses
 finished, failed, interrupted, or incomplete. Stops
 are neutral, not errors. Missing agent outcomes never imply success. These
 labels use structured envelope attributes, not body prose or the current agent

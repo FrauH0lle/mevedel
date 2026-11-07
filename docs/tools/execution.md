@@ -302,9 +302,20 @@ shows one linked line, such as `● Background command "Run tests" completed
 `● Monitor "ticker" timed out · 3 events`. A stop is neutral, not a failure,
 though the model-facing outcome fact stays `failure`. The owner's own mailbox
 delivery of that completion adds no second line; a parent receiving a child's
-forwarded completion shows it as a notice. Inside an activity group the
+forwarded completion shows it as a notice. One classifier,
+`mevedel-tool-exec-completion`, turns a completion's termination and outcome
+into the word every surface shows (the Emacs notice and breadcrumb, the
+browser record and its group summary); the first matching rule wins:
+a stop termination (stopped, interrupted, cancelled, owner-stopped) says
+`stopped`; a timeout termination (timeout, timed-out, expired) says `timed
+out`; termination `lost`, or a failure outcome (failure, errored, lost), says
+`failed`; a Bash outcome that is not a failure (success, no-match, different,
+false) says `completed`. Anything else, such as a monitor that exited without an
+outcome or an unrecognized outcome value, says `ended`, which claims neither
+success nor failure. A lost completion reads `failed` although its end was never
+observed, to avoid a fifth word. Inside an activity group the
 line folds into the group and is counted there, as in
-`ran 2 commands, 1 command finished, 1 failed`. Foreground commands have no
+`ran 2 commands, 1 command completed, 1 failed`. Foreground commands have no
 breadcrumb. The breadcrumb repeats neither output nor a metadata summary;
 `Show result` opens the original execution output, including from an older
 segment or an agent transcript. If the original row is unavailable, navigation

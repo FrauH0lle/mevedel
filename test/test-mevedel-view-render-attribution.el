@@ -14,6 +14,7 @@
 (require 'mevedel-chat)
 (require 'mevedel-tools)
 (require 'mevedel-view)
+(require 'mevedel-view-disclosure)
 (require 'mevedel-view-render)
 
 (mevedel-deftest mevedel-view--mail-attribute ()
@@ -226,7 +227,23 @@
         (should-not (string-search "collapsed]" (buffer-string)))
         (goto-char (point-min))
         (search-forward "Stopped by user")
-        (should (get-text-property (1- (point)) 'invisible))))))
+        (should (get-text-property (1- (point)) 'invisible)))))
+  :doc "a monitor that exited without an outcome renders as ended, in the error-free face"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (mevedel-tools--message-delivery-block
+                 (list :type 'MONITOR_TERMINAL :sender "/root/worker" :recipient "/root"
+                       :description "ticker"
+                       :meta '(:event-count 2 :termination "exited" :exit-code 0)
+                       :payload "Monitor ticker: exited with code 0"))
+                "\n")
+        (mevedel-view--decorate-agent-message-blocks (point-min) (point-max))
+        (goto-char (point-min))
+        (search-forward "● Monitor \"ticker\" ended · 2 events")
+        (should-not (string-search "completed" (buffer-string)))
+        (should-not (eq 'error (get-text-property (1- (point)) 'font-lock-face)))))))
 
 (provide 'test-mevedel-view-render-attribution)
 ;;; test-mevedel-view-render-attribution.el ends here

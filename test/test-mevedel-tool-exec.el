@@ -341,6 +341,50 @@ A synchronous result must come with exactly one matching acknowledgement."
             (mevedel-bash-analysis-analyze command)
             exit-code termination))))))
 
+(mevedel-deftest mevedel-tool-exec-completion ()
+  ,test
+  (test)
+  :doc "the full precedence table, over symbols and tag strings alike"
+  (dolist (case '(;; 1. stop terminations beat every outcome
+                  (stopped nil stopped "stopped")
+                  (interrupted failure stopped "stopped")
+                  (cancelled success stopped "stopped")
+                  (owner-stopped errored stopped "stopped")
+                  ;; 2. timeouts, next
+                  (timeout nil timed-out "timed out")
+                  (timed-out failure timed-out "timed out")
+                  (expired success timed-out "timed out")
+                  ;; 3. a lost termination reads as failed (disputed wording)
+                  (lost nil failed "failed")
+                  (lost success failed "failed")
+                  ;; 4. failure outcomes
+                  (exited failure failed "failed")
+                  (exited errored failed "failed")
+                  (nil lost failed "failed")
+                  (signaled failure failed "failed")
+                  ;; 5. non-failure Bash outcomes
+                  (exited success completed "completed")
+                  (exited no-match completed "completed")
+                  (exited different completed "completed")
+                  (exited false completed "completed")
+                  (nil success completed "completed")
+                  ;; 6. no outcome, or an unknown one, claims nothing
+                  (exited nil ended "ended")
+                  (nil nil ended "ended")
+                  (flood nil ended "ended")
+                  (exited unheard-of ended "ended")
+                  (exited interrupted ended "ended")))
+    (pcase-let ((`(,termination ,outcome ,status ,verb) case))
+      (dolist (form (list (list termination outcome)
+                          (list (and termination (symbol-name termination))
+                                (and outcome (symbol-name outcome)))))
+        (should (equal (cons status verb)
+                       (apply #'mevedel-tool-exec-completion form))))))
+  :doc "tag strings are compared by name and never interned"
+  (let ((name (format "never-seen-%d" (random 1000000))))
+    (should (equal '(ended . "ended") (mevedel-tool-exec-completion name name)))
+    (should-not (intern-soft name))))
+
 (mevedel-deftest mevedel-tool-exec--write-stdin ()
   ,test
   (test)
