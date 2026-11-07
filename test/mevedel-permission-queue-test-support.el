@@ -225,7 +225,7 @@ captured), :entry (a copy of the card's entry), :count and :text."
   "Apply STEP to CARD.
 A string is a key pressed on the card.  A function receives the card.  An
 outcome is pressed with its key and fails when the card does not offer it;
-(inject OUTCOME) deliberately calls the closure the card captured, for
+\(inject OUTCOME) deliberately calls the closure the card captured, for
 stale or repeated answers; a feedback answer is typed."
   (cond
    ((functionp step) (funcall step card))
