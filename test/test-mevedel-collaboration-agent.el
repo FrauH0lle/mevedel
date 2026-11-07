@@ -217,8 +217,12 @@
                    (lambda (_transport _peer frame) (push (mevedel-test--frame frame) sent) t))
                   ((symbol-function 'float-time) (lambda (&optional _) now))
                   ((symbol-function 'run-at-time)
+                   ;; Count only the agent-load timer: editing a buffer arms
+                   ;; Emacs' own `undo-auto--boundary-timer' whenever none is
+                   ;; pending, which depends on what earlier tests left behind.
                    (lambda (_time _repeat fn &rest args)
-                     (push (cons fn args) timers)))
+                     (when (eq fn #'mevedel-collaboration--load-agent)
+                       (push (cons fn args) timers))))
                   ((symbol-function 'mevedel-collaboration--room-for-buffer)
                    (lambda (buffer) (and (eq buffer data) room)))
                   ((symbol-function 'mevedel-collaboration--canonical-records)
