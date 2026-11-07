@@ -32,8 +32,11 @@ The `journal` component is selected only by `main` and delivered as an independe
 retained context update, leaving the system prefix stable. It shows at most
 five recent digests with date, session name, canonical address, and the first
 nonempty Learned bullet (falling back to Done). The entire component is bounded
-to 2 KiB of UTF-8, including labels and addresses; long names and excerpts get
-visible omission markers. These are dated evidence, not current instructions
+to 2 KiB of UTF-8, including labels and addresses. Each row has a fixed 358-byte
+allowance, including its separator, with 256 bytes reserved for the header.
+Adding a digest leaves surviving rows byte-identical, dropping the oldest when
+the list would exceed five rows; long names and excerpts get visible omission
+markers. These are dated evidence, not current instructions
 or authority to resume unfinished work. Worker, explorer, verifier, reviewer,
 guardian, buddy, and context-summary prompts omit the map. Review coverage is
 the exact union of digest IDs in published general-review records. Focused
