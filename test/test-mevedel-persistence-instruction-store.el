@@ -652,7 +652,6 @@ Return the new workspace struct."
                               (mevedel-instruction-test--store-state workspace))))
               (delete-directory foreign-dir t)))
         (delete-directory mevedel-sessions-directory t))))
-  :doc "published portable sessions in an absolute directory are attributed by their publication"
   :doc "an older-format session in an absolute directory still keeps the workspace pending"
   (test-mevedel-instruction-store--with-workspace (workspace _source)
     (let ((mevedel-sessions-directory
@@ -738,7 +737,7 @@ Return the new workspace struct."
                               (car exports)))
       (should (string-match-p "only here" (with-temp-buffer
                                             (insert-file-contents (car exports))
-                                            (buffer-string)))))))
+                                            (buffer-string))))))
   :doc "exports of two clients in the same second do not overwrite each other"
   (test-mevedel-instruction-store--with-workspace (workspace source)
     (test-mevedel-instruction-store--directive source "only here")
@@ -750,7 +749,7 @@ Return the new workspace struct."
                       (mevedel-instruction-store--export-unsynced workspace))))
         (should-not (equal first second))
         (should (file-exists-p first))
-        (should (file-exists-p second)))))
+        (should (file-exists-p second))))))
 
 
 ;;; Export and import

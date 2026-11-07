@@ -176,6 +176,32 @@ temporary one."
                              (push symbol stale))))
                (ert-info ((format "Autoloads their file does not define: %S" stale))
                  (should-not stale))))
+            ('handoff-progress
+             (require 'mevedel-plan-handoff)
+             (require 'mevedel-view)
+             (require 'mevedel-view-composer)
+             (should-not (featurep 'mevedel-view-render))
+             (should (autoloadp (symbol-function 'mevedel-view-stream-end-progress)))
+             ;; Exercise the live-buffer path before any view setup can supply
+             ;; the stream owner's renderer dependency.
+             (with-temp-buffer
+               (mevedel-view-stream-end-progress (current-buffer))
+               (should mevedel-view--request-progress-suppressed)
+               (should-not mevedel-view--spinner-status)
+               (mevedel-view-stream-show-progress
+                (current-buffer) "Preparing plan..." 'plan-preparation)
+               (should-not mevedel-view--request-progress-suppressed)
+               (should (equal "Preparing plan..." mevedel-view--spinner-status))
+               (let ((token (mevedel-view-stream-claim-progress
+                             (current-buffer) "Hook..." 'hook)))
+                 (should (eq 'hook mevedel-view--spinner-owner))
+                 (mevedel-view-stream-release-progress (current-buffer) token)
+                 (should (eq 'plan-preparation mevedel-view--spinner-owner))
+                 (should (equal "Preparing plan..." mevedel-view--spinner-status)))
+               (mevedel-view-stream-end-progress (current-buffer))
+               (should mevedel-view--request-progress-suppressed)
+               (should-not mevedel-view--spinner-status)
+               (should-not mevedel-view--spinner-timer)))
             ('request-progress
              (require 'gptel-request)
              (require 'mevedel-view-stream)

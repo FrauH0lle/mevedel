@@ -62,7 +62,7 @@ A child that outlives two minutes is killed and fails the test."
                 (should (equal 0 status))
                 (should (equal "" output))))
             (dolist (entry (list root compiled))
-              (dolist (scenario '(commands stop-shares installation request-progress
+              (dolist (scenario '(commands stop-shares installation handoff-progress request-progress
                                   artifacts gptel chat chat-in-directory tools renderers
                                   live-execution claude native-btw lobby room discuss implement
                                   directive-preview-implement directive-preview-discuss
