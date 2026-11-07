@@ -386,7 +386,11 @@ results. Audit readers also reuse bounded pure decoding in the current buffer
 across projections, retaining at most 1024 payloads totaling 4 MiB (at most
 1 MiB each); callers still establish trust independently. Fork-point
 classification scans the requested buffer range without copying the transcript. Boundary misses search only
-after the preceding validated block. Whole-buffer normalization is reused until
+after the preceding validated block. Renders outside a projection (row refreshes,
+disclosures and background preparation) keep the same index in the data
+buffer's bounded boundary memo until text, properties or narrowing change;
+without it every tool rescanned all earlier history, making a cold render cubic
+in the number of tools. Whole-buffer normalization is reused until
 text or properties change. Tool discovery advances through ordered property
 runs and validated blocks, discarding completed prefixes and stopping overlap
 searches at the candidate's end. This avoids searching old or later history for
