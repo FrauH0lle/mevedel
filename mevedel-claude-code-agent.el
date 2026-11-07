@@ -83,7 +83,7 @@ its runtime canceller owns the transport without creating a gptel FSM."
          invocation
          (lambda (mcp hook)
            (mevedel-claude-code-launch
-            (mevedel-claude-code-context-system invocation system selected)
+            (mevedel-claude-code-context-system invocation system selected (plist-get history :id))
             mcp model effort (plist-get history :id) hook))
          (lambda ()
            (mevedel-claude-code-agent-next-sample invocation)

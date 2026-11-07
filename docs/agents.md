@@ -196,7 +196,7 @@ Native children use the [native context delivery](sessions.md#native-context-del
 contract. Queued mail is attached to the prompt after the native identity is
 persisted; mail arriving during a turn follows native tool batches, and duplicate
 or failed receipts cannot consume it. The child's frozen component selection
-defines both its system baseline and its compaction restoration. Its prompt
+defines both its observation reminders and its compaction restoration. Its prompt
 collects the invocation's configured reminders without consuming the parent's
 reminders or hook context, and native compaction restores only that child's
 direct-child roster and learned path instructions. Continuation prompts keep the

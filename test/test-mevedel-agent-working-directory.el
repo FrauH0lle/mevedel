@@ -135,6 +135,11 @@
                                      workspace linked-subdir session linked))
                            (native (mevedel-claude-code-context-system
                                     mevedel--agent-invocation "Agent instructions."))
+                           (native-content
+                            (mapconcat (lambda (part) (or (alist-get 'text part) ""))
+                                       (mevedel-claude-code-context-prompt
+                                        mevedel--agent-invocation
+                                        [((type . "text") (text . "Inspect cwd."))]) "\n"))
                            (backend (let ((gptel--known-backends nil))
                                       (gptel-make-openai-responses "cwd-context" :key "test"
                                                                    :models '(cwd-test))))
@@ -153,7 +158,8 @@
                       (let ((delivered (mapconcat
                                         (lambda (message) (plist-get message :content))
                                         (append (plist-get data :input) nil) "\n")))
-                        (dolist (text (list native delivered))
+                        (should (equal "Agent instructions." native))
+                        (dolist (text (list native-content delivered))
                           (should (string-search (concat "Working directory: " linked-subdir) text))
                           (should (string-search "LINKED-ONLY-CWD-RULE" text))
                           (should-not (string-search "ROOT-ONLY-CWD-RULE" text))

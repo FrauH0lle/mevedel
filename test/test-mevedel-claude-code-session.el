@@ -12,6 +12,7 @@
 (require 'mevedel-claude-code)
 (require 'mevedel-claude-code-context)
 (require 'mevedel-directive-plan)
+(require 'mevedel-journal-store)
 
 (mevedel-deftest mevedel-engine-test--with-claude-session (:quiet t)
   (dolist (file-p '(nil t))
@@ -1065,11 +1066,15 @@
           (ert-info ((format "receipt=%S" receipt))
             (should (eq (if (memq receipt '(t unchanged compact revert)) 'success 'error)
                         (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
-            (should (= (if (memq receipt '(t unchanged compact revert)) 3 2)
+            ;; An unreceived first prompt now withholds required observations,
+            ;; not only mail, so no tool may run in that case.
+            (should (= (cond ((eq receipt 'pending-mail) 0)
+                             ((memq receipt '(t unchanged compact revert)) 3)
+                             (t 2))
                        (how-many "^#\\+begin_tool" (point-min) (point-max))))
             (should (= (pcase receipt ((or 't 'revert) 1) ('compact 2) (_ 0))
                        (mevedel-engine-test--count-evidence "UPDATED-MEMORY-6492")))
-            ;; The acknowledged prompt records the system baseline once; a
+            ;; The acknowledged prompt delivers the observations once; a
             ;; reverted section is recorded again as a mid-turn update.
             (should (= (pcase receipt ('revert 2) ('pending-mail 0) (_ 1))
                        (mevedel-engine-test--count-evidence "Original memory")))))))))
@@ -1080,7 +1085,7 @@
            (mevedel-system-retained-components '(memory active-goal))
            (state "Original child memory")
            (file (file-name-concat root "evidence.txt"))
-           record outcome)
+           record outcome initial-content)
       (setf (alist-get 'memory mevedel-system--prompt-components)
             (mevedel-system-prompt-component--create :name 'memory :producer (lambda (_) state))
             (alist-get 'active-goal mevedel-system--prompt-components)
@@ -1091,9 +1096,14 @@
           (cl-letf (((symbol-function 'mevedel-claude-code-launch)
                      (mevedel-engine-test--claude-launch
                       (lambda (system mcp _model _effort &optional id hook)
-                        (should (string-search "Original child memory" system))
+                        (should (equal "Child instructions" system))
                         (should-not (string-search "ROOT-ONLY-GOAL" system))
                         (list :observe (lambda (owner notification)
+                                         (when-let* ((message (alist-get 'message (alist-get 'params notification)))
+                                                     ((equal "user" (alist-get 'type message))))
+                                           (setq initial-content
+                                                 (mapconcat (lambda (part) (or (alist-get 'text part) ""))
+                                                            (alist-get 'content (alist-get 'message message)) "\n")))
                                          (mevedel-claude-code-context-observe owner notification)
                                          (when (equal "agent_message_chunk"
                                                       (alist-get 'sessionUpdate (alist-get 'update (alist-get 'params notification))))
@@ -1111,7 +1121,11 @@
             (mevedel-test--await 5 "Context update child did not settle"
               (not (mevedel-agent-control-active-turn-p session)))
             (should (equal "Child completed" (mevedel-agent-record-settled-result record)))
+            (should (string-search "Original child memory" initial-content))
+            (should (string-search "<system-reminder>" initial-content))
+            (should-not (string-search "ROOT-ONLY-GOAL" initial-content))
             (with-current-buffer (mevedel-agent-record-conversation-buffer record)
+              (should (= 1 (mevedel-engine-test--count-evidence "Original child memory")))
               (should (= 1 (mevedel-engine-test--count-evidence "CHILD-MEMORY-7258")))
               (should-not (string-search "ROOT-ONLY-GOAL" (buffer-string))))
             (should-not (string-search "CHILD-MEMORY-7258" (buffer-string))))
@@ -1169,7 +1183,7 @@
              (state "Original memory")
              (changed (if (eq receipt 'unchanged) state "CURRENT-CONTEXT-3726"))
              (file (file-name-concat root "evidence.txt"))
-             captured-system)
+             captured-system initial-content)
         (setf (alist-get 'memory mevedel-system--prompt-components)
               (mevedel-system-prompt-component--create
                :name 'memory :producer (lambda (_context) state)))
@@ -1181,6 +1195,11 @@
                     (lambda (system mcp _model _effort &optional id hook)
                       (setq captured-system system)
                       (list :observe (lambda (owner notification)
+                                       (when-let* ((message (alist-get 'message (alist-get 'params notification)))
+                                                   ((equal "user" (alist-get 'type message))))
+                                         (setq initial-content
+                                               (mapconcat (lambda (part) (or (alist-get 'text part) ""))
+                                                          (alist-get 'content (alist-get 'message message)) "\n")))
                                        (mevedel-claude-code-context-observe owner notification)
                                        (when (equal "agent_message_chunk"
                                                     (alist-get 'sessionUpdate (alist-get 'update (alist-get 'params notification))))
@@ -1198,14 +1217,18 @@
           (mevedel-test--await 5 "Compaction turn did not settle"
             (not (mevedel-turn-busy-p buffer)))
           (should (string-search "LARGE-SYSTEM-END" captured-system))
-          (should (string-search "Original memory" captured-system))
+          (should-not (string-search "Original memory" captured-system))
+          (should (string-search "Original memory" initial-content))
+          (should (string-search "<system-reminder>" initial-content))
           (should (eq (if (memq receipt '(t unchanged)) 'success 'error)
                       (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
           (ert-info ((format "receipt=%S" receipt))
             (should (= (if (memq receipt '(t unchanged)) 2 1)
                        (how-many "^#\\+begin_tool" (point-min) (point-max)))))
           (should (= (if (eq receipt t) 1 0)
-                     (mevedel-engine-test--count-evidence "CURRENT-CONTEXT-3726"))))))))
+                     (mevedel-engine-test--count-evidence "CURRENT-CONTEXT-3726")))
+          (should (= (if (eq receipt 'unchanged) 2 1)
+                     (mevedel-engine-test--count-evidence "Original memory"))))))))
 
 (mevedel-deftest mevedel--send-request/claude-recovery (:quiet t)
   (mevedel-engine-test--with-claude-session
@@ -1317,8 +1340,8 @@
 (mevedel-deftest mevedel--send-request/claude-records-system-observations (:quiet t)
   ,test
   (test)
-  :doc "Claude records the observations its system prompt delivered, like a gptel first turn"
-  (let (gptel-types claude-types)
+  :doc "Claude delivers and records first-turn observations after user input, like gptel"
+  (let (gptel-types claude-types gptel-data)
     ;; gptel delivers changed observations as a recorded turn-start injection.
     (mevedel-engine-test--with-session
       (let* ((gptel--known-backends nil)
@@ -1333,10 +1356,22 @@
                      (let ((sent (apply real-request prompt (append options '(:dry-run t)))))
                        (mevedel-context-delivery-stage sent)
                        (mevedel-reminders--handle-inject sent)
+                       (setq gptel-data (plist-get (gptel-fsm-info sent) :data))
                        sent))))
           (mevedel--insert-user-turn "Parity task")
           (mevedel--send-request))
-        (setq gptel-types (test-mevedel-claude-code-session--observation-types (buffer-string)))))
+        (setq gptel-types (test-mevedel-claude-code-session--observation-types (buffer-string)))
+        (should (equal "Parity fixture" (plist-get gptel-data :system)))
+        (let* ((messages (plist-get gptel-data :messages))
+               (first (mevedel-context-delivery--message-text (aref messages 0)))
+               (reminders (mevedel-context-delivery--message-text (aref messages 1))))
+          (should (string-search "Parity task" first))
+          (dolist (record (mevedel-transcript-audit-records (buffer-string) 'injected-reminders))
+            (should (eq 'turn-start (plist-get record :phase)))
+            (dolist (item (plist-get record :items))
+              (should-not (string-search (plist-get item :body) first))
+              (should (string-search (mevedel-reminders-format-block (plist-get item :body))
+                                     reminders)))))))
     (should (memq 'context-environment gptel-types))
     (mevedel-engine-test--with-claude-session
       (let ((real-prompt (symbol-function 'mevedel-claude-code-context-prompt))
@@ -1354,15 +1389,19 @@
             (not (mevedel-turn-busy-p buffer)))
           (should (eq 'success (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
           (setq claude-types (test-mevedel-claude-code-session--observation-types (buffer-string)))
-          ;; Recorded observations were delivered by the native system prompt,
-          ;; not repeated in the prompt content.
+          (should (equal (plist-get gptel-data :system) (car systems)))
+          ;; Recorded observations reach the model after authored user input,
+          ;; never through the native system prompt.
           (dolist (record (mevedel-transcript-audit-records (buffer-string) 'injected-reminders))
             (dolist (item (plist-get record :items))
               (when (memq (plist-get item :type) claude-types)
                 (should (eq 'turn-start (plist-get record :phase)))
-                (should (string-search (plist-get item :body) (car systems)))
-                (should-not (string-search (plist-get item :body)
-                                           (prin1-to-string (car prompts)))))))
+                (should-not (string-search (plist-get item :body) (car systems)))
+                (should (equal "Parity task" (alist-get 'text (aref (car prompts) 0))))
+                (should (seq-some (lambda (part)
+                                    (string-search (mevedel-reminders-format-block (plist-get item :body))
+                                                   (or (alist-get 'text part) "")))
+                                  (substring (car prompts) 1))))))
           ;; Control: an unchanged baseline is not recorded again; one changed
           ;; section is recorded alone.
           (write-region "PARITY WORKSPACE GUIDANCE" nil (file-name-concat root "AGENTS.md") nil 'silent)
@@ -1401,6 +1440,159 @@
                       (should (string-search (symbol-name type) labels)))))))))))
     (should (equal (sort (copy-sequence gptel-types) #'string<)
                    (sort (copy-sequence claude-types) #'string<)))))
+
+(mevedel-deftest mevedel--send-request/claude-stable-system-prompt (:quiet t)
+  ,test
+  (test)
+  :doc "Journal publication and workspace edits reach resumed launches without changing the system"
+  (mevedel-engine-test--with-claude-session
+    (let* ((mevedel-journal-max-age-days nil)
+           (mevedel-system-retained-components '(journal workspace-config))
+           (instructions (file-name-concat root "AGENTS.md"))
+           (file (file-name-concat root "evidence.txt"))
+           (real-prompt (symbol-function 'mevedel-claude-code-context-prompt))
+           (turn 0) systems ids prompts
+           (mevedel-post-tool-use-functions
+            (list (lambda (_event)
+                    (write-region "WORKSPACE-C-6630" nil instructions nil 'silent)
+                    nil))))
+      (mevedel-journal-store-publish-digest
+       root (list :capture-id (make-string 64 ?a) :session "cache-fixture"
+                  :session-name "Cache fixture" :workspace (make-string 64 ?b)
+                  :trigger 'session-end :segment 1 :source-revision (make-string 64 ?c)
+                  :turns '(1) :turn-ids (list (make-string 64 ?d))
+                  :created "2026-11-07T12:00:00Z" :model "provider:model")
+       "## Done\n- none\n## Learned\n- JOURNAL-A-1182\n## Surprised\n- none\n## Unfinished\n- none")
+      (write-region "WORKSPACE-A-1182" nil instructions nil 'silent)
+      (write-region "Evidence" nil file nil 'silent)
+      (setq-local gptel-system-prompt "Stable prompt fixture"
+                  gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
+      (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+                 (mevedel-engine-test--claude-launch
+                  (lambda (system _mcp _model _effort &optional id hook)
+                    (cl-incf turn)
+                    (push system systems)
+                    (push id ids)
+                    ;; The second turn's tool boundary delivers a further change.
+                    (list :meta `((hookCommand . ,hook) (responseText . "Done")
+                                  (toolBatches . ,(if (= turn 2)
+                                                      `[[((name . "Read") (id . "mid-turn")
+                                                          (args . ((file_path . ,file))))]
+                                                        [((name . "Read") (id . "after-update")
+                                                          (args . ((file_path . ,file))))]]
+                                                    [])))))))
+                ((symbol-function 'mevedel-claude-code-context-prompt)
+                 (lambda (&rest args)
+                   (car (push (apply real-prompt args) prompts)))))
+        (dolist (prompt '("First native turn" "Second native turn" "Third native turn"))
+          (goto-char (point-max))
+          (mevedel--insert-user-turn prompt)
+          (mevedel--send-request prompt)
+          (mevedel-test--await 5 "Native turn did not settle"
+            (not (mevedel-turn-busy-p buffer)))
+          (should (eq 'success (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
+          ;; Real journal publication and workspace guidance change between
+          ;; adapter starts.  The next launch must not rewrite the prefix.
+          (when (equal prompt "First native turn")
+            (mevedel-journal-store-publish-digest
+             root (list :capture-id (make-string 64 ?e) :session "cache-fixture"
+                        :session-name "Cache fixture" :workspace (make-string 64 ?b)
+                        :trigger 'session-end :segment 1 :source-revision (make-string 64 ?f)
+                        :turns '(2) :turn-ids (list (make-string 64 ?1))
+                        :created "2026-11-07T12:01:00Z" :model "provider:model")
+             "## Done\n- none\n## Learned\n- JOURNAL-B-4417\n## Surprised\n- none\n## Unfinished\n- none")
+            (write-region "WORKSPACE-B-4417" nil instructions nil 'silent)
+            ;; Advance the existing discovery throttle without a wall-clock wait.
+            (let ((observation (mevedel-workspace-journal-observation workspace)))
+              (setf (mevedel-workspace-journal-observation workspace)
+                    (plist-put observation :time (- (float-time) 11))))))
+        (ert-info ((format "ids=%S" ids))
+          (should (cadr ids))
+          (should (equal (car ids) (cadr ids))))
+        ;; Every resumed launch composes only the same static system prompt.
+        (should (= 3 (length systems)))
+        (should (equal (cadr systems) (caddr systems)))
+        (should (equal (car systems) (cadr systems)))
+        (should (cl-every (lambda (system) (equal "Stable prompt fixture" system)) systems))
+        (let ((first (car (last prompts))))
+          (should (equal "First native turn" (alist-get 'text (aref first 0))))
+          (should (string-search "JOURNAL-A-1182" (alist-get 'text (aref first 1))))
+          (should (string-search "WORKSPACE-A-1182" (alist-get 'text (aref first 1)))))
+        ;; The change reaches the model once, in the second prompt's content.
+        (let ((second (prin1-to-string (cadr prompts))))
+          (should (string-search "JOURNAL-B-4417" second))
+          (should (string-search "WORKSPACE-B-4417" second))
+          (should (string-search "<system-reminder>" second)))
+        ;; The third prompt repeats neither that nor the hook-delivered change.
+        (should-not (string-search "JOURNAL-B-4417" (prin1-to-string (car prompts))))
+        (should-not (string-search "WORKSPACE-C-6630" (prin1-to-string (car prompts))))
+        (should (= 1 (mevedel-engine-test--count-evidence "JOURNAL-B-4417")))
+        (should (= 1 (mevedel-engine-test--count-evidence "WORKSPACE-C-6630")))
+        ;; The complete second journal observation also retains the first digest.
+        (should (= 2 (mevedel-engine-test--count-evidence "JOURNAL-A-1182")))))))
+
+(mevedel-deftest mevedel--send-request/claude-observation-restoration (:quiet t)
+  ,test
+  (test)
+  :doc "Compaction and a new native conversation restore reminders, not the system prompt"
+  (mevedel-engine-test--with-claude-session
+    (let* ((mevedel-system--prompt-components (copy-tree mevedel-system--prompt-components))
+           (mevedel-system-retained-components '(memory))
+           (state "MEMORY-ONE-2051")
+           (file (file-name-concat root "evidence.txt"))
+           (real-prompt (symbol-function 'mevedel-claude-code-context-prompt))
+           (turn 0) systems prompts)
+      (setf (alist-get 'memory mevedel-system--prompt-components)
+            (mevedel-system-prompt-component--create
+             :name 'memory :producer (lambda (_context) state)))
+      (write-region "Evidence" nil file nil 'silent)
+      (setq-local gptel-system-prompt "Refresh fixture"
+                  gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
+      (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+                 (mevedel-engine-test--claude-launch
+                  (lambda (system _mcp _model _effort &optional _id hook)
+                    (cl-incf turn)
+                    (push system systems)
+                    ;; The second turn compacts before its tool batch.
+                    (list :meta `((hookCommand . ,hook) (responseText . "Done")
+                                  (compactBeforeBatch . ,(when (= turn 2) 0))
+                                  (toolBatches . ,(if (= turn 2)
+                                                      `[[((name . "Read") (id . "after-compact")
+                                                          (args . ((file_path . ,file))))]]
+                                                    [])))))))
+                ((symbol-function 'mevedel-claude-code-context-prompt)
+                 (lambda (&rest args)
+                   (car (push (apply real-prompt args) prompts)))))
+        (cl-flet ((send (prompt)
+                    (goto-char (point-max))
+                    (mevedel--insert-user-turn prompt)
+                    (mevedel--send-request prompt)
+                    (mevedel-test--await 5 "Native turn did not settle"
+                      (not (mevedel-turn-busy-p buffer)))
+                    (should (eq 'success (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))))
+          (send "First turn")
+          (setq state "MEMORY-TWO-7714")
+          (send "Compacting turn")
+          ;; Before compaction the resumed launch kept its system prompt.
+          (should (equal (cadr systems) (car systems)))
+          (send "After compaction")
+          (should-not (string-search "MEMORY-TWO-7714" (car systems)))
+          (should-not (string-search "MEMORY-TWO-7714" (prin1-to-string (car prompts))))
+          ;; The turn-start change and the compaction restoration each deliver
+          ;; the complete observation.  The following prompt repeats neither.
+          (should (= 2 (mevedel-engine-test--count-evidence "MEMORY-TWO-7714")))
+          (let ((compacted (car systems)))
+            (setq state "MEMORY-THREE-3390")
+            (send "Resumed after update")
+            ;; A further observation change still leaves the prefix intact.
+            (should (equal compacted (car systems))))
+          ;; A new native conversation starts from the current observations.
+          (mevedel-claude-code-release-history session)
+          (send "New conversation")
+          (should (string-search "MEMORY-THREE-3390" (prin1-to-string (car prompts))))
+          (should (= 2 (mevedel-engine-test--count-evidence "MEMORY-THREE-3390")))
+          (should (cl-every (lambda (system) (equal "Refresh fixture" system)) systems))
+          (should (= 5 turn)))))))
 
 (provide 'test-mevedel-claude-code-session)
 ;;; test-mevedel-claude-code-session.el ends here

@@ -69,6 +69,33 @@
       (should (equal '((context-memory . "old"))
                      (mevedel-context-delivery--previous '(context-memory)))))))
 
+(mevedel-deftest mevedel-context-delivery-native ()
+  ,test
+  (test)
+  :doc "derives latest receipts for one native conversation, never isolated or foreign turns"
+  (with-temp-buffer
+    (cl-flet ((record (native &rest items)
+                (insert (mevedel--format-hook-audit-record
+                         (append (list :type 'injected-reminders :phase 'turn-start :items items)
+                                 (when native (list :native native)))))))
+      (should-not (mevedel-context-delivery-native "X"))
+      (record "X" '(:type context-memory :body "M1")
+              '(:type context-journal :body "J1")
+              '(:type context-journal :body "J2"))
+      ;; An isolated turn and another conversation never reached X.
+      (record nil '(:type context-memory :body "ISOLATED"))
+      (record "Y" '(:type context-memory :body "OTHER"))
+      (record "X" '(:type context-memory :body "M2"))
+      (should (equal "M2" (alist-get 'context-memory (mevedel-context-delivery-native "X"))))
+      (should (equal "J2" (alist-get 'context-journal (mevedel-context-delivery-native "X"))))
+      (should (= 2 (length (mevedel-context-delivery-native "X"))))
+      (should-not (mevedel-context-delivery-native nil))
+      ;; Compaction/rewind derives only what the retained segment contains.
+      (erase-buffer)
+      (should-not (mevedel-context-delivery-native "X"))
+      (record "X" '(:type context-memory :body "M3"))
+      (should (equal '((context-memory . "M3")) (mevedel-context-delivery-native "X"))))))
+
 (mevedel-deftest mevedel-context-delivery--message-text ()
   ,test
   (test)
@@ -273,16 +300,14 @@
                                        :status 'active :tokens-used 100 :turns-run 1))
             (mevedel-context-delivery-stage fsm)
             (mevedel-reminders--handle-inject fsm)
-            ;; Usage moves with every charge and re-sends nothing.
+            ;; Usage and the turn count move with every charge or turn and
+            ;; re-send nothing.
             (cl-incf (mevedel-goal-tokens-used (mevedel-session-goal session)))
             (mevedel-context-delivery-stage fsm)
             (should-not (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))
             (cl-incf (mevedel-goal-turns-run (mevedel-session-goal session)))
             (mevedel-context-delivery-stage fsm)
-            (should (equal '(context-active-goal)
-                           (mapcar (lambda (entry) (plist-get entry :type))
-                                   (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))
-            (mevedel-reminders--handle-inject fsm)
+            (should-not (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))
             (setf (mevedel-goal-status (mevedel-session-goal session)) 'complete)
             (mevedel-context-delivery-stage fsm)
             (dolist (type '(context-active-goal context-goal-policy))
