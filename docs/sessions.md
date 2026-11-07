@@ -2299,7 +2299,15 @@ sessions or Emacs instances stay. Only a workspace still waiting for its store
 restores the session's `current.el`. That is a workspace with sessions but no
 store, or one whose migration staged candidates. While waiting, it never
 creates a store automatically and warns once. An unreadable store is reported;
-resume continues without clearing the instructions already loaded.
+resume continues without clearing the instructions already loaded. The session
+then counts as owing a Rewind resolution, so request admission keeps trying to
+settle and refuses while the store stays unreadable.
+
+Resume is not the only time the store is read. The instructions are available
+as soon as a workspace is first activated in an Emacs, before any session
+resumes. Opening a directive listing observes the store again, costing one
+target-side hash when nothing changed. Activation skips a remote root without
+a live connection.
 
 The store is written through the pinned control-file programs under
 `.mevedel/leases/instructions/`, each write naming the hash it was based on:
@@ -2311,7 +2319,9 @@ The store is written through the pinned control-file programs under
   instruction another client changed, keeping its request text on the kill
   ring.
 
-A store is created automatically only where `.mevedel/` already exists.
+A store is created automatically only where `.mevedel/` already exists, and an
+import does not create one either. While a minibuffer is active, writes wait
+until the command that read it returns.
 
 ### Explicit session migration
 
@@ -2650,9 +2660,12 @@ commit point:
   records, so nothing needs re-inserting.
 - If the prune does not land, the session's committed turn count settles the
   intent at resume or at the next request admission in that session.
-  Admission is refused until it does, so a new turn cannot reuse a discarded
-  turn number. Equal to the surviving count, it prunes; equal to the count
-  before, it drops the intent.
+  Admission is refused until it does, including while the store is
+  unreadable, so a new turn cannot reuse a discarded turn number. Equal to the
+  surviving count, it prunes; equal to the count before, it drops the intent.
+- Until the commit point Rewind holds back only its own workspace's store
+  writes. Other workspaces keep writing, and changes in its own are written
+  afterwards.
 
 Another client re-reading the store in between still sees the discarded
 activity. Actions that resolve its checkpoint find no such turn, and actions

@@ -11,6 +11,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
+(require 'mevedel-session-rewind)
 
 
 (mevedel-deftest mevedel-session-rewind--refresh-restored-buffers ()
@@ -1049,13 +1050,50 @@
                 (when (buffer-live-p source-buffer)
                   (kill-buffer source-buffer)
                   (setq source-buffer nil))
-                (cl-letf (((symbol-function 'display-buffer) #'ignore)
-                          ((symbol-function 'yes-or-no-p)
-                           (lambda (&rest _) t))
-                          ((symbol-function 'mevedel--run-session-start-hooks)
-                           #'ignore))
-                  (should
-                   (mevedel-session-rewind-rewind buffer target)))
+                ;; Meanwhile another workspace records a directive; this
+                ;; session's Rewind must not keep it from that store.
+                (let* ((other-root (file-name-as-directory
+                                    (make-temp-file "mevedel-other-ws-" t)))
+                       (other (mevedel-workspace-get-or-create
+                               'file "other-ws" other-root "other-ws"))
+                       (other-file (file-name-concat other-root "other.el"))
+                       (restore (symbol-function
+                                 'mevedel-session-rewind-execute-restore))
+                       other-buffer)
+                  (mevedel-workspace-identity-ensure other-root)
+                  (write-region "(defun other () t)\n" nil other-file nil 'silent)
+                  (unwind-protect
+                      (progn
+                        (cl-letf (((symbol-function 'display-buffer) #'ignore)
+                                  ((symbol-function 'yes-or-no-p)
+                                   (lambda (&rest _) t))
+                                  ((symbol-function 'mevedel--run-session-start-hooks)
+                                   #'ignore)
+                                  ((symbol-function
+                                    'mevedel-session-rewind-execute-restore)
+                                   (lambda (&rest args)
+                                     (prog1 (apply restore args)
+                                       (setq other-buffer (find-file-noselect other-file))
+                                       (with-current-buffer other-buffer
+                                         (setq-local mevedel--workspace other)
+                                         (mevedel--create-directive-in
+                                          other-buffer 1 6 nil "elsewhere"))))))
+                          (should
+                           (mevedel-session-rewind-rewind buffer target)))
+                        (should other-buffer)
+                        (mevedel-instruction-store-flush)
+                        (should
+                         (equal '("elsewhere")
+                                (mapcar (lambda (record) (plist-get record :request))
+                                        (plist-get (plist-get (mevedel-instruction-store--read
+                                                               other)
+                                                              :data)
+                                                   :directives)))))
+                    (when (buffer-live-p other-buffer)
+                      (with-current-buffer other-buffer (set-buffer-modified-p nil))
+                      (kill-buffer other-buffer))
+                    (mevedel--clear-instruction-state other)
+                    (delete-directory other-root t)))
                 (should (= 1 (mevedel-session-turn-count session)))
                 (with-current-buffer buffer
                   (should (string-match-p "First reply" (buffer-string)))

@@ -33,23 +33,41 @@ observed:
   reported as not recoverable.
 
 A write is retried once; if the store changed again, this client keeps the
-store's record and refuses its own changes. The store is re-read on resume and
-on every write. There is no watcher, so a listing may show state another client
+store's record and refuses its own changes.
+
+**Observation points.** The store is observed when a workspace is first
+activated in an Emacs, when a directive listing opens, at resume, and on every
+write. There is no watcher: a listing left open may show state another client
 has since changed.
+
+- An unchanged store costs one target-side hash.
+- A workspace with nothing in memory loads the store, restoring presentations
+  only in files already visited; the rest restore when visited.
+- Any other difference merges as a write would.
+- Activation skips a remote root without a live connection, since resolving a
+  workspace must not open one; the next listing or resume observes it.
 
 **Format version.** The record carries `:format`, independent of the package
 version, so two installations of different versions share one workspace. An
 unknown format or an unreadable record refuses without clearing live state or
-writing. An absent store is told apart from a corrupt one.
+writing. An absent store is told apart from a corrupt one. An unreadable store
+is reported once and read again only at the next observation point, not after
+every command. Exports and session snapshots carry the same `:format`, so a
+candidate staged on the other machine's installation imports here. A file
+written before they carried it imports only on the version that wrote it.
 
 **Where writes come from.** A creation is written immediately; other changes
 mark the workspace and are written after the command, at every session save,
-and at exit. A store is created automatically only where `.mevedel/` already
-exists. Otherwise, adding an instruction to a file in some directory would make
-that directory resolve as a workspace. `mevedel-save-instructions` and
-`mevedel-load-instructions` remain export and import. An import replaces the
-store after its confirmation, and is refused if the store changed since this
-client last read it.
+and at exit. While a minibuffer is active the write waits: editing a request
+there changes it on every keystroke, and it is written once the command that
+read it returns. A store is created automatically only where `.mevedel/`
+already exists. Otherwise, adding an instruction to a file in some directory
+would make that directory resolve as a workspace; an import there does not
+create one either. `mevedel-save-instructions` and `mevedel-load-instructions`
+remain export and import. An import replaces the store after its
+confirmation. It is refused unless this client last observed exactly the
+store's current record, so it cannot discard instructions it never saw. An
+absent store, or an unreadable one being repaired, has nothing to lose.
 
 **Waiting for migration.** A workspace without a store whose sessions exist,
 or whose migration staged candidates, is pending. It keeps the behaviour from
@@ -71,11 +89,15 @@ session's committed turn count settles the intent:
   pruned;
 - equal to the count before, it did not, and the intent is dropped.
 
-Resume settles the intent. So does request admission in that session, which
-refuses while the intent cannot be settled: otherwise a new turn would reuse a
-discarded turn number. After commit the live directive records stay the
-objects Rewind pruned, and source presentations come from the store rather than
-the historical snapshot.
+Resume settles the intent and marks the session as owing until it succeeds.
+So does request admission in that session, which refuses while the intent
+cannot be settled: otherwise a new turn would reuse a discarded turn number.
+An unreadable store is such a failure, never "no intent". After commit the
+live directive records stay the objects Rewind pruned, and source
+presentations come from the store rather than the historical snapshot. Until
+then Rewind holds back writes to its own workspace's store only. Changes in
+that workspace are still recorded and written afterwards; other workspaces
+keep writing.
 
 **Authority is unchanged.** The store is editor-owned workspace state, like
 the artifact store ([ADR 0124](0124-keep-artifacts-in-a-workspace-store.md)).

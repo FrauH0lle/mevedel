@@ -13,6 +13,8 @@
 (require 'mevedel)
 (require 'mevedel-persistence)
 (require 'mevedel-directive)
+(require 'mevedel-directive-activity)
+(require 'mevedel-session-control-fs)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -63,6 +65,25 @@ SOURCE visits `source.el' holding two functions.  The workspace has its
   "Forget WORKSPACE's in-memory instructions, as a fresh Emacs would."
   (mevedel--clear-instruction-state workspace)
   (test-mevedel-session-persistence--reset-instructions))
+
+(defun test-mevedel-instruction-store--reactivate (workspace)
+  "Restart, then resolve WORKSPACE's struct anew as a fresh Emacs would.
+Return the new workspace struct."
+  (test-mevedel-instruction-store--restart workspace)
+  (mevedel-workspace-clear-registry)
+  (mevedel-workspace-get-or-create
+   (mevedel-workspace-type workspace) (mevedel-workspace-id workspace)
+   (mevedel-workspace-root workspace) (mevedel-workspace-name workspace)))
+
+(defun test-mevedel-instruction-store--listed (workspace)
+  "Return the directive choices `mevedel-list-directives' offers in WORKSPACE."
+  (let (offered)
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt choices &rest _)
+                 (setq offered (mapcar (lambda (choice) (cdr choice)) choices))
+                 (throw 'listed nil))))
+      (catch 'listed (mevedel-list-directives workspace)))
+    (sort (mapcar #'mevedel-directive-request offered) #'string<)))
 
 (defun test-mevedel-instruction-store--record (workspace)
   "Return WORKSPACE's store record."
@@ -126,21 +147,60 @@ SOURCE visits `source.el' holding two functions.  The workspace has its
 (mevedel-deftest mevedel-instruction-store-sync (:quiet t)
   ,test
   (test)
-  :doc "a creation is written at once and survives a restart"
+  :doc "a creation is written at once and is back when the workspace activates"
   (test-mevedel-instruction-store--with-workspace (workspace source)
     (test-mevedel-instruction-store--directive source "kept")
     (with-current-buffer source
       (goto-char (point-min))
       (forward-line 1)
       (mevedel--create-reference-in source (point) (line-end-position)))
-    (test-mevedel-instruction-store--restart workspace)
-    (should-not (mevedel-workspace-directives workspace))
-    (mevedel-instruction-store-sync workspace)
-    (should (equal '("kept") (test-mevedel-instruction-store--requests workspace)))
-    (mevedel--instruction-activate-workspace workspace)
-    (should (= 1 (cl-count-if #'mevedel--referencep
-                              (alist-get source (mevedel--instruction-alist))))))
-  :doc "control: without the store the same restart loses the creation"
+    (let ((fresh (test-mevedel-instruction-store--reactivate workspace)))
+      (should (equal '("kept") (test-mevedel-instruction-store--requests fresh)))
+      (should (equal '("kept") (test-mevedel-instruction-store--listed fresh)))
+      ;; The visited source got its reference back; other files wait for a visit.
+      (mevedel--instruction-activate-workspace fresh)
+      (should (= 1 (cl-count-if #'mevedel--referencep
+                                (alist-get source (mevedel--instruction-alist)))))))
+  :doc "control: without activation the restarted workspace lists nothing"
+  (test-mevedel-instruction-store--with-workspace (workspace source)
+    (test-mevedel-instruction-store--directive source "kept")
+    (cl-letf (((symbol-function 'mevedel-instruction-store-activate) #'ignore)
+              ((symbol-function 'mevedel-instruction-store-observe) #'ignore))
+      (let ((fresh (test-mevedel-instruction-store--reactivate workspace)))
+        (should-not (mevedel-workspace-directives fresh)))))
+  :doc "opening a listing observes another client's change"
+  (test-mevedel-instruction-store--with-workspace (workspace source)
+    (let* ((overlay (test-mevedel-instruction-store--directive source "mine"))
+           (uuid (overlay-get overlay 'mevedel-uuid)))
+      (should (equal '("mine") (test-mevedel-instruction-store--listed workspace)))
+      (test-mevedel-instruction-store--other-client
+       workspace (lambda (record)
+                   (test-mevedel-instruction-store--edit-record
+                    record uuid :request "changed elsewhere")))
+      (should (equal '("changed elsewhere")
+                     (test-mevedel-instruction-store--listed workspace)))
+      ;; Control: an unchanged store costs one hash and changes nothing.
+      (should (eq 'current (mevedel-instruction-store-observe workspace)))))
+  :doc "a directive edited in the minibuffer is written once, after it returns"
+  (test-mevedel-instruction-store--with-workspace (workspace source)
+    (let* ((overlay (test-mevedel-instruction-store--directive source "base"))
+           (uuid (overlay-get overlay 'mevedel-uuid))
+           (syncs 0)
+           (sync (symbol-function 'mevedel-instruction-store-sync)))
+      (cl-letf (((symbol-function 'mevedel-instruction-store-sync)
+                 (lambda (&rest args) (cl-incf syncs) (apply sync args))))
+        (cl-letf (((symbol-function 'minibuffer-depth) (lambda () 1)))
+          (dolist (text '("b" "ba" "bas"))
+            (mevedel--set-directive-request overlay text)
+            (mevedel-instruction-store-flush)))
+        (should (= 0 syncs))
+        (should (memq workspace mevedel-instruction-store--dirty))
+        ;; Control: once the minibuffer returns, one flush writes it.
+        (mevedel-instruction-store-flush)
+        (should (= 1 syncs)))
+      (should (equal "bas" (test-mevedel-instruction-store--stored-request
+                            workspace uuid)))))
+  :doc "control: without the store a restart loses the creation"
   (test-mevedel-instruction-store--with-workspace (workspace source)
     (cl-letf (((symbol-function 'mevedel-instruction-store--applicable-p) #'ignore))
       (test-mevedel-instruction-store--directive source "kept")
@@ -371,6 +431,41 @@ SOURCE visits `source.el' holding two functions.  The workspace has its
     (let ((overlay (test-mevedel-instruction-store--directive source "one")))
       (mevedel--set-directive-request overlay "changed")
       (should (eq 'written (mevedel-instruction-store-sync workspace)))))
+  :doc "an unreadable store is reported once and not re-read after every command"
+  (test-mevedel-instruction-store--with-workspace (workspace source)
+    (let ((overlay (test-mevedel-instruction-store--directive source "one"))
+          (reads 0)
+          (read (symbol-function 'mevedel-instruction-store--read)))
+      (with-temp-file (mevedel-instruction-store-path workspace)
+        (insert "(:format 1 :ids nil"))
+      (cl-letf (((symbol-function 'mevedel-instruction-store--read)
+                 (lambda (&rest args) (cl-incf reads) (apply read args))))
+        (mevedel--set-directive-request overlay "changed")
+        (mevedel-instruction-store-flush)
+        (should (= 1 reads))
+        (should-not (memq workspace mevedel-instruction-store--dirty))
+        (mevedel-instruction-store-flush)
+        (should (= 1 reads))
+        ;; Control: the next observation point reads it again.
+        (should-error (mevedel-instruction-store-observe workspace)
+                      :type 'mevedel-instruction-store-unreadable)
+        (should (= 2 reads)))))
+  :doc "a stale write whose fallback cannot read the store keeps the change pending"
+  (test-mevedel-instruction-store--with-workspace (workspace source)
+    (let ((overlay (test-mevedel-instruction-store--directive source "one"))
+          (reads 0)
+          (read (symbol-function 'mevedel-instruction-store--read)))
+      (mevedel--set-directive-request overlay "changed")
+      (cl-letf (((symbol-function 'mevedel-instruction-store--write) #'ignore)
+                ((symbol-function 'mevedel-instruction-store--read)
+                 (lambda (&rest args)
+                   (if (> (cl-incf reads) 2)
+                       (list :status 'corrupt :reason "gone")
+                     (apply read args)))))
+        (should (eq 'stale (mevedel-instruction-store-sync workspace))))
+      (should (= 3 reads))
+      (should (memq workspace mevedel-instruction-store--dirty))
+      (should (equal '("changed") (test-mevedel-instruction-store--requests workspace)))))
   :doc "the carrier reads, creates and refuses stale writes over a TRAMP path"
   (mevedel-test--with-local-shell-tramp '("instruction-store")
     (let* ((local (file-name-as-directory (make-temp-file "mevedel-remote-store-" t)))
@@ -517,7 +612,68 @@ SOURCE visits `source.el' holding two functions.  The workspace has its
       (with-current-buffer source
         (should-error (mevedel-load-instructions export) :type 'user-error))
       (should (equal "theirs" (test-mevedel-instruction-store--stored-request
-                               workspace uuid))))))
+                               workspace uuid)))))
+  :doc "an import over a store this Emacs never read is refused"
+  (test-mevedel-instruction-store--with-workspace (workspace source)
+    (let ((export (file-name-concat (mevedel-workspace-root workspace) "export.el")))
+      (test-mevedel-instruction-store--directive source "stored")
+      (with-current-buffer source (mevedel-save-instructions export))
+      (let ((before (test-mevedel-instruction-store--record workspace))
+            (fresh (test-mevedel-instruction-store--reactivate workspace)))
+        ;; Activation loaded it; dropping the observation is what a forget does.
+        (mevedel-instruction-store--forget fresh)
+        (with-temp-buffer
+          (setq-local mevedel--workspace fresh)
+          (should-error (mevedel-load-instructions export) :type 'user-error))
+        (should (equal before (test-mevedel-instruction-store--record workspace)))
+        ;; Control: after a listing observes the store, the import proceeds.
+        (test-mevedel-instruction-store--listed fresh)
+        (with-temp-buffer
+          (setq-local mevedel--workspace fresh)
+          (mevedel-load-instructions export))
+        (should (equal '("stored") (test-mevedel-instruction-store--requests fresh))))))
+  :doc "an export from another installation's version loads"
+  (test-mevedel-instruction-store--with-workspace (workspace source)
+    (let ((export (file-name-concat (mevedel-workspace-root workspace) "export.el")))
+      (test-mevedel-instruction-store--directive source "elsewhere")
+      (with-current-buffer source (mevedel-save-instructions export))
+      (let ((data (with-temp-buffer (insert-file-contents export) (read (current-buffer)))))
+        (with-temp-file export
+          (prin1 (plist-put data :version "9.9.9") (current-buffer)))
+        (with-current-buffer source (mevedel-load-instructions export))
+        (should (equal '("elsewhere") (test-mevedel-instruction-store--requests workspace)))
+        ;; Control: a file without the shared format from another version is refused.
+        (with-temp-file export
+          (prin1 (plist-put (copy-sequence (mevedel-instruction-store--without
+                                            data '(:format)))
+                            :version "9.9.9")
+                 (current-buffer)))
+        (with-current-buffer source
+          (should-error (mevedel-load-instructions export) :type 'user-error)))))
+  :doc "an import where no .mevedel exists creates none"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-plain-import-" t)))
+         (workspace (mevedel-workspace-get-or-create 'file "plain-import" root
+                                                     "plain-import"))
+         (file (file-name-concat root "source.el"))
+         (export (file-name-concat root "export.el"))
+         buffer)
+    (unwind-protect
+        (progn
+          (write-region "(defun beta () t)\n" nil file nil 'silent)
+          (setq buffer (find-file-noselect file))
+          (with-current-buffer buffer
+            (setq-local mevedel--workspace workspace)
+            (mevedel--create-directive-in buffer 1 6 nil "plain")
+            (mevedel-save-instructions export)
+            (mevedel-load-instructions export))
+          (should (equal '("plain") (test-mevedel-instruction-store--requests workspace)))
+          (should-not (file-exists-p (file-name-concat root ".mevedel"))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (mevedel--clear-instruction-state workspace)
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
 
 
 ;;; Rewind intents
@@ -602,6 +758,34 @@ each, both written to the store."
     (test-mevedel-instruction-store--restart workspace)
     (should (mevedel-instruction-store-settle-session session))
     (should (equal '(1) (test-mevedel-instruction-store--attempt-turns workspace uuid))))
+  :doc "an unreadable store at resume keeps a committed Rewind owed until it reads"
+  (test-mevedel-instruction-store--with-rewind (workspace session uuid)
+    (let* ((path (mevedel-instruction-store-path workspace))
+           bytes)
+      (should (mevedel-instruction-store-rewind-begin session 1 2))
+      ;; The Rewind committed; Emacs died before the store was pruned.
+      (setf (mevedel-session-turn-count session) 1)
+      (test-mevedel-instruction-store--restart workspace)
+      (setq bytes (with-temp-buffer
+                    (insert-file-contents-literally path)
+                    (buffer-string)))
+      (with-temp-file path (insert "(:format 1 :ids nil"))
+      ;; Resume fails on the unreadable store.
+      (should-error (mevedel-instruction-store-restore session))
+      ;; Admission must keep refusing while the intent cannot be read.
+      (should (mevedel-instruction-store-owes-p session))
+      (should-error (mevedel-instruction-store-settle-session session)
+                    :type 'mevedel-instruction-store-unreadable)
+      (let ((coding-system-for-write 'no-conversion))
+        (write-region bytes nil path nil 'silent))
+      (should (mevedel-instruction-store-settle-session session))
+      (should (equal '(1) (test-mevedel-instruction-store--attempt-turns workspace uuid)))
+      (should-not (mevedel-instruction-store-owes-p session))))
+  :doc "control: a session resumed without an intent owes nothing"
+  (test-mevedel-instruction-store--with-rewind (workspace session _uuid)
+    (test-mevedel-instruction-store--restart workspace)
+    (mevedel-instruction-store-restore session)
+    (should-not (mevedel-instruction-store-owes-p session)))
   :doc "another session's Rewind prunes only its own activity"
   (test-mevedel-instruction-store--with-rewind (workspace session uuid)
     (let ((other (mevedel-session-create "t" workspace))
@@ -634,6 +818,104 @@ each, both written to the store."
     (setf (mevedel-session-turn-count session) 1)
     (should-not (mevedel-instruction-store-settle-session session))
     (should (equal '(1 2) (test-mevedel-instruction-store--attempt-turns workspace uuid)))))
+
+
+
+;;; Over TRAMP
+
+(mevedel-deftest mevedel-instruction-store-observe/remote (:quiet t)
+  ,test
+  (test)
+  :doc "pending, activation, observation, merge and Rewind over a TRAMP root"
+  (mevedel-test--with-local-shell-tramp '("instruction-remote")
+    (let* ((local (file-name-as-directory (make-temp-file "mevedel-remote-ws-" t)))
+           (root (format "/mevedelmock:instruction-remote:%s" local))
+           (programs 0)
+           (run (symbol-function 'mevedel-session-control-fs-run-program))
+           (counted (lambda (function)
+                      (setq programs 0)
+                      (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                                 (lambda (&rest args) (cl-incf programs) (apply run args))))
+                        (prog1 (funcall function) (setq programs programs)))))
+           (directive (lambda (request session attempts)
+                        (list :id "D1" :request request
+                              :anchor (list :state 'attached :file "source.el"
+                                            :start 1 :end 6 :evidence nil)
+                              :subdirectives nil :session-id session
+                              :planning-enabled nil :skills nil :plan nil
+                              :planning nil :attempts attempts :discussion nil)))
+           (attempt (lambda (session turn sequence)
+                      (list :sequence sequence :action 'implement
+                            :directive-request "do it" :request "do it" :result "done"
+                            :outcome 'success :patch "" :capture 'incomplete
+                            :covered-files nil :gaps nil :untracked-effects nil
+                            :captured-at "2026-11-07T00:00:00+0100"
+                            :checkpoint (list :session-id session :turn turn)
+                            :plan nil :plan-context nil :plan-selection nil
+                            :consumed-subdirectives nil)))
+           (record (lambda (directives)
+                     (list :format mevedel-instruction-store-format-version
+                           :ids (list :id-counter 0 :used-ids nil :retired-ids nil)
+                           :directives directives :files nil :rewinds nil)))
+           workspace session)
+      (unwind-protect
+          (progn
+            (setq workspace (mevedel-workspace-get-or-create
+                             'project root root "instruction-remote"))
+            (mevedel-workspace-identity-ensure root)
+            ;; A session without a store makes the workspace pending.
+            (make-directory (file-name-concat local ".mevedel" "sessions" "old") t)
+            (should (eq 'pending (mevedel-instruction-store-state workspace)))
+            (delete-directory (file-name-concat local ".mevedel" "sessions") t)
+            (setq session (mevedel-session-create "s" workspace root))
+            (let ((sid (mevedel-session-session-id session)))
+              ;; Another client writes the store; activation loads it in one read.
+              (should (mevedel-instruction-store--write
+                       workspace nil
+                       (funcall record
+                                (list (funcall directive "first" sid
+                                               (list (funcall attempt sid 1 1)
+                                                     (funcall attempt sid 2 2)))))))
+              (mevedel-workspace-clear-registry)
+              (setq workspace (mevedel-workspace-get-or-create
+                               'project root root "instruction-remote"))
+              (setf (mevedel-session-workspace session) workspace)
+              (should (equal '("first")
+                             (test-mevedel-instruction-store--requests workspace)))
+              ;; An unchanged store costs one hash program.
+              (should (eq 'current (funcall counted
+                                            (lambda ()
+                                              (mevedel-instruction-store-observe
+                                               workspace)))))
+              (should (= 1 programs))
+              ;; A change elsewhere is merged at the next observation:
+              ;; hash, read, and a write when memory differs.
+              (test-mevedel-instruction-store--other-client
+               workspace (lambda (data)
+                           (test-mevedel-instruction-store--edit-record
+                            data "D1" :request "second")))
+              (funcall counted (lambda () (mevedel-instruction-store-observe workspace)))
+              (should (<= programs 3))
+              (should (equal '("second")
+                             (test-mevedel-instruction-store--requests workspace)))
+              ;; Rewind: intent, commit, prune.
+              (setf (mevedel-session-turn-count session) 2)
+              (should (funcall counted
+                               (lambda ()
+                                 (mevedel-instruction-store-rewind-begin session 1 2))))
+              (should (= 2 programs))
+              (mevedel-workspace-rewind-directives workspace sid 2)
+              (setf (mevedel-session-turn-count session) 1)
+              (funcall counted (lambda () (mevedel-instruction-store-rewind-end session t)))
+              (should (<= programs 3))
+              (should (equal '(1) (test-mevedel-instruction-store--attempt-turns
+                                   workspace "D1")))
+              (should-not (plist-get (test-mevedel-instruction-store--record workspace)
+                                     :rewinds))))
+        (when workspace (mevedel--clear-instruction-state workspace))
+        (test-mevedel-session-persistence--reset-instructions)
+        (delete-directory local t)
+        (mevedel-workspace-clear-registry)))))
 
 (provide 'test-mevedel-persistence-instruction-store)
 ;;; test-mevedel-persistence-instruction-store.el ends here

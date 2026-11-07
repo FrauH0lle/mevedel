@@ -61,12 +61,15 @@
 (autoload 'mevedel-session-artifacts-sessions-dir "mevedel-session-artifacts")
 
 ;; `mevedel-session-control-fs'
+(declare-function mevedel-session-control-fs-file-hash
+                  "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-program-value
                   "mevedel-session-control-fs" (result))
 (declare-function mevedel-session-control-fs-run-program
                   "mevedel-session-control-fs" (operations &optional lock-directory))
 (autoload 'mevedel-session-control-fs-program-value "mevedel-session-control-fs")
 (autoload 'mevedel-session-control-fs-run-program "mevedel-session-control-fs")
+(autoload 'mevedel-session-control-fs-file-hash "mevedel-session-control-fs")
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
@@ -110,6 +113,11 @@ instruction restoration process.")
 
 (defvar mevedel--inhibit-source-missing-restore nil
   "Non-nil while a historical instruction snapshot is being installed.")
+
+(defconst mevedel-instruction-store-format-version 1
+  "Format of the workspace instruction store and instruction exports.
+Independent of the package version, so two installations of different
+versions can share one workspace and import each other's exports.")
 
 ;;;###autoload
 (defun mevedel-save-instructions (path)
@@ -204,7 +212,8 @@ contents for position patching if the file changes before restore."
                  (cl-remf entry :original-content))
                (push (cons (car cons) entry)
                      file-alist)))
-    (list :version (mevedel-version)
+    (list :format mevedel-instruction-store-format-version
+          :version (mevedel-version)
           :ids (mevedel--instruction-id-state-plist)
           :directives (and workspace
                            (mevedel--serialize-directives
@@ -324,9 +333,16 @@ before replacing existing instructions.  QUIET suppresses messages.
 DIRECTIVE-RECORDS retains current authored records; PRESERVE-DIRECTIVES-P
 enables that mode for an empty record list."
   (let ((save-file (mevedel--read-instructions-file path)))
-    (unless (equal (plist-get save-file :version) (mevedel-version))
+    ;; The shared format version lets another installation's export, such
+    ;; as a candidate staged on the other machine, load here.  Files written
+    ;; before they carried it load only on the version that wrote them.
+    (unless (or (eql (plist-get save-file :format)
+                     mevedel-instruction-store-format-version)
+                (and (not (plist-member save-file :format))
+                     (equal (plist-get save-file :version) (mevedel-version))))
       (user-error "Unsupported instruction file version: %s"
-                  (or (plist-get save-file :version) "missing")))
+                  (or (plist-get save-file :format)
+                      (plist-get save-file :version) "missing")))
     (mevedel--install-instructions
      save-file (or base-directory (file-name-parent-directory path))
      confirm quiet workspace directive-records preserve-directives-p
@@ -334,13 +350,15 @@ enables that mode for an empty record list."
 
 (defun mevedel--install-instructions
     (save-file base-directory &optional confirm quiet workspace
-               directive-records preserve-directives-p source)
+               directive-records preserve-directives-p source lazy)
   "Install instruction snapshot SAVE-FILE into WORKSPACE.
 
 SAVE-FILE is an already read snapshot plist; its version or format is the
 caller's to check.  BASE-DIRECTORY resolves relative file names.  CONFIRM,
 QUIET, DIRECTIVE-RECORDS and PRESERVE-DIRECTIVES-P are as for
-`mevedel--load-instructions-file'.  SOURCE names the snapshot in messages."
+`mevedel--load-instructions-file'.  SOURCE names the snapshot in messages.
+LAZY restores presentations only in files already visited; the others
+restore when their file is visited."
   (setq workspace (or workspace
                       (mevedel--instruction-buffer-workspace
                        (current-buffer))))
@@ -389,6 +407,7 @@ QUIET, DIRECTIVE-RECORDS and PRESERVE-DIRECTIVES-P are as for
                   (mevedel--instruction-alist))))
       (let ((mevedel--inhibit-source-missing-restore t))
         (cl-loop for (file . _) in (mevedel--instruction-alist)
+                 when (or (not lazy) (find-buffer-visiting file))
                  do (cl-multiple-value-bind (_ restored kia)
                         (mevedel--restore-file-instructions file t workspace)
                       (cl-incf total-restored restored)
@@ -750,15 +769,19 @@ restoring overlays."
 ;; is retried once, and an edit to an instruction another client changed is
 ;; refused, its request text going to the kill ring.
 
-(defconst mevedel-instruction-store-format-version 1
-  "Format of the workspace instruction store.
-Independent of the package version, so two installations of different
-versions can share one workspace.")
-
 (defvar mevedel-instruction-store--inhibit nil
-  "Non-nil while instruction changes must not reach the store.
-Bound while the store installs its own records, and by Rewind until its
-commit point, when the store is updated explicitly.")
+  "Workspace whose instruction changes must not reach its store yet, or t.
+Rewind binds its own workspace until its commit point, when the store is
+updated explicitly; other workspaces keep writing meanwhile.  The store
+binds t while it installs its own records, so they are not echoed back.")
+
+(define-error 'mevedel-instruction-store-unreadable
+  "Instruction store is unreadable" 'user-error)
+
+(defun mevedel-instruction-store--inhibited-p (workspace)
+  "Return non-nil when WORKSPACE's store must not be written now."
+  (or (eq mevedel-instruction-store--inhibit t)
+      (and workspace (eq mevedel-instruction-store--inhibit workspace))))
 
 (defvar mevedel-instruction-store--dirty nil
   "Workspaces whose instruction changes the next flush writes.")
@@ -918,13 +941,15 @@ same files from every client of the workspace."
                          (plist-get snapshot :files))
           :rewinds nil)))
 
-(defun mevedel-instruction-store--install (workspace data)
-  "Make store record DATA WORKSPACE's in-memory instructions."
+(defun mevedel-instruction-store--install (workspace data &optional lazy)
+  "Make store record DATA WORKSPACE's in-memory instructions.
+LAZY restores presentations only in files already visited."
   (let ((mevedel-instruction-store--inhibit t))
     (with-temp-buffer
       (setq-local mevedel--workspace workspace)
       (mevedel--install-instructions
-       data (mevedel-instruction-store--root workspace) nil t workspace))))
+       data (mevedel-instruction-store--root workspace) nil t workspace
+       nil nil nil lazy))))
 
 
 ;;;; Merging a stale write
@@ -1218,9 +1243,10 @@ Return the export path."
   "Signal that WORKSPACE's store in OBSERVATION cannot be read.
 Nothing is cleared or written: the store must be repaired or replaced
 with `mevedel-load-instructions'."
-  (user-error "Instruction store %s is unreadable (%s); fix it or replace it with M-x mevedel-load-instructions"
-              (mevedel-instruction-store-path workspace)
-              (plist-get observation :reason)))
+  (signal 'mevedel-instruction-store-unreadable
+          (list (format "Instruction store %s is unreadable (%s); fix it or replace it with M-x mevedel-load-instructions"
+                        (mevedel-instruction-store-path workspace)
+                        (plist-get observation :reason)))))
 
 (defun mevedel-instruction-store--observe (workspace hash data)
   "Record that WORKSPACE's store holds DATA with HASH."
@@ -1272,7 +1298,7 @@ A store is created only where mevedel already keeps workspace state:
 creating `.mevedel/' merely because an instruction was added to a file in
 some directory would make that directory, and every directory below it,
 resolve as a workspace.  The first session saved there creates both."
-  (when (and (not mevedel-instruction-store--inhibit)
+  (when (and (not (mevedel-instruction-store--inhibited-p workspace))
              (mevedel-instruction-store--applicable-p workspace))
     (setq mevedel-instruction-store--dirty
           (delq workspace mevedel-instruction-store--dirty))
@@ -1368,13 +1394,19 @@ resolve as a workspace.  The first session saved there creates both."
                 (mevedel-instruction-store--observe
                  workspace (plist-get fresh :hash) (plist-get fresh :data))
                 (mevedel-instruction-store--report-refused refused))
+              ;; Without a readable record nothing was refused or written:
+              ;; keep the changes for the next write.
+              (unless (eq 'ok (plist-get fresh :status))
+                (cl-pushnew workspace mevedel-instruction-store--dirty))
               (setq outcome 'stale)))))
       outcome)))
 
 (defun mevedel-instruction-store-touch (&optional workspace)
   "Mark WORKSPACE's instructions changed; the next flush writes them.
-WORKSPACE defaults to the current buffer's."
-  (unless mevedel-instruction-store--inhibit
+WORKSPACE defaults to the current buffer's.  A change is recorded even
+while a Rewind holds back its workspace's writes; only the store's own
+installs are not recorded."
+  (unless (eq mevedel-instruction-store--inhibit t)
     (when-let* ((workspace (or workspace
                                (mevedel--instruction-buffer-workspace
                                 (current-buffer))))
@@ -1382,21 +1414,37 @@ WORKSPACE defaults to the current buffer's."
       (cl-pushnew workspace mevedel-instruction-store--dirty)
       (add-hook 'post-command-hook #'mevedel-instruction-store-flush))))
 
-(defun mevedel-instruction-store-flush ()
+(defun mevedel-instruction-store-flush (&optional force)
   "Write every workspace with unwritten instruction changes to its store.
-Runs after each command while changes are pending, and at exit.  A
-failure is reported and the workspace stays pending for the next flush."
-  (dolist (workspace mevedel-instruction-store--dirty)
-    (condition-case err
-        (mevedel-instruction-store-sync workspace)
-      (error
-       (cl-pushnew workspace mevedel-instruction-store--dirty)
-       (message "mevedel: instructions not written to the store: %s"
-                (error-message-string err)))))
-  (unless mevedel-instruction-store--dirty
-    (remove-hook 'post-command-hook #'mevedel-instruction-store-flush)))
+Runs after each command while changes are pending, and at exit.  While a
+minibuffer is active it waits: editing a directive request in the
+minibuffer changes it on every keystroke, and the command that read it
+writes once when it returns.  FORCE writes even then, as at exit.  A
+failure is reported and the workspace
+stays pending for the next flush.  An unreadable store is reported once
+and left to the next observation point, so it is not re-read after every
+command."
+  (unless (and (> (minibuffer-depth) 0) (not force))
+    (dolist (workspace mevedel-instruction-store--dirty)
+      (condition-case err
+          (mevedel-instruction-store-sync workspace)
+        (mevedel-instruction-store-unreadable
+         (setq mevedel-instruction-store--dirty
+               (delq workspace mevedel-instruction-store--dirty))
+         (mevedel-instruction-store--warn workspace 'unreadable
+                                          (error-message-string err)))
+        (error
+         (cl-pushnew workspace mevedel-instruction-store--dirty)
+         (message "mevedel: instructions not written to the store: %s"
+                  (error-message-string err)))))
+    (unless mevedel-instruction-store--dirty
+      (remove-hook 'post-command-hook #'mevedel-instruction-store-flush))))
 
-(add-hook 'kill-emacs-hook #'mevedel-instruction-store-flush)
+(defun mevedel-instruction-store--flush-at-exit ()
+  "Write every pending workspace before Emacs exits."
+  (mevedel-instruction-store-flush t))
+
+(add-hook 'kill-emacs-hook #'mevedel-instruction-store--flush-at-exit)
 
 (defun mevedel-instruction-store--settle (workspace session-id turn)
   "Resolve SESSION-ID's Rewind intents in WORKSPACE from committed TURN.
@@ -1404,7 +1452,9 @@ An intent records a Rewind from turn :from to :to surviving turns, which
 discards the session's activity from turn :prune-from on.  TURN equal to
 :to means the Rewind committed: prune that activity, unless that already
 happened.  TURN equal to :from means it did not.  Return non-nil when an
-intent was resolved; signal when one matches neither."
+intent was resolved.  Signal when one matches neither, or when the store
+cannot be read: an intent it may hold must not be skipped, or the
+session's turn count would move past it."
   (let ((tries 0) result)
     (while (and (null result) (< tries 2))
       (cl-incf tries)
@@ -1414,8 +1464,11 @@ intent was resolved; signal when one matches neither."
                        (lambda (intent)
                          (equal (plist-get intent :session-id) session-id))
                        (plist-get data :rewinds))))
-        (if (or (not (eq 'ok (plist-get theirs :status))) (null intents))
-            (setq result 'none)
+        (unless (memq (plist-get theirs :status) '(ok absent))
+          (mevedel-instruction-store--unreadable workspace theirs))
+        (if (null intents)
+            (progn (mevedel-instruction-store--owe workspace session-id nil)
+                   (setq result 'none))
           (let ((record data))
             (dolist (intent intents)
               (cond
@@ -1500,23 +1553,22 @@ request admission.  Return non-nil when an intent was resolved."
 
 (defun mevedel-instruction-store-owes-p (session)
   "Return non-nil when SESSION may still owe the store a Rewind resolution.
-Only SESSION's owner records intents, so this client's own record of the
-intents it wrote, plus its last observation, decides whether request
-admission must resolve one.  The record survives dropping the
-observation after a failed post-commit prune."
-  (let ((workspace (mevedel-session-workspace session)))
+True when this client wrote an intent for SESSION, saw one, or resumed
+SESSION without settling: after a restart nothing in memory remembers an
+intent a crash left behind, so resume marks the session first and only a
+successful settle clears the mark.  A session created in this Emacs has
+no intent to owe."
+  (let* ((workspace (mevedel-session-workspace session))
+         (sid (mevedel-session-session-id session))
+         (state (and (mevedel-instruction-store--applicable-p workspace)
+                     (mevedel--instruction-state
+                      (mevedel--instruction-workspace-key workspace))))
+         (observation (and state (mevedel-instruction-store--observation workspace))))
     (and (mevedel-instruction-store--applicable-p workspace)
-         (or (member (mevedel-session-session-id session)
-                     (plist-get (mevedel--instruction-state
-                                 (mevedel--instruction-workspace-key workspace))
-                                :store-owed))
+         (or (member sid (plist-get state :store-owed))
              (cl-some (lambda (intent)
-                        (equal (plist-get intent :session-id)
-                               (mevedel-session-session-id session)))
-                      (plist-get (plist-get (mevedel-instruction-store--observation
-                                             workspace)
-                                            :data)
-                                 :rewinds))))))
+                        (equal (plist-get intent :session-id) sid))
+                      (plist-get (plist-get observation :data) :rewinds))))))
 
 (defun mevedel-instruction-store--owe (workspace session-id owed)
   "Record whether SESSION-ID owes WORKSPACE's store a Rewind resolution.
@@ -1537,6 +1589,9 @@ restores the session snapshot as before; otherwise the install result.
 An unreadable store signals without clearing or writing."
   (let ((workspace (mevedel-session-workspace session)))
     (when (mevedel-instruction-store--applicable-p workspace)
+      ;; Until settling succeeds, admission must settle again.
+      (mevedel-instruction-store--owe
+       workspace (mevedel-session-session-id session) t)
       (mevedel-instruction-store-settle-session session)
       (let ((outcome (mevedel-instruction-store-sync workspace)))
         ;; Without a store, the session snapshot is still where its
@@ -1544,6 +1599,76 @@ An unreadable store signals without clearing or writing."
         (if (memq outcome '(pending none))
             'pending
           (list :store outcome))))))
+
+(defvar mevedel-instruction-store--activating nil
+  "Non-nil while a workspace's activation observes its store.")
+
+(defun mevedel-instruction-store--current-hash (workspace)
+  "Return the hash of WORKSPACE's store bytes, or nil when it is absent.
+The bytes are hashed on the execution target and never transferred."
+  (condition-case nil
+      (plist-get (mevedel-session-control-fs-file-hash
+                  (mevedel-instruction-store-path workspace))
+                 :sha256)
+    (mevedel-session-control-fs-absent nil)))
+
+(defun mevedel-instruction-store--memory-empty-p (workspace)
+  "Return non-nil when WORKSPACE holds no instructions in memory."
+  (and (null (mevedel-workspace-directives workspace))
+       (null (plist-get (mevedel--instruction-state
+                         (mevedel--instruction-workspace-key workspace))
+                        :instructions))))
+
+(defun mevedel-instruction-store-observe (workspace)
+  "Bring WORKSPACE's in-memory instructions up to date with its store.
+An observation point: workspace activation, opening a listing.  When the
+store still holds the record last observed, one target-side hash is the
+whole cost.  A workspace with nothing in memory and nothing observed
+loads the store, restoring presentations only in visited files.  Any
+other difference merges as a write would.  Return `current', `loaded',
+a `mevedel-instruction-store-sync' outcome, or nil without a store.  An
+unreadable store signals."
+  (when (and (mevedel-instruction-store--applicable-p workspace)
+             (not (mevedel-instruction-store--inhibited-p workspace))
+             (file-directory-p (mevedel-workspace-state-dir workspace)))
+    (let ((observed (mevedel-instruction-store--observation workspace)))
+      (cond
+       ((and (plist-get observed :hash)
+             (equal (plist-get observed :hash)
+                    (mevedel-instruction-store--current-hash workspace)))
+        'current)
+       ((and (null (plist-get observed :data))
+             (mevedel-instruction-store--memory-empty-p workspace))
+        (let ((observation (mevedel-instruction-store--read workspace)))
+          (pcase (plist-get observation :status)
+            ('absent nil)
+            ('ok
+             (mevedel-instruction-store--install
+              workspace (plist-get observation :data) t)
+             (mevedel-instruction-store--observe
+              workspace (plist-get observation :hash) (plist-get observation :data))
+             'loaded)
+            (_ (mevedel-instruction-store--unreadable workspace observation)))))
+       (t (mevedel-instruction-store-sync workspace))))))
+
+(defun mevedel-instruction-store-activate (workspace)
+  "Observe WORKSPACE's store when the workspace is first activated.
+After a restart this makes the workspace's instructions available before
+any session resumes.  A failure is reported, never signalled: activation
+happens wherever a buffer first resolves its workspace.  A remote root
+without a live connection is left to the next observation point (resume,
+a listing): resolving a workspace must not open a connection."
+  (unless (or mevedel-instruction-store--activating
+              (let ((root (mevedel-workspace-root workspace)))
+                (and (stringp root) (file-remote-p root)
+                     (not (file-remote-p root nil t)))))
+    (let ((mevedel-instruction-store--activating t))
+      (condition-case err
+          (mevedel-instruction-store-observe workspace)
+        (error
+         (mevedel-instruction-store--warn workspace 'activation
+                                          (error-message-string err))
+         nil)))))
 
 (defun mevedel-instruction-store-rewind-begin
     (session surviving-turn prune-from)
@@ -1633,7 +1758,12 @@ workspace's current set.  Otherwise drop the intent."
 (defun mevedel-instruction-store--forget (workspace)
   "Drop WORKSPACE's store observation.
 Use when memory may not correspond to any observed record: with no base,
-a later write keeps every instruction the store holds."
+a later write keeps every instruction the store holds.  The price is a
+broad refusal: without a base, an edit this client made to an
+instruction the store also holds, differently, is indistinguishable from
+a conflict and is refused.  Using the store's current record as the base
+instead would treat the historical presentations memory may hold as this
+client's edits and delete other sessions' instructions."
   (setf (plist-get (mevedel--instruction-state
                     (mevedel--instruction-workspace-key workspace))
                    :store-observation)
@@ -1642,23 +1772,26 @@ a later write keeps every instruction the store holds."
 (defun mevedel-instruction-store-replacing (workspace load)
   "Call LOAD to replace WORKSPACE's instructions, then replace its store.
 Used by `mevedel-load-instructions': the explicit import that also gives
-a pending workspace its store.  Before LOAD changes anything, refuse
-when the store changed since this client last observed it; the write
-then requires the store to be unchanged since that check.  Return
-LOAD's value."
-  (if (not (mevedel-instruction-store--applicable-p workspace))
+a pending workspace its store.  Where no `.mevedel/' exists, only LOAD
+runs, as for a store created automatically.  Before LOAD changes
+anything, refuse unless this client last observed exactly the store's
+current record, so an import cannot discard instructions it never saw;
+an absent store, or an unreadable one being repaired, has nothing to
+lose.  The write then requires the store to be unchanged since that
+check.  Return LOAD's value."
+  (if (not (and (mevedel-instruction-store--applicable-p workspace)
+                (file-directory-p (mevedel-workspace-state-dir workspace))))
       (funcall load)
     (let* ((observed (mevedel-instruction-store--observation workspace))
            (theirs (mevedel-instruction-store--read workspace))
            (expected (plist-get theirs :hash)))
-      (when (and expected (plist-get observed :hash)
+      (when (and (eq 'ok (plist-get theirs :status))
                  (not (equal expected (plist-get observed :hash))))
-        (user-error "The instruction store changed since it was last read; reopen the session or retry after it is reloaded"))
+        (user-error "The instruction store holds instructions this Emacs has not loaded; list the directives or resume a session to load them, then import again"))
       (prog1 (funcall load)
         (let ((record (plist-put (mevedel-instruction-store--serialize workspace)
                                  :rewinds (plist-get (plist-get theirs :data)
                                                      :rewinds))))
-          (make-directory (mevedel-workspace-state-dir workspace) t)
           (if-let* ((hash (mevedel-instruction-store--write workspace expected record)))
               (mevedel-instruction-store--observe workspace hash record)
             (user-error "The instruction store changed while importing; load the file again")))))))

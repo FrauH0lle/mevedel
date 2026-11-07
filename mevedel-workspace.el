@@ -32,6 +32,11 @@
 (autoload 'mevedel-execution-target-environment "mevedel-execution-target")
 (autoload 'mevedel-execution-target-expand-path "mevedel-execution-target")
 
+;; `mevedel-persistence'
+(declare-function mevedel-instruction-store-activate
+                  "mevedel-persistence" (workspace))
+(autoload 'mevedel-instruction-store-activate "mevedel-persistence")
+
 ;; `mevedel-structs'
 (declare-function mevedel-file-cache--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-session-execution-target "mevedel-structs" (cl-x) t)
@@ -220,18 +225,23 @@ and NAME arguments)."
          (root (mevedel-workspace--normalize-root root))
          (key (cons type id)))
     (or (gethash key mevedel-workspace--registry)
-        (puthash key
-                 (mevedel-workspace--create
-                  :type type
-                  :id id
-                  :root root
-                  :name name
-                  :file-cache (mevedel-file-cache--create
-                               :table (make-hash-table :test #'equal)
-                               :order nil
-                               :total-bytes 0)
-                  :directives nil)
-                 mevedel-workspace--registry))))
+        (let ((workspace
+               (puthash key
+                        (mevedel-workspace--create
+                         :type type
+                         :id id
+                         :root root
+                         :name name
+                         :file-cache (mevedel-file-cache--create
+                                      :table (make-hash-table :test #'equal)
+                                      :order nil
+                                      :total-bytes 0)
+                         :directives nil)
+                        mevedel-workspace--registry)))
+          ;; The workspace owns its instructions: make them available as
+          ;; soon as it is activated, not only when a session resumes.
+          (mevedel-instruction-store-activate workspace)
+          workspace))))
 
 (defun mevedel-workspace-clear-registry ()
   "Remove all workspaces from the global registry.

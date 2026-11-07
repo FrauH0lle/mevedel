@@ -2283,6 +2283,9 @@ failure is reported; the session save itself already succeeded."
   (condition-case err
       (mevedel-instruction-store-sync
        (mevedel-session-workspace session) own-save-path)
+    (mevedel-instruction-store-unreadable
+     ;; Reported once; re-reading it at every save would not repair it.
+     (message "mevedel: %s" (error-message-string err)))
     (error
      (mevedel-instruction-store-touch (mevedel-session-workspace session))
      (message "mevedel: instructions not written to the store: %s"

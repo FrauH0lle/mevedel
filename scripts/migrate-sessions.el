@@ -1036,7 +1036,8 @@ File names become relative to PATH's directory, where
      scratch (mevedel--deserialize-directives (plist-get record :directives) root))
     (mevedel-migrate-session--write
      path
-     (list :version (mevedel-version)
+     (list :format mevedel-instruction-store-format-version
+           :version (mevedel-version)
            :ids (plist-get record :ids)
            :directives (mevedel--serialize-directives scratch base)
            :files (mapcar (lambda (entry)

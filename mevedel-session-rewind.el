@@ -1435,7 +1435,7 @@ head CAS."
            session target boundary))
          (staging-buffer
           (generate-new-buffer " *mevedel-remote-rewind-staging*"))
-         (mevedel-instruction-store--inhibit t)
+         (mevedel-instruction-store--inhibit workspace)
          store-intent
          file-backups
          project-restore-started
@@ -1705,7 +1705,7 @@ head CAS."
          (original-turn (mevedel-session-turn-count session))
          ;; The workspace store changes only after the commit point; until
          ;; then a durable intent lets recovery finish or drop the prune.
-         (mevedel-instruction-store--inhibit t)
+         (mevedel-instruction-store--inhibit workspace)
          store-intent store-reloaded
          file-backups source-moved published session-installed
          file-restore-started buffer-install-started committed
