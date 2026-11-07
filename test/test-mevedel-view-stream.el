@@ -7955,17 +7955,40 @@ second line")
           (should (equal "Hook running" mevedel-view--spinner-status))
           (should (eq 'hook mevedel-view--spinner-owner))))))
 
-  :doc "claim and release: release re-resolves the view, so a recreated view is the one touched"
+  :doc "claim and release: release touches the view the caller resolves now, not the claimed one"
   (mevedel-view-stream-test--with-buffers
-    (mevedel-view-stream-show-progress view-buf "Thinking...")
-    (let ((token (mevedel-view-stream-claim-progress
-                  view-buf "Retrying..." 'provider-retry)))
-      (mevedel-view-stream-release-progress nil token)
-      (with-current-buffer view-buf
-        (should (eq 'provider-retry mevedel-view--spinner-owner)))
-      (mevedel-view-stream-release-progress view-buf token)
-      (with-current-buffer view-buf
-        (should (eq 'request mevedel-view--spinner-owner)))))
+    (let ((view2 (generate-new-buffer " *mevedel-stream-view2*")))
+      (unwind-protect
+          (progn
+            (mevedel-view--setup view2 data-buf)
+            (mevedel-view-stream-show-progress view-buf "Thinking...")
+            (let ((token (mevedel-view-stream-claim-progress
+                          view-buf "Retrying..." 'provider-retry)))
+              ;; The replacement view does not hold the claim: untouched.
+              (mevedel-view-stream-show-progress view2 "Other" 'hook)
+              (mevedel-view-stream-release-progress view2 token)
+              (with-current-buffer view2
+                (should (equal "Other" mevedel-view--spinner-status))
+                (should (eq 'hook mevedel-view--spinner-owner)))
+              ;; The original view is still live and still holds the claim,
+              ;; yet release into the replacement leaves it alone.
+              (with-current-buffer view-buf
+                (should (eq 'provider-retry mevedel-view--spinner-owner)))
+              ;; A replacement that holds the owner is the one restored.
+              (mevedel-view-stream-show-progress view2 "Retrying..." 'provider-retry)
+              (mevedel-view-stream-release-progress view2 token)
+              (with-current-buffer view2
+                (should (equal "Thinking..." mevedel-view--spinner-status))
+                (should (eq 'request mevedel-view--spinner-owner)))
+              (with-current-buffer view-buf
+                (should (eq 'provider-retry mevedel-view--spinner-owner)))
+              ;; Finally the original, resolved again, is restored.
+              (mevedel-view-stream-release-progress view-buf token)
+              (with-current-buffer view-buf
+                (should (eq 'request mevedel-view--spinner-owner)))))
+        (when (buffer-live-p view2)
+          (with-current-buffer view2 (mevedel-view-stream-stop))
+          (kill-buffer view2)))))
 
   :doc "progress changes keep point and the composer draft in place"
   (mevedel-view-stream-test--with-buffers
