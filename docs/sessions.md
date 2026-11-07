@@ -732,7 +732,10 @@ delivery until Resume or another explicit user action.
 
 Each launched Claude turn puts the recipient's complete selected observations
 into the native system prompt and disables the SDK's first-prompt snapshot, so a
-resumed launch uses the newly composed baseline. Everything else reaches native
+resumed launch uses the newly composed baseline. The prompt receipt's
+[injection record](reminders.md#the-injection-record) lists baseline sections
+that differ from the transcript's last delivery, without resending them.
+Everything else reaches native
 history through one of two receipt boundaries. Transmission, ACP send
 completion, a hook preview or an offloaded file never counts as delivery.
 

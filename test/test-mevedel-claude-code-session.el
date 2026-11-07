@@ -10,6 +10,7 @@
           (file-name-directory (or load-file-name buffer-file-name))
           "mevedel-engine-test-support"))
 (require 'mevedel-claude-code)
+(require 'mevedel-claude-code-context)
 (require 'mevedel-directive-plan)
 
 (mevedel-deftest mevedel-engine-test--with-claude-session (:quiet t)
@@ -1068,7 +1069,9 @@
                        (how-many "^#\\+begin_tool" (point-min) (point-max))))
             (should (= (pcase receipt ((or 't 'revert) 1) ('compact 2) (_ 0))
                        (mevedel-engine-test--count-evidence "UPDATED-MEMORY-6492")))
-            (should (= (if (eq receipt 'revert) 1 0)
+            ;; The acknowledged prompt records the system baseline once; a
+            ;; reverted section is recorded again as a mid-turn update.
+            (should (= (pcase receipt ('revert 2) ('pending-mail 0) (_ 1))
                        (mevedel-engine-test--count-evidence "Original memory")))))))))
 
 (mevedel-deftest mevedel-agent-control-spawn/claude-context-updates (:quiet t)
@@ -1302,6 +1305,102 @@
         ;; The canonical evidence and view/provider consumers must retain the body.
         (ert-info ((mevedel-engine-test--evidence))
           (should (= 1 (mevedel-engine-test--count-evidence "SECOND GUIDANCE RESTORED"))))))))
+
+(defun test-mevedel-claude-code-session--observation-types (text)
+  "Return the selected-observation types recorded as injected in TEXT."
+  (cl-loop for record in (mevedel-transcript-audit-records text 'injected-reminders)
+           append (cl-loop for item in (plist-get record :items)
+                           for type = (plist-get item :type)
+                           when (and (symbolp type) (string-prefix-p "context-" (symbol-name type)))
+                           collect type)))
+
+(mevedel-deftest mevedel--send-request/claude-records-system-observations (:quiet t)
+  ,test
+  (test)
+  :doc "Claude records the observations its system prompt delivered, like a gptel first turn"
+  (let (gptel-types claude-types)
+    ;; gptel delivers changed observations as a recorded turn-start injection.
+    (mevedel-engine-test--with-session
+      (let* ((gptel--known-backends nil)
+             (api (gptel-make-anthropic "Parity API" :key "fixture" :models '(claude-sonnet-4-5)))
+             (real-request (symbol-function 'gptel-request)))
+        (mevedel-model-set-session-provider
+         session (list :backend api :model 'claude-sonnet-4-5) buffer)
+        (setq-local gptel-system-prompt "Parity fixture" gptel-tools nil
+                    gptel-prompt-transform-functions nil)
+        (cl-letf (((symbol-function 'gptel-request)
+                   (lambda (prompt &rest options)
+                     (let ((sent (apply real-request prompt (append options '(:dry-run t)))))
+                       (mevedel-context-delivery-stage sent)
+                       (mevedel-reminders--handle-inject sent)
+                       sent))))
+          (mevedel--insert-user-turn "Parity task")
+          (mevedel--send-request))
+        (setq gptel-types (test-mevedel-claude-code-session--observation-types (buffer-string)))))
+    (should (memq 'context-environment gptel-types))
+    (mevedel-engine-test--with-claude-session
+      (let ((real-prompt (symbol-function 'mevedel-claude-code-context-prompt))
+            systems prompts)
+        (setq-local gptel-system-prompt "Parity fixture" gptel-tools nil)
+        (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+                   (mevedel-engine-test--claude-launch
+                    (lambda (system &rest _) (push system systems) nil)))
+                  ((symbol-function 'mevedel-claude-code-context-prompt)
+                   (lambda (&rest args)
+                     (car (push (apply real-prompt args) prompts)))))
+          (mevedel--insert-user-turn "Parity task")
+          (mevedel--send-request "Parity task")
+          (mevedel-test--await 5 "First native turn did not settle"
+            (not (mevedel-turn-busy-p buffer)))
+          (should (eq 'success (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
+          (setq claude-types (test-mevedel-claude-code-session--observation-types (buffer-string)))
+          ;; Recorded observations were delivered by the native system prompt,
+          ;; not repeated in the prompt content.
+          (dolist (record (mevedel-transcript-audit-records (buffer-string) 'injected-reminders))
+            (dolist (item (plist-get record :items))
+              (when (memq (plist-get item :type) claude-types)
+                (should (eq 'turn-start (plist-get record :phase)))
+                (should (string-search (plist-get item :body) (car systems)))
+                (should-not (string-search (plist-get item :body)
+                                           (prin1-to-string (car prompts)))))))
+          ;; Control: an unchanged baseline is not recorded again; one changed
+          ;; section is recorded alone.
+          (write-region "PARITY WORKSPACE GUIDANCE" nil (file-name-concat root "AGENTS.md") nil 'silent)
+          (dolist (prompt '("Second native turn" "Third native turn"))
+            (goto-char (point-max))
+            (mevedel--insert-user-turn prompt)
+            (mevedel--send-request prompt)
+            (mevedel-test--await 5 "Later native turn did not settle"
+              (not (mevedel-turn-busy-p buffer))))
+          (let ((later (nthcdr (length claude-types)
+                               (test-mevedel-claude-code-session--observation-types (buffer-string)))))
+            (should (equal '(context-workspace-config) later))
+            (should (cl-some (lambda (record)
+                               (cl-some (lambda (item)
+                                          (and (eq 'context-workspace-config (plist-get item :type))
+                                               (string-search "PARITY WORKSPACE GUIDANCE"
+                                                              (plist-get item :body))))
+                                        (plist-get record :items)))
+                             (mevedel-transcript-audit-records (buffer-string) 'injected-reminders))))
+          ;; The real view lists the first turn's observations in its user turn.
+          ;; Killing the data buffer at fixture teardown also kills this view.
+          (let ((view (generate-new-buffer " *parity-view*")))
+            (save-current-buffer
+              (mevedel-view--setup view buffer)
+              (with-current-buffer view
+                (mevedel-view--full-rerender)
+                (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
+                       (row (and (string-match "◇ \\([0-9]+\\) system reminders (\\([^)\n]*\\)" text)
+                                 (match-beginning 0)))
+                       (labels (and row (match-string 2 text))))
+                  (ert-info (text)
+                    (should row)
+                    (should (< (string-search "Parity task" text) row
+                               (string-search "Assistant" text)))
+                    (dolist (type claude-types)
+                      (should (string-search (symbol-name type) labels)))))))))))
+    (should (equal (sort (copy-sequence gptel-types) #'string<)
+                   (sort (copy-sequence claude-types) #'string<)))))
 
 (provide 'test-mevedel-claude-code-session)
 ;;; test-mevedel-claude-code-session.el ends here
