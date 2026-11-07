@@ -185,14 +185,27 @@ number of public files deleted; finishing the manifest now also sets
   "Display scan's (WORKSPACE-ROOT . IDS) retirement observation, or nil.
 Bind only around read-only collection; never reuse for recovery or mutation.")
 
-(defun mevedel-journal-cleanup-pass-retired-p (workspace-root id)
-  "Return non-nil when pass ID in WORKSPACE-ROOT is durably retired.
-This only prevents reuse of expired private state; it never authorizes deletion."
+(defun mevedel-journal-cleanup--retired-path (workspace-root id)
+  "Return the retirement marker path of pass ID in WORKSPACE-ROOT."
   (unless (mevedel-journal-store-id-p id) (error "Invalid memory pass identity"))
-  (if (equal workspace-root (car mevedel-journal-cleanup--retired-observation))
-      (member id (cdr mevedel-journal-cleanup--retired-observation))
-    (mevedel-session-control-fs-path-exists-p
-     (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory workspace-root)) "retired-passes" id))))
+  (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory workspace-root)) "retired-passes" id))
+
+(defun mevedel-journal-cleanup-pass-retired-p (workspace-root id &optional observation)
+  "Return non-nil when pass ID in WORKSPACE-ROOT is durably retired.
+This only prevents reuse of expired private state; it never authorizes deletion.
+OBSERVATION may be the marker's optional `path-exists-p' result from this
+operation's batch; it must never be retained between operations."
+  (let ((path (mevedel-journal-cleanup--retired-path workspace-root id)))
+    (cond ((equal workspace-root (car mevedel-journal-cleanup--retired-observation))
+           (member id (cdr mevedel-journal-cleanup--retired-observation)))
+          (observation
+           (unless (equal path (plist-get observation :path))
+             (error "Retirement observation addresses another pass"))
+           (pcase (plist-get observation :status)
+             ('ok t)
+             ('absent nil)
+             (_ (mevedel-session-control-fs-program-value observation))))
+          (t (mevedel-session-control-fs-path-exists-p path)))))
 
 (defun mevedel-journal-cleanup-recover (root)
   "Finish accepted expiry manifests under journal ROOT before new mutations.

@@ -15,6 +15,7 @@
 (require 'mevedel-journal-index)
 (require 'mevedel-memory-scope)
 (require 'mevedel-memory-store)
+(require 'mevedel-session-control-fs)
 (require 'mevedel-system)
 (require 'bytecomp)
 
@@ -406,6 +407,77 @@
           (should-not (car (mevedel-memory-store--read-lisp path)))
           (should (equal "(:id \"a\"" (cdr (mevedel-memory-store--read-lisp path)))))
       (delete-directory root t))))
+
+(defun mevedel-test-memory-store--with-pass (function)
+  "Prepare one real pass and call FUNCTION with its workspace and record."
+  (let* ((root (make-temp-file "mevedel-memory-store-read-" t))
+         (workspace (mevedel-workspace--create :root root))
+         (identity (mevedel-workspace-identity-ensure root))
+         (mevedel-memory-dirs nil)
+         (journal (mevedel-journal-store-directory root))
+         claim)
+    (unwind-protect
+        (let ((entry (mevedel-test-memory-store--digest root identity 1)))
+          (setq claim (mevedel-journal-claim-acquire
+                       (file-name-concat (mevedel-journal-store-state-directory journal) "consolidation") 180))
+          (funcall function workspace
+                   (mevedel-memory-store-prepare
+                    workspace claim (mevedel-memory-scope-capture workspace) (list entry) "")))
+      (when claim (mevedel-journal-claim-settle claim 'cancelled ""))
+      (delete-directory root t))))
+
+(defun mevedel-test-memory-store--retire (workspace id)
+  "Write WORKSPACE's retirement marker for pass ID, as expiry does first."
+  (let ((marker (file-name-concat (mevedel-journal-store-state-directory
+                                   (mevedel-journal-store-directory (mevedel-workspace-root workspace)))
+                                  "retired-passes" id)))
+    (make-directory (file-name-directory marker) t)
+    (write-region "{}" nil marker nil 'silent)))
+
+(mevedel-deftest mevedel-memory-store-read ()
+  ,test
+  (test)
+  :doc "an unobserved read probes retirement and reads the record in one program, then the claim"
+  (mevedel-test-memory-store--with-pass
+   (lambda (workspace prepared)
+     (let ((run (symbol-function 'mevedel-session-control-fs-run-program))
+           (calls 0))
+       (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                  (lambda (&rest args) (cl-incf calls) (apply run args))))
+         (should (equal prepared (mevedel-memory-store-read workspace (plist-get prepared :id)))))
+       (should (= 2 calls)))))
+
+  :doc "retirement, absence and malformed records keep their results"
+  (dolist (case '((:retired (error "Memory pass has expired"))
+                  (:retired-absent (error "Memory pass has expired"))
+                  (:absent mevedel-session-control-fs-absent)
+                  (:malformed (error "Invalid prepared memory pass"))))
+    (mevedel-test-memory-store--with-pass
+     (lambda (workspace prepared)
+       (let* ((id (plist-get prepared :id))
+              (path (file-name-concat (mevedel-memory-store--directory workspace id) "prepared.el")))
+         (pcase (car case)
+           (:retired (mevedel-test-memory-store--retire workspace id))
+           (:retired-absent (mevedel-test-memory-store--retire workspace id) (delete-file path))
+           (:absent (delete-file path))
+           (:malformed (write-region "(:id" nil path nil 'silent)))
+         (let ((err (should-error (mevedel-memory-store-read workspace id))))
+           (ert-info ((format "%S" case))
+             (if (consp (nth 1 case))
+                 (should (equal (nth 1 case) err))
+               (should (eq (nth 1 case) (car err))))))))))
+
+  :doc "a bound scan observation still decides retirement"
+  (mevedel-test-memory-store--with-pass
+   (lambda (workspace prepared)
+     (let ((id (plist-get prepared :id))
+           (root (mevedel-workspace-root workspace)))
+       (mevedel-test-memory-store--retire workspace id)
+       (let ((mevedel-journal-cleanup--retired-observation (list root)))
+         (should (equal prepared (mevedel-memory-store-read workspace id))))
+       (let ((mevedel-journal-cleanup--retired-observation (list root id)))
+         (should (equal '(error "Memory pass has expired")
+                        (should-error (mevedel-memory-store-read workspace id)))))))))
 
 (provide 'test-mevedel-memory-store)
 ;;; test-mevedel-memory-store.el ends here

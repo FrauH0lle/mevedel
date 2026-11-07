@@ -97,10 +97,19 @@ OBSERVATION may supply PATH's pinned read from this operation's bounded batch."
 This internal storage interface grants no right to display original memory
 bodies; inspection must use the original authority checks on the returned scope.
 OBSERVATION and EVIDENCE may supply this operation's prepared and claim reads."
-  (when (mevedel-journal-cleanup-pass-retired-p (mevedel-workspace-root workspace) id)
-    (error "Memory pass has expired"))
-  (let* ((record (mevedel-memory-store--read-lisp
-                  (file-name-concat (mevedel-memory-store--directory workspace id) "prepared.el") observation))
+  (let* ((root (mevedel-workspace-root workspace))
+         (path (file-name-concat (mevedel-memory-store--directory workspace id) "prepared.el"))
+         ;; One program probes retirement, then reads the record.  It is no
+         ;; atomic snapshot; retirement is still decided before the record.
+         (observed (unless observation
+                     (mevedel-session-control-fs-run-program
+                      (list (list :op 'path-exists-p :optional t
+                                  :path (mevedel-journal-cleanup--retired-path root id))
+                            (list :op 'read :optional t :path path :coding 'utf-8-unix
+                                  :max-bytes (1+ mevedel-memory-store--max-bytes))))))
+         (record (if (mevedel-journal-cleanup-pass-retired-p root id (car observed))
+                     (error "Memory pass has expired")
+                   (mevedel-memory-store--read-lisp path (or observation (cadr observed)))))
          (data (car record)) (text (cdr record))
          (claim (and (proper-list-p data) (plist-get data :claim)))
          (entries (plist-get data :entries)))
