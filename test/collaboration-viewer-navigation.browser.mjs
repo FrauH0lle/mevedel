@@ -10,7 +10,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {mkdir, readFile} from 'node:fs/promises';
 import {createRequire} from 'node:module';
 import {resolve} from 'node:path';
 import {webcrypto as crypto} from 'node:crypto';
@@ -20,6 +20,13 @@ const require = createRequire(resolve(root, 'shared-editing/package.json'));
 const {chromium} = require('playwright');
 
 const TYPES = {html: 'text/html', css: 'text/css', js: 'text/javascript'};
+// Visual evidence is opt-in: MEVEDEL_CAPTURE_SCREENSHOTS=DIR saves PNGs there.
+const CAPTURE_DIR = process.env.MEVEDEL_CAPTURE_SCREENSHOTS;
+async function capture(page, name) {
+  if (!CAPTURE_DIR) return;
+  await mkdir(resolve(CAPTURE_DIR), {recursive: true});
+  await page.screenshot({path: resolve(CAPTURE_DIR, `${name}.png`)});
+}
 
 function base64url(bytes) {
   return Buffer.from(bytes).toString('base64')
@@ -58,7 +65,7 @@ const ARCHIVED_AGENT_ARTIFACT_TEXT = 'Archived agent artifact from segment 3.';
 const FILE_TEXT = 'The project file reached the new tab.';
 
 // What the stand-in host answers in each room.
-function host(lobbyRunning, records, sharedItem, coldAgent) {
+function host(lobbyRunning, records, sharedItem, coldAgent, archives) {
   const store = {t: 'store-artifacts', artifacts: [
     {id: 'page', title: 'Page', kind: 'html', artifact: 'page/index.html',
      versions: 1, modified: 1, size: PAGE_HTML.length, attached: true},
@@ -92,6 +99,9 @@ function host(lobbyRunning, records, sharedItem, coldAgent) {
     } else if (frame.t === 'files') {
       reply({t: 'files', reqId: frame.reqId, dir: '',
              entries: [{name: 'notes & plans.txt', kind: 'file', size: FILE_TEXT.length}]});
+    } else if (frame.t === 'history-get' && archives?.[frame.segment]) {
+      reply({t: 'history', reqId: frame.reqId, segment: frame.segment,
+             records: archives[frame.segment], final: true});
     } else if (frame.t === 'file-get') {
       reply({t: 'file', reqId: frame.reqId, mime: 'text/plain', size: FILE_TEXT.length,
              data: Buffer.from(FILE_TEXT).toString('base64'), final: true});
@@ -160,10 +170,10 @@ function host(lobbyRunning, records, sharedItem, coldAgent) {
 }
 
 async function open(browser, {lobbyRunning = true, records = [], sharedItem = null, coldAgent = false,
-                              viewport = {width: 1200, height: 800}} = {}) {
+                              archives = null, viewport = {width: 1200, height: 800}} = {}) {
   const context = await browser.newContext({viewport});
   const page = await context.newPage();
-  const answers = host(lobbyRunning, records, sharedItem, coldAgent);
+  const answers = host(lobbyRunning, records, sharedItem, coldAgent, archives);
   const keys = {};
   for (const room of [lobbyRoom, sessionRoom, forkRoom]) {
     keys[room.id] = await crypto.subtle.importKey(
@@ -321,6 +331,203 @@ test('live arrow floats over the transcript without reserving a bar', async () =
       await page.waitForFunction(atLiveEdge);
       await page.close();
     }
+  } finally { await browser.close(); }
+});
+
+const paragraphs = (text, count = 40) => `${text}\n\n`.repeat(count);
+const EXCHANGES = [
+  {id: 'p1', kind: 'user', text: 'First prompt: outline the plan.'},
+  {id: 'a1', kind: 'assistant', text: paragraphs('First answer paragraph.')},
+  {id: 'p2', kind: 'user', text: 'Second prompt: refactor the **parser**\n\nand keep every '
+    + 'test green, including the long names that truncate on a narrow phone.'},
+  {id: 'a2', kind: 'assistant', text: paragraphs('Second answer paragraph.')},
+  {id: 'p3', kind: 'user', text: 'Third prompt.'},
+  {id: 'a3', kind: 'assistant', text: paragraphs('Third answer paragraph.')},
+];
+
+// Scroll so the top of the record ID sits OFFSET pixels below the sticky
+// header's bottom edge (negative: above it).
+function scrollRecord(page, id, offset) {
+  return page.evaluate(([id, offset]) => {
+    const edge = document.querySelector('body > .topbar').getBoundingClientRect().bottom;
+    const top = document.querySelector(`[data-record-id="${id}"]`).getBoundingClientRect().top;
+    window.scrollBy(0, top - edge - offset);
+    return window.scrollY;
+  }, [id, offset]);
+}
+
+// Wait until the pinned row settles on TEXT, or on nothing when TEXT is null.
+function pinned(page, text) {
+  return page.waitForFunction(text => {
+    const pin = document.getElementById('pinned-prompt');
+    // What a reader sees: the row's computed visibility and rendered label.
+    const visible = getComputedStyle(pin).visibility === 'visible';
+    const rendered = getComputedStyle(pin, '::before').content.replace(/^"|"$/g, '');
+    return text === null ? !visible : visible && rendered.startsWith(text);
+  }, text);
+}
+
+function pinGeometry(page) {
+  return page.evaluate(() => {
+    const pin = document.getElementById('pinned-prompt');
+    const box = pin.getBoundingClientRect();
+    const style = getComputedStyle(pin);
+    return {top: box.top, bottom: box.bottom, left: box.left, right: box.right,
+            height: box.height, fontSize: parseFloat(style.fontSize),
+            clipped: pin.scrollWidth > pin.clientWidth,
+            headerBottom: document.querySelector('body > .topbar').getBoundingClientRect().bottom,
+            dockTop: document.querySelector('.dock').getBoundingClientRect().top,
+            column: document.getElementById('transcript').getBoundingClientRect(),
+            overflow: document.documentElement.scrollWidth > innerWidth,
+            scrollY, scrollHeight: document.documentElement.scrollHeight};
+  });
+}
+
+test('pinned prompt follows the exchange at the top without moving the transcript', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const viewport of [{width: 1200, height: 800}, {width: 375, height: 629},
+                            {width: 390, height: 844}]) {
+      const size = `${viewport.width}x${viewport.height}`;
+      const page = await open(browser, {viewport, records: EXCHANGES});
+      await page.goto(sessionRoom.link);
+      await page.locator('#transcript [data-record-id="a3"]').waitFor();
+
+      // Inside the second answer, its prompt has scrolled away.
+      const scrolled = await scrollRecord(page, 'a2', -200);
+      await pinned(page, 'Second prompt: refactor the parser and keep every test green');
+      await capture(page, `pinned-prompt-${size}`);
+      const shown = await pinGeometry(page);
+      assert.equal(shown.scrollY, scrolled, `${size}: showing the row must not scroll`);
+      assert.ok(Math.abs(shown.top - shown.headerBottom) <= 1, `${size}: ${JSON.stringify(shown)}`);
+      assert.ok(shown.height <= 40 && shown.bottom < shown.dockTop, `${size}: one row above the dock`);
+      assert.ok(shown.left >= shown.column.left - 1 && shown.right <= shown.column.right + 1,
+                `${size}: the row keeps to the conversation column`);
+      assert.ok(shown.fontSize >= 12, `${size}: readable text`);
+      assert.equal(shown.overflow, false, `${size}: no horizontal overflow`);
+      if (viewport.width < 500) assert.equal(shown.clipped, true, `${size}: long prompts truncate`);
+      // An overlay, not a reserved row: hiding it moves nothing.
+      const hiddenHeight = await page.evaluate(() => {
+        const pin = document.getElementById('pinned-prompt');
+        pin.hidden = true;
+        const height = document.documentElement.scrollHeight;
+        pin.hidden = false;
+        return height;
+      });
+      assert.equal(hiddenHeight, shown.scrollHeight);
+
+      // A host update can replace the governing prompt without resizing
+      // anything; the row follows the new element and its text.
+      const replaced = EXCHANGES[2].text.replace('**parser**', '**lexer!**');
+      await page.push[sessionRoom.id]({t: 'record', record: {...EXCHANGES[2], text: replaced}});
+      await page.waitForFunction(() => document.querySelector('[data-record-id="p2"]')
+        .textContent.includes('lexer!'));
+      assert.equal(await page.evaluate(() => document.documentElement.scrollHeight), shown.scrollHeight,
+                   `${size}: the replacement keeps the transcript's size`);
+      await pinned(page, 'Second prompt: refactor the lexer! and keep');
+      await page.locator('#pinned-prompt').click();
+      await page.waitForFunction(() => {
+        const edge = document.querySelector('body > .topbar').getBoundingClientRect().bottom;
+        const top = document.querySelector('[data-record-id="p2"]').getBoundingClientRect().top;
+        return top >= edge && top <= edge + 24;
+      });
+      await pinned(page, null);
+
+      // A visible later prompt does not replace the exchange at the top.
+      await scrollRecord(page, 'p3', 150);
+      await page.waitForTimeout(100);
+      await pinned(page, 'Second prompt');
+      await scrollRecord(page, 'a3', -100);
+      await pinned(page, 'Third prompt.');
+
+      // The preview leads back to its prompt, which then needs no pin.
+      await page.locator('#pinned-prompt').click();
+      await page.waitForFunction(() => {
+        const edge = document.querySelector('body > .topbar').getBoundingClientRect().bottom;
+        const top = document.querySelector('[data-record-id="p3"]').getBoundingClientRect().top;
+        return top >= edge && top <= edge + 24;
+      });
+      await pinned(page, null);
+      await capture(page, `pinned-prompt-clicked-${size}`);
+      // At the start no prompt has scrolled away.
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await pinned(page, null);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
+test('pinned prompt continues across compaction but not across /clear', async () => {
+  const browser = await chromium.launch();
+  const records = [
+    {id: 'cont', kind: 'assistant', text: paragraphs('Continuing after compaction.')},
+    {id: 'p-live', kind: 'user', text: 'Live prompt.'},
+    {id: 'a-live', kind: 'assistant', text: paragraphs('Live answer.')},
+  ];
+  const archives = {1: [{id: 'old-p', kind: 'user', text: 'Archived prompt before compaction.'},
+                        {id: 'old-a', kind: 'assistant', text: 'Archived answer.'}]};
+  const compacted = [{kind: 'chat', number: 1, title: 'Work', firstSegment: 1, lastSegment: 2}];
+  const cleared = [{kind: 'chat', number: 1, title: 'Old', firstSegment: 1, lastSegment: 1},
+                   {kind: 'chat', number: 2, title: 'New', firstSegment: 2, lastSegment: 2}];
+  try {
+    for (const chats of [compacted, cleared]) {
+      const page = await open(browser, {viewport: {width: 375, height: 629}, records, archives});
+      await page.goto(sessionRoom.link);
+      await page.locator('#transcript [data-record-id="a-live"]').waitFor();
+      await page.push[sessionRoom.id]({t: 'history-index', currentSegment: 2,
+                                       records: chats, final: true});
+      const segment = page.locator('#history .history-segment');
+      await segment.locator('summary').click();
+      await page.locator('[data-record-id="old-p"]').waitFor();
+      await segment.locator('.history-collapse').click();
+      await scrollRecord(page, 'cont', -150);
+      if (chats === cleared) {
+        await page.waitForTimeout(100);
+        await pinned(page, null);
+        await page.close();
+        continue;
+      }
+      await pinned(page, 'Archived prompt before compaction.');
+      await capture(page, 'pinned-prompt-compaction-375x629');
+      // A live prompt on screen takes precedence over the archived one.
+      await scrollRecord(page, 'p-live', 200);
+      await pinned(page, null);
+      await scrollRecord(page, 'cont', -150);
+      await pinned(page, 'Archived prompt before compaction.');
+      await page.locator('#pinned-prompt').click();
+      assert.equal(await segment.evaluate(node => node.open), true);
+      await page.waitForFunction(() => {
+        const edge = document.querySelector('body > .topbar').getBoundingClientRect().bottom;
+        const top = document.querySelector('[data-record-id="old-p"]').getBoundingClientRect().top;
+        return top >= edge && top <= edge + 24;
+      });
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
+test('pinned prompt picks up an archived segment that loads while collapsed', async () => {
+  const browser = await chromium.launch();
+  try {
+    // No archives: the host leaves the read pending until the test answers.
+    const page = await open(browser, {viewport: {width: 375, height: 629}, archives: {}, records: [
+      {id: 'cont', kind: 'assistant', text: paragraphs('Continuing after compaction.')},
+      {id: 'p-live', kind: 'user', text: 'Live prompt.'}]});
+    await page.goto(sessionRoom.link);
+    await page.locator('#transcript [data-record-id="p-live"]').waitFor();
+    await page.push[sessionRoom.id]({t: 'history-index', currentSegment: 2, final: true,
+      records: [{kind: 'chat', number: 1, title: 'Work', firstSegment: 1, lastSegment: 2}]});
+    const segment = page.locator('#history .history-segment');
+    await segment.locator('summary').click();
+    await segment.locator('.history-collapse').click();
+    await scrollRecord(page, 'cont', -150);
+    await pinned(page, null);
+    const request = page.received.find(entry => entry.frame.t === 'history-get').frame;
+    await page.push[sessionRoom.id]({t: 'history', reqId: request.reqId, segment: 1, final: true,
+      records: [{id: 'old-p', kind: 'user', text: 'Archived prompt before compaction.'}]});
+    await pinned(page, 'Archived prompt before compaction.');
+    assert.equal(await segment.evaluate(node => node.open), false);
+    await page.close();
   } finally { await browser.close(); }
 });
 

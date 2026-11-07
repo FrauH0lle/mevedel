@@ -1434,6 +1434,8 @@ would otherwise rebuild it on almost every step.
 Agent transcript views use the same two rows: their agent header (parent link,
 path, state, model and session) is the status strip, and the header line below
 pins the agent's task or a later follow-up prompt the same way.
+The browser viewer pins the room's prompt in an overlaid row under its header
+([collaboration](collaboration.md)); its agent sheets do not pin one.
 In the live segment after compaction, the row can also show the originating
 prompt from an earlier segment when no retained prompt governs the window.
 When compaction copies multiple prompts into the live tail, content before

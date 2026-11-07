@@ -237,6 +237,7 @@
   });
   const history = window.mevedelHistoryView.create({
     send, el, onArtifacts:refreshFilter,
+    onLoaded: () => pinnedPrompt.refresh(),
     renderRecord:record => window.mevedelTranscriptRenderer.renderRecord(
       record, scopeChip, artifacts.open, null, openExecutionResult,
       path => agents.open({path}), destinationURL),
@@ -291,6 +292,8 @@
     }
   }
   const tasks = window.mevedelTaskView.create({el, summarize: summarizeSession});
+  const pinnedPrompt = window.mevedelPinnedPrompt.create({pin: document.getElementById('pinned-prompt'),
+    transcript, history: document.getElementById('history')});
   const goal = window.mevedelGoalView.create({el, onChange: renderModeline});
   const editing = window.mevedelEditingView.create({state, send, el, href: destinationURL, flash: flashNotice, summarize: summarizeSession,
     onVisibility: () => presence.report(),
@@ -1049,6 +1052,8 @@
       composerInput.placeholder = placeholderForFilter();
     }
     renderComposerScope();
+    // Every transcript, filter and history change passes through here.
+    pinnedPrompt.refresh();
   }
 
   function placeholderForFilter() {

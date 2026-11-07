@@ -65,6 +65,7 @@ class Element {
   }
   scrollIntoView() { this.scrolled = true; }
   getBoundingClientRect() { return {top: 0, bottom: 0, height: 0}; }
+  getClientRects() { return []; }
   closest(selector) {
     for (let node = this; node; node = node.parentElement) {
       if (selector === '.viewer-panel' && node.classList.contains('viewer-panel')) return node;
@@ -82,6 +83,7 @@ class Element {
     if (index >= 0) this.parent.children[index] = other;
   }
   setAttribute(name, value) { this.attributes[name] = value; }
+  hasAttribute(name) { return name in this.attributes; }
   removeAttribute(name) {
     delete this.attributes[name];
     if (name === 'href') this.href = '';
@@ -1046,7 +1048,8 @@ async function main() {
                                                Buffer.from(writeToken),
                                                Buffer.from(ownerToken)]));
 
-  const ids = ['transcript', 'history', 'connection', 'notice', 'live-button', 'assistant-working',
+  const ids = ['transcript', 'history', 'connection', 'notice', 'live-button', 'pinned-prompt',
+               'assistant-working',
                'terminal-state', 'terminal-title', 'terminal-message', 'terminal-action',
                'composer', 'composer-input', 'composer-identity',
                'you-menu', 'you-form', 'you-name', 'you-random', 'you-initials', 'you-label',
@@ -1277,6 +1280,7 @@ async function main() {
   vm.runInNewContext(fs.readFileSync('relay/viewer/composer.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-artifact.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-history.js', 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-pinned-prompt.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-agent.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-background.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-task.js', 'utf8'), context);
@@ -1291,6 +1295,8 @@ async function main() {
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-header.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-name.js', 'utf8'), context);
   context.ResizeObserver = class { observe() {} disconnect() {} };
+  // Layout-free styles, like the fake elements' zero geometry.
+  context.getComputedStyle = () => ({getPropertyValue: () => ''});
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-requests.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-appearance.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer.js', 'utf8'), context);
