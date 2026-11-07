@@ -250,6 +250,8 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
     event: async (body) => {
       for (const send of senders) await send({ t: 'editing', reqId: 'event', body });
     },
+    /* Send every connected consumer the raw FRAME, bypassing chunking. */
+    raw: async (frame) => { for (const send of senders) await send(frame); },
     goodbye: async (why, { back = false } = {}) => {
       await Promise.all([...goodbyes].map((leave) => leave(why)));
       if (!back) mode = 'absent';
