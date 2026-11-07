@@ -1335,6 +1335,33 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
               (should-not (string-search root result)))))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-tool-fs-search/work-glob-prefix ()
+  ,test
+  (test)
+  :doc "Glob on work://shared honours a directory-prefixed ** pattern"
+  (let* ((root (make-temp-file "mevedel-work-glob-prefix-" t))
+         (workspace (mevedel-workspace--create :root root))
+         (session (mevedel-session--create :workspace workspace :save-path root))
+         (shared (mevedel-resource-work-shared-directory workspace))
+         (nested (file-name-concat shared "weekly-sweep" "2026-11-07")))
+    (unwind-protect
+        (progn
+          (make-directory nested t)
+          (with-temp-file (file-name-concat nested "ledger.md") (insert "x\n"))
+          (dolist (pattern '("weekly-sweep/**/*.md" "**/ledger.md"))
+            (let* ((attempt (mevedel-resource-prepare
+                             'glob "work://shared" (list :session session)))
+                   (mevedel-resource-current-attempts
+                    (list (cons "work://shared" attempt)))
+                   (result (test-mevedel-tool-fs-search--await-callback
+                            #'mevedel-tool-fs-search-glob
+                            (list :path "work://shared" :pattern pattern))))
+              (should (string-search
+                       "work://shared/weekly-sweep/2026-11-07/ledger.md"
+                       result))
+              (should-not (string-search root result)))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-tool-fs-search/resource-callback ()
   ,test
   (test)
