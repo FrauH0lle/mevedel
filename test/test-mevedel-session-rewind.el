@@ -1066,6 +1066,18 @@
                 (should (file-exists-p source-file))
                 (should (equal records
                                (mevedel-workspace-directives workspace)))
+                ;; The workspace instruction store took the same prune after
+                ;; the commit point, and its Rewind intent is settled.
+                (let ((stored (plist-get (mevedel-instruction-store--read workspace)
+                                         :data)))
+                  (should-not (plist-get stored :rewinds))
+                  (should
+                   (equal '(("Current early edit" 1) ("Later" 0))
+                          (sort (mapcar (lambda (record)
+                                          (list (plist-get record :request)
+                                                (length (plist-get record :attempts))))
+                                        (plist-get stored :directives))
+                                (lambda (a b) (string< (car a) (car b)))))))
                 (should (= 1 (length (mevedel-directive-attempts early))))
                 (should-not (mevedel-directive-state early))
                 (should-not (mevedel-directive-attempts later))
