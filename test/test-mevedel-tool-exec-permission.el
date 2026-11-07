@@ -20,6 +20,11 @@
 (require 'mevedel-permission-prompt)
 (require 'mevedel-permission-log)
 (require 'mevedel-permission-queue)
+(require 'mevedel-permission-queue-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-permission-queue-test-support"))
 (require 'mevedel-permission-rules)
 (require 'mevedel-permissions)
 (require 'mevedel-sandbox)
@@ -237,7 +242,9 @@
     (should (eq #'ignore (nth 2 seen))))
   :doc "falls back to direct queue admission outside the pipeline"
   (let ((mevedel-permission-mode 'ask) seen)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    ;; Isolation stub: this case checks only what the fallback hands the queue;
+    ;; the real queue is covered by test-mevedel-permission-queue-decisions.el.
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional session)
                  (setq seen (list entry session)))))
       (mevedel-tool-exec-permission--request-permission
@@ -249,7 +256,9 @@
   (let ((cell (list nil))
         queued
         settled)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    ;; Isolation stub: this case checks only what the fallback hands the queue;
+    ;; the real queue is covered by test-mevedel-permission-queue-decisions.el.
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional _session)
                  (setq queued entry))))
       (mevedel-tool-exec-permission--request-permission
@@ -272,7 +281,9 @@
   (let ((remember-cell (list '(:operation t)))
         queued
         settled)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+    ;; Isolation stub: this case checks only what the fallback hands the queue;
+    ;; the real queue is covered by test-mevedel-permission-queue-decisions.el.
+    (cl-letf (((symbol-function 'mevedel-permission-request)
                (lambda (entry &optional _session)
                  (setq queued entry))))
       (mevedel-tool-exec-permission--request-permission
@@ -962,25 +973,25 @@ additive child permissions are available only to batch Eval"
         (progn
           (write-region "file" nil path nil 'silent)
           (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-                     (lambda (_event _payload callback &rest _) (funcall callback nil)))
-                    ((symbol-function 'mevedel-permission--enqueue)
-                     (lambda (entry &optional owner)
-                       (mevedel-permission-queue--set
-                        (list (plist-put entry :session owner)) owner))))
-            (mevedel-tool-permission--request
-             context (list :kind 'sandbox :tool-name "Bash" :command "true"
-                           :sandbox-permissions 'additive
-                           :requested-additional-permissions (list :file-system selection)
-                           :resource-selection-cell (list selection))
-             session (lambda (updated result) (setq settled updated outcome result))))
-          (should (= 1 (length (mevedel-permission-queue--get session))))
-          (should (eq 'ask (mevedel-permission-queue--reevaluate
-                           (car (mevedel-permission-queue--get session)))))
-          (setf (mevedel-session-resource-grants session)
-                `((:path ,root :access write :recursive t)))
-          (mevedel-permission-queue--coalesce 'allow-session session)
-          (should (eq 'allow-once outcome))
-          (should-not (mevedel-permission-queue--get session))
+                     (lambda (_event _payload callback &rest _) (funcall callback nil))))
+            (mevedel-pq-test--answering (nil :session session)
+                                        (setq context (plist-put context :buffer (current-buffer)))
+                                        (mevedel-tool-permission--request
+                                         context (list :kind 'sandbox :tool-name "Bash" :command "true"
+                                                       :detail "true" :origin "/root"
+                                                       :sandbox-permissions 'additive
+                                                       :requested-additional-permissions (list :file-system selection)
+                                                       :resource-selection-cell (list selection))
+                                         session (lambda (updated result) (setq settled updated outcome result)))
+                                        ;; The real card is on screen; coalescing settles it.
+                                        (should (= 1 (length (mevedel-permission-queue--get session))))
+                                        (should (eq 'ask (mevedel-permission-queue--reevaluate
+                                                          (car (mevedel-permission-queue--get session)))))
+                                        (setf (mevedel-session-resource-grants session)
+                                              `((:path ,root :access write :recursive t)))
+                                        (mevedel-permission-queue--coalesce 'allow-session session)
+                                        (should (eq 'allow-once outcome))
+                                        (should-not (mevedel-permission-queue--get session))))
           (should-not (plist-get settled :approved-resources))
           (delete-file path)
           (setq server (make-network-process :name "coalesced-socket" :family 'local
@@ -1184,21 +1195,19 @@ additive child permissions are available only to batch Eval"
         (mevedel-permission-rules nil)
         (mevedel-permission-reviewer 'user)
         logged outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (queued &optional _session)
-                 (funcall (plist-get queued :callback) 'allow-once)))
-              ((symbol-function 'mevedel-tool-exec-permission--log-permission-decision)
+    (cl-letf (((symbol-function 'mevedel-tool-exec-permission--log-permission-decision)
                (lambda (_tool outcome via &rest _props)
                  (push (cons outcome via) logged))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       '(:command "true"
-                  :sandbox_permissions "with_additional_permissions"
-                  :additional_permissions
-                  (:file_system (:read ["/tmp/capability-once/input"]))
-                  :justification "Read the fixture input"
-                  :permission-decision-metadata t)
-       (lambda (result) (setq outcome result))))
+ (mevedel-pq-test--answering ((list 'allow-once))
+                             (mevedel-tool-exec-permission-check-bash-async
+                              nil
+                              '(:command "true"
+                                         :sandbox_permissions "with_additional_permissions"
+                                         :additional_permissions
+                                         (:file_system (:read ["/tmp/capability-once/input"]))
+                                         :justification "Read the fixture input"
+                                         :permission-decision-metadata t)
+                              (lambda (result) (setq outcome result)))))
     (should (eq 'allow (plist-get outcome :outcome)))
     (should (equal '((allow . sandbox-filesystem))
                    (cl-remove-if-not (lambda (item) (eq (cdr item) 'sandbox-filesystem))
@@ -1208,17 +1217,16 @@ recognized command authority is followed by a once-only network prompt"
   (let ((mevedel-permission-mode 'ask)
         (mevedel-permission-rules nil)
         entry outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (queued &optional _session)
-                 (setq entry queued)
-                 (funcall (plist-get queued :callback) 'allow-once))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       '(:command "pwd"
-                  :sandbox_permissions "with_additional_permissions"
-                  :additional_permissions (:network t)
-                  :justification "Reach the package registry?")
-       (lambda (result) (setq outcome result))))
+    (mevedel-pq-test--answering ((list (lambda (card)
+                                         (let ((queued (plist-get card :entry)))
+                                           (setq entry queued))) 'allow-once))
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 '(:command "pwd"
+                                            :sandbox_permissions "with_additional_permissions"
+                                            :additional_permissions (:network t)
+                                            :justification "Reach the package registry?")
+                                 (lambda (result) (setq outcome result))))
     (should (eq 'sandbox (plist-get entry :kind)))
     (should (equal '(:network t)
                    (plist-get entry :additional-permissions)))
@@ -1234,31 +1242,31 @@ the default selection remembers the complete requested profile"
          (mevedel-permission-rules nil)
          outcome)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                   (lambda (entry &optional _session)
-                     (should
-                      (equal '(:operation t :network t)
-                             (car
-                              (plist-get
-                               entry :remember-authority-cell))))
-                     (funcall (plist-get entry :callback)
-                              'allow-session))))
-          (mevedel-tool-exec-permission-check-bash-async
-           nil
-           `(:command "pwd"
-                      :sandbox_permissions "with_additional_permissions"
-                      :additional_permissions (:network t)
-                      :justification "Contact the service?"
-                      :permission-context
-                      (:session ,session :workspace ,workspace :mode ask))
-           (lambda (result) (setq outcome result)))
-          (should (eq 'allow outcome))
-          (should
-           (seq-some
-            (lambda (rule)
-              (and (equal "pwd" (plist-get (cdr rule) :pattern))
-                   (plist-get (cdr rule) :network)))
-            (mevedel-session-permission-rules session))))
+        (mevedel-pq-test--answering
+         ((list (lambda (card)
+                  (should
+                   (equal '(:operation t :network t)
+                          (car
+                           (plist-get
+                            (plist-get card :entry) :remember-authority-cell)))))
+                'allow-session)
+          :session session)
+         (mevedel-tool-exec-permission-check-bash-async
+          nil
+          `(:command "pwd"
+                     :sandbox_permissions "with_additional_permissions"
+                     :additional_permissions (:network t)
+                     :justification "Contact the service?"
+                     :permission-context
+                     (:session ,session :workspace ,workspace :mode ask))
+          (lambda (result) (setq outcome result)))
+         (should (eq 'allow outcome))
+         (should
+          (seq-some
+           (lambda (rule)
+             (and (equal "pwd" (plist-get (cdr rule) :pattern))
+                  (plist-get (cdr rule) :network)))
+           (mevedel-session-permission-rules session))))
       (delete-directory root t)
       (mevedel-workspace-clear-registry)))
   :doc "session Bash approval:
@@ -1274,23 +1282,26 @@ selecting network stores qualified authority and reuses it without prompting"
          outcome)
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                     (lambda (entry &optional _session)
-                       (cl-incf prompts)
-                       (setcar
-                        (plist-get entry :remember-authority-cell)
-                        '(:operation t :network t))
-                       (funcall (plist-get entry :callback)
-                                'allow-session))))
-            (mevedel-tool-exec-permission-check-bash-async
-             nil
-             `(:command "pwd"
-                        :sandbox_permissions "with_additional_permissions"
-                        :additional_permissions (:network t)
-                        :justification "Contact the service?"
-                        :permission-context
-                        (:session ,session :workspace ,workspace :mode ask))
-             (lambda (result) (setq outcome result))))
+          (mevedel-pq-test--answering
+           ((list (lambda (card)
+                    (cl-incf prompts)
+                    ;; Select network on the card, unless it already is.
+                    (unless (plist-get
+                             (car (plist-get (plist-get card :entry)
+                                             :remember-authority-cell))
+                             :network)
+                      (mevedel-pq-test--press card "n")))
+                  'allow-session)
+            :session session)
+           (mevedel-tool-exec-permission-check-bash-async
+            nil
+            `(:command "pwd"
+                       :sandbox_permissions "with_additional_permissions"
+                       :additional_permissions (:network t)
+                       :justification "Contact the service?"
+                       :permission-context
+                       (:session ,session :workspace ,workspace :mode ask))
+            (lambda (result) (setq outcome result))))
           (should (eq 'allow outcome))
           (should
            (seq-some
@@ -1299,14 +1310,14 @@ selecting network stores qualified authority and reuses it without prompting"
                    (plist-get (cdr rule) :network)))
             (mevedel-session-permission-rules session)))
           (setq outcome nil)
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                     (lambda (&rest _) (cl-incf prompts))))
-            (mevedel-tool-exec-permission-check-bash-async
-             nil
-             `(:command "pwd"
-                        :permission-context
-                        (:session ,session :workspace ,workspace :mode ask))
-             (lambda (result) (setq outcome result))))
+          (mevedel-pq-test--answering ((list (lambda (_card)
+                                               (cl-incf prompts))) :session session)
+                                      (mevedel-tool-exec-permission-check-bash-async
+                                       nil
+                                       `(:command "pwd"
+                                                  :permission-context
+                                                  (:session ,session :workspace ,workspace :mode ask))
+                                       (lambda (result) (setq outcome result))))
           (should (= 1 prompts))
           (should (eq 'allow outcome)))
       (delete-directory root t)
@@ -1316,17 +1327,16 @@ additive network authority still prompts in edits mode"
   (let ((mevedel-permission-mode 'edits)
         (mevedel-permission-rules nil)
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry &optional _session)
-                 (setq enqueued t)
-                 (funcall (plist-get entry :callback) 'deny-once))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       '(:command "pwd"
-                  :sandbox_permissions "with_additional_permissions"
-                  :additional_permissions (:network t)
-                  :justification "Contact the service?")
-       (lambda (result) (setq outcome result))))
+    (mevedel-pq-test--answering ((list (lambda (card)
+                                         (let ((entry (plist-get card :entry)))
+                                           (setq enqueued t))) 'deny-once))
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 '(:command "pwd"
+                                            :sandbox_permissions "with_additional_permissions"
+                                            :additional_permissions (:network t)
+                                            :justification "Contact the service?")
+                                 (lambda (result) (setq outcome result))))
     (should enqueued)
     (should (eq 'deny outcome)))
   :doc "full-auto Bash:
@@ -1334,16 +1344,15 @@ network authority proceeds without a prompt"
   (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules nil)
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (&rest _args) (setq enqueued t))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       '(:command "pwd"
-                  :sandbox_permissions "with_additional_permissions"
-                  :additional_permissions (:network t)
-                  :justification "Contact the service?")
-       (lambda (result) (setq outcome result))))
-    (should-not enqueued)
+    (mevedel-pq-test--answering (nil)
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 '(:command "pwd"
+                                            :sandbox_permissions "with_additional_permissions"
+                                            :additional_permissions (:network t)
+                                            :justification "Contact the service?")
+                                 (lambda (result) (setq outcome result))))
+    (should-not (mevedel-pq-test--admitted-p))
     (should (eq 'allow outcome)))
   :doc "network-qualified Bash authority:
 the matching command and its network request proceed without a prompt"
@@ -1359,21 +1368,20 @@ the matching command and its network request proceed without a prompt"
          (mevedel-permission-mode 'ask)
          (mevedel-permission-rules nil)
          enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (&rest _) (setq enqueued t))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       `(:command "npx test"
-                  :sandbox_permissions "with_additional_permissions"
-                  :additional_permissions (:network t)
-                  :justification "Reach the package registry?"
-                  :permission-context
-                  (:session ,session
-                            :session-rules
-                            (("Bash" :pattern "npx test" :action allow)
-                             ("Bash" :pattern "npx test" :network t :action allow))))
-       (lambda (result) (setq outcome result))))
-    (should-not enqueued)
+    (mevedel-pq-test--answering (nil :session session)
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 `(:command "npx test"
+                                            :sandbox_permissions "with_additional_permissions"
+                                            :additional_permissions (:network t)
+                                            :justification "Reach the package registry?"
+                                            :permission-context
+                                            (:session ,session
+                                                      :session-rules
+                                                      (("Bash" :pattern "npx test" :action allow)
+                                                       ("Bash" :pattern "npx test" :network t :action allow))))
+                                 (lambda (result) (setq outcome result))))
+    (should-not (mevedel-pq-test--admitted-p))
     (should (eq 'allow outcome)))
   :doc "workspace Bash approval:
 selected operation and network authority are reused by another session"
@@ -1389,36 +1397,39 @@ selected operation and network authority are reused by another session"
          outcome)
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                     (lambda (entry &optional _session)
-                       (cl-incf prompts)
-                       (setcar
-                        (plist-get entry :remember-authority-cell)
-                        '(:operation t :network t))
-                       (funcall (plist-get entry :callback)
-                                'always-allow))))
-            (mevedel-tool-exec-permission-check-bash-async
-             nil
-             `(:command "pwd"
-                        :sandbox_permissions "with_additional_permissions"
-                        :additional_permissions (:network t)
-                        :justification "Contact the service?"
-                        :permission-context
-                        (:session ,first :workspace ,workspace :mode ask))
-             (lambda (result) (setq outcome result))))
+          (mevedel-pq-test--answering
+           ((list (lambda (card)
+                    (cl-incf prompts)
+                    (unless (plist-get
+                             (car (plist-get (plist-get card :entry)
+                                             :remember-authority-cell))
+                             :network)
+                      (mevedel-pq-test--press card "n")))
+                  ;; Injected: this card offers no always key; the closure stores the rule.
+                  '(inject always-allow))
+            :session first)
+           (mevedel-tool-exec-permission-check-bash-async
+            nil
+            `(:command "pwd"
+                       :sandbox_permissions "with_additional_permissions"
+                       :additional_permissions (:network t)
+                       :justification "Contact the service?"
+                       :permission-context
+                       (:session ,first :workspace ,workspace :mode ask))
+            (lambda (result) (setq outcome result))))
           (setq outcome nil
                 mevedel--session second)
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                     (lambda (&rest _) (cl-incf prompts))))
-            (mevedel-tool-exec-permission-check-bash-async
-             nil
-             `(:command "pwd"
-                        :sandbox_permissions "with_additional_permissions"
-                        :additional_permissions (:network t)
-                        :justification "Contact the service?"
-                        :permission-context
-                        (:session ,second :workspace ,workspace :mode ask))
-             (lambda (result) (setq outcome result))))
+          (mevedel-pq-test--answering ((list (lambda (_card)
+                                               (cl-incf prompts))))
+                                      (mevedel-tool-exec-permission-check-bash-async
+                                       nil
+                                       `(:command "pwd"
+                                                  :sandbox_permissions "with_additional_permissions"
+                                                  :additional_permissions (:network t)
+                                                  :justification "Contact the service?"
+                                                  :permission-context
+                                                  (:session ,second :workspace ,workspace :mode ask))
+                                       (lambda (result) (setq outcome result))))
           (should (= 1 prompts))
           (should (eq 'allow outcome)))
       (delete-directory root t)
@@ -1432,16 +1443,15 @@ network authority changes no boundary and does not prompt"
          (mevedel-permission-mode 'ask)
          (mevedel-permission-rules nil)
          enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (&rest _args) (setq enqueued t))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       '(:command "pwd"
-                  :sandbox_permissions "with_additional_permissions"
-                  :additional_permissions (:network t)
-                  :justification "Contact the service?")
-       (lambda (result) (setq outcome result))))
-    (should-not enqueued)
+    (mevedel-pq-test--answering (nil)
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 '(:command "pwd"
+                                            :sandbox_permissions "with_additional_permissions"
+                                            :additional_permissions (:network t)
+                                            :justification "Contact the service?")
+                                 (lambda (result) (setq outcome result))))
+    (should-not (mevedel-pq-test--admitted-p))
     (should (eq 'allow outcome)))
   :doc "edits protected resource:
 an ungranted exact filesystem path still prompts and stores session authority"
@@ -1459,26 +1469,27 @@ an ungranted exact filesystem path still prompts and stores session authority"
     (unwind-protect
         (progn
           (with-temp-file path (insert "secret"))
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                     (lambda (queued &optional _session)
-                       (setq entry queued)
-                       (setcar
-                        (plist-get queued :remember-authority-cell)
-                        (list :operation t
-                              :file-system
-                              (list (list :path path :access 'read))))
-                       (funcall (plist-get queued :callback)
-                                'allow-session))))
-            (mevedel-tool-exec-permission-check-bash-async
-             nil
-             `(:command ,(format "cat %s" path)
-                        :sandbox_permissions "with_additional_permissions"
-                        :additional_permissions (:file_system (:read [,path]))
-                        :justification "Read the protected file?"
-                        :permission-context
-                        (:mode edits :session ,session :workspace ,workspace
-                               :resource-grants nil))
-             (lambda (result) (setq outcome result))))
+          (mevedel-pq-test--answering
+           ((list (lambda (card)
+                    (setq entry (plist-get card :entry))
+                    ;; The card's own default already selects this path.
+                    (should (equal (list :operation t
+                                         :file-system
+                                         (list (list :path path :access 'read)))
+                                   (car (plist-get entry
+                                                   :remember-authority-cell)))))
+                  'allow-session)
+            :session session)
+           (mevedel-tool-exec-permission-check-bash-async
+            nil
+            `(:command ,(format "cat %s" path)
+                       :sandbox_permissions "with_additional_permissions"
+                       :additional_permissions (:file_system (:read [,path]))
+                       :justification "Read the protected file?"
+                       :permission-context
+                       (:mode edits :session ,session :workspace ,workspace
+                              :resource-grants nil))
+            (lambda (result) (setq outcome result))))
           (should (eq 'sandbox (plist-get entry :kind)))
           (should (equal path (plist-get entry :resource-path)))
           (should (eq 'read (plist-get entry :resource-access)))
@@ -1507,26 +1518,27 @@ the complete requested path profile is selected by default"
     (unwind-protect
         (progn
           (with-temp-file path (insert "secret"))
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                     (lambda (entry &optional _session)
-                       (should-not
-                        (null
-                         (plist-get
-                          (car
-                           (plist-get entry :remember-authority-cell))
-                          :file-system)))
-                       (funcall (plist-get entry :callback)
-                                'allow-session))))
-            (mevedel-tool-exec-permission-check-bash-async
-             nil
-             `(:command ,(format "cat %s" path)
-                        :sandbox_permissions "with_additional_permissions"
-                        :additional_permissions (:file_system (:read [,path]))
-                        :justification "Read the protected file?"
-                        :permission-context
-                        (:mode edits :session ,session :workspace ,workspace
-                               :resource-grants nil))
-             (lambda (result) (setq outcome result))))
+          (mevedel-pq-test--answering
+           ((list (lambda (card)
+                    (should-not
+                     (null
+                      (plist-get
+                       (car
+                        (plist-get (plist-get card :entry)
+                                   :remember-authority-cell))
+                       :file-system))))
+                  'allow-session)
+            :session session)
+           (mevedel-tool-exec-permission-check-bash-async
+            nil
+            `(:command ,(format "cat %s" path)
+                       :sandbox_permissions "with_additional_permissions"
+                       :additional_permissions (:file_system (:read [,path]))
+                       :justification "Read the protected file?"
+                       :permission-context
+                       (:mode edits :session ,session :workspace ,workspace
+                              :resource-grants nil))
+            (lambda (result) (setq outcome result))))
           (should (eq 'allow outcome))
           (should-not (mevedel-session-resource-grants session))
           (should
@@ -1554,19 +1566,18 @@ an exact session grant skips only the filesystem prompt"
     (unwind-protect
         (progn
           (with-temp-file path (insert "secret"))
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                     (lambda (&rest _) (setq enqueued t))))
-            (mevedel-tool-exec-permission-check-bash-async
-             nil
-             `(:command ,(format "cat %s" path)
-                        :sandbox_permissions "with_additional_permissions"
-                        :additional_permissions (:file_system (:read [,path]))
-                        :justification "Read the protected file?"
-                        :permission-context
-                        (:mode edits :session ,session :workspace ,workspace
-                               :resource-grants (,grant)))
-             (lambda (result) (setq outcome result))))
-          (should-not enqueued)
+          (mevedel-pq-test--answering (nil :session session)
+                                      (mevedel-tool-exec-permission-check-bash-async
+                                       nil
+                                       `(:command ,(format "cat %s" path)
+                                                  :sandbox_permissions "with_additional_permissions"
+                                                  :additional_permissions (:file_system (:read [,path]))
+                                                  :justification "Read the protected file?"
+                                                  :permission-context
+                                                  (:mode edits :session ,session :workspace ,workspace
+                                                         :resource-grants (,grant)))
+                                       (lambda (result) (setq outcome result))))
+          (should-not (mevedel-pq-test--admitted-p))
           (should (eq 'allow outcome)))
       (delete-directory root t)))
   :doc "target replacement:
@@ -1599,23 +1610,21 @@ the session command survives but its filesystem profile requires fresh approval"
                            :permission-context
                            (:mode ask :session ,session :workspace ,workspace))
                 (lambda (result) (setq outcome result)))))
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                     (lambda (entry &optional _session)
-                       (cl-incf prompts)
-                       (setq prompt-kind (plist-get entry :kind))
-                       (funcall (plist-get entry :callback)
-                                'allow-session))))
-            (check)
-            (should (eq 'allow outcome))
-            (should (= 0 prompts))
-            (mevedel-permission-invalidate-target-grants session)
-            (check)
-            (should (eq 'allow outcome))
-            (should (= 1 prompts))
-            (should (eq 'sandbox prompt-kind))
-            (check)
-            (should (eq 'allow outcome))
-            (should (= 1 prompts))))
+          (mevedel-pq-test--answering ((list (lambda (card)
+                                               (let ((entry (plist-get card :entry)))
+                                                 (cl-incf prompts)
+                                                 (setq prompt-kind (plist-get entry :kind)))) 'allow-session))
+                                      (check)
+                                      (should (eq 'allow outcome))
+                                      (should (= 0 prompts))
+                                      (mevedel-permission-invalidate-target-grants session)
+                                      (check)
+                                      (should (eq 'allow outcome))
+                                      (should (= 1 prompts))
+                                      (should (eq 'sandbox prompt-kind))
+                                      (check)
+                                      (should (eq 'allow outcome))
+                                      (should (= 1 prompts))))
       (delete-directory root t)))
   :doc "pregranted resource with explicit ask:
 an exact ask rule remains authoritative over the stored grant"
@@ -1635,21 +1644,20 @@ an exact ask rule remains authoritative over the stored grant"
     (unwind-protect
         (progn
           (with-temp-file path (insert "secret"))
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                     (lambda (queued &optional _session)
-                       (setq entry queued)
-                       (funcall (plist-get queued :callback) 'deny-once))))
-            (mevedel-tool-exec-permission-check-bash-async
-             nil
-             `(:command ,(format "cat %s" path)
-                        :sandbox_permissions "with_additional_permissions"
-                        :additional_permissions (:file_system (:read [,path]))
-                        :justification "Read the protected file?"
-                        :permission-context
-                        (:mode edits :session ,session :workspace ,workspace
-                               :session-rules (("Bash" :path ,path :action ask))
-                               :resource-grants (,grant)))
-             (lambda (result) (setq outcome result))))
+          (mevedel-pq-test--answering ((list (lambda (card)
+                                               (let ((queued (plist-get card :entry)))
+                                                 (setq entry queued))) 'deny-once) :session session)
+                                      (mevedel-tool-exec-permission-check-bash-async
+                                       nil
+                                       `(:command ,(format "cat %s" path)
+                                                  :sandbox_permissions "with_additional_permissions"
+                                                  :additional_permissions (:file_system (:read [,path]))
+                                                  :justification "Read the protected file?"
+                                                  :permission-context
+                                                  (:mode edits :session ,session :workspace ,workspace
+                                                         :session-rules (("Bash" :path ,path :action ask))
+                                                         :resource-grants (,grant)))
+                                       (lambda (result) (setq outcome result))))
           (should (eq 'sandbox (plist-get entry :kind)))
           (should (eq 'deny outcome)))
       (delete-directory root t)))
@@ -1670,18 +1678,17 @@ an explicit exact path deny prevents filesystem escalation"
     (unwind-protect
         (progn
           (with-temp-file path (insert "secret"))
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                     (lambda (&rest _) (setq enqueued t))))
-            (mevedel-tool-exec-permission-check-bash-async
-             nil
-             `(:command ,(format "cat %s" path)
-                        :sandbox_permissions "with_additional_permissions"
-                        :additional_permissions (:file_system (:read [,path]))
-                        :justification "Read the protected file?"
-                        :permission-context
-                        (:mode full-auto :session ,session :workspace ,workspace))
-             (lambda (result) (setq outcome result))))
-          (should-not enqueued)
+          (mevedel-pq-test--answering (nil :session session)
+                                      (mevedel-tool-exec-permission-check-bash-async
+                                       nil
+                                       `(:command ,(format "cat %s" path)
+                                                  :sandbox_permissions "with_additional_permissions"
+                                                  :additional_permissions (:file_system (:read [,path]))
+                                                  :justification "Read the protected file?"
+                                                  :permission-context
+                                                  (:mode full-auto :session ,session :workspace ,workspace))
+                                       (lambda (result) (setq outcome result))))
+          (should-not (mevedel-pq-test--admitted-p))
           (should (eq 'deny outcome)))
       (delete-directory root t)))
   :doc "explicit Bash deny:
@@ -1689,34 +1696,32 @@ command denial prevents network authority even in full-auto"
   (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules '(("Bash" :pattern "pwd" :action deny)))
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (&rest _args) (setq enqueued t))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       '(:command "pwd"
-                  :sandbox_permissions "with_additional_permissions"
-                  :additional_permissions (:network t)
-                  :justification "Contact the service?")
-       (lambda (result) (setq outcome result))))
-    (should-not enqueued)
+    (mevedel-pq-test--answering (nil)
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 '(:command "pwd"
+                                            :sandbox_permissions "with_additional_permissions"
+                                            :additional_permissions (:network t)
+                                            :justification "Contact the service?")
+                                 (lambda (result) (setq outcome result))))
+    (should-not (mevedel-pq-test--admitted-p))
     (should (eq 'deny outcome)))
   :doc "ask batch Eval:
 one prompt approves both Eval and additive network authority"
   (let ((mevedel-permission-mode 'ask)
         (mevedel-permission-rules nil)
         entries outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry &optional _session)
-                 (push entry entries)
-                 (funcall (plist-get entry :callback) 'allow-once))))
-      (mevedel-tool-exec-permission-check-eval-async
-       nil
-       '(:expression "(+ 1 2)"
-                     :mode "batch"
-                     :sandbox_permissions "with_additional_permissions"
-                     :additional_permissions (:network t)
-                     :justification "Fetch package metadata?")
-       (lambda (result) (setq outcome result))))
+    (mevedel-pq-test--answering ((list (lambda (card)
+                                         (let ((entry (plist-get card :entry)))
+                                           (push entry entries))) 'allow-once))
+                                (mevedel-tool-exec-permission-check-eval-async
+                                 nil
+                                 '(:expression "(+ 1 2)"
+                                               :mode "batch"
+                                               :sandbox_permissions "with_additional_permissions"
+                                               :additional_permissions (:network t)
+                                               :justification "Fetch package metadata?")
+                                 (lambda (result) (setq outcome result))))
     (should (= 1 (length entries)))
     (should (eq 'eval (plist-get (car entries) :kind)))
     (should
@@ -1737,38 +1742,40 @@ the exact expression and selected network authority are reused together"
          outcome)
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                     (lambda (entry &optional _session)
-                       (cl-incf prompts)
-                       (setcar
-                        (plist-get entry :remember-authority-cell)
-                        '(:operation t :network t))
-                       (funcall (plist-get entry :callback)
-                                'allow-session))))
-            (mevedel-tool-exec-permission-check-eval-async
-             nil
-             `(:expression "(+ 1 2)"
-                           :mode "batch"
-                           :sandbox_permissions "with_additional_permissions"
-                           :additional_permissions (:network t)
-                           :justification "Fetch package metadata?"
-                           :permission-context
-                           (:session ,session :workspace ,workspace :mode ask))
-             (lambda (result) (setq outcome result))))
+          (mevedel-pq-test--answering
+           ((list (lambda (card)
+                    (cl-incf prompts)
+                    (unless (plist-get
+                             (car (plist-get (plist-get card :entry)
+                                             :remember-authority-cell))
+                             :network)
+                      (mevedel-pq-test--press card "n")))
+                  'allow-session)
+            :session session)
+           (mevedel-tool-exec-permission-check-eval-async
+            nil
+            `(:expression "(+ 1 2)"
+                          :mode "batch"
+                          :sandbox_permissions "with_additional_permissions"
+                          :additional_permissions (:network t)
+                          :justification "Fetch package metadata?"
+                          :permission-context
+                          (:session ,session :workspace ,workspace :mode ask))
+            (lambda (result) (setq outcome result))))
           (should
            (member
             '("Eval" :expression "(+ 1 2)" :network t :action allow)
             (mevedel-session-permission-rules session)))
           (setq outcome nil)
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                     (lambda (&rest _) (cl-incf prompts))))
-            (mevedel-tool-exec-permission-check-eval-async
-             nil
-             `(:expression "(+ 1 2)"
-                           :mode "batch"
-                           :permission-context
-                           (:session ,session :workspace ,workspace :mode ask))
-             (lambda (result) (setq outcome result))))
+          (mevedel-pq-test--answering ((list (lambda (_card)
+                                               (cl-incf prompts))) :session session)
+                                      (mevedel-tool-exec-permission-check-eval-async
+                                       nil
+                                       `(:expression "(+ 1 2)"
+                                                     :mode "batch"
+                                                     :permission-context
+                                                     (:session ,session :workspace ,workspace :mode ask))
+                                       (lambda (result) (setq outcome result))))
           (should (= 1 prompts))
           (should (eq 'allow outcome)))
       (delete-directory root t)
@@ -1780,22 +1787,22 @@ the exact expression and selected network authority are reused together"
          (mevedel-permission-rules nil)
          origins
          outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry &optional _session)
-                 (push (plist-get entry :origin) origins)
-                 (with-temp-buffer
-                   (funcall (plist-get entry :callback) 'allow-once)))))
-      (with-temp-buffer
-        (setq-local mevedel--current-request request)
-        (mevedel-tool-exec-permission-check-bash-async
-         nil
-         '(:command "pwd"
-                    :sandbox_permissions "with_additional_permissions"
-                    :additional_permissions
-                    (:file_system
-                     (:read ["/tmp/mevedel-first" "/tmp/mevedel-second"]))
-                    :justification "Inspect two requested files?")
-         (lambda (result) (setq outcome result)))))
+    (mevedel-pq-test--answering
+     ((list (lambda (card)
+              (push (plist-get (plist-get card :entry) :origin) origins)
+              ;; Answer from an unrelated buffer, on the card's own closure.
+              (with-temp-buffer
+                (mevedel-pq-test--answer-captured card 'allow-once)))))
+     (setq-local mevedel--current-request request)
+     (mevedel-tool-exec-permission-check-bash-async
+      nil
+      '(:command "pwd"
+                 :sandbox_permissions "with_additional_permissions"
+                 :additional_permissions
+                 (:file_system
+                  (:read ["/tmp/mevedel-first" "/tmp/mevedel-second"]))
+                 :justification "Inspect two requested files?")
+      (lambda (result) (setq outcome result))))
     (should (equal (list origin) (nreverse origins)))
     (should (eq 'allow outcome)))
   :doc "filesystem callback logging retains its scoped session and owner"
@@ -1814,23 +1821,22 @@ the exact expression and selected network authority are reused together"
          outcome)
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                     (lambda (entry &optional _session)
-                       (setq queued entry))))
-            (with-temp-buffer
-              (setq-local mevedel--session session
-                          mevedel--current-request request)
-              (mevedel-tool-exec-permission-check-bash-async
-               nil
-               '(:command "pwd"
-                          :permission-decision-metadata t
-                          :sandbox_permissions "with_additional_permissions"
-                          :additional_permissions
-                          (:file_system (:read ["/tmp/mevedel-scoped-log"]))
-                          :justification "Inspect the requested file?")
-               (lambda (result) (setq outcome result)))))
-          (with-temp-buffer
-            (funcall (plist-get queued :callback) 'allow-once))
+          (mevedel-pq-test--answering
+           ((list (lambda (card) (setq queued card))) :session session)
+           (setq-local mevedel--session session
+                       mevedel--current-request request)
+           (mevedel-tool-exec-permission-check-bash-async
+            nil
+            '(:command "pwd"
+                       :permission-decision-metadata t
+                       :sandbox_permissions "with_additional_permissions"
+                       :additional_permissions
+                       (:file_system (:read ["/tmp/mevedel-scoped-log"]))
+                       :justification "Inspect the requested file?")
+            (lambda (result) (setq outcome result)))
+           ;; Answer from an unrelated buffer, on the card's own closure.
+           (with-temp-buffer
+             (mevedel-pq-test--answer-captured queued 'allow-once)))
           (should (eq 'allow (plist-get outcome :outcome)))
           (let ((entry
                  (cl-find
@@ -1847,23 +1853,22 @@ the exact expression and selected network authority are reused together"
          (mevedel-permission-rules nil)
          entries
          outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry &optional _session)
-                 (push (cons (plist-get entry :kind)
-                             (plist-get entry :origin))
-                       entries)
-                 (with-temp-buffer
-                   (funcall (plist-get entry :callback) 'allow-once)))))
-      (with-temp-buffer
-        (setq-local mevedel--current-request request)
-        (mevedel-tool-exec-permission-check-eval-async
-         nil
-         '(:expression "(+ 1 2)"
-                       :mode "batch"
-                       :sandbox_permissions "with_additional_permissions"
-                       :additional_permissions (:network t)
-                       :justification "Fetch package metadata?")
-         (lambda (result) (setq outcome result)))))
+    (mevedel-pq-test--answering
+     ((list (lambda (card)
+              (push (cons (plist-get (plist-get card :entry) :kind)
+                          (plist-get (plist-get card :entry) :origin))
+                    entries)
+              (with-temp-buffer
+                (mevedel-pq-test--answer-captured card 'allow-once)))))
+     (setq-local mevedel--current-request request)
+     (mevedel-tool-exec-permission-check-eval-async
+      nil
+      '(:expression "(+ 1 2)"
+                    :mode "batch"
+                    :sandbox_permissions "with_additional_permissions"
+                    :additional_permissions (:network t)
+                    :justification "Fetch package metadata?")
+      (lambda (result) (setq outcome result))))
     (should (equal (list (cons 'eval origin))
                    (nreverse entries)))
     (should (eq 'allow outcome)))
@@ -1872,17 +1877,16 @@ both Eval and network authority proceed without prompts"
   (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules nil)
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (&rest _args) (setq enqueued t))))
-      (mevedel-tool-exec-permission-check-eval-async
-       nil
-       '(:expression "(+ 1 2)"
-                     :mode "batch"
-                     :sandbox_permissions "with_additional_permissions"
-                     :additional_permissions (:network t)
-                     :justification "Fetch package metadata?")
-       (lambda (result) (setq outcome result))))
-    (should-not enqueued)
+    (mevedel-pq-test--answering (nil)
+                                (mevedel-tool-exec-permission-check-eval-async
+                                 nil
+                                 '(:expression "(+ 1 2)"
+                                               :mode "batch"
+                                               :sandbox_permissions "with_additional_permissions"
+                                               :additional_permissions (:network t)
+                                               :justification "Fetch package metadata?")
+                                 (lambda (result) (setq outcome result))))
+    (should-not (mevedel-pq-test--admitted-p))
     (should (eq 'allow outcome))))
 
 (mevedel-deftest mevedel-tool-exec-permission--escalation-prompt-async ()
@@ -1893,13 +1897,14 @@ both Eval and network authority proceed without prompts"
          (mevedel-permission-mode 'full-auto)
          (mevedel-permission-rules nil)
          entry outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (queued &optional _session) (setq entry queued))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       '(:command "make test" :sandbox_permissions "require_escalated"
-                  :justification "Run the build outside confinement")
-       (lambda (result) (setq outcome result))))
+    (mevedel-pq-test--answering ((list (lambda (card)
+                                         (let ((queued (plist-get card :entry)))
+                                           (setq entry queued)))))
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 '(:command "make test" :sandbox_permissions "require_escalated"
+                                            :justification "Run the build outside confinement")
+                                 (lambda (result) (setq outcome result))))
     (should-not entry)
     (should (eq 'deny outcome)))
   :doc "explicit operation asks survive remembered escalation at admission and recheck"
@@ -1910,12 +1915,13 @@ both Eval and network authority proceed without prompts"
            `(("Bash" :pattern ,command :action ask)
              ("Bash" :pattern ,command :sandbox-permissions require-escalated :action allow)))
           entry outcome)
-      (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                 (lambda (queued &optional _session) (setq entry queued))))
-        (mevedel-tool-exec-permission-check-bash-async
-         nil `(:command ,command :sandbox_permissions "require_escalated"
-                        :justification "Run the build without confinement")
-         (lambda (result) (setq outcome result))))
+      (mevedel-pq-test--answering ((list (lambda (card)
+                                           (let ((queued (plist-get card :entry)))
+                                             (setq entry queued)))))
+                                  (mevedel-tool-exec-permission-check-bash-async
+                                   nil `(:command ,command :sandbox_permissions "require_escalated"
+                                                  :justification "Run the build without confinement")
+                                   (lambda (result) (setq outcome result))))
       (should entry)
       (should-not outcome)
       (should (eq 'rule (plist-get entry :permission-via)))
@@ -1928,16 +1934,15 @@ full escalation prompts without a directly authored qualified rule"
   (let ((mevedel-permission-mode 'edits)
         (mevedel-permission-rules nil)
         entry outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (queued &optional _session)
-                 (setq entry queued)
-                 (funcall (plist-get queued :callback) 'allow-once))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       '(:command "pwd"
-                  :sandbox_permissions "require_escalated"
-                  :justification "Run without confinement?")
-       (lambda (result) (setq outcome result))))
+    (mevedel-pq-test--answering ((list (lambda (card)
+                                         (let ((queued (plist-get card :entry)))
+                                           (setq entry queued))) 'allow-once))
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 '(:command "pwd"
+                                            :sandbox_permissions "require_escalated"
+                                            :justification "Run without confinement?")
+                                 (lambda (result) (setq outcome result))))
     (should (eq 'sandbox (plist-get entry :kind)))
     (should (eq 'require-escalated
                 (plist-get entry :sandbox-permissions)))
@@ -1953,14 +1958,14 @@ full escalation prompts without a directly authored qualified rule"
                          :sandbox_permissions "require_escalated"
                          :justification "Confirmed system SSH owner UID mapping failure"))
          entries outcomes)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry &optional _session)
-                 (push entry entries)
-                 (funcall (plist-get entry :callback)
-                          (if (= (length entries) 1) 'allow-once 'deny-once)))))
-      (dotimes (_ 2)
-        (mevedel-tool-exec-permission-check-bash-async
-         nil args (lambda (result) (push result outcomes)))))
+    (mevedel-pq-test--answering
+     ((lambda (n _card)
+        (list (lambda (card) (push (plist-get card :entry) entries))
+              (if (= n 1) 'allow-once 'deny-once)))
+      :session session)
+     (dotimes (_ 2)
+       (mevedel-tool-exec-permission-check-bash-async
+        nil args (lambda (result) (push result outcomes)))))
     (should (equal '(deny allow) outcomes))
     (should (= 2 (length entries)))
     (dolist (entry entries)
@@ -1978,16 +1983,15 @@ full escalation adds no boundary prompt but ordinary command authority remains"
          (mevedel-permission-mode 'ask)
          (mevedel-permission-rules nil)
          entries outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry &optional _session)
-                 (push entry entries)
-                 (funcall (plist-get entry :callback) 'allow-once))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       '(:command "rm file"
-                  :sandbox_permissions "require_escalated"
-                  :justification "Confinement is already disabled")
-       (lambda (result) (setq outcome result))))
+    (mevedel-pq-test--answering ((list (lambda (card)
+                                         (let ((entry (plist-get card :entry)))
+                                           (push entry entries))) 'allow-once))
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 '(:command "rm file"
+                                            :sandbox_permissions "require_escalated"
+                                            :justification "Confinement is already disabled")
+                                 (lambda (result) (setq outcome result))))
     (should (= 1 (length entries)))
     (should (eq 'bash (plist-get (car entries) :kind)))
     (should (eq 'allow outcome)))
@@ -1999,15 +2003,14 @@ an exact user-authored escalation rule skips the prompt"
             :sandbox-permissions require-escalated
             :action allow)))
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (&rest _) (setq enqueued t))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       '(:command "pwd"
-                  :sandbox_permissions "require_escalated"
-                  :justification "Run without confinement?")
-       (lambda (result) (setq outcome result))))
-    (should-not enqueued)
+    (mevedel-pq-test--answering (nil)
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 '(:command "pwd"
+                                            :sandbox_permissions "require_escalated"
+                                            :justification "Run without confinement?")
+                                 (lambda (result) (setq outcome result))))
+    (should-not (mevedel-pq-test--admitted-p))
     (should (eq 'allow outcome)))
   :doc "one-shot qualified allow:
 an inherited escalation rule still requires one-time sandbox approval"
@@ -2023,18 +2026,19 @@ an inherited escalation rule still requires one-time sandbox approval"
              :action allow)))
          entry outcome)
     (should (eq 'ask (mevedel-permission-mode-effective session)))
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (queued &optional _session)
-                 (setq entry queued)
-                 (funcall (plist-get queued :callback) 'allow-session))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       `(:command "pwd"
-                  :sandbox_permissions "require_escalated"
-                  :justification "Run without confinement?"
-                  :permission-context
-                  (:session ,session :one-shot-mutations-p t))
-       (lambda (result) (setq outcome result))))
+    ;; Injected: this escalation card offers no session key; the case checks
+    ;; what the closure stores for a session outcome.
+    (mevedel-pq-test--answering ((list (lambda (card)
+                                         (let ((queued (plist-get card :entry)))
+                                           (setq entry queued))) '(inject allow-session)) :session session)
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 `(:command "pwd"
+                                            :sandbox_permissions "require_escalated"
+                                            :justification "Run without confinement?"
+                                            :permission-context
+                                            (:session ,session :one-shot-mutations-p t))
+                                 (lambda (result) (setq outcome result))))
     (should (eq 'sandbox (plist-get entry :kind)))
     (should (plist-get entry :once-only))
     (should (eq 'allow outcome))
@@ -2047,16 +2051,15 @@ an unqualified command rule cannot authorize full escalation"
         (mevedel-permission-rules
          '(("Bash" :pattern "pwd" :action allow)))
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry &optional _session)
-                 (setq enqueued t)
-                 (funcall (plist-get entry :callback) 'deny-once))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       '(:command "pwd"
-                  :sandbox_permissions "require_escalated"
-                  :justification "Run without confinement?")
-       (lambda (result) (setq outcome result))))
+    (mevedel-pq-test--answering ((list (lambda (card)
+                                         (let ((entry (plist-get card :entry)))
+                                           (setq enqueued t))) 'deny-once))
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 '(:command "pwd"
+                                            :sandbox_permissions "require_escalated"
+                                            :justification "Run without confinement?")
+                                 (lambda (result) (setq outcome result))))
     (should enqueued)
     (should (eq 'deny outcome)))
   :doc "delegated allow is insufficient:
@@ -2064,21 +2067,20 @@ an invocation-qualified rule cannot grant full escalation"
   (let ((mevedel-permission-mode 'edits)
         (mevedel-permission-rules nil)
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry &optional _session)
-                 (setq enqueued t)
-                 (funcall (plist-get entry :callback) 'deny-once))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       '(:command "pwd"
-                  :sandbox_permissions "require_escalated"
-                  :justification "Run without confinement?"
-                  :permission-context
-                  (:buckets
-                   ((:invocation
-                     ("Bash" :sandbox-permissions require-escalated
-                      :action allow)))))
-       (lambda (result) (setq outcome result))))
+    (mevedel-pq-test--answering ((list (lambda (card)
+                                         (let ((entry (plist-get card :entry)))
+                                           (setq enqueued t))) 'deny-once))
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 '(:command "pwd"
+                                            :sandbox_permissions "require_escalated"
+                                            :justification "Run without confinement?"
+                                            :permission-context
+                                            (:buckets
+                                             ((:invocation
+                                               ("Bash" :sandbox-permissions require-escalated
+                                                :action allow)))))
+                                 (lambda (result) (setq outcome result))))
     (should enqueued)
     (should (eq 'deny outcome)))
   :doc "ordinary deny remains final:
@@ -2087,15 +2089,14 @@ an explicit command deny prevents escalation without prompting"
         (mevedel-permission-rules
          '(("Bash" :pattern "pwd" :action deny)))
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (&rest _) (setq enqueued t))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       '(:command "pwd"
-                  :sandbox_permissions "require_escalated"
-                  :justification "Run without confinement?")
-       (lambda (result) (setq outcome result))))
-    (should-not enqueued)
+    (mevedel-pq-test--answering (nil)
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 '(:command "pwd"
+                                            :sandbox_permissions "require_escalated"
+                                            :justification "Run without confinement?")
+                                 (lambda (result) (setq outcome result))))
+    (should-not (mevedel-pq-test--admitted-p))
     (should (eq 'deny outcome)))
   :doc "qualified compound deny remains final:
 a denied segment cannot hide behind a broad full-escalation allow"
@@ -2105,15 +2106,14 @@ a denied segment cannot hide behind a broad full-escalation allow"
            ("Bash" :pattern "rm *"
             :sandbox-permissions require-escalated :action deny)))
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (&rest _) (setq enqueued t))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       '(:command "pwd && rm -rf /"
-                  :sandbox_permissions "require_escalated"
-                  :justification "Run without confinement?")
-       (lambda (result) (setq outcome result))))
-    (should-not enqueued)
+    (mevedel-pq-test--answering (nil)
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 '(:command "pwd && rm -rf /"
+                                            :sandbox_permissions "require_escalated"
+                                            :justification "Run without confinement?")
+                                 (lambda (result) (setq outcome result))))
+    (should-not (mevedel-pq-test--admitted-p))
     (should (eq 'deny outcome)))
   :doc "qualified nested deny remains final:
 a harvested command substitution cannot hide behind a broad allow"
@@ -2123,15 +2123,14 @@ a harvested command substitution cannot hide behind a broad allow"
            ("Bash" :pattern "rm *"
             :sandbox-permissions require-escalated :action deny)))
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (&rest _) (setq enqueued t))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       '(:command "echo $(rm -rf /)"
-                  :sandbox_permissions "require_escalated"
-                  :justification "Run without confinement?")
-       (lambda (result) (setq outcome result))))
-    (should-not enqueued)
+    (mevedel-pq-test--answering (nil)
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 '(:command "echo $(rm -rf /)"
+                                            :sandbox_permissions "require_escalated"
+                                            :justification "Run without confinement?")
+                                 (lambda (result) (setq outcome result))))
+    (should-not (mevedel-pq-test--admitted-p))
     (should (eq 'deny outcome)))
   :doc "session approval:
 the prompt stores an exact execution-level-qualified pattern rule"
@@ -2140,16 +2139,14 @@ the prompt stores an exact execution-level-qualified pattern rule"
          (mevedel-permission-mode 'ask)
          (mevedel-permission-rules nil)
          outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry &optional _session)
-                 (funcall (plist-get entry :callback) 'allow-session))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       `(:command "pwd"
-                  :sandbox_permissions "require_escalated"
-                  :justification "Run without confinement?"
-                  :permission-context (:session ,session))
-       (lambda (result) (setq outcome result))))
+    (mevedel-pq-test--answering ((list 'allow-session) :session session)
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 `(:command "pwd"
+                                            :sandbox_permissions "require_escalated"
+                                            :justification "Run without confinement?"
+                                            :permission-context (:session ,session))
+                                 (lambda (result) (setq outcome result))))
     (should (eq 'allow outcome))
     (should
      (equal
@@ -2165,16 +2162,15 @@ trust-literal execution cannot use even a matching direct escalation rule"
             :sandbox-permissions require-escalated
             :action allow)))
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (&rest _) (setq enqueued t))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       '(:command "pwd"
-                  :trust-literal-p t
-                  :sandbox_permissions "require_escalated"
-                  :justification "Run without confinement?")
-       (lambda (result) (setq outcome result))))
-    (should-not enqueued)
+    (mevedel-pq-test--answering (nil)
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 '(:command "pwd"
+                                            :trust-literal-p t
+                                            :sandbox_permissions "require_escalated"
+                                            :justification "Run without confinement?")
+                                 (lambda (result) (setq outcome result))))
+    (should-not (mevedel-pq-test--admitted-p))
     (should (eq 'deny (car outcome))))
   :doc "reusable escalation rules:
 prompts propose only literal stable Bash and Eval rules"
@@ -2196,16 +2192,15 @@ literal dangerous Bash offers reusable full-escalation authority"
   (let ((mevedel-permission-mode 'ask)
         (mevedel-permission-rules nil)
         entry outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (queued &optional _session)
-                 (setq entry queued)
-                 (funcall (plist-get queued :callback) 'deny-once))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       '(:command "rm -rf /"
-                  :sandbox_permissions "require_escalated"
-                  :justification "Run without confinement?")
-       (lambda (result) (setq outcome result))))
+    (mevedel-pq-test--answering ((list (lambda (card)
+                                         (let ((queued (plist-get card :entry)))
+                                           (setq entry queued))) 'deny-once))
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 '(:command "rm -rf /"
+                                            :sandbox_permissions "require_escalated"
+                                            :justification "Run without confinement?")
+                                 (lambda (result) (setq outcome result))))
     (should (plist-get entry :include-always))
     (should (eq 'deny outcome)))
   :doc "Eval escalation prompt:
@@ -2213,17 +2208,16 @@ literal batch Eval offers reusable full-escalation authority"
   (let ((mevedel-permission-mode 'ask)
         (mevedel-permission-rules nil)
         entry outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (queued &optional _session)
-                 (setq entry queued)
-                 (funcall (plist-get queued :callback) 'deny-once))))
-      (mevedel-tool-exec-permission-check-eval-async
-       nil
-       '(:expression "(delete-file \"important\")"
-                     :mode "batch"
-                     :sandbox_permissions "require_escalated"
-                     :justification "Run batch Eval without confinement?")
-       (lambda (result) (setq outcome result))))
+    (mevedel-pq-test--answering ((list (lambda (card)
+                                         (let ((queued (plist-get card :entry)))
+                                           (setq entry queued))) 'deny-once))
+                                (mevedel-tool-exec-permission-check-eval-async
+                                 nil
+                                 '(:expression "(delete-file \"important\")"
+                                               :mode "batch"
+                                               :sandbox_permissions "require_escalated"
+                                               :justification "Run batch Eval without confinement?")
+                                 (lambda (result) (setq outcome result))))
     (should (plist-get entry :include-always))
     (should (eq 'deny outcome)))
   :doc "batch Eval direct allow:
@@ -2232,16 +2226,15 @@ a broad qualified Eval rule authorizes unconfined batch execution"
         (mevedel-permission-rules
          '(("Eval" :sandbox-permissions require-escalated :action allow)))
         enqueued outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (&rest _) (setq enqueued t))))
-      (mevedel-tool-exec-permission-check-eval-async
-       nil
-       '(:expression "(+ 1 2)"
-                     :mode "batch"
-                     :sandbox_permissions "require_escalated"
-                     :justification "Run batch Eval without confinement?")
-       (lambda (result) (setq outcome result))))
-    (should-not enqueued)
+    (mevedel-pq-test--answering (nil)
+                                (mevedel-tool-exec-permission-check-eval-async
+                                 nil
+                                 '(:expression "(+ 1 2)"
+                                               :mode "batch"
+                                               :sandbox_permissions "require_escalated"
+                                               :justification "Run batch Eval without confinement?")
+                                 (lambda (result) (setq outcome result))))
+    (should-not (mevedel-pq-test--admitted-p))
     (should (eq 'allow outcome)))
   :doc "full escalation diagnostics:
 the decision log identifies complete confinement bypass authority"
@@ -2355,15 +2348,15 @@ default Bash keeps bare dot inspection automatic"
                   (edits (("Bash" :pattern "make *" :action ask)) rule)))
     (pcase-let ((`(,mode ,rules ,via) case))
       (let ((mevedel-permission-reviewer 'user) entry outcome)
-        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                   (lambda (queued &optional _session)
-                     (setq entry queued)
-                     (funcall (plist-get entry :callback) 'deny-once))))
-          (mevedel-tool-exec-permission-check-bash-async
-           nil
-           (list :command "make test" :permission-context
-                 (list :mode mode :buckets (list (cons :session rules))))
-           (lambda (result) (setq outcome result))))
+        (mevedel-pq-test--answering
+         ((list (lambda (card) (setq entry (plist-get card :entry)))
+                'deny-once)
+          :mode mode)
+         (mevedel-tool-exec-permission-check-bash-async
+          nil
+          (list :command "make test" :permission-context
+                (list :mode mode :buckets (list (cons :session rules))))
+          (lambda (result) (setq outcome result))))
         (should (eq 'deny outcome))
         (should (eq mode (plist-get entry :permission-mode-effective)))
         (should (eq via (plist-get entry :permission-via))))))
@@ -2456,17 +2449,16 @@ default Bash keeps bare dot inspection automatic"
          (target (file-name-concat temporary-file-directory
                                    "mevedel-exact-target"))
          entry outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (queued &optional _session)
-                 (setq entry queued)
-                 (funcall (plist-get queued :callback) 'allow-session))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       `(:command ,(format "rm -rf %s" target)
-                  :permission-context
-                  (:session ,session :workspace ,workspace
-                            :mode ask :allowed-roots (,temporary-file-directory)))
-       (lambda (result) (setq outcome result))))
+    (mevedel-pq-test--answering ((list (lambda (card)
+                                         (let ((queued (plist-get card :entry)))
+                                           (setq entry queued))) 'allow-session) :session session)
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 `(:command ,(format "rm -rf %s" target)
+                                            :permission-context
+                                            (:session ,session :workspace ,workspace
+                                                      :mode ask :allowed-roots (,temporary-file-directory)))
+                                 (lambda (result) (setq outcome result))))
     (should (plist-get entry :include-always))
     (should (eq outcome 'allow))
     (should
@@ -2479,24 +2471,22 @@ default Bash keeps bare dot inspection automatic"
         (mevedel-bash-dangerous-commands '("rm"))
         enqueued
         outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (&rest _)
-                 (setq enqueued t))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil '(:command "rm foo") (lambda (r) (setq outcome r))))
+    (mevedel-pq-test--answering (nil)
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil '(:command "rm foo") (lambda (r) (setq outcome r))))
     (should (eq outcome 'allow))
-    (should-not enqueued))
+    (should-not (mevedel-pq-test--admitted-p)))
   :doc "queued prompt entries preserve raw commands and add counted summary"
   (let ((mevedel-permission-rules nil)
         (mevedel-bash-dangerous-commands nil)
         captured)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry &optional _session)
-                 (setq captured entry))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil
-       '(:command "git add -- a && git commit -m x && git add -- b && git commit -m y")
-       #'ignore))
+    (mevedel-pq-test--answering ((list (lambda (card)
+                                         (let ((entry (plist-get card :entry)))
+                                           (setq captured entry)))))
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil
+                                 '(:command "git add -- a && git commit -m x && git add -- b && git commit -m y")
+                                 #'ignore))
     (should (equal '("git" "git" "git" "git")
                    (plist-get captured :commands)))
     (should (equal "git (4)"
@@ -2508,21 +2498,17 @@ default Bash keeps bare dot inspection automatic"
   (let ((mevedel-permission-rules nil)
         (mevedel-bash-dangerous-commands '("sudo"))
         outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry &optional _session)
-                 (funcall (plist-get entry :callback) 'allow-once))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil '(:command "sudo ls") (lambda (r) (setq outcome r))))
+    (mevedel-pq-test--answering ((list 'allow-once))
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil '(:command "sudo ls") (lambda (r) (setq outcome r))))
     (should (eq outcome 'allow)))
   :doc "prompts user and returns deny when pattern says ask and user denies"
   (let ((mevedel-permission-rules nil)
         (mevedel-bash-dangerous-commands '("sudo"))
         outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry &optional _session)
-                 (funcall (plist-get entry :callback) 'deny-once))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil '(:command "sudo ls") (lambda (r) (setq outcome r))))
+    (mevedel-pq-test--answering ((list 'deny-once))
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil '(:command "sudo ls") (lambda (r) (setq outcome r))))
     (should (eq outcome 'deny)))
   :doc "feedback maps to (deny . REASON) with the historical message"
   ;; Feedback is part of the authoritative queued prompt vocabulary.
@@ -2531,12 +2517,9 @@ default Bash keeps bare dot inspection automatic"
   (let ((mevedel-permission-rules nil)
         (mevedel-bash-dangerous-commands '("sudo"))
         outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry &optional _session)
-                 (funcall (plist-get entry :callback)
-                          '(feedback . "use git instead")))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil '(:command "sudo ls") (lambda (r) (setq outcome r))))
+    (mevedel-pq-test--answering ((list '(feedback . "use git instead")))
+                                (mevedel-tool-exec-permission-check-bash-async
+                                 nil '(:command "sudo ls") (lambda (r) (setq outcome r))))
     (should (consp outcome))
     (should (eq 'deny (car outcome)))
     (should (equal "Command cancelled by user. Feedback: use git instead"
@@ -2551,16 +2534,13 @@ default Bash keeps bare dot inspection automatic"
          (mevedel-bash-dangerous-commands nil)
          outcome)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                   (lambda (entry &optional _session)
-                     (funcall (plist-get entry :callback)
-                              'allow-session))))
-          (mevedel-tool-exec-permission-check-bash-async
-           nil '(:command "git describe --tags")
-           (lambda (r) (setq outcome r)))
-          (should (eq outcome 'allow))
-          (should (member '("Bash" :pattern "git describe:*" :action allow)
-                          (mevedel-session-permission-rules session))))
+        (mevedel-pq-test--answering ((list 'allow-session))
+                                    (mevedel-tool-exec-permission-check-bash-async
+                                     nil '(:command "git describe --tags")
+                                     (lambda (r) (setq outcome r)))
+                                    (should (eq outcome 'allow))
+                                    (should (member '("Bash" :pattern "git describe:*" :action allow)
+                                                    (mevedel-session-permission-rules session))))
       (delete-directory root t)
       (mevedel-workspace-clear-registry))))
 
@@ -2675,14 +2655,18 @@ default Bash keeps bare dot inspection automatic"
                            ('escalated '(:sandbox_permissions "require_escalated"
                                          :justification "Test full escalation"))))
                         (lambda (result) (setq outcome result)))))
-                  (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                             (lambda (entry &optional _session)
-                               (cl-incf prompts)
-                               (when (eq authority 'network)
-                                 (setcar (plist-get entry :remember-authority-cell)
-                                         '(:operation t :network t)))
-                               (funcall (plist-get entry :callback) scope))))
-                    (check expression))
+                  (mevedel-pq-test--answering
+                   ((list (lambda (card)
+                            (cl-incf prompts)
+                            (when (and (eq authority 'network)
+                                       (not (plist-get
+                                             (car (plist-get
+                                                   (plist-get card :entry)
+                                                   :remember-authority-cell))
+                                             :network)))
+                              (mevedel-pq-test--press card "n")))
+                          scope))
+                   (check expression))
                   (should (eq outcome 'allow))
                   (should (= prompts 1))
                   ;; Workspace reuse must survive a fresh disk read, with no
@@ -2690,18 +2674,17 @@ default Bash keeps bare dot inspection automatic"
                   (when (eq scope 'always-allow)
                     (setf (mevedel-session-permission-rules session) nil)
                     (clrhash mevedel-permission--store-cache))
-                  (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                             (lambda (entry &optional _session)
-                               (cl-incf prompts)
-                               (funcall (plist-get entry :callback) 'deny-once))))
-                    (check expression)
-                    (should (eq outcome 'allow))
-                    (should (= prompts 1))
-                    (dolist (other (list "(message \"a\")" (concat expression " ")))
-                      (let ((previous prompts))
-                        (check other)
-                        (should (eq outcome 'deny))
-                        (should (= prompts (1+ previous))))))))
+                  (mevedel-pq-test--answering ((list (lambda (card)
+                                                       (let ((entry (plist-get card :entry)))
+                                                         (cl-incf prompts))) 'deny-once))
+                                              (check expression)
+                                              (should (eq outcome 'allow))
+                                              (should (= prompts 1))
+                                              (dolist (other (list "(message \"a\")" (concat expression " ")))
+                                                (let ((previous prompts))
+                                                  (check other)
+                                                  (should (eq outcome 'deny))
+                                                  (should (= prompts (1+ previous))))))))
             (delete-directory root t))))))
   :doc "returns deny when input has no expression"
   (let (outcome)
@@ -2736,22 +2719,20 @@ default Bash keeps bare dot inspection automatic"
       (delete-directory dir t)))
   :doc "returns allow when user approves"
   (let (outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry)
-                 (funcall (plist-get entry :callback) 'allow-once))))
-      (mevedel-tool-exec-permission-check-eval-async
-       nil '(:expression "(+ 1 2)") (lambda (r) (setq outcome r))))
+    (mevedel-pq-test--answering ((list 'allow-once))
+                                (mevedel-tool-exec-permission-check-eval-async
+                                 nil '(:expression "(+ 1 2)") (lambda (r) (setq outcome r))))
     (should (eq outcome 'allow)))
   :doc "enqueues requested mode and preserve_ui metadata"
   (let (entry)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (queued)
-                 (setq entry queued))))
-      (mevedel-tool-exec-permission-check-eval-async
-       nil '(:expression "(delete-other-windows)"
-                         :mode "live"
-                         :preserve_ui :json-false)
-       #'ignore))
+    (mevedel-pq-test--answering ((list (lambda (card)
+                                         (let ((queued (plist-get card :entry)))
+                                           (setq entry queued)))))
+                                (mevedel-tool-exec-permission-check-eval-async
+                                 nil '(:expression "(delete-other-windows)"
+                                                   :mode "live"
+                                                   :preserve_ui :json-false)
+                                 #'ignore))
     (should (equal "live" (plist-get entry :mode)))
     (should-not (plist-get entry :preserve-ui)))
   :doc "returns deny reason for invalid mode instead of signaling"
@@ -2772,37 +2753,30 @@ default Bash keeps bare dot inspection automatic"
                    :working-directory "/ssh:user@host:/srv/project/"))
          outcome
          enqueued)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (&rest _)
-                 (setq enqueued t))))
-      (mevedel-tool-exec-permission-check-eval-async
-       nil
-       `(:expression "(+ 1 2)"
-                     :mode "batch"
-                     :permission-context (:session ,session))
-       (lambda (result) (setq outcome result))))
-    (should-not enqueued)
+    (mevedel-pq-test--answering (nil :session session)
+                                (mevedel-tool-exec-permission-check-eval-async
+                                 nil
+                                 `(:expression "(+ 1 2)"
+                                               :mode "batch"
+                                               :permission-context (:session ,session))
+                                 (lambda (result) (setq outcome result))))
+    (should-not (mevedel-pq-test--admitted-p))
     (should (eq 'deny (car outcome)))
     (should
      (string-match-p "Batch Eval is unavailable for remote sessions"
                      (cdr outcome))))
   :doc "returns deny when user denies"
   (let (outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry)
-                 (funcall (plist-get entry :callback) 'deny-once))))
-      (mevedel-tool-exec-permission-check-eval-async
-       nil '(:expression "(+ 1 2)") (lambda (r) (setq outcome r))))
+    (mevedel-pq-test--answering ((list 'deny-once))
+                                (mevedel-tool-exec-permission-check-eval-async
+                                 nil '(:expression "(+ 1 2)") (lambda (r) (setq outcome r))))
     (should (eq outcome 'deny)))
   :doc "feedback maps to (deny . REASON) with the historical message"
   (let (outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry)
-                 (funcall (plist-get entry :callback)
-                          '(feedback . "too dangerous")))))
-      (mevedel-tool-exec-permission-check-eval-async
-       nil '(:expression "(delete-file \"/etc/passwd\")")
-       (lambda (r) (setq outcome r))))
+    (mevedel-pq-test--answering ((list '(feedback . "too dangerous")))
+                                (mevedel-tool-exec-permission-check-eval-async
+                                 nil '(:expression "(delete-file \"/etc/passwd\")")
+                                 (lambda (r) (setq outcome r))))
     (should (consp outcome))
     (should (eq 'deny (car outcome)))
     (should (equal "Eval cancelled by user. Feedback: too dangerous"
@@ -2810,27 +2784,23 @@ default Bash keeps bare dot inspection automatic"
   :doc "trusted Eval with active allow bypasses prompt"
   (let ((mevedel-permission-rules '(("Eval" :action allow)))
         outcome enqueued)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (&rest _)
-                 (setq enqueued t))))
-      (mevedel-tool-exec-permission-check-eval-async
-       nil '(:expression "(+ 1 2)" :trust-literal-p t)
-       (lambda (r) (setq outcome r))))
+    (mevedel-pq-test--answering (nil)
+                                (mevedel-tool-exec-permission-check-eval-async
+                                 nil '(:expression "(+ 1 2)" :trust-literal-p t)
+                                 (lambda (r) (setq outcome r))))
     (should (eq outcome 'allow))
-    (should-not enqueued))
+    (should-not (mevedel-pq-test--admitted-p)))
 
   :doc "full-auto Eval bypasses prompt without active allow"
   (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules nil)
         outcome enqueued)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (&rest _)
-                 (setq enqueued t))))
-      (mevedel-tool-exec-permission-check-eval-async
-       nil '(:expression "(+ 1 2)")
-       (lambda (r) (setq outcome r))))
+    (mevedel-pq-test--answering (nil)
+                                (mevedel-tool-exec-permission-check-eval-async
+                                 nil '(:expression "(+ 1 2)")
+                                 (lambda (r) (setq outcome r))))
     (should (eq outcome 'allow))
-    (should-not enqueued))
+    (should-not (mevedel-pq-test--admitted-p)))
 
   :doc "explicit context Eval uses context mode without ambient session"
   (let* ((session (mevedel-session--create
@@ -2851,15 +2821,15 @@ default Bash keeps bare dot inspection automatic"
                   (edits (("Eval" :action ask)) rule)))
     (pcase-let ((`(,mode ,rules ,via) case))
       (let (entry outcome)
-        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                   (lambda (queued &optional _session)
-                     (setq entry queued)
-                     (funcall (plist-get entry :callback) 'deny-once))))
-          (mevedel-tool-exec-permission-check-eval-async
-           nil
-           (list :expression "(+ 1 2)" :mode "batch" :permission-context
-                 (list :mode mode :buckets (list (cons :session rules))))
-           (lambda (result) (setq outcome result))))
+        (mevedel-pq-test--answering
+         ((list (lambda (card) (setq entry (plist-get card :entry)))
+                'deny-once)
+          :mode mode)
+         (mevedel-tool-exec-permission-check-eval-async
+          nil
+          (list :expression "(+ 1 2)" :mode "batch" :permission-context
+                (list :mode mode :buckets (list (cons :session rules))))
+          (lambda (result) (setq outcome result))))
         (should (eq 'deny outcome))
         (should (equal "batch" (plist-get entry :mode)))
         (should (eq mode (plist-get entry :permission-mode-effective)))
@@ -2868,27 +2838,23 @@ default Bash keeps bare dot inspection automatic"
   (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules '(("Eval" :action deny)))
         outcome enqueued)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (&rest _)
-                 (setq enqueued t))))
-      (mevedel-tool-exec-permission-check-eval-async
-       nil '(:expression "(+ 1 2)")
-       (lambda (r) (setq outcome r))))
+    (mevedel-pq-test--answering (nil)
+                                (mevedel-tool-exec-permission-check-eval-async
+                                 nil '(:expression "(+ 1 2)")
+                                 (lambda (r) (setq outcome r))))
     (should (eq outcome 'deny))
-    (should-not enqueued))
+    (should-not (mevedel-pq-test--admitted-p)))
 
   :doc "trusted Eval without active allow denies without prompting"
   (let ((mevedel-permission-rules nil)
         outcome enqueued)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (&rest _)
-                 (setq enqueued t))))
-      (mevedel-tool-exec-permission-check-eval-async
-       nil '(:expression "(+ 1 2)" :trust-literal-p t)
-       (lambda (r) (setq outcome r))))
+    (mevedel-pq-test--answering (nil)
+                                (mevedel-tool-exec-permission-check-eval-async
+                                 nil '(:expression "(+ 1 2)" :trust-literal-p t)
+                                 (lambda (r) (setq outcome r))))
     (should (consp outcome))
     (should (eq 'deny (car outcome)))
-    (should-not enqueued))
+    (should-not (mevedel-pq-test--admitted-p)))
 
   :doc "explicit Eval deny beats trusted allow"
   (let* ((ws (mevedel-workspace--create
@@ -2916,12 +2882,11 @@ default Bash keeps bare dot inspection automatic"
   :doc "direct Eval allow authorizes model-generated Eval without prompting"
   (let ((mevedel-permission-rules '(("Eval" :action allow)))
         outcome enqueued)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry)
-                 (setq enqueued t)
-                 (funcall (plist-get entry :callback) 'allow-once))))
-      (mevedel-tool-exec-permission-check-eval-async
-       nil '(:expression "(+ 1 2)") (lambda (r) (setq outcome r))))
+    (mevedel-pq-test--answering ((list (lambda (card)
+                                         (let ((entry (plist-get card :entry)))
+                                           (setq enqueued t))) 'allow-once))
+                                (mevedel-tool-exec-permission-check-eval-async
+                                 nil '(:expression "(+ 1 2)") (lambda (r) (setq outcome r))))
     (should (eq outcome 'allow))
     (should-not enqueued))
 
@@ -2929,12 +2894,11 @@ default Bash keeps bare dot inspection automatic"
   (let ((mevedel-permission-mode 'edits)
         (mevedel-permission-rules '(("Eval" :action ask)))
         outcome enqueued)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry)
-                 (setq enqueued t)
-                 (funcall (plist-get entry :callback) 'deny-once))))
-      (mevedel-tool-exec-permission-check-eval-async
-       nil '(:expression "(+ 1 2)") (lambda (r) (setq outcome r))))
+    (mevedel-pq-test--answering ((list (lambda (card)
+                                         (let ((entry (plist-get card :entry)))
+                                           (setq enqueued t))) 'deny-once))
+                                (mevedel-tool-exec-permission-check-eval-async
+                                 nil '(:expression "(+ 1 2)") (lambda (r) (setq outcome r))))
     (should (eq outcome 'deny))
     (should enqueued))
   )

@@ -416,7 +416,7 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
 					     outcome))))
 				   (when-let* ((progress (plist-get context :progress-callback)))
 				     (ignore-errors (funcall progress 'permission-wait)))
-				   (mevedel-permission--enqueue queued session))))))))
+				   (mevedel-permission-request queued session))))))))
 	  context session workspace
 	  (plist-get context :request)
 	  (plist-get context :invocation))))

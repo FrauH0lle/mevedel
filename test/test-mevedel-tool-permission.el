@@ -33,6 +33,11 @@
 (require 'mevedel-tool-permission)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-web)
+(require 'mevedel-permission-queue-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-permission-queue-test-support"))
 
 
 ;;
@@ -179,51 +184,52 @@ Return the outcome and the logged entry."
   ,test
   (test)
   :doc "unresolved requests enter the queue and user denials retain provenance"
-  (let (progress queued settled-context settled-outcome)
-    (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-               (lambda (_event _payload callback &rest _)
-                 (funcall callback nil)))
-              ((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry &optional _session) (setq queued entry))))
-      (mevedel-tool-permission--request
-       (list :progress-callback (lambda (event) (setq progress event))
-             :tool-use-id "ptc-1/2"
-             :parent-tool-use-id "ptc-1"
-             :call-source 'ptc)
-       '(:kind generic :callback ignore) nil
-       (lambda (context outcome)
-         (setq settled-context context settled-outcome outcome)))
-      (should queued)
-      (should (eq 'permission-wait progress))
-      (should (equal "ptc-1/2" (plist-get queued :tool-use-id)))
-      (should (equal "ptc-1" (plist-get queued :parent-tool-use-id)))
-      (should (eq 'ptc (plist-get queued :call-source)))
-      (funcall (plist-get queued :callback) 'deny-session)
-      (should (eq 'deny-session settled-outcome))
-      (should (eq 'user
-                  (plist-get settled-context
-                             :permission-denial-provenance)))))
+  (mevedel-pq-test--with-queue (session _data view)
+    (let (progress settled-context settled-outcome)
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (funcall callback nil))))
+        (mevedel-tool-permission--request
+         (list :progress-callback (lambda (event) (setq progress event))
+               :tool-use-id "ptc-1/2"
+               :parent-tool-use-id "ptc-1"
+               :call-source 'ptc)
+         '(:kind generic :origin "/root" :callback ignore) session
+         (lambda (context outcome)
+           (setq settled-context context settled-outcome outcome)))
+        (let* ((card (mevedel-pq-test--card view))
+               (queued (plist-get card :entry)))
+          (should queued)
+          (should (eq 'permission-wait progress))
+          (should (equal "ptc-1/2" (plist-get queued :tool-use-id)))
+          (should (equal "ptc-1" (plist-get queued :parent-tool-use-id)))
+          (should (eq 'ptc (plist-get queued :call-source)))
+          (mevedel-pq-test--press card "D"))
+        (should (eq 'deny-session settled-outcome))
+        (should (eq 'user
+                    (plist-get settled-context
+                               :permission-denial-provenance))))))
   :doc "hook allow and deny settle without queue admission"
   (dolist (decision '((:permission-decision allow)
                       (:permission-decision deny
                                             :permission-reason "blocked")))
-    (let (queued settled-context settled-outcome)
-      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-                 (lambda (_event _payload callback &rest _)
-                   (funcall callback decision)))
-                ((symbol-function 'mevedel-permission--enqueue)
-                 (lambda (&rest _) (setq queued t))))
-        (mevedel-tool-permission--request
-         nil '(:kind generic :callback ignore) nil
-         (lambda (context outcome)
-           (setq settled-context context settled-outcome outcome)))
-        (should-not queued)
-        (if (eq 'allow (plist-get decision :permission-decision))
-            (should (eq 'allow settled-outcome))
-          (should (eq 'deny (car settled-outcome)))
-          (should (eq 'PermissionRequest
-                      (plist-get settled-context
-                                 :permission-denial-provenance)))))))
+    (mevedel-pq-test--with-queue (session _data _view)
+      (let ((mevedel-permission-log-enabled t)
+            settled-context settled-outcome)
+        (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                   (lambda (_event _payload callback &rest _)
+                     (funcall callback decision))))
+          (mevedel-tool-permission--request
+           nil '(:kind generic :origin "/root" :callback ignore) session
+           (lambda (context outcome)
+             (setq settled-context context settled-outcome outcome)))
+          (should-not (mevedel-pq-test--requested-p session))
+          (if (eq 'allow (plist-get decision :permission-decision))
+              (should (eq 'allow settled-outcome))
+            (should (eq 'deny (car settled-outcome)))
+            (should (eq 'PermissionRequest
+                        (plist-get settled-context
+                                   :permission-denial-provenance))))))))
   :doc "hook approval cannot authorize an unrepresentable directory write"
   (let ((root (make-temp-file "mevedel-hook-directory-" t))
         outcome)
@@ -248,79 +254,98 @@ Return the outcome and the logged entry."
 
   :doc "hook, fallback and queued approvals retain only their explicit resource selection"
   (dolist (source '(hook fallback queued coalesced denied))
-    (let* ((selection '((:path "/service/socket" :access write)))
-           (entry (list :kind 'generic :callback #'ignore
-                        :resource-selection-cell (list (copy-tree selection))))
-           queued settled-context settled-outcome)
-      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-                 (lambda (_event _payload callback &rest _)
-                   (funcall callback
-                            (pcase source
-                              ('hook '(:permission-decision allow))
-                              ('denied '(:permission-decision deny))))))
-                ((symbol-function 'mevedel-permission--enqueue)
-                 (lambda (value &optional _session) (setq queued value))))
-        (mevedel-tool-permission--request
-         nil entry nil
-         (lambda (context outcome)
-           (setq settled-context context settled-outcome outcome))
-         nil (and (eq source 'fallback) 'allow))
-        (when (eq source 'queued)
-          (funcall (plist-get queued :callback) 'allow-once))
-        (when (eq source 'coalesced)
-          (mevedel-permission-queue--safe-settle queued 'allow 'coalesced))
-        (if (memq source '(denied coalesced))
-            (progn
-              (if (eq source 'denied)
-                  (should (eq 'deny (car settled-outcome)))
-                (should (eq 'allow settled-outcome)))
-              (should-not (plist-get settled-context :approved-resources)))
-          (should (memq settled-outcome '(allow allow-once)))
-          (should (equal selection (plist-get settled-context :approved-resources)))
-          (should-not (eq (car (plist-get entry :resource-selection-cell))
-                          (plist-get settled-context :approved-resources)))))))
-
-  :doc "an unresolved request uses its card-free fallback"
-  (let (queued settled-outcome)
-    (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-               (lambda (_event _payload callback &rest _)
-                 (funcall callback nil)))
-              ((symbol-function 'mevedel-permission--enqueue)
-               (lambda (&rest _) (setq queued t))))
-      (mevedel-tool-permission--request
-       nil '(:kind generic :callback ignore) nil
-       (lambda (_context outcome) (setq settled-outcome outcome))
-       nil 'allow)
-      (should-not queued)
-      (should (eq 'allow settled-outcome))))
-  :doc "an explicit hook ask overrides the card-free fallback"
-  (let (queued settled-outcome)
-    (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-               (lambda (_event _payload callback &rest _)
-                 (funcall callback '(:permission-decision ask))))
-              ((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry &optional _session) (setq queued entry))))
-      (mevedel-tool-permission--request
-       nil '(:kind generic :callback ignore) nil
-       (lambda (_context outcome) (setq settled-outcome outcome))
-       nil 'allow)
-      (should queued)
-      (should-not settled-outcome)))
-  :doc "one-shot prompts retain their authoritative side data buffer"
-  (let ((side-buffer (generate-new-buffer " *mevedel-side-queue*"))
-        queued)
-    (unwind-protect
+    (mevedel-pq-test--with-queue (session _data view)
+      (let* ((selection '((:path "/service/socket" :access write)))
+             ;; Read access, so the head's session grant can settle the sibling
+             ;; through the real queue; the selection under test stays a write.
+             (entry (list :kind 'generic :tool-name "Read" :origin "/root"
+                          :specifier-key :path
+                          :specifier-value "/service/socket"
+                          :resource-access 'read :callback #'ignore
+                          :resource-selection-cell (list (copy-tree selection))))
+             settled-context settled-outcome)
         (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                    (lambda (_event _payload callback &rest _)
-                     (funcall callback nil)))
-                  ((symbol-function 'mevedel-permission--enqueue)
-                   (lambda (entry &optional _session) (setq queued entry))))
+                     (funcall callback
+                              (pcase source
+                                ('hook '(:permission-decision allow))
+                                ('denied '(:permission-decision deny)))))))
+          (when (eq source 'coalesced)
+            ;; A head request answered for the session stores the grant that
+            ;; the real queue then uses to settle this sibling.
+            (mevedel-permission-request
+             (list :kind 'generic :tool-name "Read" :origin "/root"
+                   :specifier-key :path :specifier-value "/service/socket"
+                   :resource-access 'read :include-always nil
+                   :callback (lambda (outcome)
+                               (when (eq outcome 'allow-session)
+                                 (mevedel-permission-add-session-resource-grant
+                                  session "/service/socket" 'read))))
+             session))
           (mevedel-tool-permission--request
-           `(:one-shot-mutations-p t :buffer ,side-buffer)
-           '(:kind generic :mutation-p t :callback ignore) nil
-           #'ignore)
-          (should (plist-get queued :once-only))
-          (should (eq side-buffer (plist-get queued :data-buffer))))
+           nil entry session
+           (lambda (context outcome)
+             (setq settled-context context settled-outcome outcome))
+           nil (and (eq source 'fallback) 'allow))
+          (when (eq source 'queued)
+            (mevedel-pq-test--press (mevedel-pq-test--card view) "a"))
+          (when (eq source 'coalesced)
+            (mevedel-pq-test--press
+             (car (mevedel-pq-test--cards view)) "s"))
+          (if (memq source '(denied coalesced))
+              (progn
+                (if (eq source 'denied)
+                    (should (eq 'deny (car settled-outcome)))
+                  (should (eq 'allow settled-outcome)))
+                (should-not (plist-get settled-context :approved-resources)))
+            (should (memq settled-outcome '(allow allow-once)))
+            (should (equal selection (plist-get settled-context :approved-resources)))
+            (should-not (eq (car (plist-get entry :resource-selection-cell))
+                            (plist-get settled-context :approved-resources))))))))
+
+  :doc "an unresolved request uses its card-free fallback"
+  (mevedel-pq-test--with-queue (session _data _view)
+    (let ((mevedel-permission-log-enabled t)
+          settled-outcome)
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (funcall callback nil))))
+        (mevedel-tool-permission--request
+         nil '(:kind generic :origin "/root" :callback ignore) session
+         (lambda (_context outcome) (setq settled-outcome outcome))
+         nil 'allow)
+        (should-not (mevedel-pq-test--requested-p session))
+        (should (eq 'allow settled-outcome)))))
+  :doc "an explicit hook ask overrides the card-free fallback"
+  (mevedel-pq-test--with-queue (session _data view)
+    (let (settled-outcome)
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (funcall callback '(:permission-decision ask)))))
+        (mevedel-tool-permission--request
+         nil '(:kind generic :origin "/root" :callback ignore) session
+         (lambda (_context outcome) (setq settled-outcome outcome))
+         nil 'allow)
+        (should (mevedel-pq-test--card view))
+        (should-not settled-outcome))))
+  :doc "one-shot prompts retain their authoritative side data buffer"
+  (let ((side-buffer (generate-new-buffer " *mevedel-side-queue*"))
+        (session (mevedel-pq-test--make-session)))
+    (unwind-protect
+        (with-current-buffer side-buffer
+          (setq-local mevedel--session session)
+          (mevedel-pq-test--with-view-here view
+            (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                       (lambda (_event _payload callback &rest _)
+                         (funcall callback nil))))
+              (mevedel-tool-permission--request
+               `(:one-shot-mutations-p t :buffer ,side-buffer)
+               '(:kind generic :mutation-p t :origin "/root" :callback ignore)
+               session #'ignore)
+              (let ((queued (plist-get (mevedel-pq-test--card view) :entry)))
+                (should (plist-get queued :once-only))
+                (should (eq side-buffer (plist-get queued :data-buffer)))))
+            (mevedel-permission-queue-abort-all session)))
       (kill-buffer side-buffer))))
 
 (mevedel-deftest mevedel-tool-permission-step
@@ -356,16 +381,15 @@ Return the outcome and the logged entry."
          (file (mevedel-permission-persistence-file workspace 'global))
          (mevedel-permission-rules nil)
          (mevedel-protected-paths (list (cons path 'inaccessible)))
-         allowed queued denied)
+         allowed denied)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                   (lambda (&rest _) (setq queued t))))
+        (mevedel-pq-test--with-session-view session view
           (mevedel-permission-persistence-write-store
            file `(:rules nil :resource-grants ((:path ,path :access read))))
           (mevedel-tool-permission-step
            context (lambda (_) (setq allowed t)) #'ignore)
           (should allowed)
-          (should-not queued)
+          (should-not (mevedel-pq-test--requested-p session))
           ;; External revocation must not be hidden by the store cache.
           (with-temp-file file
             (insert "(:rules nil :resource-grants nil)"))
@@ -373,7 +397,7 @@ Return the outcome and the logged entry."
           (mevedel-tool-permission-step
            context (lambda (_) (setq allowed t)) #'ignore)
           (should-not allowed)
-          (should queued)
+          (should (mevedel-session-permission-queue session))
           (mevedel-permission-persistence-write-store
            file `(:rules nil :resource-grants ((:path ,path :access read))))
           (mevedel-permission-persistence-save-rule
@@ -889,16 +913,15 @@ Return the outcome and the logged entry."
                     :workspace ws))
          (mevedel-permission-rules nil)
          (mevedel-protected-paths nil)
-         called enqueued)
+         called)
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel--all-allowed-roots)
-                   (lambda (&optional _buffer) (list root extra)))
-                  ((symbol-function 'mevedel-permission--enqueue)
-                   (lambda (&rest _args) (setq enqueued t))))
-          (mevedel-tool-permission-step
-           ctx (lambda (_c) (setq called t)) #'ignore)
-          (should called)
-          (should-not enqueued))
+                   (lambda (&optional _buffer) (list root extra))))
+          (mevedel-pq-test--with-session-view session view
+            (mevedel-tool-permission-step
+             ctx (lambda (_c) (setq called t)) #'ignore)
+            (should called)
+            (should-not (mevedel-pq-test--requested-p session))))
       (delete-directory root t)
       (delete-directory extra t)))
   :doc "ask prompts for native edits even inside allowed roots"
@@ -919,16 +942,15 @@ Return the outcome and the logged entry."
                     :session session :workspace ws))
          (mevedel-permission-rules nil)
          (mevedel-protected-paths nil)
-         called enqueued)
+         called)
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel--all-allowed-roots)
-                   (lambda (&optional _buffer) (list root)))
-                  ((symbol-function 'mevedel-permission--enqueue)
-                   (lambda (&rest _args) (setq enqueued t))))
-          (mevedel-tool-permission-step
-           ctx (lambda (_c) (setq called t)) #'ignore)
-          (should-not called)
-          (should enqueued))
+                   (lambda (&optional _buffer) (list root))))
+          (mevedel-pq-test--with-session-view session view
+            (mevedel-tool-permission-step
+             ctx (lambda (_c) (setq called t)) #'ignore)
+            (should-not called)
+            (should (mevedel-pq-test--card view))))
       (delete-directory root t)))
   :doc "edits advances native edit tools inside allowed roots"
   (let* ((root (file-name-as-directory
@@ -956,13 +978,12 @@ Return the outcome and the logged entry."
                                       (plist-get args key))))
                    (ctx (list :tool tool :args (list key path)
                               :session session :workspace ws))
-                   called enqueued)
-              (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                         (lambda (&rest _args) (setq enqueued t))))
+                   called)
+              (mevedel-pq-test--with-session-view session view
                 (mevedel-tool-permission-step
-                 ctx (lambda (_c) (setq called t)) #'ignore))
-              (should called)
-              (should-not enqueued))))
+                 ctx (lambda (_c) (setq called t)) #'ignore)
+                (should called)
+                (should-not (mevedel-pq-test--requested-p session))))))
       (delete-directory root t)))
   :doc "edits keeps Bash and Eval behind their permission checks"
   (dolist (name '("Bash" "Eval"))
@@ -973,13 +994,12 @@ Return the outcome and the logged entry."
            (ctx (list :tool tool :args nil :session session))
            (mevedel-permission-rules nil)
            (mevedel-protected-paths nil)
-           called enqueued)
-      (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                 (lambda (&rest _args) (setq enqueued t))))
+           called)
+      (mevedel-pq-test--with-session-view session view
         (mevedel-tool-permission-step
-         ctx (lambda (_c) (setq called t)) #'ignore))
-      (should-not called)
-      (should enqueued)))
+         ctx (lambda (_c) (setq called t)) #'ignore)
+        (should-not called)
+        (should (mevedel-pq-test--card view)))))
   :doc "session-scoped dropped-file grant allows exact Read outside workspace"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-pipeline-root-" t)))
@@ -1002,18 +1022,17 @@ Return the outcome and the logged entry."
          (mevedel-permission-rules nil)
          (mevedel-protected-paths nil)
          (mevedel-permission-mode 'ask)
-         called enqueued)
+         called)
     (with-temp-file path (insert "dropped\n"))
     (mevedel-session-activate-dropped-file-grants session (list path))
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel--all-allowed-roots)
-                   (lambda (&optional _buffer) (list root)))
-                  ((symbol-function 'mevedel-permission--enqueue)
-                   (lambda (&rest _args) (setq enqueued t))))
-          (mevedel-tool-permission-step
-           ctx (lambda (_c) (setq called t)) #'ignore)
-          (should called)
-          (should-not enqueued))
+                   (lambda (&optional _buffer) (list root))))
+          (mevedel-pq-test--with-session-view session view
+            (mevedel-tool-permission-step
+             ctx (lambda (_c) (setq called t)) #'ignore)
+            (should called)
+            (should-not (mevedel-pq-test--requested-p session))))
       (delete-file path)
       (delete-directory outside t)
       (delete-directory root t)))
@@ -1038,33 +1057,32 @@ Return the outcome and the logged entry."
          (mevedel-permission-rules nil)
          (mevedel-protected-paths nil)
          (mevedel-permission-mode 'ask)
-         captured-entry called)
+         called)
     (with-temp-file path (insert "outside\n"))
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel--all-allowed-roots)
-                   (lambda (&optional _buffer) (list root)))
-                  ((symbol-function 'mevedel-permission--enqueue)
-                   (lambda (entry &optional _session)
-                     (setq captured-entry entry))))
-          (mevedel-tool-permission-step
-           ctx (lambda (_c) (setq called t)) #'ignore)
-          (should-not called)
-          (should (eq 'read
-                      (plist-get captured-entry :resource-access)))
-          (should (equal path
-                         (plist-get captured-entry :specifier-value)))
-          (funcall (plist-get captured-entry :callback)
-                   'allow-session)
-          (should called)
-          (should (equal (list (list :path path :access 'read))
-                         (mevedel-session-resource-grants session)))
-          (should-not (mevedel-session-permission-rules session))
-          (setq called nil
-                captured-entry nil)
-          (mevedel-tool-permission-step
-           ctx (lambda (_c) (setq called t)) #'ignore)
-          (should called)
-          (should-not captured-entry))
+                   (lambda (&optional _buffer) (list root))))
+          (mevedel-pq-test--with-session-view session view
+            (mevedel-tool-permission-step
+             ctx (lambda (_c) (setq called t)) #'ignore)
+            (should-not called)
+            (let* ((card (mevedel-pq-test--card view))
+                   (captured-entry (plist-get card :entry)))
+              (should (eq 'read
+                          (plist-get captured-entry :resource-access)))
+              (should (equal path
+                             (plist-get captured-entry :specifier-value)))
+              (mevedel-pq-test--press card "s"))
+            (should called)
+            (should (equal (list (list :path path :access 'read))
+                           (mevedel-session-resource-grants session)))
+            (should-not (mevedel-session-permission-rules session))
+            (setq called nil)
+            (mevedel-pq-test--forget-requests session)
+            (mevedel-tool-permission-step
+             ctx (lambda (_c) (setq called t)) #'ignore)
+            (should called)
+            (should-not (mevedel-pq-test--requested-p session))))
       (delete-file path)
       (delete-directory outside t)
       (delete-directory root t)))
@@ -1092,20 +1110,18 @@ Return the outcome and the logged entry."
          (mevedel-permission-rules nil)
          (mevedel-protected-paths nil)
          (mevedel-permission-mode 'ask)
-         called captured-entry)
+         called)
     (make-directory descendant-dir)
     (with-temp-file descendant (insert "secret\n"))
     (mevedel-session-activate-dropped-file-grants session (list path))
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel--all-allowed-roots)
-                   (lambda (&optional _buffer) (list root)))
-                  ((symbol-function 'mevedel-permission--enqueue)
-                   (lambda (entry &optional _session)
-                     (setq captured-entry entry))))
-          (mevedel-tool-permission-step
-           ctx (lambda (_c) (setq called t)) #'ignore)
-          (should-not called)
-          (should captured-entry))
+                   (lambda (&optional _buffer) (list root))))
+          (mevedel-pq-test--with-session-view session view
+            (mevedel-tool-permission-step
+             ctx (lambda (_c) (setq called t)) #'ignore)
+            (should-not called)
+            (should (mevedel-pq-test--card view))))
       (when (file-exists-p descendant)
         (delete-file descendant))
       (when (file-directory-p descendant-dir)
@@ -1134,19 +1150,17 @@ Return the outcome and the logged entry."
          (mevedel-permission-rules nil)
          (mevedel-protected-paths nil)
          (mevedel-permission-mode 'ask)
-         called captured-entry)
+         called)
     (with-temp-file path (insert "dropped\n"))
     (mevedel-session-activate-dropped-file-grants session (list path))
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel--all-allowed-roots)
-                   (lambda (&optional _buffer) (list root)))
-                  ((symbol-function 'mevedel-permission--enqueue)
-                   (lambda (entry &optional _session)
-                     (setq captured-entry entry))))
-          (mevedel-tool-permission-step
-           ctx (lambda (_c) (setq called t)) #'ignore)
-          (should-not called)
-          (should captured-entry))
+                   (lambda (&optional _buffer) (list root))))
+          (mevedel-pq-test--with-session-view session view
+            (mevedel-tool-permission-step
+             ctx (lambda (_c) (setq called t)) #'ignore)
+            (should-not called)
+            (should (mevedel-pq-test--card view))))
       (delete-file path)
       (delete-directory outside t)
       (delete-directory root t)))
@@ -1170,16 +1184,15 @@ Return the outcome and the logged entry."
          (mevedel-permission-rules
           `(("Grep" :path ,root-without-slash :action ask)))
          (mevedel-protected-paths nil)
-         captured-entry)
+         )
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                   (lambda (entry &optional _session)
-                     (setq captured-entry entry))))
+        (mevedel-pq-test--with-session-view session view
           (mevedel-tool-permission-step ctx #'ignore #'ignore)
-          (should (equal "Grep" (plist-get captured-entry :tool-name)))
-          (should (eq :path (plist-get captured-entry :specifier-key)))
-          (should (equal root-without-slash
-                         (plist-get captured-entry :specifier-value))))
+          (let ((captured-entry (plist-get (mevedel-pq-test--card view) :entry)))
+            (should (equal "Grep" (plist-get captured-entry :tool-name)))
+            (should (eq :path (plist-get captured-entry :specifier-key)))
+            (should (equal root-without-slash
+                           (plist-get captured-entry :specifier-value)))))
       (delete-directory root t)))
   :doc "error from async prompt callback surfaces through fail, not a strand"
   ;; When apply-prompt-result throws (e.g. a persistent-rule write
@@ -1303,35 +1316,32 @@ Return the outcome and the logged entry."
                  (mevedel-permission-rules nil)
                  (mevedel-protected-paths nil)
                  (mevedel-permission-reviewer 'user)
-                 (enqueued nil)
                  (events nil)
                  (next-called nil))
       (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                  (lambda (event _payload callback &rest _)
                    (push event events)
-                   (funcall callback nil)))
-                ((symbol-function 'mevedel-permission--enqueue)
-                 (lambda (&rest _) (setq enqueued t))))
-        (mevedel-tool-permission-step
-         (list :tool tool :args args :session session
-               :hook-permission-decision 'allow)
-         (lambda (_context) (setq next-called t)) #'ignore))
-      (should next-called)
-      (should-not enqueued)
+                   (funcall callback nil))))
+        (mevedel-pq-test--with-session-view session view
+          (mevedel-tool-permission-step
+           (list :tool tool :args args :session session
+                 :hook-permission-decision 'allow)
+           (lambda (_context) (setq next-called t)) #'ignore)
+          (should next-called)
+          (should-not (mevedel-pq-test--requested-p session))))
       (should (equal '(PermissionRequest) events))))
   :doc "full-auto ignores PreToolUse asks but retains hook denies"
   (dolist (hook '(ask deny))
     (let ((session (mevedel-session--create :permission-mode 'full-auto))
           (mevedel-permission-rules nil)
-          enqueued allowed denied)
-      (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                 (lambda (&rest _) (setq enqueued t))))
+          allowed denied)
+      (mevedel-pq-test--with-session-view session view
         (mevedel-tool-permission-step
          (list :tool (mevedel-tool--create :name "HookProbe")
                :session session :hook-permission-decision hook)
          (lambda (_context) (setq allowed t))
-         (lambda (&rest _) (setq denied t))))
-      (should-not enqueued)
+         (lambda (&rest _) (setq denied t)))
+        (should-not (mevedel-pq-test--requested-p session)))
       (should (eq (eq hook 'ask) allowed))
       (should (eq (eq hook 'deny) denied))))
   :doc "PermissionRequest allow settles generic Bash and Eval asks without cards"
@@ -1351,19 +1361,17 @@ Return the outcome and the logged entry."
                  (mevedel-permission-rules nil)
                  (mevedel-protected-paths nil)
                  (mevedel-permission-reviewer 'user)
-                 (enqueued nil)
                  (next-called nil))
       (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                  (lambda (_event _payload callback &rest _)
                    (funcall callback
-                            '(:permission-decision allow))))
-                ((symbol-function 'mevedel-permission--enqueue)
-                 (lambda (&rest _) (setq enqueued t))))
-        (mevedel-tool-permission-step
-         (list :tool tool :args args :session session)
-         (lambda (_context) (setq next-called t)) #'ignore))
-      (should next-called)
-      (should-not enqueued)))
+                            '(:permission-decision allow)))))
+        (mevedel-pq-test--with-session-view session view
+          (mevedel-tool-permission-step
+           (list :tool tool :args args :session session)
+           (lambda (_context) (setq next-called t)) #'ignore)
+          (should next-called)
+          (should-not (mevedel-pq-test--requested-p session))))))
   :doc "PermissionRequest deny settles generic Bash and Eval asks with provenance"
   (dolist (case
            (list
@@ -1383,7 +1391,6 @@ Return the outcome and the logged entry."
                  (mevedel-permission-reviewer 'user)
                  (events nil)
                  (provenance nil)
-                 (enqueued nil)
                  (failure nil))
       (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                  (lambda (event payload callback &rest _)
@@ -1395,17 +1402,16 @@ Return the outcome and the logged entry."
                    (funcall callback
                             (and (eq event 'PermissionRequest)
                                  '(:permission-decision deny
-                                                        :permission-reason "hook denied")))))
-                ((symbol-function 'mevedel-permission--enqueue)
-                 (lambda (&rest _) (setq enqueued t))))
-        (mevedel-tool-permission-step
-         (list :tool tool :args args :session session)
-         #'ignore (lambda (reason &rest _) (setq failure reason))))
+                                                        :permission-reason "hook denied"))))))
+        (mevedel-pq-test--with-session-view session view
+          (mevedel-tool-permission-step
+           (list :tool tool :args args :session session)
+           #'ignore (lambda (reason &rest _) (setq failure reason)))
+          (should-not (mevedel-pq-test--requested-p session))))
       (should (equal '(PermissionRequest PermissionDenied)
                      (nreverse events)))
       (should (eq 'PermissionRequest provenance))
-      (should (string-match-p "hook denied" failure))
-      (should-not enqueued)))
+      (should (string-match-p "hook denied" failure))))
   :doc "policy denials retain their rule provenance"
   (let* ((tool (mevedel-tool--create
                 :name "Edit" :read-only-p nil))
@@ -1428,20 +1434,18 @@ Return the outcome and the logged entry."
          (mevedel-permission-rules '(("Edit" :action ask)))
          (mevedel-protected-paths nil)
          (mevedel-permission-mode 'ask)
-         entry
+         (session (mevedel-session--create :permission-mode 'ask))
          provenance)
     (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                (lambda (event payload callback &rest _)
                  (when (eq event 'PermissionDenied)
                    (setq provenance
                          (plist-get payload :permission-provenance)))
-                 (funcall callback nil)))
-              ((symbol-function 'mevedel-permission--enqueue)
-               (lambda (queued &optional _session)
-                 (setq entry queued))))
-      (mevedel-tool-permission-step
-       (list :tool tool :args nil) #'ignore #'ignore)
-      (funcall (plist-get entry :callback) 'deny-once))
+                 (funcall callback nil))))
+      (mevedel-pq-test--with-session-view session view
+        (mevedel-tool-permission-step
+         (list :tool tool :args nil :session session) #'ignore #'ignore)
+        (mevedel-pq-test--press (mevedel-pq-test--card view) "d")))
     (should (eq 'user provenance)))
 
   :doc "sub-agent sees parent's session rules through context :session"

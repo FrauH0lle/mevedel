@@ -1137,7 +1137,7 @@
                  (buffer-substring-no-properties
                   (point-min) mevedel-view--input-marker))))
       (with-current-buffer data-buf
-        (mevedel-permission--enqueue
+        (mevedel-permission-request
          (list :kind 'generic
                :tool-name "Read"
                :specifier-key :path
@@ -1185,7 +1185,7 @@
           (with-current-buffer data-buf
             (dolist (path '("/tmp/one.el" "/tmp/two.el" "/tmp/three.el"))
               (let ((captured-path path))
-                (mevedel-permission--enqueue
+                (mevedel-permission-request
                  (list :kind 'generic
                        :tool-name "Read"
                        :specifier-key :path
@@ -1568,7 +1568,7 @@
               (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                          (lambda () 'ask)))
                 (with-current-buffer agent-buf
-                  (mevedel-permission--enqueue
+                  (mevedel-permission-request
                    (list :kind 'sandbox
                          :tool-name "Bash"
                          :detail "npx @emacs-eask/cli test"
@@ -1927,7 +1927,7 @@ TIMERS is a cons cell whose car holds captured `(FUNCTION . ARGS)' entries."
                 ((symbol-function 'mevedel--submit-generated-turn)
                  (lambda (&rest _) (setq dispatched t))))
         (with-current-buffer data-buf
-          (mevedel-permission--enqueue
+          (mevedel-permission-request
            (list :kind 'generic :tool-name "Read" :origin "/root/worker"
                  :data-buffer data-buf
                  :callback (lambda (value) (setq outcome value)))

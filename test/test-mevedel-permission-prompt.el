@@ -715,7 +715,7 @@
               (goto-char (mevedel-view--input-start))
               (insert draft))
             (with-current-buffer data
-              (mevedel-permission--enqueue entry session))
+              (mevedel-permission-request entry session))
             ;; A scope change redraws the same pending one-shot card.
             (dolist (scope '((:path "/srv/input" :access read)
                              (:path "/srv" :access write :recursive t)))
@@ -851,7 +851,7 @@
             (goto-char (mevedel-view--input-start))
             (insert draft))
           (with-current-buffer data
-            (mevedel-permission--enqueue entry session))
+            (mevedel-permission-request entry session))
           (with-current-buffer view
             (let* ((queued (car (mevedel-session-permission-queue session)))
                    (ov (gethash (mevedel-queue--entry-metadata-get queued :interaction-id)

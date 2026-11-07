@@ -14,6 +14,12 @@
 (require 'mevedel-resource)
 (require 'mevedel-resource-capf)
 (require 'mevedel-system)
+(require 'mevedel-permission-queue)
+(require 'mevedel-permission-queue-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-permission-queue-test-support"))
 (require 'mevedel-tool-patch)
 (require 'mevedel-tool-permission)
 (require 'mevedel-journal-evidence)
@@ -249,20 +255,24 @@
                                   :workspace workspace :request request))
                    queued allowed denied)
               (make-directory directory t)
-              (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                         (lambda (entry &optional _session) (setq queued entry))))
+              (mevedel-pq-test--with-session-view session view
                 (cl-flet ((admit ()
-                            (setq queued nil allowed nil denied nil)
+                            (setq allowed nil denied nil)
+                            (mevedel-pq-test--forget-requests session)
                             (mevedel-tool-permission-step
                              context (lambda (updated) (setq allowed updated))
-                             (lambda (reason &rest _) (setq denied reason)))))
+                             (lambda (reason &rest _) (setq denied reason)))
+                            (setq queued (car (mevedel-pq-test--cards view)))))
                   (admit)
                   (should queued)
                   (should-not allowed)
-                  (should (equal "/root/worker" (plist-get queued :origin)))
-                  (should (equal path (plist-get queued :specifier-value)))
+                  (should (equal "/root/worker"
+                                 (plist-get (plist-get queued :entry) :origin)))
+                  (should (equal path
+                                 (plist-get (plist-get queued :entry)
+                                            :specifier-value)))
                   ;; An exact approval must not authorize a sibling file.
-                  (funcall (plist-get queued :callback) 'allow-session)
+                  (mevedel-pq-test--press queued "s")
                   (should allowed)
                   (should (equal (list (list :path path :access 'write))
                                  (mevedel-session-resource-grants session)))
@@ -278,14 +288,30 @@
                   (admit)
                   (should queued)
                   (should-not allowed)
-                  ;; The permission card's selected directory is shared by
-                  ;; approval storage and the handler's trusted context.
-                  (setcar (plist-get queued :resource-selection-cell)
-                          (list (list :path directory :access 'write :recursive t)))
-                  (funcall (plist-get queued :callback) 'allow-session)
+                  ;; The person selects the directory tree on the card ("g");
+                  ;; the choice is the only input replaced.  Approval storage
+                  ;; and the handler's trusted context share that selection.
+                  (cl-letf (((symbol-function 'completing-read)
+                             (lambda (_prompt choices &rest _)
+                               (car (cl-find-if
+                                     (lambda (choice)
+                                       (let ((grant (cdr choice)))
+                                         (and (plist-get grant :recursive)
+                                              (equal directory
+                                                     (plist-get grant :path)))))
+                                     choices)))))
+                    (mevedel-pq-test--press queued "g"))
+                  (setq queued (car (mevedel-pq-test--cards view)))
+                  (mevedel-pq-test--press queued "s")
                   (should allowed)
+                  ;; The card builds the grant itself, so compare its fields,
+                  ;; not the order they were written in.
                   (should (equal (list (list :path directory :access 'write :recursive t))
-                                 (plist-get allowed :approved-resources)))
+                                 (mapcar (lambda (grant)
+                                           (list :path (plist-get grant :path)
+                                                 :access (plist-get grant :access)
+                                                 :recursive (plist-get grant :recursive)))
+                                         (plist-get allowed :approved-resources))))
                   (admit)
                   (should allowed)
                   (should-not queued)

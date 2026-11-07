@@ -144,7 +144,7 @@
                      (mevedel-permission-queue-prepare-resources reviewed)
                      (mevedel-permission-queue-validate-approval reviewed 'allow-once)
                      (setq fallback cont))))
-          (mevedel-permission--enqueue entry session)
+          (mevedel-permission-request entry session)
           (should-not (mevedel-session-permission-queue session))
           (funcall fallback)
           (let ((selected (car (car (plist-get entry :resource-selection-cell)))))
@@ -187,7 +187,7 @@
                      (funcall directory-p path)))
                   ((symbol-function 'mevedel-permission-queue--render-entry)
                    (lambda (_) (setq rendered t))))
-          (mevedel-permission--enqueue
+          (mevedel-permission-request
            (list :kind 'sandbox :tool-name "Bash" :origin "/root"
                  :request request :resource-selection-cell
                  (list (list (list :path root :access 'write)))
@@ -210,7 +210,7 @@
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                    #'ignore))
-          (mevedel-permission--enqueue
+          (mevedel-permission-request
            (list :kind 'sandbox :tool-name "Bash" :origin "/root"
                  :resource-selection-cell selection
                  :callback (lambda (outcome) (push outcome received)))
@@ -303,7 +303,7 @@
       (unwind-protect
           (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry) #'ignore))
             (setf (mevedel-session-sandbox-mode session) 'off)
-            (mevedel-permission--enqueue
+            (mevedel-permission-request
              (list :kind 'sandbox :tool-name "Bash" :origin "/root"
                    :resource-selection-cell (list (list (list :path root :access 'write)))
                    :callback (lambda (value) (push (cons 'first value) outcomes))) session)
@@ -314,7 +314,7 @@
                            (setq yielded t)
                            (when cancel-head
                              (mevedel-permission-queue--on-head-outcome first 'aborted))
-                           (mevedel-permission--enqueue
+                           (mevedel-permission-request
                             (list :kind 'generic :tool-name "Read" :origin "/root"
                                   :callback (lambda (value) (push (cons 'second value) outcomes)))
                             session)
@@ -331,7 +331,7 @@
         (mevedel-permission-queue-abort-all session)
         (delete-directory root t)))))
 
-(mevedel-deftest mevedel-permission--enqueue
+(mevedel-deftest mevedel-permission-request
   (:quiet t :doc "FIFO permission queue contract")
   ,test
   (test)
@@ -342,13 +342,13 @@
          (rendered nil))
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                (lambda (entry) (push entry rendered))))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Read"
              :origin "/root" :callback #'ignore))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Edit"
              :origin "/root" :callback #'ignore))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Write"
              :origin "/root" :callback #'ignore)))
     ;; The visible head is re-rendered as siblings arrive so pending
@@ -369,7 +369,7 @@
          (mevedel--session session))
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                #'ignore))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Read"
              :origin "/root" :callback #'ignore)))
     (let* ((q (mevedel-session-permission-queue session))
@@ -382,7 +382,7 @@
         outcome)
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                (lambda (entry) (push entry rendered))))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Read"
              :origin "/root"
              :callback (lambda (o) (setq outcome o)))))
@@ -397,12 +397,12 @@
           (lambda (entry) (push entry notified))))
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                #'ignore))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Read"
              :specifier-key :path :specifier-value "one.el"
              :origin "/root" :callback #'ignore))
       ;; A sibling re-renders the head but notifies only for itself.
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'bash :command "git add ." :origin "/root"
              :callback #'ignore)))
     (should (= 2 (length notified)))
@@ -423,7 +423,7 @@
          (lambda (_entry) (cl-incf notified))))
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                #'ignore))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Read"
              :origin "/root" :callback #'ignore)))
     (should (= 0 notified)))
@@ -437,7 +437,7 @@
     (mevedel-test--with-captured-diagnostics captured
       (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                  #'ignore))
-        (mevedel-permission--enqueue
+        (mevedel-permission-request
          (list :kind 'generic :tool-name "Read"
                :origin "/root" :callback #'ignore))))
     (should (= 1 (length (mevedel-session-permission-queue session))))
@@ -445,7 +445,7 @@
 
   :doc "unrenderable cards abort once without a display or user response"
   (let ((session (test-pq--make-session)) outcomes)
-    (mevedel-permission--enqueue
+    (mevedel-permission-request
      (list :kind 'unknown :origin "/root"
            :callback (lambda (outcome) (push outcome outcomes)))
      session)
@@ -462,7 +462,7 @@
   :doc "enqueue rejects a missing origin"
   (let ((session (test-pq--make-session)))
     (should-error
-     (mevedel-permission--enqueue
+     (mevedel-permission-request
       (list :kind 'generic :tool-name "Read" :callback #'ignore)
       session)
      :type 'error))
@@ -472,7 +472,7 @@
     (dolist (origin '(nil "" "root" "/root/" "/root/Bad"
                           "/root/explorer.agent" "explorer--abc"))
       (should-error
-       (mevedel-permission--enqueue
+       (mevedel-permission-request
         (list :kind 'generic :tool-name "Read"
               :origin origin :callback #'ignore)
         session)
@@ -491,10 +491,10 @@
           (list (cons "/root/worker" record)))
     (cl-letf (((symbol-function 'mevedel-permission--prompt-async-attributed)
                (lambda (&rest _args) nil)))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Read"
              :origin "/root/worker" :callback #'ignore))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Edit"
              :origin "/root/worker" :callback #'ignore))
       (should (eq 'permission-blocked
@@ -589,7 +589,7 @@
               ((symbol-function 'mevedel-telemetry-record)
                (lambda (session event &rest props)
                  (push (list session event props) calls))))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'sandbox :tool-name "Bash"
              :specifier-key :path :specifier-value "/private/path"
              :resource-path "/private/resource"
@@ -628,7 +628,7 @@
       (setf (mevedel-session-audit-session side) parent)
       (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                  #'ignore))
-        (mevedel-permission--enqueue
+        (mevedel-permission-request
          (list :kind 'eval :mode "batch" :origin "/root"
                :permission-mode-effective 'edits :permission-via 'mode
                :resource-originals '((:path "/private/request" :access read))
@@ -663,7 +663,7 @@
           (setf (mevedel-session-save-path session) dir)
           (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                      #'ignore))
-            (mevedel-permission--enqueue
+            (mevedel-permission-request
              (list :kind 'generic
                    :tool-name "Read"
                    :specifier-key :path
@@ -698,7 +698,7 @@
           (setf (mevedel-session-save-path session) dir)
           (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                      #'ignore))
-            (mevedel-permission--enqueue
+            (mevedel-permission-request
              (list :kind 'bash
                    :command "printf SECRET_TOKEN"
                    :commands-summary "printf"
@@ -723,7 +723,7 @@
           (setf (mevedel-session-save-path session) dir)
           (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                      #'ignore))
-            (mevedel-permission--enqueue
+            (mevedel-permission-request
              (list :kind 'eval
                    :expression "(message \"SECRET_TOKEN\")"
                    :mode "live"
@@ -747,7 +747,7 @@
           (setf (mevedel-session-save-path session) dir)
           (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                      #'ignore))
-            (mevedel-permission--enqueue
+            (mevedel-permission-request
              (list :kind 'sandbox
                    :tool-name "Bash"
                    :detail "curl https://secret.example"
@@ -819,13 +819,13 @@
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                #'ignore))
       ;; Enqueue two identical Read requests.
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Read"
              :specifier-value "/foo/bar.el"
              :resource-access 'read
              :origin "/root"
              :callback (lambda (o) (push (cons "Read1" o) resolved-outcomes))))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Read"
              :specifier-value "/foo/bar.el"
              :resource-access 'read
@@ -853,12 +853,12 @@
          (outcomes nil))
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                #'ignore))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Read"
              :specifier-value "/x.el"
              :origin "/root"
              :callback (lambda (o) (push o outcomes))))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Read"
              :specifier-value "/x.el"
              :origin "/root"
@@ -876,7 +876,7 @@
                #'ignore))
       (dolist (id '(first second))
         (let ((entry-id id))
-          (mevedel-permission--enqueue
+          (mevedel-permission-request
            (list :kind 'generic :tool-name "Read"
                  :specifier-value "/reentrant.el"
                  :resource-access 'read
@@ -899,13 +899,13 @@
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                #'ignore))
       ;; Two queued entries with different paths.
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Read"
              :specifier-value "/foo.el"
              :resource-access 'read
              :origin "/root"
              :callback (lambda (o) (push (cons "foo" o) outcomes))))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Read"
              :specifier-value "/bar.el"
              :resource-access 'read
@@ -926,7 +926,7 @@
          (outcomes nil))
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                #'ignore))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "WebFetch"
              :specifier-key :domain
              :specifier-value "example.com"
@@ -946,12 +946,12 @@
          (outcomes nil))
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                #'ignore))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Read"
              :specifier-value path
              :origin "/root"
              :callback (lambda (o) (push o outcomes))))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Read"
              :specifier-value path
              :origin "/root"
@@ -973,12 +973,12 @@
          (outcomes nil))
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                #'ignore))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Read"
              :specifier-value "/uncovered.el"
              :origin "/root"
              :callback (lambda (o) (push o outcomes))))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Read"
              :specifier-value "/uncovered.el"
              :origin "/root"
@@ -994,7 +994,7 @@
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                #'ignore))
       (dotimes (_ 2)
-        (mevedel-permission--enqueue
+        (mevedel-permission-request
          (list :kind 'sandbox :tool-name "Bash"
                :detail "pwd" :sandbox-permissions 'additive
                :requested-additional-permissions
@@ -1020,7 +1020,7 @@
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                #'ignore))
       (dotimes (_ 2)
-        (mevedel-permission--enqueue
+        (mevedel-permission-request
          (list :kind 'sandbox :tool-name "Bash"
                :detail "pwd" :sandbox-permissions 'additive
                :requested-additional-permissions missing
@@ -1047,7 +1047,7 @@
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                #'ignore))
       (dotimes (_ 2)
-        (mevedel-permission--enqueue
+        (mevedel-permission-request
          (list :kind 'sandbox :tool-name "Bash"
                :detail "pwd" :sandbox-permissions 'additive
                :requested-additional-permissions
@@ -1069,7 +1069,7 @@
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                #'ignore))
       (dotimes (_ 2)
-        (mevedel-permission--enqueue
+        (mevedel-permission-request
          (list :kind 'sandbox :tool-name "Bash"
                :detail "emacs --batch -Q"
                :sandbox-permissions 'require-escalated
@@ -1090,7 +1090,7 @@
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                #'ignore))
       (dotimes (_ 2)
-        (mevedel-permission--enqueue
+        (mevedel-permission-request
          (list :kind 'sandbox :tool-name "Eval"
                :detail "(message \"hello\")"
                :sandbox-permissions 'require-escalated
@@ -1313,7 +1313,7 @@
                                              message)
                          (setq render-error message)))))
             (with-current-buffer data-buf
-              (mevedel-permission--enqueue
+              (mevedel-permission-request
                (list :kind 'generic
                      :tool-name "Grep"
                      :args (list :pattern "mevedel-check-permission"
@@ -1440,7 +1440,7 @@
           (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                      (lambda () 'ask)))
             (with-current-buffer agent-data
-              (mevedel-permission--enqueue
+              (mevedel-permission-request
                (list :kind 'eval
                      :expression "(message \"hi\")"
                      :mode "batch"
@@ -1495,7 +1495,7 @@
               (mevedel-view--render-agent-status))
             (with-current-buffer agent-data
               (dotimes (i 3)
-                (mevedel-permission--enqueue
+                (mevedel-permission-request
                  (list :kind 'eval
                        :expression (format "(+ %d 1)" i)
                        :mode "batch"
@@ -1598,7 +1598,7 @@
           (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                      (lambda () 'ask)))
             (with-current-buffer data-buf
-              (mevedel-permission--enqueue
+              (mevedel-permission-request
                (list :kind 'generic
                      :tool-name "Read"
                      :specifier-key :path
@@ -1609,7 +1609,7 @@
                      (lambda (outcome)
                        (push (cons "one" outcome) outcomes)))
                session)
-              (mevedel-permission--enqueue
+              (mevedel-permission-request
                (list :kind 'generic
                      :tool-name "Read"
                      :specifier-key :path
@@ -2425,11 +2425,11 @@
          (outcomes nil))
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                #'ignore))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Read"
              :origin "/root"
              :callback (lambda (o) (push (cons "Read" o) outcomes))))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'bash :command "rm /tmp/x"
              :origin "/root"
              :callback (lambda (o) (push (cons "Bash" o) outcomes))))
@@ -2458,17 +2458,17 @@
          (outcomes nil))
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                #'ignore))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Read"
              :origin "/root/explorer"
              :request-id "request-1"
              :callback (lambda (o) (push (cons "explorer" o) outcomes))))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Read"
              :origin "/root/explorer"
              :request-id "request-2"
              :callback (lambda (o) (push (cons "main" o) outcomes))))
-      (mevedel-permission--enqueue
+      (mevedel-permission-request
        (list :kind 'generic :tool-name "Read"
              :origin "/root/explorer"
              :request-id "request-1"
@@ -2500,7 +2500,7 @@
           (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                      (lambda () 'ask)))
             (with-current-buffer data-buf
-              (mevedel-permission--enqueue
+              (mevedel-permission-request
                (list :kind 'generic
                      :tool-name "Read"
                      :specifier-value "/tmp/agent.txt"
@@ -2512,7 +2512,7 @@
                     (mevedel-queue--entry-metadata-get
                      (car (mevedel-session-permission-queue session))
                      :interaction-id))
-              (mevedel-permission--enqueue
+              (mevedel-permission-request
                (list :kind 'generic
                      :tool-name "Read"
                      :specifier-value "/tmp/main.txt"

@@ -15,6 +15,11 @@
           "helpers"))
 (require 'mevedel-permission-persistence)
 (require 'mevedel-permission-queue)
+(require 'mevedel-permission-queue-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-permission-queue-test-support"))
 (require 'mevedel-permissions)
 (require 'mevedel-structs)
 (require 'mevedel-tool-permission)
@@ -62,16 +67,15 @@ GET-PATH, when non-nil, names a path the tool also writes."
          (source "/srv/mevedel-outside/plot.png")
          (mevedel-permission-rules nil)
          (mevedel-protected-paths nil)
-         allowed queued)
+         allowed)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                   (lambda (&rest _) (setq queued t))))
+        (mevedel-pq-test--with-session-view session view
           (mevedel-tool-permission-step
            (list :tool (mevedel-test--read-access-tool)
                  :session session :workspace workspace :args (list :source source))
            (lambda (_) (setq allowed t)) #'ignore)
           (should allowed)
-          (should-not queued)
+          (should-not (mevedel-pq-test--requested-p session))
           ;; The same path as a tool-wide write asks.
           (setq allowed nil)
           (mevedel-tool-permission-step
@@ -80,7 +84,7 @@ GET-PATH, when non-nil, names a path the tool also writes."
                  :session session :workspace workspace
                  :args (list :source source))
            (lambda (_) (setq allowed t)) #'ignore)
-          (should queued)
+          (should (mevedel-pq-test--card view))
           (should-not allowed))
       (delete-directory dir t)))
   :doc "asks for a protected path until a read grant covers it, which a write path would not accept"
@@ -91,24 +95,24 @@ GET-PATH, when non-nil, names a path the tool also writes."
          (session (mevedel-session--create :workspace workspace :permission-mode 'edits))
          (mevedel-permission-rules nil)
          (mevedel-protected-paths (list (cons source 'inaccessible)))
-         allowed queued)
+         allowed)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                   (lambda (&rest _) (setq queued t))))
+        (mevedel-pq-test--with-session-view session view
           (let ((context (list :tool (mevedel-test--read-access-tool)
                                :session session :workspace workspace
                                :args (list :source source))))
             (mevedel-tool-permission-step
              context (lambda (_) (setq allowed t)) #'ignore)
-            (should queued)
+            (should (mevedel-pq-test--card view))
             (should-not allowed)
             (setf (mevedel-session-resource-grants session)
                   (list (list :path source :access 'read)))
-            (setq queued nil)
+            (mevedel-permission-queue-abort-all session)
+            (mevedel-pq-test--forget-requests session)
             (mevedel-tool-permission-step
              context (lambda (_) (setq allowed t)) #'ignore)
             (should allowed)
-            (should-not queued)
+            (should-not (mevedel-pq-test--requested-p session))
             ;; A read grant is not authority to write the path.
             (setq allowed nil)
             (mevedel-tool-permission-step
@@ -116,7 +120,7 @@ GET-PATH, when non-nil, names a path the tool also writes."
                         (mevedel-test--read-access-tool
                          (lambda (args) (plist-get args :source))))
              (lambda (_) (setq allowed t)) #'ignore)
-            (should queued)
+            (should (mevedel-pq-test--card view))
             (should-not allowed)))
       (delete-directory dir t)))
   :doc "in ask mode the prompt offers a read grant for a read-access path and a write grant for a written one"
@@ -127,17 +131,19 @@ GET-PATH, when non-nil, names a path the tool also writes."
          (source "/srv/mevedel-outside/plot.png")
          (mevedel-permission-rules nil)
          (mevedel-protected-paths nil)
-         entries)
+         )
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                   (lambda (entry &rest _) (push entry entries))))
+        (mevedel-pq-test--with-session-view session view
           (dolist (get-path (list nil (lambda (args) (plist-get args :source))))
             (mevedel-tool-permission-step
              (list :tool (mevedel-test--read-access-tool get-path)
                    :session session :workspace workspace :args (list :source source))
              #'ignore #'ignore))
-          (should (= 2 (length entries)))
-          (pcase-let ((`(,written ,read) entries))
+          ;; Both requests are queued behind the one visible card.
+          (should (= 1 (length (mevedel-pq-test--cards view))))
+          (should (= 2 (length (mevedel-session-permission-queue session))))
+          (pcase-let ((`(,written ,read)
+                       (reverse (mevedel-session-permission-queue session))))
             (should (eq 'read (plist-get read :resource-access)))
             (should (eq 'read (plist-get (caar (plist-get read :resource-selection-cell)) :access)))
             (should (eq 'write (plist-get written :resource-access)))

@@ -535,7 +535,7 @@
   (test)
   :doc "allow once never admits a card or persists authority and settles once"
   (progn
-  (mevedel-permission--enqueue entry session)
+  (mevedel-permission-request entry session)
   (should evidence)
   (should-not outcomes)
   (should-not (mevedel-session-permission-queue session))
@@ -647,14 +647,14 @@
     (with-current-buffer buffer (setq-local gptel-stream stream))
     (with-temp-buffer
       (setq-local gptel-stream (not stream))
-      (mevedel-permission--enqueue entry session))
+      (mevedel-permission-request entry session))
     (should (eq stream provider-stream))
     (funcall provider-callback "{\"decision\":\"deny\",\"reason\":\"Done\"}")
     (should (equal '((deny . "Done")) outcomes)))
 
   :doc "reviewer refusal reports its reason without admitting a card"
   (progn
-  (mevedel-permission--enqueue entry session)
+  (mevedel-permission-request entry session)
   (funcall provider-callback "{\"decision\":\"deny\",\"reason\":\"Unrelated credential upload\"}")
   (should (equal '((deny . "Unrelated credential upload")) outcomes))
   (should-not (mevedel-session-permission-queue session)))
@@ -664,7 +664,7 @@
         (mevedel-permission-notify-function (lambda (_entry) (cl-incf notifications))))
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                (lambda (_entry) (cl-incf cards))))
-      (mevedel-permission--enqueue entry session)
+      (mevedel-permission-request entry session)
       (should (= 0 notifications))
       (funcall provider-callback "not JSON")
       (should (= 1 notifications))
@@ -763,13 +763,13 @@
   :doc "full-auto mode bypasses provider review"
   (progn
   (setf (mevedel-session-permission-mode session) 'full-auto)
-  (mevedel-permission--enqueue entry session)
+  (mevedel-permission-request entry session)
   (should-not provider-callback)
   (should (equal '(allow-once) outcomes)))
 
   :doc "request cancellation drains review and ignores a late approval"
   (progn
-    (mevedel-permission--enqueue entry session)
+    (mevedel-permission-request entry session)
     (mevedel-request-cancel request)
     (should (equal '(aborted) outcomes))
     (should (= 1 cancelled))
@@ -792,7 +792,7 @@
 
   :doc "switching to full-auto settles a pending review once"
   (progn
-    (mevedel-permission--enqueue entry session)
+    (mevedel-permission-request entry session)
     (with-current-buffer buffer (mevedel-permission-mode-transition 'full-auto))
     (should (equal '(allow-once) outcomes))
     (should (= 1 cancelled))
@@ -801,7 +801,7 @@
 
   :doc "a restrictive mode transition invalidates pending review"
   (progn
-    (mevedel-permission--enqueue entry session)
+    (mevedel-permission-request entry session)
     (with-current-buffer buffer (mevedel-permission-mode-transition 'ask))
     (funcall provider-callback "{\"decision\":\"allow-once\",\"reason\":\"Old mode\"}")
     (should (equal '(aborted) outcomes)))
@@ -846,7 +846,7 @@
 
   :doc "revoked ownership denies even a positive model result"
   (progn
-    (mevedel-permission--enqueue entry session)
+    (mevedel-permission-request entry session)
     (cl-letf (((symbol-function 'mevedel-session-artifacts-assert-mutation-authority)
                (lambda (&rest _) (error "Session ownership lost"))))
       (funcall provider-callback "{\"decision\":\"allow-once\",\"reason\":\"Authorized\"}"))
@@ -877,7 +877,7 @@
     (setq entry (plist-put entry :resource-originals
                            (list (copy-sequence original) (copy-sequence file-grant))))
     (setq entry (plist-put entry :resource-selection-cell cell))
-    (mevedel-permission--enqueue entry session)
+    (mevedel-permission-request entry session)
     (should provider-callback)
     (let ((selected (car (plist-get evidence :selected-resources))))
       (should (equal root (plist-get selected :path)))
@@ -908,7 +908,7 @@
     (setq entry (plist-put entry :resource-selection-cell cell))
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                (lambda (_entry) (cl-incf cards))))
-      (mevedel-permission--enqueue entry session)
+      (mevedel-permission-request entry session)
       (let ((reviewed (car (plist-get evidence :selected-resources))))
         (funcall provider-callback "{\"decision\":\"ask\",\"reason\":\"Unclear\"}")
         (should (= 1 cards))
@@ -923,7 +923,7 @@
   (progn
     (setq entry (plist-put entry :args (list :expression "(+ 1 2)" :mode "live"
                                              :justification "  Check arithmetic  ")))
-    (mevedel-permission--enqueue entry session)
+    (mevedel-permission-request entry session)
     (should (equal "Check arithmetic"
                    (plist-get (plist-get evidence :operation) :justification)))
     (funcall provider-callback "{\"decision\":\"deny\",\"reason\":\"Probe\"}"))

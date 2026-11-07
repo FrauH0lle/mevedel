@@ -1553,7 +1553,7 @@ Remove the global hooks a started room installs afterwards."
     (let ((session (mevedel-session--create :permission-mode 'ask)))
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
-        (mevedel-permission--enqueue
+        (mevedel-permission-request
          (list :kind 'generic :tool-name "EarlyTool" :origin "/root"
                :data-buffer data-buf :callback #'ignore)
          session))

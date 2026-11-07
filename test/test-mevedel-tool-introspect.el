@@ -10,6 +10,12 @@
 (require 'mevedel-tool-registry)
 (require 'gptel-request)
 (require 'mevedel-tool-introspect)
+(require 'mevedel-permission-queue)
+(require 'mevedel-permission-queue-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-permission-queue-test-support"))
 (require 'mevedel-tools)
 (require 'helpers
          (file-name-concat
@@ -418,20 +424,18 @@ Return the delivered text; omitted optional arguments are nil."
   :doc "a value read asks in Edits despite a tool allow rule, then reads the global value"
   (let ((session (mevedel-session--create :name "introspection" :permission-mode 'edits))
         (mevedel-permission-rules '(("EmacsDescribe" :action allow)))
-        entry result)
+        result)
     (with-temp-buffer
       (setq-local mevedel--session session)
       (setq-local fill-column 13)
       (mevedel-test--with-captured-diagnostics nil
-        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                   (lambda (queued &optional _session) (setq entry queued))))
+        (mevedel-pq-test--with-view-here view
           (funcall (gptel-tool-function
                     (mevedel-tool-gptel-tool (mevedel-tool-get "EmacsDescribe" "mevedel")))
-                   (lambda (value) (setq result value)) "fill-column" "value" nil))
-        (should entry)
-        (should-not result)
-        (funcall (plist-get entry :callback) 'allow-once)
-        (should (equal (default-value 'fill-column) result))))))
+                   (lambda (value) (setq result value)) "fill-column" "value" nil)
+          (should-not result)
+          (mevedel-pq-test--press (mevedel-pq-test--card view) "a")
+          (should (equal (default-value 'fill-column) result)))))))
 
 (provide 'test-mevedel-tool-introspect)
 ;;; test-mevedel-tool-introspect.el ends here

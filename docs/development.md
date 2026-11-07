@@ -959,3 +959,18 @@ must not need a load-order recipe.
   can then restore an obsolete autoload. A `require` inside the `cl-letf` body
   does not fix this ordering. The standards checker ratchets existing violations
   against the merge base; do not add new ones.
+- **Permission callers run the real queue**: a test of code that asks for a
+  permission (`mevedel-permission-request`) uses
+  `test/mevedel-permission-queue-test-support.el`: the real request path in a
+  session with a live view, answered through the card's own keys
+  (`mevedel-pq-test--press`) or, for a delayed or repeated answer, the closure
+  that card captured (`mevedel-pq-test--answer-captured`). Never fetch the
+  queue head to answer, fabricate a closure, or bypass review or validation:
+  a stale answer must not reach the next request. Cases that settle without a
+  card (automatic review, cancelled, held) keep that behaviour and are checked
+  through the log (`mevedel-pq-test--requested-p`) or the queue. Stubbing
+  `mevedel-permission-request` needs a one-line reason beside the stub, for
+  caller isolation with real-queue coverage elsewhere, or for a case that has
+  no session or view. `test/test-mevedel-permission-queue-decisions.el` is the
+  decision table for the queue's mode, reviewer, hold, settle-once and
+  coalescing behaviour; it must pass unchanged when the request path changes.

@@ -12,6 +12,11 @@
 (require 'mevedel-bash-policy)
 (require 'mevedel-execution)
 (require 'mevedel-permission-queue)
+(require 'mevedel-permission-queue-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-permission-queue-test-support"))
 (require 'mevedel-pipeline)
 (require 'mevedel-structs)
 (require 'mevedel-tools)
@@ -152,7 +157,8 @@
          (workspace (mevedel-workspace--create :type 'file :id child :root child))
          (session (mevedel-session-create "cwd" workspace root))
          (mevedel-permission-rules nil)
-         prompts done result)
+         (mevedel-permission-log-enabled t)
+         done result)
     (unwind-protect
         (with-temp-buffer
           ;; Only the child's directory is an automatic resource root.  The
@@ -171,17 +177,13 @@
              (mevedel-permission-rules-path-in-allowed-roots-p
               (file-name-concat root "marker")
               (mevedel--all-allowed-roots (current-buffer))))
-            (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                       (lambda (entry &optional _session)
-                         (push entry prompts)
-                         (funcall (plist-get entry :callback) 'deny))))
-              (mevedel-pipeline-run-tool
-               (mevedel-tool-ensure "Bash")
-               (lambda (value) (setq result value done t))
-               '(:command "cat ./marker" :description "Read child admission marker"))
-              (with-timeout (10 (ert-fail "Bash did not settle"))
-                (while (not done) (accept-process-output nil 0.05))))
-            (should-not prompts)
+            (mevedel-pipeline-run-tool
+             (mevedel-tool-ensure "Bash")
+             (lambda (value) (setq result value done t))
+             '(:command "cat ./marker" :description "Read child admission marker"))
+            (with-timeout (10 (ert-fail "Bash did not settle"))
+              (while (not done) (accept-process-output nil 0.05)))
+            (should-not (mevedel-pq-test--requested-p session))
             (should (string-prefix-p "child-admission-marker\n" result))
             (should (equal root (mevedel-session-working-directory session)))))
       (mevedel-execution-teardown-session session)
