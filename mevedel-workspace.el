@@ -13,6 +13,12 @@
 ;; Keeps a workspace registry so that distinct buffers under the
 ;; same project share a single workspace struct (and therefore a
 ;; single state directory and additional-roots list).
+;;
+;; Registering a workspace (`mevedel-workspace-get-or-create' creating a
+;; struct) observes its instruction store: a state-directory check and at
+;; most one store read, or one target-side hash, skipped for a remote root
+;; without a live connection.  It is bounded I/O, but I/O: avoid creating
+;; workspaces on hot paths such as redisplay, timers or process filters.
 
 ;;; Code:
 

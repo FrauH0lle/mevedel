@@ -1751,9 +1751,12 @@ head CAS."
           (setq buffer-install-started t)
           (mevedel-session-rewind--install-rewind-buffer
            buffer staging-buffer session target)
+          ;; Current records: another session may have added one since
+          ;; this Rewind started, and it is not this Rewind's to drop.
           (unless
               (mevedel-session-artifacts-load-instructions
-               session buffer (1- (plist-get target :cum-turn)) directives t)
+               session buffer (1- (plist-get target :cum-turn))
+               (mevedel-workspace-directives workspace) t)
             (error "Instruction restore failed during Rewind"))
           (mevedel-workspace-rewind-directives
            workspace (mevedel-session-session-id session)
@@ -1806,7 +1809,13 @@ head CAS."
                   (plist-get (cdr entry) :attempts)
                   (mevedel-directive-discussion directive)
                   (plist-get (cdr entry) :discussion))))
-        (mevedel-workspace-set-directives workspace directives)
+        ;; Restore the records this Rewind changed and keep any another
+        ;; session added meanwhile.
+        (mevedel-workspace-set-directives
+         workspace
+         (append directives
+                 (cl-remove-if (lambda (record) (memq record directives))
+                               (mevedel-workspace-directives workspace))))
         (when session-installed
           (mevedel-session-rewind-copy-session-state
            original-state session))
@@ -1854,7 +1863,8 @@ head CAS."
                     (set-buffer-modified-p original-buffer-modified)
                     (goto-char (min original-point (point-max)))))
                 (mevedel-session-artifacts-load-instructions
-                 session buffer original-turn directives t)
+                 session buffer original-turn
+                 (mevedel-workspace-directives workspace) t)
                 (mevedel-session-persistence-notify-session-event
                  session 'rerender))
             (error

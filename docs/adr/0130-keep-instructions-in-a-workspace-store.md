@@ -46,6 +46,10 @@ has since changed.
 - Any other difference merges as a write would.
 - Activation skips a remote root without a live connection, since resolving a
   workspace must not open one; the next listing or resume observes it.
+- Activation happens when `mevedel-workspace-get-or-create` registers a new
+  workspace. It costs a state-directory check plus at most one read or hash:
+  bounded I/O, but I/O. Callers avoid creating workspaces on hot paths such as
+  redisplay, timers or process filters.
 
 **Format version.** The record carries `:format`, independent of the package
 version, so two installations of different versions share one workspace. An

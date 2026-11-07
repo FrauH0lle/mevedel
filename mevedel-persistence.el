@@ -10,6 +10,12 @@
 ;; are restored against a buffer whose contents have changed, native buffer
 ;; replacement reconciles overlay positions.  Exported save files must match
 ;; the current mevedel version; the store carries its own format version.
+;;
+;; Activating a workspace observes its store: registering a struct in
+;; `mevedel-workspace-get-or-create' calls
+;; `mevedel-instruction-store-activate'.  That is bounded I/O, a
+;; state-directory check plus at most one read or target-side hash, so
+;; callers avoid creating workspaces on hot paths.
 
 ;;; Code:
 
@@ -1298,6 +1304,10 @@ A store is created only where mevedel already keeps workspace state:
 creating `.mevedel/' merely because an instruction was added to a file in
 some directory would make that directory, and every directory below it,
 resolve as a workspace.  The first session saved there creates both."
+  ;; Held back by a Rewind of this workspace: write after it instead.
+  (when (and (not (eq mevedel-instruction-store--inhibit t))
+             (mevedel-instruction-store--inhibited-p workspace))
+    (mevedel-instruction-store-touch workspace))
   (when (and (not (mevedel-instruction-store--inhibited-p workspace))
              (mevedel-instruction-store--applicable-p workspace))
     (setq mevedel-instruction-store--dirty
