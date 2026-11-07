@@ -240,6 +240,11 @@ removed from branch history by a force-push.
 
 Enforced invariants:
 
+- Every non-merge commit since the resolved merge base has the subject format
+  and at least one GNU-style file entry required by [commits.md](commits.md).
+  Docs-only commits are included; subject length remains advisory. The pending
+  commit message is not available to this pre-commit check, so it is checked on
+  the next run after committing and in CI.
 - First-line `lexical-binding: t` and a matching final `;;; FILENAME.el ends
   here` footer (optional final period) in root Lisp libraries and immediate
   `test/`, `benchmark/`, and `scripts/` Lisp files. Dotfiles, data, and nested
@@ -297,6 +302,7 @@ that overwrites a test stub (with the preloaded-owner variant as its control):
 
 ```bash
 python3 -m unittest test/test_check_standards.py test/test_check.py
+python3 -m unittest discover -s scripts -p 'test_check_commit_messages.py'
 ```
 
 Full-tree checkdoc remains available as an advisory inventory:

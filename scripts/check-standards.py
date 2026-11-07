@@ -311,13 +311,38 @@ def changed_lisp(root, revision):
     return changed
 
 
+def commit_message_errors(message):
+    """Check the deterministic subject and GNU body-entry rules in docs/commits.md."""
+    subject, _, body = message.partition('\n')
+    errors = []
+    types = 'feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|tweak'
+    if not re.fullmatch(rf'(?:{types})(?:\([^\s()]+\))?!?: [A-Z][^\r\n]*', subject):
+        errors.append('subject must be type(scope): Capitalized description '
+                      '(scope optional; see docs/commits.md)')
+    if not re.search(r'^\* [^\s():]+(?: \([^()\n]+\)(?:\n[ \t]*\([^()\n]+\))*)?:'
+                     r'[ \t]+\S', body, re.M):
+        errors.append('body must contain a GNU entry: * file (function): Description '
+                      'or * file: Description (see docs/commits.md)')
+    return errors
+
+
+def commit_errors(root, revision):
+    """Check every non-merge commit after REVISION, including docs-only commits."""
+    errors = []
+    for commit in git(root, 'rev-list', '--no-merges', f'{revision}..HEAD').decode().splitlines():
+        message = git(root, 'show', '-s', '--format=%B', commit).decode()
+        errors.extend(f'{commit[:12]}: commit-message: {error}'
+                      for error in commit_message_errors(message))
+    return errors
+
+
 def run(root, base):
     """Check the working tree against the resolved merge base, including new files."""
     revision = git(root, 'merge-base', base, 'HEAD').decode().strip()
     names = inventory(root)
     base_names = set(git(root, 'ls-tree', '-r', '--name-only', revision).decode().splitlines())
     origins = changed_lisp(root, revision)
-    errors = test_integrity_errors(root, names)
+    errors = commit_errors(root, revision) + test_integrity_errors(root, names)
     changed, before, after = [], [], []
     for name in names:
         if not name.endswith(('.el', '.md')):
