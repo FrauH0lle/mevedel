@@ -315,9 +315,13 @@
 (declare-function mevedel--ordered-completion-table "mevedel-utilities" (displays category))
 (declare-function mevedel--transcript-org-mode "mevedel-utilities" nil)
 (declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
+                  "mevedel-utilities" (scope key format &rest args))
 (declare-function mevedel--write-file-atomically
                   "mevedel-utilities" (path content &optional coding mode))
+(declare-function mevedel-diagnostic-message "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-warning "mevedel-utilities" (scope type message &optional level buffer-name))
 (declare-function mevedel-version "mevedel-utilities" (&optional here message))
 (autoload 'mevedel--forget-place "mevedel-utilities")
 (autoload 'mevedel--ordered-completion-table "mevedel-utilities")
@@ -325,6 +329,10 @@
 (autoload 'mevedel--warn-once "mevedel-utilities")
 (autoload 'mevedel--write-file-atomically "mevedel-utilities")
 (autoload 'mevedel-version "mevedel-utilities")
+(autoload 'mevedel-diagnostic-message "mevedel-utilities")
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+(autoload 'mevedel-diagnostic-warning "mevedel-utilities")
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
@@ -541,17 +549,18 @@ Do not prompt for a singleton.  For multiple segments, default to the newest."
     (car segments)))
 
 (defun mevedel-session-artifacts-inspect-cold-session
-    (save-path authority-mode &optional publication)
+    (save-path authority-mode &optional publication scope)
   "Open an authoritative persisted transcript without hydrating a session.
 
 SAVE-PATH is the persisted session directory.  AUTHORITY-MODE is `pid-lock'
 or `portable'.  Portable inspection uses only the optional already-validated
-PUBLICATION capture.  Return a safe read-only inspection buffer or signal a
+PUBLICATION capture.  SCOPE is its caller's explicit diagnostic root.
+Return a safe read-only inspection buffer or signal a
 `user-error'."
   (let* ((segments
           (or (mevedel-session-artifacts--cold-segments
                save-path authority-mode publication)
-              (user-error
+              (mevedel-diagnostic-user-error (or scope 'unavailable)
                "No authoritative transcript segment is available: %s"
                save-path)))
          (logical (mevedel-session-artifacts--select-cold-segment segments))
@@ -585,7 +594,7 @@ PUBLICATION capture.  Return a safe read-only inspection buffer or signal a
       (error
        (when (buffer-live-p buffer)
          (kill-buffer buffer))
-       (user-error "Could not inspect session transcript: %s"
+       (mevedel-diagnostic-user-error (or scope 'unavailable) "Could not inspect session transcript: %s"
                    (error-message-string err))))))
 
 (defun mevedel-session-artifacts-artifact-present-p
@@ -1856,7 +1865,7 @@ the new directory when SESSION was moved, nil otherwise."
                                  (expand-file-name default-directory))
                                 old))
                 (setq default-directory root))))
-          (display-warning
+          (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
            'mevedel
            (format "Working directory %s no longer exists; session %s moved to %s"
                    old (mevedel-session-name session) root)
@@ -2285,10 +2294,10 @@ failure is reported; the session save itself already succeeded."
        (mevedel-session-workspace session) own-save-path)
     (mevedel-instruction-store-unreadable
      ;; Reported once; re-reading it at every save would not repair it.
-     (message "mevedel: %s" (error-message-string err)))
+     (mevedel-diagnostic-message (mevedel-diagnostic-scope session) "%s" (error-message-string err)))
     (error
      (mevedel-instruction-store-touch (mevedel-session-workspace session))
-     (message "mevedel: instructions not written to the store: %s"
+     (mevedel-diagnostic-message (mevedel-diagnostic-scope session) "Instructions not written to the store: %s"
               (error-message-string err)))))
 
 (defun mevedel-session-artifacts-load-instructions
@@ -2311,7 +2320,7 @@ waiting for its store restores the session snapshot."
                            (or (mevedel-instruction-store-restore session)
                                'pending)
                          (error
-                          (display-warning
+                          (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                            'mevedel
                            (format "Could not restore workspace instructions: %s"
                                    (error-message-string err))
@@ -2365,7 +2374,7 @@ waiting for its store restores the session snapshot."
                 (when (and temporary (file-exists-p temporary))
                   (delete-file temporary))))
           (error
-           (display-warning
+           (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
             'mevedel
             (format "Could not restore instruction snapshot %s: %s"
                     path (error-message-string err))
@@ -2633,6 +2642,7 @@ continues to wait for the root turn's completed-turn publication boundary."
                       'after-save-hook))
                  (error
                   (mevedel--warn-once
+                   (mevedel-diagnostic-scope session)
                    'artifacts-agent-post-save
                    "Agent transcript post-save cleanup failed: %s"
                    (error-message-string err)))))
@@ -2919,6 +2929,7 @@ Edits made after capture remain modified.  Nothing is published here."
                       'after-save-hook)))
                (error
                 (mevedel--warn-once
+                 (mevedel-diagnostic-scope session)
                  'artifacts-session-post-save
                  "Session post-save cleanup failed: %s"
                  (error-message-string err))))))
@@ -3073,6 +3084,7 @@ the caller's gate token."
                     (delete-file (plist-get artifact :path)))
                 (error
                  (mevedel--warn-once
+                  (mevedel-diagnostic-scope session)
                   'file-history-cleanup "File history cleanup failed: %s"
                   (error-message-string err))))
               (mevedel-session-artifacts-save-instructions session buffer)
@@ -3235,7 +3247,7 @@ timestamp: another save updates this checkpoint, not the file's turn history."
                                       (format-time-string "%FT%H-%M-%S"))))
          (gap
           (lambda (reason)
-            (display-warning
+            (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
              'mevedel (format "Checkpoint gap for %s: %s" path reason)
              :warning)
             (cons path (append base (list :gap reason))))))
@@ -3918,7 +3930,7 @@ CLEAR also closes the current chat and rearms automatic naming."
           (condition-case err
               (setq capture (mevedel-journal-capture-checkpoint session buffer))
             (error
-             (display-warning 'mevedel
+             (mevedel-diagnostic-warning (mevedel-diagnostic-scope session) 'mevedel
                               (format "Journal capture checkpoint failed: %s"
                                       (error-message-string err))
                               :warning))))
@@ -4143,7 +4155,7 @@ the predecessor path when it was finalized.  Requires mutation ownership."
          predecessor)
     (when (and (> filesystem-n 0)
                (not (= sidecar-n filesystem-n)))
-      (display-warning
+      (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
        'mevedel
        (format "Sidecar :current-segment %d differs from filesystem (%d); using %d"
                sidecar-n filesystem-n filesystem-n)

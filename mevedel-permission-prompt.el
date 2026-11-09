@@ -10,6 +10,8 @@
   (require 'cl-lib)
   (require 'subr-x))
 
+(require 'mevedel-utilities)
+
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-native-path
                   "mevedel-execution-target" (target path))
@@ -218,7 +220,10 @@ Selection changes the visible card only; approval chooses its lifetime."
   (if-let* ((ov (mevedel--prompt--overlay-at-point
                 'mevedel-permission-prompt)))
       (if (overlay-get ov 'mevedel-permission-suppress-allow-session)
-          (message "Session allow is not available for this prompt")
+          (mevedel-diagnostic-message
+           (mevedel-diagnostic-scope
+            (plist-get (overlay-get ov 'mevedel-view-interaction-entry) :session))
+           "Session allow is not available for this prompt")
         (mevedel-permission--prompt-finish 'allow-session))
     (mevedel-permission--prompt-self-insert)))
 
@@ -228,7 +233,10 @@ Selection changes the visible card only; approval chooses its lifetime."
   (if-let* ((ov (mevedel--prompt--overlay-at-point
                 'mevedel-permission-prompt)))
       (if (not (overlay-get ov 'mevedel-permission-include-always))
-          (message "Persistent allow is not available for this prompt")
+          (mevedel-diagnostic-message
+           (mevedel-diagnostic-scope
+            (plist-get (overlay-get ov 'mevedel-view-interaction-entry) :session))
+           "Persistent allow is not available for this prompt")
         (mevedel-permission--prompt-finish 'always-allow))
     (mevedel-permission--prompt-self-insert)))
 
@@ -247,6 +255,8 @@ Selection changes the visible card only; approval chooses its lifetime."
   (interactive)
   (if-let* ((ov (mevedel--prompt--overlay-at-point 'mevedel-permission-prompt)))
       (let* ((entry (overlay-get ov 'mevedel-view-interaction-entry))
+             (scope (mevedel-diagnostic-scope
+                     (or (plist-get entry :session) (plist-get entry :workspace))))
              (cell (and entry
                         (gethash entry mevedel-permission-queue--settled-cells)))
              (text (read-string "Feedback: ")))
@@ -254,10 +264,11 @@ Selection changes the visible card only; approval chooses its lifetime."
         ;; is active.  Never redirect its feedback to a replacement at point.
         (cond
          ((eq (cdr cell) 'expired)
-          (message "Request expired; nothing was approved"))
+          (mevedel-diagnostic-message scope "Request expired; nothing was approved"))
          ((or (car cell) (overlay-get ov 'mevedel-settled)
               (not (buffer-live-p (overlay-buffer ov))))
-          (message "Request is no longer pending; nothing was approved."))
+          (mevedel-diagnostic-message
+           scope "Request is no longer pending; nothing was approved."))
          ((and text (not (string-empty-p (string-trim text))))
           (mevedel--prompt--settle ov (cons 'feedback (string-trim text))))))
     (mevedel-permission--prompt-self-insert)))
@@ -325,8 +336,13 @@ Selection changes the visible card only; approval chooses its lifetime."
   "Settle the permission prompt overlay at point with RESULT."
   (when-let* ((ov (mevedel--prompt--overlay-at-point
                    'mevedel-permission-prompt)))
-    (mevedel-permission-queue-validate-approval
-     (overlay-get ov 'mevedel-view-interaction-entry) result)
+    (let* ((entry (overlay-get ov 'mevedel-view-interaction-entry))
+           (scope (mevedel-diagnostic-scope
+                   (or (plist-get entry :session) (plist-get entry :workspace)))))
+      (condition-case err
+          (mevedel-permission-queue-validate-approval entry result)
+        (user-error
+         (mevedel-diagnostic-user-error scope "%s" (error-message-string err)))))
     (mevedel--prompt--settle ov result)
     t))
 

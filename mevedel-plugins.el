@@ -8,11 +8,15 @@
 ;;; Code:
 
 (require 'mevedel-structs)
+(require 'mevedel-utilities)
 
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-call-in-data
                   "mevedel-cockpit" (context function &rest args))
+(declare-function mevedel-cockpit-context-workspace
+                  "mevedel-cockpit" (&optional context))
 (autoload 'mevedel-cockpit-call-in-data "mevedel-cockpit")
+(autoload 'mevedel-cockpit-context-workspace "mevedel-cockpit")
 
 ;; `mevedel-plugin-registry'
 (declare-function mevedel-plugin-name
@@ -31,11 +35,6 @@
 (defvar mevedel--session)
 (defvar mevedel--workspace)
 
-;; `mevedel-utilities'
-(declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
-(autoload 'mevedel--warn-once "mevedel-utilities")
-
 (defun mevedel-plugins-current-workspace ()
   "Return the current chat workspace, if available."
   (or (and (boundp 'mevedel--session)
@@ -48,20 +47,24 @@
   "Refresh CONTEXT's session skills when `mevedel-skills' is available.
 Without CONTEXT, refresh the session owned by the current buffer."
   (when (fboundp 'mevedel-skills-rescan)
-    (condition-case err
-        (progn
-          (if context
-              (mevedel-cockpit-call-in-data
-               context #'mevedel-skills-rescan)
-            (mevedel-skills-rescan))
-          t)
-      (user-error nil)
-      (error
-       (let ((message (error-message-string err)))
-         (mevedel--warn-once
-          'plugin-registry-refresh
-          "Plugin registry refresh failed: %s" message)
-         message)))))
+    (let ((scope (mevedel-diagnostic-scope
+                  (if context (mevedel-cockpit-context-workspace context)
+                    (current-buffer)))))
+      (condition-case err
+          (progn
+            (if context
+                (mevedel-cockpit-call-in-data
+                 context #'mevedel-skills-rescan)
+              (mevedel-skills-rescan))
+            t)
+        (user-error nil)
+        (error
+         (let ((message (error-message-string err)))
+           (mevedel--warn-once
+            scope
+            'plugin-registry-refresh
+            "Plugin registry refresh failed: %s" message)
+           message))))))
 
 (defun mevedel-plugins-skill-dirs (&optional workspace)
   "Return enabled plugin skill directories as source-tagged entries.

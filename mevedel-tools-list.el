@@ -173,7 +173,8 @@
 (defun mevedel-tools-list--collect (context)
   "Return tools cockpit items for CONTEXT."
   (let ((session (or (mevedel-cockpit-context-session context)
-                     (user-error "No mevedel session in this buffer")))
+                     (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope context)
+                                                  "No mevedel session in this buffer")))
         (data-buffer (mevedel-cockpit-context-data-buffer context)))
     (mevedel-tools-list--collect-items session data-buffer)))
 
@@ -206,7 +207,8 @@
   (interactive)
   (let* ((context (mevedel-cockpit-surface-context))
          (session (or (mevedel-cockpit-context-session context)
-                      (user-error "No mevedel session in this buffer")))
+                      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope context)
+                                                   "No mevedel session in this buffer")))
          (data-buffer (mevedel-tools-list--context-data-buffer))
          (candidates (delete-dups
                       (mapcar #'cadar
@@ -217,7 +219,8 @@
                      candidates nil nil nil nil (car candidates))))
          result)
     (when (string-empty-p (string-trim query))
-      (user-error "Search query cannot be empty"))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope context)
+                                   "Search query cannot be empty"))
     (with-current-buffer data-buffer
       (let ((mevedel--agent-invocation nil)
             (mevedel--session session))
@@ -290,7 +293,8 @@
   (require 'mevedel-tools)
   (let ((context (or context (mevedel-cockpit-current-context))))
     (unless (mevedel-cockpit-context-session context)
-      (user-error "No mevedel session in this buffer"))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope context)
+                                   "No mevedel session in this buffer"))
     (mevedel-cockpit-open-surface mevedel-tools-list--surface context)))
 
 (provide 'mevedel-tools-list)

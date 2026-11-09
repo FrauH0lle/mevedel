@@ -822,7 +822,9 @@
 
 (mevedel-deftest mevedel-collaboration--observer-failure
   (:doc "warns the host with the error and tells guests once until a publish succeeds")
-  (let ((room (list :data-buffer nil :records nil))
+  (let ((room (list :data-buffer nil :records nil
+                    :session (mevedel-session--create
+                              :workspace (mevedel-workspace--create :root "/origin/project/"))))
         warnings notices)
     (cl-letf (((symbol-function 'display-warning)
                (lambda (_type message &rest _) (push message warnings)))
@@ -837,8 +839,10 @@
       (mevedel-collaboration--observer-failure room '(error "Projection broke"))
       (mevedel-collaboration--observer-failure room '(error "Projection broke"))
       (should (= 1 (length warnings)))
-      (should (string-search "Projection broke" (car warnings)))
+      (should (equal "mevedel [/origin/project/]: Live collaboration update failed: Projection broke"
+                     (car warnings)))
       (should (= 1 (length notices)))
+      (should-not (string-search "/origin/project/" (prin1-to-string notices)))
       (should-not (string-search "still running" (plist-get (car notices) :message)))
       (mevedel-collaboration--publish room)
       (mevedel-collaboration--observer-failure room '(error "Projection broke"))
@@ -1667,10 +1671,14 @@ Remove the global hooks a started room installs afterwards."
             (puthash 2 (list :name "writer" :writable t)
                      (plist-get room :guests))
             ;; TARGET has no session, so sharing it fails.
+            (with-current-buffer target
+              (setq-local mevedel--workspace (mevedel-workspace--create :root "/target/project/")))
             (cl-letf (((symbol-function 'display-warning)
                        (lambda (_type message &rest _) (setq warning message))))
               (should-not (mevedel-collaboration-hand-off source target)))
             (should (string-match-p "Could not share" warning))
+            (should (string-prefix-p "mevedel [/target/project/]: " warning))
+            (should (= 1 (cl-count ?\[ warning)))
             (should-not (mevedel-collaboration--room-list))
             (should (equal '((0 :t "bye" :reason "handoff-failed")) sent))))
       (kill-buffer source)

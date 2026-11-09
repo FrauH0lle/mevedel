@@ -382,7 +382,7 @@
         (gc-cons-threshold gc-cons-threshold)
         (noninteractive nil)
         owned host)
-    (setq owned (mevedel--run-periodic-timer 1 #'ignore)
+    (setq owned (mevedel--run-periodic-timer 'global 1 #'ignore)
           host mevedel--coalesced-timer)
     ;; GC maintenance remembers its timer, so it must stop as an owner.
     (mevedel--gc-hold 'request #'always)

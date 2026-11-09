@@ -9,6 +9,7 @@
 
 (require 'cl-lib)
 (require 'mevedel-permission-origin)
+(require 'mevedel-utilities)
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create
@@ -75,10 +76,6 @@
                   "mevedel-transport" (key path thunk &optional on-cancel))
 (autoload 'mevedel-transport-busy-p "mevedel-transport")
 (autoload 'mevedel-transport-run-when-idle "mevedel-transport")
-
-;; `mevedel-utilities'
-(declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-state-dir
@@ -505,13 +502,16 @@ WORKSPACE-ROOT enables relative grants in a workspace store only."
 TARGET restores portable target paths when non-nil.
 WORKSPACE-ROOT enables relative grants in a workspace store only."
   (when (mevedel-transport-busy-p file)
-    (user-error "Execution target is busy; retry the permission change when idle"))
+    (mevedel-diagnostic-user-error
+     (mevedel-diagnostic-scope workspace-root)
+     "Execution target is busy; retry the permission change when idle"))
   (let ((result (mevedel-permission--read-store-file-uncached file target workspace-root)))
     (pcase (plist-get result :status)
       ('valid (plist-get result :store))
       ('missing (list :rules nil :resource-grants nil))
       (_
-       (user-error
+       (mevedel-diagnostic-user-error
+        (mevedel-diagnostic-scope workspace-root)
         "Invalid permission store %s: expected (:rules (...) :resource-grants (...))"
         file)))))
 
@@ -537,6 +537,7 @@ Reads past `mevedel-permission--store-cache\' and replaces its snapshot."
                  result mevedel-permission--store-cache)
         (when (eq status 'invalid)
           (mevedel--warn-once
+           (mevedel-diagnostic-scope workspace)
            (list 'permission-store-invalid file
                  (mevedel-permission--store-version file))
            "Invalid %s permission store %s (%s); expected (:rules (...) :resource-grants (...)). Authority from this file is disabled until fixed"
@@ -601,9 +602,13 @@ WORKSPACE-ROOT enables origin encoding for a workspace store only."
                (session (and data-buf
                              (buffer-local-value 'mevedel--session data-buf))))
           (unless session
-            (user-error "Remote permission changes require a live session"))
+            (mevedel-diagnostic-user-error
+             (mevedel-diagnostic-scope workspace-root)
+             "Remote permission changes require a live session"))
           (when (mevedel-session-publication-active-p session)
-            (user-error "Permission changes cannot be queued during publication"))
+            (mevedel-diagnostic-user-error
+             (mevedel-diagnostic-scope (or workspace-root session))
+             "Permission changes cannot be queued during publication"))
           (mevedel-session-artifacts-publish-text
            session file content 'utf-8-unix))
       (mevedel-session-control-fs-make-directory

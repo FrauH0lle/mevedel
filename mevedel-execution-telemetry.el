@@ -49,6 +49,7 @@
                   "mevedel-telemetry" (session event &rest props))
 
 (require 'mevedel-telemetry)
+(require 'mevedel-utilities)
 
 (defconst mevedel-execution-telemetry--audit-prop-keys
   '(:additional-read-count :additional-write-count
@@ -349,7 +350,8 @@ unconfined child."
       facts
     (when session
       (puthash session t mevedel-execution-telemetry--fallback-sessions)
-      (display-warning
+      (mevedel-diagnostic-warning
+       (mevedel-diagnostic-scope session)
        'mevedel
        "Sandbox unavailable; this session is falling back to direct execution"
        :warning))

@@ -142,7 +142,7 @@
 (defvar mevedel--view-buffer)
 
 ;; `mevedel-tool-registry'
-(declare-function mevedel-tool-display-string "mevedel-tool-registry" (tool-name args))
+(declare-function mevedel-tool-display-string "mevedel-tool-registry" (tool-name args &optional scope))
 
 ;; `mevedel-tool-task'
 (declare-function mevedel-tool-task-display-string
@@ -635,10 +635,10 @@ preview overlays render against this marker.")
   (pcase symbol
     ('mevedel-view-spinner-framerate
      (unless (and (integerp value) (<= 1 value 60))
-       (user-error "Spinner frame rate must be an integer from 1 to 60")))
+       (mevedel-diagnostic-user-error 'global "Spinner frame rate must be an integer from 1 to 60")))
     ('mevedel-view-spinner-battery-framerate
      (unless (and (integerp value) (<= 0 value 60))
-       (user-error "Battery frame rate must be an integer from 0 to 60"))))
+       (mevedel-diagnostic-user-error 'global "Battery frame rate must be an integer from 0 to 60"))))
   (set-default symbol value)
   (when (fboundp 'mevedel-view--refresh-animation-options)
     (dolist (buffer (buffer-list))
@@ -999,9 +999,10 @@ new view buffer is created."
   (cond
    ((and mevedel--session
          (mevedel-session-pending-publication mevedel--session))
-    (message
+    (mevedel-diagnostic-message
+     (mevedel-diagnostic-scope mevedel--session)
      (concat
-      "mevedel: session publication is pending; run "
+      "Session publication is pending; run "
       "mevedel-session-publication-retry or "
       "mevedel-session-publication-abandon first"))
     nil)
@@ -1011,9 +1012,10 @@ new view buffer is created."
               (plist-get (mevedel-session-lease mevedel--session)
                          :state)))
          (mevedel-execution-unsettled-mutation-p mevedel--session))
-    (message
+    (mevedel-diagnostic-message
+     (mevedel-diagnostic-scope mevedel--session)
      (concat
-      "mevedel: remote mutation is unsettled; stop live executions or run "
+      "Remote mutation is unsettled; stop live executions or run "
       "mevedel-retry-target-readiness to acknowledge it first"))
     nil)
    (t t)))
@@ -1021,17 +1023,19 @@ new view buffer is created."
 (defun mevedel-view--abort-data-buffer (data-buffer)
   "Abort active work owned by DATA-BUFFER."
   (when (buffer-live-p data-buffer)
-    (condition-case err
-        (with-current-buffer data-buffer
-          (if mevedel-view--abort-function
-              (funcall mevedel-view--abort-function data-buffer)
-            (when (and mevedel--session (fboundp 'mevedel-abort))
-              (mevedel-abort data-buffer))))
-      (error
-       (display-warning
-        'mevedel
-        (format "Could not abort session during buffer cleanup: %S" err)
-        :warning)))))
+    (let ((scope (mevedel-diagnostic-scope data-buffer)))
+      (condition-case err
+          (with-current-buffer data-buffer
+            (if mevedel-view--abort-function
+                (funcall mevedel-view--abort-function data-buffer)
+              (when (and mevedel--session (fboundp 'mevedel-abort))
+                (mevedel-abort data-buffer))))
+        (error
+         (mevedel-diagnostic-warning
+          scope 'mevedel
+          (format "%s (Could not abort session during buffer cleanup)"
+                  (error-message-string err))
+          :warning))))))
 
 (defun mevedel-view--abort-data-buffer-for-kill (data-buffer)
   "Abort DATA-BUFFER's active work once for the whole teardown of its pair.
@@ -1112,12 +1116,12 @@ not cancelled.  Native providers manage their own automatic compaction."
                          (current-buffer))
     (mevedel-view--assert-live-tip)
     (when mevedel-view--side-conversation-p
-      (user-error "Side conversations do not compact"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Side conversations do not compact"))
     (unless (buffer-live-p mevedel--data-buffer)
-      (user-error "No live chat buffer"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No live chat buffer"))
     (with-current-buffer mevedel--data-buffer
       (when (mevedel-engine-external-p gptel-backend)
-        (user-error "Automatic compaction is managed by the provider"))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Automatic compaction is managed by the provider"))
       (setq-local mevedel-compact-auto
                   (not (and mevedel-compact-auto
                             (not mevedel--compact-auto-disabled))))
@@ -1632,7 +1636,8 @@ when one of them changes."
   "Build a short status string for TOOL-NAME with ARGS."
   (if (equal tool-name "WaitAgent")
       "Waiting for agents"
-    (let ((primary-arg (mevedel-tool-display-string tool-name args)))
+    (let ((primary-arg (mevedel-tool-display-string
+                        tool-name args (mevedel-diagnostic-scope mevedel--data-buffer))))
       (if primary-arg
           (format "Calling %s: %s..." tool-name primary-arg)
         (format "Calling %s..." tool-name)))))
@@ -1653,6 +1658,9 @@ when one of them changes."
 
 (defvar-local mevedel-view--pending-render-data-buffer nil
   "Authoritative data buffer for the pending transcript render.")
+
+(defvar-local mevedel-view--pending-render-scope 'unavailable
+  "Captured workspace scope for the pending transcript render.")
 
 (defcustom mevedel-view-rerender-debounce 0.15
   "Seconds to wait before a queued full transcript refresh.
@@ -1720,7 +1728,8 @@ redisplay hooks reschedule it once someone can see the result."
       (let ((mevedel-view-prepare-enabled (not synchronous))
             (kind mevedel-view--pending-render-kind)
             (tool-rows mevedel-view--pending-tool-rows)
-            (data-buffer mevedel-view--pending-render-data-buffer))
+            (data-buffer mevedel-view--pending-render-data-buffer)
+            (scope mevedel-view--pending-render-scope))
         (cond
          ((mevedel-view--unattended-p)
           (setq mevedel-view--render-timer nil))
@@ -1765,8 +1774,8 @@ redisplay hooks reschedule it once someone can see the result."
                         (mevedel-view-stream--schedule-execution-row-recovery
                          data-buffer id))))))
             (error
-             (message "mevedel: view refresh failed: %s"
-                      (error-message-string err))))
+             (mevedel-diagnostic-message
+              scope "%s (View refresh failed)" (error-message-string err))))
           (mevedel-view--sanitize-undo)))))))
 
 (defun mevedel-view--resume-render-if-attended (view-buffer)
@@ -1844,7 +1853,8 @@ chunk or progress event.  The resume hooks schedule it when it is seen."
   (unless (memq kind '(tools incremental full))
     (error "Unknown render kind: %S" kind))
   (when (buffer-live-p data-buffer)
-    (setq mevedel-view--pending-render-data-buffer data-buffer)
+    (setq mevedel-view--pending-render-data-buffer data-buffer
+          mevedel-view--pending-render-scope (mevedel-diagnostic-scope data-buffer))
     (when (or (eq kind 'full)
               (and (eq kind 'incremental)
                    (eq mevedel-view--pending-render-kind 'tools))
@@ -1903,7 +1913,7 @@ the editable composer signal instead of settling queued interactions."
          (activate (get-text-property pos 'mevedel-view-zone-activate)))
     (cond
      ((mevedel-view--position-in-input-region-p pos)
-      (user-error "No actionable fragment at point"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No actionable fragment at point"))
      ((get-text-property pos 'mevedel-view-agent-path)
       (mevedel-view-open-agent-transcript-at-point event))
      ((and activate
@@ -1914,7 +1924,7 @@ the editable composer signal instead of settling queued interactions."
      ((and event (mouse-event-p event))
       nil)
      (t
-      (user-error "No actionable fragment at point")))))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No actionable fragment at point")))))
 
 (defun mevedel-view--indent-region-lines (start end prefix)
   "Insert PREFIX before every non-empty line between START and END."
@@ -2003,7 +2013,8 @@ the editable composer signal instead of settling queued interactions."
 Blocking issues have no dismissal control.  The action captures this exact
 issue, so a stale control cannot dismiss a later failure with the same id."
   (concat
-   (plist-get issue :message)
+   (mevedel-diagnostic-format
+    (mevedel-diagnostic-scope session) "%s" (plist-get issue :message))
    (unless (plist-get issue :blocking)
      (concat
       "  "

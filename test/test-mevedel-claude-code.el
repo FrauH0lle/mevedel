@@ -331,7 +331,8 @@
           (progn
             (setq buffer (mevedel-claude-code-setup))
             (with-current-buffer buffer
-              (should (string-search "Claude subscription login required" (buffer-string)))
+              (should (string-search "mevedel [global]: Claude subscription login required"
+                                     (buffer-string)))
               (should (string-search "claude auth login" (buffer-string)))
               (should-not (string-search "Ready for Claude Code subscription sessions" (buffer-string)))))
         (when (buffer-live-p buffer) (kill-buffer buffer)))))

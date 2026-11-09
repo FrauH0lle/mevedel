@@ -137,7 +137,38 @@
     (mevedel-execution-scheduler-release first)
     (should (equal '(first) started))
     (should (equal '(queued) rejected))
-    (should-not (mevedel-execution-scheduler-release queued))))
+    (should-not (mevedel-execution-scheduler-release queued)))
+  :doc "attributes queued failures after the origin buffer dies"
+  (let* ((root (make-temp-file "mevedel-scheduler-scope-" t))
+         (session (test-mevedel-execution-scheduler--session root))
+         (origin (generate-new-buffer " *scheduler-origin*"))
+         (scheduler (mevedel-execution-scheduler-create))
+         (first (mevedel-execution-scheduler-submit
+                 scheduler 'exclusive #'ignore))
+         diagnostics)
+    (unwind-protect
+        (progn
+          (with-current-buffer origin
+            (setq-local mevedel--session session)
+            (mevedel-execution-scheduler-submit
+             scheduler 'exclusive
+             (lambda (_) (error "Start failed")) nil nil root)
+            (mevedel-execution-scheduler-submit
+             scheduler 'exclusive #'ignore
+             (lambda () (error "Admission failed"))
+             (lambda (_) (error "Rejection failed")) root))
+          (kill-buffer origin)
+          (with-temp-buffer
+            (setq-local mevedel--session
+                        (test-mevedel-execution-scheduler--session "/other/project"))
+            (mevedel-test--with-captured-diagnostics diagnostics
+              (mevedel-execution-scheduler-release first)))
+          (dolist (failure '("scheduler start" "admission check" "scheduler rejection"))
+            (should (string-search
+                     (format "mevedel [%s]: execution %s failed:" root failure)
+                     diagnostics))))
+      (when (buffer-live-p origin) (kill-buffer origin))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-execution-scheduler-cancel ()
   ,test

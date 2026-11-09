@@ -17,6 +17,12 @@
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-record "mevedel-telemetry" (session event &rest props))
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-warning "mevedel-utilities" (scope type message &optional level buffer-name))
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-warning "mevedel-utilities")
+
 ;; `mevedel-structs'
 (defvar mevedel--session)
 
@@ -152,7 +158,7 @@ Cache observations only; the editor still checks authority and pins at deletion.
           (mevedel-session-collection--arm session job))
       (error
        (mevedel-session-collection-cancel session)
-       (display-warning 'mevedel
+       (mevedel-diagnostic-warning (mevedel-diagnostic-scope session) 'mevedel
                         (format "Could not prepare publication collection: %s" (error-message-string err))
                         :warning)))))
 
@@ -163,7 +169,7 @@ Cache observations only; the editor still checks authority and pins at deletion.
     (if (not error)
         (mevedel-session-collection--arm session job)
       (mevedel-session-collection--finish session job 'failed)
-      (display-warning 'mevedel
+      (mevedel-diagnostic-warning (mevedel-diagnostic-scope session) 'mevedel
                        (format "Could not collect published generations: %s"
                                (error-message-string error)) :warning))))
 
@@ -280,7 +286,7 @@ Cache observations only; the editor still checks authority and pins at deletion.
 
       (error
        (mevedel-session-collection--finish session job 'failed)
-       (display-warning 'mevedel
+       (mevedel-diagnostic-warning (mevedel-diagnostic-scope session) 'mevedel
                         (format "Could not collect published generations: %s"
                                 (error-message-string err)) :warning)))))
 

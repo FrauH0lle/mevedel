@@ -515,7 +515,7 @@
       (mevedel-workspace-clear-registry))))
 
 
-(mevedel-deftest mevedel-session-fork--stage-fork ()
+(mevedel-deftest mevedel-session-fork--stage-fork (:quiet t)
   ,test
   (test)
   :doc "bare staging persists shifted bounds after lost-execution-only repairs"

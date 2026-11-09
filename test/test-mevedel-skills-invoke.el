@@ -2381,7 +2381,10 @@ description: Yell
     (should (eq skill (plist-get (car (plist-get plan :nodes)) :skill)))))
 
 (mevedel-deftest mevedel-skills--prepare-single
-  (:doc "expands and settles one preflighted node")
+  ()
+  ,test
+  (test)
+  :doc "expands and settles one preflighted node"
   (let* ((skill (mevedel-skill--create :name "one"))
          (node (list :skill skill :body "body" :arguments ""
                      :root '(:role instruction) :dependency-depth 0))
@@ -2395,7 +2398,29 @@ description: Yell
       (mevedel-skills--prepare-single
        node 'user (lambda (value) (setq outcome value))))
     (should (eq 'ok (plist-get outcome :status)))
-    (should (equal "body" (plist-get outcome :body)))))
+    (should (equal "body" (plist-get outcome :body))))
+
+  :doc "attributes late display failures after the originating buffer dies"
+  (let* ((workspace (mevedel-workspace--create :root "/workspace/skill-origin/"))
+         (skill (mevedel-skill--create :name "one"))
+         (node (list :skill skill :body "body" :arguments ""
+                     :root (list :role 'instruction :display-callback
+                                 (lambda (_) (error "Broken display")))))
+         (mevedel--warn-once-table (make-hash-table :test #'equal))
+         pending warnings)
+    (cl-letf (((symbol-function 'mevedel-skills-preparation-expand-body)
+               (lambda (_body callback &rest _) (setq pending callback)))
+              ((symbol-function 'display-warning)
+               (lambda (_type text &rest _) (push text warnings))))
+      (with-temp-buffer
+        (setq-local mevedel--session (mevedel-session-create "main" workspace))
+        (mevedel-skills--prepare-single node 'internal #'ignore))
+      (with-temp-buffer
+        (setq-local mevedel--workspace
+                    (mevedel-workspace--create :root "/workspace/other/"))
+        (funcall pending '(:status ok :body "body"))))
+    (should (equal '("mevedel [/workspace/skill-origin/]: Skill display-callback error: Broken display")
+                   warnings))))
 
 (mevedel-deftest mevedel-skills--node-reachable-p
   (:doc "finds identity through a nested dependency tree")

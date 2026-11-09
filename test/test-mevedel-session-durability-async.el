@@ -276,9 +276,9 @@ run while it is pending."
          directory (mevedel-session-control-fs-target-time directory))
         (cl-letf (((symbol-function
                     'mevedel-session-control-fs-run-program-async)
-                   (lambda (operations callback)
+                   (lambda (operations callback &optional scope)
                      (push operations programs)
-                     (funcall run operations callback))))
+                     (funcall run operations callback scope))))
           (should (equal '(t nil)
                          (test-mevedel-durability-async--call
                           #'mevedel-session-durability--update-owned-lease-async
@@ -345,7 +345,7 @@ run while it is pending."
           (calls 0)
           settled)
       (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program-async)
-                 (lambda (_operations callback)
+                 (lambda (_operations callback &optional _scope)
                    (funcall callback nil '(file-error "boom"))
                    (funcall callback nil '(file-error "again")))))
         (mevedel-session-durability--update-owned-lease-async
@@ -462,9 +462,9 @@ run while it is pending."
              (mevedel-session-lease session)))
       (setq bound (copy-sequence (mevedel-session-lease session)))
       (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program-async)
-                 (lambda (operations callback)
+                 (lambda (operations callback &optional scope)
                    (cl-incf launches)
-                   (funcall run operations callback))))
+                   (funcall run operations callback scope))))
         (let ((mevedel-session-durability-async-process-function
                (lambda (_process) (signal 'quit nil))))
           (condition-case nil
@@ -498,14 +498,14 @@ run while it is pending."
   (let* (calls
          (job (mevedel-session-durability--async-job
                (lambda (success error) (push (list success error) calls)))))
-    (funcall (cdr job) (lambda () (error "Boom")))
+    (funcall (cadr job) (lambda () (error "Boom")))
     (should (equal '((nil (error "Boom"))) calls)))
   :doc "a quit finishes the job and returns without re-signalling"
   (let* (calls
          (job (mevedel-session-durability--async-job
                (lambda (success error) (push (list success error) calls)))))
     (should (eq 'returned (condition-case nil
-                              (progn (funcall (cdr job) (lambda () (signal 'quit nil)))
+                              (progn (funcall (cadr job) (lambda () (signal 'quit nil)))
                                      'returned)
                             (quit 'escaped))))
     (should (equal '((nil (quit))) calls)))
@@ -516,7 +516,7 @@ run while it is pending."
                (lambda (_success _error) (cl-incf calls) (signal 'quit nil)))))
     (mevedel-test--with-captured-diagnostics diagnostics
       (should (eq 'returned (condition-case nil
-                                (progn (funcall (cdr job) (lambda () (error "Boom")))
+                                (progn (funcall (cadr job) (lambda () (error "Boom")))
                                        (funcall (car job) t nil)
                                        'returned)
                               (quit 'escaped)))))
@@ -528,7 +528,7 @@ run while it is pending."
     (mevedel-test--with-captured-diagnostics diagnostics
       (should (eq 'returned (condition-case nil
                                 (progn
-                                  (funcall (cdr job)
+                                  (funcall (cadr job)
                                            (lambda ()
                                              (funcall (car job) t nil)
                                              (signal 'quit nil)))
@@ -540,14 +540,14 @@ run while it is pending."
          (job (mevedel-session-durability--async-job
                (lambda (success error) (push (list success error) calls)))))
     (funcall (car job) nil '(error "aborted"))
-    (funcall (cdr job) (lambda () (setq ran t)))
+    (funcall (cadr job) (lambda () (setq ran t)))
     (should-not ran)
     (should (= 1 (length calls))))
   :doc "an error from the callback itself propagates without a second call"
   (let* ((calls 0)
          (job (mevedel-session-durability--async-job
                (lambda (_success _error) (cl-incf calls) (error "Callback failed")))))
-    (should-error (funcall (cdr job) (lambda () (funcall (car job) t nil))))
+    (should-error (funcall (cadr job) (lambda () (funcall (car job) t nil))))
     (should (= 1 calls))))
 
 (mevedel-deftest mevedel-session-durability-commit-publication-head-async ()
@@ -703,9 +703,9 @@ run while it is pending."
     (let ((programs 0)
           (run (symbol-function 'mevedel-session-control-fs-run-program-async)))
       (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program-async)
-                 (lambda (operations callback)
+                 (lambda (operations callback &optional scope)
                    (cl-incf programs)
-                   (funcall run operations callback))))
+                   (funcall run operations callback scope))))
         (mevedel-session-durability-with-transaction
           (should (equal '(t nil)
                          (test-mevedel-durability-async--call
@@ -722,9 +722,9 @@ run while it is pending."
             (mevedel-session-durability--strip-assumption
              (mevedel-session-lease session)))
       (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program-async)
-                 (lambda (operations callback)
+                 (lambda (operations callback &optional scope)
                    (cl-incf programs)
-                   (funcall run operations callback))))
+                   (funcall run operations callback scope))))
         (should (equal '(nil (user-error "Portable session has no bound lease bytes"))
                        (test-mevedel-durability-async--call
                         #'mevedel-session-durability-admit-async session))))

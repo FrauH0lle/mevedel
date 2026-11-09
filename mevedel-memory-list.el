@@ -12,12 +12,21 @@
 (require 'mevedel-cockpit)
 (require 'mevedel-memory-pass)
 (require 'mevedel-memory-library)
+(require 'mevedel-utilities)
 (require 'mevedel-memory-cleanup)
 (require 'mevedel-report)
 (require 'mevedel-journal-worker)
 
 ;; `mevedel-journal-jobs'
 (autoload 'mevedel-journal-jobs "mevedel-journal-jobs" nil t)
+
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-message "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format &rest args))
+(autoload 'mevedel-diagnostic-message "mevedel-utilities")
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
 
 (defvar-local mevedel-memory-list--view nil "Current memory table view.")
 (defvar-local mevedel-memory-list--positions nil "Selected row IDs by view.")
@@ -439,7 +448,7 @@ This is a display hint, not content authentication or an atomic snapshot."
 
 (defun mevedel-memory-list-switch (view)
   "Show VIEW in the current memory cockpit, preserving each view's selection."
-  (unless (memq view '(candidates memories history)) (user-error "Unknown memory view"))
+  (unless (memq view '(candidates memories history)) (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (mevedel-cockpit-context-workspace (mevedel-cockpit-surface-context))) "Unknown memory view"))
   (mevedel-memory-list--remember-position)
   (setq mevedel-memory-list--view view)
   (mevedel-cockpit-surface-refresh (alist-get view mevedel-memory-list--positions))
@@ -510,7 +519,7 @@ Count pending, recovery-required and unavailable rows, as Candidates shows."
       (unwind-protect
           (let ((decision (mevedel-memory-library-delete workspace item)))
             (unless (eq 'applied (plist-get decision :status))
-              (user-error "%s" (or (plist-get decision :reason) "Memory deletion was not applied"))))
+              (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "%s" (or (plist-get decision :reason) "Memory deletion was not applied"))))
         (mevedel-memory-list-refresh)))))
 
 (defun mevedel-memory-list--collect (context &optional local-only reused)
@@ -653,7 +662,7 @@ Attachments and folders carry no text and are described by hash and kind."
 (cl-defun mevedel-memory-list--details (item context)
   "Return ITEM's captured body, before/after diff, and evidence in CONTEXT.
 Check original root authority before disclosing private topic contents."
-  (when (plist-get item :error) (user-error "%s" (plist-get item :error)))
+  (when (plist-get item :error) (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (mevedel-cockpit-context-workspace context)) "%s" (plist-get item :error)))
   (pcase (plist-get item :kind)
     ('memory (cl-return-from mevedel-memory-list--details
                (mevedel-memory-library-details (mevedel-cockpit-context-workspace context) item)))
@@ -735,26 +744,27 @@ Check original root authority before disclosing private topic contents."
   (let* ((workspace (mevedel-cockpit-context-workspace (mevedel-cockpit-surface-context)))
          (items (if all (copy-sequence (mevedel-cockpit-surface-items)) (list (mevedel-cockpit-surface-selected))))
          continuation)
-    (unwind-protect
-        (let ((mevedel-journal-cleanup--inhibit-scheduling t))
-          (dolist (item items)
-            (when (or (not all) (mevedel-memory-decision-actionable-status-p (plist-get item :status)))
-              (unless (plist-get item :proposal) (user-error "This record has no available proposal"))
-              (pcase action
-                ('accept
-                 ;; One explicit serial request: carry its opaque continuation.
-                 (let ((result (mevedel-memory-decision-apply workspace (plist-get item :pass) (plist-get item :id)
-                                                              :continuation continuation)))
-                   (setq continuation (plist-get result :continuation))
-                   (when (memq (plist-get result :status) '(held waiting))
-                     (user-error "%s" (or (plist-get result :reason) "Memory application is held")))))
-                ('reject (setq continuation
-                               (plist-get (mevedel-memory-decision-reject workspace (plist-get item :pass) (plist-get item :id)
-                                                                          :reason reason :continuation continuation)
-                                          :continuation)))
-                ('reverse (mevedel-memory-decision-reverse workspace (plist-get item :pass) (plist-get item :id)))))))
-      (mevedel-journal-cleanup-schedule workspace t)
-      (mevedel-memory-list-refresh))))
+    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+      (unwind-protect
+          (let ((mevedel-journal-cleanup--inhibit-scheduling t))
+            (dolist (item items)
+              (when (or (not all) (mevedel-memory-decision-actionable-status-p (plist-get item :status)))
+                (unless (plist-get item :proposal) (user-error "This record has no available proposal"))
+                (pcase action
+                  ('accept
+                   ;; One explicit serial request: carry its opaque continuation.
+                   (let ((result (mevedel-memory-decision-apply workspace (plist-get item :pass) (plist-get item :id)
+                                                                :continuation continuation)))
+                     (setq continuation (plist-get result :continuation))
+                     (when (memq (plist-get result :status) '(held waiting))
+                       (user-error "%s" (or (plist-get result :reason) "Memory application is held")))))
+                  ('reject (setq continuation
+                                 (plist-get (mevedel-memory-decision-reject workspace (plist-get item :pass) (plist-get item :id)
+                                                                            :reason reason :continuation continuation)
+                                            :continuation)))
+                  ('reverse (mevedel-memory-decision-reverse workspace (plist-get item :pass) (plist-get item :id)))))))
+        (mevedel-journal-cleanup-schedule workspace t)
+        (mevedel-memory-list-refresh)))))
 
 (defun mevedel-memory-list-accept ()
   "Accept the selected memory proposal."
@@ -787,12 +797,13 @@ Check original root authority before disclosing private topic contents."
                       (plist-get (mevedel-memory-decision-inspect
                                   workspace :pass (plist-get item :pass) :proposal (plist-get item :id))
                                  :writes))))
-    (unless writes (user-error "No marked write to recover for this proposal"))
-    (unwind-protect
-        (dolist (write writes)
-          (mevedel-memory-decision-recover-write workspace (plist-get write :id) (plist-get write :hash)
-                                                 :rollback rollback))
-      (mevedel-memory-list-refresh))))
+    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+      (unless writes (user-error "No marked write to recover for this proposal"))
+      (unwind-protect
+          (dolist (write writes)
+            (mevedel-memory-decision-recover-write workspace (plist-get write :id) (plist-get write :hash)
+                                                   :rollback rollback))
+        (mevedel-memory-list-refresh)))))
 
 (defun mevedel-memory-list-rollback ()
   "Roll back the selected interrupted write only from recorded states."
@@ -806,7 +817,7 @@ Check original root authority before disclosing private topic contents."
          (source (plist-get request :buffer))
          (report (plist-get request :report)))
     (unless (and (buffer-live-p source) report)
-      (user-error "No consolidation request is running in this client"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "No consolidation request is running in this client"))
     (let ((buffer (mevedel-report-show "*mevedel running consolidation*" (funcall report))))
       (with-current-buffer buffer (mevedel-report-follow-source source report))
       buffer)))
@@ -827,7 +838,7 @@ Check original root authority before disclosing private topic contents."
   (interactive)
   (let* ((workspace (mevedel-cockpit-context-workspace (mevedel-cockpit-surface-context)))
          (observation (or (mevedel-memory-notes-observation workspace)
-                          (user-error "No shared working folder has been observed yet"))))
+                          (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "No shared working folder has been observed yet"))))
     (mevedel-report-show
      "*mevedel shared notes*"
      (list :title "Shared working notes" :subtitle (format "Observed %s" (plist-get observation :at))
@@ -871,8 +882,8 @@ Check original root authority before disclosing private topic contents."
                     (length (plist-get entry :digests)) (length (plist-get entry :proposals))
                     (or (plist-get result :remaining) 0) notes))))
       ('aborted (message "mevedel: memory review cancelled"))
-      ('restart-required (message "mevedel: %s" (plist-get result :error)))
-      (_ (message "mevedel: memory review failed: %s" (or (plist-get result :error) "Unavailable"))))))
+      ('restart-required (mevedel-diagnostic-message (mevedel-diagnostic-scope workspace) "%s" (plist-get result :error)))
+      (_ (mevedel-diagnostic-message (mevedel-diagnostic-scope workspace) "memory review failed: %s" (or (plist-get result :error) "Unavailable"))))))
 
 ;;;###autoload
 (defun mevedel-remember (&optional focus context)

@@ -17,6 +17,7 @@
 (require 'subr-x)
 (require 'mevedel-structs)
 (require 'mevedel-turn)
+(require 'mevedel-utilities)
 
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
@@ -824,7 +825,8 @@ character so keybindings on trailing newlines still toggle the fragment."
                collapse-key
                (get-text-property pos 'mevedel-view-zone-collapsed))))
         (mevedel-view--render-status))
-    (message "No task list here")))
+    (mevedel-diagnostic-message
+     (mevedel-diagnostic-scope (current-buffer)) "No task list here")))
 
 (defun mevedel-tool-task--tallies (session)
   "Return SESSION's task tallies as one compact label, or nil when empty.

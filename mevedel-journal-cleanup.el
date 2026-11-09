@@ -40,6 +40,12 @@
 (declare-function mevedel-transport-run-when-idle "mevedel-transport"
                   (key path thunk &optional on-cancel))
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-message "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(autoload 'mevedel-diagnostic-message "mevedel-utilities")
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+
 (defconst mevedel-journal-cleanup--max-bytes (* 4 1024 1024)
   "Maximum encoded expiry manifest, including dependent file identities.")
 
@@ -351,7 +357,7 @@ error in the editor, ends with nil."
       (error
        (if mevedel-journal-worker--child-p
            (signal (car err) (cdr err))
-         (message "mevedel: journal cleanup failed: %s" (error-message-string err))
+         (mevedel-diagnostic-message (mevedel-diagnostic-scope workspace) "journal cleanup failed: %s" (error-message-string err))
          nil)))))
 
 (defvar mevedel-journal-cleanup--inhibit-scheduling nil
@@ -492,7 +498,7 @@ coalesce; a forced request received during cleanup runs after that batch."
 							(when (plist-get result :more) (setcdr job t))
 							(when (and (plist-get result :error)
                                                                    (not mevedel-journal-cleanup--inhibit-scheduling))
-                                                          (message "mevedel: journal cleanup failed: %s" (plist-get result :error)))
+                                                          (mevedel-diagnostic-message (mevedel-diagnostic-scope root) "journal cleanup failed: %s" (plist-get result :error)))
 							(finish)))))))
                                        (unless iterator
                                          (setq iterator (mevedel-journal-cleanup--steps workspace (cdr job)))
@@ -504,7 +510,7 @@ coalesce; a forced request received during cleanup runs after that batch."
                                  (iter-end-of-sequence (finish))
                                  ((error quit)
                                   (finish)
-                                  (message "mevedel: journal cleanup failed: %s" (error-message-string err)))))
+                                  (mevedel-diagnostic-message (mevedel-diagnostic-scope root) "journal cleanup failed: %s" (error-message-string err)))))
                              #'cancel))
                   (cancel)))))
            (puthash root job mevedel-journal-cleanup--pending)

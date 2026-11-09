@@ -15,6 +15,7 @@
 (require 'mevedel-skills-core)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-view-zone)
+(require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -22,6 +23,58 @@
           "helpers"))
 
 (defvar gptel--known-presets)
+
+(mevedel-deftest mevedel-directive-commands/source-diagnostics ()
+  ,test
+  (test)
+  :doc "captures command ownership for an uncached source-buffer refusal"
+  (dolist (command '(mevedel-implement-directive mevedel-request-directive-changes
+                    mevedel-retry-directive mevedel-discuss-directive
+                    mevedel-implement-discussion-directive mevedel-process-directives
+                    mevedel-create-directive))
+    (with-temp-buffer
+      (let* ((root "/source origin/")
+             (workspace (mevedel-workspace--create :root root))
+             (resolutions 0))
+        (should-not (bound-and-true-p mevedel--workspace))
+        (should-not (bound-and-true-p mevedel--session))
+        (cl-letf (((symbol-function 'mevedel-workspace)
+                   (lambda (&optional _buffer) (cl-incf resolutions) workspace)))
+          (should
+           (equal (format "mevedel [%s]: %s" root
+                          (pcase command
+                            ('mevedel-process-directives "No directives found")
+                            ('mevedel-create-directive
+                             "Cannot create a directive in a buffer visiting no file")
+                            (_ "No directive found at point")))
+                  (error-message-string (should-error (funcall command) :type 'user-error))))
+          (should (= 1 resolutions))))))
+  :doc "projects a local directory refusal but leaves the shared validator raw"
+  (let* ((root (make-temp-file "mevedel-command-root-" t))
+         (workspace (mevedel-workspace--create :root root))
+         (missing (file-name-concat root "missing")))
+    (unwind-protect
+        (with-temp-buffer
+          (cl-letf (((symbol-function 'mevedel-workspace)
+                     (lambda (&optional _buffer) workspace)))
+            (let ((raw (error-message-string
+                        (should-error (mevedel--normalize-session-directory missing workspace)
+                                      :type 'user-error))))
+              (should-not (string-search "mevedel [" raw))
+              (should (equal (format "mevedel [%s]: %s" root raw)
+                             (error-message-string
+                              (should-error (mevedel-in-directory missing) :type 'user-error)))))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-create-reference/no-region ()
+  (with-temp-buffer
+    (insert "Unselected source")
+    (let ((workspace (mevedel-workspace--create :root "/source origin/")))
+      (cl-letf (((symbol-function 'mevedel-workspace)
+                 (lambda (&optional _buffer) workspace)))
+        (should-not (mevedel-create-reference))
+        (should (equal "Unselected source" (buffer-string)))
+        (should-not (overlays-in (point-min) (point-max)))))))
 
 (mevedel-deftest mevedel--request-changes-prompt ()
   ,test

@@ -26,6 +26,7 @@
 (require 'mevedel-prompt-submission)
 (require 'mevedel-skills-input)
 (require 'mevedel-skills-ui)
+(require 'mevedel-utilities)
 
 ;; `browse-url'
 (declare-function browse-url "browse-url" (url &optional new-window))
@@ -112,7 +113,7 @@
 		  (event event-plist callback &optional session
 			 workspace request invocation))
 (declare-function mevedel-hooks-sanitize-final-decision
-                  "mevedel-hooks" (event decision))
+                  "mevedel-hooks" (event decision &optional scope))
 (autoload 'mevedel-hooks-event-plist "mevedel-hooks")
 
 ;; `mevedel-implementation-policy'
@@ -433,8 +434,14 @@
                   "mevedel-utilities" (input))
 (declare-function mevedel--normalize-message-text "mevedel-utilities"
 		  (text))
+(declare-function mevedel-diagnostic-message "mevedel-utilities" (scope format-string &rest args))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format-string &rest args))
 (autoload 'mevedel--insert-user-turn "mevedel-utilities")
 (autoload 'mevedel--normalize-message-text "mevedel-utilities")
+(autoload 'mevedel-diagnostic-message "mevedel-utilities")
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
 
 ;; `mevedel-view'
 (declare-function mevedel-view--abort-data-buffer
@@ -843,7 +850,7 @@ calls this again to place the overlay on the new text."
     (when (equal
            (plist-get target :fork-point-id)
            (mevedel-session-forked-from-fork-point-id session))
-      (user-error
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer))
        "Fork the inherited response from Source; switch variants first"))
     (mevedel-session-rewind-assert-stable-source
      session mevedel--data-buffer "forking")
@@ -878,7 +885,7 @@ ALLOW-ARMED-FORK permits submission of an already armed session fork."
   (when (and (mevedel-view-historical-segment-p)
              (not (and allow-armed-fork
                        mevedel-view--armed-session-fork)))
-    (user-error
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer))
      "Viewing historical segment; return to latest or fork from an assistant response")))
 
 (defun mevedel-view-arm-conversation-fork ()
@@ -2183,12 +2190,12 @@ and other input properties remain untouched."
 (defun mevedel-view--ensure-interactive-chat-view ()
   "Signal when the current view buffer is not an editable chat view."
   (when mevedel-view--agent-transcript-p
-    (user-error "Agent transcript views are read-only")))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Agent transcript views are read-only")))
 
 (defun mevedel-view--transcript-gptel-send-blocked (&optional _arg)
   "Block `gptel-send' from transcript inspection views."
   (interactive "P")
-  (user-error "Agent transcript views are read-only"))
+  (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Agent transcript views are read-only"))
 
 
 (defun mevedel-view--begin-external-turn
@@ -2386,7 +2393,7 @@ follows `mevedel-view--input-marker'."
                       (and data-buf
                            (buffer-local-value 'mevedel--session data-buf)))))
     (unless (and data-buf session)
-      (user-error "No mevedel session for permission mode cycling"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No mevedel session for permission mode cycling"))
     (let ((next
            (mevedel-view--next-permission-mode
             (or (mevedel-session-permission-mode session) 'ask))))
@@ -2407,7 +2414,7 @@ follows `mevedel-view--input-marker'."
                       (and data-buf
                            (buffer-local-value 'mevedel--session data-buf)))))
     (unless (and data-buf session)
-      (user-error "No mevedel session for Plan mode"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No mevedel session for Plan mode"))
     (if (mevedel-session-plan-mode session)
         (mevedel-plan-mode-exit session)
       (mevedel-plan-mode-enter session))
@@ -2514,7 +2521,7 @@ When FORCE is non-nil, replace the current draft unconditionally."
   "Switch to SCOPE, preserving separate composer drafts."
   (let ((session (mevedel-view--session)))
     (unless session
-      (user-error "No active session for composer scope"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No active session for composer scope"))
     (puthash (mevedel-view--composer-scope-key)
              (mevedel-view--composer-snapshot session)
              mevedel-view--composer-drafts)
@@ -2546,7 +2553,7 @@ When FORCE is non-nil, replace the current draft unconditionally."
    ((and workspace (mevedel-directive-p directive)
          (memq directive (mevedel-workspace-directives workspace)))
     (list directive workspace))
-   (t (user-error "No directive selected"))))
+   (t (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No directive selected"))))
 
 (defun mevedel-view-enter-directive-scope
     (directive action &optional attempt-index workspace)
@@ -2565,7 +2572,7 @@ When FORCE is non-nil, replace the current draft unconditionally."
                (memq (plist-get (mevedel-directive-plan record) :status)
                      '(draft proposed)))
               (_ (memq action actions)))
-      (user-error "Directive action is not available: %s"
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Directive action is not available: %s"
                   (mevedel-overlay-ui-directive-action-label action)))
     (let* ((data-buffer
             (car (mevedel--directive-session-buffer record workspace)))
@@ -2628,7 +2635,7 @@ Non-nil means later input is a follow-up.  The symbol is one of
 
 (defun mevedel-view--occupied-root-workflow-error (occupied)
   "Signal the user error for the OCCUPIED root workflow symbol."
-  (user-error
+  (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer))
    "%s"
    (pcase occupied
      ('implementation-retry
@@ -2725,7 +2732,7 @@ in the view when present.  SUBMITTED-DRAFT is the composer text captured
 when the submission started.  DISPATCH receives the admitted request and
 starts the fork after insertion."
   (when (mevedel-turn-busy-p mevedel--data-buffer)
-    (user-error "Turn settlement is still pending"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope mevedel--data-buffer) "Turn settlement is still pending"))
   (let ((view-turn-start
          (mevedel-view--insert-user-message display-text nil hook-context))
         request)
@@ -2762,15 +2769,13 @@ starts the fork after insertion."
           (with-current-buffer data-buffer
             (mevedel-skills-input-insert-fork-result outcome)))
          (_
-          (message "Skill '%s' returned unsupported outcome: %S"
+          (mevedel-diagnostic-message (mevedel-diagnostic-scope data-buffer) "Skill '%s' returned unsupported outcome: %S"
                    name outcome))))
       (_
        (with-current-buffer view-buffer
          (mevedel-view--stop-request-progress)
-         (message "Skill '%s' failed: %s"
-                  name
-                  (or (plist-get outcome :message)
-                      "unknown error")))
+         (mevedel-diagnostic-message (mevedel-diagnostic-scope data-buffer) "%s (Skill '%s' failed)"
+                  (or (plist-get outcome :message) "unknown error") name))
        (with-current-buffer data-buffer
          (when (bound-and-true-p mevedel--current-request)
            (mevedel-request-end))
@@ -2806,9 +2811,9 @@ starts the fork after insertion."
     (mevedel-view--finish-skill-submission token)
     (when (and prepared
                (not (eq (plist-get prepared :reason) 'cancelled)))
-      (message "mevedel: skill $%s failed: %s"
-               (or (plist-get prepared :name) "unknown")
-               (or (plist-get prepared :message) "unknown error")))
+      (mevedel-diagnostic-message (mevedel-diagnostic-scope (plist-get submission :data-buffer)) "%s (skill $%s failed)"
+               (or (plist-get prepared :message) "unknown error")
+               (or (plist-get prepared :name) "unknown")))
     (when on-block
       (funcall on-block))))
 
@@ -2856,6 +2861,7 @@ non-nil, receives SUBMISSION instead of starting a request.  SUBMITTED-DRAFT is
 the composer text captured before preparation began, so a draft typed while it
 ran survives the send."
   (let* ((view-buffer (current-buffer))
+         (diagnostic-scope (mevedel-diagnostic-scope data-buffer))
          (outcome (mevedel-prompt-submission-outcome submission))
          (input (mevedel-prompt-submission-display-text submission))
          (model-input (plist-get outcome :model-input))
@@ -2937,7 +2943,7 @@ ran survives the send."
              (setq-local mevedel-skills--pending-request-context nil))))
        (mevedel-implementation-policy-pause-failure
         data-buffer err failure-preparation)
-       (message "mevedel: skill dispatch failed: %s"
+       (mevedel-diagnostic-message diagnostic-scope "%s"
                 (error-message-string err))
        (when on-block
          (funcall on-block))
@@ -2965,7 +2971,7 @@ ran survives the send."
           (mevedel-prompt-submission-set-outcome
            prompt-submission outcome)
           (when-let* ((warnings (plist-get prepared :warnings)))
-            (message "mevedel: %s" (string-join warnings "; ")))
+            (mevedel-diagnostic-message (mevedel-diagnostic-scope data-buffer) "%s" (string-join warnings "; ")))
           (mevedel-view--dispatch-prepared-outcome
            prompt-submission data-buffer
            :before-send (plist-get plan-submission :before-send)
@@ -3184,7 +3190,7 @@ SNAPSHOT is the exact Source composer state transferred on publication."
               (cl-find id (mevedel-workspace-directives workspace)
                        :key #'mevedel-directive-id :test #'equal))))
     (unless record
-      (user-error "Directive no longer exists: %s" id))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Directive no longer exists: %s" id))
     (let ((directive
            (plist-get
             (mevedel--directive-action-context record workspace)
@@ -3210,9 +3216,9 @@ SNAPSHOT is the exact Source composer state transferred on publication."
               (and (mevedel-view--occupied-root-workflow session)
                    (not (eq (plist-get mevedel-view--composer-scope :action)
                             'plan))))
-      (user-error "The workflow is occupied -- use C-c TAB to queue this directive follow-up"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "The workflow is occupied -- use C-c TAB to queue this directive follow-up"))
     (when (mevedel-skills-parse-slash-line input)
-      (user-error "Slash commands are unavailable in directive scope"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Slash commands are unavailable in directive scope"))
     (mevedel-view--dispatch-directive-input mevedel-view--composer-scope input)
     ;; Only a dispatched message ends a wait for the user.
     (mevedel-permission-absence-clear session)
@@ -3222,9 +3228,10 @@ SNAPSHOT is the exact Source composer state transferred on publication."
 (defun mevedel-view-send ()
   "Send the current root or ephemeral side-conversation composer text."
   (interactive)
-  (if mevedel-view--side-conversation-p
-      (mevedel-side-conversation-send)
-    (mevedel-view--send-root)))
+  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope (current-buffer))
+    (if mevedel-view--side-conversation-p
+        (mevedel-side-conversation-send)
+      (mevedel-view--send-root))))
 
 (defun mevedel-view--send-root (&optional steering-input)
   "Send the current composer text to the LLM via the data buffer.
@@ -3237,30 +3244,30 @@ instead of the composer, preserving its draft."
   (mevedel-view--ensure-interactive-chat-view)
   (mevedel-view--assert-live-tip t)
   (when mevedel-view--pending-input-edit
-    (user-error "Save or cancel the pending-input edit first"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Save or cancel the pending-input edit first"))
   (unless mevedel--data-buffer
-    (user-error "No data buffer associated with this view"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No data buffer associated with this view"))
   (unless (buffer-live-p mevedel--data-buffer)
-    (user-error "Data buffer has been killed"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Data buffer has been killed"))
   (when (and (mevedel-turn-busy-p mevedel--data-buffer)
              (not (buffer-local-value 'mevedel--current-request
                                       mevedel--data-buffer)))
-    (user-error "Turn settlement is still pending"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Turn settlement is still pending"))
   (when mevedel-view--prompt-hook-pending
-    (user-error "A prompt hook is still running -- wait or abort first"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "A prompt hook is still running -- wait or abort first"))
   (when mevedel-view--pending-skill-submission
-    (user-error "Skill preparation is still running -- wait or abort first"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Skill preparation is still running -- wait or abort first"))
   (when (buffer-local-value 'mevedel-compact-run-in-flight mevedel--data-buffer)
     (message "mevedel: compacting, please wait...")
-    (user-error "Compaction in progress"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Compaction in progress"))
   (when (buffer-local-value 'mevedel-session--read-only-mode
                             mevedel--data-buffer)
-    (user-error "Session is open read-only (another host holds the lock)"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Session is open read-only (another host holds the lock)"))
   (when steering-input
     (when mevedel-view--composer-scope
-      (user-error "Return to the main conversation to steer"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Return to the main conversation to steer"))
     (unless (buffer-local-value 'mevedel--current-request mevedel--data-buffer)
-      (user-error "No active root turn to steer")))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No active root turn to steer")))
   (let* ((session (buffer-local-value 'mevedel--session
                                       mevedel--data-buffer))
          (snapshot (and session (not steering-input)
@@ -3278,9 +3285,9 @@ instead of the composer, preserving its draft."
     (when session
       (mevedel-session-artifacts-assert-new-mutation-authority session))
     (when (string-empty-p input)
-      (user-error "Nothing to send"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Nothing to send"))
     (when (and steering-input (mevedel-skills-parse-slash-line input))
-      (user-error "Slash commands cannot be queued as steering"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Slash commands cannot be queued as steering"))
     (if mevedel-view--composer-scope
         (mevedel-view--send-directive-input input)
       (let* ((slash-parsed (mevedel-skills-parse-slash-line input))
@@ -3292,7 +3299,7 @@ instead of the composer, preserving its draft."
               (and (not slash-parsed)
                    (mevedel-view--occupied-root-workflow session))))
 	(when (and slash-parsed (mevedel-view-historical-segment-p))
-          (user-error
+          (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer))
            "Slash commands are unavailable while viewing a historical segment"))
 	(when (and fork-target (not slash-parsed))
           (mevedel-session-rewind-assert-stable-source
@@ -3307,17 +3314,19 @@ instead of the composer, preserving its draft."
                ((and slash-parsed
                      (mevedel-skills-local-command-active-request-p
                       (nth 0 slash-parsed) (nth 1 slash-parsed)))
-		(let ((result (with-current-buffer mevedel--data-buffer
+		(let ((scope (mevedel-diagnostic-scope session))
+                      (result (with-current-buffer mevedel--data-buffer
 				(funcall (cdr (assoc (nth 0 slash-parsed)
                                                      mevedel-slash-commands))
 					 (nth 1 slash-parsed)))))
                   (unless (eq result 'mevedel-view-sent)
-                    (when (stringp result) (message "%s" result))
+                    (mevedel-skills-message-command-result
+                     scope (nth 0 slash-parsed) result)
                     (mevedel-view-history-add input)
                     (mevedel-view--clear-input))))
                (slash-parsed
 		(funcall restore)
-		(user-error
+		(mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer))
 		 "A request is already active -- wait or abort first"))
                ((not active-request)
 		(funcall restore)
@@ -3325,7 +3334,7 @@ instead of the composer, preserving its draft."
 		 occupied))
                ((not (mevedel-view--steerable-root-request-p active-request))
 		(funcall restore)
-		(user-error
+		(mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer))
 		 "This workflow cannot be steered -- use C-c TAB"))
                (t
 		(condition-case err
@@ -3333,8 +3342,8 @@ instead of the composer, preserving its draft."
                      input nil
                      (lambda ()
                        (funcall restore)
-                       (message
-			"mevedel: steering preparation failed; use C-c TAB"))
+                       (mevedel-diagnostic-message (mevedel-diagnostic-scope session)
+			"steering preparation failed; use C-c TAB"))
                      (lambda (submission)
                        (unless
                            (mevedel-view--queue-prepared-steering
@@ -3342,7 +3351,7 @@ instead of the composer, preserving its draft."
 			 (funcall restore))))
                   (error
                    (funcall restore)
-                   (user-error "%s; use C-c TAB for a follow-up"
+                   (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "%s; use C-c TAB for a follow-up"
                                (error-message-string err)))))))
           (cond
            (slash-parsed
@@ -3398,7 +3407,8 @@ This is the one place that decides between the two invocation
 namespaces.  Composer input and queued external invocations both route
 through it, so a collaboration guest\='s button runs exactly what typing
 the same line in the composer would."
-  (let* ((local (assoc name mevedel-slash-commands))
+  (let* ((scope (mevedel-diagnostic-scope mevedel--data-buffer))
+         (local (assoc name mevedel-slash-commands))
          (kind (if local
                    'command
                  (mevedel-view-invocation-kind name)))
@@ -3438,7 +3448,7 @@ the same line in the composer would."
         ;; return this sentinel when it took ownership of the input.
         (if (eq result 'mevedel-view-sent)
             (when on-sent (funcall on-sent))
-          (when (stringp result) (message "%s" result))
+          (mevedel-skills-message-command-result scope name result)
           (when on-quiet (funcall on-quiet)))))
      ((eq kind 'skill)
       ;; A skill is invoked with its own sigil and planned like any
@@ -3450,7 +3460,7 @@ the same line in the composer would."
                  ""))
        (lambda () (when on-sent (funcall on-sent)))))
      (t
-      (message "Unknown slash command: /%s" name)
+      (mevedel-diagnostic-message (mevedel-diagnostic-scope (current-buffer)) "Unknown slash command: /%s" name)
       (when on-quiet (funcall on-quiet))))))
 
 (defun mevedel-view--send-local-goal (input args)
@@ -3461,7 +3471,7 @@ INPUT is the original composer text, including the slash command."
          (objective args)
          (submitted-draft (mevedel-view--visible-draft)))
     (when (string-blank-p objective)
-      (user-error "Goal objective must not be blank"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Goal objective must not be blank"))
     (mevedel-view--run-prompt-submit-hook
      objective input
      (lambda (submission)
@@ -3493,15 +3503,16 @@ commits the submission immediately after it durably records the accepted
 input."
   (mevedel-view--ensure-interactive-chat-view)
   (when mevedel-view--prompt-hook-pending
-    (user-error "A prompt hook is still running -- wait or abort first"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "A prompt hook is still running -- wait or abort first"))
   (let ((view-buffer (current-buffer))
         (data-buffer mevedel--data-buffer)
-        session workspace submission)
+        session workspace submission scope)
     (unless (and data-buffer (buffer-live-p data-buffer))
-      (user-error "Data buffer has been killed"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Data buffer has been killed"))
     (with-current-buffer data-buffer
       (setq session mevedel--session
             workspace mevedel--workspace))
+    (setq scope (mevedel-diagnostic-scope session))
     (setq submission
           (mevedel-prompt-submission-create
            :input input :display-text display-text :session session)
@@ -3522,7 +3533,7 @@ input."
                    (when (buffer-live-p data-buffer)
                      (setq decision
                            (mevedel-hooks-sanitize-final-decision
-                            'UserPromptSubmit decision))
+                            'UserPromptSubmit decision scope))
                      (cond
                       ((and (plist-member decision :continue)
                             (not (plist-get decision :continue)))
@@ -3531,7 +3542,7 @@ input."
                         session decision 'UserPromptSubmit)
                        (when blocked-callback
                          (funcall blocked-callback))
-                       (message "mevedel: prompt blocked by hook: %s"
+                       (mevedel-diagnostic-message (mevedel-diagnostic-scope session) "prompt blocked by hook: %s"
                                 (or (plist-get decision :stop-reason)
                                     "no reason provided")))
                       (t
@@ -3599,7 +3610,7 @@ after the forwarded prompt, where the LLM's response will begin."
                                    mevedel--data-buffer)
            (signal 'mevedel-stale-implementation-preparation nil))
          (when (mevedel-turn-busy-p mevedel--data-buffer)
-           (user-error "The session became busy before dispatch"))
+           (mevedel-diagnostic-user-error (mevedel-diagnostic-scope mevedel--data-buffer) "The session became busy before dispatch"))
          (when before-send
            (funcall before-send))
          (mevedel-view--forward-input-now
@@ -3639,7 +3650,7 @@ asynchronous preparation ran is left alone instead of cleared."
   (mevedel-view--ensure-interactive-chat-view)
   (when (buffer-local-value 'mevedel-compact-run-in-flight mevedel--data-buffer)
     (message "mevedel: compacting, please wait...")
-    (user-error "Compaction in progress"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope mevedel--data-buffer) "Compaction in progress"))
   (mevedel-session-durability-with-transaction
    (let* ((input (mevedel--normalize-message-text input))
           (display-text (and display-text
@@ -3669,7 +3680,7 @@ asynchronous preparation ran is left alone instead of cleared."
                (with-current-buffer data-buffer
                  (mevedel-implementation-policy-assert-preparation preparation)))
              (when (mevedel-turn-busy-p mevedel--data-buffer)
-               (user-error "The session became busy before dispatch"))))
+               (mevedel-diagnostic-user-error (mevedel-diagnostic-scope data-buffer) "The session became busy before dispatch"))))
           (dropped-file-grants
            (mevedel-view--pop-dropped-file-grants-for-input input session)))
      (let (data-turn-start

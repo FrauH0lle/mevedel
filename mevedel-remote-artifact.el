@@ -284,7 +284,8 @@ receives (:welcome WELCOME :reply REPLY) or (:error MESSAGE), later.")
               (process-put process :partial-bytes 0)
               (condition-case err
                   (mevedel-remote-artifact--receive line)
-                (error (message "mevedel: unreadable remote-artifact reply: %s"
+                (error (mevedel-diagnostic-message
+                        'global "Unreadable remote-artifact reply: %s"
                                 (error-message-string err)))))))))))
 
 (defun mevedel-remote-artifact--bridge ()
@@ -631,12 +632,15 @@ reachability of links not checked lately."
 (defun mevedel-remote-artifact--check-alias (workspace alias link)
   "Signal unless WORKSPACE may attach LINK under ALIAS."
   (unless (mevedel-artifact-store-id-p alias)
-    (user-error "%s is not a valid name: use letters, digits, - and _ (at most 80)" alias))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace)
+                                  "%s is not a valid name: use letters, digits, - and _ (at most 80)" alias))
   (when (member alias (mevedel-artifact-store-ids workspace))
-    (user-error "%s names an artifact of this project; choose another name" alias))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace)
+                                  "%s names an artifact of this project; choose another name" alias))
   (when-let* ((other (mevedel-remote-artifact--entry workspace alias))
               ((not (equal link (plist-get other :link)))))
-    (user-error "%s is already attached (%s); choose another name" alias
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace)
+                                  "%s is already attached (%s); choose another name" alias
                 (plist-get other :title))))
 
 ;;;###autoload
@@ -657,19 +661,22 @@ Attaching a link again refreshes it and may rename it."
                             :test #'equal))
          (guest-id (or (plist-get (cdr previous) :guest-id)
                        (substring (mevedel-shared-editing-op-id) 0 16))))
-    (when (string-empty-p link) (user-error "No artifact link given"))
+    (when (string-empty-p link)
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "No artifact link given"))
     (let* ((outcome (mevedel-remote-artifact--request-sync
                      (list :link link :guestId guest-id
                            :name (mevedel-remote-artifact--display-name)
                            :ref (mevedel-remote-artifact--ref link))))
            (welcome (or (plist-get outcome :welcome)
-                        (user-error "Could not attach the artifact: %s"
+                        (mevedel-diagnostic-user-error
+                         (mevedel-diagnostic-scope workspace) "Could not attach the artifact: %s"
                                     (or (plist-get outcome :error)
                                         mevedel-remote-artifact--unavailable))))
            (kind (plist-get welcome :kind))
            (alias (or name (plist-get welcome :id))))
       (unless (member kind mevedel-remote-artifact--kinds)
-        (user-error "%s artifacts cannot be attached in mevedel yet" kind))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace)
+                                      "%s artifacts cannot be attached in mevedel yet" kind))
       (while (and (null name) (called-interactively-p 'any)
                   (condition-case err
                       (progn (mevedel-remote-artifact--check-alias workspace alias link) nil)
@@ -709,10 +716,12 @@ that attached it no longer list it."
      (list workspace
            (completing-read "Detach remote artifact: "
                             (or (mapcar #'car (mevedel-remote-artifact--records-of workspace))
-                                (user-error "No remote artifacts are attached here"))
+                                (mevedel-diagnostic-user-error
+                                 (mevedel-diagnostic-scope workspace) "No remote artifacts are attached here"))
                             nil t))))
   (unless (mevedel-remote-artifact--entry workspace alias)
-    (user-error "No remote artifact %s is attached here" alias))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace)
+                                  "No remote artifact %s is attached here" alias))
   (mevedel-remote-artifact--set-records-of
    workspace (assoc-delete-all alias (copy-sequence
                                       (mevedel-remote-artifact--records-of workspace))))

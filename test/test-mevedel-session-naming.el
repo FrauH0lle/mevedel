@@ -1170,7 +1170,11 @@ Each call is a plist of :backend, :model, :effort, :prompt, :callback,
         (setf (mevedel-session-audit-session session) nil)
         (cl-letf (((symbol-function 'mevedel-session-artifacts-assert-mutation-authority)
                    (lambda (&rest _) (user-error "Another client owns this session"))))
-          (should-error (mevedel-retry-session-naming "Replace it") :type 'user-error))
+          (let ((err (should-error (mevedel-retry-session-naming "Replace it")
+                                   :type 'user-error)))
+            (should (equal (format "mevedel [%s]: Another client owns this session"
+                                   (mevedel-workspace-root workspace))
+                           (error-message-string err)))))
         (accept-process-output nil 0.05)
         (should-not calls)
         (should-not mevedel-session-naming--cancel)

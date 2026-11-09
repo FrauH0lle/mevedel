@@ -8,6 +8,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (require 'mevedel-engine)
 
 (eval-when-compile
@@ -933,7 +935,7 @@ FROZEN-CONTEXT is the materialized gptel context plist."
   "Close the current ephemeral /btw side conversation."
   (interactive)
   (unless (bound-and-true-p mevedel-view--side-conversation-p)
-    (user-error "This is not a /btw side conversation"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "This is not a /btw side conversation"))
   ;; Settle remote mutation authority before the ordinary close guard runs.
   (when mevedel--session
     (mevedel-execution-teardown-session mevedel--session))
@@ -943,19 +945,21 @@ FROZEN-CONTEXT is the materialized gptel context plist."
   "Send the current side-composer prompt as an independent turn."
   (interactive)
   (unless (bound-and-true-p mevedel-view--side-conversation-p)
-    (user-error "This is not a /btw side conversation"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "This is not a /btw side conversation"))
   (unless (buffer-live-p mevedel--data-buffer)
-    (user-error "Side conversation data has been discarded"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Side conversation data has been discarded"))
   (when (mevedel-side-conversation--busy-p mevedel--data-buffer)
-    (user-error "The /btw response is still active"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "The /btw response is still active"))
   (with-current-buffer mevedel--data-buffer
     (when (mevedel-claude-code-backend-p gptel-backend)
-      (mevedel-claude-code-btw-assert-open)))
+      (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope (current-buffer))
+        (mevedel-claude-code-btw-assert-open))))
   (let* ((raw (mevedel-view--input-text))
          (session (buffer-local-value 'mevedel--session mevedel--data-buffer)))
     (when (string-empty-p raw)
-      (user-error "Nothing to send"))
-    (mevedel-side-conversation--validate-input raw)
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Nothing to send"))
+    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope session)
+      (mevedel-side-conversation--validate-input raw))
     (let ((input
            (with-current-buffer mevedel--data-buffer
              (mevedel-mentions-prepare-user-input raw session))))

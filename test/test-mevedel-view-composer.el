@@ -31,6 +31,8 @@
 (require 'mevedel-skills-plan)
 (require 'mevedel-skills-ui)
 (require 'mevedel-workspace)
+(require 'mevedel-worktree)
+(require 'mevedel-side-conversation)
 (require 'mevedel-file-state)
 (require 'mevedel-session-persistence)
 (require 'mevedel-tool-ui)
@@ -1144,7 +1146,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                            (regexp-quote "[skill:alpha -- unavailable]")
                            sent))
                   (should-not (string-match-p "COMPETING ALPHA BODY" sent))
-                  (should (string-match-p "mevedel:" message-text))
+                  (should (string-prefix-p (format "mevedel [%s]: " root)
+                                           message-text))
                   (should (string-empty-p (mevedel-view--input-text)))
                   (should (equal "> diagnosis\nPlease use $alpha"
                                  (car (mevedel-view-history--entries))))
@@ -3848,6 +3851,28 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           (mevedel-view-send)
           (should (equal "fake result" seen))
           (should (string-empty-p (mevedel-view--input-text)))))))
+  :doc "local shared-command refusals are attributed while shared calls stay raw"
+  (dolist (case '(("worktree" "unknown" mevedel-cmd--worktree
+                   "Unknown /worktree command: unknown" nil)
+                  ("btw" "" mevedel-cmd--btw
+                   "No mevedel session in this buffer" t)))
+    (mevedel-view-test--with-buffers
+      (pcase-let ((`(,name ,args ,handler ,reason ,active) case))
+        (with-current-buffer data-buf
+          (setq-local mevedel--workspace
+                      (mevedel-workspace--create :root "/tmp/command origin/")
+                      mevedel-slash-commands (list (cons name handler))
+                      mevedel--current-request (and active (mevedel-request--create)))
+          (should (equal reason (cadr (should-error (funcall handler args)
+                                                   :type 'user-error)))))
+        (with-current-buffer view-buf
+          (setq-local mevedel-slash-commands (list (cons name handler)))
+          (let ((input (concat "/" name (unless (string-empty-p args) (concat " " args)))))
+            (goto-char (mevedel-view--input-start))
+            (insert input)
+            (should (equal (concat "mevedel [/tmp/command origin/]: " reason)
+                           (cadr (should-error (mevedel-view-send) :type 'user-error))))
+            (should (equal input (mevedel-view--input-text))))))))
   :doc "/goal pause reaches the lifecycle handler during an active request"
   (mevedel-view-test--with-buffers
     (let* (seen
@@ -4138,7 +4163,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
          '(:status error :name "alpha" :message "failed")))
       (should blocked)
       (should-not mevedel-view--pending-skill-submission)
-      (should (equal "mevedel: skill $alpha failed: failed" notice)))))
+      (should (equal "mevedel [workspace unavailable]: failed (skill $alpha failed)"
+                     notice)))))
 
 (mevedel-deftest mevedel-view--prepared-plan-outcome ()
   ,test
@@ -4779,7 +4805,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                 ((symbol-function 'message)
                  (lambda (format-string &rest args)
                    (let ((text (apply #'format format-string args)))
-                     (when (string-prefix-p "mevedel:" text)
+                     (when (string-prefix-p (format "mevedel [%s]: " root) text)
                        (push text messages)))))
                 ((symbol-function 'gptel-send)
                  (lambda (&rest _)
@@ -4841,7 +4867,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                 (condition-case err
                     (progn (mevedel-view-send) nil)
                   (user-error (error-message-string err))))
-          (should (equal "Malformed mention binding" raised))
+          (should (equal (format "mevedel [%s]: Malformed mention binding" root)
+                         raised))
           (should-not send-called)
           (should (equal "Use $alpha @file:/tmp/a @mcp:docs:file:///api"
                          (mevedel-view--input-text)))))))
@@ -6529,7 +6556,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                 (cl-letf (((symbol-function 'message)
                            (lambda (format-string &rest args)
                              (let ((text (apply #'format format-string args)))
-                               (when (string-prefix-p "mevedel: reference" text)
+                               (when (string-prefix-p (format "mevedel [%s]: reference" root) text)
                                  (setq warning text)))))
                           ((symbol-function 'gptel-send)
                            (lambda (&rest _)
@@ -6540,8 +6567,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                                      request-data))
               (should-not (string-search "replacement reference body"
                                          request-data))
-              (should (string-match-p "mevedel: reference .* unavailable"
-                                      warning))
+              (should (string-match-p
+                       (concat (regexp-quote (format "mevedel [%s]: reference " root))
+                               ".* unavailable")
+                       warning))
               (with-current-buffer data-buf
                 (goto-char (point-min))
                 (should (search-forward token nil t))
@@ -6613,7 +6642,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (cl-letf (((symbol-function 'message)
                        (lambda (format-string &rest args)
                          (let ((text (apply #'format format-string args)))
-                           (when (string-prefix-p "mevedel: file" text)
+                           (when (string-prefix-p (format "mevedel [%s]: file" root) text)
                              (setq warning text)))))
                       ((symbol-function 'gptel-send)
                        (lambda (&rest _)
@@ -6624,7 +6653,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                    "[file:queued.txt -- does not exist]" request-data))
           (should-not (string-search "queued file secret" request-data))
           (should (string-match-p
-                   "mevedel: file .* unavailable" warning))
+                   (concat (regexp-quote (format "mevedel [%s]: file " root))
+                           ".* unavailable")
+                   warning))
           (with-current-buffer data-buf
             (goto-char (point-min))
             (should (search-forward "@file:queued.txt" nil t))

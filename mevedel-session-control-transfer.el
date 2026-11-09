@@ -91,7 +91,7 @@
 (declare-function mevedel-session-persistence-apply-read-only-mode
                   "mevedel-session-persistence" (buf &optional reason))
 (declare-function mevedel-session-persistence-load-sidecar
-                  "mevedel-session-persistence" (path))
+                  "mevedel-session-persistence" (path &optional scope))
 (autoload 'mevedel-session-persistence-apply-read-only-mode
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-load-sidecar
@@ -200,7 +200,11 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--transcript-org-mode "mevedel-utilities" ())
+(declare-function mevedel-diagnostic-message "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
 (autoload 'mevedel--transcript-org-mode "mevedel-utilities")
+(autoload 'mevedel-diagnostic-message "mevedel-utilities")
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
 
 (defcustom mevedel-session-follow-published t
   "Whether a non-owner session buffer follows the owner's committed state.
@@ -268,7 +272,7 @@ rolled back because a view was closed during a redraw."
     (condition-case err
         (apply observer event args)
       (error
-       (message "mevedel: session observer failed for %s: %s"
+       (mevedel-diagnostic-message (mevedel-diagnostic-scope session) "Session observer failed for %s: %s"
                 event (error-message-string err)))))
   nil)
 
@@ -560,7 +564,7 @@ conflict on the user's behalf."
                (sidecar
                 (and publication
                      (mevedel-session-persistence-load-sidecar
-                      (plist-get publication :sidecar))))
+                      (plist-get publication :sidecar) (mevedel-diagnostic-scope session))))
                (refreshed
                 (and sidecar
                      (plist-get
@@ -613,7 +617,7 @@ session, including its native history, rather than a cooperative transfer."
                   (error "Transferred session has no committed publication")))
              (sidecar
               (mevedel-session-persistence-load-sidecar
-               (plist-get publication :sidecar)))
+               (plist-get publication :sidecar) (mevedel-diagnostic-scope session)))
              (refreshed
               (plist-get
                (mevedel-session-codec-deserialize sidecar workspace)

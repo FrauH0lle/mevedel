@@ -156,7 +156,8 @@ SCOPE `built-in' lists every built-in variable in NAME as one row."
     (when workspace
       (when (mevedel-transport-busy-p
              (mevedel-permission-persistence-file workspace 'workspace))
-        (user-error "Execution target is busy; refresh permissions when idle"))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace)
+                                     "Execution target is busy; refresh permissions when idle"))
       (mevedel-cockpit-call-in-data
        context #'mevedel-permission-validate-persistent-stores workspace))
     (dolist (rule (and session (mevedel-session-permission-rules session)))
@@ -266,7 +267,8 @@ SCOPE `built-in' lists every built-in variable in NAME as one row."
                    ('safe-env 'safe-env)
                    (_ 'rule)))
       (`(built-in . ,_)
-       (user-error "Built-in safe variables cannot be removed"))
+       (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope context)
+                                     "Built-in safe variables cannot be removed"))
       (`(session . rule)
        (mevedel-permission-remove-session-rule session value))
       (`(session . resource)

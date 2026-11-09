@@ -185,8 +185,8 @@
           (mevedel-test--with-captured-messages messages
             (mevedel-permission--prompt-feedback)))
         (should (equal (if expired
-                           "Request expired; nothing was approved"
-                         "Request is no longer pending; nothing was approved.")
+                           "mevedel [workspace unavailable]: Request expired; nothing was approved"
+                         "mevedel [workspace unavailable]: Request is no longer pending; nothing was approved.")
                        (string-trim messages)))
         (should (equal before (buffer-string)))
         (should-not (overlay-get second 'mevedel-settled)))))

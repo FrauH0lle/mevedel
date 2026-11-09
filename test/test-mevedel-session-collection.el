@@ -172,6 +172,29 @@
       (mevedel-session-collection--step session job)
       (should-not (plist-get job :wait)))))
 
+(mevedel-deftest mevedel-session-collection--resumed (:quiet t)
+  ,test
+  (test)
+  :doc "async collection failures identify their session, not the current workspace"
+  (test-mevedel-collection--with-session
+    (let ((job (gethash session mevedel-session-collection--jobs))
+          warning)
+      (with-temp-buffer
+        (setq-local mevedel--workspace
+                    (test-mevedel-session-persistence--make-workspace
+                     (file-name-concat root "unrelated")))
+        (cl-letf (((symbol-function 'display-warning)
+                   (lambda (type text &optional level buffer-name)
+                     (setq warning (list type text level buffer-name)))))
+          (mevedel-session-collection--resumed
+           session job '(error "Injected collection failure"))))
+      (should (equal warning
+                     (list 'mevedel
+                           (format "mevedel [%s]: Could not collect published generations: Injected collection failure"
+                                   (directory-file-name root))
+                           :warning nil)))
+      (should-not (gethash session mevedel-session-collection--jobs)))))
+
 (mevedel-deftest mevedel-session-collection--observed (:quiet t)
   ,test
   (test)

@@ -41,6 +41,12 @@
 (defvar mevedel--data-buffer)
 (defvar mevedel--view-buffer)
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format-string &rest args))
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+
 ;; `mevedel-view'
 (declare-function mevedel-view--jump-to-pinned-prompt
                   "mevedel-view" (position &optional event))
@@ -180,20 +186,20 @@ session's root segments."
                (cl-find source-pos
                         (mevedel-session-artifacts-collect-prompts buffer)
                         :key (lambda (entry) (plist-get entry :pos))))
-    (user-error "No user prompt at source position %s" source-pos)))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No user prompt at source position %s" source-pos)))
 
 (defun mevedel-view-segments--show-now (number direction &optional source-pos)
   "Switch to NUMBER in DIRECTION with projection ownership held.
 When SOURCE-POS is non-nil, verify its prompt before replacing the view."
   (let* ((session (or (mevedel-view-segments--session)
-                      (user-error "Active view has no mevedel session")))
+                      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Active view has no mevedel session")))
          (entries (mevedel-view-segments--entries session))
          (current (plist-get (car (last entries)) :number))
          (entry (cl-find number entries
                          :key (lambda (item) (plist-get item :number)))))
     (when (and mevedel-view--agent-transcript-p
                (not (and entry (eq (plist-get entry :status) 'readable))))
-      (user-error "Unreadable transcript segment: %s" number))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Unreadable transcript segment: %s" number))
     (if (= number current)
         (mevedel-view-segments--return-now)
       (let* ((new-buffer
@@ -294,10 +300,10 @@ When SOURCE-POS is non-nil, verify its prompt before replacing the view."
 Called in the owning view buffer.  WINDOW is the clicked view window, if any.
 An invalid prompt or unreadable archive leaves the current projection intact."
   (let* ((session (or (mevedel-view-segments--session)
-                      (user-error "Active view has no mevedel session")))
+                      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Active view has no mevedel session")))
          (latest (or (mevedel-session-current-segment session) 1)))
     (unless (and (integerp segment) (<= 1 segment) (< segment latest))
-      (user-error "Unknown archived session segment: %s" segment))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Unknown archived session segment: %s" segment))
     (mevedel-view-render-mutate
      'source
      (lambda ()
@@ -316,7 +322,7 @@ An invalid prompt or unreadable archive leaves the current projection intact."
          (let ((position (mevedel-view-segments--prompt-header
                           mevedel-view-segments--buffer source-pos)))
            (unless position
-             (user-error "Archived prompt is not rendered at %s" source-pos))
+             (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Archived prompt is not rendered at %s" source-pos))
            (mevedel-view-segments--reveal-prompt
             position (or window (get-buffer-window (current-buffer) t))))))
      t)))
@@ -325,7 +331,7 @@ An invalid prompt or unreadable archive leaves the current projection intact."
   "Show the previous session segment without changing session state."
   (interactive)
   (let* ((session (or (mevedel-view-segments--session)
-                      (user-error "Active view has no mevedel session")))
+                      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Active view has no mevedel session")))
          (entries (mevedel-view-segments--entries session))
          (current (or mevedel-view-segments--number
                       (plist-get (car (last entries)) :number)))
@@ -342,7 +348,7 @@ An invalid prompt or unreadable archive leaves the current projection intact."
   "Show the next session segment without changing session state."
   (interactive)
   (let* ((session (or (mevedel-view-segments--session)
-                      (user-error "Active view has no mevedel session")))
+                      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Active view has no mevedel session")))
          (entries (mevedel-view-segments--entries session))
          (latest (plist-get (car (last entries)) :number))
          (current (or mevedel-view-segments--number latest))
@@ -384,7 +390,7 @@ unreadable entries in root transcripts.  Agent views offer their own
 readable compaction archives instead of the parent session's segments."
   (interactive)
   (let* ((session (or (mevedel-view-segments--session)
-                      (user-error "Active view has no mevedel session")))
+                      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Active view has no mevedel session")))
          (segments (mevedel-view-segments--entries session))
          (latest (plist-get (car (last segments)) :number))
          (displayed (or mevedel-view-segments--number latest))
@@ -408,7 +414,7 @@ readable compaction archives instead of the parent session's segments."
                  (or (not mevedel-view--agent-transcript-p)
                      (cl-find target segments
                               :key (lambda (entry) (plist-get entry :number)))))
-      (user-error "Unknown session segment: %s" target))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Unknown session segment: %s" target))
     (unless (= target displayed)
       (mevedel-view-segments--show
        target (if (< target displayed) 'backward 'forward)))))
@@ -428,7 +434,7 @@ opens at its last segment, read-only like any archived segment; the
 current chat returns to the live segment."
   (interactive)
   (let* ((chats (or (mevedel-view-segments--chats)
-                    (user-error "Active view has no mevedel session")))
+                    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Active view has no mevedel session")))
          (choices
           (mapcar
            (lambda (chat)
@@ -447,11 +453,11 @@ current chat returns to the live segment."
           (if number
               (or (cl-find number chats
                            :key (lambda (chat) (plist-get chat :number)))
-                  (user-error "Unknown chat: %s" number))
+                  (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Unknown chat: %s" number))
             (if (cdr chats)
                 (cdr (assoc (completing-read "Go to chat: " choices nil t)
                             choices))
-              (user-error "This session has one chat; /clear starts another")))))
+              (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "This session has one chat; /clear starts another")))))
     (mevedel-view-go-to-segment (plist-get chat :last-segment))))
 
 (defvar-keymap mevedel-view-segments--chats-map

@@ -68,7 +68,7 @@ filesystem.  Subsequent phases retain the ordinary carrier."
   `(let ((run (symbol-function 'mevedel-session-control-fs-run-program-async))
          (programs 0) captured resume)
      (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program-async)
-                (lambda (operations callback)
+                (lambda (operations callback &optional scope)
                   (cl-incf programs)
                   (funcall run operations
                            (lambda (results error)
@@ -76,7 +76,8 @@ filesystem.  Subsequent phases retain the ordinary carrier."
                                (setq captured t
                                      resume (lambda ()
                                               (setq resume nil)
-                                              (funcall callback results error)))))))))
+                                              (funcall callback results error)))))
+                           scope))))
        (unwind-protect
 	   (progn
 	     (funcall tick session)
@@ -302,9 +303,9 @@ filesystem.  Subsequent phases retain the ordinary carrier."
 	  (decode (symbol-function 'mevedel-session-control-fs--program-value))
 	  (programs 0) final-clock)
       (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program-async)
-		 (lambda (operations callback)
+                 (lambda (operations callback &optional scope)
 		   (cl-incf programs)
-		   (funcall run operations callback)))
+                   (funcall run operations callback scope)))
 		((symbol-function 'mevedel-session-control-fs--program-value)
 		 (lambda (operation payload)
 		   (let ((value (funcall decode operation payload)))
@@ -360,7 +361,7 @@ filesystem.  Subsequent phases retain the ordinary carrier."
                    (if (and failed (equal root path)) alias
                      (apply remote path arguments))))
                 ((symbol-function 'mevedel-session-control-fs-run-program-async)
-                 (lambda (operations callback)
+                 (lambda (operations callback &optional scope)
                    (cl-incf calls)
                    (funcall run operations
                             (lambda (results error)
@@ -368,7 +369,8 @@ filesystem.  Subsequent phases retain the ordinary carrier."
                               (should-not (gethash "" mevedel-session-control-fs--programs))
                               (setq failed t)
                               (remhash alias mevedel-session-control-fs--programs)
-                              (funcall callback results error)))))
+                              (funcall callback results error))
+                            scope)))
                 ((symbol-function 'display-warning)
                  (lambda (_type message &rest _) (push message warnings)))
                 ((symbol-function 'mevedel-session-control-fs-run-program)
@@ -378,7 +380,10 @@ filesystem.  Subsequent phases retain the ordinary carrier."
       (should failed)
       (should (= calls 1))
       (should (= (length warnings) 1))
-      (should (string-prefix-p "Portable session heartbeat failed:" (car warnings)))
+      (should (string-prefix-p
+               (format "mevedel [%s]: Portable session heartbeat failed:"
+                       (mevedel-workspace-root (mevedel-session-workspace session)))
+               (car warnings)))
       (should (string-match-p "exit status 71" (car warnings)))
       (should (eq 'lost (plist-get (mevedel-session-lease session) :state)))
       (should-not (mevedel-session-lease-renewal-timer session))))

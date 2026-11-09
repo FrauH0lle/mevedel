@@ -129,7 +129,7 @@ native/prebuilt.eld; a download that does not match is never loaded."
 (defun mevedel-native--report-failure ()
   "Say once why the native module is unavailable and how to enable it.
 Without it, PGTK presentation and animation cost several times the CPU."
-  (message "mevedel: native module unavailable (%s); PGTK frames use more CPU.  %s"
+  (mevedel-diagnostic-message 'global "Native module unavailable (%s); PGTK frames use more CPU.  %s"
            mevedel-native--load-state
            (if (mevedel-native--pin)
                "M-x mevedel-native-install downloads a prebuilt module."
@@ -177,33 +177,34 @@ For systems without a C compiler or the GTK 3/Wayland development files.
 The download must match the checksum pinned in mevedel's source.  With a
 module already loaded, the download loads in the next session."
   (interactive)
-  (unless (and (fboundp 'module-load) module-file-suffix)
-    (user-error "This Emacs cannot load modules"))
-  (let ((pin (or (mevedel-native--pin)
-                 (user-error "No prebuilt module for %s at this mevedel revision"
-                             (mevedel-native--arch))))
-        (path (mevedel-native--prebuilt-path))
-        (url (format mevedel-native--release-url
-                     (mevedel-native--source-hash) (mevedel-native--arch))))
-    (message "Downloading %s..." url)
-    (let ((data (mevedel-native--download url)))
-      (unless (equal pin (secure-hash 'sha256 data))
-        (user-error "Downloaded module does not match its pinned checksum"))
-      (make-directory (file-name-directory path) t)
-      (let ((temporary (make-temp-file (concat path "-"))))
-        (unwind-protect
-            (let ((coding-system-for-write 'no-conversion))
-              (write-region data nil temporary nil 'silent)
-              (rename-file temporary path t))
-          (when (file-exists-p temporary) (delete-file temporary)))))
-    (cond
-     ;; A second module would run beside the loaded one, whose surfaces and
-     ;; hooks it cannot see.
-     ((eq mevedel-native--load-state 'ready)
-      (message "Native module installed; it loads in the next Emacs session"))
-     ((progn (setq mevedel-native--load-state nil) (mevedel-native-load))
-      (message "Native module installed"))
-     (t (user-error "Native module did not load: %s" mevedel-native--load-state)))))
+  (mevedel-with-diagnostic-errors 'global
+    (unless (and (fboundp 'module-load) module-file-suffix)
+      (user-error "This Emacs cannot load modules"))
+    (let ((pin (or (mevedel-native--pin)
+                   (user-error "No prebuilt module for %s at this mevedel revision"
+                               (mevedel-native--arch))))
+          (path (mevedel-native--prebuilt-path))
+          (url (format mevedel-native--release-url
+                       (mevedel-native--source-hash) (mevedel-native--arch))))
+      (message "Downloading %s..." url)
+      (let ((data (mevedel-native--download url)))
+        (unless (equal pin (secure-hash 'sha256 data))
+          (user-error "Downloaded module does not match its pinned checksum"))
+        (make-directory (file-name-directory path) t)
+        (let ((temporary (make-temp-file (concat path "-"))))
+          (unwind-protect
+              (let ((coding-system-for-write 'no-conversion))
+                (write-region data nil temporary nil 'silent)
+                (rename-file temporary path t))
+            (when (file-exists-p temporary) (delete-file temporary)))))
+      (cond
+       ;; A second module would run beside the loaded one, whose surfaces and
+       ;; hooks it cannot see.
+       ((eq mevedel-native--load-state 'ready)
+        (message "Native module installed; it loads in the next Emacs session"))
+       ((progn (setq mevedel-native--load-state nil) (mevedel-native-load))
+        (message "Native module installed"))
+       (t (user-error "Native module did not load: %s" mevedel-native--load-state))))))
 
 (provide 'mevedel-native)
 ;;; mevedel-native.el ends here

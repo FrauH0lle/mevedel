@@ -3196,7 +3196,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                 (lambda (_) '(:sidecar "/committed/session.meta.el")))
                ((symbol-function
                  'mevedel-session-persistence-load-sidecar)
-                (lambda (_) '(:committed t)))
+                (lambda (_ &optional _scope) '(:committed t)))
                ((symbol-function 'mevedel-session-codec-deserialize)
                 (lambda (&rest _) (list :session refreshed)))
                ((symbol-function 'mevedel-session-artifacts-read-artifact)
@@ -3747,6 +3747,14 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
           (should
            (eq restored
                (mevedel-session-persistence-choose-entry workspace)))
+          (cl-letf (((symbol-function 'mevedel-session-persistence-restore)
+                     (lambda (&rest _) (user-error "Session authority changed"))))
+            (let ((err (should-error
+                        (mevedel-session-persistence-choose-entry workspace)
+                        :type 'user-error)))
+              (should (equal (format "mevedel [%s]: Session authority changed"
+                                     (mevedel-workspace-root workspace))
+                             (error-message-string err)))))
           ;; Nothing holds an unheld session, so starting an independent one
           ;; alongside it needs no warning.  Neither does an expired lease:
           ;; its writer is gone, which is why the row offers a takeover.
@@ -3811,10 +3819,11 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                 (ert-fail "Inspect must not restore a session")))
              ((symbol-function
                'mevedel-session-artifacts-inspect-cold-session)
-              (lambda (path mode &optional publication)
+              (lambda (path mode &optional publication scope)
                 (should (equal "/old-session/" path))
                 (should (eq 'pid-lock mode))
                 (should-not publication)
+                (should (equal (mevedel-workspace-root workspace) scope))
                 inspection)))
           (should
            (equal (list :action 'inspect :buffer inspection)

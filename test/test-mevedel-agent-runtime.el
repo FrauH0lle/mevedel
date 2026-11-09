@@ -2436,9 +2436,12 @@ ARTIFACT-P selects whether its sidecar counts as committed."
     (cl-letf (((symbol-function 'mevedel-session-publication-defer)
                (lambda (&rest _) t)))
       (should-not (mevedel-agent-runtime--settle invocation "answer"))))
-  :doc "a queued failure is reported through a warning naming the agent"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+  :doc "a queued failure keeps its workspace after the origin buffer dies"
+  (let* ((workspace (mevedel-workspace--create :root "/project/origin/"))
+         (session (mevedel-session--create :authority-mode 'pid-lock
+                                           :workspace workspace))
          (invocation (mevedel-agent-runtime-test--invocation))
+         (origin (generate-new-buffer " *agent diagnostic origin*"))
          queued warning)
     (setf (mevedel-agent-invocation-parent-session invocation) session)
     (cl-letf (((symbol-function 'mevedel-session-publication-defer)
@@ -2446,10 +2449,20 @@ ARTIFACT-P selects whether its sidecar counts as committed."
                  (ignore token)
                  (setq queued (cons preparation failure))
                  t)))
-      (mevedel-agent-runtime--settle invocation "answer"))
-    (cl-letf (((symbol-function 'display-warning)
-               (lambda (_type message &optional args) (ignore args) (setq warning message))))
-      (funcall (cdr queued) '(error "Disk full")))
+      (unwind-protect
+          (with-current-buffer origin
+            (setq-local mevedel--session session)
+            (mevedel-agent-runtime--settle invocation "answer"))
+        (kill-buffer origin)))
+    (with-temp-buffer
+      (setq-local mevedel--session
+                  (mevedel-session--create
+                   :workspace (mevedel-workspace--create :root "/project/other/")))
+      (cl-letf (((symbol-function 'display-warning)
+                 (lambda (_type message &optional _level _buffer-name)
+                   (setq warning message))))
+        (funcall (cdr queued) '(error "Disk full"))))
+    (should (string-prefix-p "mevedel [/project/origin/]: " warning))
     (should (string-match-p "/root/explore.*Disk full" warning))
     (should-not (mevedel-agent-invocation-runtime-settled-p invocation)))
   :doc "raw deferred acknowledgements run once on precommit and postcommit errors"

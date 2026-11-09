@@ -92,6 +92,12 @@
 (autoload 'mevedel-view-history-load "mevedel-view-history")
 (autoload 'mevedel-view-history-save "mevedel-view-history")
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format-string &rest args))
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+
 ;; `mevedel-view'
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 (autoload 'mevedel-view-rerender "mevedel-view")
@@ -309,7 +315,7 @@ ambient current buffer, which may be an unrelated buffer when a timer fires."
   "Grant the currently displayed cooperative control-transfer request."
   (interactive)
   (let ((data (mevedel-view--control-transfer-data-buffer)))
-    (unless data (user-error "No active mevedel session"))
+    (unless data (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No active mevedel session"))
     (with-current-buffer data
       (mevedel-session-control-transfer-decide mevedel--session 'grant))
     (mevedel-view--control-transfer-rebuild)))
@@ -318,7 +324,7 @@ ambient current buffer, which may be an unrelated buffer when a timer fires."
   "Reject the currently displayed cooperative control-transfer request."
   (interactive)
   (let ((data (mevedel-view--control-transfer-data-buffer)))
-    (unless data (user-error "No active mevedel session"))
+    (unless data (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No active mevedel session"))
     (with-current-buffer data
       (mevedel-session-control-transfer-decide mevedel--session 'reject))
     (mevedel-view--control-transfer-rebuild)))
@@ -327,7 +333,7 @@ ambient current buffer, which may be an unrelated buffer when a timer fires."
   "Request control of the current read-only portable session."
   (interactive)
   (let ((data (mevedel-view--control-transfer-data-buffer)))
-    (unless data (user-error "No active mevedel session"))
+    (unless data (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No active mevedel session"))
     (with-current-buffer data
       (mevedel-session-control-transfer-request mevedel--session))
     (message "mevedel: control-transfer request recorded; wait for release")
@@ -336,9 +342,9 @@ ambient current buffer, which may be an unrelated buffer when a timer fires."
 (defun mevedel-view--control-transfer-session ()
   "Return the current view's (DATA-BUFFER . SESSION), or signal."
   (let ((data (mevedel-view--control-transfer-data-buffer)))
-    (unless data (user-error "No active mevedel session"))
+    (unless data (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No active mevedel session"))
     (let ((session (buffer-local-value 'mevedel--session data)))
-      (unless session (user-error "No active mevedel session"))
+      (unless session (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No active mevedel session"))
       (cons data session))))
 
 ;;;###autoload
@@ -353,7 +359,7 @@ releases, so control arrives without anyone sitting at the other machine."
   (interactive)
   (pcase-let ((`(,data . ,session) (mevedel-view--control-transfer-session)))
     (unless (buffer-local-value 'mevedel-session--read-only-mode data)
-      (user-error "This session is already writable here"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "This session is already writable here"))
     (if (eq 'foreign
             (mevedel-session-durability-lease-state
              (mevedel-session-save-path session)))
@@ -372,10 +378,10 @@ the same reason a granted transfer waits for it."
   (interactive)
   (pcase-let ((`(,data . ,session) (mevedel-view--control-transfer-session)))
     (when (buffer-local-value 'mevedel-session--read-only-mode data)
-      (user-error "This session is already read-only here"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "This session is already read-only here"))
     (when-let* ((blocker
                 (mevedel-session-control-transfer-drain-blocker session)))
-      (user-error "Cannot release control while %s is outstanding" blocker))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Cannot release control while %s is outstanding" blocker))
     (mevedel-session-artifacts-save session data t)
     (mevedel-session-durability-lease-release
      (mevedel-session-save-path session) session)
@@ -405,7 +411,7 @@ this view follows."
   (interactive)
   (pcase-let ((`(,data . ,session) (mevedel-view--control-transfer-session)))
     (unless (buffer-local-value 'mevedel-session--read-only-mode data)
-      (user-error "This session is writable here; there is nothing to follow"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "This session is writable here; there is nothing to follow"))
     (if (mevedel-session-control-transfer--follow-published session data t)
         (progn
           (mevedel-view-rerender)

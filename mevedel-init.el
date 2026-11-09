@@ -8,6 +8,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (eval-when-compile
   (require 'cl-lib))
 
@@ -138,11 +140,11 @@
 (defun mevedel-init--ensure-sendable ()
   "Signal if the current data buffer cannot send an init turn."
   (when (bound-and-true-p mevedel--current-request)
-    (user-error "A request is already active -- wait or abort first"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "A request is already active -- wait or abort first"))
   (when (bound-and-true-p mevedel-compact-run-in-flight)
-    (user-error "Compaction in progress"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Compaction in progress"))
   (when (bound-and-true-p mevedel-session--read-only-mode)
-    (user-error "Session is open read-only (another host holds the lock)")))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Session is open read-only (another host holds the lock)")))
 
 (defun mevedel-init--send-direct (prompt data-buffer)
   "Insert PROMPT into DATA-BUFFER and send through its selected engine."
@@ -155,7 +157,7 @@
 (defun mevedel-init--dispatch (focus)
   "Dispatch `/init' with optional FOCUS."
   (let* ((data-buffer (or (mevedel-init--current-data-buffer)
-                          (user-error "No mevedel chat buffer available")))
+                          (mevedel-diagnostic-user-error 'unavailable "No mevedel chat buffer available")))
          (display (mevedel-init--display-text focus))
          (prompt (mevedel-init--prompt focus data-buffer))
          (view-buffer (mevedel-init--view-buffer data-buffer)))

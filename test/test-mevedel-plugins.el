@@ -10,8 +10,10 @@
   (require 'cl-lib))
 
 (require 'mevedel-plugin-registry)
+(require 'mevedel-cockpit)
 (require 'mevedel-plugins)
 (require 'mevedel-structs)
+(require 'mevedel-skills-core)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -51,7 +53,27 @@
     (cl-letf (((symbol-function 'mevedel-skills-rescan)
                (lambda () (setq rescanned t))))
       (should (eq t (mevedel-plugins-refresh-session)))
-      (should rescanned))))
+      (should rescanned)))
+
+  :doc "attributes refresh failures to the context, preserving the raw result"
+  (let* ((workspace (mevedel-workspace--create :root "/workspace/origin/"))
+         (context (list :workspace workspace))
+         (mevedel--warn-once-table (make-hash-table :test #'equal))
+         warnings)
+    (cl-letf (((symbol-function 'mevedel-cockpit-call-in-data)
+               (lambda (&rest _) (error "Broken refresh")))
+              ((symbol-function 'display-warning)
+               (lambda (type text &optional level _buffer)
+                 (push (list type text level) warnings))))
+      (with-temp-buffer
+        (setq-local mevedel--workspace
+                    (mevedel-workspace--create :root "/workspace/other/"))
+        (should (equal "Broken refresh"
+                       (mevedel-plugins-refresh-session context)))))
+    (should (equal '((mevedel
+                     "mevedel [/workspace/origin/]: Plugin registry refresh failed: Broken refresh"
+                     :warning))
+                   warnings))))
 
 (mevedel-deftest mevedel-plugins-skill-dirs
   (:vars* ((root (file-name-as-directory

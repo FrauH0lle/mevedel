@@ -486,7 +486,7 @@ streams over stdin."
           ;; Both payloads were staged and the stopped program consumed neither.
           (should (= 2 (length mevedel-session-control-fs--orphaned-staged)))
           (should (cl-every #'file-exists-p
-                            mevedel-session-control-fs--orphaned-staged))
+                            (mapcar #'car mevedel-session-control-fs--orphaned-staged)))
           (should-not mevedel-session-control-fs--async-jobs)
           (mevedel-session-control-fs--exit-cleanup)
           (should-not mevedel-session-control-fs--orphaned-staged)

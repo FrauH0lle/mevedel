@@ -75,7 +75,7 @@
                   "mevedel-execution-scheduler" (lease))
 (declare-function mevedel-execution-scheduler-submit
                   "mevedel-execution-scheduler"
-                  (scheduler mode start &optional admit-p reject))
+                  (scheduler mode start &optional admit-p reject scope))
 
 ;; `mevedel-execution-telemetry'
 (declare-function mevedel-execution-telemetry-command-properties
@@ -148,12 +148,12 @@
                   "mevedel-sandbox"
                   (command workdir writable-roots &optional
                            additional-permissions sandbox-permissions mode
-                           temporary-root candidates))
+                           temporary-root candidates scope))
 (declare-function mevedel-sandbox-prepare-start
                   "mevedel-sandbox"
                   (callback start-process command workdir writable-roots
                             &optional additional-permissions sandbox-permissions
-                            mode temporary-root))
+                            mode temporary-root scope))
 (declare-function mevedel-sandbox-strip-marker
                   "mevedel-sandbox" (preparation child-result))
 (autoload 'mevedel-sandbox--record-launch-failure "mevedel-sandbox")
@@ -233,7 +233,7 @@
                   "mevedel-utilities"
                   (head tail total-length &optional preview-size))
 (declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
+                  "mevedel-utilities" (scope key format &rest args))
 
 ;; `mevedel-workspace'
 (defvar mevedel-workspace-additional-roots)
@@ -381,6 +381,12 @@ row redraws a second.")
   yield-time-ms
   yield-timer
   yielded-p)
+
+(defun mevedel-execution--diagnostic-scope (record)
+  "Return RECORD's originating workspace scope, without ambient lookup."
+  (mevedel-diagnostic-scope
+   (when-let* ((origin (mevedel-execution--record-origin record)))
+     (mevedel-execution--origin-session origin))))
 
 (defvar mevedel-execution--orphan-state nil
   "Private state for children that have no chat session owner.")
@@ -699,6 +705,7 @@ whose remote work is long finished recovers on its own."
                 (funcall function session data-buffer)
               (error
                (mevedel--warn-once
+                (mevedel-diagnostic-scope session)
                 'execution-state-consumer
                 "Execution state consumer failed: %s"
                 (error-message-string err))))))))))
@@ -777,8 +784,10 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
       (mevedel-execution--cleanup-record record preserve-spool))))
 
 (defun mevedel-execution--start-process
-    (callback name command workdir timeout session owner teardown-function)
-  "Start raw COMMAND and call CALLBACK with its bounded terminal result."
+    (callback name command workdir timeout session owner teardown-function
+              &optional scope)
+  "Start raw COMMAND and call CALLBACK with its bounded terminal result.
+SCOPE overrides SESSION's diagnostic ownership for sessionless helpers."
   (let* ((record
           (mevedel-execution--record-create
            :callback callback
@@ -793,6 +802,7 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
     (setq
      child
      (mevedel-execution-process-create
+      :diagnostic-scope (mevedel-diagnostic-scope (or scope session))
       :workdir workdir
       :terminal-function
       (lambda (settled result)
@@ -928,14 +938,15 @@ identity, owner liveness, target and policy must still remain unchanged."
                        session owner
                        (lambda ()
                          (setq abandoned t)
-                         (when teardown (funcall teardown))))))
+                         (when teardown (funcall teardown)))
+                       (mevedel-diagnostic-scope policy-session))))
            (lambda ()
              (when child (mevedel-execution-process-stop child 'aborted)))))
        command workdir roots additional permissions
        (mevedel-sandbox-mode-effective
         policy-session
         (mevedel-permission-mode-effective policy-session nil nil request invocation))
-       temporary-root))))
+       temporary-root (mevedel-diagnostic-scope policy-session)))))
 
 
 ;;
@@ -949,6 +960,9 @@ identity, owner liveness, target and policy must still remain unchanged."
 (defun mevedel-execution--create-child (record spool-path)
   "Create RECORD's process child using SPOOL-PATH."
   (mevedel-execution-process-create
+   :diagnostic-scope
+   (mevedel-diagnostic-scope
+    (mevedel-execution--origin-session (mevedel-execution--record-origin record)))
    :workdir (mevedel-execution--record-workdir record)
    :tty (mevedel-execution--record-tty-p record)
    :spool-path spool-path
@@ -1082,6 +1096,7 @@ is."
              record "\n[stderr truncated at the output limit]\n")))
       (error
        (mevedel--warn-once
+        (mevedel-execution--diagnostic-scope record)
         'execution-remote-stderr
         "Could not collect remote execution stderr: %s"
         (error-message-string err))))))
@@ -1235,8 +1250,9 @@ FINAL retains the last line at settlement without stopping or arming a timer."
         'exited)))
 
 (defun mevedel-execution--resolve-outcome
-    (outcome-function exit-code termination)
+    (outcome-function exit-code termination &optional scope)
   "Resolve a canonical outcome without risking execution settlement.
+SCOPE identifies the originating workspace for resolver failure reports.
 
 OUTCOME-FUNCTION may interpret EXIT-CODE and TERMINATION.  Without one,
 preserve the default zero-success/nonzero-failure rule."
@@ -1252,7 +1268,8 @@ preserve the default zero-success/nonzero-failure rule."
               (error "Invalid execution outcome: %S" outcome))
             outcome)
         (error
-         (display-warning
+         (mevedel-diagnostic-warning
+          (mevedel-diagnostic-scope scope)
           'mevedel
           (format "Execution outcome resolver failed: %s"
                   (error-message-string err))
@@ -1342,7 +1359,8 @@ execution's progress cost."
                                      (equal exit-code (car (last pipeline-codes))))
                                  (plist-get pipeline-facts :pipeline-outcome))
                             (mevedel-execution--resolve-outcome
-                             outcome-function exit-code termination)))
+                             outcome-function exit-code termination
+                             (mevedel-execution--diagnostic-scope record))))
           :wall-time-seconds
           (- (float-time) (mevedel-execution--record-started-at record))
           :output-bytes (mevedel-execution--record-output-bytes record)
@@ -1399,6 +1417,7 @@ execution's progress cost."
           (funcall function (mevedel-execution--copy-value event))
         (error
          (mevedel--warn-once
+          (mevedel-diagnostic-scope (plist-get event :session))
           'execution-event-consumer
           "Execution event consumer failed: %s"
           (error-message-string err)))))))
@@ -1418,6 +1437,7 @@ outstanding, else nil."
                       (funcall acknowledgement (and success t) error)
                     (error
                      (mevedel--warn-once
+                      (mevedel-execution--diagnostic-scope record)
                       'execution-mailbox-acknowledgement
                       "Execution mailbox acknowledgement failed: %s"
                       (error-message-string err))))))))
@@ -1434,6 +1454,7 @@ outstanding, else nil."
               (funcall ack nil "Mailbox sink returned without acknowledging")))
         (error
          (mevedel--warn-once
+          (mevedel-execution--diagnostic-scope record)
           'execution-mailbox-delivery
           "Execution mailbox delivery failed: %s"
           (error-message-string err))
@@ -1478,7 +1499,8 @@ see `mevedel-execution--hasten-progress'."
               mevedel-execution--quiet-progress-interval))
       (timer-set-function timer #'mevedel-execution--emit-progress (list record))
       (setf (mevedel-execution--record-progress-timer record) timer)
-      (mevedel--ui-timer-activate timer t))))
+      (mevedel--ui-timer-activate
+       timer t (mevedel-execution--diagnostic-scope record)))))
 
 (defun mevedel-execution--hasten-progress (record)
   "Bring RECORD's next progress event forward after new output.
@@ -1499,7 +1521,8 @@ the UI-host primitives instead."
               ((> (float-time (timer--time timer)) (+ due 0.01))))
     (mevedel--ui-timer-cancel timer)
     (timer-set-time timer (seconds-to-time (max due (float-time))))
-    (mevedel--ui-timer-activate timer)))
+    (mevedel--ui-timer-activate
+     timer nil (mevedel-execution--diagnostic-scope record))))
 
 (defun mevedel-execution--unread-preview (record unread-bytes)
   "Return RECORD's bounded unread preview for UNREAD-BYTES."
@@ -1567,7 +1590,8 @@ settles a yielded execution.  The live spool always remains local."
                  (mevedel-execution--record-recoverable-output-path record)
                  native)))
           (error
-           (display-warning
+           (mevedel-diagnostic-warning
+            (mevedel-execution--diagnostic-scope record)
             'mevedel
             (format "Could not publish remote execution output: %s"
                     (error-message-string err))
@@ -1713,7 +1737,8 @@ Return `pending' while acknowledgement is outstanding, else nil."
                        (mevedel-execution--copy-value observation))
                  (mevedel-execution--consume-unread-range record range)
                  (mevedel-execution--retire-terminal-record record))
-             (display-warning
+             (mevedel-diagnostic-warning
+              (mevedel-execution--diagnostic-scope record)
               'mevedel
               (format "Execution %s completion was not delivered: %s"
                       (mevedel-execution--record-execution-id record)
@@ -1750,6 +1775,7 @@ Return `pending' while acknowledgement is outstanding, else nil."
         (funcall callback (mevedel-execution--observation record))
       (error
        (mevedel--warn-once
+        (mevedel-execution--diagnostic-scope record)
         'execution-poll-callback
         "Execution poll callback failed: %s"
         (error-message-string err))))))
@@ -2337,7 +2363,8 @@ and uses DESCRIPTION and TIMEOUT-MS for its root-owned event lifetime."
                        'unknown)
                       (mevedel-execution--finish-managed record))
                   (mevedel-execution--reject-owner-record
-                   record rejected-lease))))))
+                   record rejected-lease)))
+              (mevedel-diagnostic-scope session))))
         (unless (or (mevedel-execution--record-finished-p record)
                     (mevedel-execution--record-scheduler-lease record))
           (setf (mevedel-execution--record-scheduler-lease record) lease)))

@@ -15,6 +15,7 @@
 (require 'cl-lib)
 
 (require 'mevedel-instruction-registry)
+(require 'mevedel-utilities)
 
 ;; `gptel-request'
 (declare-function gptel--model-name "ext:gptel-request" (model))
@@ -268,11 +269,15 @@
 (defun mevedel--ov-actions-model (&optional instruction)
   "Select a request-local model for owning directive INSTRUCTION."
   (interactive (list (mevedel--ov-actions-getov)))
-  (let ((directive
-         (mevedel--topmost-instruction instruction 'directive)))
+  (let* ((directive
+          (mevedel--topmost-instruction instruction 'directive))
+         (workspace (mevedel--instruction-buffer-workspace
+                     (and directive (overlay-buffer directive))))
+         (scope (mevedel-diagnostic-scope workspace)))
     (when (memq (mevedel--directive-status directive)
                 '(implementing discussing))
-      (user-error "Cannot change the model while the directive is processing"))
+      (mevedel-diagnostic-user-error scope
+       "Cannot change the model while the directive is processing"))
     (pcase-let ((`(,provider ,effort ,inherited)
                  (mevedel--directive-model-values directive)))
       (mevedel-menu-open-model-selection
@@ -336,7 +341,7 @@ active chat session."
                     (mevedel--active-chat-buffer workspace))))
     (or (and (buffer-live-p buffer)
              (buffer-local-value 'mevedel--session buffer))
-        (user-error
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace)
          "Skill selection needs an open session for this workspace"))))
 
 (defun mevedel--ov-actions-toggle-skill (directive)
@@ -351,7 +356,8 @@ active chat session."
                     (cons (mevedel-skill-name skill) skill))
                   (mevedel-skills-user-visible-skills session))))
     (unless candidates
-      (user-error "No user-invocable skills available"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace)
+                                   "No user-invocable skills available"))
     (let* ((choice (completing-read "Toggle implementation skill: "
                                     candidates nil t))
            (skill (cdr (assoc choice candidates)))
@@ -565,7 +571,8 @@ active in the buffer."
                          pos 'mevedel-view-directive nil limit)
                         limit))))
       (unless found
-        (user-error "Directive answer is not in the live transcript"))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace)
+                                     "Directive answer is not in the live transcript"))
       (goto-char found)
       (when (get-text-property found 'mevedel-view-collapsed)
         (mevedel-view-toggle-section)))

@@ -25,6 +25,7 @@
   (require 'cl-lib))
 
 (require 'mevedel-recovery)
+(require 'mevedel-utilities)
 
 ;; `gptel'
 (defvar gptel-model)
@@ -998,7 +999,8 @@ waits for the host.  This never signals: when TARGET cannot be shared,
 the host is warned and SOURCE's guests are told the work continues in
 Emacs, so a failed share never blocks the caller's own handoff."
   (when-let* ((room (mevedel-collaboration--room-for-buffer source)))
-    (let ((successor
+    (let* ((scope (mevedel-diagnostic-scope target))
+           (successor
            (condition-case err
                (progn
                  (mevedel-collaboration--load-room-modules)
@@ -1006,8 +1008,8 @@ Emacs, so a failed share never blocks the caller's own handoff."
                   (mevedel-collaboration--data-buffer-session target)
                   target))
              (error
-              (display-warning
-               'mevedel
+              (mevedel-diagnostic-warning
+               scope 'mevedel
                (format "Could not share %s for its predecessor's guests: %s"
                        (if (buffer-live-p target) (buffer-name target) target)
                        (error-message-string err)))
@@ -1188,14 +1190,15 @@ view's interaction zone; prompts are adopted in the order they opened."
   (require 'mevedel-collaboration-share)
   (require 'mevedel-collaboration-transport))
 
-(defun mevedel-collaboration--confirm-share ()
-  "Ask to share a session through the relay; signal `user-error' if declined."
+(defun mevedel-collaboration--confirm-share (&optional owner)
+  "Ask to share OWNER's session; signal `user-error' if declined."
   (unless (yes-or-no-p
            (concat
             "Share visible prompts, responses, paths, and tool results, which "
             "may contain credentials or secrets, through the relay? Frames are "
             "sealed end to end; the links are bearer credentials. "))
-    (user-error "Collaboration not started")))
+    (mevedel-diagnostic-user-error
+     (mevedel-diagnostic-scope (or owner (current-buffer))) "Collaboration not started")))
 
 (defun mevedel-collaboration--data-buffer-session (data-buffer)
   "Return DATA-BUFFER's session, or signal `user-error'."
@@ -1207,12 +1210,15 @@ view's interaction zone; prompts are adopted in the order they opened."
   "Return (ROOM . STARTED) for DATA-BUFFER's room.
 Without a room, start one after the user consents; STARTED is then t."
   (mevedel-collaboration--load-room-modules)
-  (let ((session (mevedel-collaboration--data-buffer-session data-buffer))
-        (room (mevedel-collaboration--room-for-buffer data-buffer)))
-    (if room
-        (cons room nil)
-      (mevedel-collaboration--confirm-share)
-      (cons (mevedel-collaboration--start session data-buffer) t))))
+  (let ((scope (mevedel-diagnostic-scope data-buffer)))
+    (condition-case err
+        (let ((session (mevedel-collaboration--data-buffer-session data-buffer))
+              (room (mevedel-collaboration--room-for-buffer data-buffer)))
+          (if room
+              (cons room nil)
+            (mevedel-collaboration--confirm-share session)
+            (cons (mevedel-collaboration--start session data-buffer) t)))
+      (user-error (mevedel-diagnostic-user-error scope "%s" (error-message-string err))))))
 
 (defun mevedel-collaboration-view ()
   "Start live collaboration, or report the active room's links."
@@ -1239,7 +1245,7 @@ having been given is refused rather than reshared."
          (unless (and data-buffer
                       (mevedel-collaboration--data-buffer-session data-buffer)
                       (mevedel-collaboration--room-for-buffer data-buffer))
-           (mevedel-collaboration--confirm-share)
+           (mevedel-collaboration--confirm-share data-buffer)
            t)))
     (lambda (buffer id &optional route)
       (let ((session (mevedel-collaboration--data-buffer-session buffer))
@@ -1247,7 +1253,9 @@ having been given is refused rather than reshared."
             started)
         (unless room
           (unless consented
-            (user-error "This session is no longer shared; open the item again"))
+            (mevedel-diagnostic-user-error
+             (mevedel-diagnostic-scope session)
+             "This session is no longer shared; open the item again"))
           (setq room (mevedel-collaboration--start session buffer)
                 started t))
         ;; The viewer opens `?shared=ID' directly as that item's editor tab.
@@ -1318,7 +1326,8 @@ One guest may hold several tabs, which share its stable identity."
   "Return every session share and lobby of this Emacs, without secrets.
 Each entry is a plist with `:kind' (`room', `lobby', or `recorded-lobby'
 for a lobby recorded to run that is not running), `:label', `:guests',
-and `:connected'.  A room names its owning `:data-buffer', a lobby its
+and `:connected'.  A room names its owning `:data-buffer' and retains its
+`:diagnostic-scope' for local refusals after it stops; a lobby names its
 workspace root `:directory'.  Rooms come first, in the order they started.
 Read from memory and the small lobby record, so status displays may call
 it freely."
@@ -1332,7 +1341,8 @@ it freely."
                                      (mevedel-collaboration--transport-open-p
                                       transport)
                                      t)
-                     :data-buffer (plist-get room :data-buffer))))
+                     :data-buffer (plist-get room :data-buffer)
+                     :diagnostic-scope (mevedel-diagnostic-scope (plist-get room :session)))))
            (mevedel-collaboration--room-list))
    ;; A lobby exists only once its module is loaded.
    (and (fboundp 'mevedel-collaboration-lobby-shares)
@@ -1341,7 +1351,10 @@ it freely."
 (defun mevedel-collaboration--share-room (entry)
   "Return the live room of room ENTRY, or signal that it has stopped."
   (or (mevedel-collaboration--room-for-buffer (plist-get entry :data-buffer))
-      (user-error "%s is no longer shared" (plist-get entry :label))))
+      (mevedel-diagnostic-user-error
+       (or (plist-get entry :diagnostic-scope)
+           (mevedel-diagnostic-scope (plist-get entry :data-buffer)))
+       "%s is no longer shared" (plist-get entry :label))))
 
 (defun mevedel-collaboration-show-share (entry)
   "Show the links of ENTRY from `mevedel-collaboration-shares'.
@@ -1667,7 +1680,8 @@ re-arms the report, so a repeating fault does not flood either."
     (plist-put room :observer-failed t)
     (condition-case nil
         (progn
-          (display-warning
+          (mevedel-diagnostic-warning
+           (mevedel-diagnostic-scope (plist-get room :session))
            'mevedel (format "Live collaboration update failed: %s"
                             (if err (error-message-string err) "unknown error"))
            :warning)

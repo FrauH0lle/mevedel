@@ -181,8 +181,8 @@ itself is unaffected."
               (delete-file path)
             (mevedel--write-private-data-file path updated))
         (error
-         (display-warning
-          'mevedel
+         (mevedel-diagnostic-warning
+          root 'mevedel
           (format "Could not record the shared artifacts of %s for the next start: %s"
                   root (error-message-string err))))))))
 
@@ -217,8 +217,8 @@ stays recorded for the next start."
           (if (not (file-directory-p root))
               (progn
                 (mevedel-collaboration-artifact-room--set-recorded root nil)
-                (display-warning
-                 'mevedel (format "Shared artifacts of %s forgotten: the directory is gone"
+                (mevedel-diagnostic-warning
+                 root 'mevedel (format "Shared artifacts of %s forgotten: the directory is gone"
                                   root)))
             (let* ((workspace (mevedel-collaboration-artifact-room--workspace root))
                    (ids (mevedel-collaboration-artifact-room--shared-ids workspace)))
@@ -228,14 +228,14 @@ stays recorded for the next start."
                 (condition-case err
                     (mevedel-collaboration-artifact-room--start workspace id)
                   (error
-                   (display-warning
-                    'mevedel
+                   (mevedel-diagnostic-warning
+                    root 'mevedel
                     (format (concat "Shared artifact %s of %s not restarted: %s "
                                     "(revoking it ends the retries)")
                             id root (error-message-string err)))))))))
       (error
-       (display-warning
-        'mevedel
+       (mevedel-diagnostic-warning
+        root 'mevedel
         (format "Shared artifacts of %s not restarted: %s"
                 root (error-message-string err)))))))
 
@@ -274,7 +274,8 @@ artifact deleted meanwhile records nothing."
       (when (mevedel-artifact-store-meta workspace id)
         (condition-case err
             (mevedel-artifact-store-save-version workspace id)
-          (error (message "mevedel: no version of %s was saved: %s"
+          (error (mevedel-diagnostic-message
+                  (mevedel-diagnostic-scope workspace) "No version of %s was saved: %s"
                           id (error-message-string err))))))))
 
 
@@ -778,7 +779,7 @@ whose links are meant to keep working."
         (let ((inhibit-interaction t))
           (funcall handler room peer frame))
       (error
-       (message "mevedel: artifact room frame failed: %s"
+       (mevedel-diagnostic-message root "Artifact room frame failed: %s"
                 (error-message-string err))))))
 
 (defun mevedel-collaboration-artifact-room--on-control (root id event peer)
@@ -1096,7 +1097,9 @@ With SHARED, offer only the shared ones."
                                                  (plist-get row :kind) id)
                                          id))))
     (unless choices
-      (user-error (if shared "No artifact of this workspace is shared"
+      (mevedel-diagnostic-user-error
+       (mevedel-diagnostic-scope workspace)
+       (if shared "No artifact of this workspace is shared"
                     "This workspace has no whiteboard, document or HTML artifact to share")))
     (cdr (assoc (completing-read (if shared "Shared artifact: " "Share artifact: ")
                                  choices nil t)
@@ -1133,7 +1136,7 @@ already keeps its links."
                                  "lets whoever holds it read this %s, its edit "
                                  "link change it, until you revoke them. ")
                          (plist-get meta :title) (plist-get meta :kind))))
-      (user-error "Artifact not shared"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Artifact not shared"))
     (mevedel-collaboration-artifact-room--present
      meta (mevedel-collaboration-artifact-room-sharing workspace id 'share))))
 
@@ -1149,7 +1152,7 @@ for good."
     (unless (yes-or-no-p
              (format "Whoever holds its links loses access.  Revoke the links of \"%s\"? "
                      title))
-      (user-error "Artifact still shared"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Artifact still shared"))
     (mevedel-collaboration-artifact-room-sharing workspace id 'revoke)
     (message "mevedel: %s is no longer shared" title)))
 
@@ -1165,7 +1168,7 @@ copied to the kill ring."
     (unless (yes-or-no-p
              (format "The old links stop working.  Replace the links of \"%s\"? "
                      (plist-get meta :title)))
-      (user-error "Links unchanged"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Links unchanged"))
     (mevedel-collaboration-artifact-room--present
      meta (mevedel-collaboration-artifact-room-sharing workspace id 'rotate))))
 

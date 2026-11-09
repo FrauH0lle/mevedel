@@ -7,6 +7,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (require 'gptel)
 (require 'mevedel-acp)
 (require 'mevedel-acp-compaction)
@@ -84,8 +86,14 @@ A stop decision cannot be hidden by another hook's block decision."
      (lambda (function)
        (unless (memq function '(mevedel-tool-repair-pre-tool-call
                                 mevedel-tool-repair-post-tool-call))
-         (let ((result (with-demoted-errors "Tool hook error: %S"
-                         (funcall function (copy-sequence call)))))
+         (let ((result
+                (condition-case-unless-debug err
+                    (funcall function (copy-sequence call))
+                  (error
+                   (mevedel-diagnostic-message
+                    (mevedel-diagnostic-scope (plist-get info :buffer))
+                    "Tool hook error: %S" err)
+                   nil))))
            (when (and (eq hook 'gptel-pre-tool-call-functions)
                       (or (plist-member result :confirm)
                           (and (plist-member result :name)
@@ -178,6 +186,7 @@ PREPARE, when non-nil, receives a zero-argument continuation.  Startup waits
 for it; duplicate or late continuations cannot start a cancelled turn."
   (let* ((info (mevedel-engine-info request))
          (buffer (plist-get info :buffer))
+         (scope (mevedel-diagnostic-scope buffer))
          (calls (make-hash-table :test #'equal))
          (root-p (mevedel-request-p request))
          (admission (if root-p request (plist-get info :mevedel-request)))
@@ -351,8 +360,8 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                                             (or (plist-get info :tracking-marker)
                                                 (plist-get info :position))))
                      (error
-                      (display-warning
-                       'mevedel (format "Post-response hook failed: %s"
+                      (mevedel-diagnostic-warning
+                       scope 'mevedel (format "Post-response hook failed: %s"
                                         (error-message-string err)) :warning)))
                    (setf (mevedel-engine-info request)
                          (plist-put (mevedel-engine-info request) :mevedel-response-end

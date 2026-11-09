@@ -12,6 +12,7 @@
 (require 'cl-lib)
 
 (require 'gptel-request)
+(require 'mevedel-utilities)
 
 ;; `mevedel-pipeline'
 (autoload 'mevedel-pipeline-run-tool "mevedel-pipeline")
@@ -23,7 +24,7 @@
 (declare-function mevedel--truncate-display
                   "mevedel-utilities" (text width &optional ellipsis))
 (declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
+                  "mevedel-utilities" (scope key format &rest args))
 (declare-function mevedel-library-source-directory "mevedel-utilities" (file))
 (autoload 'mevedel--truncate-display "mevedel-utilities")
 (autoload 'mevedel--warn-once "mevedel-utilities")
@@ -267,8 +268,9 @@ Intended for testing and cleanup."
              when (eq (nth 2 arg) :required)
              return (intern (format ":%s" (car arg))))))
 
-(defun mevedel-tool-display-string (tool-name args)
+(defun mevedel-tool-display-string (tool-name args &optional scope)
   "Return a display string for TOOL-NAME with ARGS.
+SCOPE identifies the originating workspace when label generation fails.
 Looks up the tool in the registry and uses its `display-arg' slot.
 Returns nil when no meaningful display string can be produced.
 
@@ -288,6 +290,7 @@ one this function already documents; losing the turn is not."
       (mevedel-tool--display-string tool-name args)
     (error
      (mevedel--warn-once
+      (mevedel-diagnostic-scope scope)
       (list 'tool-display-string tool-name)
       "Tool display string for %s signaled, omitting label: %S"
       tool-name error)

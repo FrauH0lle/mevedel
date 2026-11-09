@@ -9,6 +9,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (require 'mevedel-recovery)
 
 (require 'cl-lib)
@@ -257,7 +259,7 @@
 (declare-function mevedel--gc-hold "mevedel-utilities" (key live-p))
 (defvar mevedel--gc-settlement-grace)
 (declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
+                  "mevedel-utilities" (scope key format &rest args))
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-rebuild
@@ -656,8 +658,9 @@ is returned here."
                       (mevedel-artifact-backend-save-version
                        workspace id (mevedel-session-session-id
                                      (mevedel-request-session request)))
-                    (error (message "mevedel: no version of %s was saved: %s"
-                                    id (error-message-string err)))))
+                    (error (mevedel-diagnostic-message (mevedel-diagnostic-scope workspace)
+                                    "%s (no version of %s was saved)"
+                                    (error-message-string err) id))))
                 (when (equal (mevedel-request-origin request) "/root")
                   ;; A long-running Emacs must keep expiring old sessions.
                   (mevedel-session-persistence-schedule-cleanup
@@ -692,8 +695,9 @@ Run `mevedel-turn-settled-functions' with OUTCOME in the chat buffer."
       (dolist (function mevedel-turn-settled-functions)
         (condition-case err
             (funcall function outcome)
-          (error (message "mevedel: turn settlement step %s failed: %s"
-                          function (error-message-string err)))))
+          (error (mevedel-diagnostic-message (mevedel-diagnostic-scope chat-buffer)
+                          "%s (turn settlement step %s failed)"
+                          (error-message-string err) function))))
       (when (featurep 'mevedel-readiness)
         (mevedel-readiness-record-turn info outcome (mevedel--fsm-error-message fsm)))
       (when (and (bound-and-true-p mevedel--session)
@@ -792,7 +796,8 @@ Run `mevedel-turn-settled-functions' with OUTCOME in the chat buffer."
               (let ((notice (format "%s is unavailable; using %s" selector
                                     (mevedel-model--provider-label provider))))
                 (mevedel-recovery-report mevedel--session "model" 'model notice nil)
-                (message "mevedel: %s" notice)))))
+                (mevedel-diagnostic-message (mevedel-diagnostic-scope chat-buffer)
+                                            "%s" notice)))))
         (mevedel-view--append-request-summary
          chat-buffer
          (plist-get info :position)
@@ -869,7 +874,9 @@ Signal when the request is missing or its reservation is not the next turn."
                       (plist-put (mevedel-engine-info fsm) :mevedel-turn-saved t)))
             (error
              (setf (mevedel-session-ptc-checkpoints mevedel--session) ptc-checkpoints)
-             (mevedel--warn-once 'turn-auto-save "Session auto-save failed: %s" err)
+             (mevedel--warn-once (mevedel-diagnostic-scope mevedel--session)
+                                'turn-auto-save "%s (Session auto-save failed)"
+                                (error-message-string err))
              (setq-local mevedel-session--save-failed t)
              (force-mode-line-update))))))))
 
@@ -919,7 +926,8 @@ The terminal admission hold stays live between publication and this phase."
                 (mevedel-journal-process-schedule workspace root-p)
                 (when root-p (mevedel-journal-idle-arm-seal mevedel--session chat-buffer)))
             (error
-             (mevedel--warn-once 'journal-capture "Journal capture checkpoint failed: %s"
+             (mevedel--warn-once (mevedel-diagnostic-scope workspace)
+                                'journal-capture "%s (Journal capture checkpoint failed)"
                                  (error-message-string err))))
           (when root-p
             (mevedel-journal-cleanup-schedule workspace)
@@ -1374,11 +1382,15 @@ also autosaves, and it reaches here from the same process sentinel."
     (condition-case err
         (funcall handler fsm)
       (error
-       (mevedel--warn-once
-        (list 'turn-fsm-handler (mevedel--handler-name handler))
-        "FSM handler %s failed: %s"
-        (mevedel--handler-name handler)
-        (error-message-string err))
+       (let* ((info (mevedel-engine-info fsm))
+              (request (plist-get info :mevedel-request)))
+         (mevedel--warn-once
+          (mevedel-diagnostic-scope
+           (if request (mevedel-request-session request) (plist-get info :buffer)))
+          (list 'turn-fsm-handler (mevedel--handler-name handler))
+          "%s (FSM handler %s failed)"
+          (error-message-string err)
+          (mevedel--handler-name handler)))
        nil))))
 
 

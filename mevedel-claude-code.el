@@ -7,6 +7,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (require 'acp)
 (require 'cl-lib)
 (require 'button)
@@ -186,7 +188,9 @@ the user's Claude settings is reset to `default': mevedel owns permissions."
                        (mevedel-recovery-report mevedel--session "effort" 'configuration
                                                 "Claude reset unsupported reasoning effort to its default" nil)
                        (mevedel-model-set-session-effort mevedel--session nil buffer)))))
-               (message "mevedel: Claude %s does not support effort %s; using its default" model effort))
+               (mevedel-diagnostic-message
+                (or (mevedel-acp-diagnostic-scope connection) 'unavailable)
+                "Claude %s does not support effort %s; using its default" model effort))
              ;; A retained child reports what Claude acknowledged, including a
              ;; recovered model or its default effort, not what it requested.
              (when-let* ((invocation
@@ -334,7 +338,7 @@ Return the setup buffer."
                        (plist-get (mevedel-claude-code-launch "Setup check" [] "sonnet" nil)
                                   :prepare-launch))
                       "Ready for Claude Code subscription sessions.")
-                  (error (error-message-string err))))
+                  (error (mevedel-diagnostic-format 'global "%s" (error-message-string err)))))
         (buffer (get-buffer-create "*mevedel Claude Code setup*")))
     (mevedel-claude-code-register)
     (with-current-buffer buffer

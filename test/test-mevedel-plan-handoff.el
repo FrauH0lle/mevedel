@@ -391,7 +391,9 @@
   (let* ((retry '(:step submit))
          (session
           (mevedel-session--create
-           :name "main" :plan-metadata
+           :name "main"
+           :workspace (mevedel-workspace--create :root "/tmp/origin/worktree")
+           :plan-metadata
            (list :implementation-retry retry)))
          (chat-buffer (generate-new-buffer " *mevedel-plan-dead-source*"))
          (fsm (gptel-make-fsm :info nil)))
@@ -403,7 +405,8 @@
       (cl-letf (((symbol-function 'display-warning)
                  (lambda (&rest warning) (push warning warnings))))
         (mevedel-plan-handoff-settle-request fsm 'success))
-      (should warnings))
+      (should (string-prefix-p "mevedel [/tmp/origin/worktree]: "
+                               (cadar warnings))))
     (should
      (eq retry
          (plist-get (mevedel-session-plan-metadata session)
@@ -500,9 +503,14 @@
       (mevedel-retry-plan-implementation session (current-buffer)))
     (should (equal (list session (current-buffer)) dispatched))
     (setf (mevedel-session-plan-metadata session) nil)
-    (should-error
-     (mevedel-retry-plan-implementation session (current-buffer))
-     :type 'user-error)))
+    (setf (mevedel-session-workspace session)
+          (mevedel-workspace--create :root "/tmp/explicit/worktree"))
+    (let ((failure
+           (should-error
+            (mevedel-retry-plan-implementation session (current-buffer))
+            :type 'user-error)))
+      (should (equal (cadr failure)
+                     "mevedel [/tmp/explicit/worktree]: No accepted plan implementation to retry")))))
 
 (mevedel-deftest mevedel-plan-handoff-selection-valid-p
   (:doc "accepts exactly the supported location/context/mode matrix")

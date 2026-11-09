@@ -98,11 +98,17 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--run-periodic-timer
-                  "mevedel-utilities" (period function &rest arguments))
+                  "mevedel-utilities" (scope period function &rest arguments))
 (declare-function mevedel--ui-timer-cancel "mevedel-utilities" (timer))
+(declare-function mevedel-diagnostic-message "mevedel-utilities" (scope format-string &rest args))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format-string &rest args))
 (declare-function mevedel-library-source-directory "mevedel-utilities" (file))
 (autoload 'mevedel--run-periodic-timer "mevedel-utilities")
 (autoload 'mevedel--ui-timer-cancel "mevedel-utilities")
+(autoload 'mevedel-diagnostic-message "mevedel-utilities")
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
 (autoload 'mevedel-library-source-directory "mevedel-utilities")
 
 ;; `mevedel-view-render'
@@ -504,7 +510,7 @@ supplies them itself."
                (write-region content nil file t 'silent))))
           t)
       (error
-       (message "mevedel: telemetry persistence failed: %s"
+       (mevedel-diagnostic-message (mevedel-diagnostic-scope session) "Telemetry persistence failed: %s"
                 (error-message-string err))
        nil))))
 
@@ -537,7 +543,7 @@ keys are always discarded.  Return the sanitized event plist."
                   (cons entry pending)))
           entry)
       (error
-       (message "mevedel: telemetry event failed: %s"
+       (mevedel-diagnostic-message (mevedel-diagnostic-scope session) "Telemetry event failed: %s"
                 (error-message-string err))
        nil))))
 
@@ -584,7 +590,7 @@ Failures are diagnostic only and never alter the background operation."
             (mevedel-telemetry--append-workspace workspace text))
           entry)
       (error
-       (message "mevedel: workspace telemetry failed: %s" (error-message-string err))
+       (mevedel-diagnostic-message (mevedel-diagnostic-scope workspace) "Workspace telemetry failed: %s" (error-message-string err))
        nil))))
 
 (defun mevedel-telemetry-forwarded-audit-p (session)
@@ -952,7 +958,7 @@ other windows with the wrong background."
       ((error quit)
        (when (eq thread mevedel-telemetry--lag-thread)
          (mevedel-telemetry--lag-stop)
-         (message "mevedel: event-loop lag watching stopped: %s"
+         (mevedel-diagnostic-message 'global "Event-loop lag watching stopped: %s"
                   (error-message-string err)))))))
 
 (defun mevedel-telemetry--lag-start ()
@@ -981,6 +987,7 @@ other windows with the wrong background."
         (unless mevedel-telemetry--lag-thread
           (setq mevedel-telemetry--lag-timer
                 (mevedel--run-periodic-timer
+                 'global
                  (if (seq-some (lambda (frame) (eq (framep frame) 'pgtk))
                                (frame-list))
                      mevedel-telemetry--lag-pgtk-interval
@@ -1090,7 +1097,7 @@ string identifier, never evidence or focus text.  No session is required."
                             mevedel-telemetry--lag-pass-windows)
                   (mevedel-telemetry--lag-stop)))))
         (error
-         (message "mevedel: memory pass lag watching failed: %s"
+         (mevedel-diagnostic-message (mevedel-diagnostic-scope workspace) "Memory pass lag watching failed: %s"
                   (error-message-string err))
          nil)))))
 
@@ -1205,7 +1212,7 @@ never reports settling."
                (condition-case err
                    (mevedel-telemetry--append-workspace
                     (car rows) (apply #'concat (nreverse (cdr rows))))
-                 (error (message "mevedel: workspace telemetry failed: %s"
+                 (error (mevedel-diagnostic-message (mevedel-diagnostic-scope (car rows)) "Workspace telemetry failed: %s"
                                  (error-message-string err))))))
            batch)))
       (unless (or mevedel-telemetry--lag-windows
@@ -1338,7 +1345,7 @@ Return an opaque span plist accepted by `mevedel-telemetry-finish'."
        :prompt-chars (and text (length text))
        :blocked (and mevedel-telemetry-profiler-fail-on-prompt t)))
     (if mevedel-telemetry-profiler-fail-on-prompt
-        (user-error "Interactive prompt blocked during telemetry run: %s"
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Interactive prompt blocked during telemetry run: %s"
                     function)
       (apply original args))))
 
@@ -1485,9 +1492,9 @@ MODE defaults to `cpu+mem'.  Interactively with a prefix argument, prompt for
   (let ((session (mevedel-telemetry-current-session))
         (mode (or mode 'cpu+mem)))
     (unless session
-      (user-error "No mevedel session in the current buffer"))
+      (mevedel-diagnostic-user-error 'unavailable "No mevedel session in the current buffer"))
     (when mevedel-telemetry--profiler-session
-      (user-error "A mevedel profiler run is already active"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope mevedel-telemetry--profiler-session) "A mevedel profiler run is already active"))
     ;; A cold session has no directory yet, so the run would have nowhere to
     ;; put its artifacts.  Materialize it here rather than making the user
     ;; send a throwaway turn first.
@@ -1499,7 +1506,7 @@ MODE defaults to `cpu+mem'.  Interactively with a prefix argument, prompt for
            (current-buffer))
        nil t)
       (unless (mevedel-session-save-path session)
-        (user-error "Could not materialize the mevedel session for profiling")))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Could not materialize the mevedel session for profiling")))
     (require 'profiler)
     (setq mevedel-telemetry--profiler-run-id
           (format "run-%s-%s"
@@ -1529,8 +1536,9 @@ MODE defaults to `cpu+mem'.  Interactively with a prefix argument, prompt for
           (message "mevedel: profiler started for session %s"
                    (or (mevedel-session-session-id session) "pending")))
       (error
-       (with-demoted-errors "mevedel: profiler rollback failed: %S"
-         (profiler-stop))
+       (condition-case-unless-debug rollback-error (profiler-stop)
+         (error (mevedel-diagnostic-message (mevedel-diagnostic-scope session)
+                                           "Profiler rollback failed: %S" rollback-error)))
        (mevedel-telemetry--profiler-release)
        (signal (car err) (cdr err))))))
 
@@ -1593,7 +1601,7 @@ so version control never hears about any of it."
   "Stop the active mevedel profiler and save its session artifacts."
   (interactive)
   (unless mevedel-telemetry--profiler-session
-    (user-error "No mevedel profiler run is active"))
+    (mevedel-diagnostic-user-error 'global "No mevedel profiler run is active"))
   (let* ((session mevedel-telemetry--profiler-session)
          (directory (mevedel-telemetry-profiler-directory session))
          (failure-stage 'stop))
@@ -1712,7 +1720,7 @@ connection settings."
                     (file-name-concat directory "view-render-debug.log"))
                    (default-file-modes #o600))
               (unless (marker-buffer marker)
-                (user-error "The active gptel debug log buffer was killed"))
+                (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "The active gptel debug log buffer was killed"))
               (make-directory directory t)
               (with-temp-buffer
                 (insert-buffer-substring (marker-buffer marker) marker)

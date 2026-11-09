@@ -52,6 +52,12 @@
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format-string &rest args))
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+
 ;; `mevedel-system'
 (defvar mevedel-memory-dirs)
 
@@ -303,7 +309,7 @@ registry, creating one lazily if needed."
 
 (defun mevedel-workspace-current ()
   "Return the current buffer's workspace for a command, or signal `user-error'."
-  (or (mevedel-workspace) (user-error "No mevedel workspace here")))
+  (or (mevedel-workspace) (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No mevedel workspace here")))
 
 
 ;;
@@ -491,7 +497,7 @@ This grants the LLM permission to read and write files in this
 directory and its subdirectories for the current workspace only."
   (interactive "DAdd project root to current workspace: ")
   (unless (file-directory-p directory)
-    (user-error "%s is not a directory" directory))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "%s is not a directory" directory))
   (with-current-buffer (mevedel-workspace--session-data-buffer)
     (let* ((expanded (file-name-as-directory (expand-file-name directory)))
            ;; Try to get project root, otherwise default to directory
@@ -515,7 +521,7 @@ directory and its subdirectories for the current workspace only."
             (current-roots (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)))
        (list (if current-roots
                  (completing-read "Remove project root: " current-roots nil t)
-               (user-error "No additional project roots configured for this workspace"))))))
+               (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No additional project roots configured for this workspace"))))))
   (with-current-buffer (mevedel-workspace--session-data-buffer)
     (let* ((workspace-root (mevedel-workspace-root (mevedel-workspace)))
            (current-roots (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)))

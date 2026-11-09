@@ -10,6 +10,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (require 'diff-mode)
 
 ;; `mevedel-structs'
@@ -194,7 +196,7 @@ repair heuristically instead of prompting or modifying the diff."
                         (point)))
                    (looking-at-p diff-hunk-header-re)))))
           (if (not (zerop failures))
-              (message "%d hunks failed; no buffers changed" failures)
+              (mevedel-diagnostic-message (mevedel-diagnostic-scope (current-buffer)) "%d hunks failed; no buffers changed" failures)
             (let ((edits-by-buffer (make-hash-table :test 'eq))
                   buffer-order
                   changes)

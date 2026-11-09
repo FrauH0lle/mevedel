@@ -15,6 +15,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 
 (require 'cl-lib)
 (require 'mevedel-engine)
@@ -720,14 +722,16 @@ for the next turn."
                  (setcdr data (cdr previous))
                  (signal (car err) (cdr err)))))
             (dolist (commit (plist-get events :commits))
-              (with-demoted-errors "mevedel: reminder commit failed: %S"
-                (funcall commit)))))
+              (condition-case-unless-debug commit-error (funcall commit)
+                (error (mevedel-diagnostic-message (mevedel-diagnostic-scope buffer)
+                                                  "Reminder commit failed: %S" commit-error))))))
         ;; Staged commits belong to a payload existing at all: hook
         ;; context reached it as prompt text rather than as a block, so
         ;; gating these on `entries' would leave it pending forever.
         (dolist (commit staged-commits)
-          (with-demoted-errors "mevedel: reminder commit failed: %S"
-            (funcall commit)))
+          (condition-case-unless-debug commit-error (funcall commit)
+            (error (mevedel-diagnostic-message (mevedel-diagnostic-scope buffer)
+                                              "Reminder commit failed: %S" commit-error))))
         (setf (gptel-fsm-info fsm)
               (plist-put
                (plist-put

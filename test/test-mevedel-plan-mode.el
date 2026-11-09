@@ -753,6 +753,7 @@
   :doc "a Worktree card names queued input as the blocker and RET refuses with the same reason"
   (let* ((session (mevedel-session--create
                    :authority-mode 'pid-lock
+                   :workspace (mevedel-workspace--create :root "/tmp/plan-origin")
                    :name "test" :working-directory default-directory))
          (data-buffer (generate-new-buffer " *plan-blocked-data*"))
          (view-buffer (generate-new-buffer " *plan-blocked-view*"))
@@ -800,7 +801,7 @@
                   (unless (string-prefix-p "#" line)
                     (should (<= (string-width line) width)))))))
           (should
-           (equal notice
+           (equal (concat "mevedel [/tmp/plan-origin]: " notice)
                   (condition-case err
                       (call-interactively
                        (lookup-key (plist-get descriptor :keymap) (kbd "RET")))

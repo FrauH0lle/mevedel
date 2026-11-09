@@ -160,6 +160,7 @@
         (should (eq 'success (plist-get outcome :status))))))
 
   :doc "process loss fails the active prompt, warns the host with stderr, without restarting"
+  (let ((mevedel-acp-test--launch-options '(:diagnostic-scope "/workspace/provider/")))
   (mevedel-acp-test--with-connection nil
     (let (outcomes warnings)
       (cl-letf (((symbol-function 'display-warning)
@@ -177,6 +178,8 @@
         (await (lambda () outcomes)))
       (should (= 1 (length outcomes)))
       (should (eq 'error (plist-get (car outcomes) :status)))
+      (should (string-prefix-p "mevedel [/workspace/provider/]: " (car warnings)))
+      (should-not (string-search "mevedel [" (plist-get (car outcomes) :message)))
       (let ((log (file-name-concat mevedel-user-dir "agent-stderr.log")))
         ;; Host logs stay out of the classified, shared outcome message,
         ;; which names the log that outlives the warning buffer instead.
@@ -190,7 +193,7 @@
         (should (= #o600 (file-modes log))))
       (should-error
        (mevedel-acp-prompt connection [((type . "text") (text . "again"))]
-                           #'ignore #'ignore))))
+                           #'ignore #'ignore)))))
 
   :doc "a prompt refused before any tool call is re-sent once when the launch accepts the failure"
   (let ((mevedel-acp-test--launch-options

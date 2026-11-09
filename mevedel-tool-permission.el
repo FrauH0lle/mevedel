@@ -22,6 +22,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-telemetry)
 (require 'mevedel-tool-registry)
+(require 'mevedel-utilities)
 
 ;; `mevedel-bash-policy'
 (declare-function mevedel-bash-policy-decision-specifier-value
@@ -240,6 +241,7 @@ ASK-DECISION is logged only when hooks leave queue admission unresolved.
 FALLBACK-OUTCOME settles an unresolved request without queue admission."
   (let ((caller-settle settle))
     (mevedel-permission--run-async
+     (mevedel-diagnostic-scope session)
      (lambda (finish guard)
        (let* ((settle (lambda (updated outcome)
 			(funcall finish (list updated outcome))))

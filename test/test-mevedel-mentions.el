@@ -2314,7 +2314,8 @@ injector would once the payload exists."
         (mevedel--transform-expand-mentions nil))
       (setq transformed (buffer-string)))
     (should (string-match-p "not connected" transformed))
-    (should (string-match-p "mevedel: MCP .* unavailable" warning))
+    (should (string-match-p (concat (regexp-quote "mevedel [workspace unavailable]: ")
+                                   "MCP .* unavailable") warning))
     (should (equal (concat "Use " token " and continue") input))
     (should (equal "file:///guide"
                    (plist-get
@@ -2380,7 +2381,8 @@ injector would once the payload exists."
             (setq transformed (buffer-string)))
           (should (string-match-p "unavailable" transformed))
           (should-not (string-match-p "replacement body" transformed))
-          (should (string-match-p "mevedel: reference .* unavailable" warning))
+          (should (string-match-p (concat (regexp-quote "mevedel [workspace unavailable]: ")
+                                         "reference .* unavailable") warning))
           (should (equal (format "check %s and continue" token) input))
           (should (equal uuid
                          (plist-get

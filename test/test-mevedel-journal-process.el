@@ -14,6 +14,43 @@
 (require 'mevedel-journal-claim)
 (require 'mevedel-memory-pass)
 (require 'mevedel-session-control-fs)
+(require 'mevedel-journal-process)
+(require 'mevedel-journal-worker)
+(require 'mevedel-transport)
+
+(mevedel-deftest mevedel-journal-process-schedule/attribution ()
+  ,test
+  (test)
+  :doc "deferred worker failure retains captured scope after origin death and buffer switch"
+  (let* ((workspace (mevedel-workspace--create :root "/ssh:origin:/project with spaces/"))
+         (origin (generate-new-buffer " *journal-origin*"))
+         (mevedel-journal-enabled t)
+         (mevedel-journal-process--inhibit-scheduling nil)
+         (mevedel-journal-process--workers (make-hash-table :test #'equal))
+         (mevedel-journal-process--running (make-hash-table :test #'equal))
+         (mevedel-journal-process--recover-requested (make-hash-table :test #'equal))
+         dispatch complete warnings)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-journal-process--key) (lambda (_) "origin-key"))
+                  ((symbol-function 'mevedel-transport-schedule-idle)
+                   (lambda (_table _key _tag _path thunk) (setq dispatch thunk)))
+                  ((symbol-function 'mevedel-journal-worker-local-p) (lambda (_) t))
+                  ((symbol-function 'mevedel-journal-worker-start)
+                   (lambda (_workspace _operation _payload callback &rest _)
+                     (setq complete callback) 'origin-worker))
+                  ((symbol-function 'display-warning)
+                   (lambda (type text &optional level _buffer) (push (list type text level) warnings))))
+          (with-current-buffer origin (mevedel-journal-process-schedule workspace))
+          (kill-buffer origin)
+          ;; A mutable owner must not rebind an already scheduled diagnostic.
+          (setf (mevedel-workspace-root workspace) "/tmp/rebound/")
+          (with-temp-buffer
+            (setq-local mevedel--workspace (mevedel-workspace--create :root "/tmp/current/"))
+            (funcall dispatch)
+            (funcall complete '(:error "Digest preparation failed")))
+          (should (equal warnings
+                         '((mevedel "mevedel [/ssh:origin:/project with spaces/]: Digest preparation failed" :warning)))))
+      (when (buffer-live-p origin) (kill-buffer origin)))))
 (autoload 'mevedel-journal-process-next "mevedel-journal-process")
 (autoload 'mevedel-journal-process-cancel "mevedel-journal-process")
 (defvar mevedel-journal-process--timeout-seconds)
@@ -469,7 +506,8 @@
          (should (= 4 calls))
          (mevedel-test--with-captured-diagnostics nil
            (should-not (mevedel-journal-process-next workspace)))
-         (should (gethash (plist-get capture :id) mevedel-journal-process--exhausted-warned))
+         (should (gethash (list (mevedel-workspace-root workspace) (plist-get capture :id))
+                          mevedel-journal-process--exhausted-warned))
          (should (= 4 calls))
          (should (mevedel-journal-pins-present-p (mevedel-session-save-path session))))))))
 

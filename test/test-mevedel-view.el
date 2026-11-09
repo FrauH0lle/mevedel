@@ -22,6 +22,7 @@
 (require 'mevedel-background-list)
 (require 'mevedel-gptel-stream-bridge)
 (require 'mevedel-view)
+(require 'mevedel-view-render)
 (require 'mevedel-view-segments)
 (require 'mevedel-view-stream)
 (require 'mevedel-menu)
@@ -48,7 +49,7 @@
   ,test
   (test)
   :doc "blocking notices do not offer dismissal"
-  (should (equal "Sign in"
+  (should (equal "mevedel [workspace unavailable]: Sign in"
                  (mevedel-view--status-recovery-body
                   (mevedel-session--create)
                   '(:message "Sign in" :blocking t))))
@@ -361,6 +362,30 @@
               (should-not mevedel-view--render-timer)))
         (with-current-buffer view-buf
           (mevedel-view--cancel-scheduled-render))))))
+
+(mevedel-deftest mevedel-view--flush-scheduled-render/diagnostic-scope ()
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (setq-local mevedel--workspace
+                  (mevedel-workspace--create :root "/project A/same/")))
+    (with-current-buffer view-buf
+      (mevedel-view--schedule-render 'full data-buf 10)
+      (cancel-timer mevedel-view--render-timer)
+      (setq mevedel-view--render-timer nil))
+    (with-current-buffer data-buf
+      (let ((kill-buffer-hook nil)) (kill-buffer data-buf)))
+    (with-temp-buffer
+      (setq-local mevedel--workspace
+                  (mevedel-workspace--create :root "/project B/same/"))
+      (cl-letf (((symbol-function 'mevedel-view-historical-segment-p) (lambda () nil))
+                ((symbol-function 'mevedel-view--unattended-p) (lambda (&rest _) nil))
+                ((symbol-function 'mevedel-view--full-rerender)
+                 (lambda () (error "Injected render failure"))))
+        (let (messages)
+          (mevedel-test--with-captured-messages messages
+            (mevedel-view--flush-scheduled-render view-buf t))
+          (should (equal "mevedel [/project A/same/]: Injected render failure (View refresh failed)\n"
+                         messages)))))))
 
 (mevedel-deftest mevedel-view--flush-scheduled-render/tool-rows
   (:doc "coalesced full rendering subsumes rows while incremental retains them")

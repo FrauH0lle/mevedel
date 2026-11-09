@@ -8,6 +8,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 ;; `gptel'
 (declare-function gptel-curl--stream-filter
                   "ext:gptel-request" (process output))
@@ -45,7 +47,7 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--timer-pending-p "mevedel-utilities" (timer))
 (declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
+                  "mevedel-utilities" (scope key format &rest args))
 (autoload 'mevedel--timer-pending-p "mevedel-utilities")
 (autoload 'mevedel--warn-once "mevedel-utilities")
 (eval-when-compile (require 'mevedel-utilities))
@@ -151,7 +153,8 @@ chunk when that stale transformer fails."
   (when-let* ((transformer (and (consp info)
                                 (plist-get info :transformer)))
               ((functionp transformer))
-              ((not (plist-get info :mevedel-transformer-wrapped))))
+              ((not (plist-get info :mevedel-transformer-wrapped)))
+              (scope (mevedel-diagnostic-scope (plist-get info :buffer))))
     (plist-put info :mevedel-transformer-wrapped t)
     (plist-put
      info :transformer
@@ -160,7 +163,7 @@ chunk when that stale transformer fails."
            (funcall transformer str)
          (error
           (mevedel--warn-once
-           'stream-bridge-transformer
+           scope 'stream-bridge-transformer
            "Ignoring stale gptel stream transformer: %s"
            (error-message-string err))
           str))))))
@@ -253,6 +256,8 @@ code replaced meanwhile is not restored over that replacement."
   ;; until the remote command returns.
   (unless (mevedel--timer-pending-p
            (plist-get info :mevedel-stream-insert-timer))
+    (plist-put info :mevedel-stream-diagnostic-scope
+               (mevedel-diagnostic-scope (plist-get info :buffer)))
     (plist-put
      info :mevedel-stream-insert-timer
      (mevedel-transport-run-at-time
@@ -287,8 +292,10 @@ early falls in step with this one, sharing its passes from then on."
       (dolist (function (nreverse (car after)))
         (condition-case-unless-debug err
             (funcall function)
-          (error (message "mevedel: stream batch follow-up failed: %s"
-                          (error-message-string err)))))
+          (error (mevedel-diagnostic-message
+                  (or (plist-get info :mevedel-stream-diagnostic-scope) 'unavailable)
+                  "Stream batch follow-up failed: %s"
+                  (error-message-string err)))))
       (let ((delay mevedel-gptel-stream-bridge-insert-batch-delay))
         (mevedel-transport-resume-paused
          (and (numberp delay) (> delay 0) (max (/ delay 2.0) 0.1)))))))
@@ -453,7 +460,7 @@ was a leading allocator in a profiled session."
               (process-put process 'mevedel-gptel-stream-bridge--pending-output nil)
               (process-put process 'mevedel-gptel-stream-bridge--filter-retries nil)
               (mevedel--warn-once
-               'stream-bridge-orphan-chunk
+               'unavailable 'stream-bridge-orphan-chunk
                "Dropping gptel stream chunk without registered request FSM"))
           (process-put process 'mevedel-gptel-stream-bridge--filter-retries retries)
           (process-put

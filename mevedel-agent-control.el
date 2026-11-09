@@ -10,6 +10,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (eval-when-compile
   (require 'cl-lib)
   (require 'subr-x)
@@ -246,7 +248,7 @@
                   "mevedel-utilities"
                   (head tail total-length &optional preview-size))
 (declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
+                  "mevedel-utilities" (scope key format &rest args))
 
 (defconst mevedel-agent-control--result-limit (* 32 1024)
   "Maximum number of characters in an inline RESULT payload.")
@@ -488,8 +490,8 @@ blockers compose and stale releases cannot alter a later follow-up."
                         mevedel--agent-invocation))))))
           (if saved-p
               (kill-buffer buffer)
-            (display-warning
-             'mevedel
+            (mevedel-diagnostic-warning
+             (mevedel-diagnostic-scope session) 'mevedel
              (format
               "Retained agent transcript could not be saved during session teardown: %s"
               (car entry))
@@ -758,8 +760,8 @@ the whole set, backing off from 50 ms to 500 ms while publication stays busy."
             ;; Arbitrary waiter code must open a fresh transaction of its own.
             (mevedel-session-durability-call-outside-transaction (cdr entry))
           (error
-           (display-warning
-            'mevedel (format "Mailbox notification failed: %s"
+           (mevedel-diagnostic-warning
+            (mevedel-diagnostic-scope session) 'mevedel (format "Mailbox notification failed: %s"
                              (error-message-string err)) :warning)))))
     (cond
      ((not (buffer-live-p (mevedel-session-root-buffer session)))
@@ -791,8 +793,8 @@ or teardown to discard.  A callback failure is diagnostic only."
     (condition-case err
         (mevedel-session-durability-call-outside-transaction function)
       (error
-       (display-warning
-        'mevedel (format "Mailbox notification failed: %s"
+       (mevedel-diagnostic-warning
+        (mevedel-diagnostic-scope session) 'mevedel (format "Mailbox notification failed: %s"
                          (error-message-string err)) :warning)))))
 
 (defun mevedel-agent-control--offer-at-gate-open (session)
@@ -895,7 +897,7 @@ Detach before I/O: arrivals during the commit belong to the next preparation."
         (condition-case err
             (funcall ack (not failure) failure)
           ((error quit)
-           (display-warning 'mevedel
+           (mevedel-diagnostic-warning (mevedel-diagnostic-scope session) 'mevedel
                             (format "Mailbox acknowledgement failed: %s"
                                     (error-message-string err)) :warning)))
         (when (and (not failure) records)
@@ -1437,8 +1439,8 @@ already committed RESULT."
               (setf (mevedel-agent-record-result-handler record) nil))
           (error
            (setf (mevedel-agent-record-result-handler record) nil)
-           (display-warning
-            'mevedel
+           (mevedel-diagnostic-warning
+            (mevedel-diagnostic-scope session) 'mevedel
             (format "Agent result handler failed for %s: %s"
                     (mevedel-agent-record-path record)
                     (error-message-string err))
@@ -1835,7 +1837,8 @@ cannot start leaves its mail unread for a later turn without retrying."
                  ;; Neither a failure nor a quit restarts the agent by itself.
                  (mevedel-agent-control-clear-agent-wakes
                   session (mevedel-agent-record-path record))
-                 (message "mevedel: could not start %s for its mail: %s"
+                 (mevedel-diagnostic-message (mevedel-diagnostic-scope session)
+                          "Could not start %s for its mail: %s"
                           (mevedel-agent-record-path record)
                           (if (eq (car err) 'quit)
                               "quit"
@@ -1925,6 +1928,7 @@ the caller's optional override, without changing shared resource authority."
             (and (eq session mevedel--session)
                  mevedel--conversation-working-directory)))
          (caller-path (mevedel-agent-control-current-path session))
+         (scope (mevedel-diagnostic-scope session))
          (record (mevedel-agent-control--reserve
                   session caller-path task-name role-name))
          context-snapshot
@@ -1975,7 +1979,7 @@ the caller's optional override, without changing shared resource authority."
                                   (funcall on-invocation invocation)
                                 (error
                                  (mevedel--warn-once
-                                  'agent-invocation-observer
+                                  scope 'agent-invocation-observer
                                   "Agent invocation observer failed: %s"
                                   (error-message-string err))))))
                           :on-settle

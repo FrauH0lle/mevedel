@@ -2242,7 +2242,7 @@ and its segment path."
                                (if (and (eq scenario 'intent-write) (equal path marker))
                                    (error "Injected abandonment failure")
                                  (funcall write-marker path data)))))
-                    (should (equal "Injected abandonment failure"
+                    (should (equal (format "mevedel [%s]: Injected abandonment failure" root)
                                    (error-message-string
                                     (should-error
                                      (mevedel-session-publication-abandon session))))))

@@ -310,9 +310,9 @@ Return its events, oldest first, once it has completed."
                         (should-not (memq cancel kill-buffer-hook)))
                       (should (equal diagnostics
                                      (if (eq cleanup-failure 'error)
-                                         (concat "ACP workload MCP cleanup failed: Cleanup failed\n"
+                                         (concat "mevedel [workspace unavailable]: ACP workload MCP cleanup failed: Cleanup failed\n"
                                                  (unless (eq stage 'launch)
-                                                   "ACP workload ACP cleanup failed: Cleanup failed\n"))
+                                                   "mevedel [workspace unavailable]: ACP workload ACP cleanup failed: Cleanup failed\n"))
                                        ""))))
                   (when cancel (condition-case nil (funcall cancel) ((error quit) nil)))))))))))
 
@@ -355,10 +355,10 @@ Return its events, oldest first, once it has completed."
                          (if (eq cleanup-failure 'error) 2 0)))
               (should (equal diagnostics
                              (if (eq cleanup-failure 'error)
-                                 (concat "ACP workload MCP cleanup failed: Cleanup failed\n"
-                                         "ACP workload ACP cleanup failed: Cleanup failed\n"
-                                         "mevedel: ACP workload MCP cleanup failed: Cleanup failed\n"
-                                         "mevedel: ACP workload ACP cleanup failed: Cleanup failed\n")
+                                 (concat "mevedel [workspace unavailable]: ACP workload MCP cleanup failed: Cleanup failed\n"
+                                         "mevedel [workspace unavailable]: ACP workload ACP cleanup failed: Cleanup failed\n"
+                                         "mevedel [workspace unavailable]: ACP workload MCP cleanup failed: Cleanup failed\n"
+                                         "mevedel [workspace unavailable]: ACP workload ACP cleanup failed: Cleanup failed\n")
                                ""))))))))))
 
 (provide 'test-mevedel-acp-workload)

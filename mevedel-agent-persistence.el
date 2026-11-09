@@ -524,8 +524,9 @@ Malformed identities are diagnosed and dropped independently.  Unexpected
                  entry seen-paths seen-ids target)
                 candidates)
         (mevedel-agent-persistence-invalid-data
-         (display-warning
-          'mevedel
+         (mevedel-diagnostic-warning
+          (mevedel-diagnostic-scope
+           (and target (mevedel-execution-target-workspace-root target))) 'mevedel
           (format "Persisted agent identity was dropped: %s"
                   (error-message-string err))
           :warning))))
@@ -686,8 +687,8 @@ dropped or recovered records."
                (set-buffer-modified-p nil))
              (kill-buffer buffer))
            (cl-incf dropped)
-           (display-warning
-            'mevedel
+           (mevedel-diagnostic-warning
+            (mevedel-diagnostic-scope session) 'mevedel
             (format "Retained agent %s was not restored: %s"
                     path (error-message-string err))
             :warning)))))

@@ -867,7 +867,7 @@
             (mevedel--compact-handle-wait fsm))
           (should (= sent 0))
           (should (string-match-p
-                   "Auto-compaction failed; request not sent: boom"
+                   "boom (auto-compaction failed; request not sent)"
                    warning)))
       (kill-buffer chat-buf)))
 
@@ -1106,7 +1106,8 @@
                     ((symbol-function 'display-warning)
                      (lambda (_type text &rest _) (setq warning text))))
             (mevedel--compact-auto-failure fsm buffer "boom"))
-          (should (string-match-p "request not sent: boom" warning))
+          (should (string-prefix-p "mevedel [workspace unavailable]: " warning))
+          (should (string-search "boom (auto-compaction failed; request not sent)" warning))
           (should (equal " Compaction failed" status))
           (should (eq 'ERRS transition))
           (should (equal "Compaction failed: boom"

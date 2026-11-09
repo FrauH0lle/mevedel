@@ -24,6 +24,12 @@
                   "mevedel-transcript" (start end))
 (autoload 'mevedel-transcript-segments "mevedel-transcript")
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format-string &rest args))
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+
 ;; `mevedel-view'
 (defvar mevedel-view--display-map)
 
@@ -696,7 +702,7 @@ section only."
                 (mevedel-view-disclosure--expand-now source vtype)
               (mevedel-view-disclosure--collapse-now source vtype)))
            (t
-            (user-error "No collapsible section at point")))
+            (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No collapsible section at point")))
         ;; A toggle deletes and re-inserts view text.  The retained
         ;; live-tail view marker can be dragged backwards by that
         ;; delete relative to its data-buffer twin, after which the
@@ -797,7 +803,7 @@ moves point onto the following row."
                          (get-text-property
                           (car bounds) 'mevedel-view-collapsed))))
     (unless bounds
-      (user-error "No collapsible section at point"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No collapsible section at point"))
     (let ((inhibit-read-only t)
           (start (car bounds))
           (end-marker (copy-marker (cdr bounds) t)))
@@ -822,7 +828,7 @@ moves point onto the following row."
                                         (car range) (cdr range)))
                                      ranges))))
                 (unless ranges
-                  (user-error "No collapsible section at point"))
+                  (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No collapsible section at point"))
                 (mevedel-view-disclosure--delete-mailbox-hints
                  start (marker-position end-marker))
                 (setq ranges (mevedel-view-disclosure--mailbox-body-ranges

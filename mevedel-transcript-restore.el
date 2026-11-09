@@ -7,6 +7,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (eval-when-compile
   (require 'cl-lib)
   (require 'subr-x))
@@ -179,8 +181,8 @@ still runs whenever transcript properties are present."
           (condition-case err
               (gptel--restore-props (read bounds))
             (error
-             (display-warning
-              'mevedel
+             (mevedel-diagnostic-warning
+              (mevedel-diagnostic-scope (current-buffer)) 'mevedel
               (format "Could not restore transcript GPTEL_BOUNDS: %s"
                       (error-message-string err)))))))
       (when (mevedel-transcript-restore-properties-present-p

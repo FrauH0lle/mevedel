@@ -80,6 +80,10 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--normalize-message-text "mevedel-utilities"
 		  (text))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format-string &rest args))
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
 
 ;; `mevedel-view'
 (declare-function mevedel-view--display-fragment-keymap "mevedel-view"
@@ -653,7 +657,7 @@ approvals as needed."
          (pair (or (cadr (member (assoc current pairs) pairs)) (car pairs)))
          (bounds (and pair (mevedel-view-zone-fragment-bounds
                             'interaction (car pair)))))
-    (unless bounds (user-error "No pending question or approval"))
+    (unless bounds (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No pending question or approval"))
     (let* ((saved (assq window mevedel-view--interaction-focus-return))
            (input-start (mevedel-view--input-start))
            (offset (if (>= (point) input-start)

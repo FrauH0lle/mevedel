@@ -11,6 +11,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (require 'mevedel-recovery)
 
 (require 'cl-lib)
@@ -465,7 +467,8 @@ transport rather than nesting inside a remote operation already in flight."
              (error
               (mevedel-goal-pause-runtime-failure
                buffer (format "Goal continuation failed: %s" (error-message-string err)))
-              (message "mevedel: Goal continuation failed: %s" (error-message-string err))))))))))
+              (mevedel-diagnostic-message (mevedel-diagnostic-scope session)
+               "%s (Goal continuation failed)" (error-message-string err))))))))))
 
 (defun mevedel-goal-schedule-continuation
     (&optional session buffer prompt-submission delay)
@@ -1089,7 +1092,8 @@ another turn retry, regardless of the provider's failure message."
                      (mevedel-goal--transient-failure-p reason)
                      (< mevedel-goal--transient-retries
                         (length mevedel-goal--transient-retry-delays)))
-                (message "mevedel: Goal retrying in %ds after: %s"
+                (mevedel-diagnostic-message (mevedel-diagnostic-scope session)
+                         "Goal retrying in %ds after: %s"
                          (nth (cl-incf mevedel-goal--transient-retries)
                               (cons 0 mevedel-goal--transient-retry-delays))
                          reason)

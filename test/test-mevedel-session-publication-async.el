@@ -1881,16 +1881,16 @@ QUEUED adds a second completion while the first job is unresolved."
                        session "segment-9.chat.org" t))))))
 
   :doc "fails the job and rolls back on a failed, missing or malformed result"
-  (dolist (outcome (list (lambda (_ops callback)
+  (dolist (outcome (list (lambda (_ops callback &optional _scope)
                            (funcall callback nil '(file-error "Injected hash failure")) nil)
-                         (lambda (_ops callback) (funcall callback nil nil) nil)
-                         (lambda (ops callback)
+                         (lambda (_ops callback &optional _scope) (funcall callback nil nil) nil)
+                         (lambda (ops callback &optional _scope)
                            (funcall callback
                                     (mapcar (lambda (_) (list :status 'ok :value (list :sha256 "bad")))
                                             ops)
                                     nil)
                            nil)
-                         (lambda (ops callback)
+                         (lambda (ops callback &optional _scope)
                            (funcall callback
                                     (mapcar (lambda (_) (list :status 'failed)) ops) nil)
                            nil)))
@@ -1919,11 +1919,11 @@ QUEUED adds a second completion while the first job is unresolved."
        (mevedel-session-publication--retain-uncommitted-batch session retained)
        (cl-letf* ((orig (symbol-function 'mevedel-session-control-fs-run-program-async))
                   ((symbol-function 'mevedel-session-control-fs-run-program-async)
-                   (lambda (operations callback)
+                   (lambda (operations callback &optional scope)
                      (setq hashed (append hashed
                                           (mapcar (lambda (op) (plist-get op :path))
                                                   operations)))
-                     (funcall orig operations callback))))
+                     (funcall orig operations callback scope))))
          (should (equal '((t nil))
                         (test-mevedel-publication-async--staged-submit
                          session buffer nil "segment-5.chat.org" "new"))))
@@ -1942,13 +1942,13 @@ QUEUED adds a second completion while the first job is unresolved."
      (let ((orig (symbol-function 'mevedel-session-control-fs-run-program-async))
            edited)
        (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program-async)
-                  (lambda (operations callback)
+                  (lambda (operations callback &optional scope)
                     (unless edited
                       (setq edited t)
                       (with-current-buffer buffer
                         (goto-char (point-max))
                         (insert "LIVE EDIT DURING DIGEST")))
-                    (funcall orig operations callback))))
+                    (funcall orig operations callback scope))))
          (should (equal '((t nil))
                         (test-mevedel-publication-async--staged-submit
                          session buffer nil "segment-4.chat.org" "frozen text"))))

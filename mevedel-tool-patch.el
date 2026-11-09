@@ -1570,8 +1570,10 @@ Call CONTINUATION after diagnostics."
     (condition-case err
         (mevedel-artifact-store-note-writes
          session changes (buffer-local-value 'mevedel--current-request data-buffer))
-      (error (message "mevedel: artifact store bookkeeping failed: %s"
-                      (error-message-string err)))))
+      (error (mevedel-diagnostic-message
+              (mevedel-diagnostic-scope session)
+              "artifact store bookkeeping failed: %s"
+              (error-message-string err)))))
   (cl-labels
       ((finish (remaining)
          (let ((remaining

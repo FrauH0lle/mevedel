@@ -23,6 +23,7 @@
 (require 'mevedel-telemetry)
 (require 'mevedel-tool-exec-permission)
 (require 'mevedel-turn)
+(require 'mevedel-utilities)
 (require 'mevedel-workspace)
 (require 'subr-x)
 (require 'xml)
@@ -146,7 +147,7 @@
 (declare-function mevedel--clamped-integer
                   "mevedel-utilities" (value default minimum maximum))
 (declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
+                  "mevedel-utilities" (scope key format &rest args))
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view-call-preserving-window-configuration
@@ -246,10 +247,11 @@ unsaved readers use the execution module's temporary spool instead."
   "Model guidance appended to failed confined child results.")
 
 (defun mevedel-tool-exec--sandbox-disclosure
-    (text child-result &optional suppress-p failed-p)
+    (text child-result &optional suppress-p failed-p scope)
   "Append CHILD-RESULT confinement facts and recovery guidance to TEXT.
 SUPPRESS-P hides model-facing disclosure.  FAILED-P identifies a failed tool
-operation rather than a successful or semantic non-error result."
+operation rather than a successful or semantic non-error result.
+SCOPE identifies the workspace for local suppressed-disclosure warnings."
   (let ((facts (plist-get child-result :sandbox-facts)))
     (cond
      ((not facts) text)
@@ -257,6 +259,7 @@ operation rather than a successful or semantic non-error result."
      (when (and (eq (plist-get facts :filesystem) 'unrestricted)
                 (not (eq (plist-get facts :sandbox) 'unavailable)))
         (mevedel--warn-once
+         (mevedel-diagnostic-scope scope)
          'exec-skill-unconfined
          "Skill shell expansion ran without confinement: %s"
          (mevedel-sandbox-status-text facts)))
@@ -550,12 +553,12 @@ matching information, not a diagnosis inferred from untrusted child output."
              "inspect prior effects first. No grant or retry is automatic.")))))))
 
 (defun mevedel-tool-exec--observation-envelope
-    (observation &optional suppress-sandbox-disclosure-p force-success-p)
+    (observation &optional suppress-sandbox-disclosure-p force-success-p scope)
   "Return a handler envelope for managed OBSERVATION.
 
 SUPPRESS-SANDBOX-DISCLOSURE-P preserves trusted internal expansion behavior.
 FORCE-SUCCESS-P makes control-tool completion successful independently of the
-stopped command's outcome."
+stopped command's outcome.  SCOPE owns any local diagnostic report."
   (let* ((facts (plist-get observation :facts))
          (output (or (plist-get observation :output) ""))
          (error-data (plist-get observation :error))
@@ -575,7 +578,7 @@ stopped command's outcome."
           (string-join
            (delq nil
                  (list (mevedel-tool-exec--sandbox-disclosure
-                        body observation suppress-sandbox-disclosure-p failed-p)
+                        body observation suppress-sandbox-disclosure-p failed-p scope)
                        (and failed-p (not suppress-sandbox-disclosure-p)
                             (mevedel-tool-exec--compound-profile-hint observation))))
            "\n\n"))
@@ -720,7 +723,8 @@ wakes an idle model once secured; a stopped one does not."
            (plist-get event :owner)
            (plist-get
             (mevedel-tool-exec--observation-envelope
-             observation (plist-get args :suppress-sandbox-disclosure-p))
+             observation (plist-get args :suppress-sandbox-disclosure-p) nil
+             (mevedel-diagnostic-scope (plist-get event :session)))
             :result)
            (plist-get facts :execution-id) wake meta secured))
          (t
@@ -729,7 +733,8 @@ wakes an idle model once secured; a stopped one does not."
            (plist-get event :owner)
            (plist-get
             (mevedel-tool-exec--observation-envelope
-             observation (plist-get args :suppress-sandbox-disclosure-p))
+             observation (plist-get args :suppress-sandbox-disclosure-p) nil
+             (mevedel-diagnostic-scope (plist-get event :session)))
             :result)
            meta secured))))))
     (_
@@ -815,7 +820,8 @@ CALLBACK receives the envelope.  ARGS has :command; KIND may be `monitor'."
          (funcall
           callback
           (mevedel-tool-exec--observation-envelope
-           observation (plist-get args :suppress-sandbox-disclosure-p))))
+           observation (plist-get args :suppress-sandbox-disclosure-p) nil
+           (mevedel-diagnostic-scope session))))
        :session session :data-buffer (current-buffer)
        :owner owner :request mevedel--current-request
        :kind (or kind 'bash) :description (plist-get args :description)

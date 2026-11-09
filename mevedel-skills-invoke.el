@@ -20,6 +20,7 @@
 (require 'mevedel-implementation-policy)
 (require 'mevedel-skills-core)
 (require 'mevedel-turn)
+(require 'mevedel-utilities)
 
 ;; `gptel'
 (defvar gptel-backend)
@@ -77,7 +78,7 @@
                   (event event-plist callback
                          &optional session workspace request invocation))
 (declare-function mevedel-hooks-sanitize-final-decision
-                  "mevedel-hooks" (event decision))
+                  "mevedel-hooks" (event decision &optional scope))
 (autoload 'mevedel-hooks-additional-context-string "mevedel-hooks")
 (autoload 'mevedel-hooks-decision-reason "mevedel-hooks")
 (autoload 'mevedel-hooks-event-plist "mevedel-hooks")
@@ -161,11 +162,6 @@
 (declare-function mevedel-current-origin "mevedel-turn" ())
 (declare-function mevedel-request-begin "mevedel-turn"
                   (session &optional directive-uuid options))
-
-;; `mevedel-utilities'
-(declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
-(autoload 'mevedel--warn-once "mevedel-utilities")
 
 ;;
 ;;; Request-scoped skill context
@@ -306,8 +302,9 @@ Policy never changes after this realization boundary."
 ;;
 ;;; Unified skill invocation API
 
-(defun mevedel-skills--display-event (display-callback event)
+(defun mevedel-skills--display-event (scope display-callback event)
   "Funcall DISPLAY-CALLBACK with EVENT, ignoring errors.
+SCOPE is the originating workspace root captured before async preparation.
 DISPLAY-CALLBACK may be nil; EVENT is a lifecycle event plist
 \\=."
   (when display-callback
@@ -315,6 +312,7 @@ DISPLAY-CALLBACK may be nil; EVENT is a lifecycle event plist
         (funcall display-callback event)
       (error
        (mevedel--warn-once
+        scope
         'skill-display-callback
         "Skill display-callback error: %s"
         (error-message-string err))))))
@@ -325,6 +323,7 @@ DISPLAY-CALLBACK may be nil; EVENT is a lifecycle event plist
 DISPLAY-CALLBACK receives the lifecycle event when non-nil."
   (let ((skill-name (and skill (mevedel-skill-name skill))))
     (mevedel-skills--display-event
+     (mevedel-diagnostic-scope (and skill (mevedel-skill-workspace skill)))
      display-callback
      `(:event error :skill ,skill-name
               :reason ,reason :message ,message))
@@ -360,6 +359,7 @@ skip the hook and call CALLBACK with PROMPT and nil."
 DISPLAY-CALLBACK receives the lifecycle event when non-nil."
   (let ((skill-name (and skill (mevedel-skill-name skill))))
     (mevedel-skills--display-event
+     (mevedel-diagnostic-scope (and skill (mevedel-skill-workspace skill)))
      display-callback
      `(:event done :skill ,skill-name))
     (funcall callback outcome)))
@@ -921,6 +921,8 @@ sanitized `UserPromptExpansion' hook decision."
          (policy (or (plist-get root :policy) '(:status ok)))
          (display-callback (plist-get root :display-callback))
          (session (and (boundp 'mevedel--session) mevedel--session))
+         (scope (mevedel-diagnostic-scope
+                 (or session (mevedel-skill-workspace skill))))
          (command-p (eq role 'command))
          (rules (mevedel-skill-allowed-tool-rules skill))
          (hooks (and command-p (mevedel-skill-hooks skill)))
@@ -945,21 +947,21 @@ sanitized `UserPromptExpansion' hook decision."
     (cl-labels
         ((fail (reason message)
            (mevedel-skills--display-event
-            display-callback
+            scope display-callback
             `(:event error :skill ,skill-name :reason ,reason :message ,message))
            (funcall finish
                     (list :status 'error :reason reason :message message)))
          (complete (original expanded decision)
            (setq decision
                  (mevedel-hooks-sanitize-final-decision
-                  'UserPromptExpansion decision))
+                  'UserPromptExpansion decision scope))
            (if (and (plist-member decision :continue)
                     (not (plist-get decision :continue)))
                (fail 'hook-blocked
                      (or (plist-get decision :stop-reason)
                          "UserPromptExpansion hook stopped skill"))
              (mevedel-skills--display-event
-              display-callback `(:event done :skill ,skill-name))
+              scope display-callback `(:event done :skill ,skill-name))
              (funcall finish
                       (mevedel-skills--preparation-success-outcome
                        metadata original expanded decision)))))
@@ -995,6 +997,9 @@ optional :display-callback.  CALLBACK receives one atomic aggregate outcome."
         (progn
           (when-let* ((root (car roots)))
             (mevedel-skills--display-event
+             (mevedel-diagnostic-scope
+              (and (mevedel-skill-p (plist-get root :skill))
+                   (mevedel-skill-workspace (plist-get root :skill))))
              (plist-get root :display-callback)
              `(:event error
                       :skill ,(and (mevedel-skill-p (plist-get root :skill))

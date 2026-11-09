@@ -132,7 +132,7 @@ the views' own scheduling callbacks so visibility policy stays in the view."
            (timer (timer-create)))
       (timer-set-time timer (time-add nil (max 0 (- due now))))
       (timer-set-function timer #'mevedel-view-power--poll (list timer))
-      (mevedel--ui-timer-activate timer)
+      (mevedel--ui-timer-activate timer nil 'global)
       (setq mevedel-view-power--timer timer))))
 
 (defun mevedel-view-power--poll (timer)

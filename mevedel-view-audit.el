@@ -78,6 +78,14 @@
 (autoload 'mevedel-session-artifacts-transcript-segment-identity
   "mevedel-session-artifacts")
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-format "mevedel-utilities" (scope format-string &rest args))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format-string &rest args))
+(autoload 'mevedel-diagnostic-format "mevedel-utilities")
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+
 ;; `mevedel-view-agent'
 (declare-function mevedel-view-open-agent-transcript
                   "mevedel-view-agent" (agent-path))
@@ -844,7 +852,8 @@ The completion's source target may be a later segment after compaction."
 
 (defun mevedel-view-audit--evidence (record)
   "Display retained read-only evidence or an explicit limitation for RECORD."
-  (let* ((tool-id (plist-get record :tool-use-id))
+  (let* ((scope (mevedel-diagnostic-scope (current-buffer)))
+         (tool-id (plist-get record :tool-use-id))
          (data (and (buffer-live-p mevedel--data-buffer)
                     (or (mevedel-execution-transcript-pending-render-data
                          mevedel--data-buffer tool-id)
@@ -900,19 +909,20 @@ The completion's source target may be a later segment after compaction."
           (insert disclosure "\n"))
         (cond
          (output-limited
-          (insert "Output truncated: execution output limit reached; retained output may omit content.\n"))
+          (insert (mevedel-diagnostic-format scope "Output truncated: execution output limit reached; retained output may omit content.\n")))
          (stale-artifact
-          (insert "Output truncated: retained artifact may omit later output.\n"))
+          (insert (mevedel-diagnostic-format scope "Output truncated: retained artifact may omit later output.\n")))
          ((and preview-truncated
                (not (and (integerp artifact-size)
                          (integerp output-bytes))))
-          (insert "Output truncated: retained preview may omit content.\n")))
+          (insert (mevedel-diagnostic-format scope "Output truncated: retained preview may omit content.\n"))))
         (when execution-error
-          (insert (format "%s: %s\n"
-                          (if (eq (plist-get data :termination) 'spawn-failed)
-                              "Failed to start process"
-                            "Execution error")
-                          execution-error)))
+          (insert (mevedel-diagnostic-format
+                   scope "%s: %s\n"
+                   (if (eq (plist-get data :termination) 'spawn-failed)
+                       "Failed to start process"
+                     "Execution error")
+                   execution-error)))
         (cond
          ((integerp artifact-size)
           (when (and (zerop (cadr (insert-file-contents physical)))
@@ -926,7 +936,7 @@ The completion's source target may be a later segment after compaction."
                           "Execution produced no output.\n")
                       output))))
          (t
-          (insert "Original execution row and retained output are unavailable.\n"
+          (insert (mevedel-diagnostic-format scope "Original execution row and retained output are unavailable.\n")
                   (if (stringp path)
                       (format "Retained output address: %s\n" path)
                     ""))))
@@ -936,7 +946,7 @@ The completion's source target may be a later segment after compaction."
 (defun mevedel-view-audit-show-result (record)
   "Reveal RECORD's canonical execution row, or display retained evidence."
   (interactive (list (get-text-property (point) 'mevedel-view-execution-breadcrumb)))
-  (unless record (user-error "No execution breadcrumb at point"))
+  (unless record (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No execution breadcrumb at point"))
   (when (and (stringp (plist-get record :owner))
              (not (equal (plist-get record :owner) "/root"))
              (not (and mevedel-view--agent-transcript-p
@@ -1288,6 +1298,7 @@ nothing concerning it can be older."
   "Open a read-only disclosure of retained tool records for EXECUTION-ID."
   (interactive "sExecution ID: ")
   (let ((records (mevedel-view-audit--history-records execution-id))
+        (scope (mevedel-diagnostic-scope (current-buffer)))
         (buffer (get-buffer-create "*mevedel execution history*")))
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
@@ -1309,7 +1320,7 @@ nothing concerning it can be older."
                               (plist-get call :result))
                         "\n"))
               (insert "\n"))
-          (insert "Retained interaction records are unavailable in this transcript.\n"))
+          (insert (mevedel-diagnostic-format scope "Retained interaction records are unavailable in this transcript.\n")))
         (special-mode)))
     (display-buffer buffer)))
 
@@ -1357,7 +1368,7 @@ nothing concerning it can be older."
                        (get-text-property
                         (car bounds) 'mevedel-view-turn-id))))
     (unless bounds
-      (user-error "No collapsible section at point"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No collapsible section at point"))
     (let ((inhibit-read-only t)
           (start (car bounds))
           (end (cdr bounds)))

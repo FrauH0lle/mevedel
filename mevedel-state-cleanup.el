@@ -23,6 +23,12 @@
 ;; `gptel'
 (defvar gptel-context)
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-message "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(autoload 'mevedel-diagnostic-message "mevedel-utilities")
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+
 ;; `mevedel-view-history'
 (defvar mevedel-view-history--ring)
 (defvar mevedel-view-history--stored-incomplete)
@@ -169,7 +175,7 @@ turns and the idle maintenance timer schedule."
                       (cl-incf deleted))))))))
         deleted)
     (error
-     (message "mevedel: artifact cleanup postponed: %s" (error-message-string err))
+     (mevedel-diagnostic-message (mevedel-diagnostic-scope workspace) "artifact cleanup postponed: %s" (error-message-string err))
      nil)))
 
 (provide 'mevedel-state-cleanup)

@@ -74,8 +74,6 @@
 (defvar mevedel--session)
 
 ;; `mevedel-utilities'
-(declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
 (declare-function mevedel--write-file-atomically
                   "mevedel-utilities" (path content &optional coding mode))
 
@@ -577,13 +575,15 @@ The sentinel `:unrestricted' is the identity; nil is an explicit empty set."
    ((or (null left) (null right)) nil)
    (t (seq-filter (lambda (name) (member name right)) left))))
 
-(defun mevedel-skills--warn-shell (val source-file)
+(defun mevedel-skills--warn-shell (val source-file &optional workspace)
   "Warn about a frontmatter shell VAL, which skills do not support.
 Body shell expansion always runs through the session Bash pipeline, so
 accepting a declared shell silently would run the skill under different
-semantics than its author wrote.  SOURCE-FILE identifies the skill."
+semantics than its author wrote.  SOURCE-FILE identifies the skill;
+WORKSPACE owns the local diagnostic."
   (when val
     (mevedel--warn-once
+     (mevedel-diagnostic-scope workspace)
      (list 'skill-declared-shell source-file)
      "Skill at %s declares shell %S; skills run bash"
      source-file val)))
@@ -666,7 +666,7 @@ For `/path/to/grill-me/SKILL.md' returns `grill-me'."
   (make-hash-table :test #'equal)
   "Parsed SKILL.md frontmatter keyed by file path and file fingerprint.")
 
-(defun mevedel-skills--parse-frontmatter (skill-file &optional content)
+(defun mevedel-skills--parse-frontmatter (skill-file &optional content workspace)
   "Parse SKILL-FILE's YAML frontmatter and body from CONTENT.
 
 When CONTENT is nil, read SKILL-FILE once and reuse the previous parse
@@ -677,9 +677,9 @@ those bytes read them for a reason of its own, and the file fingerprint
 does not identify them.
 
 The cached plist is copied out, so a caller may `plist-put' into its
-result without reaching the entry behind it."
+result without reaching the entry behind it.  WORKSPACE owns parse warnings."
   (if content
-      (mevedel-skills--parse-frontmatter-1 skill-file content)
+      (mevedel-skills--parse-frontmatter-1 skill-file content workspace)
     (let* ((path (expand-file-name skill-file))
            (attributes (file-attributes path))
            (fingerprint
@@ -691,18 +691,18 @@ result without reaching the entry behind it."
                         (gethash path mevedel-skills--frontmatter-cache))))
       (if (and cached (equal fingerprint (car cached)))
           (copy-sequence (cdr cached))
-        (let ((plist (mevedel-skills--parse-frontmatter-1 skill-file nil)))
-          (when fingerprint
+        (let ((plist (mevedel-skills--parse-frontmatter-1 skill-file nil workspace)))
+          (when (and fingerprint plist)
             (puthash path (cons fingerprint plist)
                      mevedel-skills--frontmatter-cache))
           (copy-sequence plist))))))
 
-(defun mevedel-skills--parse-frontmatter-1 (skill-file content)
+(defun mevedel-skills--parse-frontmatter-1 (skill-file content &optional workspace)
   "Parse SKILL-FILE's YAML frontmatter and body from CONTENT.
 When CONTENT is nil, read SKILL-FILE once.  Preserve `:name' so callers
 can decide whether to honor it or use the directory name.  Frontmatter
 values remain inert data.  Return nil on read/parse failure and warn when
-YAML parsing fails."
+YAML parsing fails, attributing the warning to WORKSPACE."
   (when (or content
             (and (file-readable-p skill-file)
                  (file-regular-p skill-file)))
@@ -733,6 +733,7 @@ YAML parsing fails."
                 plist))))
       (error
        (mevedel--warn-once
+        (mevedel-diagnostic-scope workspace)
         (list 'skill-invalid-yaml skill-file)
         "Skill at %s has invalid YAML: %s; skipping"
         skill-file (error-message-string err))
@@ -741,7 +742,7 @@ YAML parsing fails."
 (defun mevedel-skills--from-plist
     (name plist source-file source
           &optional source-family project-hooks-trusted-p plugin-name workspace
-          discovery-root)
+          discovery-root diagnostic-scope)
   "Build a `mevedel-skill' from NAME and PLIST parsed from SOURCE-FILE.
 SOURCE is the origin tag symbol.  SOURCE-FAMILY is `mevedel', `agents',
 or nil.  PROJECT-HOOKS-TRUSTED-P authorizes executable hooks from a
@@ -750,7 +751,8 @@ validated by the caller).  Description fallback from the body is the
 caller's responsibility -- anything in PLIST's `:description' wins over
 the fallback.  PLUGIN-NAME records plugin ownership when SOURCE is
   `plugin'.  WORKSPACE owns persisted enablement.  DISCOVERY-ROOT is the
-configured root under which SOURCE-FILE was found."
+configured root under which SOURCE-FILE was found.  DIAGNOSTIC-SCOPE, when
+supplied, owns local warnings independently of persisted WORKSPACE state."
   (let* ((description (plist-get plist :description))
          (display-name (plist-get plist :display-name))
          (disable-model (plist-get plist :disable-model-invocation))
@@ -783,7 +785,7 @@ configured root under which SOURCE-FILE was found."
            (when (and declared-hooks (eq source 'project)
                       (not project-hooks-trusted-p))
              (list "Project skill hooks are ignored until the manifest is trusted")))))
-    (mevedel-skills--warn-shell shell source-file)
+    (mevedel-skills--warn-shell shell source-file (or diagnostic-scope workspace))
     (mevedel-skill--create
      :name name
      :raw-name name
@@ -871,8 +873,9 @@ relative and WORKSPACE-ROOT is nil."
         (cons resolved
               (if family (cons 'project family) 'project)))))))
 
-(defun mevedel-skills--scan-resolved-dir (dir source &optional workspace)
-  "Scan DIR with SOURCE, applying plugin namespacing when requested."
+(defun mevedel-skills--scan-resolved-dir (dir source &optional workspace scope)
+  "Scan DIR with SOURCE, applying plugin namespacing when requested.
+WORKSPACE owns state; optional SCOPE supplies diagnostic-only ownership."
   (let* ((plugin-name (and (consp source)
                            (eq (car source) 'plugin)
                            (cdr source)))
@@ -885,7 +888,7 @@ relative and WORKSPACE-ROOT is nil."
                   (mevedel-skills--namespace-plugin-skill plugin-name skill)
                 skill))
             (mevedel-skills--scan-dir
-             dir source-tag source-family workspace plugin-name))))
+             dir source-tag source-family workspace plugin-name scope))))
 
 (defun mevedel-skills-project-files (workspace-root)
   "Return SKILL.md files under configured project roots in WORKSPACE-ROOT."
@@ -920,19 +923,22 @@ relative and WORKSPACE-ROOT is nil."
     skill))
 
 (defun mevedel-skills--build-skill
-    (skill-file source &optional source-family workspace plugin-name discovery-root)
+    (skill-file source &optional source-family workspace plugin-name discovery-root
+                diagnostic-scope)
   "Build a `mevedel-skill' for SKILL-FILE with SOURCE origin tag.
 SOURCE-FAMILY distinguishes `.mevedel' and `.agents' resource roots.
 Performs name resolution (frontmatter `:name' > directory name) and
 validation.  WORKSPACE owns project hook trust.  PLUGIN-NAME records
 plugin ownership.  Returns nil with a
 warning when the skill is invalid \\(bad name, etc.).  Computes
-description fallback from the body when frontmatter omits `description'."
+description fallback from the body when frontmatter omits `description'.
+DIAGNOSTIC-SCOPE supplies ownership for root-only scans."
   (let* ((snapshot
           (when (eq source 'project)
             (mevedel-hooks-project-file-snapshot workspace skill-file)))
          (plist (mevedel-skills--parse-frontmatter
-                 skill-file (plist-get snapshot :content))))
+                 skill-file (plist-get snapshot :content)
+                 (or diagnostic-scope workspace))))
     (when plist
       (let* ((dir-name (mevedel-skills--directory-name skill-file))
              (frontmatter-name (plist-get plist :name))
@@ -941,6 +947,7 @@ description fallback from the body when frontmatter omits `description'."
         (cond
          ((not (mevedel-skills--valid-name-p raw-name))
           (mevedel--warn-once
+           (mevedel-diagnostic-scope (or diagnostic-scope workspace))
            (list 'skill-invalid-name skill-file)
            "Skill at %s has invalid name %S; skipping (must match %s, max %d chars)"
            skill-file raw-name
@@ -957,14 +964,15 @@ description fallback from the body when frontmatter omits `description'."
           (mevedel-skills--from-plist
            raw-name plist skill-file source source-family
            (plist-get snapshot :trusted-p) plugin-name workspace
-           discovery-root)))))))
+           discovery-root diagnostic-scope)))))))
 
 (defun mevedel-skills--scan-dir
-    (dir source &optional source-family workspace plugin-name)
+    (dir source &optional source-family workspace plugin-name diagnostic-scope)
   "Return a list of `mevedel-skill' structs found under DIR.
 SOURCE is the origin tag applied to every skill scanned from DIR.
 SOURCE-FAMILY distinguishes `.mevedel' and `.agents' resource roots.
 WORKSPACE owns project hook trust.  PLUGIN-NAME records plugin ownership.
+DIAGNOSTIC-SCOPE supplies ownership for root-only scans.
 Each SKILL.md is wrapped in `condition-case' so a single bad skill
 does not abort the whole scan."
   (when (file-directory-p dir)
@@ -974,9 +982,11 @@ does not abort the whole scan."
         (let ((skill (condition-case err
                          (mevedel-skills--build-skill
                           skill-file source source-family workspace plugin-name
-                          (file-name-as-directory (expand-file-name dir)))
+                          (file-name-as-directory (expand-file-name dir))
+                          diagnostic-scope)
                        (error
                         (mevedel--warn-once
+                         (mevedel-diagnostic-scope (or diagnostic-scope workspace))
                          (list 'skill-load-failed skill-file)
                          "Skill at %s failed to load: %s"
                          skill-file (error-message-string err))
@@ -1102,19 +1112,21 @@ explicit scans for tests and internal callers."
                   (dir (car resolved))
                   (source (cdr resolved)))
         (dolist (skill (mevedel-skills--scan-resolved-dir
-                        dir source workspace))
+                        dir source workspace (or workspace workspace-root)))
           (push skill result))))
     (when (and mevedel-skills-include-bundled
                (file-directory-p mevedel-skills--bundled-dir))
       (dolist (skill (mevedel-skills--scan-dir
-                      mevedel-skills--bundled-dir 'bundled nil workspace))
+                      mevedel-skills--bundled-dir 'bundled nil workspace nil
+                      (or workspace workspace-root)))
         (push skill result)))
     (when include-plugins
       (dolist (entry (mevedel-plugins-skill-dirs workspace))
         (when-let* ((resolved (mevedel-skills--resolve-dir
                                entry workspace-root)))
           (dolist (skill (mevedel-skills--scan-resolved-dir
-                          (car resolved) (cdr resolved) workspace))
+                          (car resolved) (cdr resolved) workspace
+                          (or workspace workspace-root)))
             (push skill result)))))
     (mevedel-skills--resolve-dependencies
      (mevedel-skills--apply-enable-state
@@ -1134,7 +1146,8 @@ the cached string without touching the filesystem.  Returns nil if the file
 has no body text or cannot be read."
   (or (mevedel-skill-body skill)
       (when-let* ((file (mevedel-skill-source-file skill))
-                  (parsed (mevedel-skills--parse-frontmatter file))
+                  (parsed (mevedel-skills--parse-frontmatter
+                           file nil (mevedel-skill-workspace skill)))
                   (body (plist-get parsed :system))
                   ((not (string-blank-p body))))
         (setf (mevedel-skill-body skill) body)
@@ -1406,7 +1419,7 @@ Removes now-orphan watchers."
       (puthash dir (cons buffer entry) mevedel-skills--dir-buffers)))
   (when (mevedel-skills--strategy-active-p 'watch-files)
     (dolist (dir dirs)
-      (mevedel-skills--ensure-watcher dir target)))
+      (mevedel-skills--ensure-watcher dir target (mevedel-diagnostic-scope buffer))))
   (mevedel-skills--gc-watchers))
 
 (defun mevedel-skills--unregister-buffer (buffer)
@@ -1535,13 +1548,13 @@ ignored."
                        (mevedel-skills--mark-buffer-dirty buffer)))))
                mevedel-skills--watchers))))
 
-(cl-defun mevedel-skills--ensure-watcher (dir &optional target)
+(cl-defun mevedel-skills--ensure-watcher (dir &optional target scope)
   "Install a `file-notify' watcher on DIR if none is live yet.
 Silently no-ops on platforms without filenotify support, when DIR does
 not exist, or when matching remote TARGET has neither `inotifywait'
 nor `gio'.  Errors during watcher installation are downgraded to
 warnings -- a missing watcher only degrades hot-reload, it never
-breaks normal operation.
+breaks normal operation.  SCOPE is the consuming workspace's captured root.
 
 A batch Emacs never installs a watcher.  File-notification arrives as
 an input event, and without a command loop nothing ever delivers it;
@@ -1571,9 +1584,9 @@ sentinel is silently dropped)."
             (puthash identity supported
                      mevedel-skills--remote-watch-states)
             (unless supported
-              (message
+              (mevedel-diagnostic-message (or scope 'unavailable)
                (concat
-                "mevedel: remote skill watching unavailable on %s; "
+                "remote skill watching unavailable on %s; "
                 "save checks and M-x mevedel-skills-rescan remain "
                 "available (install inotifywait or gio to enable watching)")
                (mevedel-execution-target-label target)))))))
@@ -1592,6 +1605,7 @@ sentinel is silently dropped)."
             (error
              (save-current-buffer
                (mevedel--warn-once
+                (or scope 'unavailable)
                 (list 'skill-watcher dir)
                 "Skill watcher failed for %s: %s"
                 dir (error-message-string err))))))))))
@@ -1709,7 +1723,8 @@ restarting Emacs."
                       (target
                        (and session
                             (mevedel-session-execution-target session))))
-                 (mevedel-skills--ensure-watcher dir target)))
+                 (mevedel-skills--ensure-watcher
+                  dir target (mevedel-diagnostic-scope buffer))))
              mevedel-skills--dir-buffers))
    (t
     (mevedel-skills--teardown-all-watchers))))
@@ -1750,7 +1765,9 @@ filesystems where `file-notify' is silently unreliable, or when
   (interactive)
   (let ((session (and (boundp 'mevedel--session) mevedel--session)))
     (unless session
-      (user-error "No mevedel session in this buffer"))
+      (mevedel-diagnostic-user-error
+       (mevedel-diagnostic-scope (current-buffer))
+       "No mevedel session in this buffer"))
     (mevedel-skills--mark-buffer-dirty (current-buffer))
     (mevedel-skills-ensure-fresh (current-buffer) session)
     (message "Rescanned %d skills"

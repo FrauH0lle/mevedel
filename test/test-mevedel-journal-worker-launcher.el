@@ -264,7 +264,9 @@
                                     (not mevedel-journal-worker--processes))))))
                (if (memq ending '(signal exit))
                    (should (equal warning
-                                  (format "Journal worker exited with status %s\n" (if (eq ending 'signal) 15 17))))
+                                  (format "mevedel [%s]: Journal worker exited with status %s\n"
+                                          (mevedel-workspace-root workspace)
+                                          (if (eq ending 'signal) 15 17))))
                  (should (string-empty-p warning))))
            (mevedel-journal-process-stop-all)))))))
 

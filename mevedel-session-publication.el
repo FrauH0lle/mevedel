@@ -20,6 +20,7 @@
 ;; this direction is the loadable one.
 (require 'mevedel-session-durability)
 (require 'mevedel-transport)
+(require 'mevedel-utilities)
 
 ;; `files'
 (defvar remote-file-name-inhibit-cache)
@@ -58,7 +59,7 @@
 (declare-function mevedel-session-control-fs-run-program
                   "mevedel-session-control-fs" (operations))
 (declare-function mevedel-session-control-fs-run-program-async
-                  "mevedel-session-control-fs" (operations callback))
+                  "mevedel-session-control-fs" (operations callback &optional scope))
 
 ;; `mevedel-session-codec'
 (declare-function mevedel-session-codec-portable-authority-p
@@ -140,6 +141,16 @@
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 
+;; `mevedel-utilities'
+(declare-function mevedel--warn-once "mevedel-utilities" (scope key format &rest args))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-warning "mevedel-utilities" (scope type message &optional level buffer-name))
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+(autoload 'mevedel-diagnostic-warning "mevedel-utilities")
+(autoload 'mevedel--warn-once "mevedel-utilities")
+
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-state-dir
                   "mevedel-workspace" (workspace))
@@ -187,7 +198,7 @@ Errors are reported and do not stop the queue.")
                   (run-hook-with-args
                    'mevedel-session-publication-gate-open-functions session)
                 ((error quit)
-                 (display-warning 'mevedel (error-message-string err) :warning))))
+                 (mevedel-diagnostic-warning (mevedel-diagnostic-scope session) 'mevedel (error-message-string err) :warning))))
             ;; The hook may have started work; recheck the gate.
             (unless (or (mevedel-session-lease-renewal-job session)
                         (mevedel-session-publication-job session)
@@ -204,9 +215,9 @@ Errors are reported and do not stop the queue.")
                           ((error quit)
                            (condition-case handler-error
                                (if (cdr entry) (funcall (cdr entry) err)
-                                 (display-warning 'mevedel (error-message-string err) :warning))
+                                 (mevedel-diagnostic-warning (mevedel-diagnostic-scope session) 'mevedel (error-message-string err) :warning))
                              ((error quit)
-                              (display-warning 'mevedel (error-message-string handler-error) :warning)))))
+                              (mevedel-diagnostic-warning (mevedel-diagnostic-scope session) 'mevedel (error-message-string handler-error) :warning)))))
                       (setf (mevedel-session-publication-preparation-token session) nil)
                       (when (and (not (mevedel-session-publication-job session))
                                  (mevedel-session-publication-preparations session))
@@ -402,7 +413,7 @@ ABANDONED explicitly discards recovery instead of retaining a failed checkpoint.
                    (condition-case callback-error
                        (funcall (mevedel-session-publication--job-acknowledge job) success err)
                      ((error quit)
-                      (display-warning
+                      (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                        'mevedel (format "Publication acknowledgement failed: %s"
                                         (error-message-string callback-error)) :warning)))))
               (condition-case cleanup
@@ -428,20 +439,20 @@ ABANDONED explicitly discards recovery instead of retaining a failed checkpoint.
                                              (plist-get retained :directory)))))
                       (mevedel-session-publication--delete-batch original)))
                 ((error quit)
-                 (display-warning 'mevedel
+                 (mevedel-diagnostic-warning (mevedel-diagnostic-scope session) 'mevedel
                                   (format "Session publication cleanup failed: %s"
                                           (error-message-string cleanup)) :warning)))
               (condition-case cleanup
                   (mevedel-session-checkpoint-release-proofs session)
                 ((error quit)
-                 (display-warning 'mevedel (error-message-string cleanup) :warning)))
+                 (mevedel-diagnostic-warning (mevedel-diagnostic-scope session) 'mevedel (error-message-string cleanup) :warning)))
               (when (and (not (mevedel-session-publication-busy-p session))
                          (plist-get (mevedel-session-lease session) :release-pending))
                 (condition-case cleanup
                     (mevedel-session-durability-lease-release
                      (mevedel-session-save-path session) session)
                   ((error quit)
-                   (display-warning 'mevedel (error-message-string cleanup) :warning))))))
+                   (mevedel-diagnostic-warning (mevedel-diagnostic-scope session) 'mevedel (error-message-string cleanup) :warning))))))
         (setf (mevedel-session-publication-finishing-p session) nil)
         ;; Offer notifications before admitting the successor, not inside this
         ;; finalizer.  Also wake a last job's offers without waiting for backoff.
@@ -600,7 +611,7 @@ Optional operations do not stop the program; skipped results follow its cause."
                (condition-case cleanup
                    (mevedel-session-collection-schedule session)
                  ((error quit)
-                  (display-warning
+                  (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                    'mevedel
                    (format "Session publication committed before collection failed: %s"
                            (error-message-string cleanup)) :warning)))
@@ -719,7 +730,8 @@ well-formed result; any other outcome fails the job."
                        job 'select t nil))
                   ((error quit)
                    (mevedel-session-publication--job-result
-                    job 'select nil err)))))))
+                    job 'select nil err))))
+              (mevedel-diagnostic-scope (mevedel-session-publication--job-session job)))))
         (when (mevedel-session-publication--job-waiting-p job)
           (setf (mevedel-session-publication--job-process job) process))))))
 
@@ -902,7 +914,7 @@ generation to compare against."
     (condition-case err
         (delete-directory directory t)
       (file-error
-       (display-warning
+       (mevedel-diagnostic-warning (or (plist-get batch :diagnostic-scope) 'unavailable)
         'mevedel
         (format "Could not remove publication recovery: %s"
                 (error-message-string err))
@@ -973,7 +985,7 @@ cost a process start inside every committing publication."
         (list :batches batches
               :failed-at (format-time-string "%FT%T%z")
               :reason (error-message-string err)))
-  (display-warning
+  (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
    'mevedel
    (format
     (concat "Critical session publication failed: %s. "
@@ -989,7 +1001,7 @@ cost a process start inside every committing publication."
       (and (boundp 'mevedel--data-buffer)
            (buffer-live-p mevedel--data-buffer)
            (buffer-local-value 'mevedel--session mevedel--data-buffer))
-      (user-error "No active mevedel session")))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No active mevedel session")))
 
 (defun mevedel-session-publication--valid-published-path-p (path)
   "Return non-nil when PATH names immutable publication storage.
@@ -1952,7 +1964,8 @@ batch whose written artifacts name local `:source' files."
            (push normalized staged))
           (when (> marker-count 1)
             (error "Publication requires exactly one commit marker"))
-          (list :directory directory :artifacts (nreverse staged)))
+          (list :directory directory :artifacts (nreverse staged)
+                :diagnostic-scope (mevedel-diagnostic-scope session)))
       ((error quit)
        (when (file-directory-p directory)
          (delete-directory directory t))
@@ -2622,7 +2635,7 @@ REQUIRE-COMMIT is its commit requirement."
                (mevedel-session-publication--delete-batch batch)))
            (if (and committed-p require-commit)
                (progn
-                 (display-warning
+                 (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                   'mevedel
                   (format "Session publication committed before cleanup failed: %s"
                           (error-message-string err))
@@ -2630,57 +2643,66 @@ REQUIRE-COMMIT is its commit requirement."
                  (mevedel-session-publication session))
              (signal (car err) (cdr err)))))))))
 
-(cl-defun mevedel-session-publication-retry (&optional session)
-  "Retry SESSION's pending critical publication."
+(cl-defun mevedel-session-publication-retry (&optional session &aux scope)
+  "Retry SESSION's pending critical publication.
+SCOPE captures diagnostic ownership before publication work starts."
   (interactive)
   (setq session (or session
-                    (mevedel-session-publication--current-session)))
+                    (mevedel-session-publication--current-session))
+        scope (mevedel-diagnostic-scope session))
   (when-let* ((job (mevedel-session-publication-job session)))
     (unless (eq 'unresolved (mevedel-session-publication--job-phase job))
-      (user-error "Session publication is still running"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Session publication is still running"))
     (setf (mevedel-session-publication--job-phase job) 'reconcile)
     (mevedel-session-publication--advance-soon job)
-    (mevedel-session-publication-barrier session)
+    (mevedel-with-diagnostic-errors scope
+      (mevedel-session-publication-barrier session))
     ;; The barrier also drains later accepted jobs, whose successful heads can
     ;; supersede this candidate.  Judge this job's acknowledgement, not the
     ;; session's head after all those preparations finish.
     (unless (mevedel-session-publication--job-success-p job)
       (let ((err (mevedel-session-publication--job-error job)))
-        (signal (car err) (cdr err))))
+        (mevedel-with-diagnostic-errors scope
+          (signal (car err) (cdr err)))))
     (cl-return-from mevedel-session-publication-retry
       (mevedel-session-publication session)))
   ;; A failure caused by a vanished working directory must be retryable.
-  (mevedel-session-artifacts-recover-working-directory session)
-  (mevedel-session-recovery-refresh session)
+  (mevedel-with-diagnostic-errors scope
+    (mevedel-session-artifacts-recover-working-directory session)
+    (mevedel-session-recovery-refresh session))
   (let* ((pending (or (mevedel-session-pending-publication session)
-                      (user-error "Session has no pending publication")))
+                      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Session has no pending publication")))
          (batches (plist-get pending :batches)))
     (when (plist-get pending :manual-recovery-marker)
-      (user-error
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session)
        "Pending transaction requires manual recovery at %s"
        (plist-get pending :manual-recovery)))
     (unless batches
-      (user-error
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session)
        "Pending transaction requires manual recovery at %s"
        (or (plist-get pending :manual-recovery) "its retained target state")))
     (unless (mevedel-session-durability-lease-renew session)
-      (user-error "Portable session lease could not be renewed for publication"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Portable session lease could not be renewed for publication"))
     (unless (mevedel-session-durability-lease-owned-p session)
-      (user-error "Portable session mutation requires its live lease"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Portable session mutation requires its live lease"))
     (prog1
-        (mevedel-session-publication--publish-critical-batches
-         session batches)
+        (mevedel-with-diagnostic-errors scope
+          (mevedel-session-publication--publish-critical-batches
+           session batches))
       (mevedel-session-recovery-refresh-session-buffers session))))
 
-(defun mevedel-session-publication-abandon (&optional session)
-  "Explicitly discard SESSION's pending local recovery material."
+(cl-defun mevedel-session-publication-abandon (&optional session &aux scope)
+  "Explicitly discard SESSION's pending local recovery material.
+SCOPE captures diagnostic ownership before recovery work starts."
   (interactive)
   (setq session (or session
-                    (mevedel-session-publication--current-session)))
+                    (mevedel-session-publication--current-session))
+        scope (mevedel-diagnostic-scope session))
   (when-let* ((job (mevedel-session-publication-job session)))
     (unless (eq 'unresolved (mevedel-session-publication--job-phase job))
-      (user-error "Session publication is still running")))
-  (mevedel-session-recovery-refresh session)
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Session publication is still running")))
+  (mevedel-with-diagnostic-errors scope
+    (mevedel-session-recovery-refresh session))
   (when-let* ((pending (mevedel-session-pending-publication session)))
     (let ((specialized-p (plist-get pending :manual-recovery-marker)))
       (unless
@@ -2692,24 +2714,25 @@ REQUIRE-COMMIT is its commit requirement."
              (concat
               "Abandon pending session publication? The target project effects "
               "remain, but transcript chronology and recovery state may be lost. ")))
-        (user-error "Pending publication was not abandoned"))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Pending publication was not abandoned"))
       (when specialized-p
-        (mevedel-session-recovery--abandon session))
+        (mevedel-with-diagnostic-errors scope
+          (mevedel-session-recovery--abandon session)))
       (when-let* ((local-recovery
                   (plist-get pending :manual-recovery-local)))
         (condition-case err
             (mevedel-session-recovery--delete-local local-recovery)
           (error
-           (user-error "Could not remove local recovery: %s"
+           (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Could not remove local recovery: %s"
                        (error-message-string err)))))
       (mevedel-session-publication-clear-transient session)
       (when-let* ((job (mevedel-session-publication-job session)))
         (unless (eq 'unresolved (mevedel-session-publication--job-phase job))
-          (user-error "Session publication is still running"))
+          (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Session publication is still running"))
         (mevedel-session-publication--job-complete
          job nil '(error "Session publication was explicitly abandoned") t))
       (mevedel-session-recovery-refresh-session-buffers session)
-      (display-warning
+      (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
        'mevedel
        "Pending session publication was explicitly abandoned"
        :warning)
@@ -2844,6 +2867,7 @@ are written now instead of queueing for a batch that never comes."
        (lambda (results error)
          (when error
            (mevedel--warn-once
+            (mevedel-diagnostic-scope session)
             (list 'diagnostic-append (mevedel-session-save-path session))
             "Diagnostic append failed, retaining for retry: %s"
             (error-message-string error)))
@@ -2851,6 +2875,7 @@ are written now instead of queueing for a batch that never comes."
                   for result in results
                   when (eq 'failed (plist-get result :status))
                   do (mevedel--warn-once
+                      (mevedel-diagnostic-scope session)
                       (list 'diagnostic-append (car entry))
                       "Diagnostic append failed for %s, retaining for retry: %s"
                       (car entry)
@@ -2875,6 +2900,7 @@ are written now instead of queueing for a batch that never comes."
       (if (<= bytes mevedel-session-publication--diagnostic-backlog-max-bytes)
           (push entry kept)
         (mevedel--warn-once
+         (mevedel-diagnostic-scope session)
          (list 'diagnostic-backlog (mevedel-session-save-path session))
          "Dropping diagnostics that could not be written to %s"
          (mevedel-session-save-path session))))

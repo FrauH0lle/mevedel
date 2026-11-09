@@ -32,6 +32,25 @@
 ;;
 ;;; One-shot execution
 
+(mevedel-deftest mevedel-execution--diagnostic-scope ()
+  ,test
+  (test)
+  :doc "uses the record session, never the callback's current workspace"
+  (let* ((session (mevedel-session--create
+                   :workspace (mevedel-workspace--create :root "/owner/project")))
+         (record (mevedel-execution--record-create
+                  :origin (mevedel-execution--origin-create :session session))))
+    (with-temp-buffer
+      (setq-local mevedel--session
+                  (mevedel-session--create
+                   :workspace (mevedel-workspace--create :root "/other/project")))
+      (should (equal "/owner/project"
+                     (mevedel-execution--diagnostic-scope record)))))
+  :doc "marks a genuinely ownerless record unavailable"
+  (should (eq 'unavailable
+              (mevedel-execution--diagnostic-scope
+               (mevedel-execution--record-create)))))
+
 (mevedel-deftest test-mevedel-execution--timeout-after-ready
   (:doc "waits for a nonempty marker only for timeout delivery, preserving its budget")
   (let* ((root (make-temp-file "mevedel-timeout-ready-" t))
@@ -150,7 +169,7 @@
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-execution--event) #'ignore)
                   ((symbol-function 'mevedel-execution--emit-event) #'ignore))
-          (setq other (mevedel--run-periodic-timer 1 #'ignore))
+          (setq other (mevedel--run-periodic-timer 'unavailable 1 #'ignore))
           (mevedel-execution--emit-progress record)
           (setq timer (mevedel-execution--record-progress-timer record))
           (mevedel-execution--release-runtime record)
@@ -286,11 +305,11 @@
                            (apply original-make-process
                                   (plist-put args :sentinel #'ignore)))))
                   ((symbol-function 'mevedel--run-periodic-timer)
-                   (lambda (period function &rest args)
+                   (lambda (scope period function &rest args)
                      (should (= 1.0 period))
                      (should-not watch)
                      (setq watch (lambda () (apply function args)))
-                     (setq watch-timer (apply schedule 3600 function args)))))
+                     (setq watch-timer (apply schedule scope 3600 function args)))))
           (should
            (functionp
             (mevedel-execution-start-one-shot
@@ -331,7 +350,7 @@
         (cl-letf (((symbol-function 'mevedel-sandbox-prepare)
                    (lambda (command _workdir _roots
                                     &optional _additional _permissions mode
-                                    _temporary-root _candidates)
+                                    _temporary-root _candidates _scope)
                      (setq captured-mode mode)
                      (list :state 'unrestricted
                            :command command
@@ -1263,7 +1282,7 @@
             (setq-local mevedel-protected-paths frozen-policy))
           (cl-letf
               (((symbol-function 'mevedel-execution-scheduler-submit)
-                (lambda (_scheduler _mode start &optional _admit-p _reject)
+                (lambda (_scheduler _mode start &optional _admit-p _reject _scope)
                   (setq admission start)
                   nil))
                ((symbol-function 'mevedel-sandbox-prepare)
@@ -1298,7 +1317,7 @@
     (unwind-protect
         (cl-letf
             (((symbol-function 'mevedel-execution-scheduler-submit)
-              (lambda (_scheduler _mode _start &optional admit-p rejection)
+              (lambda (_scheduler _mode _start &optional admit-p rejection _scope)
                 (setq admissible admit-p
                       reject rejection)
                 nil)))

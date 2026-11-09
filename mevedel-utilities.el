@@ -11,6 +11,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-structs)
 (require 'subr-x)
 (require 'timer)
 
@@ -431,29 +432,105 @@ CATEGORY is exposed as completion metadata for completion UI integrations."
 ;;
 ;;; Diagnostics
 
+(defun mevedel-diagnostic-scope (owner)
+  "Return the diagnostic root of explicit OWNER, without discovery or I/O.
+OWNER may be a root string, workspace, session or buffer, or the symbols
+`global' and `unavailable'.  Buffers contribute only their cached session,
+workspace or data-buffer binding.  Missing ownership is `unavailable', not
+the project containing whichever buffer happens to be current.  Capture the
+returned root before scheduling work that can outlive its buffer."
+  (cond
+   ((or (stringp owner) (memq owner '(global unavailable))) owner)
+   ((mevedel-workspace-p owner) (or (mevedel-workspace-root owner) 'unavailable))
+   ((mevedel-session-p owner)
+    (mevedel-diagnostic-scope (mevedel-session-workspace owner)))
+   ((buffer-live-p owner)
+    (let* ((session (buffer-local-value 'mevedel--session owner))
+           (workspace (buffer-local-value 'mevedel--workspace owner))
+           (data (buffer-local-value 'mevedel--data-buffer owner)))
+      (mevedel-diagnostic-scope
+       (or session workspace
+           (and (buffer-live-p data)
+                (or (buffer-local-value 'mevedel--session data)
+                    (buffer-local-value 'mevedel--workspace data)))))))
+   (t 'unavailable)))
+
+(defun mevedel-diagnostic-format (scope format-string &rest args)
+  "Attribute FORMAT-STRING and ARGS to explicit diagnostic SCOPE.
+SCOPE is a captured absolute root, `global' or `unavailable'.  Preserve root
+spelling, including remote prefixes, without filesystem access.  A leading
+attribution from an earlier human projection is replaced, not stacked."
+  (let ((text (apply #'format format-string args)))
+    (when (string-match "\\`mevedel \\[[^\n]*?\\]: " text)
+      (setq text (substring text (match-end 0))))
+    (format "mevedel [%s]: %s"
+            (pcase scope
+              ('global "global")
+              ((pred stringp) scope)
+              (_ "workspace unavailable"))
+            text)))
+
+(defun mevedel-diagnostic-message (scope format-string &rest args)
+  "Report FORMAT-STRING and ARGS as a message attributed to SCOPE."
+  (message "%s" (apply #'mevedel-diagnostic-format scope format-string args)))
+
+(defun mevedel-diagnostic-warning (scope type message &optional level buffer-name)
+  "Report MESSAGE attributed to SCOPE using `display-warning'.
+TYPE, LEVEL and BUFFER-NAME retain their `display-warning' meanings."
+  (display-warning type (mevedel-diagnostic-format scope "%s" message)
+                   level buffer-name))
+
+(defun mevedel-diagnostic-user-error (scope format-string &rest args)
+  "Signal a user error for FORMAT-STRING and ARGS attributed to SCOPE."
+  (user-error "%s" (apply #'mevedel-diagnostic-format scope format-string args)))
+
+(defmacro mevedel-with-diagnostic-errors (scope &rest body)
+  "Attribute message-bearing failures from local command BODY to SCOPE.
+Evaluate SCOPE once before BODY.  Shared guards keep their unprefixed
+conditions for tool and browser callers; a local command projects them
+here.  Format only generic `error', `user-error' and `file-error' messages,
+preserving their condition symbol and non-message fields.  Other Lisp
+conditions and quit stay unchanged: a string operand is not a message."
+  (declare (indent 1) (debug (form body)))
+  (let ((root (make-symbol "scope"))
+        (failure (make-symbol "failure")))
+    `(let ((,root ,scope))
+       (condition-case ,failure (progn ,@body)
+         (error
+          (signal (car ,failure)
+                  (if (and (stringp (cadr ,failure))
+                           (or (eq (car ,failure) 'error)
+                               (memq 'user-error (get (car ,failure) 'error-conditions))
+                               (memq 'file-error (get (car ,failure) 'error-conditions))))
+                      (cons (mevedel-diagnostic-format ,root "%s" (cadr ,failure))
+                            (cddr ,failure))
+                    (cdr ,failure))))))))
+
 (defvar mevedel--warn-once-table (make-hash-table :test #'equal)
   "Keys already surfaced by `mevedel--warn-once'.")
 
-(defun mevedel--warn-once (key format &rest args)
-  "Emit a mevedel `display-warning' once per KEY; demote repeats.
+(defun mevedel--warn-once (scope key format &rest args)
+  "Emit a mevedel `display-warning' once per SCOPE and KEY; demote repeats.
 
 KEY is compared with `equal'.  The first call per KEY raises a
 `display-warning' under category `mevedel'; later calls log the
 formatted text to *Messages* with `inhibit-message' bound so the
 echo area stays untouched.  FORMAT and ARGS are as for `format'."
-  (let ((text (apply #'format format args)))
+  (let ((text (apply #'mevedel-diagnostic-format scope format args))
+        (key (cons scope key)))
     (if (gethash key mevedel--warn-once-table)
         (let ((inhibit-message t))
-          (message "mevedel: %s" text))
+          (message "%s" text))
       (puthash key t mevedel--warn-once-table)
       (display-warning 'mevedel text :warning))))
 
-(defun mevedel--warn-once-reset-site (site)
-  "Forget every plain or composite `mevedel--warn-once' key for SITE."
+(defun mevedel--warn-once-reset-site (scope site)
+  "Forget `mevedel--warn-once' keys for SITE in SCOPE only."
   (let (stale)
     (maphash (lambda (key _)
-               (when (or (eq key site)
-                         (eq (car-safe key) site))
+               (when (and (equal (car-safe key) scope)
+                          (or (eq (cdr key) site)
+                              (eq (car-safe (cdr key)) site)))
                  (push key stale)))
              mevedel--warn-once-table)
     (dolist (key stale)
@@ -877,6 +954,9 @@ key already covers."
 A callback that waits for input or output lets Emacs run timers, the host
 timer included; its own timer must not run again inside that wait.")
 
+(defvar mevedel--ui-timer-scopes (make-hash-table :test #'eq :weakness 'key)
+  "Captured diagnostic roots for UI timers, without retaining dead timers.")
+
 (defun mevedel--ui-timer-pending-p (timer)
   "Return whether UI-host TIMER is queued, even during TRAMP suspension."
   (and (timerp timer)
@@ -889,6 +969,7 @@ timer included; its own timer must not run again inside that wait.")
 TRAMP's temporary `timer-list' binding hides the outer list from
 `cancel-timer'.  Only remove TIMER by identity, leaving other timers alone."
   (when (timerp timer)
+    (remhash timer mevedel--ui-timer-scopes)
     (cancel-timer timer)
     (let ((outer (default-toplevel-value 'timer-list)))
       (when (memq timer outer)
@@ -897,11 +978,13 @@ TRAMP's temporary `timer-list' binding hides the outer list from
       (setq mevedel--coalesced-timers (delq timer mevedel--coalesced-timers))
       (mevedel--coalesced-timer-arm))))
 
-(defun mevedel--ui-timer-activate (timer &optional coalesced)
+(defun mevedel--ui-timer-activate (timer &optional coalesced scope)
   "Activate UI-host TIMER despite TRAMP suspension.
 TIMER's time and function must be set.  With COALESCED, due callbacks share
 one host wakeup; repeating timers use integral clock multiples and skip
-missed ticks.  Otherwise use Emacs's ordinary timer delivery."
+missed ticks.  Otherwise use Emacs's ordinary timer delivery.
+SCOPE is an explicit diagnostic root for failures in coalesced callbacks."
+  (when scope (puthash timer scope mevedel--ui-timer-scopes))
   (if coalesced
       (progn
         ;; One timer without a time would break every later arm.
@@ -913,17 +996,18 @@ missed ticks.  Otherwise use Emacs's ordinary timer delivery."
       (timer-activate timer)
       (set-default-toplevel-value 'timer-list timer-list))))
 
-(defun mevedel--run-periodic-timer (period function &rest arguments)
+(defun mevedel--run-periodic-timer (scope period function &rest arguments)
   "Run FUNCTION with ARGUMENTS every PERIOD seconds, sharing UI wakeups.
 The first call is at the next integral multiple of PERIOD.  Missed calls
 are skipped after a stall.  Use `mevedel--ui-timer-cancel' to stop the timer.
-This is for periodic observation, not deadlines or animation frames."
+This is for periodic observation, not deadlines or animation frames.
+SCOPE is the captured diagnostic root, `global' or `unavailable'."
   (unless (and (numberp period) (> period 0))
     (error "Timer period must be positive"))
   (let ((timer (timer-create)))
     (timer-set-time timer (timer-next-integral-multiple-of-time nil period) period)
     (timer-set-function timer function arguments)
-    (mevedel--ui-timer-activate timer t)
+    (mevedel--ui-timer-activate timer t scope)
     timer))
 
 (defun mevedel--coalesced-timer-arm (&optional due)
@@ -989,10 +1073,13 @@ A tick can run inside a callback that waits; it skips running callbacks."
                          (or (input-pending-p) (time-less-p until nil)))
                 (throw 'yield nil))
               (setq delivered t)
-              (condition-case-unless-debug err
-                  (mevedel--coalesced-timer-call timer)
-                (error (message "Error running periodic callback: %s"
-                                (error-message-string err))))))))
+              ;; A callback may cancel its own timer before it fails.
+              (let ((scope (or (gethash timer mevedel--ui-timer-scopes) 'unavailable)))
+                (condition-case-unless-debug err
+                    (mevedel--coalesced-timer-call timer)
+                  (error (mevedel-diagnostic-message
+                          scope "Error running periodic callback: %s"
+                          (error-message-string err)))))))))
     (mevedel--coalesced-timer-arm)))
 
 (defun mevedel--cycle-list-around (element list)
@@ -1765,7 +1852,7 @@ while scrolling, a 130 ms stall every few seconds."
           (setq mevedel--gc-floor-applied floor)
           (add-hook 'pre-command-hook #'mevedel--gc-note-input)
           (unless (timerp mevedel--gc-timer)
-            (setq mevedel--gc-timer (mevedel--run-periodic-timer 1 #'mevedel--gc-maintain))))
+            (setq mevedel--gc-timer (mevedel--run-periodic-timer 'global 1 #'mevedel--gc-maintain))))
       (when (timerp mevedel--gc-timer)
         (mevedel--ui-timer-cancel mevedel--gc-timer))
       (setq mevedel--gc-timer nil)

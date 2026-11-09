@@ -106,7 +106,13 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--file-relative-name-or-absolute
                   "mevedel-utilities" (file directory))
+(declare-function mevedel-diagnostic-message "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-warning "mevedel-utilities" (scope type message &optional level buffer-name))
 (declare-function mevedel-version "mevedel-utilities" (&optional here message))
+(autoload 'mevedel-diagnostic-message "mevedel-utilities")
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-warning "mevedel-utilities")
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-state-dir "mevedel-workspace" (workspace))
@@ -284,12 +290,14 @@ The loaded instructions replace the workspace instruction store, after
 the confirmation the load asks for.  This also gives a workspace waiting
 for its store, such as one whose migration staged candidates, its store."
   (interactive (list (read-file-name "Instruction list file: ")))
-  (let ((confirm (called-interactively-p 'any)))
-    (mevedel-instruction-store-replacing
-     (mevedel--instruction-buffer-workspace (current-buffer))
-     (lambda ()
-       (mevedel--load-instructions-file path (file-name-parent-directory path)
-                                        confirm nil)))))
+  (let ((confirm (called-interactively-p 'any))
+        (workspace (mevedel--instruction-buffer-workspace (current-buffer))))
+    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+      (mevedel-instruction-store-replacing
+       workspace
+       (lambda ()
+         (mevedel--load-instructions-file path (file-name-parent-directory path)
+                                          confirm nil workspace))))))
 
 (defun mevedel--read-instructions-file (path)
   "Read the instruction snapshot form from PATH."
@@ -760,8 +768,8 @@ restoring overlays."
                   kia (- (length instructions) restored))
             (setf (alist-get file (mevedel--instruction-alist) nil nil #'equal) restored-instrs)
             (when (and message (> kia 0))
-              (display-warning
-               'mevedel
+              (mevedel-diagnostic-warning
+               (mevedel-diagnostic-scope workspace) 'mevedel
                (format "Could not restore %d mevedel instruction%s in %s"
                        kia (if (= kia 1) "" "s") file)
                :warning))))
@@ -1245,14 +1253,14 @@ LIST holding (UUID . REQUEST-TEXT) for each change of MINE refused."
              :rewinds (plist-get theirs :rewinds))
        :refused (nreverse refused)))))
 
-(defun mevedel-instruction-store--report-refused (refused)
-  "Tell the user about REFUSED changes and keep their request texts."
+(defun mevedel-instruction-store--report-refused (workspace refused)
+  "Tell the user about WORKSPACE's REFUSED changes and keep request texts."
   (when refused
     (let ((texts (delq nil (mapcar #'cdr refused))))
       (dolist (text texts)
         (kill-new text))
-      (display-warning
-       'mevedel
+      (mevedel-diagnostic-warning
+       (mevedel-diagnostic-scope workspace) 'mevedel
        (format (concat "%d instruction change%s refused: another client changed "
                        "the same instruction first.  %s")
                (length refused) (if (= 1 (length refused)) " was" "s were")
@@ -1270,7 +1278,7 @@ LIST holding (UUID . REQUEST-TEXT) for each change of MINE refused."
   (let ((key (cons kind (mevedel--instruction-workspace-key workspace))))
     (unless (member key mevedel-instruction-store--warned)
       (push key mevedel-instruction-store--warned)
-      (display-warning 'mevedel text :warning))))
+      (mevedel-diagnostic-warning (mevedel-diagnostic-scope workspace) 'mevedel text :warning))))
 
 (defun mevedel-instruction-store--pending-p (workspace observed own-save-path)
   "Return non-nil when WORKSPACE, whose store is absent, awaits migration.
@@ -1438,8 +1446,8 @@ resolve as a workspace.  The first session saved there creates both."
                    (mevedel-instruction-store--install workspace data)
                    (mevedel-instruction-store--observe
                     workspace (plist-get theirs :hash) data)
-                   (display-warning
-                    'mevedel
+                   (mevedel-diagnostic-warning
+                    (mevedel-diagnostic-scope workspace) 'mevedel
                     (format (concat "The instruction store for %s now exists; it replaced "
                                     "this Emacs's instructions, which were exported to %s")
                             (mevedel-workspace-root workspace) path)
@@ -1469,7 +1477,7 @@ resolve as a workspace.  The first session saved there creates both."
                            outcome (if refused (cons 'refused refused) 'merged))))))))
             (when stored
               (mevedel-instruction-store--observe workspace (car stored) (cdr stored))
-              (mevedel-instruction-store--report-refused refused))
+              (mevedel-instruction-store--report-refused workspace refused))
             (when (and (null outcome) (>= (cl-incf tries) 2))
               ;; Retried once and still stale: keep the store's record and
               ;; refuse this client's changes, recovering request texts.
@@ -1488,7 +1496,7 @@ resolve as a workspace.  The first session saved there creates both."
                   (mevedel-instruction-store--install workspace (plist-get fresh :data))
                   (mevedel-instruction-store--observe
                    workspace (plist-get fresh :hash) (plist-get fresh :data))
-                  (mevedel-instruction-store--report-refused refused))
+                  (mevedel-instruction-store--report-refused workspace refused))
                 ;; Without a readable record nothing was refused or written:
                 ;; keep the changes for the next write.
                 (unless (eq 'ok (plist-get fresh :status))
@@ -1544,7 +1552,7 @@ after every command."
              (cl-pushnew workspace mevedel-instruction-store--dirty)
              (setf (alist-get workspace mevedel-instruction-store--failed)
                    (current-time))
-             (message "mevedel: instructions not written to the store: %s"
+             (mevedel-diagnostic-message (mevedel-diagnostic-scope workspace) "instructions not written to the store: %s"
                       (error-message-string err)))))))
     (unless mevedel-instruction-store--dirty
       (remove-hook 'post-command-hook #'mevedel-instruction-store-flush))))

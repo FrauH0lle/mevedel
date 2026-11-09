@@ -10,6 +10,7 @@
 
 (require 'mevedel-resource)
 (require 'mevedel-turn)
+(require 'mevedel-utilities)
 
 ;; `gptel-request'
 (declare-function gptel-backend-name "ext:gptel-request" (cl-x) t)
@@ -786,7 +787,7 @@ with `Error:' so gptel settles the call without invoking its handler."
                   tool (plist-get outcome :issues))
                  (and abandoned
                       (mevedel-tool-repair-format-audit-block
-                       'abandoned abandoned)))))))
+                       'abandoned abandoned (mevedel-diagnostic-scope session))))))))
         (error
          (when telemetry-start-time
            (mevedel-telemetry-record
@@ -802,7 +803,8 @@ with `Error:' so gptel settles the call without invoking its handler."
            name 'internal-error args nil nil
            '((:path nil :kind internal-error)) info
            'internal-repair-error))
-         (display-warning
+         (mevedel-diagnostic-warning
+          (mevedel-diagnostic-scope session)
           'mevedel
           (format "Tool input repair failed for %s (%s)"
                   name (car-safe err))

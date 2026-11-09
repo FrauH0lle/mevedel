@@ -25,6 +25,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (eval-when-compile (require 'cl-lib))
 
 ;; `mevedel-chat'
@@ -287,7 +289,7 @@ frame grows with the answer instead of resizing on every chunk."
   "Toggle whether the directive frame filters the transcript."
   (interactive)
   (unless (frame-live-p mevedel-directive-frame--frame)
-    (user-error "No directive frame is open"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No directive frame is open"))
   (if mevedel-directive-frame--filtered-p
       (progn
         (mevedel-directive-frame--clear-filter)
@@ -296,8 +298,8 @@ frame grows with the answer instead of resizing on every chunk."
       (mevedel-directive-frame--apply-filter))
     (if mevedel-directive-frame--filtered-p
         (message "mevedel: showing this directive only")
-      (message
-       "mevedel: cannot filter while the view is displayed elsewhere"))))
+      (mevedel-diagnostic-message (mevedel-diagnostic-scope (current-buffer))
+       "Cannot filter while the view is displayed elsewhere"))))
 
 
 ;;
@@ -659,7 +661,7 @@ an ordinary window when child frames are unavailable."
   "Dismiss the directive frame."
   (interactive)
   (unless (frame-live-p mevedel-directive-frame--frame)
-    (user-error "No directive frame is open"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No directive frame is open"))
   (delete-frame mevedel-directive-frame--frame))
 
 

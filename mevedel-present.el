@@ -15,6 +15,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (require 'mevedel-native)
 
 ;; `native/mevedel-present.c'
@@ -50,7 +52,7 @@ Return non-nil when it is active."
           (let ((result (mevedel-present--enable)))
             (if (eq result t)
                 'enabled
-              (message "mevedel: PGTK presentation unchanged: %s" result)
+              (mevedel-diagnostic-message 'global "PGTK presentation unchanged: %s" result)
               result))))
   (mevedel-present-active-p))
 

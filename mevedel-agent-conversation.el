@@ -9,6 +9,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (eval-when-compile
   (require 'cl-lib)
   (require 'subr-x))
@@ -460,7 +462,10 @@ return nil so delivery can refuse to consume missing transcript records."
               (mevedel--insert-user-role-block-at-marker block marker)
               t))
         (error
-         (message "mevedel: conversation user-block insert failed: %S" err)
+         (mevedel-diagnostic-message
+          (mevedel-diagnostic-scope
+           (mevedel-agent-invocation-parent-session invocation))
+          "Conversation user-block insert failed: %S" err)
          nil)))))
 
 
@@ -706,8 +711,9 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
                 (mevedel-view-refresh-agent-rendering
                  view (mevedel-agent-invocation-path invocation)))))
         (error
-         (display-warning
-          'mevedel
+         (mevedel-diagnostic-warning
+          (mevedel-diagnostic-scope
+           (mevedel-agent-invocation-parent-session invocation)) 'mevedel
           (format "Agent conversation refresh failed for %s: %S"
                   agent-id err)
           :warning))))))
@@ -857,7 +863,8 @@ debounced save is cancelled because this freeze supersedes it."
     (let* ((session (mevedel-agent-invocation-parent-session invocation))
            (buffer (mevedel-agent-invocation-buffer invocation))
            (parent (mevedel-agent-invocation-parent-data-buffer invocation))
-           (root (and session (or (mevedel-session-root-buffer session) parent))))
+           (root (and session (or (mevedel-session-root-buffer session) parent)))
+           (scope (mevedel-diagnostic-scope session)))
       (when (and session
                  (mevedel-agent-conversation--owns-transcript-p invocation)
                  (mevedel-session-codec-portable-authority-p session)
@@ -892,7 +899,7 @@ debounced save is cancelled because this freeze supersedes it."
                          (mevedel-agent-conversation--finish-save frozen-tick)
                        (error
                         (mevedel--warn-once
-                         'agent-conversation-post-save
+                         scope 'agent-conversation-post-save
                          "Agent transcript post-save cleanup failed: %s"
                          (error-message-string err)))))))
                (setf (mevedel-agent-invocation-sidecar-dirty invocation) nil)))))))))
@@ -908,7 +915,8 @@ returns nil.  TOKEN is the caller's gate ownership, which is exempt."
         (condition-case err
             (progn (mevedel-session-publication-barrier session token) t)
           (error
-           (message "mevedel: conversation save deferred for %s: %s"
+           (mevedel-diagnostic-message (mevedel-diagnostic-scope session)
+                    "Conversation save deferred for %s: %s"
                     (mevedel-agent-invocation-agent-id invocation)
                     (error-message-string err))
            nil)))))
@@ -1005,7 +1013,8 @@ ownership, handed to gated writers."
                    (lambda () (mevedel-agent-conversation--write invocation)))
 		  nil)
 		 (error
-		  (message "mevedel: conversation save failed for %s: %S"
+		  (mevedel-diagnostic-message (mevedel-diagnostic-scope session)
+                           "Conversation save failed for %s: %S"
                            (mevedel-agent-invocation-agent-id invocation) err)
 		  nil))))))))))
 
@@ -1066,7 +1075,12 @@ buffer so explicit recovery stays possible."
   (or (not (mevedel-agent-invocation-p mevedel--agent-invocation))
       (if-let* ((reason (mevedel-agent-conversation--unsaved-reason
                          mevedel--agent-invocation)))
-          (progn (message "mevedel: %s" reason) nil)
+          (progn
+            (mevedel-diagnostic-message
+             (mevedel-diagnostic-scope
+              (mevedel-agent-invocation-parent-session mevedel--agent-invocation))
+             "%s" reason)
+            nil)
         t)))
 
 (defun mevedel-agent-conversation--preserve-unsaved (invocation)
@@ -1094,8 +1108,9 @@ discarded silently."
         (mevedel-agent-conversation-save mevedel--agent-invocation)
       ((error quit) nil))
     (when (mevedel-agent-conversation--owes-p mevedel--agent-invocation)
-      (display-warning
-       'mevedel
+      (mevedel-diagnostic-warning
+       (mevedel-diagnostic-scope
+        (mevedel-agent-invocation-parent-session mevedel--agent-invocation)) 'mevedel
        (format "Closing %s left unpublished changes; recovered to %s"
                (mevedel-agent-invocation-agent-id mevedel--agent-invocation)
                (mevedel-agent-conversation--preserve-unsaved

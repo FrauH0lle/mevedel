@@ -13,6 +13,7 @@
 (require 'mevedel-claude-code-history)
 (require 'mevedel-tools)
 (require 'mevedel-turn)
+(require 'mevedel-utilities)
 
 ;; `mevedel-side-conversation'
 (defvar mevedel-side-conversation--frozen-context)
@@ -25,7 +26,7 @@
 (cl-defstruct (mevedel-claude-code-btw--fork
                (:constructor mevedel-claude-code-btw--make-fork))
   "One owned native fork, including late cleanup after its buffer dies."
-  buffer launch id closed deleting pending error)
+  buffer launch id closed deleting pending error diagnostic-scope)
 
 (defvar mevedel-claude-code-btw--forks nil
   "Native side forks not yet deleted, including pending fork replies.")
@@ -73,14 +74,18 @@
                            (delq fork mevedel-claude-code-btw--forks)))
                  (setf (mevedel-claude-code-btw--fork-error fork)
                        (plist-get outcome :message))
-                 (display-warning 'mevedel
+                 (mevedel-diagnostic-warning
+                  (or (mevedel-claude-code-btw--fork-diagnostic-scope fork) 'unavailable)
+                  'mevedel
                                   (format "Could not delete /btw native fork %s: %s"
                                           (mevedel-claude-code-btw--fork-id fork)
                                           (plist-get outcome :message))))))
           (error
            (setf (mevedel-claude-code-btw--fork-deleting fork) nil
                  (mevedel-claude-code-btw--fork-error fork) (error-message-string err))
-           (display-warning 'mevedel (error-message-string err))))))))
+           (mevedel-diagnostic-warning
+            (or (mevedel-claude-code-btw--fork-diagnostic-scope fork) 'unavailable)
+            'mevedel (error-message-string err))))))))
 
 (defun mevedel-claude-code-btw-close ()
   "Retire this buffer's native fork and delete it after cancellation settles."
@@ -102,7 +107,8 @@ changes during startup, refuse rather than silently capture newer history."
                     (gptel--model-name gptel-model) nil)))
          (tick (buffer-chars-modified-tick parent))
          (fork (mevedel-claude-code-btw--make-fork
-                :buffer side :launch launch :pending t)))
+                :buffer side :launch launch :pending t
+                :diagnostic-scope (mevedel-diagnostic-scope parent))))
     (push fork mevedel-claude-code-btw--forks)
     (with-current-buffer side
       (setq-local mevedel-claude-code-btw--fork fork)
@@ -129,7 +135,9 @@ changes during startup, refuse rather than silently capture newer history."
               (setf (mevedel-claude-code-btw--fork-closed fork) t)
               (when (buffer-live-p side) (kill-buffer side))
               (mevedel-claude-code-btw--delete fork)
-              (display-warning 'mevedel (error-message-string failure))))))
+              (mevedel-diagnostic-warning
+               (mevedel-claude-code-btw--fork-diagnostic-scope fork)
+               'mevedel (error-message-string failure))))))
       ((error quit)
        (setf (mevedel-claude-code-btw--fork-pending fork) nil
              (mevedel-claude-code-btw--fork-closed fork) t)
@@ -243,8 +251,13 @@ changes during startup, refuse rather than silently capture newer history."
                                                         (mevedel-claude-code-btw--fork-buffer fork)))))
                          mevedel-claude-code-btw--forks))
       (accept-process-output nil 0.05)))
-  (when mevedel-claude-code-btw--forks
-    (display-warning 'mevedel "Some /btw native forks could not be deleted before exit")))
+  (dolist (scope (delete-dups
+                 (mapcar (lambda (fork)
+                           (or (mevedel-claude-code-btw--fork-diagnostic-scope fork)
+                               'unavailable))
+                         mevedel-claude-code-btw--forks)))
+    (mevedel-diagnostic-warning
+     scope 'mevedel "Some /btw native forks could not be deleted before exit")))
 
 (add-hook 'kill-emacs-hook #'mevedel-claude-code-btw-shutdown)
 

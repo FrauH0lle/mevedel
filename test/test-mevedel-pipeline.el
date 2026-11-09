@@ -1565,7 +1565,7 @@ cover, so the permission step's warning about it is captured here."
       (should (eq 'paused (mevedel-goal-status goal)))
       (should (equal "PostToolUse hook stopped the turn: halt"
                      (mevedel-goal-reason goal)))
-      (should (equal '("mevedel: PostToolUse hook stopped the turn: halt")
+      (should (equal '("mevedel [workspace unavailable]: PostToolUse hook stopped the turn: halt")
                      messages))))
 
   :doc "an agent's stop ends only the agent turn"

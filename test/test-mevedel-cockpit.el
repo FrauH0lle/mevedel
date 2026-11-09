@@ -11,6 +11,7 @@
 (require 'mevedel-menu)
 (require 'mevedel-structs)
 (require 'mevedel-view)
+(require 'mevedel-workspace)
 (require 'tabulated-list)
 (require 'helpers
          (file-name-concat
@@ -304,6 +305,15 @@
                           :type 'user-error)))
       (mevedel-cockpit-test--cleanup view-buffer data-buffer)))
 
+  :doc "attributes a dead owner's refusal to its explicit workspace"
+  (with-temp-buffer
+    (let* ((workspace (mevedel-cockpit-test--workspace))
+           (context (list :workspace workspace :data-buffer nil :view-buffer nil))
+           (err (should-error (mevedel-cockpit-require-owner "test cockpit" context)
+                              :type 'user-error)))
+      (should (equal (error-message-string err)
+                     "mevedel [/tmp/cockpit]: No live mevedel session for this test cockpit"))))
+
   :doc "accepts a workspace context, which has no owners that can die"
   (let ((workspace (mevedel-workspace--create :type 'project :id "w")))
     (should (mevedel-cockpit-require-owner
@@ -311,6 +321,18 @@
     (should-error (mevedel-cockpit-require-owner
                    "test cockpit" (mevedel-cockpit-workspace-context nil))
                   :type 'user-error)))
+
+(mevedel-deftest mevedel-cockpit-diagnostic-scope ()
+  ,test (test)
+  :doc "prefers explicit context over the current buffer and never discovers"
+  (with-temp-buffer
+    (let* ((workspace (mevedel-cockpit-test--workspace))
+           (session (mevedel-session--create :workspace workspace)))
+      (cl-letf (((symbol-function 'mevedel-workspace)
+                 (lambda (&rest _) (ert-fail "Diagnostic discovered a workspace"))))
+        (should (equal "/tmp/cockpit"
+                       (mevedel-cockpit-diagnostic-scope (list :session session))))
+        (should (eq 'unavailable (mevedel-cockpit-diagnostic-scope)))))))
 
 (mevedel-deftest mevedel-cockpit-workspace-context ()
   ,test

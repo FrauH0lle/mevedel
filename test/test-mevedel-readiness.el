@@ -5,6 +5,9 @@
 ;;; Code:
 (require 'helpers (file-name-concat (file-name-directory (or load-file-name buffer-file-name)) "helpers"))
 (require 'mevedel-readiness)
+(require 'mevedel-auth)
+(require 'mevedel-claude-code)
+(require 'mevedel-utilities)
 (require 'mevedel-view)
 
 (defmacro test-mevedel-readiness--with-claude (&rest body)
@@ -62,6 +65,26 @@
 	(should-not (mevedel-recovery-blocker session))
 	(mevedel-recovery-report session "preset" 'configuration "Choose a preset" t)
 	(should-error (mevedel-readiness-assert session) :type 'user-error))))
+  :doc "shared auth failures stay raw while local projection preserves condition fields"
+  (let* ((workspace (mevedel-workspace--create :root "/project A/same/"))
+         (session (mevedel-session--create :workspace workspace))
+         (failure (list 'user-error "Token expired" :provider "Codex")))
+    (with-temp-buffer
+      (setq-local mevedel--workspace (mevedel-workspace--create :root "/project B/same/"))
+      (cl-letf (((symbol-function 'mevedel-auth-assert-ready)
+                 (lambda (_backend) (signal (car failure) (cdr failure)))))
+        (should (equal failure
+                       (should-error (mevedel-readiness-assert session 'test-provider)
+                                     :type 'user-error)))
+        (should
+         (equal (list 'user-error "mevedel [/project A/same/]: Token expired" :provider "Codex")
+                (should-error
+                 (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope session)
+                   (mevedel-readiness-assert session 'test-provider))
+                 :type 'user-error)))))
+    (let ((issue (mevedel-recovery-blocker session)))
+      (should (equal "Codex login needs renewal" (plist-get issue :message)))
+      (should (equal "Provider sign-in is required" (mevedel-recovery-public-message issue)))))
   :doc "unknown Claude readiness never refuses or starts a check"
   (test-mevedel-readiness--with-claude
     (cl-letf (((symbol-function 'mevedel-claude-code-launch)

@@ -7,6 +7,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (require 'mevedel-engine)
 
 (require 'mevedel-context-delivery)
@@ -109,7 +111,7 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
+                  "mevedel-utilities" (scope key format &rest args))
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--assert-live-tip
@@ -229,6 +231,7 @@
            (eligible admission)
            (t
             (mevedel--warn-once
+             (mevedel-diagnostic-scope (current-buffer))
              (list 'compact-auto-ineligible (buffer-name))
              "Auto-compaction skipped: %s"
              (or ineligible-reason "session is not eligible"))
@@ -261,12 +264,14 @@ With prefix argument AGGRESSIVE, compact without preserving a recent
             (current-buffer))
            (t (mevedel--active-chat-buffer)))))
     (unless (and chat-buffer (buffer-live-p chat-buffer))
-      (user-error "No mevedel chat buffer found"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer))
+                                    "No mevedel chat buffer found"))
     (with-current-buffer chat-buffer
-      (mevedel-engine-assert-local-history mevedel--session "Manual compaction" gptel-backend t)
-      (mevedel-compact-run-start
-       :aggressive aggressive
-       :instructions instructions))))
+      (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope chat-buffer)
+        (mevedel-engine-assert-local-history mevedel--session "Manual compaction" gptel-backend t)
+        (mevedel-compact-run-start
+         :aggressive aggressive
+         :instructions instructions)))))
 
 (defun mevedel--compact-terminate-request (fsm status err)
   "Move FSM to its error state after compaction failure ERR.
@@ -298,12 +303,12 @@ a request that will never reach them."
     (with-current-buffer chat-buffer
       (when (>= mevedel-compact-run-failure-count 3)
         (setq mevedel--compact-auto-disabled t))
-      (display-warning
+      (mevedel-diagnostic-warning (mevedel-diagnostic-scope chat-buffer)
        'mevedel
        (format
         (if mevedel--compact-auto-disabled
-            "Auto-compaction disabled after repeated failures; request not sent: %s"
-          "Auto-compaction failed; request not sent: %s")
+            "%s (auto-compaction disabled after repeated failures; request not sent)"
+          "%s (auto-compaction failed; request not sent)")
         err)
        :warning)
       (mevedel-view-stream-end-progress mevedel--view-buffer)

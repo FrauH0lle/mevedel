@@ -15,6 +15,12 @@
 (define-error 'mevedel-journal-discard-source-required
               "Capture descriptor is unreadable; provide its original source directory" 'user-error)
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format &rest args))
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+
 (defun mevedel-journal-discard-prepare (workspace id &optional original-source)
   "Freeze an explicit discard payload for WORKSPACE's capture ID.
 ORIGINAL-SOURCE is required only when the source descriptor is unreadable.
@@ -26,9 +32,9 @@ A matching source pin must be present and valid before accepting the omission."
     (when (and capture original-source
                (not (equal (mevedel-session-control-fs-physical-path source)
                            (mevedel-session-control-fs-physical-path original-source))))
-      (user-error "Source directory does not match the capture's original source"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Source directory does not match the capture's original source"))
     (when (and remote (not (equal remote (file-remote-p (mevedel-workspace-root workspace)))))
-      (user-error "Source belongs to a different execution target"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Source belongs to a different execution target"))
     (mevedel-journal-pins--read (mevedel-journal-pins--path source id))
     (json-serialize
      (list :class "discard" :capture-id id

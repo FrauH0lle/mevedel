@@ -16,6 +16,7 @@
                            "mevedel-session-test-support"))
 (require 'mevedel-shared-editing)
 
+(require 'mevedel-artifact-backend)
 (require 'mevedel-artifact-store)
 
 (defmacro mevedel-shared-editing-test--with-workspace (&rest body)
@@ -1050,7 +1051,9 @@
                               :title)))))
 
 (mevedel-deftest mevedel-shared-editing-save-version-later
-  (:doc "Versions an item after the saves queued before it")
+  ()
+  ,test (test)
+  :doc "Versions an item after the saves queued before it"
   (mevedel-shared-editing-test--with-workspace
     (mevedel-shared-editing-call
      workspace '(:action "create" :id "board" :kind "whiteboard" :title "First"
@@ -1062,7 +1065,27 @@
                   (< (float-time) deadline))
         (accept-process-output nil 0.05)))
     (should (equal "s1" (plist-get (car (mevedel-artifact-store-versions workspace "board"))
-                                   :session)))))
+                                   :session))))
+
+  :doc "attributes a deferred failure after the origin buffer dies and another workspace is current"
+  (let* ((workspace (mevedel-workspace--create :root "/origin/project/"))
+         (origin (generate-new-buffer " *version-origin*"))
+         callback captured)
+    (unwind-protect
+        (progn
+          (with-current-buffer origin
+            (setq-local mevedel--workspace workspace)
+            (cl-letf (((symbol-function 'mevedel-artifact-backend-call)
+                       (lambda (_workspace _args reply &rest _) (setq callback reply))))
+              (mevedel-shared-editing-save-version-later workspace "board")))
+          (kill-buffer origin)
+          (with-temp-buffer
+            (setq-local mevedel--workspace (mevedel-workspace--create :root "/other/project/"))
+            (mevedel-test--with-captured-messages captured
+              (funcall callback '(:error "Disk full"))))
+          (should (equal "mevedel [/origin/project/]: No version of board was saved: Disk full\n"
+                         captured)))
+      (when (buffer-live-p origin) (kill-buffer origin)))))
 
 (mevedel-deftest mevedel-shared-editing-duplicate
   (:doc "Copies an item into an independent one under its own lease")

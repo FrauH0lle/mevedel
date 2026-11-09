@@ -37,6 +37,12 @@
 (declare-function mevedel-session-persistence-save-agent-state-soon "mevedel-session-persistence" (session))
 (autoload 'mevedel-session-persistence-save-agent-state-soon "mevedel-session-persistence")
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-message "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(autoload 'mevedel-diagnostic-message "mevedel-utilities")
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+
 ;; `mevedel-view'
 (declare-function mevedel-view--render-status "mevedel-view" (&optional data-buf))
 (defvar mevedel--view-buffer)
@@ -49,8 +55,12 @@
       (mevedel-collaboration-notify-request-changed buffer))
     (when (fboundp 'mevedel-collaboration-recovery-refresh)
       ;; Presentation must not fail the request path that reported the issue.
-      (with-demoted-errors "mevedel: recovery publication failed: %S"
-        (mevedel-collaboration-recovery-refresh buffer)))
+      (let ((scope (mevedel-diagnostic-scope session)))
+        (condition-case err
+            (mevedel-collaboration-recovery-refresh buffer)
+          (error
+           (mevedel-diagnostic-message
+            scope "%s (Recovery publication failed)" (error-message-string err))))))
     (when-let* (((local-variable-p 'mevedel--view-buffer buffer))
                 (view (buffer-local-value 'mevedel--view-buffer buffer))
                 ((buffer-live-p view)))

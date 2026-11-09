@@ -20,6 +20,12 @@
 (declare-function mevedel-cockpit-context-workspace "mevedel-cockpit" (&optional context))
 (autoload 'mevedel-cockpit-context-workspace "mevedel-cockpit")
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format &rest args))
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+
 (defvar-local mevedel-journal-jobs--workspace nil
   "Workspace inspected by the current journal jobs buffer.")
 
@@ -30,7 +36,7 @@
           (mevedel-cockpit-context-workspace)
         (user-error nil))
       (mevedel-workspace)
-      (user-error "No workspace in this buffer")))
+      (mevedel-diagnostic-user-error 'unavailable "No workspace in this buffer")))
 
 (defun mevedel-journal-jobs--records (workspace)
   "Return inspectable pending job states for WORKSPACE without mutation."
@@ -150,7 +156,7 @@ explain retention for humans; they grant neither recall nor deletion authority."
                             (cons (format "%s %s" (plist-get job :id) (plist-get job :status))
                                   (plist-get job :id)))
                           (mevedel-journal-jobs--records workspace))))
-    (unless choices (user-error "No pending journal jobs"))
+    (unless choices (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "No pending journal jobs"))
     (list workspace (or (and (member at-point (mapcar #'cdr choices)) at-point)
                         (cdr (assoc (completing-read "Journal job: " choices nil t) choices))))))
 
@@ -235,7 +241,7 @@ explain retention for humans; they grant neither recall nor deletion authority."
   "Inspect frozen evidence and diagnostics for pending capture ID in WORKSPACE."
   (let ((job (cl-find id (mevedel-journal-jobs--records workspace)
                       :key (lambda (job) (plist-get job :id)) :test #'equal)))
-    (unless job (user-error "Journal capture is no longer pending"))
+    (unless job (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Journal capture is no longer pending"))
     (list :title "Journal capture" :subtitle (format "%s · %s" id (plist-get job :status))
           :identity (list workspace id) :navigator t :initial 'evidence
           :refresh (lambda () (mevedel-journal-jobs--capture-report workspace id))

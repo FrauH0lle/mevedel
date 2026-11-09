@@ -22,6 +22,14 @@
 
 (require 'mevedel-structs)
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-message "mevedel-utilities" (scope format-string &rest args))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format-string &rest args))
+(autoload 'mevedel-diagnostic-message "mevedel-utilities")
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+
 ;; `mevedel-view'
 (defvar mevedel-view--interaction-marker)
 (defvar mevedel-view--status-marker)
@@ -153,7 +161,7 @@ responsible for rerendering the producer."
          (default (get-text-property position
                                      'mevedel-view-zone-collapsed)))
     (unless (and key collapsible)
-      (user-error "No collapsible fragment at point"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No collapsible fragment at point"))
     (mevedel-view-zone-toggle-collapse-state key default)))
 
 (defun mevedel-view-zone--normalize (fragment)
@@ -209,8 +217,11 @@ that fits in it stays one screen row per line in every window."
   (let ((width (mevedel-view-zone-width)))
     (unless (eql width mevedel-view-zone--width)
       (setq mevedel-view-zone--width width)
-      (with-demoted-errors "mevedel: zone width change: %S"
-        (run-hooks 'mevedel-view-zone-width-change-functions)))))
+      (let ((scope (mevedel-diagnostic-scope
+                    (or mevedel--session mevedel--data-buffer))))
+        (condition-case-unless-debug err
+            (run-hooks 'mevedel-view-zone-width-change-functions)
+          (error (mevedel-diagnostic-message scope "%s" (error-message-string err))))))))
 
 (defun mevedel-view-zone--watch-width ()
   "Start reporting width changes of the windows showing this buffer."

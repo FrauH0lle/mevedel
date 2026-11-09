@@ -18,6 +18,7 @@
           "helpers"))
 (require 'mevedel-cockpit)
 (require 'mevedel-gptel-bridge)
+(require 'mevedel-hooks)
 (require 'mevedel-mentions)
 (require 'mevedel-permissions)
 (require 'mevedel-structs)
@@ -461,11 +462,16 @@
 
   :doc "retained-agent native steering is refused before creating a TSTR message"
   (mevedel-gptel-bridge-test--with-buffers
+    (setf (mevedel-session-workspace session)
+          (mevedel-workspace--create :root "/workspace/steering/"))
     (with-current-buffer data-buf
       (let ((mevedel--agent-invocation 'retained-agent))
         (cl-letf (((symbol-function 'read-string) #'ert-fail))
-          (should-error (mevedel-gptel-bridge--steer-advice #'ert-fail)
-                        :type 'user-error))))
+          (should
+           (equal
+            (list 'user-error "mevedel [/workspace/steering/]: Use SendMessage to steer a retained agent")
+            (should-error (mevedel-gptel-bridge--steer-advice #'ert-fail)
+                          :type 'user-error))))))
     (should-not (mevedel-session-pending-steering session)))
 
   :doc "blank input preserves pending entries and unrelated gptel delegates"

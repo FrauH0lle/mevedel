@@ -20,6 +20,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (eval-when-compile
   (require 'cl-lib))
 (require 'seq)
@@ -813,7 +815,7 @@ dismissed so it does not raise the same point again."
       (progn
         (mevedel-buddy-note-dismiss (plist-get record :id) "user")
         (message "mevedel: note dismissed"))
-    (user-error "No buddy note at point")))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No buddy note at point")))
 
 ;;;###autoload
 (defun mevedel-buddy-dismiss-notes ()

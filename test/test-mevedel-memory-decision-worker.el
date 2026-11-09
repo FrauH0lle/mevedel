@@ -13,6 +13,34 @@
 (require 'mevedel-models)
 (require 'mevedel-session-control-fs)
 (require 'mevedel-transport)
+(require 'mevedel-utilities)
+
+(mevedel-deftest mevedel-memory-decision--recovery-failed/attribution ()
+  ,test
+  (test)
+  :doc "recovery reports its explicit workspace and a successful peer cannot reset it"
+  (let* ((a (mevedel-workspace--create :root "/tmp/project A/"))
+         (b (mevedel-workspace--create :root "/ssh:host:/project A/"))
+         (mevedel--warn-once-table (make-hash-table :test #'equal))
+         (mevedel-memory-decision--recovery-workers (make-hash-table :test #'equal))
+         (key-a "a-claim") (key-b "b-claim") warnings messages
+         (job (list :diagnostic-scope (mevedel-workspace-root a)
+                    :claim (list :directory key-a :expires-at (+ (float-time) 30))
+                    :currentp (lambda () t))))
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (_type text &rest _) (push text warnings)))
+              ((symbol-function 'message)
+               (lambda (format &rest args) (push (apply #'format format args) messages))))
+      (mevedel-memory-decision--recovery-failed a key-a "Invalid bundle")
+      (mevedel-memory-decision--recovery-failed b key-b "Invalid bundle")
+      (puthash key-a job mevedel-memory-decision--recovery-workers)
+      (mevedel-memory-decision--recover-next-write a job)
+      (mevedel-memory-decision--recovery-failed b key-b "Invalid bundle")
+      (mevedel-memory-decision--recovery-failed a key-a "Invalid bundle"))
+    (should (= 3 (length warnings)))
+    (should (= 1 (length messages)))
+    (should (string-prefix-p "mevedel [/ssh:host:/project A/]: " (car messages)))
+    (should (string-prefix-p "mevedel [/tmp/project A/]: " (car warnings)))))
 
 (require 'memory-history-fixtures
          (file-name-concat (file-name-directory (or buffer-file-name load-file-name)) "memory-history-fixtures"))
@@ -465,8 +493,8 @@
                           (accept-process-output nil .01)))))
             (run) (run)
             (should-not completed)
-            (should (equal (list (format "Memory recovery failed: %s.  Memory review waits until recovery succeeds"
-                                         failure))
+            (should (equal (list (format "mevedel [%s]: Memory recovery failed: %s.  Memory review waits until recovery succeeds"
+                                         root failure))
                            warnings))
             (setq failure nil)
             (run)

@@ -6,6 +6,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (require 'cl-lib)
 (require 'subr-x)
 (eval-when-compile (require 'mevedel-structs))
@@ -138,7 +140,7 @@
 (declare-function mevedel--normalize-message-text "mevedel-utilities"
 		  (text))
 (declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
+                  "mevedel-utilities" (scope key format &rest args))
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--clear-input "mevedel-view-composer"
@@ -198,13 +200,16 @@
   (interactive)
   (let ((session (mevedel-plan-mode--current-session session)))
     (unless session
-      (user-error "No mevedel session for Plan mode"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session)
+                                    "No mevedel session for Plan mode"))
     (mevedel-session-artifacts-assert-new-mutation-authority session)
     (when (mevedel-session-directive-planning session)
-      (user-error "Finish or cancel directive planning before entering Plan"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session)
+                                    "Finish or cancel directive planning before entering Plan"))
     (when-let* ((goal (mevedel-session-goal session)))
       (unless (eq (mevedel-goal-status goal) 'complete)
-        (user-error "Finish or clear the current Goal before entering Plan")))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session)
+                                      "Finish or clear the current Goal before entering Plan")))
     (unless (mevedel-session-plan-mode session)
       (mevedel-reminders-rearm-plan-mode session)
       (let ((metadata (copy-sequence
@@ -395,7 +400,8 @@ opening an editable draft."
    ((eq outcome 'aborted)
     (mevedel-plan-mode--demote-proposal session t))
    ((memq outcome '(invalidated plan-exit superseded render-error)) nil)
-   (t (message "mevedel: unknown Plan proposal outcome %S" outcome))))
+   (t (mevedel-diagnostic-message (mevedel-diagnostic-scope session)
+                                  "Unknown Plan proposal outcome %S" outcome))))
 
 (defun mevedel-plan-mode--approval-entry
     (plan-markdown chat-buffer session selection)
@@ -475,7 +481,7 @@ An explicit change also refreshes the cached source checkout state."
   "Save the current Plan implementation instructions and close the editor."
   (interactive)
   (unless mevedel-plan-mode--instructions-entry
-    (user-error "No Plan implementation instructions to save"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (plist-get mevedel-plan-mode--instructions-entry :session)) "No Plan implementation instructions to save"))
   (let* ((entry mevedel-plan-mode--instructions-entry)
          (session (plist-get entry :session))
          (selection (plist-get entry :selection))
@@ -525,7 +531,7 @@ An explicit change also refreshes the cached source checkout state."
              (cons (mevedel-skill-name skill) skill))
            skills)))
     (unless candidates
-      (user-error "No user-invocable skills available"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (plist-get entry :session)) "No user-invocable skills available"))
     (let* ((choice (completing-read "Toggle implementation skill: "
                                     candidates nil t))
            (skill (cdr (assoc choice candidates)))
@@ -620,6 +626,12 @@ Unlike the compact native card this discloses all implementation instructions."
            (when overlay (mevedel--prompt--settle overlay outcome)))
          (accept (&optional branch remote-p)
            (interactive)
+           (if remote-p
+               (accept-selection branch remote-p)
+             (mevedel-with-diagnostic-errors
+                 (mevedel-diagnostic-scope (plist-get entry :session))
+               (accept-selection branch remote-p))))
+         (accept-selection (branch remote-p)
            (let ((accepted (copy-tree selection))
                  (provider (plist-get selection :model-provider)))
              (when (eq (plist-get accepted :location) 'worktree)
@@ -675,7 +687,8 @@ Unlike the compact native card this discloses all implementation instructions."
                       input)
                      (string-to-number (match-string 1 input)))
                     (t
-                     (user-error
+                     (mevedel-diagnostic-user-error
+                      (mevedel-diagnostic-scope (plist-get entry :session))
                       "Goal token budget must be a positive integer or empty")))))
              (plist-put selection :goal-token-budget budget)
              (mevedel-plan-mode--selection-changed entry)))
@@ -923,7 +936,7 @@ Warn when a standalone delimiter is present but no nonblank plan is recognized."
         ;; One standalone delimiter signals an attempted block.
         ;; An inline mention alone is not enough to diagnose a proposal.
         (when (string-match-p "^[ \t]*</?proposed_plan>[ \t]*$" text)
-          (display-warning
+          (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
            'mevedel
            (concat "Plan approval unavailable: no complete, nonblank proposal "
                    "was recognized. Ask the assistant to resend the full plan "
@@ -984,8 +997,10 @@ When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
         (mevedel-queue--unregister-entry-interaction entry)
         t)
     (error
-     (display-warning 'mevedel
-                      (format "Plan approval %s callback error: %S" phase err)
+     (mevedel-diagnostic-warning
+      (mevedel-diagnostic-scope (plist-get entry :session)) 'mevedel
+                      (format "%s (Plan approval %s callback error)"
+                              (error-message-string err) phase)
                       :warning)
      (unless retain (mevedel-queue--unregister-entry-interaction entry))
      nil)))
@@ -1015,8 +1030,9 @@ When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
             (funcall renderer entry)
           (error "Plan approval has no renderer"))
       (error
-       (display-warning 'mevedel
-                        (format "Plan approval render error: %S" err)
+       (mevedel-diagnostic-warning (mevedel-diagnostic-scope session) 'mevedel
+                        (format "%s (Plan approval render error)"
+                                (error-message-string err))
                         :warning)
        ;; A rendering bug must not discard the proposal: settling it as
        ;; aborted would drop the selection a later resume needs.
@@ -1040,7 +1056,7 @@ When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
                 (mevedel-session-pending-follow-ups session)))
       (user-error "Resolve pending planning follow-ups before implementing"))
     (if (not (eq entry pending))
-        (mevedel--warn-once 'plan-approval-stale
+        (mevedel--warn-once (mevedel-diagnostic-scope session) 'plan-approval-stale
                             "Plan approval: stale settlement ignored")
       (setf (mevedel-session-pending-plan-approval session) nil)
       (unless (mevedel-plan-approval--deliver entry outcome "settle" t)

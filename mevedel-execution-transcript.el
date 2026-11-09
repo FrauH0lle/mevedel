@@ -13,6 +13,7 @@
 (require 'mevedel-execution-telemetry)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-transcript-audit)
+(require 'mevedel-utilities)
 
 ;; `mevedel-execution-telemetry'
 (declare-function mevedel-execution-telemetry-sandbox-summary-class
@@ -381,7 +382,8 @@ completion holds its updated bounded output when it settles after the call."
                        (mevedel-execution-transcript--persist-terminal-record
                         record)
                      (error
-                      (display-warning
+                      (mevedel-diagnostic-warning
+                       (mevedel-diagnostic-scope (or (plist-get event :session) data-buffer))
                        'mevedel
                        (format "Could not publish nested execution %s: %s"
                                tool-use-id (error-message-string err))
@@ -700,7 +702,8 @@ after publishing the updated archive."
                       data-buffer event render-data)
                      (push tool-use-id settled)))
                  (error
-                  (display-warning
+                  (mevedel-diagnostic-warning
+                   (mevedel-diagnostic-scope (or (plist-get event :session) data-buffer))
                    'mevedel
                    (format "Could not settle pending execution %s: %s"
                            tool-use-id (error-message-string err))
@@ -762,7 +765,8 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
                      (set-buffer-modified-p t)))))
              (mevedel-execution-transcript-store-pending-terminal
               data-buffer event render-data)
-             (display-warning
+             (mevedel-diagnostic-warning
+              (mevedel-diagnostic-scope (or (plist-get event :session) data-buffer))
               'mevedel
               (format "Could not persist archived execution %s: %s"
                       tool-use-id (error-message-string err))
@@ -774,7 +778,8 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
             (error
              (mevedel-execution-transcript-store-pending-terminal
               data-buffer event render-data)
-             (display-warning
+             (mevedel-diagnostic-warning
+              (mevedel-diagnostic-scope (or (plist-get event :session) data-buffer))
               'mevedel
               (format "Could not retain nested execution %s: %s"
                       tool-use-id (error-message-string err))
@@ -785,7 +790,8 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
         (condition-case err
             (mevedel-execution-transcript--record-breadcrumb event)
           (error
-           (display-warning
+           (mevedel-diagnostic-warning
+            (mevedel-diagnostic-scope (or (plist-get event :session) data-buffer))
             'mevedel
             (format "Could not persist execution completion %s: %s"
                     tool-use-id (error-message-string err))

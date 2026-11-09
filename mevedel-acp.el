@@ -13,13 +13,14 @@
 (require 'seq)
 (require 'mevedel-structs)
 (require 'mevedel-transport)
+(require 'mevedel-utilities)
 
 ;; `mevedel-gptel-stream-bridge'
 (defvar mevedel-gptel-stream-bridge-insert-batch-delay)
 
 (cl-defstruct (mevedel-acp (:constructor mevedel-acp--create))
   "Runtime state for one external model conversation."
-  client launch session-id capabilities commands prepared checked
+  client launch session-id capabilities commands prepared checked diagnostic-scope
   (state 'starting) active timer prepare-cancel ready failure stderr)
 
 (defconst mevedel-acp--control-timeout 30
@@ -199,7 +200,9 @@ orderly close, and that exit is no failure."
                process (not (process-live-p process)) (not (string-empty-p stderr)))
       (let* ((file (mevedel-acp--log-stderr connection message stderr))
              (where (if file (abbreviate-file-name file) "*Warnings*")))
-        (display-warning 'mevedel (format "%s\nAgent stderr (also in %s):\n%s"
+        (mevedel-diagnostic-warning
+         (or (mevedel-acp-diagnostic-scope connection) 'unavailable)
+         'mevedel (format "%s\nAgent stderr (also in %s):\n%s"
                                           message where stderr))
         (setq message (format "%s; agent stderr is in %s" message where))))
     (mevedel-acp--shutdown
@@ -318,6 +321,8 @@ startup errors or timeout fail before any prompt is submitted.
 Optional :required-command waits for a session command advertisement before
 READY; missing support fails startup without sending a prompt.
 Optional :initialize-only checks the protocol without creating a conversation.
+Optional :diagnostic-scope overrides the root captured from the invoking buffer
+for local warnings; machine-wide validation supplies `global'.
 Optional :compaction advertises support for retained session summaries.
 Optional :normalize-outcome translates adapter-specific terminal metadata and
 usage into an outcome plist; generic ACP cannot infer its accounting scope.
@@ -334,7 +339,11 @@ immediately."
     (unless (and (stringp cwd) (file-name-absolute-p cwd)
                  (not (file-remote-p cwd)) (file-directory-p cwd))
       (error "ACP requires an existing absolute local working directory"))
-    (let* ((connection (mevedel-acp--create :launch launch :ready ready :failure failure))
+    (let* ((connection (mevedel-acp--create
+                        :launch launch :ready ready :failure failure
+                        :diagnostic-scope
+                        (or (plist-get launch :diagnostic-scope)
+                            (mevedel-diagnostic-scope (current-buffer)))))
            (client (acp-make-client :command (plist-get launch :command)
                                     :command-params (plist-get launch :args))))
       (setf (mevedel-acp-client connection) client)

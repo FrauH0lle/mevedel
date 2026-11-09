@@ -44,6 +44,12 @@
 (declare-function mevedel-system-render-prompt-file "mevedel-system" (relative-path &optional replacements))
 (autoload 'mevedel-system-render-prompt-file "mevedel-system")
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format &rest args))
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+
 (defcustom mevedel-memory-review-max-tokens 64000
   "Cumulative output token budget for one memory review.
 Both the client estimate and reported provider usage must fit this budget.
@@ -203,7 +209,8 @@ first while the request fits.  The callback reports the admitted note IDs as
 :notes and the captured notes left for later as :omitted-notes.
 The accepting store disposes of admitted notes after a successful review;
 malformed memory changes and unrecoverable reply structure reject the reply."
-  (let* ((buffer (generate-new-buffer " *mevedel-memory-review*"))
+  (let* ((diagnostic-scope (mevedel-diagnostic-scope (plist-get scope :workspace-root)))
+         (buffer (generate-new-buffer " *mevedel-memory-review*"))
          (caller (current-buffer))
          (stream gptel-stream)
          (token-budget mevedel-memory-review-max-tokens)
@@ -591,7 +598,7 @@ malformed memory changes and unrecoverable reply structure reject the reply."
                             :identity buffer :navigator t :initial 'response
                             :validate (lambda ()
                                         (unless (and (buffer-live-p buffer) (live))
-                                          (user-error "Consolidation inspection source is no longer live")))
+                                          (mevedel-diagnostic-user-error diagnostic-scope "Consolidation inspection source is no longer live")))
                             :sections
                             (list (list :id 'evidence :title "Admitted review evidence" :body input
                                         :mode 'json-mode)

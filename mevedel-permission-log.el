@@ -17,6 +17,8 @@
 
 (eval-when-compile (require 'cl-lib))
 
+(require 'mevedel-utilities)
+
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
@@ -100,8 +102,9 @@
                (write-region content nil file t 'silent))))
           t)
       (error
-       (message "mevedel: permission log persistence failed: %s"
-                (error-message-string err))
+       (mevedel-diagnostic-message
+        (mevedel-diagnostic-scope session)
+        "Permission log persistence failed: %s" (error-message-string err))
        nil))))
 
 (defun mevedel-permission-log--persist (session entry)

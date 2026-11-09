@@ -151,7 +151,7 @@
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-display-string "mevedel-tool-registry"
-		  (tool-name args))
+                  (tool-name args &optional scope))
 (declare-function mevedel-tool-for-call "mevedel-tool-registry" (name))
 (declare-function mevedel-tool-get "mevedel-tool-registry"
 		  (name &optional category))
@@ -245,10 +245,20 @@
 (declare-function mevedel--timer-pending-p "mevedel-utilities" (timer))
 (declare-function mevedel--trim-tool-result "mevedel-utilities" (text))
 (declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
+                  "mevedel-utilities" (scope key format &rest args))
+(declare-function mevedel-diagnostic-format "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-message "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format &rest args))
 (defvar mevedel--hook-audit-close)
 (defvar mevedel--hook-audit-open)
 (defvar mevedel-transcript-audit--decode-cache)
+(autoload 'mevedel--warn-once "mevedel-utilities")
+(autoload 'mevedel-diagnostic-format "mevedel-utilities")
+(autoload 'mevedel-diagnostic-message "mevedel-utilities")
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+
 
 ;; `mevedel-view'
 (declare-function mevedel-view--header-string
@@ -1115,8 +1125,9 @@ DATA-BUF, START, and END describe the data-buffer range being rendered."
                      event
                      data))))
       (error
-       (message "mevedel view render trace failed: %s"
-                (error-message-string err))))))
+       (mevedel-diagnostic-message
+        (mevedel-diagnostic-scope mevedel--data-buffer)
+        "%s (View render trace failed)" (error-message-string err))))))
 
 (defun mevedel-view--debug-turn-summary (turns data-buf)
   "Return compact debug metadata for DATA-BUF.
@@ -1212,6 +1223,7 @@ affordance, so batch Emacs -- where nobody can act on it -- stays quiet."
              mevedel-view-fontify-responses
              (not (mevedel-view--markdown-grammars-ready-p)))
     (mevedel--warn-once
+     'global
      'view-render-markdown-grammar
      "Markdown responses render unfontified: the `markdown' and \
 `markdown-inline' tree-sitter grammars are not installed. \
@@ -1281,8 +1293,9 @@ buffer's font-lock refontification cycles."
                            (mevedel-view--fontify-as text 'markdown-mode)
                          (error
                           (mevedel--warn-once
+                           (mevedel-diagnostic-scope mevedel--data-buffer)
                            'view-render-fontify
-                           "Could not fontify response as Markdown: %s"
+                           "%s (Could not fontify response as Markdown)"
                            (error-message-string err))
                           text))
                      text)))
@@ -1643,7 +1656,8 @@ produces a `Bash: …' / `Read: …' header instead of bare `Tool'."
                  (result-text
                   (mevedel--strip-hook-audit-blocks result-text))
                  (result-lines (length (split-string result-text "\n" t)))
-                 (primary-arg (mevedel-tool-display-string name args))
+                 (primary-arg (mevedel-tool-display-string
+                               name args (mevedel-diagnostic-scope mevedel--data-buffer)))
                  (blocked (mevedel-view--tool-hook-blocked-info
                            result-text))
                  (error-p (mevedel-view--tool-result-error-p result-text))
@@ -1939,6 +1953,7 @@ straight off ARGS and RESULT without needing render-data."
            ((not fn)
             (when (mevedel-view--renderer-malformed-p renderer status)
               (mevedel--warn-once
+               (mevedel-diagnostic-scope mevedel--data-buffer)
                (list 'view-render-renderer-uncallable tool-label)
                "Renderer for %s is not callable for status %s"
                tool-label status))
@@ -1962,15 +1977,17 @@ straight off ARGS and RESULT without needing render-data."
                       plist))
                    (t
                     (mevedel--warn-once
+                     (mevedel-diagnostic-scope mevedel--data-buffer)
                      (list 'view-render-renderer-malformed tool-label)
                      "Renderer for %s returned malformed plist: %S"
                      tool-label plist)
                     nil)))
               (error
                (mevedel--warn-once
+		(mevedel-diagnostic-scope mevedel--data-buffer)
 		(list 'view-render-renderer-failed tool-label)
-		"Renderer for %s failed: %s"
-		tool-label (error-message-string err))
+		"%s (Renderer for %s failed)"
+		(error-message-string err) tool-label)
                nil)))))))))
 
 (defun mevedel-view--tool-result-line-count (result)
@@ -1997,7 +2014,8 @@ RENDER-DATA may carry the pipeline's structured `:status'."
   (let* ((tool-name (or name "Tool"))
          (primary (and (listp args)
                        (condition-case nil
-                           (mevedel-tool-display-string tool-name args)
+                           (mevedel-tool-display-string
+                            tool-name args (mevedel-diagnostic-scope mevedel--data-buffer))
                          (error nil))))
          (lines (mevedel-view--tool-result-line-count result))
          (status (mevedel-view--tool-render-status result render-data))
@@ -2815,7 +2833,7 @@ does not overwrite the identity of the rows it owns."
          (depth (and start (get-text-property start 'mevedel-view-child-depth)))
          (turn-id (and start (get-text-property start 'mevedel-view-turn-id))))
     (unless (and bounds child)
-      (user-error "No collapsible section at point"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No collapsible section at point"))
     (let ((inhibit-read-only t))
       (save-excursion
         (goto-char start)
@@ -3191,7 +3209,9 @@ DATA-BUF supplies live execution metadata; COLLAPSED-ONLY requests summaries."
                       (and code (format "Code: %s" code))
                       (and extra-data (format "Provider data: %S" extra-data))
                       ""
-                      (and message-text (format "%s" message-text))
+                      (mevedel-diagnostic-format
+                       (mevedel-diagnostic-scope data-buf) "%s"
+                       (or message-text "Request failed"))
                       (and retry-exhausted
                            (format "Automatic retries exhausted%s."
                                    (if retry-errors
@@ -5340,7 +5360,7 @@ EXPANDED means insert the disclosure body expanded."
                        (get-text-property
                         (car bounds) 'mevedel-view-turn-id))))
     (unless bounds
-      (user-error "No collapsible section at point"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No collapsible section at point"))
     (let ((inhibit-read-only t)
           (start (car bounds))
           (end (cdr bounds)))
@@ -5839,7 +5859,7 @@ coordinates yet -- folds and expands the same way as a rendered turn."
                         'mevedel-view-type)))
          (start (car-safe bounds)))
     (unless bounds
-      (user-error "No collapsible section at point"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No collapsible section at point"))
     (let* ((inhibit-read-only t)
            (end (cdr bounds))
            (collapsed (get-text-property start 'mevedel-view-collapsed))
@@ -6151,7 +6171,7 @@ is stored as a leading code-formatted action (\"`implement` Text\")."
   (interactive (list (get-text-property (point) 'mevedel-view-directive)))
   (pcase-let* ((`(,record ,workspace ,attempt ,attempt-index)
                 (or (mevedel-view--directive-metadata-context directive)
-                    (user-error "Directive record is unavailable")))
+                    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Directive record is unavailable")))
                (actions (mevedel-directive-actions record))
                (discussion-p
                 (eq (plist-get directive :activity-kind) 'discussion))
@@ -7738,7 +7758,7 @@ restore the turn with all inner section state intact.  Signals a
          (id (get-text-property (point) 'mevedel-view-turn-id))
          (directive (get-text-property (point) 'mevedel-view-directive)))
     (unless (and bounds role id)
-      (user-error "No turn at point"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No turn at point"))
     (mevedel-view-stream-in-flight-turn-start-position)
     (let* ((turn-start (car bounds))
            (turn-end (cdr bounds))
@@ -7772,7 +7792,7 @@ restore the turn with all inner section state intact.  Signals a
                    ('assistant 'mevedel-view-assistant-header)
                    ('directive 'mevedel-view-user-header))))
       (unless summary
-        (user-error "Turn is already compact"))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Turn is already compact"))
       (when directive
         (mevedel-view--record-directive-collapse-state directive t))
       (let ((inhibit-read-only t))
@@ -7828,7 +7848,7 @@ restore the turn with all inner section state intact.  Signals a
          (stash (get-text-property (point) 'mevedel-view-stash))
          (directive (get-text-property (point) 'mevedel-view-directive)))
     (unless (and bounds stash)
-      (user-error "No collapsed turn at point"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No collapsed turn at point"))
     (mevedel-view-stream-in-flight-turn-start-position)
     (when directive
       (mevedel-view--record-directive-collapse-state directive nil))
@@ -7915,10 +7935,10 @@ When COLLAPSE-NEWEST is non-nil, collapse that turn too."
     (unless (and (memq role '(assistant directive))
                  (consp source)
                  (buffer-live-p data-buffer))
-      (user-error "Point is not on an assistant response"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Point is not on an assistant response"))
     (or (mevedel-session-artifacts-fork-point-at-source
          data-buffer (car source) (cdr source))
-        (user-error "Assistant response is not a settled fork point"))))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Assistant response is not a settled fork point"))))
 
 (defun mevedel-view-fork-point-at-point ()
   "Return the stable assistant fork point at point.
@@ -7926,7 +7946,7 @@ When COLLAPSE-NEWEST is non-nil, collapse that turn too."
 Signal a user error for directive turns because they have no conversational
 continuation context."
   (when (get-text-property (point) 'mevedel-view-directive)
-    (user-error "Directive turns cannot be forked"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Directive turns cannot be forked"))
   (mevedel-view--settled-response-at-point))
 
 (defun mevedel-view-goto-conversation-variant (fork-point-id)
@@ -7944,7 +7964,7 @@ continuation context."
                    pos 'mevedel-view-variant-fork-point-id nil limit)
                   limit))))
     (unless found
-      (user-error "Conversation fork point is no longer available"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Conversation fork point is no longer available"))
     (goto-char found)
     (when-let* ((bounds (mevedel-view-disclosure-section-bounds
                         'mevedel-view-turn-id)))
@@ -7957,7 +7977,7 @@ continuation context."
                (buffer-local-value 'mevedel--session
                                    mevedel--data-buffer)))
          (_ (unless session
-              (user-error "Active view has no mevedel session")))
+              (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Active view has no mevedel session")))
          (session-id (mevedel-session-session-id session))
          (variants
           (mevedel-session-persistence-conversation-variants
@@ -7970,7 +7990,7 @@ continuation context."
                   (plist-get (plist-get entry :summary) :session-id))))
          (target
           (pcase (length alternatives)
-            (0 (user-error "No related conversation variant survives"))
+            (0 (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No related conversation variant survives"))
             (1 (car alternatives))
             (_
              (mevedel-session-persistence-choose-conversation-variant
@@ -8280,7 +8300,7 @@ The segment owner holds projection ownership across source replacement."
   (interactive)
   (if-let* ((data-buffer (mevedel-view-segments-display-buffer)))
       (switch-to-buffer data-buffer)
-    (user-error "No data buffer associated with this view")))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No data buffer associated with this view")))
 
 
 ;;

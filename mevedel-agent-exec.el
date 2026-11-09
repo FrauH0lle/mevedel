@@ -14,6 +14,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (eval-when-compile
   (require 'cl-lib)
   (require 'gptel)
@@ -539,7 +541,10 @@ Returns the native FSM or external invocation handle."
            (mevedel-cb
             (mevedel-agent-exec--make-callback
              main-cb agent-type description where (list partial)))
-           (wrapped (mevedel-agent-exec--wrap-callback mevedel-cb)))
+           (wrapped (mevedel-agent-exec--wrap-callback
+                     mevedel-cb
+                     (mevedel-diagnostic-scope
+                      (mevedel-agent-invocation-parent-session invocation)))))
       (setf (mevedel-agent-invocation-runtime-fsm invocation) fsm)
       (gptel--update-status " Calling Agent..." 'font-lock-escape-face)
       ;; Install one dispatch-local copy of the frozen request state before
@@ -581,7 +586,7 @@ Returns the native FSM or external invocation handle."
         (setf (gptel-fsm-info fsm) req-info))
       fsm)))
 
-(defun mevedel-agent-exec--wrap-callback (mevedel-cb)
+(defun mevedel-agent-exec--wrap-callback (mevedel-cb scope)
   "Build the wrap-and-chain callback for the agent-buffer dispatch path.
 
 MEVEDEL-CB is the bookkeeping callback returned by
@@ -603,7 +608,8 @@ the provider request is sent, which can happen after `gptel-request'
 returns (edited-file diffs are prepared asynchronously), so it cannot be
 captured at dispatch.
 
-Insertion errors are diagnostic only.  The adapter retains a terminal event
+Insertion errors are diagnostic only and attributed to captured SCOPE.
+The adapter retains a terminal event
 whose runtime handoff fails and retries it from an owned timer."
   (lambda (response &rest rest)
     (let ((terminal (memq response '(t nil abort))))
@@ -614,7 +620,8 @@ whose runtime handoff fails and retries it from an owned timer."
                      #'gptel--insert-response)
                    response rest)
           (error
-           (message "mevedel: gptel insertion callback errored: %S" err))))
+           (mevedel-diagnostic-message scope
+                                      "gptel insertion callback errored: %S" err))))
       (when mevedel-cb
         (apply mevedel-cb response rest)))))
 

@@ -25,6 +25,7 @@
 (defvar-local mevedel-report--index nil "Section index buffer owned by this panel.")
 (defvar-local mevedel-report--unfollow nil "Detach this inspector from its live source.")
 (defvar-local mevedel-report--parent nil "Reading buffer owning this section index.")
+(defvar-local mevedel-report--scope 'unavailable "Retained diagnostic ownership.")
 
 (defun mevedel-report-fields (&rest rows)
   "Format ROWS of (LABEL VALUE) as aligned, visually wrapped information."
@@ -58,7 +59,8 @@
 (defun mevedel-report--owner ()
   "Return the reading buffer for this panel or section index."
   (unless (derived-mode-p 'mevedel-report-mode)
-    (user-error "No information panel in this buffer"))
+    (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope)
+                                 "No information panel in this buffer"))
   (if (buffer-live-p mevedel-report--parent)
       mevedel-report--parent
     (current-buffer)))
@@ -93,7 +95,8 @@
     (remove-overlays)
     (erase-buffer)
     (insert (propertize "* Report unavailable\n\n" 'face 'error)
-            (error-message-string error-data))
+            (mevedel-diagnostic-format mevedel-report--scope "%s"
+                                       (error-message-string error-data)))
     (goto-char (point-min))
     (set-buffer-modified-p nil)))
 
@@ -107,7 +110,8 @@
          (signal (car err) (cdr err)))))
     (unless (seq-find (lambda (section) (equal id (plist-get section :id)))
                       (plist-get mevedel-report--report :sections))
-      (user-error "Section is no longer available"))
+      (mevedel-diagnostic-user-error mevedel-report--scope
+                                   "Section is no longer available"))
     (mevedel-report--save-position)
     (setq mevedel-report--selected id)
     (mevedel-report--render)
@@ -120,7 +124,8 @@
     (let ((origin mevedel-report--origin)
           (refresh (plist-get mevedel-report--report :refresh)))
       (unless (and refresh (buffer-live-p origin))
-        (user-error "No live source to refresh this report"))
+        (mevedel-diagnostic-user-error mevedel-report--scope
+                                     "No live source to refresh this report"))
       (condition-case err
           (mevedel-report-render (with-current-buffer origin (funcall refresh)) origin)
         (error (mevedel-report--unavailable err) (signal (car err) (cdr err)))))))
@@ -352,12 +357,20 @@ Coalesce source events; closing the inspector leaves SOURCE untouched."
 
 (defun mevedel-report-render (report &optional origin)
   "Render REPORT in the current buffer without displaying or selecting it.
-ORIGIN identifies the live caller; omission retains this inspector's owner."
+ORIGIN identifies the live caller; omission retains this inspector's owner.
+REPORT's optional :diagnostic-scope is a captured root, `global' or
+`unavailable'; it overrides ORIGIN's diagnostic ownership."
   (unless (and (stringp (plist-get report :title))
                (listp (plist-get report :sections)))
     (error "Invalid information report"))
-  (let* ((origin (or origin mevedel-report--origin (current-buffer)))
+  (let* ((scope (or (plist-get report :diagnostic-scope)
+                   (if (buffer-live-p origin)
+                       (with-current-buffer origin (mevedel-cockpit-diagnostic-scope))
+                     (if mevedel-report--origin mevedel-report--scope
+                       (mevedel-cockpit-diagnostic-scope)))))
+         (origin (or origin mevedel-report--origin (current-buffer)))
          (identity (list origin (plist-get report :identity) (plist-get report :title))))
+    (setq mevedel-report--scope scope)
     (condition-case err
         (when-let* ((check (plist-get report :validate))) (funcall check))
       (error
@@ -371,7 +384,8 @@ ORIGIN identifies the live caller; omission retains this inspector's owner."
       (setq mevedel-report--folds (make-hash-table :test #'equal)
             mevedel-report--positions (make-hash-table :test #'equal)
             mevedel-report--selected (plist-get report :initial)))
-    (setq mevedel-report--report report
+    (setq mevedel-report--scope scope
+          mevedel-report--report report
           mevedel-report--identity identity
           mevedel-report--origin origin)
     (unless (seq-find (lambda (section)

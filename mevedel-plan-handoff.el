@@ -9,6 +9,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (require 'mevedel-engine)
 
 (require 'cl-lib)
@@ -628,12 +630,12 @@ REASON is a string or an error value; it is recorded in bounded form."
     (condition-case err
         (mevedel-session-artifacts-save session chat-buffer)
       (error
-       (display-warning
+       (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
         'mevedel
-        (format "Could not persist plan implementation retry: %s"
+        (format "%s (could not persist plan implementation retry)"
                 (mevedel-plan-handoff--failure-reason err))))))
-  (message
-   "mevedel: Implementation failed: %s; retry with M-x mevedel-retry-plan-implementation"
+  (mevedel-diagnostic-message (mevedel-diagnostic-scope session)
+   "%s (implementation failed); retry with M-x mevedel-retry-plan-implementation"
    reason)
   nil)
 
@@ -642,6 +644,8 @@ REASON is a string or an error value; it is recorded in bounded form."
   "Attach CHAT-BUFFER's Direct handoff recovery to turn OWNER.
 OWNER is a native gptel state machine or an admitted external request."
   (let ((info (copy-sequence (or (mevedel-engine-info owner) nil))))
+    (setq info (plist-put info :mevedel-plan-handoff-diagnostic-scope
+                          (mevedel-diagnostic-scope chat-buffer)))
     (setf (mevedel-engine-info owner)
           (plist-put info :mevedel-plan-handoff-source-buffer chat-buffer)))
   owner)
@@ -657,9 +661,9 @@ OWNER is a native gptel state machine or an admitted external request."
         (mevedel-session-artifacts-save session chat-buffer)
       (error
        (setf (mevedel-session-plan-metadata session) old-metadata)
-       (display-warning
+       (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
         'mevedel
-        (format "Could not persist completed plan implementation: %s"
+        (format "%s (could not persist completed plan implementation)"
                 (mevedel-plan-handoff--failure-reason err)))))))
 
 (defun mevedel-plan-handoff-settle-request (fsm status &optional reason)
@@ -668,13 +672,15 @@ OWNER is a native gptel state machine or an admitted external request."
 STATUS is `success', `error', or `aborted'.  Optional REASON supplies the
 provider or abort detail retained for a retryable failure."
   (let* ((info (copy-sequence (or (mevedel-engine-info fsm) nil)))
+         (diagnostic-scope (plist-get info :mevedel-plan-handoff-diagnostic-scope))
          (chat-buffer
           (plist-get info :mevedel-plan-handoff-source-buffer)))
     (when (plist-member info :mevedel-plan-handoff-source-buffer)
       (cl-remf info :mevedel-plan-handoff-source-buffer)
+      (cl-remf info :mevedel-plan-handoff-diagnostic-scope)
       (setf (mevedel-engine-info fsm) info)
       (if (not (buffer-live-p chat-buffer))
-          (display-warning
+          (mevedel-diagnostic-warning diagnostic-scope
            'mevedel
            "Plan implementation settled after its source buffer was killed; \
 the durable retry was retained"
@@ -786,8 +792,8 @@ the durable retry was retained"
                           (equal goal-id (mevedel-goal-id goal-started))
                           (equal policy (mevedel-goal-implementation-policy goal-started)))
                  (mevedel-goal-pause-runtime-failure chat-buffer reason))
-               (message
-                "mevedel: Goal kickoff did not start: %s; inspect the current Goal before resuming"
+               (mevedel-diagnostic-message (mevedel-diagnostic-scope session)
+                "%s (Goal kickoff did not start); inspect the current Goal before resuming"
                 reason))
            (mevedel-plan-handoff--implementation-failed
             session chat-buffer reason)))))))
@@ -953,7 +959,8 @@ the durable retry was retained"
     (unless (and session
                  (plist-get (mevedel-session-plan-metadata session)
                             :implementation-retry))
-      (user-error "No accepted plan implementation to retry"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session)
+                                    "No accepted plan implementation to retry"))
     (mevedel-plan-handoff--dispatch-accepted session chat-buffer)))
 
 

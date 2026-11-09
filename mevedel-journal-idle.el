@@ -46,6 +46,12 @@
 (declare-function mevedel-memory-pass-schedule "mevedel-memory-pass" (workspace))
 (autoload 'mevedel-memory-pass-schedule "mevedel-memory-pass")
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-warning "mevedel-utilities" (scope type message &optional level buffer-name))
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-warning "mevedel-utilities")
+
 (defcustom mevedel-journal-seal-idle-minutes 20
   "Minutes a session stays quiet after a completed root turn before sealing.
 When no newer root turn completes in that session and no request is running
@@ -191,7 +197,7 @@ Also ensure the maintenance timer runs while this session is open."
               (mevedel-memory-pass-schedule workspace)
               (mevedel-journal-cleanup-schedule workspace))
           (error
-           (display-warning 'mevedel
+           (mevedel-diagnostic-warning (mevedel-diagnostic-scope workspace) 'mevedel
                             (format "Journal maintenance failed: %s" (error-message-string err))
                             :warning)))))))
 
@@ -236,7 +242,7 @@ processed without waiting for a turn.  Only queues; nothing runs here."
           (mevedel-journal-process-schedule workspace t)
           (mevedel-memory-pass-schedule workspace))
       (error
-       (display-warning 'mevedel
+       (mevedel-diagnostic-warning (mevedel-diagnostic-scope workspace) 'mevedel
                         (format "Journal maintenance failed: %s" (error-message-string err))
                         :warning)))))
 

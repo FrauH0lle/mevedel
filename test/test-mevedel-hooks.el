@@ -3094,7 +3094,7 @@
 			  (lambda (cb)
 			    (mevedel-hooks-run-event
 			     'PreToolUse '(:tool-name "Read") cb session)))
-			 (should (member "mevedel: PreToolUse hook blocked: blocked"
+			 (should (member (format "mevedel [%s]: PreToolUse hook blocked: blocked" root)
 					 messages)))
 		     (delete-directory root t)))
 		 (let* ((root (make-temp-file "mevedel-hooks-surface" t))

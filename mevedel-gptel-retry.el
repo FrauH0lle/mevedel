@@ -10,6 +10,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
@@ -212,7 +214,11 @@ the machine so its next dispatch aborts instead of sampling again."
           (when-let* ((callback (plist-get (gptel-fsm-info fsm) :callback)))
             (condition-case err
                 (funcall callback 'abort (gptel-fsm-info fsm))
-              (error (message "mevedel: cancellation callback failed: %s" (error-message-string err)))))
+              (error
+               (mevedel-diagnostic-message
+                (or (plist-get (plist-get (gptel-fsm-info fsm) :mevedel-retry-state) :scope)
+                    (mevedel-diagnostic-scope (plist-get (gptel-fsm-info fsm) :buffer)))
+                "Cancellation callback failed: %s" (error-message-string err)))))
           (unwind-protect (funcall (cddr entry))
             (when (processp (car entry))
               (mevedel-transport-resume-process (car entry)))
@@ -500,6 +506,7 @@ invocation has settled, aborts instead: its owner no longer accepts output."
                            (plist-get info :callback)))
                (previous (plist-get info :mevedel-retry-state))
                (state (list :fsm fsm :request request :retries 0
+                            :scope (mevedel-diagnostic-scope (plist-get info :buffer))
                             :limit mevedel-gptel-retry-max-retries
                             :data (copy-tree (plist-get info :data) t)
                             :callback (if previous (plist-get previous :callback)

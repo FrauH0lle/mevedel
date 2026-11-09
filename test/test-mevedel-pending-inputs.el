@@ -21,6 +21,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-telemetry)
+(require 'mevedel-transport)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-interaction)
@@ -1674,7 +1675,8 @@
                  (lambda (&rest _) (list :input "edited")))
                 ((symbol-function 'mevedel-pending-inputs--finish-replacement)
                  (lambda (&rest _) (setq finished t))))
-        (mevedel-pending-inputs--save-steering state "edited" 'request))
+        (mevedel-pending-inputs--save-steering
+         state "edited" (mevedel-request--create :session session)))
       (should finished)
       (should (mevedel-permission-absence-held-p session))))
 
@@ -1964,7 +1966,7 @@
       (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-idle-work)
                  (lambda (_) (error "Offer failed")))
                 ((symbol-function 'mevedel--warn-once)
-                 (lambda (_key format &rest args)
+                 (lambda (_scope _key format &rest args)
                    (setq warning (apply #'format format args)))))
         (mevedel-pending-inputs-offer-root-event session))
       (should (string-search "Offer failed" warning))
@@ -2354,7 +2356,23 @@ BODY sees SUBMITTED, a list of (PROMPT DISPLAY ATTRIBUTION) per turn."
       (should (string-match-p "Backend not ready" reported))
       (should (mevedel-agent-control-wake-pending-p session))
       (with-current-buffer data-buf
-        (should-not mevedel-view--pending-guest-attribution)))))
+        (should-not mevedel-view--pending-guest-attribution))))
+  :doc "deferred event failure retains origin after buffer teardown"
+  (mevedel-pending-inputs-test--with-session
+    (let (deferred reported)
+      (cl-letf (((symbol-function 'mevedel-transport-run-when-idle)
+                 (lambda (_key _directory callback) (setq deferred callback)))
+                ((symbol-function 'mevedel-pending-inputs--wake-for-event)
+                 (lambda (_) (error "Backend not ready"))))
+        (mevedel-pending-inputs--run-event-wake data-buf)
+        (kill-buffer data-buf)
+        (with-temp-buffer
+          (setq-local mevedel--workspace
+                      (mevedel-workspace--create :root "/tmp/other/pending-inputs"))
+          (mevedel-test--with-captured-diagnostics reported
+            (funcall deferred))))
+      (should (string-prefix-p
+               "mevedel [/tmp/pending-inputs]: " reported)))))
 
 (mevedel-deftest mevedel-pending-inputs-offer-event-after-turn ()
   ,test

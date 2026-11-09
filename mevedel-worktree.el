@@ -9,6 +9,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (require 'mevedel-report)
 
 (eval-when-compile
@@ -462,7 +464,7 @@ repositories and submodules have different common directories."
   "Return the data buffer that launched the worktree transient."
   (or (mevedel-cockpit-context-data-buffer
        (or context (mevedel-cockpit-current-context)))
-      (user-error "No live mevedel session for this worktree status")))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "No live mevedel session for this worktree status")))
 
 (defun mevedel-worktree--branch-head-label (branch head)
   "Return compact branch or HEAD label from BRANCH and HEAD."
@@ -799,12 +801,12 @@ The complete repository state lives in the worktree info panel."
   "Open or switch to the selected worktree's mevedel session."
   (interactive)
   (let* ((item (or (mevedel-worktree-list--selected-item)
-                   (user-error "No worktree on this line")))
+                   (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "No worktree on this line")))
          (context (mevedel-worktree-list--context))
          (path (plist-get item :path))
          (workspace (mevedel-cockpit-context-workspace context)))
     (unless workspace
-      (user-error "No mevedel workspace for selected worktree"))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "No mevedel workspace for selected worktree"))
     (mevedel--start-chat workspace path nil t)))
 
 (defun mevedel-worktree-list-create ()
@@ -822,10 +824,10 @@ The complete repository state lives in the worktree info panel."
   "Remove the selected worktree.
 When FORCE is non-nil, pass `--force' to `git worktree remove'."
   (let* ((item (or (mevedel-worktree-list--selected-item)
-                   (user-error "No worktree on this line")))
+                   (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "No worktree on this line")))
          (context (mevedel-worktree-list--context))
          (workspace (or (mevedel-cockpit-context-workspace context)
-                        (user-error "No mevedel workspace for selected worktree")))
+                        (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "No mevedel workspace for selected worktree")))
          (workspace-root (file-name-as-directory
                           (expand-file-name
                            (mevedel-workspace-root workspace))))
@@ -840,39 +842,39 @@ When FORCE is non-nil, pass `--force' to `git worktree remove'."
          (branch (plist-get entry :branch))
          (sessions (mevedel-worktree-list--sessions workspace path)))
     (when (plist-get item :current)
-      (user-error "Cannot remove the current worktree"))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Cannot remove the current worktree"))
     (unless (mevedel--file-in-directory-p path worktrees-root)
-      (user-error "Can only remove worktrees under %s"
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Can only remove worktrees under %s"
                   (mevedel-worktree--native-path
                    worktrees-root workspace-root)))
     (when (plist-get entry :bare)
-      (user-error "Cannot remove a bare worktree"))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Cannot remove a bare worktree"))
     (when (plist-get entry :locked)
-      (user-error "Cannot remove a locked worktree"))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Cannot remove a locked worktree"))
     (when sessions
-      (user-error "Worktree has live mevedel sessions: %s"
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Worktree has live mevedel sessions: %s"
                   (string-join sessions ", ")))
     (unless force
       (let ((status (mevedel-worktree--git-result
                      path "status" "--porcelain")))
         (unless (eq 0 (plist-get status :exit))
-          (user-error "Git status failed: %s"
+          (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Git status failed: %s"
                       (plist-get status :output)))
         (unless (string-empty-p (plist-get status :output))
-          (user-error "Worktree has uncommitted changes; use D to force remove"))))
+          (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Worktree has uncommitted changes; use D to force remove"))))
     (unless (yes-or-no-p
              (if force
                  (format "Force remove %s and discard uncommitted changes? "
                          display-path)
                (format "Remove worktree %s? " display-path)))
-      (user-error "Cancelled"))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Cancelled"))
     (let ((result (apply #'mevedel-worktree--git-result
                          (mevedel-worktree--context-directory context)
                          "worktree" "remove"
                          (append (when force (list "--force"))
                                  (list path)))))
       (unless (eq 0 (plist-get result :exit))
-        (user-error "Git worktree remove failed: %s"
+        (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Git worktree remove failed: %s"
                     (plist-get result :output))))
     (mevedel-worktree-list-refresh)
     (message "mevedel: removed worktree %s; %s"
@@ -1345,9 +1347,9 @@ new session."
     (condition-case err
         (mevedel-session-artifacts-save mevedel--session chat-buffer)
       (error
-       (display-warning
+       (mevedel-diagnostic-warning (mevedel-diagnostic-scope chat-buffer)
         'mevedel
-        (format "Could not save worktree setup context: %s"
+        (format "%s (could not save worktree setup context)"
                 (error-message-string err))
         :warning)))))
 

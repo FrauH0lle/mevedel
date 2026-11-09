@@ -17,6 +17,7 @@
 (require 'mevedel-collaboration-projection)
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-view-interaction)
+(require 'mevedel-utilities)
 
 ;; `mevedel-artifact-store'
 (declare-function mevedel-artifact-store-meta "mevedel-artifact-store" (workspace id))
@@ -105,7 +106,8 @@ addition and deletion.  Only the mutable current segment needs its own probe."
   "Return bounded canonical history for ITEM in SESSION, preferring LIVE.
 Keep archive-read diagnostics local; browser errors name only logical segments."
   (cl-flet ((unavailable (err &optional number)
-              (message "mevedel: artifact history read failed: %S" err)
+              (mevedel-diagnostic-message (mevedel-diagnostic-scope session)
+                                          "Artifact history read failed: %S" err)
               (if number
                   (user-error "Session history segment %d is unavailable" number)
                 (user-error "An answering-session transcript segment is unavailable"))))

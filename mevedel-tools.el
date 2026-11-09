@@ -682,8 +682,9 @@ sync with what the model actually saw.  Return non-nil on successful insertion."
                     transcript-block marker)
                    t)))
         (error
-         (message "mevedel: insert session injected prompt failed: %S"
-                  err)
+         (mevedel-diagnostic-message
+          (mevedel-diagnostic-scope session)
+          "insert session injected prompt failed: %S" err)
          nil)))))
 
 ;;

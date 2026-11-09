@@ -21,6 +21,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-permission-log)
 (require 'mevedel-queue)
+(require 'mevedel-utilities)
 
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-block-turn
@@ -122,11 +123,6 @@
 (declare-function mevedel-transport-run-at-time
                   "mevedel-transport" (seconds function &rest args))
 (autoload 'mevedel-transport-run-at-time "mevedel-transport")
-
-;; `mevedel-utilities'
-(declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
-(autoload 'mevedel--warn-once "mevedel-utilities")
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-rebuild
@@ -323,7 +319,10 @@ Callers are the actions that submit a user message; nothing else resumes."
   "Tell the user that a late answer for ENTRY, retired by expiry, is void."
   (when (eq (cdr (gethash entry mevedel-permission-queue--settled-cells))
             'expired)
-    (message "mevedel: Request expired; nothing was approved")
+    (mevedel-diagnostic-message
+     (mevedel-diagnostic-scope (or (plist-get entry :session)
+                                 (plist-get entry :workspace)))
+     "Request expired; nothing was approved")
     t))
 
 (defun mevedel-permission-queue--expire (session state)
@@ -343,6 +342,7 @@ Callers are the actions that submit a user message; nothing else resumes."
             (mevedel-collaboration-retire-permission-requests session queue)
           (error
            (mevedel--warn-once
+            (mevedel-diagnostic-scope session)
             'permission-queue-retire
             "permission-queue: retiring remote requests failed: %S" err)))
         (dolist (entry queue)
@@ -401,8 +401,13 @@ Return non-nil when this call delivered or consumed the outcome."
                 (funcall callback outcome))
             (error
              (mevedel--warn-once
+              (mevedel-diagnostic-scope (or (plist-get entry :session)
+                                          (plist-get entry :workspace)))
               (list 'permission-queue-callback phase)
-              "permission-queue: %s callback error: %S" phase err)))
+              "%s"
+              (if (memq 'user-error (get (car err) 'error-conditions))
+                  (error-message-string err)
+                (format "permission-queue: %s callback error: %S" phase err)))))
         (mevedel-queue--unregister-entry-interaction entry))
       t)))
 
@@ -615,6 +620,7 @@ ENTRY plist keys:
                     (mevedel-request-cancelled-p request)))
               (unless session
                 (mevedel--warn-once
+                 (mevedel-diagnostic-scope (plist-get entry :workspace))
                  'permission-queue-no-session
                  "permission-queue: enqueue with no session"))
               (mevedel-permission-queue--safe-settle
@@ -628,9 +634,13 @@ ENTRY plist keys:
                session)
               (mevedel-permission-queue--ensure-armed session)
               (when mevedel-permission-notify-function
-                (with-demoted-errors "mevedel: permission notify failed: %S"
-                  (funcall mevedel-permission-notify-function
-                           (map-delete (copy-sequence entry) :callback))))
+                (condition-case-unless-debug err
+                    (funcall mevedel-permission-notify-function
+                             (map-delete (copy-sequence entry) :callback))
+                  (error
+                   (mevedel-diagnostic-message
+                    (mevedel-diagnostic-scope session)
+                    "Permission notify failed: %S" err))))
               ;; Re-render the head so its pending count includes new siblings.
               (mevedel-permission-queue--render-head session)))
           (error
@@ -655,6 +665,7 @@ ENTRY plist keys:
         (mevedel-permission-queue--render-entry head)
       (error
        (mevedel--warn-once
+        (mevedel-diagnostic-scope session)
         'permission-queue-render
         "permission-queue: render error: %S" err)
        (mevedel-permission-queue--pop
@@ -751,6 +762,7 @@ subsume an exact grant, but this function never broadens selected authority."
                 entry head)))
       (unless (mevedel-permission-queue--note-stale entry)
         (mevedel--warn-once
+         (mevedel-diagnostic-scope session)
          'permission-queue-stale-settlement
          "permission-queue: stale queue entry settlement ignored")))
      (t
@@ -773,6 +785,7 @@ subsume an exact grant, but this function never broadens selected authority."
                 (mevedel-permission-queue--coalesce outcome session)
               (error
                (mevedel--warn-once
+                (mevedel-diagnostic-scope session)
                 'permission-queue-coalesce
                 "permission-queue: coalesce error: %S" err))))
           (mevedel-permission-queue--render-head session)))))))

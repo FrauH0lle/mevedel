@@ -13,6 +13,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (require 'mevedel-recovery)
 
 (require 'cl-lib)
@@ -393,8 +395,8 @@ read at teardown, so one selected during the request wins."
              (symbol
               (setq gptel-keys (append gptel-keys (list key value))))
              (t
-              (display-warning
-               '(mevedel presets)
+              (mevedel-diagnostic-warning
+               'global '(mevedel presets)
                (format "mevedel preset %s: setting for %s not found, ignoring"
                        name key)))))))))
     (let ((metadata (list :parents (plist-get raw-keys :parents)
@@ -674,6 +676,7 @@ steering still take precedence, so queued steering is delivered first."
           (funcall finish fsm))
       (error
        (mevedel--warn-once
+        (mevedel-diagnostic-scope (plist-get (mevedel-engine-info fsm) :buffer))
         (list 'turn-fsm-handler "mevedel-preset--final-patch-handler")
         "FSM handler mevedel-preset--final-patch-handler failed: %s"
         (error-message-string err))
@@ -682,6 +685,7 @@ steering still take precedence, so queued steering is delivered first."
 (defun mevedel-preset--apply-final-patch
     (fsm chat-buffer workspace request &optional continuation)
   "Generate FSM's final patch for WORKSPACE, then call CONTINUATION.
+CHAT-BUFFER owns the originating conversation and REQUEST owns its changes.
 
 This handler runs from `gptel--fsm-transition', which gptel calls inside
 its curl process sentinel -- and TRAMP re-runs a pending sentinel from the
@@ -820,7 +824,7 @@ owners derive it from their FSM. CANCELLED-P overrides either with aborted."
     (plist-put info :error (list :type "stale_implementation_preparation" :message reason))
     (plist-put info :mevedel-preparation-rejected t)
     (setf (gptel-fsm-info fsm) info)
-    (message "mevedel: request not sent: %s" reason)
+    (mevedel-diagnostic-message (mevedel-diagnostic-scope buffer) "Request not sent: %s" reason)
     (when (and (buffer-live-p buffer)
                (buffer-local-value 'mevedel--current-request buffer))
       ;; gptel's error presentation and last-FSM handler are buffer-scoped.

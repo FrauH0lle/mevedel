@@ -30,6 +30,12 @@
 (autoload 'mevedel-execution-target-direct-async-capable-p
   "mevedel-execution-target")
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-warning "mevedel-utilities" (scope type message &optional level buffer-name))
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+(autoload 'mevedel-diagnostic-warning "mevedel-utilities")
+
 (define-error 'mevedel-session-control-fs-conflict
 	      "Portable control filesystem name already exists")
 (define-error 'mevedel-session-control-fs-absent
@@ -646,7 +652,7 @@ optional `gzip' that `mevedel-session-control-fs--script-arguments' uses."
   ;; portable entry point -- lease, recovery, transfer, publication --
   ;; with one message instead of an inscrutable script exit.
   (when (and (null remote) (not (eq system-type 'gnu/linux)))
-    (user-error
+    (mevedel-diagnostic-user-error 'global
      (concat "Portable session storage requires a Linux host: the "
              "control filesystem needs procfs, GNU stat, and bash "
              "(this host: %s)")
@@ -1479,7 +1485,7 @@ cannot do for programs launched earlier.  Return non-nil when none remain."
     (null mevedel-session-control-fs--async-jobs)))
 
 (defvar mevedel-session-control-fs--orphaned-staged nil
-  "Staged payload files whose deletion failed, retried at Emacs exit.")
+  "Staged (FILE . SCOPE) payloads whose deletion failed, retried at exit.")
 
 (defun mevedel-session-control-fs--exit-cleanup ()
   "Remove staged payload files of asynchronous programs that never delivered.
@@ -1488,15 +1494,17 @@ cancelled one was lost; the staged files sit beside target files and must not
 outlive the editor.  Files an earlier cleanup could not delete are retried.
 Each failure is reported and does not stop the rest."
   (let ((files (apply #'append mevedel-session-control-fs--orphaned-staged
-                      (mapcar (lambda (job) (car (car job)))
+                      (mapcar (lambda (job)
+                                (mapcar (lambda (file) (cons file (cadr job)))
+                                        (car (car job))))
                               mevedel-session-control-fs--async-jobs))))
     (setq mevedel-session-control-fs--orphaned-staged nil
           mevedel-session-control-fs--async-jobs nil)
-    (dolist (file files)
+    (dolist (entry files)
       (condition-case err
-          (when (file-exists-p file) (delete-file file))
+          (when (file-exists-p (car entry)) (delete-file (car entry)))
         ((error quit)
-         (display-warning
+         (mevedel-diagnostic-warning (or (cdr entry) 'unavailable)
           'mevedel
           (format "Staged control payload cleanup failed: %s"
                   (error-message-string err))
@@ -1504,7 +1512,7 @@ Each failure is reported and does not stop the rest."
 
 (add-hook 'kill-emacs-hook #'mevedel-session-control-fs--exit-cleanup 90)
 
-(defun mevedel-session-control-fs-run-program-async (operations callback)
+(defun mevedel-session-control-fs-run-program-async (operations callback &optional scope)
   "Run OPERATIONS as one control program, then call CALLBACK.
 
 CALLBACK receives RESULTS, as `mevedel-session-control-fs-run-program'
@@ -1529,6 +1537,7 @@ program runs synchronously and CALLBACK runs before this returns.  Return the
 process when the program runs asynchronously, and nil otherwise.
 `mevedel-session-control-fs-wait-async' waits for programs in flight.
 
+SCOPE is the captured diagnostic root, or `unavailable' for ownerless work.
 Nothing orders an asynchronous program against other programs on the same
 target: callers serialize the ones that touch the same files."
   (let ((remote (file-remote-p (plist-get (car operations) :path))))
@@ -1549,7 +1558,7 @@ target: callers serialize the ones that touch the same files."
              (output (generate-new-buffer " *mevedel-control-fs-async*"))
              (stderr (generate-new-buffer " *mevedel-control-fs-async-stderr*"))
              (staged (list nil))
-             (job (list staged))
+             (job (list staged scope))
              ;; The transport queue coalesces work under `equal' keys, and
              ;; JOB is structurally equal across programs that stage
              ;; nothing: an uninterned symbol keeps each delivery its own.
@@ -1566,7 +1575,7 @@ target: callers serialize the ones that touch the same files."
                             (condition-case err
                                 (when (file-exists-p file) (delete-file file))
                               ((error quit)
-                               (push file mevedel-session-control-fs--orphaned-staged)
+                               (push (cons file scope) mevedel-session-control-fs--orphaned-staged)
                                (setq failure (or failure err)))))
                           ;; Every private resource is released on its own:
                           ;; one failing or quitting kill hook must not leave
@@ -1615,7 +1624,7 @@ target: callers serialize the ones that touch the same files."
                                           (condition-case cleanup
                                               (funcall release)
                                             ((error quit)
-                                             (display-warning
+                                             (mevedel-diagnostic-warning (or scope 'unavailable)
                                               'mevedel
                                               (format "Control program cleanup failed: %s"
                                                       (error-message-string cleanup))
@@ -1720,7 +1729,7 @@ target: callers serialize the ones that touch the same files."
              (condition-case cleanup
                  (funcall release)
                ((error quit)
-                (display-warning
+                (mevedel-diagnostic-warning (or scope 'unavailable)
                  'mevedel
                  (format "Control program cleanup failed: %s"
                          (error-message-string cleanup))

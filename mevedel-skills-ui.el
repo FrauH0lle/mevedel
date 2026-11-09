@@ -18,6 +18,7 @@
 (require 'mevedel-models)
 (require 'mevedel-skills-core)
 (require 'mevedel-structs)
+(require 'mevedel-utilities)
 
 ;; `gptel'
 (declare-function gptel--model-name "ext:gptel" (model))
@@ -205,7 +206,9 @@
 
 ;; `mevedel-plugin-ui'
 (declare-function mevedel-plugins-slash-command "mevedel-plugin-ui" (args))
+(declare-function mevedel-plugins-message-local-result "mevedel-plugin-ui" (scope result))
 (autoload 'mevedel-plugins-slash-command "mevedel-plugin-ui" nil nil)
+(autoload 'mevedel-plugins-message-local-result "mevedel-plugin-ui")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-refresh-visited-file-modtime-or-error
@@ -656,7 +659,9 @@ Routes through the lifecycle-aware permission transition path."
 (defun mevedel-skills-list--collect (context)
   "Return skill cockpit items for CONTEXT."
   (or (mevedel-cockpit-context-session context)
-      (user-error "No mevedel session in this buffer"))
+      (mevedel-diagnostic-user-error
+       (mevedel-diagnostic-scope (mevedel-cockpit-context-workspace context))
+       "No mevedel session in this buffer"))
   (mevedel-session-skills (mevedel-cockpit-context-session context)))
 
 (defun mevedel-skills-list-refresh ()
@@ -701,7 +706,9 @@ Routes through the lifecycle-aware permission transition path."
                   ((and file (file-readable-p file)) file)
                   ((and dir (file-directory-p dir)) dir))))
     (unless target
-      (user-error "Skill source is not readable: %s"
+      (mevedel-diagnostic-user-error
+       (mevedel-diagnostic-scope (mevedel-skill-workspace skill))
+       "Skill source is not readable: %s"
                   (or file dir "unknown")))
     (find-file target)))
 
@@ -758,7 +765,9 @@ Routes through the lifecycle-aware permission transition path."
   "Open the skill listing buffer for CONTEXT."
   (let ((context (or context (mevedel-cockpit-current-context))))
     (unless (mevedel-cockpit-context-session context)
-      (user-error "No mevedel session in this buffer"))
+      (mevedel-diagnostic-user-error
+       (mevedel-diagnostic-scope (mevedel-cockpit-context-workspace context))
+       "No mevedel session in this buffer"))
     (mevedel-cockpit-open-surface mevedel-skills-list--surface context)))
 
 (defun mevedel-skills--list-message-text (session)
@@ -935,6 +944,13 @@ DELETE-START and REGION-END bound the command text."
      (mevedel-skills--text-after-local-command-delete
       delete-start region-end))))
 
+(defun mevedel-skills-message-command-result (scope name result)
+  "Present local command NAME's RESULT under captured SCOPE."
+  (when (stringp result)
+    (if (equal name "plugin")
+        (mevedel-plugins-message-local-result scope result)
+      (message "%s" result))))
+
 (defun mevedel-skills--dispatch-slash-command ()
   "Parse and dispatch a local `/command' in the current chat buffer.
 
@@ -947,6 +963,7 @@ Returns:
               (text (buffer-substring-no-properties (car region) (cdr region)))
               (parsed (mevedel-skills-parse-slash-line text)))
     (let* ((name (nth 0 parsed))
+           (scope (mevedel-diagnostic-scope (current-buffer)))
            (args (nth 1 parsed))
            (slash-pos (+ (car region) (nth 2 parsed)))
            (local (assoc name mevedel-slash-commands))
@@ -958,12 +975,12 @@ Returns:
          delete-start (cdr region))
         (delete-region delete-start (cdr region))
         (mevedel-skills-input-ensure-fresh-line)
-        (when-let* ((result (funcall (cdr local) args))
-                    ((stringp result)))
-          (message "%s" result))
+        (mevedel-skills-message-command-result scope name (funcall (cdr local) args))
         'local)
        (t
-        (message "Unknown slash command: /%s" name)
+        (mevedel-diagnostic-message
+         (mevedel-diagnostic-scope (current-buffer))
+         "Unknown slash command: /%s" name)
         'unknown)))))
 
 (defun mevedel-skills--gptel-send-advice (orig-fn &rest args)
@@ -999,9 +1016,13 @@ drain it."
            (unwind-protect
                (progn
                  (when (mevedel-turn-busy-p)
-                   (user-error "A request is already active -- wait or abort first"))
+                   (mevedel-diagnostic-user-error
+                    (mevedel-diagnostic-scope (current-buffer))
+                    "A request is already active -- wait or abort first"))
                  (when (bound-and-true-p mevedel-session--read-only-mode)
-                   (user-error "Session is open read-only (another host holds the lock)"))
+                   (mevedel-diagnostic-user-error
+                    (mevedel-diagnostic-scope (current-buffer))
+                    "Session is open read-only (another host holds the lock)"))
                  (mevedel--dispatch-request nil (lambda () (apply orig-fn args))))
              (mevedel-skills-input-clear-pending))))
       (if (and (boundp 'mevedel--view-buffer)

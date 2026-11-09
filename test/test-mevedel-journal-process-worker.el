@@ -79,15 +79,15 @@
         warning)
     (mevedel-test--with-captured-diagnostics warning
       (mevedel-journal-process--warn-exhausted
-       (list (list :id first :session-name "Refactor") (list :id second :session-name ""))))
-    (should (equal (concat "Journal digest generation failed 3 times for aaaaaaaaaaaa (Refactor), "
+       "/tmp/journal-owner/" (list (list :id first :session-name "Refactor") (list :id second :session-name ""))))
+    (should (equal (concat "mevedel [/tmp/journal-owner/]: Journal digest generation failed 3 times for aaaaaaaaaaaa (Refactor), "
                            "bbbbbbbbbbbb; retry or discard them from M-x mevedel-journal-jobs\n")
                    warning))
     (mevedel-test--with-captured-diagnostics warning
-      (mevedel-journal-process--warn-exhausted (list (list :id first :session-name "Refactor"))))
+      (mevedel-journal-process--warn-exhausted "/tmp/journal-owner/" (list (list :id first :session-name "Refactor"))))
     (should (string-empty-p warning))
     (mevedel-test--with-captured-diagnostics warning
-      (mevedel-journal-process--warn-exhausted nil))
+      (mevedel-journal-process--warn-exhausted "/tmp/journal-owner/" nil))
     (should (string-empty-p warning))))
 
 (mevedel-deftest mevedel-journal-worker-start/digest ()

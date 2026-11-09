@@ -9,6 +9,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (require 'mevedel-report)
 (require 'mevedel-structs)
 
@@ -983,7 +985,7 @@ to conversation delivery, leaving only the stable system contract."
           ((bound-and-true-p mevedel--session) (current-buffer)))))
     (unless (and (buffer-live-p buffer)
                  (buffer-local-value 'mevedel--session buffer))
-      (user-error "Not in a live mevedel session"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Not in a live mevedel session"))
     buffer))
 
 (defun mevedel-system--prompt-profile-for-preset (preset)
@@ -1059,10 +1061,11 @@ to conversation delivery, leaving only the stable system contract."
                   (error (format "%S" gptel-model)))
               "none")))
       (list :title "Effective Prompt" :identity session
+            :diagnostic-scope (mevedel-diagnostic-scope session)
             :refresh (lambda () (mevedel-system--effective-prompt-report data-buffer))
             :validate (lambda ()
                         (unless (buffer-live-p data-buffer)
-                          (user-error "Prompt source buffer is no longer live")))
+                          (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Prompt source buffer is no longer live")))
             :sections
             (list
              (list :id 'context :title "Context" :body (with-temp-buffer

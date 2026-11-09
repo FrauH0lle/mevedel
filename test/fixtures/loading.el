@@ -358,7 +358,9 @@ temporary one."
                      ;; No prior session or answer: load the session owner,
                      ;; create its view, then report the absent answer.
                      (should
-                      (equal '(user-error "Directive answer is not in the live transcript")
+                      (equal (list 'user-error
+                                   (format "mevedel [%s]: Directive answer is not in the live transcript"
+                                           (mevedel-workspace-root workspace)))
                              (should-error
                               (mevedel--ov-actions-show-answer directive)
                               :type 'user-error)))

@@ -278,12 +278,15 @@ instructions overlap to the point where no other reasonable option is
 available."
   (interactive "d")
   (let ((instructions-at-point (mevedel--instructions-at point))
+        (scope (mevedel-diagnostic-scope
+                (mevedel--instruction-buffer-workspace (current-buffer))))
         (original-highlighted-instruction mevedel--highlighted-instruction))
     (cond
      ((null instructions-at-point)
       (setq mevedel--highlighted-instruction nil)
       (when (called-interactively-p 'any)
-        (message "No instructions at point")))
+        (mevedel-diagnostic-message scope
+                                    "No instructions at point")))
      ((or (null mevedel--highlighted-instruction)
           (not (memq mevedel--highlighted-instruction instructions-at-point)))
       (setq mevedel--highlighted-instruction nil)
@@ -325,7 +328,9 @@ available."
 Display a message to the user showing how many instructions were
 deleted.  Throw a user error if no instructions to delete were found."
   (interactive)
-  (let ((deleted-count 0))
+  (let ((deleted-count 0)
+        (scope (mevedel-diagnostic-scope
+                (mevedel--instruction-buffer-workspace (current-buffer)))))
     (if (use-region-p)
         (let ((start (region-beginning))
               (end (region-end)))
@@ -336,12 +341,14 @@ deleted.  Throw a user error if no instructions to delete were found."
           (when (> deleted-count 0)
             (deactivate-mark))
           (unless (> deleted-count 0)
-            (user-error "No instructions to delete within the selected region")))
+            (mevedel-diagnostic-user-error scope
+                                         "No instructions to delete within the selected region")))
       (let ((overlay (mevedel--delete-instruction-at (point))))
         (when overlay
           (setq deleted-count 1))
         (unless overlay
-          (user-error "No instruction to delete at point"))))
+          (mevedel-diagnostic-user-error scope
+                                       "No instruction to delete at point"))))
     (when (> deleted-count 0)
       (message "Deleted %d instruction%s" deleted-count (if (> deleted-count 1) "s" "")))))
 
@@ -396,14 +403,17 @@ contributing to the buffer count.  Archived records are never deleted."
                                                 (seq-filter #'mevedel--directivep
                                                             instructions)))))
         (when (mevedel-directive-has-activity-p record)
-          (user-error "Archive directives with activity")))
+          (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (or workspace 'global))
+                                       "Archive directives with activity")))
       (when interactivep
         (when (zerop count)
-          (user-error "No %ss to delete" noun))
+          (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (or workspace 'global))
+                                       "No %ss to delete" noun))
         (unless (y-or-n-p (format "Delete %s in %s? " summary
                                  (if workspace "the current workspace"
                                    "the shared global bucket")))
-          (user-error "Aborted")))
+          (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (or workspace 'global))
+                                       "Aborted")))
       (dolist (instruction instructions)
         ;; Deleting a parent already deletes its nested directives.
         (unless (overlay-get instruction 'mevedel-marked-for-deletion)
@@ -560,14 +570,19 @@ Examples:
                                                            'mevedel-directive-infix-tag-query-string)
                                               "")))))
         (mevedel--set-directive-tag-query directive query))
-    (user-error "No directive at point")))
+    (let ((scope (mevedel-diagnostic-scope
+                  (mevedel--instruction-buffer-workspace (current-buffer)))))
+      (mevedel-diagnostic-user-error scope "No directive at point"))))
 
 (defun mevedel-add-tags (&optional reference)
   "Add tags to the reference under the point.
 
 Adds specificly to REFERENCE if it is non-nil."
   (interactive)
-  (let* ((instructions (mevedel--instructions-at (point) 'reference))
+  (let* ((scope (mevedel-diagnostic-scope
+                 (mevedel--instruction-buffer-workspace
+                  (if reference (overlay-buffer reference) (current-buffer)))))
+         (instructions (mevedel--instructions-at (point) 'reference))
          (instr (or reference (mevedel--highest-priority-instruction instructions t))))
     (if instr
         (let* ((existing-tags (mevedel--available-tags))
@@ -576,23 +591,28 @@ Adds specificly to REFERENCE if it is non-nil."
                (new-tags (mapcar #'intern input)))
           (let ((added (mevedel--add-tags instr new-tags)))
             (message "%d tag%s added" added (if (= added 1) "" "s"))))
-      (user-error "No reference at point"))))
+      (mevedel-diagnostic-user-error scope
+                                   "No reference at point"))))
 
 (defun mevedel-remove-tags ()
   "Remove tags from the reference under the point."
   (interactive)
-  (let* ((instructions (mevedel--instructions-at (point) 'reference))
+  (let* ((scope (mevedel-diagnostic-scope
+                 (mevedel--instruction-buffer-workspace (current-buffer))))
+         (instructions (mevedel--instructions-at (point) 'reference))
          (instr (mevedel--highest-priority-instruction instructions t)))
     (if instr
         (let ((tags-list (mevedel--reference-tags instr)))
           (if (null tags-list)
-              (user-error "Reference has no tags of its own to remove")
+              (mevedel-diagnostic-user-error scope
+                                           "Reference has no tags of its own to remove")
             ;; Prompt the user to remove tags.
             (let* ((input (completing-read-multiple "Remove tags: " tags-list nil t))
                    (tags-to-remove (mapcar #'intern input)))
               (let ((removed (mevedel--remove-tags instr tags-to-remove)))
                 (message "%d tag%s removed" removed (if (= removed 1) "" "s"))))))
-      (user-error "No reference at point"))))
+      (mevedel-diagnostic-user-error scope
+                                   "No reference at point"))))
 
 
 (defun mevedel--stashed-buffer-instructions (buffer)
@@ -686,76 +706,84 @@ buffer count, and line count with proper pluralization."
 
 DEFAULT is the default query to display in the minibuffer.
 Returns the validated query string."
-  (minibuffer-with-setup-hook
-      (lambda ()
-        (let ((timer nil)
-              (minibuffer-message))
-          (add-hook 'minibuffer-exit-hook
-                    (lambda ()
-                      (when timer
-                        (cancel-timer timer)))
-                    nil t)
-          (add-hook 'after-change-functions
-                    (lambda (_beg _end _len)
-                      (when timer
-                        (cancel-timer timer))
-                      (setq timer
-                            (run-with-timer
-                             0.5
-                             nil
-                             (lambda ()
-                               (condition-case err
-                                   (let* ((input (minibuffer-contents))
-                                          (query (read (concat "(" input ")"))))
-                                     (let ((refs (mevedel--filter-references
-                                                  (mevedel--tag-query-prefix-from-infix query))))
-                                       (setq minibuffer-message
-                                             (mevedel--reference-list-info-string refs))))
-                                 (error
-                                  (let ((errmsg (error-message-string err)))
-                                    (setq minibuffer-message errmsg))))
-                               (when minibuffer-message
-                                 (set-minibuffer-message minibuffer-message))))))
-                    nil t)))
-    (let ((default (or default "")))
-      (let ((input (read-from-minibuffer "Tag query: " default)))
-        (let ((query (read (format "(%s)" input))))
-          (condition-case err
-              (progn
-                (mevedel--tag-query-prefix-from-infix query)
-                (mapconcat (lambda (q) (format "%s" q)) query " "))
-            (error
-             (let ((errmsg (error-message-string err)))
-               (user-error errmsg)))))))))
+  (let ((scope (mevedel-diagnostic-scope
+                (mevedel--instruction-buffer-workspace (current-buffer)))))
+    (minibuffer-with-setup-hook
+        (lambda ()
+          (let ((timer nil)
+                (minibuffer-message))
+            (add-hook 'minibuffer-exit-hook
+                      (lambda ()
+                        (when timer
+                          (cancel-timer timer)))
+                      nil t)
+            (add-hook 'after-change-functions
+                      (lambda (_beg _end _len)
+                        (when timer
+                          (cancel-timer timer))
+                        (setq timer
+                              (run-with-timer
+                               0.5
+                               nil
+                               (lambda ()
+                                 (condition-case err
+                                     (let* ((input (minibuffer-contents))
+                                            (query (read (concat "(" input ")"))))
+                                       (let ((refs (mevedel--filter-references
+                                                    (mevedel--tag-query-prefix-from-infix query))))
+                                         (setq minibuffer-message
+                                               (mevedel--reference-list-info-string refs))))
+                                   (error
+                                    (let ((errmsg (error-message-string err)))
+                                      (setq minibuffer-message
+                                            (mevedel-diagnostic-format scope "%s" errmsg)))))
+                                 (when minibuffer-message
+                                   (set-minibuffer-message minibuffer-message))))))
+                      nil t)))
+      (let ((default (or default "")))
+        (let ((input (read-from-minibuffer "Tag query: " default)))
+          (let ((query (read (format "(%s)" input))))
+            (condition-case err
+                (progn
+                  (mevedel--tag-query-prefix-from-infix query)
+                  (mapconcat (lambda (q) (format "%s" q)) query " "))
+              (error
+               (let ((errmsg (error-message-string err)))
+                 (mevedel-diagnostic-user-error scope "%s" errmsg))))))))))
 
 (defun mevedel--set-directive-tag-query (directive query)
   "Set the tag query for DIRECTIVE to QUERY string."
-  (condition-case err
-      (let ((parsed-prefix-tag-query
-             (mevedel--tag-query-prefix-from-infix (read (concat "(" query ")")))))
-        (overlay-put directive 'mevedel-directive-prefix-tag-query parsed-prefix-tag-query)
-        (if (string-empty-p query)
-            (overlay-put directive 'mevedel-directive-infix-tag-query-string nil)
-          (overlay-put directive
-                       'mevedel-directive-infix-tag-query-string
-                       (mevedel--apply-face-to-match "\\b\\(?:(*not\\|or\\|and\\)\\b\\|(\\|)"
-                                                     (mevedel--apply-face-to-match
-                                                      "\\(:?.+\\)"
-                                                      query
-                                                      'font-lock-constant-face)
-                                                     nil))
-          (mevedel--set-directive-status directive nil))
-        (mevedel--update-instruction-overlay directive t))
-    (error
-     (message (error-message-string err)))))
+  (let ((scope (mevedel-diagnostic-scope
+                (mevedel--instruction-buffer-workspace (overlay-buffer directive)))))
+    (condition-case err
+        (let ((parsed-prefix-tag-query
+               (mevedel--tag-query-prefix-from-infix (read (concat "(" query ")")))))
+          (overlay-put directive 'mevedel-directive-prefix-tag-query parsed-prefix-tag-query)
+          (if (string-empty-p query)
+              (overlay-put directive 'mevedel-directive-infix-tag-query-string nil)
+            (overlay-put directive
+                         'mevedel-directive-infix-tag-query-string
+                         (mevedel--apply-face-to-match "\\b\\(?:(*not\\|or\\|and\\)\\b\\|(\\|)"
+                                                       (mevedel--apply-face-to-match
+                                                        "\\(:?.+\\)"
+                                                        query
+                                                        'font-lock-constant-face)
+                                                       nil))
+            (mevedel--set-directive-status directive nil))
+          (mevedel--update-instruction-overlay directive t))
+      (error
+       (mevedel-diagnostic-message scope "%s" (error-message-string err))))))
 
 (defun mevedel--print-instruction-not-found (direction type)
   "Print a not found message for the given DIRECTION and TYPE."
   (let ((type-string (pcase type
                        ('directive "directive")
                        ('reference "reference")
-                       (_ "instruction"))))
-    (message "No %s %s found"
+                       (_ "instruction")))
+        (scope (mevedel-diagnostic-scope
+                (mevedel--instruction-buffer-workspace (current-buffer)))))
+    (mevedel-diagnostic-message scope
+             "No %s %s found"
              (if (eq direction 'next) "next" "previous")
              type-string)))
 
@@ -1025,7 +1053,9 @@ activity (archive it instead), a directive containing nested directives
 (convert those first), and a bodyless directive (a reference cannot be
 empty)."
   (interactive)
-  (let ((instructions
+  (let ((scope (mevedel-diagnostic-scope
+                (mevedel--instruction-buffer-workspace (current-buffer))))
+        (instructions
          (if (use-region-p)
              (mevedel--instructions-in (region-beginning) (region-end))
            (when-let* ((instruction
@@ -1036,10 +1066,12 @@ empty)."
         (to-directive 0)
         (skipped nil))
     (unless instructions
-      (user-error "No instructions to convert"))
+      (mevedel-diagnostic-user-error scope
+                                   "No instructions to convert"))
     (when (and (cl-some #'mevedel--referencep instructions)
                (not (buffer-file-name)))
-      (user-error "Cannot create a directive in a buffer visiting no file"))
+      (mevedel-diagnostic-user-error scope
+                                   "Cannot create a directive in a buffer visiting no file"))
     (deactivate-mark)
     (dolist (instruction instructions)
       (let ((buffer (overlay-buffer instruction))
@@ -1695,7 +1727,8 @@ This is the shared individual and batch submission eligibility check."
                    (overlay-put overlay 'mevedel-transient-source-missing t)
                    overlay)))))))
     (unless directive
-      (user-error "Directive prompt context is unavailable; reattach its source first"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace)
+                                   "Directive prompt context is unavailable; reattach its source first"))
     (condition-case err
         (list :directive directive
               :prompt (mevedel--directive-llm-prompt directive))

@@ -10,10 +10,11 @@
 (require 'mevedel-acp-text)
 (require 'mevedel-mcp)
 (require 'mevedel-mcp-tools)
+(require 'mevedel-utilities)
 
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
+                  "mevedel-utilities" (scope key format &rest args))
 (autoload 'mevedel--warn-once "mevedel-utilities")
 
 (defun mevedel-acp-workload-request (launch prompt tools callback before-tool boundary)
@@ -32,6 +33,7 @@ Teardown errors warn once per owner; errors and quits do not replace the
 outcome or skip its callback.
 Return a canceller; killing the current buffer also retires this scope."
   (let ((buffer (current-buffer)) (calls (make-hash-table :test #'equal))
+        (scope (mevedel-diagnostic-scope (current-buffer)))
         server configuration cancel-text finished lost)
     (cl-labels
         ((live () (and (not finished) (buffer-live-p buffer)))
@@ -39,7 +41,7 @@ Return a canceller; killing the current buffer also retires this scope."
            ;; Reporting must not interrupt the remaining cleanup or settlement.
            (condition-case nil
                (mevedel--warn-once
-                (list 'acp-workload-cleanup owner)
+                scope (list 'acp-workload-cleanup owner)
                 "ACP workload %s cleanup failed: %s" owner (error-message-string err))
              ((error quit) nil)))
          (finish (response info)

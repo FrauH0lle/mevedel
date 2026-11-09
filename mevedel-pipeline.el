@@ -521,8 +521,8 @@ REASON and MESSAGE describe an early pipeline failure."
           :hook-additional-context (plist-get context :hook-additional-context)
           :hook-audit-records (plist-get context :hook-audit-records))))
 
-(defun mevedel-pipeline--format-outcome-failure (outcome)
-  "Return OUTCOME's provider-facing early-failure text."
+(defun mevedel-pipeline--format-outcome-failure (outcome &optional scope)
+  "Return OUTCOME's provider-facing early-failure text, reporting in SCOPE."
   (let ((failure (plist-get outcome :result)))
     (when-let* ((repairs (plist-get outcome :input-repairs)))
       (setq failure
@@ -534,19 +534,20 @@ REASON and MESSAGE describe an early pipeline failure."
                     (concat failure "\n\n" reminder)))
               (error
                (ignore-errors
-                 (display-warning
+                 (mevedel-diagnostic-warning
+                  (mevedel-diagnostic-scope scope)
                   'mevedel
                   "Could not append tool input repair reminder"
                   :warning))
                failure))))
     failure))
 
-(defun mevedel-pipeline--provider-result (outcome)
-  "Project canonical OUTCOME into the provider-facing result value."
+(defun mevedel-pipeline--provider-result (outcome &optional scope)
+  "Project canonical OUTCOME to a provider result, reporting in SCOPE."
   (if (plist-get outcome :failure-message)
       (condition-case nil
           (let ((text (mevedel-pipeline-append-hook-side-channel
-                       (mevedel-pipeline--format-outcome-failure outcome) outcome))
+                       (mevedel-pipeline--format-outcome-failure outcome scope) outcome))
                 (data (plist-get outcome :render-data)))
             (if (plist-get data :permission-approvals)
                 (concat text (mevedel-tool-render-data-format
@@ -555,8 +556,10 @@ REASON and MESSAGE describe an early pipeline failure."
               text))
         (error
          (ignore-errors
-           (display-warning 'mevedel "Pipeline audit formatting failed" :warning))
-         (mevedel-pipeline--format-outcome-failure outcome)))
+           (mevedel-diagnostic-warning
+            (mevedel-diagnostic-scope scope)
+            'mevedel "Pipeline audit formatting failed" :warning))
+         (mevedel-pipeline--format-outcome-failure outcome scope)))
     (plist-get outcome :result)))
 
 (defun mevedel-pipeline--context-default-directory (context)
@@ -705,6 +708,10 @@ CONTEXT is the initial plist."
                      (progn
                        (unless (eq settled 'cancel)
                          (mevedel--warn-once
+                          (mevedel-diagnostic-scope
+                           (or (plist-get context :diagnostic-scope)
+                               (plist-get context :session)
+                               (plist-get context :workspace)))
                           (list 'pipeline-duplicate-outcome step-name)
                           "Pipeline step %s called %s after already %s; \
 ignoring duplicate outcome"
@@ -1098,7 +1105,11 @@ restart the stopped work."
                               "no reason given"))))
       (unless (plist-get context :invocation)
         (mevedel-goal-pause-runtime-failure (plist-get context :buffer) reason))
-      (message "mevedel: %s" reason))))
+      (mevedel-diagnostic-message
+       (mevedel-diagnostic-scope
+        (or (plist-get context :diagnostic-scope)
+            (plist-get context :session) (plist-get context :workspace)))
+       "%s" reason))))
 
 (defun mevedel-pipeline--step-pre-tool-hooks (context next fail)
   "Run `PreToolUse' hooks for CONTEXT, then call NEXT or FAIL.
@@ -1437,7 +1448,10 @@ buffer."
               (concat result "\n\n"
                       (mevedel-tool-repair-format-reminder records))))
           (error
-           (display-warning
+           (mevedel-diagnostic-warning
+            (mevedel-diagnostic-scope
+             (or (plist-get context :diagnostic-scope)
+                 (plist-get context :session) (plist-get context :workspace)))
             'mevedel
             (format "Could not append tool input repair reminder: %S" err)
             :warning)
@@ -1482,7 +1496,10 @@ FAIL is unused; transform failures warn and leave CONTEXT unchanged."
              ((progn
                 (> (mevedel-tool-render-data-size render-data)
                    mevedel-pipeline--render-transform-max-data-size))
-              (display-warning
+              (mevedel-diagnostic-warning
+               (mevedel-diagnostic-scope
+                (or (plist-get context :diagnostic-scope)
+                    (plist-get context :session) (plist-get context :workspace)))
                'mevedel
                (format "Render transform for %s returned oversized metadata"
                        (or name "tool"))
@@ -1492,7 +1509,10 @@ FAIL is unused; transform failures warn and leave CONTEXT unchanged."
               (funcall next
                        (plist-put context :render-data render-data)))))
         (error
-         (display-warning
+         (mevedel-diagnostic-warning
+          (mevedel-diagnostic-scope
+           (or (plist-get context :diagnostic-scope)
+               (plist-get context :session) (plist-get context :workspace)))
           'mevedel
           (format "Render transform for %s failed: %s"
                   (or name "tool") (error-message-string err))
@@ -1842,6 +1862,7 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
           (cond
            (session (mevedel-session-workspace session))
            ((and (boundp 'mevedel--workspace) mevedel--workspace))))
+         (scope (mevedel-diagnostic-scope (or workspace session)))
          (workdir (file-name-as-directory
                    (mevedel-conversation-working-directory session)))
          (request (mevedel-pipeline--current-request))
@@ -1860,6 +1881,7 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
          (cancel-cell (list nil))
          (sandbox-summary-cell (list nil))
          (context (list :tool tool :args args
+                        :diagnostic-scope scope
                         :session session
                         :workspace workspace
                         :request request :invocation invocation :engine fsm
@@ -1876,7 +1898,8 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
                               (list audit))
                           (error
                            (ignore-errors
-                             (display-warning
+                             (mevedel-diagnostic-warning
+                              scope
                               'mevedel
                               "Tool input repair audit construction failed"
                               :warning))
@@ -1907,9 +1930,9 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
                           (if provider-p
                               (plist-put outcome :result
                                          (mevedel-pipeline--provider-result
-                                          outcome))
+                                          outcome scope))
                             outcome)
-                        (mevedel-pipeline--provider-result outcome))))
+                        (mevedel-pipeline--provider-result outcome scope))))
                 (mevedel-telemetry-record-audit
                  session 'tool-finished
                  :tool-name (mevedel-tool-name tool)
@@ -1926,7 +1949,8 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
                 (condition-case err
                     (funcall callback delivery)
                   (error
-                   (display-warning
+                   (mevedel-diagnostic-warning
+                    scope
                     'mevedel
                     (format "Pipeline final callback signaled: %S" err)
                     :warning)))))
@@ -1939,6 +1963,7 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
               ;; the bug-fix path; we drop the late error but flag it so
               ;; a recurring drop is diagnosable rather than silent.
               (mevedel--warn-once
+               scope
                'pipeline-late-callback
                "Pipeline callback fired twice; dropping late \
 delivery: %S"

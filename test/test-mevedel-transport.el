@@ -127,7 +127,7 @@
          (lambda ()
            (mevedel-transport-call-with-retained-timers
             (lambda ()
-              (setq owned (mevedel--run-periodic-timer 1 #'ignore)
+              (setq owned (mevedel--run-periodic-timer 'global 1 #'ignore)
                     host mevedel--coalesced-timer)))
            (should host)
            (should-not (mevedel-transport-held-timer-p host))

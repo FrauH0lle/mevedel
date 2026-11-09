@@ -14,6 +14,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 ;; `setf' on a slot of a struct defined elsewhere needs that
 ;; `cl-defstruct' at compile time: `declare-function' supplies the
 ;; accessor but not the setter, and without the expander the form
@@ -538,10 +540,10 @@ sessions keep their existing startup behavior and return nil."
                        (buffer-local-value 'mevedel--session data-buffer)))
          (target (and session (mevedel-session-execution-target session))))
     (unless session
-      (user-error "No mevedel session here"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No mevedel session here"))
     (unless (and target
                  (mevedel-execution-target-remote-p target))
-      (user-error "Current mevedel session is local"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Current mevedel session is local"))
     (let ((readiness (mevedel--probe-session-target session t)))
       (when (eq 'ready (plist-get readiness :status))
         (require 'mevedel-execution)
@@ -552,15 +554,18 @@ sessions keep their existing startup behavior and return nil."
                 "The target is reachable, but a previous remote process "
                 "may still be running. Acknowledge that outcome and allow "
                 "new mutating execution? "))
-            (user-error "Unknown remote execution remains unacknowledged"))
+            (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Unknown remote execution remains unacknowledged"))
           (mevedel-execution-acknowledge-unknown session)))
       (when-let* ((view-buffer
                    (buffer-local-value 'mevedel--view-buffer data-buffer))
                   ((buffer-live-p view-buffer)))
         (with-current-buffer view-buffer
           (force-mode-line-update t)))
-      (message "mevedel: execution target %s"
-               (mevedel-execution-target-readiness-message target))
+      (if (eq 'ready (plist-get readiness :status))
+          (message "mevedel: execution target %s"
+                   (mevedel-execution-target-readiness-message target))
+        (mevedel-diagnostic-message (mevedel-diagnostic-scope session)
+         "Execution target %s" (mevedel-execution-target-readiness-message target)))
       readiness)))
 
 (defun mevedel--run-session-start-hooks (source)
@@ -646,9 +651,10 @@ ending."
                  "exit" (lambda (_decision) (setcar cell t)))
               (error
                (setcar cell t)
-               (message "mevedel: SessionEnd failed in %s: %s"
-                        (buffer-name buffer)
-                        (error-message-string err))))))))
+               (mevedel-diagnostic-message (mevedel-diagnostic-scope buffer)
+                        "%s (SessionEnd failed in %s)"
+                        (error-message-string err)
+                        (buffer-name buffer))))))))
     (with-local-quit
       (while (cl-some (lambda (cell) (not (car cell))) pending)
         (accept-process-output nil 0.05)))))

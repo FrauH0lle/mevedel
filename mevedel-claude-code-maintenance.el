@@ -6,6 +6,8 @@
 ;; published state is cheap and side-effect free, also without Claude.  The
 ;; bounded status-command runner is shared with launch preflight.
 ;;; Code:
+
+(require 'mevedel-utilities)
 (require 'cl-lib)
 (require 'json)
 (require 'subr-x)
@@ -217,7 +219,10 @@ lock.  A forced check reports a running check and its result in the echo area."
                                     :previousAdapter (plist-get old :adapter)
                                     :rejectedCli (and message candidate)
                                     :rejectedAdapter (and message adapter)) nil)))
-                   (when force (message "mevedel: %s" (or message "Claude runtime is up to date")))))
+                   (when force
+                     (if message
+                         (mevedel-diagnostic-message 'global "%s" message)
+                       (message "mevedel: Claude runtime is up to date")))))
                (run (command next)
                  (setq cancel-command
                        (let ((default-directory temporary-file-directory))
@@ -242,7 +247,7 @@ lock.  A forced check reports a running check and its result in the echo area."
                               (setenv "CLAUDE_CODE_EXECUTABLE" candidate)
                               (setq connection
                                     (mevedel-acp-open
-                                     (list :command adapter :cwd directory
+                                     (list :command adapter :cwd directory :diagnostic-scope 'global
                                            :environment process-environment :initialize-only t)
                                      (lambda (checked)
                                        (if (eq t (alist-get 'loadSession (mevedel-acp-capabilities checked)))

@@ -2150,7 +2150,7 @@ mouse events in them, which later interactive calls would read."
               (test-mevedel-execution--wait (lambda () output)))
             (with-current-buffer output
               (should buffer-read-only)
-              (should (string-search "Warning: Error: Could not decode retained execution output"
+              (should (string-search "mevedel [workspace unavailable]: Error: Could not decode retained execution output"
                                      (buffer-string)))
               (should (string-search "Full output unavailable" (buffer-string))))
             (should views)

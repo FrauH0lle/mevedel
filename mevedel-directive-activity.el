@@ -12,6 +12,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (eval-when-compile (require 'cl-lib))
 
 ;; `gptel'
@@ -420,7 +422,7 @@
   (interactive)
   (unless (and mevedel-directive-activity--workspace
                (mevedel-directive-p mevedel-directive-activity--directive))
-    (user-error "No directive inspector is associated with this buffer"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope mevedel-directive-activity--workspace) "No directive inspector is associated with this buffer"))
   (let ((inhibit-read-only t))
     (mevedel-directive-activity--kill-transcript)
     (dolist (symbol '(mevedel-view--status-marker
@@ -560,7 +562,7 @@
   (let* ((attempt (mevedel-directive-activity--attempt-at-point))
          (patch (and attempt (mevedel-directive-attempt-patch attempt))))
     (unless (and patch (not (string-empty-p patch)))
-      (user-error "Attempt has no captured patch"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope mevedel-directive-activity--workspace) "Attempt has no captured patch"))
     (mevedel--replace-patch-buffer patch)))
 
 (defun mevedel-directive-activity-rewind ()
@@ -571,7 +573,7 @@
          (checkpoint
           (and attempt (mevedel-directive-attempt-checkpoint attempt))))
     (unless checkpoint
-      (user-error "Point is not on an implementation attempt"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope mevedel-directive-activity--workspace) "Point is not on an implementation attempt"))
     (let* ((session-id (plist-get checkpoint :session-id))
            (buffer
             (cl-loop
@@ -622,7 +624,7 @@
           (mevedel-directive-id mevedel-directive-activity--directive)
           mevedel-directive-activity--workspace)))
     (unless (overlayp overlay)
-      (user-error "Directive has no live attached source"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope mevedel-directive-activity--workspace) "Directive has no live attached source"))
     (pop-to-buffer (overlay-buffer overlay))
     (goto-char (overlay-start overlay))))
 
@@ -646,7 +648,9 @@
                        (memq directive
                              (mevedel-workspace-directives workspace)))
                   (list workspace directive))
-                 (t (user-error "No directive selected"))))
+                 (t (mevedel-diagnostic-user-error
+                     (mevedel-diagnostic-scope (or workspace (current-buffer)))
+                     "No directive selected"))))
                (buffer
                 (get-buffer-create
                  (format "*mevedel:directive:%s@%s*"
@@ -670,7 +674,8 @@
          (_ (condition-case err
                 (mevedel-instruction-store-observe workspace)
               (mevedel-instruction-store-unreadable
-               (display-warning 'mevedel (error-message-string err) :warning))))
+               (mevedel-diagnostic-warning (mevedel-diagnostic-scope workspace)
+                                          'mevedel (error-message-string err) :warning))))
          (_ (unless archived-p
               (mevedel--reconcile-directive-sources workspace)))
          (directives
@@ -681,7 +686,7 @@
                      (plist-get (mevedel-directive-anchor directive) :state))))
            (mevedel-workspace-directives workspace))))
     (unless directives
-      (user-error (if archived-p
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) (if archived-p
                       "Workspace has no archived directives"
                     "Workspace has no directives")))
     (let* ((choices

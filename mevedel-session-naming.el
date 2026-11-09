@@ -32,6 +32,7 @@
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-persistence)
 (require 'mevedel-transport)
+(require 'mevedel-utilities)
 
 ;; `gptel-request'
 (defvar gptel-reasoning-effort)
@@ -45,6 +46,14 @@
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-record "mevedel-telemetry" (session event &rest props))
 (autoload 'mevedel-telemetry-record "mevedel-telemetry")
+
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-message "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format &rest args))
+(autoload 'mevedel-diagnostic-message "mevedel-utilities")
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
 
 ;; `mevedel-view'
 (defvar mevedel--data-buffer)
@@ -144,7 +153,7 @@ Drop recorded naming input and resolve a retained naming-failure notice."
                      mevedel--data-buffer (current-buffer)))
          (session (and (buffer-live-p buffer)
                        (buffer-local-value 'mevedel--session buffer))))
-    (unless session (user-error "Not in a mevedel chat or view buffer"))
+    (unless session (mevedel-diagnostic-user-error (mevedel-diagnostic-scope buffer) "Not in a mevedel chat or view buffer"))
     (cons session buffer)))
 
 ;;;###autoload
@@ -152,7 +161,10 @@ Drop recorded naming input and resolve a retained naming-failure notice."
   "Rename the current session to NEW-NAME without changing its identity."
   (interactive "sNew session name: ")
   (pcase-let ((`(,session . ,buffer) (mevedel-session-naming--command-root)))
-    (mevedel-session-naming-rename session buffer new-name)
+    (condition-case err
+        (mevedel-session-naming-rename session buffer new-name)
+      (user-error (mevedel-diagnostic-user-error
+                   (mevedel-diagnostic-scope session) "%s" (error-message-string err))))
     (message "mevedel: session renamed to %s" (mevedel-session-name session))))
 
 (defconst mevedel-session-naming--reply-limit 4096
@@ -303,17 +315,18 @@ request is replaced.  An explicit name is never replaced automatically."
   (pcase-let ((`(,session . ,buffer) (mevedel-session-naming--command-root)))
     (unless (and (mevedel-session-persistence-root-data-buffer-p buffer)
                  (eq buffer (mevedel-session-root-buffer session)))
-      (user-error "Session root buffer is unavailable"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Session root buffer is unavailable"))
     (when (mevedel-session-audit-session session)
-      (user-error "Transient conversations are not named"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Transient conversations are not named"))
     (when (eq (mevedel-session-naming-state session) 'explicit)
-      (user-error "This session has an explicit name; change it with M-x mevedel-rename-session"))
-    (mevedel-session-artifacts-assert-mutation-authority session buffer)
-    (mevedel-session-artifacts-assert-new-mutation-authority session)
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "This session has an explicit name; change it with M-x mevedel-rename-session"))
+    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope session)
+      (mevedel-session-artifacts-assert-mutation-authority session buffer)
+      (mevedel-session-artifacts-assert-new-mutation-authority session))
     (let ((text (mevedel-session-naming--input
                  (or input (mevedel-session-naming-input session)
                      (read-string "Describe this session to name it: ")))))
-      (unless text (user-error "Session naming needs a nonblank description"))
+      (unless text (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Session naming needs a nonblank description"))
       (with-current-buffer buffer (mevedel-session-naming-cancel))
       (setf (mevedel-session-naming-state session) 'attempted
             (mevedel-session-naming-input session) text)
@@ -331,6 +344,7 @@ Each provider's reply deadline starts once its request is submitted."
   (with-current-buffer buffer
     (add-hook 'kill-buffer-hook #'mevedel-session-naming-cancel nil t)
     (let ((key (list 'session-naming buffer))
+          (scope (mevedel-diagnostic-scope session))
           (segment (or (mevedel-session-current-segment session) 1))
           (path (mevedel-session-working-directory session))
           ;; Streaming is a session choice, not this request's: providers
@@ -366,8 +380,10 @@ Each provider's reply deadline starts once its request is submitted."
                (when (and canceller
                           (not (mevedel-session-naming--candidate-finished candidate)))
                  (setf (mevedel-session-naming--candidate-finished candidate) t)
-                 (with-demoted-errors "mevedel: title request cancellation failed: %S"
-                   (funcall canceller))))
+                 (condition-case-unless-debug err
+                     (funcall canceller)
+                   (error (mevedel-diagnostic-message
+                           scope "Title request cancellation failed: %S" err)))))
              (let ((request (mevedel-session-naming--candidate-buffer candidate)))
                (when (buffer-live-p request) (kill-buffer request))))
            (retire (candidate)

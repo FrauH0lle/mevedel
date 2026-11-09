@@ -175,7 +175,8 @@
   "Return the artifacts cockpit workspace for CONTEXT."
   (or (mevedel-cockpit-context-workspace
        (or context (mevedel-cockpit-surface-context)))
-      (user-error "No mevedel workspace here")))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope context)
+                                   "No mevedel workspace here")))
 
 (defun mevedel-artifacts-list--store-rows (workspace session)
   "Return WORKSPACE's store artifacts as rows, marking SESSION's attached.
@@ -300,7 +301,8 @@ Artifacts shared through artifact links are marked `:shared'."
   "Return the selected artifact, refusing a remote one."
   (let ((item (mevedel-cockpit-surface-selected)))
     (when (plist-get item :remote)
-      (user-error "%s lives at its origin; agents reach it as shared://%s"
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope)
+                  "%s lives at its origin; agents reach it as shared://%s"
                   (plist-get item :title) (plist-get item :id)))
     item))
 
@@ -308,10 +310,12 @@ Artifacts shared through artifact links are marked `:shared'."
   "Return the selected artifact's still-existing path."
   (let ((item (mevedel-artifacts-list--local-selected)))
     (when (plist-get item :item)
-      (user-error "Whiteboards and documents open in their editor; use o"))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope)
+                                   "Whiteboards and documents open in their editor; use o"))
     (unless (and (plist-get item :path) (file-exists-p (plist-get item :path)))
       (mevedel-cockpit-surface-refresh)
-      (user-error "Artifact file no longer exists"))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope)
+                                   "Artifact file no longer exists"))
     (plist-get item :path)))
 
 (defun mevedel-artifacts-list--browse (path)
@@ -331,7 +335,8 @@ lobby does, since a room resolves store artifacts by its workspace."
                       (mevedel-collaboration-lobby--find
                        (mevedel-artifacts-list--workspace context)))))
       (unless lobby
-        (user-error "To view %s, start the project lobby (/collab lobby) or open Project artifacts from a session"
+        (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope context)
+                    "To view %s, start the project lobby (/collab lobby) or open Project artifacts from a session"
                     (plist-get item :title)))
       (browse-url (mevedel-collaboration-item-link
                    (plist-get lobby :link-full) (plist-get item :id) "artifact")))))
@@ -367,7 +372,8 @@ session the project lobby's; that room reads it from its origin."
   "Return the selected artifact, refusing one that is not shared."
   (let ((item (mevedel-artifacts-list--local-selected)))
     (unless (plist-get item :shared)
-      (user-error "%s is not shared; S shares it" (plist-get item :title)))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope)
+                                   "%s is not shared; S shares it" (plist-get item :title)))
     item))
 
 (defun mevedel-artifacts-list--after-sharing (function item)
@@ -410,7 +416,9 @@ The link is read without echo; a prefix argument asks for NAME."
   (interactive)
   (let* ((context (mevedel-cockpit-surface-context))
          (session (or (mevedel-cockpit-context-session context)
-                      (user-error "Attaching needs a session; open the cockpit from one")))
+                      (mevedel-diagnostic-user-error
+                       (mevedel-cockpit-diagnostic-scope context)
+                       "Attaching needs a session; open the cockpit from one")))
          (id (plist-get (mevedel-cockpit-surface-selected) :id)))
     (mevedel-artifact-store-attach
      session id (mevedel-cockpit-context-data-buffer context))
@@ -433,6 +441,7 @@ Restoring copies the version over the artifact as a new version."
          (workspace (mevedel-artifacts-list--workspace context))
          (session (mevedel-cockpit-context-session context))
          (id (plist-get (mevedel-artifacts-list--local-selected) :id))
+         (scope (mevedel-diagnostic-scope workspace))
          (choices
           (mapcar (lambda (row)
                     (cons (format "%d  %s  %s" (plist-get row :n)
@@ -445,7 +454,8 @@ Restoring copies the version over the artifact as a new version."
                 (cdr (assoc (completing-read (format "Version of %s: " id)
                                              choices nil t)
                             choices))
-              (user-error "%s has no versions yet" id))))
+              (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace)
+                                           "%s has no versions yet" id))))
     (pcase (if (plist-get (mevedel-cockpit-surface-selected) :item)
                ;; A whiteboard's or document's version opens only by restoring.
                (and (y-or-n-p (format "Restore version %d of %s? " n id)) ?r)
@@ -461,7 +471,8 @@ Restoring copies the version over the artifact as a new version."
            nil
            (lambda (reply)
              (if (plist-get reply :error)
-                 (message "mevedel: restoring %s: %s" id (plist-get reply :error))
+                 (mevedel-diagnostic-message scope
+                                             "%s; restoring %s" (plist-get reply :error) id)
                (when (buffer-live-p buffer)
                  (with-current-buffer buffer
                    (mevedel-cockpit-surface-refresh id)))
@@ -475,7 +486,8 @@ Restoring copies the version over the artifact as a new version."
          (workspace (mevedel-artifacts-list--workspace context))
          (session (mevedel-cockpit-context-session context))
          (id (or (plist-get (mevedel-artifacts-list--local-selected) :item)
-                 (user-error "File artifacts keep a version of every saved change")))
+                 (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace)
+                                              "File artifacts keep a version of every saved change")))
          (n (mevedel-shared-editing-save-version
              workspace id (and session (mevedel-session-session-id session)))))
     (mevedel-cockpit-surface-refresh id)
@@ -514,6 +526,7 @@ is detached instead: its origin keeps it."
          (workspace (mevedel-artifacts-list--workspace context))
          (item (mevedel-cockpit-surface-selected))
          (name (or (plist-get item :title) (plist-get item :id)))
+         (scope (mevedel-diagnostic-scope workspace))
          (buffer (current-buffer)))
     (cond
      ((plist-get item :remote)
@@ -526,7 +539,8 @@ is detached instead: its origin keeps it."
        workspace (plist-get item :id) nil
        (lambda (failure)
          (if failure
-             (message "mevedel: %s was not deleted: %s" name failure)
+             (mevedel-diagnostic-message scope
+                                         "%s; %s was not deleted" failure name)
            (when (buffer-live-p buffer)
              (with-current-buffer buffer (mevedel-cockpit-surface-refresh)))
            (message "mevedel: %s deleted" name))))))))
@@ -548,13 +562,17 @@ that is read-only here refuses."
   (let* ((context (or (condition-case nil (mevedel-cockpit-current-context)
                         (user-error nil))
                       (mevedel-cockpit-workspace-context
-                       (or (mevedel-workspace) (user-error "No mevedel workspace here"))
+                       (or (mevedel-workspace)
+                           (mevedel-diagnostic-user-error
+                            (mevedel-diagnostic-scope (current-buffer))
+                            "No mevedel workspace here"))
                        (current-buffer))))
          (session (mevedel-cockpit-context-session context))
          (data (and session (mevedel-cockpit-context-data-buffer context))))
     (mevedel-cockpit-require-owner "item creation" context)
     (unless (mevedel-shared-editing-session-writable-p data)
-      (user-error "This session is read-only here; take control to create items"))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope context)
+                                   "This session is read-only here; take control to create items"))
     (list context (mevedel-artifacts-list--workspace context) session data)))
 
 (defun mevedel-artifacts-list--created (reply kind title workspace data opener)
@@ -564,12 +582,14 @@ in the item's own conversation.  OPENER is from
 `mevedel-collaboration-item-opener'.  A created item is never discarded:
 a later failure is reported with its address."
   (if-let* ((failure (plist-get reply :error)))
-      (message "mevedel: %s \"%s\" was not created: %s" kind title failure)
+      (mevedel-diagnostic-message (mevedel-diagnostic-scope workspace)
+                                  "%s; %s \"%s\" was not created" failure kind title)
     (let ((id (plist-get reply :id)))
       (message "mevedel: created %s \"%s\" (shared://%s)" kind title id)
       (when-let* ((failure (plist-get reply :attach-error)))
-        (message "mevedel: created shared://%s but it was not attached to this session: %s"
-                 id failure))
+        (mevedel-diagnostic-message (mevedel-diagnostic-scope workspace)
+                                    "%s; created shared://%s but it was not attached to this session"
+                                    failure id))
       ;; Only a cockpit of the same store lists the item; selecting an id
       ;; another store lacks would move its selection.
       (when-let* ((cockpit (get-buffer mevedel-artifacts-list-buffer-name)))
@@ -581,8 +601,9 @@ a later failure is reported with its address."
       (condition-case err
           (funcall opener (or data (mevedel-artifact-store-conversation workspace id)) id)
         (error
-         (message "mevedel: created shared://%s \"%s\", but could not open it: %s"
-                  id title (error-message-string err)))))))
+         (mevedel-diagnostic-message (mevedel-diagnostic-scope workspace)
+                                     "%s; created shared://%s \"%s\", but could not open it"
+                                     (error-message-string err) id title))))))
 
 ;;;###autoload
 (defun mevedel-artifacts-new-shared-item (kind title)
@@ -670,7 +691,10 @@ workspace."
          (or context
              (mevedel-cockpit-context-for-buffer (current-buffer))
              (mevedel-cockpit-workspace-context
-              (or (mevedel-workspace) (user-error "No mevedel workspace here"))
+              (or (mevedel-workspace)
+                  (mevedel-diagnostic-user-error
+                   (mevedel-diagnostic-scope (current-buffer))
+                   "No mevedel workspace here"))
               (current-buffer)))))
     (mevedel-cockpit-open-surface mevedel-artifacts-list--surface context)))
 

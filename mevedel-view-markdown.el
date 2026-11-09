@@ -63,6 +63,12 @@
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format-string &rest args))
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+
 ;; `mevedel-view'
 (defvar mevedel--data-buffer)
 (defvar mevedel-view-inline-image-max-width)
@@ -267,7 +273,7 @@ during a redraw."
   (setq address
         (condition-case err
             (plist-get (mevedel-resource-parse-address address) :canonical)
-          (error (user-error "%s" (error-message-string err)))))
+          (error (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "%s" (error-message-string err)))))
   (cond
    ;; Browser-made item ids are UUIDs; `shared://library' is no item.
    ((and (string-match "\\`shared://\\([a-zA-Z0-9_-]+\\)\\(?:/\\|\\'\\)" address)
@@ -280,9 +286,9 @@ during a redraw."
     (let ((path (condition-case err
                     (mevedel-resource-visit-path
                      address (list :session (bound-and-true-p mevedel--session)))
-                  (error (user-error "%s" (error-message-string err))))))
+                  (error (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "%s" (error-message-string err))))))
       (unless (and path (file-exists-p path))
-        (user-error "Nothing to open for %s" address))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Nothing to open for %s" address))
       ;; Only working files and memory are editable through their address.
       (if (string-match-p "\\`\\(?:work\\|memory\\)://" address)
           (find-file-other-window path)

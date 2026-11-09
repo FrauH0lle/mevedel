@@ -34,6 +34,7 @@
 (require 'mevedel-permissions)
 (require 'mevedel-persistence)
 (require 'mevedel-plugins)
+(require 'mevedel-plugin-ui)
 (require 'mevedel-reminders)
 (require 'mevedel-session-persistence)
 (require 'mevedel-skills-core)
@@ -2512,6 +2513,22 @@ spanning lines")))
       (set-default-toplevel-value 'mevedel-permission-mode saved))))
 
 
+
+(mevedel-deftest mevedel-skills-message-command-result ()
+  ,test
+  (test)
+  :doc "projects plugin failures locally and preserves other command results"
+  (progn
+  (dolist (name '("plugin" "other"))
+    (let ((raw "Failed to update plugin x: rejected") echoed)
+      (mevedel-test--with-captured-messages echoed
+        (mevedel-skills-message-command-result "/owner/" name raw))
+      (should (equal (concat (if (equal name "plugin") "mevedel [/owner/]: " "")
+                             raw "\n") echoed))))
+  (let (echoed)
+    (mevedel-test--with-captured-messages echoed
+      (mevedel-skills-message-command-result "/owner/" "plugin" nil))
+    (should (string-empty-p echoed)))))
 
 (provide 'test-mevedel-skills-ui)
 

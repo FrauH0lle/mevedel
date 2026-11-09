@@ -262,11 +262,12 @@ Once the lease was released, another Emacs may have edited the item."
 Locally it follows any save in progress and waits while the store's
 connection is busy.  SESSION-ID names the session that edited it; a
 failure is a message."
-  (mevedel-artifact-backend-call
-   workspace (list :action "version" :id id :session session-id)
-   (lambda (reply)
-     (when-let* ((failure (plist-get reply :error)))
-       (message "mevedel: no version of %s was saved: %s" id failure)))))
+  (let ((scope (mevedel-diagnostic-scope workspace)))
+    (mevedel-artifact-backend-call
+     workspace (list :action "version" :id id :session session-id)
+     (lambda (reply)
+       (when-let* ((failure (plist-get reply :error)))
+         (mevedel-diagnostic-message scope "No version of %s was saved: %s" id failure))))))
 
 (defun mevedel-shared-editing-op-id ()
   "Return a fresh operation identity."

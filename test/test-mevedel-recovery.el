@@ -4,6 +4,7 @@
 ;;; Code:
 (require 'helpers (file-name-concat (file-name-directory (or load-file-name buffer-file-name)) "helpers"))
 (require 'mevedel-recovery)
+(require 'mevedel-utilities)
 (require 'mevedel-models)
 (require 'mevedel-pending-inputs)
 (require 'gptel-openai)
@@ -19,6 +20,22 @@
     (should (mevedel-recovery-clear session "model"))
     (should-not (mevedel-recovery-clear session "model"))
     (should-not (mevedel-session-recovery-issues session))))
+
+(mevedel-deftest mevedel-recovery-assert-ready ()
+  (let* ((workspace (mevedel-workspace--create :root "/project A/same/"))
+         (issue (list :id "model" :category "model" :message "Select a model" :blocking t))
+         (session (mevedel-session--create :workspace workspace :recovery-issues (list issue))))
+    (with-temp-buffer
+      (setq-local mevedel--workspace (mevedel-workspace--create :root "/project B/same/"))
+      (should (equal (list 'user-error "Select a model")
+                     (should-error (mevedel-recovery-assert-ready session) :type 'user-error)))
+      (should (equal (list 'user-error "mevedel [/project A/same/]: Select a model")
+                     (should-error
+                      (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope session)
+                        (mevedel-recovery-assert-ready session))
+                      :type 'user-error))))
+    (should (equal "Select a model" (plist-get issue :message)))
+    (should (equal "Select a model" (mevedel-recovery-public-message issue)))))
 
 (mevedel-deftest mevedel-recovery-clear-informational ()
   (let ((session (mevedel-session--create)))

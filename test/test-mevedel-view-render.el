@@ -4941,6 +4941,24 @@
       (should (eq 'mevedel (caar warnings)))
       (should (string-match-p "failed" (cadar warnings))))))
 
+(mevedel-deftest mevedel-view--invoke-renderer/diagnostic-scope ()
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (setq-local mevedel--workspace (mevedel-workspace--create :root "/project A/same/")))
+    (with-current-buffer view-buf
+      (let ((tool (mevedel-tool--create
+                   :name "Refusal"
+                   :renderer (lambda (&rest _)
+                               (user-error "%s" "mevedel [/project A/same/]: Refused"))))
+            (mevedel--warn-once-table (make-hash-table :test #'equal))
+            warnings)
+        (cl-letf (((symbol-function 'display-warning)
+                   (lambda (_type text &rest _) (push text warnings))))
+          (should-not (mevedel-view--invoke-renderer tool nil nil "ok"))
+          (should (= 1 (length warnings)))
+          (should (string-prefix-p "mevedel [/project A/same/]: " (car warnings)))
+          (should-not (string-match-p "mevedel.*mevedel" (car warnings))))))))
+
 (mevedel-deftest mevedel-view--tool-row-start-p ()
   ,test
   (test)
@@ -5584,6 +5602,25 @@
         (if attempts
             (should (string-search "Attempt 1: Connection interrupted" body))
           (should-not (string-search "Attempt history" body)))))))
+
+(mevedel-deftest mevedel-view--render-prepared-tool/diagnostic-scope ()
+  (let ((source (generate-new-buffer " *diagnostic source*"))
+        (summary (list :backend "Provider" :outcome 'error :message "Raw failure")))
+    (unwind-protect
+        (progn
+          (with-current-buffer source
+            (setq-local mevedel--workspace
+                        (mevedel-workspace--create :root "/project A/same/")))
+          (with-temp-buffer
+            (setq-local mevedel--workspace
+                        (mevedel-workspace--create :root "/project B/same/"))
+            (let ((rendering (mevedel-view--render-prepared-tool
+                              (list :request-failure summary) source)))
+              (should (string-search "mevedel [/project A/same/]: Raw failure"
+                                     (plist-get rendering :body)))
+              (should-not (string-search "/project B/" (plist-get rendering :body)))))
+          (should (equal "Raw failure" (plist-get summary :message))))
+      (kill-buffer source))))
 
 (mevedel-deftest mevedel-view--request-failure-extra-data ()
   ,test

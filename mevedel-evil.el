@@ -8,6 +8,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (require 'cl-lib)
 
 ;; `evil'
@@ -251,7 +253,7 @@ to cover whole lines.  Block selections are deliberately unsupported."
                (transient-mark-mode t)
                (mark-active t))
           (when (eq type 'block)
-            (user-error "Block selections cannot create or delete instructions"))
+            (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Block selections cannot create or delete instructions"))
           (goto-char (if forward end beg))
           (set-mark (if forward beg end))
           (if args
@@ -293,7 +295,7 @@ Require Evil at call time, without enabling it.  Calling this repeatedly
 is harmless.  No evil-collection dependency is needed."
   (interactive)
   (unless (require 'evil nil t)
-    (user-error "Evil is not installed; install Evil before calling mevedel-evil-setup"))
+    (mevedel-diagnostic-user-error 'global "Evil is not installed; install Evil before calling mevedel-evil-setup"))
   (unless mevedel-evil--installed
     (require 'mevedel-overlays)
     (setq mevedel-evil--installed t)

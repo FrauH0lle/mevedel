@@ -10,6 +10,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (require 'cl-lib)
 (require 'generator)
 
@@ -1252,14 +1254,16 @@ outcome.  WORKLOAD overrides the verifier's model policy when non-nil."
              (mevedel-review--transform-command-outcome outcome command))))
          (_
           (mevedel-review--end-direct-request data-buffer)
-          (message "mevedel: %s returned unsupported outcome: %S"
+          (mevedel-diagnostic-message (mevedel-diagnostic-scope data-buffer)
+                   "%s returned unsupported outcome: %S"
                    (mevedel-review--command-name command) outcome))))
       (_
        (mevedel-review--end-direct-request data-buffer)
-       (message "mevedel: %s failed: %s"
-                (mevedel-review--command-name command)
+       (mevedel-diagnostic-message (mevedel-diagnostic-scope data-buffer)
+                "%s (%s failed)"
                 (or (plist-get outcome :message)
-                    "unknown error"))))))
+                    "unknown error")
+                (mevedel-review--command-name command))))))
 
 (defun mevedel-review--handle-view-outcome
     (outcome view-buffer data-buffer &optional command)
@@ -1276,14 +1280,16 @@ outcome.  WORKLOAD overrides the verifier's model policy when non-nil."
          (_
           (mevedel-review--end-direct-request data-buffer)
           (mevedel-view-stream-end-progress view-buffer)
-          (message "%s returned unsupported outcome: %S"
+          (mevedel-diagnostic-message (mevedel-diagnostic-scope data-buffer)
+                   "%s returned unsupported outcome: %S"
                    (mevedel-review--command-label command) outcome))))
       (_
        (mevedel-view-stream-end-progress view-buffer)
-       (message "%s failed: %s"
-                (mevedel-review--command-label command)
+       (mevedel-diagnostic-message (mevedel-diagnostic-scope data-buffer)
+                "%s (%s failed)"
                 (or (plist-get outcome :message)
-                    "unknown error"))
+                    "unknown error")
+                (mevedel-review--command-label command))
        (mevedel-review--end-direct-request data-buffer)
        (with-current-buffer data-buffer
          (gptel--update-status " Ready" 'success))))))
@@ -1403,7 +1409,8 @@ DATA-BUFFER receives the task transcript."
 When INSTRUCTIONS is non-empty, parse explicit target forms or run a custom
 review with that prompt instead of opening the target picker."
   (interactive)
-  (mevedel-review--run-command instructions 'review))
+  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope (current-buffer))
+    (mevedel-review--run-command instructions 'review)))
 
 ;;;###autoload
 (defun mevedel-verify (&optional instructions)
@@ -1411,7 +1418,8 @@ review with that prompt instead of opening the target picker."
 When INSTRUCTIONS is non-empty, parse explicit target forms or run a custom
 verification with that prompt instead of opening the target picker."
   (interactive)
-  (mevedel-review--run-command instructions 'verify))
+  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope (current-buffer))
+    (mevedel-review--run-command instructions 'verify)))
 
 (defun mevedel-cmd--review (args)
   "Run `/review' with optional custom ARGS."

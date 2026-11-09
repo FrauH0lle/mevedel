@@ -1625,7 +1625,13 @@ as presence may interleave, so only notices are returned."
                (should (equal (list (list :t "notice" :message notice))
                               replies))
                (if warning
-                   (should (string-search warning captured))
+                   (progn
+                     (should (string-search warning captured))
+                     (should (string-search
+                              (format "mevedel [%s]: "
+                                      (mevedel-workspace-root
+                                       (mevedel-collaboration--room-workspace room)))
+                              captured)))
                  (should (string-empty-p captured)))
                (should (eq room (if (eq kind 'lobby)
                                     (gethash (plist-get room :directory)

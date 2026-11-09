@@ -1508,9 +1508,8 @@
                           :info (list :buffer (current-buffer)
                                       :mevedel-request request
                                       :mevedel-request-id "terminal-diff"))))
-                (cl-letf (((symbol-function 'mevedel--warn-once)
-                           (lambda (_key format-string &rest arguments)
-                             (push (apply #'format format-string arguments) warnings)))
+                (cl-letf (((symbol-function 'display-warning)
+                           (lambda (_type text &rest _) (push text warnings)))
                           ((symbol-function 'mevedel--replace-patch-buffer)
                            (lambda (patch) (setq shown patch))))
                   (mevedel-preset--apply-final-patch
@@ -1532,7 +1531,7 @@
                   (if (memq change '(permission sandbox request))
                       (progn
                         (should-not shown)
-                        (should (equal '("FSM handler #<function> failed: Execution authority changed during preparation; submit the operation again")
+                        (should (equal (list (format "mevedel [%s]: Execution authority changed during preparation; submit the operation again (FSM handler #<function> failed)" root))
                                        warnings)))
                     (should-not warnings)
                     (should (string-search "-before\n+after\n" shown))

@@ -156,7 +156,11 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--truncate-display
                   "mevedel-utilities" (text width &optional ellipsis))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-warning "mevedel-utilities" (scope type message &optional level buffer-name))
 (autoload 'mevedel--truncate-display "mevedel-utilities")
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-warning "mevedel-utilities")
 
 
 ;; `mevedel-workspace'
@@ -1655,7 +1659,7 @@ the installed timer uses `mevedel-session-durability-heartbeat' instead."
       (error
        (mevedel-session-durability--bind-lease
         session (mevedel-session-lease session) 'lost)
-       (display-warning
+       (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
         'mevedel
         (format "Portable session lease renewal failed: %s" err)
         :warning)
@@ -1973,7 +1977,8 @@ assuming."
                (setf (mevedel-session-lease session)
                      (mevedel-session-durability--strip-assumption
                       (mevedel-session-lease session))))
-             (funcall callback (and proved (cddr results)) error))))))))
+             (funcall callback (and proved (cddr results)) error)))
+         (mevedel-diagnostic-scope session))))))
 
 
 ;;
@@ -2060,8 +2065,9 @@ cells change: the publication acknowledgement in
          (mevedel-session-recovery--mutation-cache nil))
     (funcall function)))
 
-(defun mevedel-session-durability--async-job (callback)
-  "Return (FINISH . GUARD) delivering one asynchronous result to CALLBACK.
+(defun mevedel-session-durability--async-job (callback &optional scope)
+  "Return (FINISH GUARD SCOPE) delivering one result to CALLBACK.
+SCOPE is captured diagnostic ownership, or `unavailable' for ownerless work.
 FINISH calls CALLBACK with (SUCCESS ERROR) the first time only.  GUARD runs
 a thunk and reports its error or quit through FINISH, unless FINISH already
 ran: then an error came from CALLBACK itself and propagates.  A quit never
@@ -2078,10 +2084,10 @@ continuation of a program whose launch was interrupted, does not run."
               (condition-case nil
                   (funcall callback success error)
                 (quit
-                 (display-warning
+                 (mevedel-diagnostic-warning (or scope 'unavailable)
                   'mevedel "Asynchronous lease callback was interrupted"
                   :warning)))))))
-    (cons finish
+    (list finish
           (lambda (thunk)
             (unless done
               (condition-case err
@@ -2091,10 +2097,11 @@ continuation of a program whose launch was interrupted, does not run."
                   ((not done)
                    (funcall finish nil err))
                   ((eq 'quit (car err))
-                   (display-warning
+                   (mevedel-diagnostic-warning (or scope 'unavailable)
                     'mevedel "Asynchronous lease step was interrupted"
                     :warning))
-                  (t (signal (car err) (cdr err)))))))))))
+                  (t (signal (car err) (cdr err))))))))
+          scope)))
 
 (defun mevedel-session-durability--async-program
     (directory operations job context continue)
@@ -2106,7 +2113,7 @@ once unless a remote operation is in flight for DIRECTORY, in which case it
 waits for the transport: the previous step's callback can run inside another
 remote command.  A transport that refuses the wait fails the job."
   (let* ((finish (car job))
-         (guard (cdr job))
+         (guard (cadr job))
          (owner (nth 4 context))
          (launch
           (lambda ()
@@ -2133,7 +2140,8 @@ remote command.  A transport that refuses the wait fails the job."
                                  (if (and (nth 5 context)
                                           (not (funcall (nth 5 context))))
                                      (funcall finish nil '(error "Lease heartbeat superseded"))
-                                   (funcall continue results error))))))))))
+                                   (funcall continue results error)))))))
+                         (nth 2 job))))
                    (when (and process owner)
                      (funcall owner process))))))))))
     (if (mevedel-transport-busy-p directory)
@@ -2431,9 +2439,9 @@ binding is then rebound as the synchronous update does when the lease is
 lost.  A nil SUCCESS always carries ERROR.  Commit riders and the
 transaction cells in effect at launch stay in effect across the asynchronous
 steps."
-  (let ((job (mevedel-session-durability--async-job callback))
+  (let ((job (mevedel-session-durability--async-job callback (mevedel-diagnostic-scope session)))
         (context (mevedel-session-durability-capture-context)))
-    (funcall (cdr job)
+    (funcall (cadr job)
              (lambda ()
                (mevedel-session-durability--update-async
                 session accepted-status status seconds publication-head
@@ -2489,10 +2497,10 @@ record on the target whoever owns it, `:publication-head' its publication
 head, `:now' the target clock, and `:owned' non-nil when that record is this
 client's live authority.  The lease binding is not changed.  Use it to decide
 an uncertain commit: nothing is rolled back from a head this has not read."
-  (let ((job (mevedel-session-durability--async-job callback))
+  (let ((job (mevedel-session-durability--async-job callback (mevedel-diagnostic-scope session)))
         (context (mevedel-session-durability-capture-context)))
     (funcall
-     (cdr job)
+     (cadr job)
      (lambda ()
        (if-let* ((session-dir (mevedel-session-save-path session)))
            (let* ((directory (mevedel-session-durability--lease-path
@@ -2568,11 +2576,11 @@ recovery marker, or a live transfer request -- and otherwise the error of a
 failed program, an invalid request, or a PID lock.  Local checks (pending
 publication, target incarnation, disclosure, materialization) stay with the
 caller."
-  (let* ((job (mevedel-session-durability--async-job callback))
+  (let* ((job (mevedel-session-durability--async-job callback (mevedel-diagnostic-scope session)))
          (finish (car job))
          (context (mevedel-session-durability-capture-context)))
     (funcall
-     (cdr job)
+     (cadr job)
      (lambda ()
        (let* ((session-dir (mevedel-session-save-path session))
               (session-id (mevedel-session-session-id session))
@@ -2748,7 +2756,7 @@ not a completed result: process failure itself invalidates that cache."
            session lease (if error 'lost (plist-get lease :state))
            (and (not error) (plist-get lease :bytes))))
         (when error
-          (display-warning 'mevedel
+          (mevedel-diagnostic-warning (mevedel-diagnostic-scope session) 'mevedel
                            (format "Portable session heartbeat failed: %s" error)
                            :warning)))
       (when (mevedel-session-publication-busy-p session)
@@ -2760,7 +2768,8 @@ not a completed result: process failure itself invalidates that cache."
                      (mevedel-session-save-path shadow)))
          (proposed (mevedel-session-lease shadow))
          (job (mevedel-session-durability--async-job
-               (lambda (_success error) (funcall callback error))))
+               (lambda (_success error) (funcall callback error))
+               (mevedel-diagnostic-scope shadow)))
          (context (mevedel-session-durability-capture-context)))
     (mevedel-session-durability--observe-lease-async
      directory (plist-get proposed :generation) nil job context
@@ -2795,7 +2804,7 @@ CALLBACK receives SUCCESS and ERROR.  Election, predecessor comparison and
 abort follow `mevedel-session-durability--claim-next', using real programs."
   (let* ((directory (mevedel-session-durability--lease-path
                      (mevedel-session-save-path shadow)))
-         (job (mevedel-session-durability--async-job callback))
+         (job (mevedel-session-durability--async-job callback (mevedel-diagnostic-scope shadow)))
          (context (mevedel-session-durability-capture-context)))
     (mevedel-session-durability--observe-lease-async
      directory nil nil job context

@@ -244,7 +244,8 @@
                         (mevedel-agent-exec--make-callback
                          (lambda (result) (push result agent-results))
                          "explorer" "Async tool test"
-                         (plist-get (gptel-fsm-info fsm) :position) (list ""))))))
+                         (plist-get (gptel-fsm-info fsm) :position) (list ""))
+                        'unavailable))))
         (plist-put (gptel-fsm-info fsm) :tools
                    (list (gptel-make-tool
                           :name "Deferred" :description "Return after HTTP cleanup"
@@ -300,7 +301,8 @@
                         "explorer" "Retry test" (plist-get (gptel-fsm-info fsm) :position) partial)))
         (with-current-buffer data-buf (setq-local mevedel--agent-invocation inv))
         (plist-put (gptel-fsm-info fsm) :mevedel-agent-invocation inv)
-        (plist-put (gptel-fsm-info fsm) :callback (mevedel-agent-exec--wrap-callback callback))
+        (plist-put (gptel-fsm-info fsm) :callback
+                   (mevedel-agent-exec--wrap-callback callback 'unavailable))
         (gptel--fsm-transition fsm)
         (mevedel-retry-test--drain-native)
         (should (equal '("Recovered answer") results))

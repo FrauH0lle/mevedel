@@ -17,6 +17,7 @@
 (require 'mevedel-permission-rules)
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
+(require 'mevedel-utilities)
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-skill-permission-rules
@@ -123,10 +124,6 @@
 (declare-function mevedel-tool-read-only-p "mevedel-tool-registry" (cl-x) t)
 (defvar mevedel-tool-registry--source-dir)
 
-;; `mevedel-utilities'
-(declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
-
 ;; `mevedel-workspace'
 (declare-function mevedel--all-allowed-roots
                   "mevedel-workspace" (&optional buffer))
@@ -206,8 +203,9 @@ own copying the passed structures."
        (cons 'deny (error-message-string err)) 'sandbox-policy))
      (t (mevedel-permission--decision 'internal-error 'tool-slot :error err)))))
 
-(defun mevedel-permission--run-async (start cont)
+(defun mevedel-permission--run-async (scope start cont)
   "Run START with guarded callbacks and deliver one decision to CONT.
+SCOPE is the originating diagnostic root captured before asynchronous work.
 START receives FINISH and GUARD functions.  FINISH settles the decision;
 GUARD wraps asynchronous callbacks so errors become decisions rather than
 escaping the event loop.  Late callbacks do nothing after settlement."
@@ -216,8 +214,14 @@ escaping the event loop.  Late callbacks do nothing after settlement."
      ((finish (decision)
         (unless settled
           (setq settled t)
-          (with-demoted-errors "Permission callback failed: %S"
-            (funcall cont decision))))
+          (condition-case-unless-debug err
+              (funcall cont decision)
+            (error
+             (mevedel-diagnostic-message
+              scope "%s"
+              (if (memq 'user-error (get (car err) 'error-conditions))
+                  (error-message-string err)
+                (format "Permission callback failed: %S" err)))))))
       (guard (callback)
         (lambda (&rest values)
           (unless settled
@@ -343,6 +347,7 @@ path base; absent an explicit snapshot, use BUFFER's conversation directory."
         resource-grants (mevedel-permission-origin-usable-grants resource-grants path))
   (when (and warn-no-session-p (not session))
     (mevedel--warn-once
+     (mevedel-diagnostic-scope (or workspace-root workspace buffer))
      (list 'permission-no-session tool-name)
      "Permission step for %s ran with no session in \
 context; falling back to defcustom defaults.  Session-scoped \
@@ -637,6 +642,12 @@ Bucket-aware; see `mevedel-check-permission' for the keyword-arg
 semantics.  EXACT-ALLOWED-PATHS is passed to the shared tail as an
 exact-match in-bounds path list."
   (mevedel-permission--run-async
+   (let ((context (plist-get args :normalized-context)))
+     (mevedel-diagnostic-scope
+      (or (plist-get context :workspace-root)
+          (plist-get context :workspace) (plist-get context :session)
+          (plist-get context :buffer)
+          (plist-get args :workspace-root) (plist-get args :session))))
    (lambda (cont guard)
      (let* ((context (apply #'mevedel-permission--preflight tool-name args))
             (tool (plist-get context :tool))
@@ -956,8 +967,8 @@ SANDBOX-PERMISSIONS qualifies an already requested execution level."
                 ;; rule write produces a session-only rule and
                 ;; surprises the user on next Emacs start.  Warn so
                 ;; the gap is at least diagnosable.
-                (display-warning
-                 'mevedel
+                (mevedel-diagnostic-warning
+                 (mevedel-diagnostic-scope session) 'mevedel
                  (format "Persistent rule for %s skipped: no workspace in context"
                          tool-name)
                  :warning)))))

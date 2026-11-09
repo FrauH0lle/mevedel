@@ -47,6 +47,14 @@
                   "mevedel-structs" (session paths))
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-message "mevedel-utilities" (scope format-string &rest args))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format-string &rest args))
+(autoload 'mevedel-diagnostic-message "mevedel-utilities")
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--ensure-interactive-chat-view
                   "mevedel-view-composer" ())
@@ -133,7 +141,7 @@ handler whose command exists is used by `mevedel-view-yank-dwim'."
   (let ((session (mevedel-view--session))
         tokens)
     (unless session
-      (user-error "No active session for dropped files"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No active session for dropped files"))
     (dolist (path paths)
       (let* ((expanded (expand-file-name path))
              (token (mevedel-mentions-file-token expanded)))
@@ -178,11 +186,11 @@ of scope for the composer."
                         (dnd-get-local-file-name uri nil)))))
         (cond
          ((not path)
-          (message "mevedel: ignored non-local drop: %s" uri))
+          (mevedel-diagnostic-message (mevedel-diagnostic-scope (current-buffer)) "ignored non-local drop: %s" uri))
          ((not (file-exists-p path))
-          (message "mevedel: ignored missing dropped file: %s" path))
+          (mevedel-diagnostic-message (mevedel-diagnostic-scope (current-buffer)) "ignored missing dropped file: %s" path))
          ((file-directory-p path)
-          (message "mevedel: ignored directory drop: %s" path))
+          (mevedel-diagnostic-message (mevedel-diagnostic-scope (current-buffer)) "ignored directory drop: %s" path))
          (t
           (push path paths)))))
     (nreverse paths)))
@@ -204,7 +212,7 @@ handler advertises `dnd-multiple-handler'."
   (let* ((session (mevedel-view--session))
          (workspace (and session (mevedel-session-workspace session))))
     (unless workspace
-      (user-error "No active session for clipboard image"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No active session for clipboard image"))
     (let ((dir (file-name-concat (mevedel-workspace-state-dir workspace)
                                  "state" "media")))
       (make-directory dir t)

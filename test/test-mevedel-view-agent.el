@@ -733,7 +733,9 @@
             (let ((text (buffer-substring-no-properties
                          (point-min) mevedel-view--input-marker)))
               (should opened)
-              (should (equal "Transcript file missing" message-text))
+              (should (equal (format "mevedel [%s]: Transcript file missing"
+                                     temporary-file-directory)
+                             message-text))
               (should-not (string-match-p
                            "rendered missing transcript body" text))
               (should-not (string-match-p "raw launch payload" text))))))))
@@ -796,7 +798,9 @@
             (let ((text (buffer-substring-no-properties
                          (point-min) mevedel-view--input-marker)))
               (should opened)
-              (should (equal "Live buffer unavailable" message-text))
+              (should (equal (format "mevedel [%s]: Live buffer unavailable"
+                                     temporary-file-directory)
+                             message-text))
               (should-not (string-match-p "rendered stale live body" text))
               (should-not (string-match-p "raw launch payload" text)))))))))
 

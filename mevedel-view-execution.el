@@ -184,14 +184,14 @@ and their own retained terminal entries to `mevedel-view-execution--ordered'."
   "Resolve SNAPSHOT in the current SESSION, or signal a stale action.
 With LIVE-ONLY, a retained terminal selection is not sufficient."
   (unless (eq session (mevedel-view--status-session))
-    (user-error "Execution belongs to a different session"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Execution belongs to a different session"))
   (or (cl-find-if (lambda (item) (mevedel-view-execution--same-p item snapshot))
                   (mevedel-view-execution--live session))
       (and (not live-only)
            (eq session (plist-get mevedel-view-execution--selected :session))
            (mevedel-view-execution--same-p mevedel-view-execution--selected snapshot)
            mevedel-view-execution--selected)
-      (user-error "Execution is no longer available")))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Execution is no longer available")))
 
 (defun mevedel-view-execution--retain-selected ()
   "Give the completed selected inspector a fresh held-row grace period.
@@ -234,13 +234,13 @@ Retain only its summary, not the inspector's output payloads."
   "Return the current status row of active agent PATH, or signal."
   (or (cl-find path (mevedel-view--agent-status-collect)
                :key (lambda (row) (plist-get row :path)) :test #'equal)
-      (user-error "Agent %s is no longer active" path)))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Agent %s is no longer active" path)))
 
 (defun mevedel-view-execution--agent-conversation (path)
   "Show the Agent call that started PATH in its parent's conversation."
   (let ((row (mevedel-view-execution--agent-row path)))
     (unless (plist-get row :tool-use-id)
-      (user-error "The call that started %s is not available" path))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "The call that started %s is not available" path))
     (mevedel-view-audit-show-result
      (list :owner (or (plist-get row :parent-path) "/root")
            :tool-use-id (plist-get row :tool-use-id)))))
@@ -583,7 +583,7 @@ highlighting row ends would join adjacent rows into one hover."
 Agent actions receive the agent's canonical path as OWNER and no ID."
   (lambda ()
     (unless (eq session (mevedel-view--status-session))
-      (user-error "Background work belongs to a different session"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Background work belongs to a different session"))
     (let ((identity (list :owner owner :execution-id id)))
       (pcase action
         ('toggle (mevedel-view-execution--toggle session identity))
@@ -871,13 +871,13 @@ The expansion stays while the row is held, so finishing does not pull
 rows out from under the pointer."
   (mevedel-view-execution--agent-details nil row t))
 
-(defun mevedel-view-execution--preview (snapshot)
+(defun mevedel-view-execution--preview (snapshot &optional scope)
   "Return SNAPSHOT's preview: a header and exactly three output rows.
 Each line is cut to one screen row and missing lines are blank, so an
 open inspector keeps one height while output arrives and after the
 execution finishes; it sits above the anchored composer, where any
 growth moves the rows the user is reading.  An output-limit warning
-joins the header instead of adding a line."
+joins the header instead of adding a line.  SCOPE is a captured diagnostic root."
   (let* ((terminal (plist-get snapshot :terminal-p))
          (output (if terminal (plist-get snapshot :whole-output)
                    (plist-get snapshot :output-tail)))
@@ -897,7 +897,10 @@ joins the header instead of adding a line."
                      (and (string-empty-p output)
                           (or (eq (plist-get snapshot :state) 'lost)
                               (> (or (plist-get snapshot :output-bytes) 0) 0))))
-                 (funcall quiet "Output unavailable."))
+                 (funcall quiet (mevedel-diagnostic-format
+                                 (or scope (mevedel-diagnostic-scope
+                                            (or (plist-get snapshot :session) (current-buffer))))
+                                 "Output unavailable.")))
                 ((string-empty-p output)
                  (funcall quiet (if terminal "No output." "No output yet.")))
                 (t (mapcar (lambda (line)
@@ -921,7 +924,8 @@ joins the header instead of adding a line."
 
 (defun mevedel-view-execution--full-output (session snapshot)
   "Inspect full output for SESSION's SNAPSHOT without visiting its spool."
-  (let* ((current (mevedel-view-execution--current session snapshot))
+  (let* ((scope (mevedel-diagnostic-scope session))
+         (current (mevedel-view-execution--current session snapshot))
          (spool (plist-get current :artifact-path))
          (address (plist-get current :output-path))
          (path (or (and (stringp spool) (not (file-remote-p spool))
@@ -937,16 +941,18 @@ joins the header instead of adding a line."
          (lambda (result)
            (when (eq (plist-get result :status) 'error)
              (mevedel-view-execution--render-full-output
-              current nil (or (plist-get result :result) "Could not read retained output"))))
+              current nil (or (plist-get result :result) "Could not read retained output") scope)))
          (lambda (selected callback)
-           (mevedel-view-execution--render-full-output current selected)
+           (mevedel-view-execution--render-full-output current selected nil scope)
            (funcall callback nil)
            nil))
-      (mevedel-view-execution--render-full-output current path))))
+      (mevedel-view-execution--render-full-output current path nil scope))))
 
-(defun mevedel-view-execution--render-full-output (current path &optional failure)
-  "Inspect CURRENT's output at ordinary PATH, showing any visible FAILURE."
-  (let ((whole (plist-get current :whole-output))
+(defun mevedel-view-execution--render-full-output (current path &optional failure scope)
+  "Inspect CURRENT's output at PATH, showing FAILURE attributed to captured SCOPE."
+  (let ((scope (or scope (mevedel-diagnostic-scope
+                          (or (plist-get current :session) (current-buffer)))))
+        (whole (plist-get current :whole-output))
         (buffer (generate-new-buffer "*mevedel execution output*")))
     (with-current-buffer buffer
       (insert (format "Full output · %s · %s\n\n"
@@ -954,19 +960,19 @@ joins the header instead of adding a line."
                       (mevedel-view-execution--state-label current)))
       (when (or (eq (plist-get current :termination) 'output-limit)
                 (> (or (plist-get current :omitted-output-bytes) 0) 0))
-        (insert "Warning: output was truncated; retained output may omit content.\n\n"))
+        (insert (mevedel-diagnostic-format scope "Warning: output was truncated; retained output may omit content.\n\n")))
       (when failure
-        (insert "Warning: " failure ".\n\n"))
+        (insert (mevedel-diagnostic-format scope "%s" failure) ".\n\n"))
       (cond
        ((and path (file-regular-p path) (file-readable-p path))
         (when (< (file-attribute-size (file-attributes path))
                  (or (plist-get current :output-bytes) 0))
-          (insert "Warning: retained output is truncated or incomplete.\n\n"))
+          (insert (mevedel-diagnostic-format scope "Warning: retained output is truncated or incomplete.\n\n")))
         (when (zerop (cadr (insert-file-contents path)))
           (insert (cond
                    ((or (eq (plist-get current :state) 'lost)
                         (> (or (plist-get current :output-bytes) 0) 0))
-                    "Retained output is empty; output unavailable.\n")
+                    (mevedel-diagnostic-format scope "Retained output is empty; output unavailable.\n"))
                    ((plist-get current :terminal-p) "No output.\n")
                    (t "No output yet.\n")))))
        ((and (stringp whole) (not (plist-get current :whole-output-truncated-p))
@@ -975,7 +981,8 @@ joins the header instead of adding a line."
                       (zerop (or (plist-get current :output-bytes) 0)))))
         (insert (if (string-empty-p whole) "No output.\n" whole)))
        (t
-        (insert "Full output unavailable.\n\n" (mevedel-view-execution--preview current))))
+        (insert (mevedel-diagnostic-format scope "Full output unavailable.\n\n")
+                (mevedel-view-execution--preview current scope))))
       (goto-char (point-min))
       (special-mode))
     (display-buffer buffer)))

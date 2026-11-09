@@ -20,6 +20,7 @@
   (require 'cl-lib))
 
 (require 'json)
+(require 'mevedel-utilities)
 
 ;; `mevedel-collaboration'
 ;; `mevedel-tool-fs-read'
@@ -900,7 +901,9 @@ Authority comes only from the tokens FRAME proves it holds."
         (mevedel-collaboration--transport-send
          (plist-get room :transport) peer
          (mevedel-collaboration--store-frame room))
-      (error (message "mevedel: artifact listing failed: %s"
+      (error (mevedel-diagnostic-message
+              (mevedel-diagnostic-scope (mevedel-collaboration--room-workspace room))
+              "Artifact listing failed: %s"
                       (error-message-string err))))
     (when (and (plist-get guest :writable)
                mevedel-collaboration-remote-interactions)
@@ -1061,7 +1064,8 @@ with literal text, mutually exclusive with `:invoke'."
                       ;; A failed media write is this prompt's problem, not
                       ;; the room's: letting it reach the frame handler
                       ;; tears the session down for every guest.
-                      (display-warning
+                      (mevedel-diagnostic-warning
+                       (mevedel-diagnostic-scope (mevedel-collaboration--room-workspace room))
                        'mevedel
                        (format "Guest attachment could not be saved: %s"
                                (error-message-string err))
@@ -1306,14 +1310,15 @@ answer, and only the host's warning names the question."
          (mevedel-collaboration--transport-send
           (plist-get room :transport) peer
           (list :t "notice" :message mevedel-collaboration-needs-host-message))
-         (display-warning
-          'mevedel
+         (mevedel-diagnostic-warning
+          (mevedel-diagnostic-scope (mevedel-collaboration--room-workspace room)) 'mevedel
           (format "A guest's %s request needed a decision in Emacs and was refused%s"
                   (plist-get frame :t) (mevedel-view--refused-question err)))))
     (error
      (condition-case nil
          (progn
-           (display-warning
+           (mevedel-diagnostic-warning
+            (mevedel-diagnostic-scope (mevedel-collaboration--room-workspace room))
             'mevedel (format "A guest's %s frame failed: %s"
                              (plist-get frame :t) (error-message-string fault))
             :warning)
@@ -1431,8 +1436,8 @@ returns; for the room's own types the value is unspecified."
        (unless (or (plist-get room :was-open)
                    (plist-get room :dial-warned))
          (setq room (plist-put room :dial-warned t))
-         (display-warning
-          'mevedel
+         (mevedel-diagnostic-warning
+          (mevedel-diagnostic-scope (mevedel-collaboration--room-workspace room)) 'mevedel
           (concat "Collaboration relay dial failing; the share is not "
                   "live. Check `mevedel-collaboration-relay-url' and "
                   "the relay's optional host-token configuration.")

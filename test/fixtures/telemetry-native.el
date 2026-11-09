@@ -130,7 +130,7 @@
                   (sleep-for 0.01))
                 (should-not (thread-live-p worker))
                 (should-not mevedel-telemetry--lag-thread)))
-            (should (equal notices '("mevedel: event-loop lag watching stopped: Quit"))))
+            (should (equal notices '("mevedel [global]: Event-loop lag watching stopped: Quit"))))
           (mevedel-telemetry--lag-request session 'request-start "restart")
           (should (thread-live-p mevedel-telemetry--lag-thread))
           (mevedel-telemetry--lag-stop))

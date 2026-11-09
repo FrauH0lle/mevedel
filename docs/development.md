@@ -866,16 +866,39 @@ with `(interpreted-function-p (symbol-function 'mevedel-transcript-segments))`.
   `(see spec 19)`. Specs are implementation-phase artifacts; code
   comments must stand on their own. Describe what a slot/variable
   holds, not where it was designed.
-- **`error` strings**: capitalized, no package prefix —
+- **Internal `error` strings**: capitalized, no package prefix —
   `(error "Unknown tool: %s" name)`. The backtrace identifies the
   source. The checkdoc ratchet gates new capitalization diagnostics. When the
   first word is a literal binary, option, or parameter name that must stay
   lowercase, quote it instead of changing its spelling: `(error "'pdftoppm' not
   installed")`.
-- **`message` strings**: lowercase `"mevedel: ..."` prefix is fine —
-  `(message "mevedel: stale request found, replacing")`. Output goes
-  to `*Messages*` where there's no backtrace, so the prefix earns its
-  keep.
+- **Human-facing warnings and errors**: use the diagnostic reporters in
+  `mevedel-utilities.el`. Their body is `mevedel [/absolute/workspace/root/]:
+  ...`; machine-wide facilities explicitly use `global`. Missing ownership is
+  `workspace unavailable`, never an arbitrary current project. The scope
+  argument is a captured root, `global`, or `unavailable`.
+  `mevedel-diagnostic-scope` extracts a root from an explicit workspace,
+  session, or buffer's cached ownership without discovery or filesystem I/O.
+  Capture it before scheduling callbacks that can outlive their originating
+  buffers. Synchronous source commands resolve their normal operation workspace
+  at entry. Reporters and deferred callbacks must never discover/register a
+  workspace, resolve symlinks, or connect to a remote target to obtain scope.
+  Use `mevedel-diagnostic-message`, `mevedel-diagnostic-warning`, and
+  `mevedel-diagnostic-user-error` at human reporting boundaries; the warning
+  reporter retains `display-warning`'s category and severity arguments.
+  Local commands that call shared refusal guards can wrap their body with
+  `mevedel-with-diagnostic-errors`; it captures the explicit scope once and
+  attributes generic errors, user errors and file errors without changing
+  their type or other data fields. Other Lisp conditions and quit stay
+  unchanged; their string operands are not necessarily message text.
+  `mevedel--warn-once` and its site reset both take scope before the existing
+  arguments, isolating suppression and recovery between workspaces.
+  Attribute local failure cards/reports when rendering, not in canonical
+  stored issues or tool/provider payloads. Keep browser redaction unchanged:
+  a local attribution must not put host paths into shared payloads.
+- **Ordinary progress and success messages**: lowercase `"mevedel: ..."`
+  remains fine. The diagnostic change does not require attributing every
+  informational message or third-party diagnostic.
 
 ## Loading and initialization
 

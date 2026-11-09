@@ -24,6 +24,7 @@
 (require 'mevedel-permissions)
 (require 'mevedel-structs)
 (require 'mevedel-turn)
+(require 'mevedel-utilities)
 (require 'seq)
 (require 'subr-x)
 
@@ -146,7 +147,7 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
+                  "mevedel-utilities" (scope key format &rest args))
 
 
 ;;
@@ -1625,6 +1626,9 @@ then decides again until the invocation is allowed or denied."
   "Authorize Bash INPUT, then layer any requested child authority.
 CONT follows the async permission slot contract."
   (mevedel-permission--run-async
+   (mevedel-diagnostic-scope
+    (or (plist-get (plist-get input :permission-context) :session)
+        (mevedel-queue--current-session)))
    (lambda (cont guard)
      (let* ((input (mevedel-tool-exec-permission--capture-permission-origin input))
             (command (plist-get input :command))
@@ -1652,6 +1656,9 @@ CONT follows the async permission slot contract."
   "Authorize Eval INPUT, then layer any requested child authority.
 CONT follows the async permission slot contract."
   (mevedel-permission--run-async
+   (mevedel-diagnostic-scope
+    (or (plist-get (plist-get input :permission-context) :session)
+        (mevedel-queue--current-session)))
    (lambda (cont guard)
      (let* ((input (mevedel-tool-exec-permission--capture-permission-origin input))
             (mode (mevedel-tool-exec-permission-eval-mode input))

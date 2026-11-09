@@ -24,7 +24,9 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
+                  "mevedel-utilities" (scope key format &rest args))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-register
@@ -124,7 +126,9 @@ prompts during request teardown."
                                              data-buf)))
       (with-current-buffer prompt-buffer
         (when (overlayp overlay)
-          (overlay-put overlay 'mevedel--owning-request request))
+          (overlay-put overlay 'mevedel--owning-request request)
+          (overlay-put overlay 'mevedel-diagnostic-scope
+                       (mevedel-diagnostic-scope data-buf)))
         (unless (mevedel--prompt--registered-for-p request)
           (let ((buf prompt-buffer))
             (mevedel-request-push-canceller
@@ -152,7 +156,7 @@ the stored callback."
           (end (overlay-end overlay)))
       (unless (buffer-live-p buf)
         (setq cb nil)
-        (mevedel--warn-once 'interaction-prompt-stale
+        (mevedel--warn-once (or (overlay-get overlay 'mevedel-diagnostic-scope) 'unavailable) 'interaction-prompt-stale
                             "Stale interaction prompt activation ignored"))
       (when (and interaction-id
                  (boundp 'mevedel-view--interaction-overlays)
@@ -161,7 +165,8 @@ the stored callback."
                           (gethash interaction-id
                                    mevedel-view--interaction-overlays))))
         (setq cb nil)
-        (mevedel--warn-once 'interaction-prompt-stale
+        (mevedel--warn-once (or (overlay-get overlay 'mevedel-diagnostic-scope)
+                               (mevedel-diagnostic-scope buf)) 'interaction-prompt-stale
                             "Stale interaction prompt activation ignored"))
       (when (buffer-live-p buf)
         (with-current-buffer buf

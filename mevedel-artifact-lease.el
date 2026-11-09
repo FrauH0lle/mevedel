@@ -25,6 +25,7 @@
 (require 'mevedel-session-control-fs)
 (require 'mevedel-session-durability)
 (require 'mevedel-transport)
+(require 'mevedel-utilities)
 (require 'mevedel-workspace)
 
 ;; `mevedel-shared-editing'
@@ -99,7 +100,7 @@ the item from someone still editing it."
   "Remember RECORD as this Emacs's lease on WORKSPACE's ID in DIRECTORY."
   (let ((held (gethash directory mevedel-artifact-lease--held)))
     (unless held
-      (setq held (list :workspace workspace :id id
+      (setq held (list :workspace workspace :id id :diagnostic-scope (mevedel-diagnostic-scope workspace)
                        :timer (run-at-time mevedel-session-lease-renewal-seconds
                                            mevedel-session-lease-renewal-seconds
                                            #'mevedel-artifact-lease--renew directory)))
@@ -361,10 +362,10 @@ TO, a client id, reserves the item for that client for one lease period."
                                    (mevedel-session-durability--record-bytes record))
                         (plist-put held :renewed (float-time)))
                     (mevedel-artifact-lease--forget directory)
-                    (message "mevedel: lost the editing lease on %s" id)))))))
+                    (mevedel-diagnostic-message (or (plist-get held :diagnostic-scope) (mevedel-diagnostic-scope workspace)) "Lost the editing lease on %s" id)))))))
         (error
          (mevedel-artifact-lease--forget directory)
-         (message "mevedel: lost the editing lease on %s: %s"
+         (mevedel-diagnostic-message (or (plist-get held :diagnostic-scope) (mevedel-diagnostic-scope (plist-get held :workspace))) "Lost the editing lease on %s: %s"
                   (plist-get held :id) (error-message-string err)))))))
 
 (defun mevedel-artifact-lease-forget-item (workspace id)

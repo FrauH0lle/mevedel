@@ -14,6 +14,7 @@
 (require 'mevedel-cockpit)
 (require 'mevedel-plugin-registry)
 (require 'mevedel-plugins)
+(require 'mevedel-utilities)
 
 ;; `dired'
 (declare-function dired "dired" (dirname &optional switches))
@@ -134,11 +135,6 @@
 ;; `mevedel-structs'
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
-;; `mevedel-utilities'
-(declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
-(autoload 'mevedel--warn-once "mevedel-utilities")
-
 ;; `tabulated-list'
 (declare-function tabulated-list-get-id "tabulated-list" ())
 (declare-function tabulated-list-mode "tabulated-list" ())
@@ -163,11 +159,23 @@ The warning is raised once per workspace and message; later session
 starts log it quietly to *Messages*."
   (when-let* ((message (mevedel-plugins-pending-consent-message workspace)))
     (mevedel--warn-once
+     (mevedel-diagnostic-scope (or workspace (current-buffer)))
      (list 'plugin-pending-consent
            (and workspace (mevedel-workspace-root workspace))
            message)
      "%s" message)
     t))
+
+(defun mevedel-plugins-message-local-result (scope result)
+  "Present plugin RESULT locally under SCOPE, attributing only known failures."
+  (if (or (cl-some (lambda (prefix) (string-prefix-p prefix result))
+                  '("Failed to install plugin " "Failed to update plugin "
+                    "Invalid plugin target:" "Unknown plugin:" "Plugin path "
+                    "No current workspace for plugin state."
+                    "Plugin registry reload failed:"))
+          (string-match-p "\\`Plugin .+\\(?: is not managed by mevedel;\\| is not enabled[.]\\'\\)" result))
+      (mevedel-diagnostic-message scope "%s" result)
+    (message "%s" result)))
 
 (defun mevedel-plugins--reload (&optional context)
   "Reload plugin-visible skills for CONTEXT's session when possible."
@@ -288,10 +296,16 @@ starts log it quietly to *Messages*."
     (cond
      ((mevedel-plugin-p item) item)
      ((mevedel-plugin-error-p item)
-      (user-error "Plugin metadata cannot be read: %s"
+      (mevedel-diagnostic-user-error
+       (mevedel-diagnostic-scope
+        (mevedel-cockpit-context-workspace (mevedel-cockpit-surface-context)))
+       "Plugin metadata cannot be read: %s"
                   (mevedel-plugin-error-message item)))
      (t
-      (user-error "No plugin on this line")))))
+      (mevedel-diagnostic-user-error
+       (mevedel-diagnostic-scope
+        (mevedel-cockpit-context-workspace (mevedel-cockpit-surface-context)))
+       "No plugin on this line")))))
 
 (defun mevedel-plugins-list--selected-name ()
   "Return the selected plugin name, or signal a user error."
@@ -377,12 +391,13 @@ starts log it quietly to *Messages*."
          (name (mevedel-plugins-list--selected-name))
          (workspace (mevedel-cockpit-context-workspace
                      context))
+         (scope (mevedel-diagnostic-scope workspace))
          (message (mevedel-plugins-update
                    name
                    workspace)))
     (mevedel-plugins-refresh-session context)
     (mevedel-cockpit-surface-refresh name)
-    (message "%s" message)))
+    (mevedel-plugins-message-local-result scope message)))
 
 (defun mevedel-plugins-list-check-updates ()
   "Check managed plugins for upstream updates now, ignoring the interval.
@@ -404,12 +419,13 @@ finishes, keeping the selected row."
          (name (mevedel-plugins-list--selected-name))
          (workspace (mevedel-cockpit-context-workspace
                      context))
+         (scope (mevedel-diagnostic-scope workspace))
          (message (mevedel-plugins-remove
                    name
                    workspace)))
     (mevedel-plugins-refresh-session context)
     (mevedel-cockpit-surface-refresh name)
-    (message "%s" message)))
+    (mevedel-plugins-message-local-result scope message)))
 
 (defun mevedel-plugins-list--installed-name (message)
   "Return the plugin name from install MESSAGE when it is present."
@@ -421,32 +437,41 @@ finishes, keeping the selected row."
   (interactive (list (read-string "Install plugin OWNER/REPO: ")))
   (let* ((context (mevedel-cockpit-surface-context))
          (selected (tabulated-list-get-id))
+         (scope (mevedel-diagnostic-scope (mevedel-cockpit-context-workspace context)))
          (message (mevedel-plugins-install target))
          (name (mevedel-plugins-list--installed-name message)))
     (mevedel-plugins-refresh-session context)
     (mevedel-cockpit-surface-refresh (or name selected))
-    (message "%s" message)))
+    (mevedel-plugins-message-local-result scope message)))
 
 (defun mevedel-plugins-list-reload ()
   "Reload plugin-visible session skills and refresh the cockpit."
   (interactive)
   (let* ((context (mevedel-cockpit-surface-context))
          (name (tabulated-list-get-id))
+         (scope (mevedel-diagnostic-scope (mevedel-cockpit-context-workspace context)))
          (message (mevedel-plugins--reload context)))
     (mevedel-cockpit-surface-refresh name)
-    (message "%s" message)))
+    (mevedel-plugins-message-local-result scope message)))
 
 (defun mevedel-plugins-list-open-source ()
   "Open the selected plugin source directory in Dired."
   (interactive)
   (let* ((item (or (mevedel-plugins-list--selected-item)
-                   (user-error "No plugin on this line")))
+                   (mevedel-diagnostic-user-error
+                    (mevedel-diagnostic-scope
+                     (mevedel-cockpit-context-workspace
+                      (mevedel-cockpit-surface-context)))
+                    "No plugin on this line")))
          (root (cond
                 ((mevedel-plugin-p item) (mevedel-plugin-root item))
                 ((mevedel-plugin-error-p item)
                  (mevedel-plugin-error-root item)))))
     (unless (and root (file-directory-p root))
-      (user-error "Plugin source is not readable: %s" root))
+      (mevedel-diagnostic-user-error
+       (mevedel-diagnostic-scope
+        (mevedel-cockpit-context-workspace (mevedel-cockpit-surface-context)))
+       "Plugin source is not readable: %s" root))
     (dired root)))
 
 (defun mevedel-plugins-list--detail-report (plugin context)

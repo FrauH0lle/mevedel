@@ -31,6 +31,7 @@
 
 (require 'mevedel-collaboration)
 (require 'mevedel-workspace)
+(require 'mevedel-utilities)
 
 ;; `mevedel-chat'
 (declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
@@ -256,8 +257,8 @@ cannot be written is reported, since the lobby itself is unaffected."
             (with-temp-file path
               (prin1 updated (current-buffer))))
         (error
-         (display-warning
-          'mevedel
+         (mevedel-diagnostic-warning
+          root 'mevedel
           (format "Could not record the lobby of %s for the next start: %s"
                   root (error-message-string err))))))))
 
@@ -273,13 +274,13 @@ gone, in which case it is forgotten."
           (if (not (file-directory-p root))
               (progn
                 (mevedel-collaboration-lobby--set-intended root nil)
-                (display-warning
-                 'mevedel (format "Lobby of %s forgotten: the directory is gone"
+                (mevedel-diagnostic-warning
+                 root 'mevedel (format "Lobby of %s forgotten: the directory is gone"
                                   root)))
             (mevedel-collaboration-lobby-start root)))
       (error
-       (display-warning
-        'mevedel
+       (mevedel-diagnostic-warning
+        root 'mevedel
         (format (concat "Lobby of %s not restarted: %s "
                         "(/collab lobby stop there ends the retries)")
                 root (error-message-string err)))))))
@@ -449,7 +450,9 @@ already; PEER receives the room at its own tier."
        (maphash (lambda (peer _guest)
                   (condition-case err
                       (mevedel-collaboration-lobby--send-listing lobby peer)
-                    (error (message "mevedel: lobby rename refresh failed: %s"
+                    (error (mevedel-diagnostic-message
+                            (mevedel-diagnostic-scope session)
+                            "Lobby rename refresh failed: %s"
                                     (error-message-string err)))))
                 (plist-get lobby :guests))))
    mevedel-collaboration-lobby--lobbies))
@@ -779,7 +782,7 @@ Otherwise a lobby that stopped meanwhile is refused."
       (mevedel-collaboration-share-present lobby)
     (unless (and restart
                  (member root (mevedel-collaboration-lobby--intended)))
-      (user-error "The lobby of %s is no longer running" root))
+      (mevedel-diagnostic-user-error root "The lobby of %s is no longer running" root))
     (mevedel-collaboration-share-present
      (mevedel-collaboration-lobby-start root))))
 
@@ -829,7 +832,7 @@ Credentials stay stored, so starting a lobby again revives its links."
                   "a full or owner link can open sessions and read, upload "
                   "and remove project files; an owner link can also create "
                   "sessions. ")))
-      (user-error "Lobby not started"))
+      (mevedel-diagnostic-user-error root "Lobby not started"))
     (mevedel-collaboration-share-present
      (mevedel-collaboration-lobby-start root))))
 

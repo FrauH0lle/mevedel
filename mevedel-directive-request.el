@@ -11,6 +11,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 ;; `setf' on a slot of a struct defined elsewhere needs that
 ;; `cl-defstruct' at compile time: `declare-function' supplies the
 ;; accessor but not the setter, and without the expander the form
@@ -1068,9 +1070,10 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
                  ((error quit)
                   (when (eq reserved-request mevedel--current-request)
                     (setq mevedel--current-request nil))
-                  (display-warning
+                  (mevedel-diagnostic-warning
+                   (mevedel-diagnostic-scope (mevedel-request-session reserved-request))
                    'mevedel
-                   (format "Directive request cleanup failed: %s"
+                   (format "%s (directive request cleanup failed)"
                            (error-message-string cleanup-error))
                    :warning))))))
        (when (markerp cleanup-turn-start)

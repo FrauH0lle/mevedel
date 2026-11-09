@@ -9,6 +9,7 @@
 
 (require 'mevedel-structs)
 (require 'mevedel-telemetry)
+(require 'mevedel-utilities)
 
 ;; `gptel'
 (declare-function gptel-backend-name "ext:gptel-request" (cl-x) t)
@@ -50,7 +51,7 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
+                  "mevedel-utilities" (scope key format &rest args))
 
 (defun mevedel-tool-repair--audit-identifier-p (value)
   "Return non-nil when VALUE is a bounded value-free identifier."
@@ -112,8 +113,9 @@
   (mevedel-tool-repair-normalize-audit-record
    (list :type 'tool-input-repair :state state :repairs repairs)))
 
-(defun mevedel-tool-repair-format-audit-block (state repairs)
-  "Return a hidden value-free audit block for STATE and REPAIRS."
+(defun mevedel-tool-repair-format-audit-block (state repairs &optional scope)
+  "Return a hidden value-free audit block for STATE and REPAIRS.
+Report formatting failures in the originating SCOPE."
   (condition-case nil
       (if-let* ((record (mevedel-tool-repair-audit-record state repairs)))
           (progn
@@ -123,7 +125,7 @@
         "")
     (error
      (ignore-errors
-       (mevedel--warn-once 'repair-audit-formatting
+       (mevedel--warn-once (mevedel-diagnostic-scope scope) 'repair-audit-formatting
                            "Tool input repair audit formatting failed"))
      "")))
 
@@ -257,7 +259,7 @@
                  (write-region content nil file t 'silent))))
             t))
       (error
-       (mevedel--warn-once 'repair-telemetry-persistence
+       (mevedel--warn-once (mevedel-diagnostic-scope session) 'repair-telemetry-persistence
                            "Repair telemetry persistence failed")
        nil))))
 
@@ -321,7 +323,7 @@ Unchanged valid inputs do not enter memory, persistence, or telemetry."
         t)
     (error
      (ignore-errors
-       (mevedel--warn-once 'repair-telemetry-logging
+       (mevedel--warn-once (mevedel-diagnostic-scope session) 'repair-telemetry-logging
                            "Repair telemetry logging failed"))
      t)))
 
@@ -392,7 +394,8 @@ Unchanged valid inputs do not enter memory, persistence, or telemetry."
     (error
      (ignore-errors (mevedel-tool-repair--release-entry entry))
      (ignore-errors
-       (mevedel--warn-once 'repair-telemetry-logging
+       (mevedel--warn-once (mevedel-diagnostic-scope (plist-get entry :session))
+                           'repair-telemetry-logging
                            "Repair telemetry logging failed"))
      nil)))
 

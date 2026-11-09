@@ -27,6 +27,23 @@
 (require 'mevedel-view)
 (require 'mevedel-system)
 
+(mevedel-deftest mevedel-memory-list--finished/attribution ()
+  ,test
+  (test)
+  :doc "both terminal failures retain the originating workspace after its buffer dies"
+  (let* ((workspace (mevedel-workspace--create :root "/tmp/origin project/"))
+         (origin (generate-new-buffer " *memory-origin*"))
+         messages)
+    (kill-buffer origin)
+    (with-temp-buffer
+      (setq-local mevedel--workspace (mevedel-workspace--create :root "/tmp/other/"))
+      (mevedel-test--with-captured-messages messages
+        (mevedel-memory-list--finished workspace '(:outcome failed :error "Invalid bundle"))
+        (mevedel-memory-list--finished workspace '(:outcome restart-required :error "Retry review"))))
+    (should (= 2 (length (split-string messages "\n" t))))
+    (dolist (text (split-string messages "\n" t))
+      (should (string-prefix-p "mevedel [/tmp/origin project/]: " text)))))
+
 (mevedel-deftest mevedel-memory-list--terminal-p
     (:doc "decided and completed rows are terminal; undecided and unreadable rows are not")
   (should (equal ,expected (and (mevedel-memory-list--terminal-p (list :status ,status)) t)))

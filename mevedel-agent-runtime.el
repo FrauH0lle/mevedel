@@ -9,6 +9,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (require 'mevedel-agent-directory)
 
 (require 'mevedel-recovery)
@@ -330,7 +332,10 @@
                              (mevedel-agent-invocation-parent-turn
                               invocation)))))))
         (error
-         (message "mevedel: transcript persistence setup failed: %S" err))))))
+         (mevedel-diagnostic-message
+          (mevedel-diagnostic-scope
+           (mevedel-agent-invocation-parent-session invocation))
+          "Transcript persistence setup failed: %S" err))))))
 
 
 ;;
@@ -355,7 +360,8 @@
                (mevedel-session-artifacts-artifact-present-p session relative))
           (expand-file-name relative save-path))
       (error
-       (message "mevedel: transcript path validation failed: %S" err)
+       (mevedel-diagnostic-message (mevedel-diagnostic-scope session)
+                                   "Transcript path validation failed: %S" err)
        nil))))
 
 (defun mevedel-agent-runtime--partial-text (invocation &optional fallback)
@@ -418,8 +424,9 @@
   (condition-case err
       (funcall function)
     (error
-     (display-warning
-      'mevedel
+     (mevedel-diagnostic-warning
+      (mevedel-diagnostic-scope
+       (mevedel-agent-invocation-parent-session invocation)) 'mevedel
       (format "Agent finalization step %s failed for %s: %s"
               label
               (or (mevedel-agent-invocation-path invocation) "unknown")
@@ -552,7 +559,8 @@ its queued run, before any registry mutation or sidecar capture, in the
 buffer that requested it.  A failure is passed to FAILURE, if supplied, and
 warned as WHAT, never dropped silently."
   (when-let* ((session (mevedel-agent-invocation-parent-session invocation)))
-    (let ((buffer (current-buffer)))
+    (let ((buffer (current-buffer))
+          (scope (mevedel-diagnostic-scope session)))
       (mevedel-session-publication-defer
        session
        (lambda (queued-token)
@@ -561,8 +569,8 @@ warned as WHAT, never dropped silently."
            (funcall function queued-token)))
        (lambda (err)
          (when failure (funcall failure err))
-         (display-warning
-          'mevedel
+         (mevedel-diagnostic-warning
+          scope 'mevedel
           (format "Deferred %s of %s failed: %s" what
                   (or (mevedel-agent-invocation-path invocation) "unknown")
                   (error-message-string err))

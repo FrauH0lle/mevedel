@@ -974,6 +974,8 @@ shell: fish
             (mevedel-test--with-captured-diagnostics warnings
               (mevedel-skills-scan dir '(".")))
             (should (string-match-p "powershell" warnings))
+            (should (string-match-p
+                     (regexp-quote (format "mevedel [%s]:" dir)) warnings))
             (should (string-match-p "fish" warnings))
             (should-not (string-match-p "default-shell" warnings))))
       (delete-directory dir t)))
@@ -1007,6 +1009,7 @@ description: present
               (should-not (member "broken" names))
               (should (cl-some (lambda (m)
                                  (and (string-match-p "broken/SKILL.md" m)
+                                      (string-prefix-p (format "mevedel [%s]:" dir) m)
                                       (string-match-p "invalid YAML" m)))
                                warnings)))))
       (delete-directory dir t)))
@@ -2718,7 +2721,11 @@ paths:
 
   :doc "errors when no session is bound in the buffer"
   (with-temp-buffer
-    (should-error (mevedel-skills-rescan) :type 'user-error)))
+    (setq-local mevedel--workspace
+                (mevedel-workspace--create :root "/workspace/rescan/"))
+    (should (equal "mevedel [/workspace/rescan/]: No mevedel session in this buffer"
+                   (error-message-string
+                    (should-error (mevedel-skills-rescan) :type 'user-error))))))
 
 (mevedel-deftest mevedel-skills--unregister-buffer
   (:before-each (mevedel-skills-test--reset-watchers)

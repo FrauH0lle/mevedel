@@ -592,7 +592,7 @@
                            (push (cons process chunk) chunks)))
                         :sentinel #'ignore))))
              ((symbol-function 'mevedel--run-periodic-timer)
-              (lambda (period function &rest args)
+              (lambda (_scope period function &rest args)
                 (should (= period mevedel-execution-process--watch-interval))
                 (setq watch (lambda () (apply function args)))
                 (funcall original-run-at-time 3600 nil #'ignore)))

@@ -98,8 +98,8 @@
                     (lambda (a b) (funcall less (or a now) (or b now))))
                    ((symbol-function 'timer-next-integral-multiple-of-time)
                     (lambda (time period) (funcall next (or time now) period))))
-          (setq first (mevedel--run-periodic-timer 1 (lambda () (push 'first calls)))
-                second (mevedel--run-periodic-timer 1 (lambda () (push 'second calls))))
+          (setq first (mevedel--run-periodic-timer 'global 1 (lambda () (push 'first calls)))
+                second (mevedel--run-periodic-timer 'global 1 (lambda () (push 'second calls))))
           (dolist (timer (list first second))
             (let ((due (float-time (timer--time timer))))
               (should (= due (floor due)))))
@@ -132,9 +132,9 @@
         first second called)
     (unwind-protect
         (progn
-          (setq second (mevedel--run-periodic-timer 1 (lambda () (setq called t)))
+          (setq second (mevedel--run-periodic-timer 'global 1 (lambda () (setq called t)))
                 first (mevedel--run-periodic-timer
-                       1 (lambda () (mevedel--ui-timer-cancel second))))
+                       'global 1 (lambda () (mevedel--ui-timer-cancel second))))
           (timer-set-time first (time-subtract nil 1) 1)
           (timer-set-time second (time-subtract nil 1) 1)
           (mevedel--coalesced-timer-tick)
@@ -151,7 +151,7 @@
     (unwind-protect
         (progn
           (setq good (timer-create)
-                bad (mevedel--run-periodic-timer 1 (lambda () (error "Expected failure"))))
+                bad (mevedel--run-periodic-timer "/one/" 1 (lambda () (error "Expected failure"))))
           (timer-set-time good (time-subtract nil 1))
           (timer-set-function good (lambda ()
                                      (push 'good calls)
@@ -165,7 +165,7 @@
             (mevedel--coalesced-timer-tick))
           (should (equal '(good) calls))
           (should (= 1 (length notices)))
-          (should (string-match-p "Expected failure" (car notices)))
+          (should (equal "mevedel [/one/]: Error running periodic callback: Expected failure" (car notices)))
           (should (mevedel--ui-timer-pending-p good)))
       (mevedel--ui-timer-cancel good)
       (mevedel--ui-timer-cancel bad))
@@ -177,9 +177,9 @@
         (pending nil) (calls 0) first second)
     (unwind-protect
         (cl-letf (((symbol-function 'input-pending-p) (lambda () pending)))
-          (setq second (mevedel--run-periodic-timer 1 (lambda () (cl-incf calls)))
+          (setq second (mevedel--run-periodic-timer 'global 1 (lambda () (cl-incf calls)))
                 first (mevedel--run-periodic-timer
-                       1 (lambda () (cl-incf calls) (setq pending t))))
+                       'global 1 (lambda () (cl-incf calls) (setq pending t))))
           (timer-set-time first (time-subtract nil 1) 1)
           (timer-set-time second (time-subtract nil 1) 1)
           (mevedel--coalesced-timer-tick)
@@ -195,20 +195,27 @@
   :doc "a yielded batch lets an ordinary due timer run before its remainder"
   (let ((mevedel--coalesced-timers nil)
         (mevedel--coalesced-timer nil)
+        (suspended
+         (mapcar (lambda (timer) (cons timer (timer--triggered timer)))
+                 (default-toplevel-value 'timer-list)))
         log busy first second ordinary)
     (unwind-protect
         (progn
+          ;; Measure one timer pass without foreign callbacks (such as Org's
+          ;; lock refresh) allowing the next host to overtake the ordinary timer.
+          (dolist (entry suspended)
+            (setf (timer--triggered (car entry)) t))
           ;; Busy members: a wait would run the ordinary timer itself.
           (setq busy (lambda ()
                        (push 'member log)
                        (let ((until (time-add nil 0.03)))
                          (while (time-less-p nil until))))
                 second (mevedel--run-periodic-timer
-                        1 (lambda ()
+                        'global 1 (lambda ()
                             (mevedel--ui-timer-cancel second)
                             (funcall busy)))
                 first (mevedel--run-periodic-timer
-                       1 (lambda ()
+                       'global 1 (lambda ()
                            (mevedel--ui-timer-cancel first)
                            (funcall busy))))
           (timer-set-time first (time-subtract nil 2) 1)
@@ -224,7 +231,9 @@
           (should (equal '(member ordinary member) (reverse log))))
       (cancel-timer ordinary)
       (mevedel--ui-timer-cancel first)
-      (mevedel--ui-timer-cancel second)))
+      (mevedel--ui-timer-cancel second)
+      (dolist (entry suspended)
+        (setf (timer--triggered (car entry)) (cdr entry)))))
 
   :doc "a callback waiting for process output lets due siblings run, never itself"
   (let ((mevedel--coalesced-timers nil)
@@ -237,13 +246,13 @@
         (progn
           ;; Members run newest first; the waiter goes ahead of its sibling.
           (setq sibling (mevedel--run-periodic-timer
-                         1 (lambda ()
+                         'global 1 (lambda ()
                              (cl-incf sibling-calls)
                              (setq sibling-ran t)
                              (mevedel--ui-timer-cancel sibling)))
                 waiter
                 (mevedel--run-periodic-timer
-                 1 (lambda ()
+                 'global 1 (lambda ()
                      (cl-incf waiter-calls)
                      ;; Due again during its own wait: must not re-enter.
                      (timer-set-time waiter (time-subtract nil 1) 1)
@@ -275,11 +284,11 @@
     (unwind-protect
         (progn
           (setq sibling (mevedel--run-periodic-timer
-                         1 (lambda ()
+                         'global 1 (lambda ()
                              (setq sibling-ran t)
                              (mevedel--ui-timer-cancel sibling)))
                 waiter (mevedel--run-periodic-timer
-                        1 (lambda ()
+                        'global 1 (lambda ()
                             (cl-incf waiter-calls)
                             (timer-set-time waiter (time-subtract nil 1) 1)
                             (let ((deadline (time-add nil 5)))
@@ -308,7 +317,7 @@
         owned clock)
     (unwind-protect
         (let ((timer-list nil))
-          (setq owned (mevedel--run-periodic-timer 1 #'ignore)
+          (setq owned (mevedel--run-periodic-timer 'global 1 #'ignore)
                 clock mevedel--coalesced-timer)
           (should (memq clock (default-toplevel-value 'timer-list)))
           (should (mevedel--ui-timer-pending-p owned))
@@ -1954,6 +1963,105 @@ CAPTURE, when non-nil, is called with the stub's arguments."
                          (with-temp-buffer (insert-file-contents nested) (buffer-string)))))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-diagnostic-format
+    (:doc "attributes diagnostics without probing or abbreviating the root")
+  (should (equal ,expected (mevedel-diagnostic-format ,scope "Failed: %s" "100%")))
+  (scope expected)
+  "/projects/one/" "mevedel [/projects/one/]: Failed: 100%"
+  "/projects/two/" "mevedel [/projects/two/]: Failed: 100%"
+  "/ssh:host:/srv/project/" "mevedel [/ssh:host:/srv/project/]: Failed: 100%"
+  "/" "mevedel [/]: Failed: 100%"
+  "/path with %/" "mevedel [/path with %/]: Failed: 100%"
+  'global "mevedel [global]: Failed: 100%"
+  'unavailable "mevedel [workspace unavailable]: Failed: 100%")
+
+(mevedel-deftest mevedel-diagnostic-user-error ()
+  ,test
+  (test)
+  :doc "interactive failures keep the user-error condition and one attribution"
+  (let ((err (should-error
+              (mevedel-diagnostic-user-error
+               "/projects/one/" "%s; retry"
+               "mevedel [/projects/one/]: Not ready")
+              :type 'user-error)))
+    (should (equal "mevedel [/projects/one/]: Not ready; retry"
+                   (error-message-string err)))))
+
+(mevedel-deftest mevedel-with-diagnostic-errors ()
+  ,test
+  (test)
+  :doc "attributes command refusals without changing shared guard conditions"
+  (let ((raw (should-error (user-error "Session is read-only") :type 'user-error))
+        (local (should-error
+                (mevedel-with-diagnostic-errors "/one/"
+                  (user-error "Session is read-only"))
+                :type 'user-error)))
+    (should (equal "Session is read-only" (error-message-string raw)))
+    (should (equal "mevedel [/one/]: Session is read-only" (error-message-string local))))
+  :doc "keeps a file failure's condition type and non-message fields"
+  (let ((failure (should-error
+                  (mevedel-with-diagnostic-errors "/one/"
+                    (signal 'file-missing '("Opening input file" "No such file" "/absent")))
+                  :type 'file-missing)))
+    (should (equal '(file-missing "mevedel [/one/]: Opening input file" "No such file" "/absent")
+                   failure)))
+  :doc "does not replace non-message Lisp errors or turn quit into a failure"
+  (should (equal '(args-out-of-range "abc" 4)
+                 (should-error (mevedel-with-diagnostic-errors "/one/" (aref "abc" 4))
+                               :type 'args-out-of-range)))
+  (should-error (mevedel-with-diagnostic-errors "/one/" (signal 'arith-error nil)) :type 'arith-error)
+  (should (eq 'quit (condition-case nil
+                       (mevedel-with-diagnostic-errors "/one/" (signal 'quit nil))
+                     (quit 'quit)))))
+
+(mevedel-deftest mevedel-diagnostic-scope ()
+  ,test
+  (test)
+  :doc "captures a view's owner without consulting the selected workspace"
+  (let* ((data (generate-new-buffer " *diagnostic owner*"))
+         (view (generate-new-buffer " *diagnostic view*"))
+         (workspace (mevedel-workspace--create :root "/one/project/"))
+         scope)
+    (unwind-protect
+        (progn
+          (with-current-buffer data
+            (setq mevedel--session (mevedel-session--create :workspace workspace)))
+          (with-current-buffer view (setq mevedel--data-buffer data))
+          (with-temp-buffer
+            (setq mevedel--workspace (mevedel-workspace--create :root "/two/project/"))
+            (setq scope (mevedel-diagnostic-scope view))
+            (should (equal "/one/project/" scope)))
+          (kill-buffer data)
+          (should (equal "mevedel [/one/project/]: Failed"
+                         (mevedel-diagnostic-format scope "Failed")))
+          (should (eq 'unavailable (mevedel-diagnostic-scope data))))
+      (when (buffer-live-p data) (kill-buffer data))
+      (kill-buffer view))))
+
+(mevedel-deftest mevedel-diagnostic-warning ()
+  ,test
+  (test)
+  :doc "preserves category severity and destination without remote access"
+  (let ((file-name-handler-alist
+         (list (cons "/ssh:" (lambda (&rest _) (ert-fail "Reporting performed remote I/O")))))
+        captured)
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (&rest args) (setq captured args))))
+      (mevedel-diagnostic-warning "/ssh:host:/srv/" '(mevedel test) "Failure" :error "*test warning*"))
+    (should (equal '((mevedel test) "mevedel [/ssh:host:/srv/]: Failure" :error "*test warning*")
+                   captured))))
+
+(mevedel-deftest mevedel-diagnostic-message ()
+  ,test
+  (test)
+  :doc "uses explicit global scope rather than the active workspace"
+  (let (text)
+    (with-temp-buffer
+      (setq mevedel--workspace (mevedel-workspace--create :root "/one/"))
+      (mevedel-test--with-captured-messages text
+        (mevedel-diagnostic-message 'global "Failed: %s" "100%")))
+    (should (equal "mevedel [global]: Failed: 100%\n" text))))
+
 (mevedel-deftest mevedel--warn-once ()
   ,test
   (test)
@@ -1965,15 +2073,15 @@ CAPTURE, when non-nil, is called with the stub's arguments."
               ((symbol-function 'message)
                (lambda (format &rest args)
                  (push (apply #'format format args) messages))))
-      (mevedel--warn-once 'test-key "problem %d" 1)
-      (mevedel--warn-once 'test-key "problem %d" 2)
-      (mevedel--warn-once (list 'test-site "a") "subject a")
-      (mevedel--warn-once (list 'test-site "b") "subject b"))
-    (should (equal '((mevedel . "problem 1")
-                     (mevedel . "subject a")
-                     (mevedel . "subject b"))
+      (mevedel--warn-once "/one/" 'test-key "problem %d" 1)
+      (mevedel--warn-once "/one/" 'test-key "problem %d" 2)
+      (mevedel--warn-once "/one/" (list 'test-site "a") "subject a")
+      (mevedel--warn-once "/one/" (list 'test-site "b") "subject b"))
+    (should (equal '((mevedel . "mevedel [/one/]: problem 1")
+                     (mevedel . "mevedel [/one/]: subject a")
+                     (mevedel . "mevedel [/one/]: subject b"))
                    (nreverse warnings)))
-    (should (equal '("mevedel: problem 2") messages)))
+    (should (equal '("mevedel [/one/]: problem 2") messages)))
 
   :doc "repeats bind `inhibit-message' so the echo area stays untouched"
   (let ((mevedel--warn-once-table (make-hash-table :test #'equal))
@@ -1981,8 +2089,8 @@ CAPTURE, when non-nil, is called with the stub's arguments."
     (cl-letf (((symbol-function 'display-warning) #'ignore)
               ((symbol-function 'message)
                (lambda (&rest _) (setq inhibited inhibit-message))))
-      (mevedel--warn-once 'test-key "problem")
-      (mevedel--warn-once 'test-key "problem"))
+      (mevedel--warn-once 'global 'test-key "problem")
+      (mevedel--warn-once 'global 'test-key "problem"))
     (should inhibited)))
 
 (mevedel-deftest mevedel--warn-once-reset-site ()
@@ -1994,15 +2102,20 @@ CAPTURE, when non-nil, is called with the stub's arguments."
     (cl-letf (((symbol-function 'display-warning)
                (lambda (_type text &rest _) (push text warnings)))
               ((symbol-function 'message) #'ignore))
-      (mevedel--warn-once 'test-site "site")
-      (mevedel--warn-once (list 'test-site "a") "site a")
-      (mevedel--warn-once (list 'test-site "b") "site b")
-      (mevedel--warn-once (list 'other-site "c") "other c")
-      (mevedel--warn-once-reset-site 'test-site)
-      (mevedel--warn-once 'test-site "site")
-      (mevedel--warn-once (list 'test-site "a") "site a")
-      (mevedel--warn-once (list 'other-site "c") "other c"))
-    (should (equal '("site" "site a" "site b" "other c" "site" "site a")
+      (mevedel--warn-once "/one/" 'test-site "site")
+      (mevedel--warn-once "/one/" (list 'test-site "a") "site a")
+      (mevedel--warn-once "/one/" (list 'test-site "b") "site b")
+      (mevedel--warn-once "/one/" (list 'other-site "c") "other c")
+      (mevedel--warn-once "/two/" 'test-site "site")
+      (mevedel--warn-once-reset-site "/one/" 'test-site)
+      (mevedel--warn-once "/one/" 'test-site "site")
+      (mevedel--warn-once "/one/" (list 'test-site "a") "site a")
+      (mevedel--warn-once "/one/" (list 'other-site "c") "other c")
+      (mevedel--warn-once "/two/" 'test-site "site"))
+    (should (equal '("mevedel [/one/]: site" "mevedel [/one/]: site a"
+                     "mevedel [/one/]: site b" "mevedel [/one/]: other c"
+                     "mevedel [/two/]: site" "mevedel [/one/]: site"
+                     "mevedel [/one/]: site a")
                    (nreverse warnings)))))
 
 (mevedel-deftest mevedel--with-gc-batched ()

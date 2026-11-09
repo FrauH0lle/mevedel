@@ -92,6 +92,12 @@ such a binding every call reads the target.")
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-warning "mevedel-utilities" (scope type message &optional level buffer-name))
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-warning "mevedel-utilities")
+
 (defun mevedel-session-recovery-refresh-session-buffers (session)
   "Refresh SESSION's registered root and notify visible projections.
 
@@ -443,7 +449,7 @@ that installation fails."
               (mevedel-session-recovery--delete-local
                recovery-path)
             (error
-             (display-warning
+             (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
               'mevedel
               (format "Target recovery installed, but local cleanup failed: %s"
                       (error-message-string err))
@@ -477,7 +483,7 @@ that installation fails."
                     :recovery-portable nil
                     :recovery-kind 'rewind))))
     (mevedel-session-recovery-refresh-session-buffers session)
-    (display-warning
+    (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
      'mevedel
      (cond
       (target-recovery

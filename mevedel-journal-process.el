@@ -38,6 +38,14 @@
 (autoload 'mevedel-transport-cancel-idle "mevedel-transport")
 (autoload 'mevedel-transport-schedule-idle "mevedel-transport")
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-warning "mevedel-utilities" (scope type message &optional level buffer-name))
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+(autoload 'mevedel-diagnostic-warning "mevedel-utilities")
+
 (defvar mevedel-journal-process--inhibit-scheduling nil
   "Non-nil while exiting or isolating a lifecycle operation from scheduling.")
 
@@ -54,7 +62,7 @@
   "Attempts a sealed capture gets before only an explicit retry runs it.")
 
 (defvar mevedel-journal-process--exhausted-warned (make-hash-table :test #'equal)
-  "Capture IDs whose exhausted automatic attempts this Emacs session reported.")
+  "Workspace/capture keys whose exhausted attempts this Emacs session reported.")
 
 (defvar mevedel-journal-process--running (make-hash-table :test #'equal)
   "Live digest request states, keyed by physical workspace journal directory.")
@@ -72,7 +80,8 @@ Repeated lifecycle events coalesce; busy requests wait for a later opportunity
 rather than recursively draining the backlog.  Exit suppresses scheduling.
 RECOVER requests abandoned-capture recovery before this processing opportunity."
   (when (and mevedel-journal-enabled (not mevedel-journal-process--inhibit-scheduling))
-    (let ((key (mevedel-journal-process--key workspace)))
+    (let ((key (mevedel-journal-process--key workspace))
+          (scope (mevedel-diagnostic-scope workspace)))
       (when recover (puthash key t mevedel-journal-process--recover-requested))
       (unless (or (gethash key mevedel-journal-process--running)
                   (gethash key mevedel-journal-process--workers))
@@ -94,19 +103,19 @@ RECOVER requests abandoned-capture recovery before this processing opportunity."
                                     (remhash key mevedel-journal-process--workers)
                                     (if (plist-get result :error)
                                         (unless mevedel-journal-process--inhibit-scheduling
-                                          (display-warning 'mevedel (plist-get result :error) :warning))
+                                          (mevedel-diagnostic-warning scope 'mevedel (plist-get result :error) :warning))
                                       (setf (mevedel-workspace-journal-observation workspace) nil)
                                       (when recover (mevedel-memory-pass-schedule workspace))
                                       (condition-case failure
                                           (mevedel-journal-process--prepared
                                            workspace (plist-get result :prepared))
                                         (error
-                                         (display-warning 'mevedel (error-message-string failure) :warning))))))))
+                                         (mevedel-diagnostic-warning scope 'mevedel (error-message-string failure) :warning))))))))
                          (puthash key worker mevedel-journal-process--workers))
                      (when recover (mevedel-journal-recovery-run workspace))
                      (mevedel-journal-process-next workspace))
                  (error
-                  (display-warning 'mevedel
+                  (mevedel-diagnostic-warning scope 'mevedel
                                    (format "Journal processing failed: %s" (error-message-string err))
                                    :warning)))))))))))
 
@@ -131,7 +140,7 @@ BUSY-MESSAGE as a user error, or return nil without it."
                 mevedel-journal-process--timeout-seconds)))
     (cond (claim (unwind-protect (funcall function claim)
                    (mevedel-journal-claim-settle claim 'completed "")))
-          (busy-message (user-error "%s" busy-message)))))
+          (busy-message (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "%s" busy-message)))))
 
 (defun mevedel-journal-process--attempts (workspace capture)
   "Return the private attempt claim directory for CAPTURE in WORKSPACE."
@@ -334,18 +343,18 @@ original source and must contain its matching valid pin."
           ((mevedel-journal-capture--marked-p workspace id "retired")
            (or (mevedel-journal-store-entry-for-capture
                 (mevedel-journal-store-entries (mevedel-workspace-root workspace)) id)
-               (user-error "Journal capture is no longer pending")))
+               (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Journal capture is no longer pending")))
           ((eq 'completed (plist-get outcome :status))
-           (unless capture (user-error "Restore the capture descriptor to recover its accepted result"))
+           (unless capture (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Restore the capture descriptor to recover its accepted result"))
            (mevedel-journal-process--recover workspace capture nil))
           ((not (mevedel-journal-capture--marked-p workspace id "ready"))
-           (user-error "Journal capture is no longer pending"))
+           (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Journal capture is no longer pending"))
           (t
            (let* ((payload (mevedel-journal-discard-prepare workspace id original-source))
                   (claim (mevedel-journal-claim-acquire attempts mevedel-journal-process--timeout-seconds
                                                         (plist-get admission :expires-at)))
                   (accepted (and claim (mevedel-journal-claim-settle claim 'cancelled payload))))
-             (unless accepted (user-error "Journal capture has another live owner"))
+             (unless accepted (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Journal capture has another live owner"))
              (mevedel-journal-discard-complete
               workspace (mevedel-journal-discard-accepted accepted id)))))))
      "Journal processing is busy; discard when its current claim settles")))
@@ -353,16 +362,16 @@ original source and must contain its matching valid pin."
 (defun mevedel-journal-process-retry (workspace id)
   "Explicitly retry WORKSPACE's pending capture ID once, or recover its result.
 This never resets the durable automatic-attempt count or changes model policy."
-  (unless mevedel-journal-enabled (user-error "Enable journaling before retrying a capture"))
+  (unless mevedel-journal-enabled (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Enable journaling before retrying a capture"))
   (let ((capture (cl-find id (mevedel-journal-capture-list workspace)
                           :key (lambda (capture) (plist-get capture :id)) :test #'equal)))
-    (unless capture (user-error "Journal capture is no longer pending"))
+    (unless capture (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Journal capture is no longer pending"))
     (when (plist-get capture :unreadable)
-      (user-error "Journal capture is unreadable: %s" (plist-get capture :error)))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Journal capture is unreadable: %s" (plist-get capture :error)))
     (unless (mevedel-journal-capture-trigger workspace capture)
-      (user-error "Journal checkpoint is not sealed yet"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Journal checkpoint is not sealed yet"))
     (or (mevedel-journal-process-next workspace id)
-        (user-error "Journal processing is busy; retry when its current claim settles"))))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Journal processing is busy; retry when its current claim settles"))))
 
 (defun mevedel-journal-process--prepare (workspace &optional retry-id)
   "Recover and select one fenced capture in WORKSPACE without model access.
@@ -425,17 +434,17 @@ listed under :exhausted, at most eight, as (:id ID :session-name NAME)."
             (append result (list :exhausted (seq-take (nreverse exhausted) 8)))
           result)))))
 
-(defun mevedel-journal-process--warn-exhausted (exhausted)
-  "Warn once per Emacs session about each newly EXHAUSTED capture.
+(defun mevedel-journal-process--warn-exhausted (workspace exhausted)
+  "Warn once per Emacs session about newly EXHAUSTED captures in WORKSPACE.
 EXHAUSTED holds (:id ID :session-name NAME) descriptions from preparation."
   (when-let* ((fresh (seq-remove (lambda (capture)
-                                   (gethash (plist-get capture :id)
+                                   (gethash (list (mevedel-diagnostic-scope workspace) (plist-get capture :id))
                                             mevedel-journal-process--exhausted-warned))
                                  exhausted)))
     (dolist (capture fresh)
-      (puthash (plist-get capture :id) t mevedel-journal-process--exhausted-warned))
-    (display-warning
-     'mevedel
+      (puthash (list (mevedel-diagnostic-scope workspace) (plist-get capture :id)) t mevedel-journal-process--exhausted-warned))
+    (mevedel-diagnostic-warning
+     (mevedel-diagnostic-scope workspace) 'mevedel
      (format "Journal digest generation failed %d times for %s; retry or discard %s from M-x mevedel-journal-jobs"
              mevedel-journal-process--automatic-attempts
              (mapconcat (lambda (capture)
@@ -451,7 +460,7 @@ EXHAUSTED holds (:id ID :session-name NAME) descriptions from preparation."
 Freshly read the selected capture and recheck both claims before inference.
 A failed handoff releases admission while retaining the capture for retry.
 Newly exhausted captures listed in PREPARED are reported first."
-  (mevedel-journal-process--warn-exhausted (plist-get prepared :exhausted))
+  (mevedel-journal-process--warn-exhausted workspace (plist-get prepared :exhausted))
   (if (plist-get prepared :entry)
       (plist-get prepared :entry)
     (when (plist-get prepared :claim)

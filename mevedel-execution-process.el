@@ -45,7 +45,7 @@
 (declare-function mevedel--executable-find
                   "mevedel-utilities" (name &optional remote))
 (declare-function mevedel--run-periodic-timer
-                  "mevedel-utilities" (period function &rest arguments))
+                  "mevedel-utilities" (scope period function &rest arguments))
 (declare-function mevedel--timer-pending-p "mevedel-utilities" (timer))
 (declare-function mevedel--ui-timer-cancel "mevedel-utilities" (timer))
 (autoload 'mevedel--executable-find "mevedel-utilities")
@@ -135,6 +135,7 @@
   coding
   confined-p
   direct-async-p
+  diagnostic-scope
   error
   exit-code
   finished-p
@@ -171,12 +172,14 @@
 
 (cl-defun mevedel-execution-process-create
     (&key workdir tty spool-path filter-function output-function pipeline-marker
-          stderr-function terminal-function)
+          stderr-function terminal-function diagnostic-scope)
   "Create an opaque child for WORKDIR without launching it.
+DIAGNOSTIC-SCOPE is its captured workspace scope for deferred reports.
 OUTPUT-FUNCTION and STDERR-FUNCTION receive (CHILD RETAINED-CHUNK) after
 the shared spool cap.  Separated stderr bypasses FILTER-FUNCTION and
 OUTPUT-FUNCTION; otherwise both streams use the ordinary output path."
   (mevedel-execution-process--child-create
+   :diagnostic-scope (or diagnostic-scope 'unavailable)
    :filter-function filter-function
    :output-function output-function
    :pipeline-marker pipeline-marker
@@ -1051,6 +1054,7 @@ a target-side wrapper appends stderr to a temporary file instead, which
                    (signal (car err) (cdr err)))))))
           (setf (mevedel-execution-process--child-watch-timer child)
                 (mevedel--run-periodic-timer
+                 (mevedel-execution-process--child-diagnostic-scope child)
                  mevedel-execution-process--watch-interval
                  (lambda ()
                    (unless

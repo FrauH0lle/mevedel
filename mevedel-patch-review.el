@@ -11,6 +11,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (eval-when-compile
   (require 'cl-lib)
   (require 'subr-x))
@@ -342,7 +344,11 @@ OPERATION owns TARGET and is retained as interaction metadata."
                                 proposal "applying this patch")))
             (ins warning 'font-lock-face 'warning))
           (when-let* ((conflict (plist-get proposal :conflict)))
-            (ins (format "Conflict: %s\n" conflict) 'font-lock-face 'error)
+            (ins (mevedel-diagnostic-format
+                  (or (plist-get proposal :diagnostic-scope)
+                      (mevedel-diagnostic-scope (plist-get proposal :data-buffer)))
+                  "%s (patch conflict)\n" conflict)
+                 'font-lock-face 'error)
             (if (plist-get proposal :rollback-incomplete)
                 (ins (concat "Rollback was incomplete. Inspect the listed"
                              " paths before retrying.\n")
@@ -712,6 +718,7 @@ DATA-BUFFER is the tool-calling buffer whose view owns the interaction."
              (list 'patch-review (cl-incf mevedel-patch-review--counter)))
   (plist-put proposal :callback callback)
   (plist-put proposal :data-buffer data-buffer)
+  (plist-put proposal :diagnostic-scope (mevedel-diagnostic-scope data-buffer))
   (plist-put proposal :view-buffer
              (mevedel-view--interaction-target-buffer data-buffer))
   (let ((overlay (mevedel-patch-review--render proposal)))
@@ -764,7 +771,7 @@ Remote whole-patch feedback requests a revision instead of applying."
         (hunk (mevedel-patch-review--target-at-point
                'mevedel-patch-hunk)))
     (unless (and proposal operation)
-      (user-error "No patch change at point"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No patch change at point"))
     (if hunk
         (plist-put hunk :folded (not (plist-get hunk :folded)))
       (plist-put operation :expanded (not (plist-get operation :expanded))))
@@ -781,7 +788,7 @@ On an Update file row this toggles every hunk in the file at once."
         (hunk (mevedel-patch-review--target-at-point
                'mevedel-patch-hunk)))
     (unless (and proposal operation)
-      (user-error "No selectable patch change at point"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No selectable patch change at point"))
     (if (and (eq (plist-get operation :kind) 'update) (not hunk))
         (let* ((hunks (seq-filter
                        #'mevedel-tool-patch-hunk-changes-p
@@ -813,14 +820,14 @@ On an Update file row this toggles every hunk in the file at once."
         (hunk (mevedel-patch-review--target-at-point
                'mevedel-patch-hunk)))
     (unless operation
-      (user-error "No patch change at point"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No patch change at point"))
     (when (eq (plist-get operation :kind) 'add)
-      (user-error "File is not created until the patch is applied"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "File is not created until the patch is applied"))
     (let ((path (mevedel-tool-patch-physical-path operation)))
       (when (mevedel-tool-patch-remote-p path)
-        (user-error "%s lives at its artifact's origin; Read it at that address" path))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "%s lives at its artifact's origin; Read it at that address" path))
       (unless (file-exists-p path)
-        (user-error "File does not exist: %s" path))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "File does not exist: %s" path))
       (find-file-other-window path)
       (when-let* ((start (and hunk (plist-get hunk :old-start))))
         (widen)
@@ -836,7 +843,7 @@ On an Update file row this toggles every hunk in the file at once."
       (setq pos (next-single-char-property-change pos 'mevedel-patch-row)))
     (if (get-char-property pos 'mevedel-patch-row)
         (goto-char pos)
-      (user-error "No next change"))))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No next change"))))
 
 (defun mevedel-patch-review-previous-row ()
   "Move point to the previous patch review row."
@@ -851,7 +858,7 @@ On an Update file row this toggles every hunk in the file at once."
              (get-char-property (1- pos) 'mevedel-patch-row))
         (progn (goto-char (1- pos))
                (forward-line 0))
-      (user-error "No previous change"))))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No previous change"))))
 
 (defun mevedel-patch-review-reject ()
   "Reject every change in the review at point."
@@ -859,7 +866,7 @@ On an Update file row this toggles every hunk in the file at once."
   (let ((proposal (mevedel-patch-review--target-at-point
                    'mevedel-patch-proposal)))
     (unless proposal
-      (user-error "No patch review at point"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No patch review at point"))
     (plist-put proposal :feedback nil)
     (dolist (operation (plist-get proposal :operations))
       (plist-put operation :selected nil)
@@ -884,7 +891,7 @@ on Update files and patch-level feedback leave selection untouched."
                 'mevedel-patch-hunk))
          (target (or hunk operation proposal)))
     (unless (and proposal target)
-      (user-error "No patch review at point"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No patch review at point"))
     (plist-put target :feedback-original (plist-get target :feedback))
     (plist-put target :selected-original (plist-get target :selected))
     (plist-put target :feedback-draft (plist-get target :feedback))
@@ -905,7 +912,7 @@ on Update files and patch-level feedback leave selection untouched."
          (end (and target (plist-get target :feedback-end))))
     (unless (and target (markerp start) (markerp end)
                  (marker-buffer start) (marker-buffer end))
-      (user-error "No patch feedback field at point"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No patch feedback field at point"))
     (cons target
           (string-trim
            (buffer-substring-no-properties start end)))))
@@ -926,7 +933,7 @@ on Update files and patch-level feedback leave selection untouched."
                 (proposal (mevedel-patch-review--target-at-point
                            'mevedel-patch-proposal)))
     (when (string-empty-p feedback)
-      (user-error "Feedback cannot be empty"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Feedback cannot be empty"))
     (plist-put target :feedback feedback)
     (plist-put target :feedback-editing nil)
     (plist-put target :feedback-draft nil)
@@ -969,12 +976,12 @@ becomes keeping the file whenever anything is left on the right."
                   (mevedel-patch-review--target-at-point
                    'mevedel-patch-edit-hunk))))
     (unless (and proposal operation)
-      (user-error "No patch operation at point"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No patch operation at point"))
     (when (buffer-live-p mevedel-patch-review--edit-session)
-      (user-error "Another patch edit session is already open"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Another patch edit session is already open"))
     (when (and (memq (plist-get operation :kind) '(update move))
                (null (plist-get operation :hunks)))
-      (user-error
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer))
        "A pure rename has no content to edit; SPC keeps the current path"))
     (pcase-let ((`(,baseline . ,planned)
                  (mevedel-patch-review--edit-sides operation)))
@@ -983,7 +990,7 @@ becomes keeping the file whenever anything is left on the right."
       ;; every hunk deselected, and that is not a change to edit.
       (when (equal (mevedel-tool-patch-content-lines baseline)
                    (mevedel-tool-patch-content-lines planned))
-        (user-error "Nothing to compare; select a change in this file first"))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Nothing to compare; select a change in this file first"))
       ;; Adopting an Add or a Delete selects the operation, and a
       ;; selected operation carries no feedback.  An Update or Move
       ;; needs no such confirmation: hunk feedback deselects its hunk,
@@ -999,7 +1006,7 @@ The feedback itself is cleared only when a revision is adopted, so
 declining the adoption costs nothing."
   (when (and (plist-get target :feedback)
              (not (yes-or-no-p "Edit and clear its feedback if adopted? ")))
-    (user-error "Edit cancelled")))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Edit cancelled")))
 
 (defun mevedel-patch-review--edit-sides (operation)
   "Return OPERATION's baseline content and planned result as a cons.
@@ -1142,16 +1149,22 @@ interactive while a session is live, so a selection changed underneath
 it would silently reinstate a hunk the user had just rejected.
 Reports rather than signals: an ediff quit hook must not fail, and a
 revision that cannot be staged leaves the proposal exactly as it was."
-  (let ((view (plist-get proposal :view-buffer)))
+  (let ((view (plist-get proposal :view-buffer))
+        (diagnostic-scope
+         (or (plist-get proposal :diagnostic-scope)
+             (mevedel-diagnostic-scope (plist-get proposal :data-buffer)))))
     (cond
      ((memq (plist-get proposal :state) '(submitting settled))
-      (message "mevedel: patch review already settled, revision discarded"))
+      (mevedel-diagnostic-message diagnostic-scope
+       "Patch review already settled, revision discarded"))
      ((not (buffer-live-p view))
-      (message "mevedel: patch review is gone, revision discarded"))
+      (mevedel-diagnostic-message diagnostic-scope
+       "Patch review is gone, revision discarded"))
      ((not (equal planned
                   (ignore-errors
                     (cdr (mevedel-patch-review--edit-sides operation)))))
-      (message (concat "mevedel: this file's selection changed while the"
+      (mevedel-diagnostic-message diagnostic-scope
+               (concat "This file's selection changed while the"
                        " editor was open, revision discarded")))
      (t
       (condition-case err
@@ -1170,7 +1183,7 @@ revision that cannot be staged leaves the proposal exactly as it was."
          ;; A rolled-back revision leaves the restored hunks carrying
          ;; positions computed for the hunk set that was rejected.
          (mevedel-tool-patch-annotate-line-numbers proposal)
-         (message "mevedel: revision not adopted, %s"
+         (mevedel-diagnostic-message diagnostic-scope "%s (revision not adopted)"
                   (mevedel-tool-patch-sanitize-error
                    (error-message-string err) proposal))))))))
 
@@ -1347,7 +1360,7 @@ refuses it later, leaves the review open with the conflict shown."
   (let ((proposal (mevedel-patch-review--target-at-point
                    'mevedel-patch-proposal)))
     (unless proposal
-      (user-error "No patch review at point"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No patch review at point"))
     (mevedel-patch-review--submit proposal)))
 
 

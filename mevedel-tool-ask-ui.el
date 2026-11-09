@@ -9,6 +9,7 @@
 ;; `cl-find', `cl-position' and `cl-count-if' live in `cl-seq' and carry no
 ;; autoloads, so they have to be present at runtime, not only at compile time.
 (require 'cl-lib)
+(require 'mevedel-utilities)
 
 (eval-when-compile
   (require 'mevedel-tool-registry))
@@ -241,16 +242,19 @@ group, named `submit'."
   "Track the entry at point and show its sample, whatever moved point."
   ;; Emacs drops a `post-command-hook' function that signals; a broken
   ;; render must not silently stop samples following point for good.
-  (with-demoted-errors "mevedel: Ask sample sync failed: %S"
-    (let* ((state (cl-find-if #'mevedel-tool-ask-ui--entry-at-point
-                              mevedel-tool-ask-ui--states))
-           (entry (and state (mevedel-tool-ask-ui--entry-at-point state))))
-      (unless (and (eq state mevedel-tool-ask-ui--active-state)
-                   (equal entry mevedel-tool-ask-ui--active-entry))
-        (setq mevedel-tool-ask-ui--active-state state
-              mevedel-tool-ask-ui--active-entry entry)
-        (when state
-          (mevedel-tool-ask-ui--sync-sample state entry))))))
+  (let ((scope (mevedel-diagnostic-scope (mevedel--prompt--data-buffer))))
+    (condition-case err
+        (let* ((state (cl-find-if #'mevedel-tool-ask-ui--entry-at-point
+                                  mevedel-tool-ask-ui--states))
+               (entry (and state (mevedel-tool-ask-ui--entry-at-point state))))
+          (unless (and (eq state mevedel-tool-ask-ui--active-state)
+                       (equal entry mevedel-tool-ask-ui--active-entry))
+            (setq mevedel-tool-ask-ui--active-state state
+                  mevedel-tool-ask-ui--active-entry entry)
+            (when state
+              (mevedel-tool-ask-ui--sync-sample state entry))))
+      (error
+       (mevedel-diagnostic-message scope "Ask sample sync failed: %S" err)))))
 
 (defun mevedel-tool-ask-ui--settled-p (state)
   "Return non-nil once STATE's form has been settled.

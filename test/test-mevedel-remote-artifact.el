@@ -288,7 +288,11 @@ under its origin id."
     (mevedel-remote-artifact-detach workspace "pipeline")
     (should (equal '((:id "taken")) (mevedel-artifact-backend-catalog workspace 'ids)))
     (should-not (mevedel-remote-artifact--records-of workspace))
-    (should-error (mevedel-remote-artifact-detach workspace "pipeline") :type 'user-error)))
+    (should (equal (list 'user-error
+                        (format "mevedel [%s]: No remote artifact pipeline is attached here"
+                                (mevedel-workspace-root workspace)))
+                   (should-error (mevedel-remote-artifact-detach workspace "pipeline")
+                                 :type 'user-error)))))
 
 (mevedel-deftest mevedel-remote-artifact--call
   (:doc "shared:// Read and Grep and SharedEdit reach the origin under the alias, never the store"

@@ -13,6 +13,7 @@
 
 (require 'tabulated-list)
 (require 'transient)
+(require 'mevedel-utilities)
 (require 'mevedel-window)
 
 ;; `mevedel-report'
@@ -105,6 +106,19 @@ Without CONTEXT, use the invoking transient's explicit context."
                     (eq mevedel--data-buffer buffer))))
         (mevedel-cockpit--make-context mevedel--view-buffer buffer buffer))))))
 
+(defun mevedel-cockpit-diagnostic-scope (&optional context)
+  "Return diagnostic scope from explicit CONTEXT or the invoking command.
+Read retained ownership only; never discover a workspace or require live owners."
+  (let ((context (or context (mevedel-cockpit-menu-context)
+                     (mevedel-cockpit-context-for-buffer (current-buffer))
+                     (and (boundp 'transient--original-buffer)
+                          (mevedel-cockpit-context-for-buffer transient--original-buffer)))))
+    (mevedel-diagnostic-scope
+     (if context
+         (or (plist-get context :workspace) (plist-get context :session)
+             'unavailable)
+       (current-buffer)))))
+
 (defun mevedel-cockpit-current-context ()
   "Return the cockpit context for the current command."
   (or (mevedel-cockpit-menu-context)
@@ -112,7 +126,8 @@ Without CONTEXT, use the invoking transient's explicit context."
       (and (boundp 'transient--original-buffer)
            (buffer-live-p transient--original-buffer)
            (mevedel-cockpit-context-for-buffer transient--original-buffer))
-      (user-error "No mevedel session cockpit here")))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope)
+                                   "No mevedel session cockpit here")))
 
 (defun mevedel-cockpit-context-view-buffer (&optional context)
   "Return CONTEXT's live view buffer, or nil."
@@ -151,14 +166,16 @@ Without CONTEXT, use the invoking transient's explicit context."
   (if-let* ((buffer (mevedel-cockpit-context-view-buffer context)))
       (with-current-buffer buffer
         (apply function args))
-    (user-error "No live mevedel session for this cockpit surface")))
+    (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope context)
+                                 "No live mevedel session for this cockpit surface")))
 
 (defun mevedel-cockpit-call-in-data (context function &rest args)
   "Call FUNCTION with ARGS in CONTEXT's data buffer."
   (if-let* ((buffer (mevedel-cockpit-context-data-buffer context)))
       (with-current-buffer buffer
         (apply function args))
-    (user-error "No live mevedel session for this cockpit surface")))
+    (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope context)
+                                 "No live mevedel session for this cockpit surface")))
 
 (defun mevedel-cockpit-data-buffer ()
   "Return the live data buffer that owns the current cockpit, or nil."
@@ -191,7 +208,8 @@ CONTEXT defaults to `mevedel-cockpit-current-context'."
                      (or context (mevedel-cockpit-current-context))
                    (user-error nil))))
     (unless (mevedel-cockpit--live-context-p context)
-      (user-error "No live mevedel session for this %s"
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope context)
+                  "No live mevedel session for this %s"
                   (or label "cockpit surface"))))
   t)
 
@@ -200,7 +218,8 @@ CONTEXT defaults to `mevedel-cockpit-current-context'."
 LABEL is used in the owner error."
   (let ((context (or context (mevedel-cockpit-current-context))))
     (unless (mevedel-cockpit--live-context-p context)
-      (user-error "No live mevedel session for this %s"
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope context)
+                  "No live mevedel session for this %s"
                   (or label "cockpit surface")))
     context))
 
@@ -221,7 +240,8 @@ LABEL is used in the owner error."
 (defun mevedel-cockpit--current-surface ()
   "Return the current cockpit surface plist."
   (or mevedel-cockpit--surface
-      (user-error "No cockpit surface here")))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope)
+                                   "No cockpit surface here")))
 
 (defun mevedel-cockpit--surface-label (&optional surface)
   "Return SURFACE's user-facing label."
@@ -236,7 +256,8 @@ LABEL is used in the owner error."
     (mevedel-cockpit-require-owner label context)
     (when (and (plist-get surface :require-session)
                (not (mevedel-cockpit-context-session context)))
-      (user-error "No mevedel session in this buffer"))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope context)
+                                   "No mevedel session in this buffer"))
     context))
 
 (defun mevedel-cockpit-surface-items ()
@@ -353,7 +374,8 @@ item is selected."
     (cond
      ((and item (not (eq item sentinel))) item)
      (no-error nil)
-     (t (user-error "No %s on this line" row-label)))))
+     (t (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope)
+                                     "No %s on this line" row-label)))))
 
 (defun mevedel-cockpit-show-help (buffer report)
   "Show structured REPORT in information BUFFER."
@@ -398,7 +420,10 @@ item is selected."
                                 (lambda (row)
                                   (equal id (car (mevedel-cockpit--row-entry surface row context))))
                                 items)))
-                   (unless fresh (user-error "Inspected item is no longer available"))
+                   (unless fresh
+                     (mevedel-diagnostic-user-error
+                      (mevedel-cockpit-diagnostic-scope context)
+                      "Inspected item is no longer available"))
                    (mevedel-cockpit--detail-report surface context id fresh))))
     report))
 
@@ -412,7 +437,8 @@ item is selected."
                      "*mevedel cockpit details*"))
          (item (mevedel-cockpit-surface-selected)))
     (unless function
-      (user-error "No details for this %s"
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope context)
+                  "No details for this %s"
                   (mevedel-cockpit--surface-label surface)))
     (mevedel-cockpit-show-help buffer
                                (mevedel-cockpit--detail-report surface context
@@ -532,7 +558,8 @@ LABEL identifies the surface.  Return to the menu only for menu entry."
     (setq context (mevedel-cockpit--require-open-context context label))
     (when (and (plist-get surface :require-session)
                (not (mevedel-cockpit-context-session context)))
-      (user-error "No mevedel session in this buffer")))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope context)
+                                   "No mevedel session in this buffer")))
   ;; One buffer name per surface, so a second session would otherwise
   ;; take the first session's buffer by overwriting its context -- and
   ;; with it the only handle the surface had on what it still owes that

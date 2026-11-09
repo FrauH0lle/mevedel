@@ -15,6 +15,7 @@
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-codec)
 (require 'mevedel-session-durability)
+(require 'mevedel-utilities)
 
 (eval-when-compile
   (require 'cl-lib)
@@ -121,7 +122,7 @@
 (declare-function mevedel-session-artifacts-disown-save-machinery "mevedel-session-artifacts" nil)
 (declare-function mevedel-session-artifacts-find-artifact-noselect "mevedel-session-artifacts" (session logical &optional inspection committed-only))
 (declare-function mevedel-session-artifacts-inhibit-so-long "mevedel-session-artifacts" ())
-(declare-function mevedel-session-artifacts-inspect-cold-session "mevedel-session-artifacts" (save-path authority-mode &optional publication))
+(declare-function mevedel-session-artifacts-inspect-cold-session "mevedel-session-artifacts" (save-path authority-mode &optional publication scope))
 (declare-function mevedel-session-artifacts-load-instructions "mevedel-session-artifacts" (session buffer &optional turn directive-records preserve-directives-p))
 (declare-function mevedel-session-artifacts-printed-value "mevedel-session-artifacts" (value))
 (declare-function mevedel-session-artifacts-publish-sidecar-state "mevedel-session-artifacts" (session root-buffer &optional token))
@@ -363,10 +364,18 @@
 (declare-function mevedel--forget-place "mevedel-utilities" nil)
 (declare-function mevedel--ordered-completion-table "mevedel-utilities" (displays category))
 (declare-function mevedel--transcript-org-mode "mevedel-utilities" nil)
+(declare-function mevedel-diagnostic-message "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-warning "mevedel-utilities" (scope type message &optional level buffer-name))
 (autoload 'mevedel--call-with-bare-transcript-mode "mevedel-utilities")
 (autoload 'mevedel--forget-place "mevedel-utilities")
 (autoload 'mevedel--ordered-completion-table "mevedel-utilities")
 (autoload 'mevedel--transcript-org-mode "mevedel-utilities")
+(autoload 'mevedel-diagnostic-message "mevedel-utilities")
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+(autoload 'mevedel-diagnostic-warning "mevedel-utilities")
 
 ;; `mevedel-view'
 (defvar mevedel--data-buffer)
@@ -682,7 +691,7 @@ Returns SESSION's `save-path' on success, or nil on failure.  Idempotent."
              session buffer)
             save-path)
         (error
-         (message "mevedel: shallow session materialization failed: %S" err)
+         (mevedel-diagnostic-message (mevedel-diagnostic-scope session) "Shallow session materialization failed: %S" err)
          nil))))
 
 (defun mevedel-session-persistence-record-running-transcript
@@ -757,7 +766,7 @@ TOKEN is the caller's gate token."
               (when checkpoint
                 (mevedel-session-checkpoint-install session checkpoint)))
           (error
-           (message "mevedel: sidecar rewrite failed: %S" err)
+           (mevedel-diagnostic-message (mevedel-diagnostic-scope session) "Sidecar rewrite failed: %S" err)
            nil)
           (:success t))))))
 
@@ -1253,7 +1262,7 @@ warns and returns nil, leaving explicit recovery or abandonment possible."
           (error
            ;; Recovery may admit work again, so admissions reopen.
            (setf (mevedel-session-publication-stopping-p session) was-stopping)
-           (display-warning
+           (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
           'mevedel
           (format "Session publication is unresolved; not saving or releasing: %s"
                   (error-message-string err))
@@ -1276,8 +1285,8 @@ possible."
             (mevedel-session-persistence--drain-temporarily mevedel--session)
             t)
         (error
-         (message
-          (concat "mevedel: session publication is unresolved (%s); run "
+         (mevedel-diagnostic-message (mevedel-diagnostic-scope mevedel--session)
+          (concat "Session publication is unresolved (%s); run "
                   "mevedel-session-publication-retry or "
                   "mevedel-session-publication-abandon before closing")
           (error-message-string err))
@@ -1294,13 +1303,13 @@ cleared on the next successful save.  Surfaced by
 `mevedel-session-persistence-header-segment' so the user has a
 visible cue in addition to the `display-warning'.")
 
-(defun mevedel-session-persistence--note-autosave-failure (buffer err)
-  "Mark BUFFER's auto-save failed with ERR and warn."
+(defun mevedel-session-persistence--note-autosave-failure (buffer err &optional scope)
+  "Mark BUFFER's auto-save failed with ERR and warn using captured SCOPE."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (setq-local mevedel-session--save-failed t)
       (force-mode-line-update)))
-  (display-warning
+  (mevedel-diagnostic-warning (or scope (mevedel-diagnostic-scope buffer))
    'mevedel
    (format "Could not auto-save %s: %s"
            (if (buffer-live-p buffer) (buffer-name buffer) "buffer")
@@ -1327,6 +1336,7 @@ deferred save runs with its own."
                  (not (bound-and-true-p mevedel-session--inspection-buffer-p))
                  (or mevedel--agent-invocation
                      (eq buffer (mevedel-session-root-buffer mevedel--session))))
+        (let ((scope (mevedel-diagnostic-scope mevedel--session)))
         (unless (and (mevedel-session-persistence--gate-owner-p mevedel--session)
                      (mevedel-session-publication-defer
                       mevedel--session
@@ -1335,7 +1345,7 @@ deferred save runs with its own."
                          buffer prepared-token))
                       (lambda (err)
                         (mevedel-session-persistence--note-autosave-failure
-                         buffer err))
+                         buffer err scope))
                       token))
         (let ((inhibit-quit t))
           (condition-case err
@@ -1374,8 +1384,8 @@ deferred save runs with its own."
                 (force-mode-line-update)
                 saved)
             ((error quit)
-             (mevedel-session-persistence--note-autosave-failure buffer err)
-             nil))))))))
+             (mevedel-session-persistence--note-autosave-failure buffer err scope)
+             nil)))))))))
 
 (defvar mevedel-session-persistence--autosaves (make-hash-table :test #'eq)
   "Conversation buffers with a queued auto-save opportunity.")
@@ -1406,6 +1416,7 @@ Explicit saves and teardown keep using the synchronous writer and its barrier."
         (if (not (mevedel-session-publication-async-eligible-p mevedel--session))
             (mevedel-session-persistence-autosave-buffer buffer)
           (let* ((session mevedel--session)
+                 (scope (mevedel-diagnostic-scope session))
                  (identity (list buffer))
                  prepared fallback
                  (acknowledge
@@ -1427,10 +1438,10 @@ Explicit saves and teardown keep using the synchronous writer and its barrier."
                                   (setq mevedel-session--save-failed nil)
                                   (force-mode-line-update))
                               (mevedel-session-persistence--note-autosave-failure
-                               buffer (if (stringp err) (list 'error err) err)))
+                               buffer (if (stringp err) (list 'error err) err) scope))
                           ((error quit)
                            (mevedel-session-persistence--note-autosave-failure
-                            buffer cleanup))))))))
+                            buffer cleanup scope))))))))
             (setq mevedel-session--checkpoint-pending identity)
             (condition-case err
                 (mevedel-session-publication-submit
@@ -1622,16 +1633,17 @@ restoration and reveal timers."
       (mevedel--forget-place))
     buffer))
 
-(defun mevedel-session-persistence-load-sidecar (path)
+(defun mevedel-session-persistence-load-sidecar (path &optional scope)
   "Read a current-version sidecar plist from PATH.
 Return nil when the sidecar is missing or unreadable.  Signal when a
-readable sidecar has an unsupported version or obsolete shape."
+readable sidecar has an unsupported version or obsolete shape.
+SCOPE is the explicit diagnostic root when the caller knows its owner."
   (let* ((result (mevedel-session-persistence--classify-sidecar path))
          (diagnostic (plist-get result :diagnostic)))
     (pcase (plist-get result :status)
       ('current (plist-get result :sidecar))
       ((or 'missing 'unreadable)
-       (display-warning 'mevedel (format "%s: %s" diagnostic path) :warning)
+       (mevedel-diagnostic-warning (or scope 'unavailable) 'mevedel (format "%s: %s" diagnostic path) :warning)
        nil)
       (_ (error "%s" diagnostic)))))
 
@@ -1697,7 +1709,7 @@ See `mevedel-session--read-only-mode' for semantics."
   (with-current-buffer buf
     (setq buffer-read-only t)
     (setq-local mevedel-session--read-only-mode t)
-    (message "mevedel: %s"
+    (mevedel-diagnostic-message (mevedel-diagnostic-scope buf) "%s"
              (or reason
                  "session opened read-only; another client holds the lease"))))
 
@@ -1952,7 +1964,8 @@ mentions-shown reset to empty hash tables on load."
               (plist-get publication :sidecar)
             direct-sidecar))
          (sidecar
-          (mevedel-session-persistence-load-sidecar sidecar-path))
+          (mevedel-session-persistence-load-sidecar
+           sidecar-path (mevedel-diagnostic-scope (or session-override workspace))))
          (had-sidecar-p    (not (null sidecar)))
          (opened-workspace
           (or workspace
@@ -2058,7 +2071,7 @@ mentions-shown reset to empty hash tables on load."
                   (unless
                       (equal
                        sidecar
-                       (mevedel-session-persistence-load-sidecar sidecar-path))
+                       (mevedel-session-persistence-load-sidecar sidecar-path (mevedel-diagnostic-scope session)))
                     (user-error
                      "Session state changed while acquiring its lock; retry restore"))))
               ;; Files newer than the sidecar may be an incomplete publication.
@@ -2797,13 +2810,13 @@ writer requires accepting the shared-files advisory once per Emacs process."
                       "Another session writer is active. Independent sessions "
                       "can race over project files; use a Worktree Fork for "
                       "isolation. Start anyway? "))
-                  (user-error "New session was not started"))
+                  (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "New session was not started"))
                 (setq mevedel-session-persistence--shared-files-accepted-p t))
               'new)
           (let ((entry (cdr (assoc choice candidates))))
             (if (eq (plist-get entry :kind) 'incompatible)
                 (if (eq (plist-get entry :status) 'undiscoverable)
-                    (user-error "Session transcript is not safely inspectable: %s"
+                    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Session transcript is not safely inspectable: %s"
                                 (plist-get entry :diagnostic))
                   (list
                    :action 'inspect
@@ -2811,9 +2824,10 @@ writer requires accepting the shared-files advisory once per Emacs process."
                    (mevedel-session-artifacts-inspect-cold-session
                     (plist-get entry :save-path)
                     (plist-get entry :authority-mode)
-                    (plist-get entry :publication))))
-              (mevedel-session-persistence-restore
-               (plist-get entry :save-path) nil nil workspace))))))))
+                    (plist-get entry :publication) (mevedel-diagnostic-scope workspace))))
+              (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+                (mevedel-session-persistence-restore
+                 (plist-get entry :save-path) nil nil workspace)))))))))
 
 (defun mevedel-session-persistence-choose-conversation-variant
     (variants current-session-id)
@@ -2936,26 +2950,29 @@ To rename the current session in place, use `mevedel-rename-session'."
            ((and (boundp 'mevedel--data-buffer) mevedel--data-buffer
                  (buffer-live-p mevedel--data-buffer))
             mevedel--data-buffer)
-           (t (user-error "Not in a mevedel chat or view buffer"))))
-         (session (buffer-local-value 'mevedel--session data-buf)))
+           (t (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Not in a mevedel chat or view buffer"))))
+         (session (buffer-local-value 'mevedel--session data-buf))
+         (scope (mevedel-diagnostic-scope (or session data-buf))))
     (unless session
-      (user-error "Active buffer has no mevedel session"))
-    (when arg
-      (mevedel-engine-assert-local-history session "Save As"))
-    (mevedel-session-artifacts-assert-mutation-authority session data-buf)
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope data-buf) "Active buffer has no mevedel session"))
+    (mevedel-with-diagnostic-errors scope
+      (when arg
+        (mevedel-engine-assert-local-history session "Save As"))
+      (mevedel-session-artifacts-assert-mutation-authority session data-buf))
     (when arg
       (when (mevedel-agent-control-active-turn-p session)
-        (user-error "Interrupt active agent turns before save-as"))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Interrupt active agent turns before save-as"))
       ;; Queued input would otherwise be delivered from both copies.
       (when (mevedel-session-pending-input-p session)
-        (user-error
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session)
          "Resolve pending input in the Pending Inputs cockpit or clear it with C-c C-q before save-as")))
-    (cond
-     (arg
-      (mevedel-session-persistence--save-as session data-buf))
-     (t
-      (mevedel-session-artifacts-save session data-buf nil t)
-      (message "Session saved.")))))
+    (mevedel-with-diagnostic-errors scope
+      (cond
+       (arg
+        (mevedel-session-persistence--save-as session data-buf))
+       (t
+        (mevedel-session-artifacts-save session data-buf nil t)
+        (message "Session saved."))))))
 
 (defun mevedel-session-persistence--save-as (session data-buf)
   "Save SESSION as an independent child under a fresh id.
@@ -3088,7 +3105,7 @@ nil when nothing was queued."
        (condition-case err
            (mevedel-session-persistence-cleanup-expired workspace)
          (error
-          (message "mevedel: session cleanup failed: %s"
+          (mevedel-diagnostic-message (mevedel-diagnostic-scope workspace) "Session cleanup failed: %s"
                    (error-message-string err))))))))
 
 (defun mevedel-session-persistence-parse-iso-time (str)
@@ -3238,6 +3255,7 @@ workspace was swept too recently."
 (defun mevedel-session-persistence--allow-emacs-exit-p ()
   "Return non-nil when every live session may exit safely."
   (let* ((unresolved nil)
+         (scope 'unavailable)
          (blocker
          (cl-some
           (lambda (buffer)
@@ -3245,6 +3263,7 @@ workspace was swept too recently."
                  (with-current-buffer buffer
                    (when (and (boundp 'mevedel--session)
                               mevedel--session)
+                     (setq scope (mevedel-diagnostic-scope mevedel--session))
                      (cond
                       ;; Queued and in-flight async publication drains here,
                       ;; leaving the session usable if another query vetoes.
@@ -3276,24 +3295,24 @@ workspace was swept too recently."
           (buffer-list))))
     (pcase blocker
       ('publication-job
-       (message
+       (mevedel-diagnostic-message scope
         (concat
-         "mevedel: session publication is unresolved (%s); run "
+         "Session publication is unresolved (%s); run "
          "mevedel-session-publication-retry or "
          "mevedel-session-publication-abandon first")
         unresolved)
        nil)
       ('publication
-       (message
+       (mevedel-diagnostic-message scope
         (concat
-         "mevedel: session publication is pending; run "
+         "Session publication is pending; run "
          "mevedel-session-publication-retry or "
          "mevedel-session-publication-abandon first"))
        nil)
       ('mutation
-       (message
+       (mevedel-diagnostic-message scope
         (concat
-         "mevedel: target mutation is unsettled; stop live executions or run "
+         "Target mutation is unsettled; stop live executions or run "
          "mevedel-retry-target-readiness to acknowledge it first"))
        nil)
       (_ t))))
@@ -3315,7 +3334,7 @@ Their state and leases are left for explicit publication recovery."
             (mevedel-session-publication-stopping session)
           (error
            (push session blocked)
-           (display-warning
+           (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
             'mevedel
             (format "Session publication is unresolved at exit; not saving or releasing: %s"
                     (error-message-string err))

@@ -8,6 +8,7 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+(require 'mevedel-utilities)
 
 (cl-defstruct (mevedel-execution-scheduler
                (:constructor mevedel-execution-scheduler--create))
@@ -24,6 +25,7 @@
   start
   admit-p
   reject
+  scope
   state)
 
 (defun mevedel-execution-scheduler-create ()
@@ -56,7 +58,9 @@
                 (funcall
                  (mevedel-execution-scheduler--lease-admit-p lease))
               (error
-               (message "mevedel: execution admission check failed: %S" err)
+               (mevedel-diagnostic-message
+                (mevedel-execution-scheduler--lease-scope lease)
+                "execution admission check failed: %S" err)
                nil))))
       (let ((scheduler (mevedel-execution-scheduler--deactivate lease)))
         (when-let* ((reject
@@ -64,8 +68,9 @@
           (condition-case err
               (funcall reject lease)
             (error
-             (message "mevedel: execution scheduler rejection failed: %S"
-                      err))))
+             (mevedel-diagnostic-message
+              (mevedel-execution-scheduler--lease-scope lease)
+              "execution scheduler rejection failed: %S" err))))
         (mevedel-execution-scheduler--drain scheduler))
     (let ((completed-p nil))
       (unwind-protect
@@ -75,7 +80,9 @@
                  (mevedel-execution-scheduler--lease-start lease) lease)
               (t
                (mevedel-execution-scheduler-release lease)
-               (message "mevedel: execution scheduler start failed: %S" err)))
+               (mevedel-diagnostic-message
+                (mevedel-execution-scheduler--lease-scope lease)
+                "execution scheduler start failed: %S" err)))
             (setq completed-p t))
         (unless completed-p
           (mevedel-execution-scheduler-release lease))))))
@@ -120,18 +127,20 @@
             (mevedel-execution-scheduler-release reader)))))))
 
 (defun mevedel-execution-scheduler-submit
-    (scheduler mode start &optional admit-p reject)
+    (scheduler mode start &optional admit-p reject scope)
   "Submit START to SCHEDULER in read or exclusive MODE.
 
 START is called with its lease when admitted.  ADMIT-P is rechecked immediately
 before START; when it returns nil, REJECT receives the released lease instead.
+SCOPE is the originating diagnostic scope, captured before queuing.
 Return the opaque lease."
   (unless (memq mode '(read exclusive))
     (error "Unknown execution scheduler mode: %S" mode))
   (let ((lease
          (mevedel-execution-scheduler--lease-create
           :scheduler scheduler :mode mode :start start
-          :admit-p admit-p :reject reject :state 'queued)))
+          :admit-p admit-p :reject reject
+          :scope (mevedel-diagnostic-scope scope) :state 'queued)))
     (if (and (null (mevedel-execution-scheduler-queue scheduler))
              (mevedel-execution-scheduler--startable-p scheduler mode))
         (mevedel-execution-scheduler--activate lease)

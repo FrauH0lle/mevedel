@@ -25,6 +25,7 @@
 
 (require 'subr-x)
 (require 'mevedel-shared-editing)
+(require 'mevedel-utilities)
 
 ;; `mevedel-artifact-store'
 (declare-function mevedel-artifact-store-attach
@@ -1038,10 +1039,11 @@ way."
               ((eq (plist-get shared :alone) t))
               (item (plist-get shared :itemId))
               (session (bound-and-true-p mevedel--session)))
-    (let ((workspace (mevedel-session-workspace session))
-          (id (plist-get shared :discussionId))
-          (report (lambda (text)
-                    (message "mevedel: could not resolve the discussion: %s" text))))
+    (let* ((workspace (mevedel-session-workspace session))
+           (scope (mevedel-diagnostic-scope workspace))
+           (id (plist-get shared :discussionId))
+           (report (lambda (text)
+                     (mevedel-diagnostic-message scope "Could not resolve the discussion: %s" text))))
       (condition-case err
           (if (not (string-prefix-p "artifact:" item))
               ;; A whiteboard's or document's discussion lives on its host.

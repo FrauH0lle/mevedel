@@ -7,6 +7,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (eval-when-compile (require 'cl-lib))
 
 ;; `gptel'
@@ -230,8 +232,9 @@ the persistent failure counter unchanged."
         (let* ((attempt (mevedel-compact-run--state-attempt state))
                (delay (expt 2 (1- attempt)))
                (chat-buffer (mevedel-compact-run--state-chat-buffer state)))
-          (message "mevedel: compaction failed, retrying in %ss (%s)"
-                   delay err)
+          (mevedel-diagnostic-message
+           (mevedel-diagnostic-scope (mevedel-compact-run--state-session state))
+           "%s (compaction failed, retrying in %ss)" err delay)
           (setf
            (mevedel-compact-run--state-retry-timer state)
            (run-at-time
@@ -245,7 +248,9 @@ the persistent failure counter unchanged."
                     (mevedel-compact-run--begin-attempt state))))))))
       (unless ignore-failure-count
         (cl-incf mevedel-compact-run-failure-count))
-      (display-warning 'mevedel err :warning)
+      (mevedel-diagnostic-warning
+       (mevedel-diagnostic-scope (mevedel-compact-run--state-session state))
+       'mevedel err :warning)
       (unless (mevedel-compact-run--state-auto state)
         (mevedel-view-stream-end-progress mevedel--view-buffer))
       (mevedel-compact-run--finish state err))))
@@ -288,9 +293,9 @@ the persistent failure counter unchanged."
                    (mevedel-compact-target-begin-root-context-epoch
                     target (mevedel-compact-run--state-auto state))
                  (error
-                  (display-warning
+                  (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                    'mevedel
-                   (format "SessionStart after compaction failed: %s"
+                   (format "%s (SessionStart after compaction failed)"
                            (error-message-string err))
                    :warning)))
                (condition-case err
@@ -298,17 +303,17 @@ the persistent failure counter unchanged."
                     target :complete
                     (mevedel-compact-run--state-auto state))
                  (error
-                  (display-warning
+                  (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                    'mevedel
-                   (format "Compaction view completion failed: %s"
+                   (format "%s (compaction view completion failed)"
                            (error-message-string err))
                    :warning)))
                (when (and (plist-get target :warn-on-completion)
                           mevedel-compact-run-warn-on-completion
                           (not mevedel-compact-run-warning-shown))
                  (setq mevedel-compact-run-warning-shown t)
-                 (message
-                  "mevedel: long threads with multiple compactions can reduce model accuracy; consider starting a new session for unrelated work")))
+                 (mevedel-diagnostic-message (mevedel-diagnostic-scope session)
+                  "Long threads with multiple compactions can reduce model accuracy; consider starting a new session for unrelated work")))
            (mevedel-compact-run--finish state nil))))
      session workspace nil
      (mevedel-compact-run--state-invocation state))))
@@ -504,8 +509,9 @@ rather than escaping, because the caller may be an asynchronous hook."
                                 (mevedel-compact-run--state-chat-buffer state))))
             (setf (mevedel-compact-run--state-journal-captures state) (list capture)))
         (error
-         (display-warning 'mevedel
-                          (format "Journal capture checkpoint failed: %s" (error-message-string err))
+         (mevedel-diagnostic-warning
+          (mevedel-diagnostic-scope (mevedel-compact-run--state-session state)) 'mevedel
+                          (format "%s (journal capture checkpoint failed)" (error-message-string err))
                           :warning))))
     state))
 

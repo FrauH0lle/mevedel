@@ -9,6 +9,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (eval-when-compile
   (require 'cl-lib))
 
@@ -1063,7 +1065,7 @@ Dispatches per `mevedel-mention-handlers'."
                       ;; when repeated media mentions share a key.
                       (push (cons key hash) dedup-updates))))))))))
     (when warnings
-      (message "mevedel: %s"
+      (mevedel-diagnostic-message (mevedel-diagnostic-scope session) "%s"
                (mapconcat #'identity (delete-dups (nreverse warnings)) "; ")))
     (list :media-contexts (nreverse media-contexts)
           :reminder-items (nreverse reminder-items)

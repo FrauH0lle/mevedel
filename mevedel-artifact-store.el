@@ -22,6 +22,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (require 'cl-lib)
 (require 'subr-x)
 (require 'mevedel-structs)
@@ -483,7 +485,8 @@ restores through its editing queue as one revertible edit by ACTOR
 Without CALLBACK, synchronous errors signal and asynchronous errors are
 reported to the echo area.  Return the new version number for files,
 nil for queued shared items."
-  (let ((meta (mevedel-artifact-store-meta workspace id)))
+  (let ((meta (mevedel-artifact-store-meta workspace id))
+        (scope (mevedel-diagnostic-scope workspace)))
     (if (mevedel-artifact-store-item-p meta)
         (progn
           (mevedel-shared-editing-restore
@@ -499,7 +502,7 @@ nil for queued shared items."
                                              (error-message-string err))))))))
                (if callback (funcall callback result)
                  (when (plist-get result :error)
-                   (message "mevedel: restoring %s: %s"
+                   (mevedel-diagnostic-message scope "Restoring %s: %s"
                             id (plist-get result :error)))))))
           nil)
       (let ((result
@@ -612,10 +615,11 @@ A whiteboard or document is deleted through its editing queue, after any
 save in progress, so its editors learn of it from ACTOR (default
 \"Host\").  CALLBACK receives nil once the artifact is gone or the
 reason it was not deleted; without one, a refusal is a message."
-  (let ((callback (or callback
+  (let* ((scope (mevedel-diagnostic-scope workspace))
+         (callback (or callback
                       (lambda (failure)
                         (when failure
-                          (message "mevedel: %s was not deleted: %s" id failure))))))
+                          (mevedel-diagnostic-message scope "%s was not deleted: %s" id failure))))))
     (if (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
         (mevedel-shared-editing-call
          workspace (list :action "delete" :id id :actor (or actor "Host"))
@@ -646,7 +650,7 @@ not record ID as its own, such as one a copied `meta.el' names, is kept."
                       (mevedel-session-artifacts-sessions-dir workspace) session-id)))
       (when (and (file-directory-p save-path)
                  (not (mevedel-session-persistence-delete workspace save-path)))
-        (message "mevedel: the conversation of %s is still in use; it stays as an ordinary session"
+        (mevedel-diagnostic-message (mevedel-diagnostic-scope workspace) "The conversation of %s is still in use; it stays as an ordinary session"
                  id))))
   (let* ((item (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id)))
          (operations
@@ -905,8 +909,9 @@ and leaves the old name."
               (session (buffer-local-value 'mevedel--session buffer))
               (name (mevedel-artifact-store--conversation-name meta id))
               ((not (equal name (mevedel-session-name session)))))
-    (with-demoted-errors "mevedel: could not rename an artifact conversation: %S"
-      (mevedel-session-naming-rename session buffer name))))
+    (condition-case-unless-debug err (mevedel-session-naming-rename session buffer name)
+      (error (mevedel-diagnostic-message (mevedel-diagnostic-scope workspace)
+                                        "Could not rename an artifact conversation: %S" err)))))
 
 (defun mevedel-artifact-store-note-writes (session changes &optional request)
   "Record settled ApplyPatch CHANGES of SESSION that land in the store.

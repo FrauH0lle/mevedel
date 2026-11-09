@@ -811,7 +811,7 @@
     (cl-letf (((symbol-function 'display-warning)
                (lambda (&rest warning) (push warning warnings))))
       (mevedel--run-turn-steps
-       'fsm
+       (gptel-make-fsm :info nil)
        (list (lambda (_fsm) (push 'first events))
              (lambda (_fsm)
                (push 'broken events)
@@ -1161,11 +1161,11 @@
       (should (eq 'ok
                   (funcall (mevedel--safe-fsm-handler
                             (lambda (_fsm) 'ok))
-                           'fsm)))
+                           (gptel-make-fsm :info nil))))
       (should-not
        (funcall (mevedel--safe-fsm-handler
                  (lambda (_fsm) (error "Handler failed")))
-                'fsm)))
+                (gptel-make-fsm :info nil))))
     (should (= 1 (length warnings)))))
 
 (provide 'test-mevedel-turn)

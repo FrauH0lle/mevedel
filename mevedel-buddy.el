@@ -23,6 +23,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (eval-when-compile
   (require 'cl-lib))
 
@@ -706,7 +708,7 @@ started by the idle timer, which an explicit request may preempt."
         (request-buffer (generate-new-buffer " *mevedel-buddy-request*")))
     (unless (plist-get policy :model)
       (kill-buffer request-buffer)
-      (user-error "No model resolves for the buddy workload"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope source) "No model resolves for the buddy workload"))
     (setq mevedel-buddy--running scope-key
           mevedel-buddy--running-automatic automatic
           mevedel-buddy--request-buffer request-buffer
@@ -1059,7 +1061,7 @@ made outranks one started by a timer."
   (mevedel-buddy--cancel-timer)
   (mevedel-buddy--preempt)
   (when mevedel-buddy--running
-    (user-error "A buddy request is already running; %s"
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "A buddy request is already running; %s"
                 "abort it with `mevedel-buddy-abort'"))
   (mevedel-buddy--request
    (mevedel-buddy--scope-key) 'buddy-guide

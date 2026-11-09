@@ -929,7 +929,7 @@ fire-count and payload."
                  (push (cons 'plain resp) inserted))))
       (let ((wrapped (mevedel-agent-exec--wrap-callback
                       (lambda (resp _info &rest _)
-                        (push resp bookkept)))))
+                        (push resp bookkept)) 'unavailable)))
         (funcall wrapped "chunk" (list :stream t))
         (funcall wrapped "whole" (list :buffer nil))
         (funcall wrapped t (list :stream t))))

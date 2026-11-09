@@ -108,6 +108,43 @@
 		       (when (buffer-live-p inspector) (kill-buffer inspector))
 		       (kill-buffer origin)))))
 
+(mevedel-deftest mevedel-report-diagnostic-owner ()
+  ,test (test)
+  :doc "retains attribution after the originating buffer dies"
+  (require 'mevedel-report)
+  (require 'mevedel-structs)
+  (let ((origin (generate-new-buffer " *report diagnostic owner*")))
+    (unwind-protect
+        (with-temp-buffer
+          (with-current-buffer origin
+            (setq-local mevedel-cockpit--context
+                        (list :workspace (mevedel-workspace--create
+                                          :root "/tmp/report-owner"))))
+          (mevedel-report-render '(:title "Report" :sections nil) origin)
+          (kill-buffer origin)
+          (should (equal (error-message-string
+                          (should-error (mevedel-report-refresh) :type 'user-error))
+                         "mevedel [/tmp/report-owner]: No live source to refresh this report"))
+          (mevedel-report--unavailable '(error "Failed at 50%"))
+          (should (string-search "mevedel [/tmp/report-owner]: Failed at 50%"
+                                 (buffer-string))))
+      (when (buffer-live-p origin) (kill-buffer origin))))
+
+  :doc "explicit captured root or special scope overrides a foreign origin"
+  (require 'mevedel-report)
+  (require 'mevedel-structs)
+  (with-temp-buffer
+    (setq-local mevedel--workspace (mevedel-workspace--create :root "/tmp/foreign"))
+    (let ((origin (current-buffer)))
+      (dolist (case '(("/tmp/captured" . "mevedel [/tmp/captured]: Failed")
+                      (global . "mevedel [global]: Failed")
+                      (unavailable . "mevedel [workspace unavailable]: Failed")))
+        (with-temp-buffer
+          (mevedel-report-render
+           (list :title "Report" :sections nil :diagnostic-scope (car case)) origin)
+          (mevedel-report--unavailable '(error "Failed"))
+          (should (string-search (cdr case) (buffer-string))))))))
+
 (mevedel-deftest mevedel-report-select-section-revoked ()
 		 ,test (test)
 		 :doc "revoked access clears already displayed private content on section navigation"

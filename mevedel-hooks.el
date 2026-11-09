@@ -441,6 +441,9 @@ Returns a plist or nil when HANDLER is invalid."
 Bound around normalization so an unusable matcher can be reported with
 the file or layer that configured it.")
 
+(defvar mevedel-hooks--normalizing-scope 'global
+  "Explicit diagnostic scope bound while normalizing a hook source.")
+
 (defun mevedel-hooks--usable-matcher-p (matcher event)
   "Return non-nil when MATCHER can be matched, reporting it for EVENT if not.
 Only a regexp matcher can fail; symbols are compared literally, and every
@@ -453,6 +456,7 @@ to a *Messages* line after that."
           (progn (string-match-p matcher "") t)
         (invalid-regexp
          (mevedel--warn-once
+          mevedel-hooks--normalizing-scope
           (list 'hooks-bad-matcher
                 mevedel-hooks--normalizing-source event matcher)
           "Ignoring %s hook group%s: matcher %S is not a valid regexp: %s"
@@ -561,10 +565,12 @@ treated as `SubagentStop'."
         :null-object nil
         :false-object :json-false)))))
 
-(defun mevedel-hooks-read-config-file (file &optional content)
-  "Read and normalize hook config FILE or snapshotted CONTENT."
+(defun mevedel-hooks-read-config-file (file &optional content scope)
+  "Read hook config FILE or snapshotted CONTENT for diagnostic SCOPE.
+Without SCOPE the source is user-wide configuration."
   (condition-case err
-      (let ((mevedel-hooks--normalizing-source file))
+      (let ((mevedel-hooks--normalizing-source file)
+            (mevedel-hooks--normalizing-scope (or scope 'global)))
         (pcase (file-name-extension file)
           ("el" (mevedel-hooks-normalize-rules
                  (mevedel-hooks--read-lisp-file file content)))
@@ -573,6 +579,7 @@ treated as `SubagentStop'."
           (_ nil)))
     (error
      (mevedel--warn-once
+      (or scope 'global)
       (list 'hooks-config-unreadable file)
       "Could not read hook config %s: %s"
       file (error-message-string err))
@@ -679,6 +686,7 @@ The returned plist includes `:path', `:hash', `:content', and
                     workspace snapshot))
               (push snapshot snapshots)
             (mevedel--warn-once
+             (mevedel-diagnostic-scope workspace)
              (list 'hooks-config-untrusted file)
              "Project hook config %s is not trusted; ignoring" file)))))))
 
@@ -738,8 +746,8 @@ Plugin runtime data is scoped to WORKSPACE when provided."
                :plugin-data (mevedel-plugins-plugin-data-dir
                              (mevedel-plugin-name plugin) workspace))))
 
-(defun mevedel-hooks--plugin-manifest-rules (plugin)
-  "Return normalized manifest hook rules for PLUGIN."
+(defun mevedel-hooks--plugin-manifest-rules (plugin &optional workspace)
+  "Return normalized manifest rules for PLUGIN in WORKSPACE."
   (let ((entries (or (and (fboundp 'mevedel-plugin-hooks)
                           (mevedel-plugin-hooks plugin))
                      (and (mevedel-plugin-hooks-file plugin)
@@ -755,7 +763,7 @@ Plugin runtime data is scoped to WORKSPACE when provided."
               ((plist-get entry :file)
                (let ((file (plist-get entry :file)))
                  (mevedel-hooks-annotate-rules-source
-                  (mevedel-hooks-read-config-file file)
+                  (mevedel-hooks-read-config-file file nil (mevedel-diagnostic-scope workspace))
                   'plugin file (mevedel-plugin-root plugin))))))))))
 
 (defun mevedel-hooks--plugin-config-rules (&optional workspace)
@@ -765,7 +773,7 @@ Plugin runtime data is scoped to WORKSPACE when provided."
       (dolist (plugin (mevedel-plugins-enabled workspace) rules)
         (when (mevedel-plugins-hooks-enabled-p plugin workspace)
           (when-let* ((manifest-rules (mevedel-hooks--plugin-manifest-rules
-                                        plugin)))
+                                        plugin workspace)))
             (setq rules
                   (append rules
                           (mevedel-hooks--annotate-plugin-rules
@@ -812,7 +820,7 @@ memo."
                    (append rules
                            (mevedel-hooks-annotate-rules-source
                             (mevedel-hooks-read-config-file
-                             file (plist-get snapshot :content))
+                             file (plist-get snapshot :content) (mevedel-diagnostic-scope workspace))
                             'project-file file
                             (file-name-as-directory
                              (mevedel-workspace-root workspace)))))))
@@ -821,7 +829,12 @@ memo."
 (defun mevedel-hooks-invalidate-config ()
   "Forget every memoized hook configuration so the next event re-reads it."
   (clrhash mevedel-hooks--config-rules-cache)
-  (mevedel--warn-once-reset-site 'hooks-bad-matcher))
+  ;; This command invalidates configuration for every workspace, unlike
+  ;; recovery of one workspace's failure.
+  (let (scopes)
+    (maphash (lambda (key _) (cl-pushnew (car key) scopes :test #'equal))
+             mevedel--warn-once-table)
+    (dolist (scope scopes) (mevedel--warn-once-reset-site scope 'hooks-bad-matcher))))
 
 ;;;###autoload
 (defun mevedel-hooks-reload ()
@@ -875,7 +888,7 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
               (and (boundp 'mevedel--workspace) mevedel--workspace)))
          (workspace-id (mevedel-hooks--workspace-id workspace)))
     (unless workspace
-      (user-error "No mevedel workspace in current buffer"))
+      (mevedel-diagnostic-user-error 'unavailable "No mevedel workspace in current buffer"))
     (require 'mevedel-skills-core)
     (let ((db (cl-remove-if
                (lambda (old)
@@ -1032,15 +1045,17 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
   "Return DECISION when it is plist-shaped, otherwise nil."
   (and (mevedel-hooks--decision-plist-p decision) decision))
 
-(defun mevedel-hooks-sanitize-final-decision (event decision)
+(defun mevedel-hooks-sanitize-final-decision (event decision &optional scope)
   "Return a callback-safe DECISION for EVENT, or nil with a warning.
 
-Hook runners sanitize their own callback value, but prompt-decision
-consumers read hook results synchronously and can be handed values from
-stubs or user code, so the boundary stays defensive at one owner."
+SCOPE identifies the originating operation.  Hook runners sanitize their
+own callback value, but prompt-decision consumers read hook results
+synchronously and can be handed values from stubs or user code, so the
+boundary stays defensive at one owner."
   (if (mevedel-hooks--decision-plist-p decision)
       decision
     (mevedel--warn-once
+     (or scope 'unavailable)
      (list 'hooks-malformed-decision event)
      "Ignoring malformed %s hook decision: %S"
      (mevedel-hooks-event-display-name event)
@@ -1377,6 +1392,7 @@ EVENT labels each generated hook event block."
             t))
       (error
        (mevedel--warn-once
+        (mevedel-diagnostic-scope session)
         'hooks-log-persistence
         "Hook log persistence failed: %s"
         (error-message-string err))
@@ -1467,7 +1483,7 @@ EVENT labels each generated hook event block."
           props))
 
 (defun mevedel-hooks--surface (text)
-  "Surface hook TEXT."
+  "Surface informational hook TEXT."
   (message "mevedel: %s" text))
 
 (defun mevedel-hooks--progress-snapshot ()
@@ -1583,11 +1599,12 @@ record only that context was added, without duplicating the body."
                                           PostCompact SubagentStop
                                           Stop StopFailure SessionEnd)))
            (mevedel-hooks--decision-blocking-p decision))
-      (mevedel-hooks--surface
-       (format "%s hook blocked: %s"
+      (mevedel-diagnostic-message
+       (mevedel-diagnostic-scope session)
+       "%s hook blocked: %s"
                (mevedel-hooks-event-display-name event)
                (or (mevedel-hooks-decision-reason decision)
-                   "no reason provided"))))
+                   "no reason provided")))
      ((plist-get decision :system-message)
       (mevedel-hooks--surface
        (format "%s hook: %s"
@@ -1815,6 +1832,7 @@ record only that context was added, without duplicating the body."
     (event handler event-plist session request callback)
   "Run command HANDLER for EVENT and call CALLBACK with decision."
   (let* ((command (plist-get handler :command))
+         (scope (or (plist-get event-plist :workspace-root) (mevedel-diagnostic-scope session)))
          (timeout (mevedel-hooks--command-timeout handler))
          (default-directory
           (mevedel-hooks--command-default-directory
@@ -1905,8 +1923,8 @@ record only that context was added, without duplicating the body."
            (unless settled
              (setq settled t)
              (mevedel-transport-cancel-pending completion-key)
-             (with-demoted-errors "mevedel: hook teardown failed: %S"
-               (release-children))
+             (condition-case-unless-debug teardown-error (release-children)
+               (error (mevedel-diagnostic-message scope "Hook teardown failed: %S" teardown-error)))
              (when (buffer-live-p stdout-buffer) (kill-buffer stdout-buffer))
              (when (buffer-live-p stderr-buffer) (kill-buffer stderr-buffer))
              (mevedel-hooks--log
@@ -2029,8 +2047,8 @@ record only that context was added, without duplicating the body."
            (unless (or settled completion-requested)
              ;; Keep the first terminal result, including while deferred.
              (setq completion-requested t)
-             (with-demoted-errors "mevedel: hook teardown failed: %S"
-               (release-children))
+             (condition-case-unless-debug teardown-error (release-children)
+               (error (mevedel-diagnostic-message scope "Hook teardown failed: %S" teardown-error)))
              ;; A local child's sentinel can run inside unrelated TRAMP I/O.
              ;; The next handler may be remote; keep cancellation live until
              ;; the transport owner can safely deliver this continuation.
@@ -2108,8 +2126,8 @@ record only that context was added, without duplicating the body."
         ;; Acquisition can yield before assigning the returned handle.  Teardown
         ;; may already have run; collect those late resources without redelivery.
         (when (or settled completion-requested)
-          (with-demoted-errors "mevedel: hook teardown failed: %S"
-            (release-children)))))))
+          (condition-case-unless-debug teardown-error (release-children)
+            (error (mevedel-diagnostic-message scope "Hook teardown failed: %S" teardown-error))))))))
 
 
 ;;
@@ -2309,7 +2327,7 @@ decision plist."
                  (unless (eq decision 'cancelled)
                    (setq decision
                          (mevedel-hooks-sanitize-final-decision
-                          event decision)))
+                          event decision (mevedel-diagnostic-scope session))))
 	                 (when telemetry-span
 	                   (mevedel-telemetry-finish
 	                    telemetry-span

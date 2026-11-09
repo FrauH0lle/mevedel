@@ -356,6 +356,21 @@
                        (mevedel-test-tabulated-entries-cells)))))
     (should (= 1 (length calls))))
 
+  :doc "failed updates stay raw until the native cockpit presents them"
+  (let ((root (mevedel-plugins-test--github-install-root "owner" "repo"))
+        (raw "Failed to update plugin demo: rejected")
+        (mevedel-plugins-git-executor (lambda (&rest _) '(1 "rejected")))
+        echoed)
+    (mevedel-plugins-test--write-manifest root "{\"name\":\"demo\"}")
+    (should (equal raw (mevedel-plugins-update "demo" workspace)))
+    (with-temp-buffer
+      (setq-local mevedel--workspace workspace)
+      (should (equal raw (mevedel-plugins-slash-command "update demo"))))
+    (mevedel-plugins-test--list-open workspace)
+    (with-current-buffer mevedel-plugins-list-buffer-name
+      (mevedel-test--with-captured-messages echoed (mevedel-plugins-list-update)))
+    (should (equal (concat "mevedel [" workspace-root "]: " raw "\n") echoed)))
+
   :doc "mutation actions require live owners before side effects"
   (let ((root (mevedel-plugins-test--github-install-root "owner" "repo"))
         (view-buffer (generate-new-buffer " *plugin-action-view*"))
@@ -698,7 +713,8 @@
         (should (equal 'mevedel (caar warnings)))
         (should (string-match-p "plugin hook consent pending for demo"
                                 (cadar warnings)))
-        (should (member (concat "mevedel: plugin hook consent pending "
+        (should (member (concat "mevedel [" (mevedel-workspace-root workspace)
+                                "]: plugin hook consent pending "
                                 "for demo; open /plugin to review")
                         messages)))
       (let ((plugin (mevedel-plugins-find "demo" workspace)))
@@ -891,7 +907,10 @@
                  (push (list type message level) warnings))))
       (should (equal "Plugin registry reload failed: refresh broke."
                      (mevedel-plugins-test--slash session "reload")))
-      (should (equal '((mevedel "Plugin registry refresh failed: refresh broke" :warning))
+      (should (equal (list (list 'mevedel
+                                (format "mevedel [%s]: Plugin registry refresh failed: refresh broke"
+                                        (mevedel-workspace-root workspace))
+                                :warning))
                      warnings))))
 
   :doc "refreshes current session skills after plugin mutations"
@@ -1019,6 +1038,29 @@
       (should (string-match-p
                "check failed\\'"
                (car (last (cdar (mevedel-test-tabulated-entries-cells)))))))))
+
+(mevedel-deftest mevedel-plugins-message-local-result ()
+  ,test
+  (test)
+  :doc "attributes known failures without changing status and cancellation messages"
+  (progn
+  (dolist (raw '("Failed to install plugin x: rejected" "Invalid plugin target: x"
+                 "Unknown plugin: x." "Plugin path /x already exists."
+                 "Plugin x is not managed by mevedel; update it manually."
+                 "Plugin x is not enabled." "No current workspace for plugin state."
+                 "Plugin registry reload failed: rejected."))
+    (let (echoed)
+      (mevedel-test--with-captured-messages echoed
+        (mevedel-plugins-message-local-result "/owner/" raw))
+      (should (equal (concat "mevedel [/owner/]: " raw "\n") echoed))))
+  (dolist (raw '("Installed plugin x." "Updated plugin x." "Removed plugin x."
+                 "Remove cancelled for plugin x." "Enable cancelled for plugin x."
+                 "Plugin x is already installed; use /plugin update x."
+                 "Plugin x declares no hooks." "Usage: /plugin list"))
+    (let (echoed)
+      (mevedel-test--with-captured-messages echoed
+        (mevedel-plugins-message-local-result "/owner/" raw))
+      (should (equal (concat raw "\n") echoed))))))
 
 (provide 'test-mevedel-plugin-ui)
 ;;; test-mevedel-plugin-ui.el ends here

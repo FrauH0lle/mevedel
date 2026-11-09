@@ -18,6 +18,12 @@
 ;; `mevedel-session-control-fs'
 (defvar mevedel-session-control-fs--async-wait)
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format &rest args))
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+
 (defconst mevedel-memory-library--batch 64
   "Maximum bounded topic reads in one inventory program.")
 
@@ -71,9 +77,10 @@ Any other frontmatter is parsed as YAML."
         (file-attribute-status-change-time attributes)
         (file-attribute-inode-number attributes) (file-attribute-device-number attributes)))
 
-(defun mevedel-memory-library--read (directory files callback live)
+(defun mevedel-memory-library--read (directory files callback live scope)
   "Read FILES in DIRECTORY by pinned bounded programs, then call CALLBACK.
 Programs run asynchronously, `mevedel-memory-library--batch' files each.
+SCOPE attributes asynchronous program diagnostics to the originating workspace.
 CALLBACK receives (FILE . RESULT) pairs and nil, or nil and the condition
 that failed a program, exactly once, unless LIVE returns nil before a batch."
   (let ((batches (seq-partition files mevedel-memory-library--batch)) results)
@@ -91,7 +98,7 @@ that failed a program, exactly once, unless LIVE returns nil before a batch."
                      (lambda (batch failure)
                        (if failure (funcall callback nil failure)
                          (setq results (append results batch))
-                         (next))))))))
+                         (next))) scope)))))
       (next))))
 
 (defun mevedel-memory-library--observe (file result)
@@ -212,7 +219,7 @@ observation stops without further IO, caching, or CALLBACK."
                                                rows)))
                         (error (unavailable configured err)))
                       (next)))
-                  #'live)))))))
+                  #'live (mevedel-diagnostic-scope workspace))))))))
       (next))))
 
 (defun mevedel-memory-library-cached (workspace)
@@ -230,24 +237,24 @@ Wait for its programs instead of returning before they deliver."
 (defun mevedel-memory-library-path (workspace item)
   "Revalidate WORKSPACE ITEM's original root and return its topic path."
   (unless (and (eq (plist-get item :kind) 'memory) (plist-get item :file))
-    (user-error "Select a stored memory"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Select a stored memory"))
   (let ((directory (plist-get item :root)) (client (plist-get item :client)))
     (unless (and (or (not client) (equal client (mevedel-workspace-identity-client)))
                  (seq-some (lambda (root) (equal (plist-get root :dir) (plist-get item :configured)))
                            (mevedel-system--memory-roots workspace))
                  (equal directory (file-name-as-directory (file-truename (plist-get item :configured)))))
-      (user-error "Original memory root is unavailable"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Original memory root is unavailable"))
     (let ((path (file-name-concat directory (plist-get item :file))))
       (unless (and (mevedel-memory-proposal--file-p (plist-get item :file))
                    (equal path (file-truename path)))
-        (user-error "Memory topic is outside its original root"))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Memory topic is outside its original root"))
       path)))
 
 (defun mevedel-memory-library-details (workspace item)
   "Return a current-memory report for WORKSPACE ITEM."
   (let* ((path (mevedel-memory-library-path workspace item))
          (snapshot (mevedel-memory-scope--snapshot path mevedel-memory-scope--max-file-bytes)))
-    (unless (plist-get snapshot :exists) (user-error "Memory topic no longer exists"))
+    (unless (plist-get snapshot :exists) (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Memory topic no longer exists"))
     (list :title (plist-get item :title) :subtitle path :identity (plist-get item :id)
           :sections (list (list :id 'body :title "Stored memory" :mode 'markdown-mode
                                :body (decode-coding-string (plist-get snapshot :bytes) 'utf-8-unix))
@@ -264,14 +271,14 @@ recovery and reversal, recording `user' as producer without inference."
   (let* ((scope (mevedel-memory-scope-capture workspace (cons (plist-get item :configured) (plist-get item :file))))
          (root (car (plist-get scope :roots)))
          (claim (or (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180)
-                    (user-error "Memory review is busy"))))
+                    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Memory review is busy"))))
     (unwind-protect
         (progn
           (unless (and root
                        (equal (plist-get (cdr root) :dir) (plist-get item :root))
                        (equal (plist-get (cdr root) :client) (plist-get item :client))
                        (member (plist-get item :file) (plist-get (cdr root) :files)))
-            (user-error "Memory topic or index could not be captured"))
+            (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Memory topic or index could not be captured"))
           (let* ((prepared (mevedel-memory-store-prepare workspace claim scope nil "User deletion"))
                  (proposal (list :action 'remove :root (car root) :file (plist-get item :file)
                                  :type (if (member (plist-get item :type) '("user" "feedback" "project" "reference"))

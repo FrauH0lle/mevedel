@@ -104,7 +104,7 @@ evaluated must not keep the machine awake indefinitely."
        (and (fboundp 'mevedel-collaboration-sleep-reasons)
             (mevedel-collaboration-sleep-reasons (float-time))))
     (error
-     (mevedel--warn-once 'sleep-reasons
+     (mevedel--warn-once 'global 'sleep-reasons
                          "Cannot determine whether to block system sleep: %s"
                          (error-message-string err))
      nil)))
@@ -121,7 +121,7 @@ evaluated must not keep the machine awake indefinitely."
           mevedel-sleep--held-reasons nil
           mevedel-sleep--failed t)
     (mevedel--warn-once
-     'sleep-inhibitor "Cannot block system sleep: %s%s"
+     'global 'sleep-inhibitor "Cannot block system sleep: %s%s"
      (string-trim event)
      (let ((output (string-trim (or (process-get process 'output) ""))))
        (if (string-empty-p output) "" (concat ": " output))))))
@@ -147,7 +147,7 @@ evaluated must not keep the machine awake indefinitely."
            :sentinel #'mevedel-sleep--sentinel))
       (error
        (setq mevedel-sleep--failed t)
-       (mevedel--warn-once 'sleep-inhibitor "Cannot block system sleep: %s"
+       (mevedel--warn-once 'global 'sleep-inhibitor "Cannot block system sleep: %s"
                            (error-message-string err))
        nil))))
 

@@ -86,7 +86,7 @@ runtime.  BEFORE-RESULT can interrupt inside an accepted terminal callback."
                (plist-put (gptel-fsm-info fsm) :mevedel-agent-invocation invocation)
                (plist-put (gptel-fsm-info fsm) :mevedel-agent-terminal-callback callback)
                (plist-put (gptel-fsm-info fsm) :callback
-                          (mevedel-agent-exec--wrap-callback callback)))
+                          (mevedel-agent-exec--wrap-callback callback 'unavailable)))
              (dolist (terminal '(DONE ERRS ABRT))
                (let ((state terminal))
                  (setf (alist-get state (gptel-fsm-handlers fsm))

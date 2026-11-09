@@ -1305,7 +1305,11 @@
   (let ((data (generate-new-buffer " *mevedel-review-error-data*"))
         message-text inserted)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-skills-input-insert-fork-result)
+        (progn
+          (with-current-buffer data
+            (setq-local mevedel--workspace
+                        (mevedel-workspace--create :root "/tmp/review-origin")))
+          (cl-letf (((symbol-function 'mevedel-skills-input-insert-fork-result)
                    (lambda (_outcome)
                      (setq inserted t)))
                   ((symbol-function 'message)
@@ -1315,8 +1319,8 @@
            '(:status error :reason hook-blocked :message "blocked")
            data)
           (should-not inserted)
-          (should (equal "mevedel: review failed: blocked" message-text))
-          (should (equal "" (with-current-buffer data (buffer-string)))))
+          (should (equal "mevedel [/tmp/review-origin]: blocked (review failed)" message-text))
+          (should (equal "" (with-current-buffer data (buffer-string))))))
       (kill-buffer data)))
 
   :doc "inserts successful direct fork outcomes"

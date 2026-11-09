@@ -276,6 +276,8 @@
          (guests (make-hash-table :test #'eql))
          (room (list :data-buffer data :guests guests :transport 'transport
                      :session-label "Review"
+                     :session (mevedel-session--create
+                               :workspace (mevedel-workspace--create :root "/origin/project/"))
                      :link-full "http://example/#room.full-secret"))
          (mevedel-collaboration--rooms (mevedel-test-room-registry)))
     (unwind-protect
@@ -290,7 +292,7 @@
           (puthash 2 (list :guest-id "a") guests)
           (let ((shares (mevedel-collaboration-shares)))
             (should (equal (list :kind 'room :label "Review" :guests 1
-                                 :connected t :data-buffer data)
+                                 :connected t :data-buffer data :diagnostic-scope "/origin/project/")
                            (car shares)))
             (should (eq 'lobby (plist-get (cadr shares) :kind)))
             (should-not (string-search "secret" (format "%S" shares)))))
@@ -318,9 +320,13 @@
                                (list 'lobby "/srv/" t))
                          (nreverse calls)))
           (clrhash mevedel-collaboration--rooms)
-          (should-error (mevedel-collaboration-show-share
-                         (list :kind 'room :label "Review" :data-buffer data))
-                        :type 'user-error))
+          (kill-buffer data)
+          (should (equal (list 'user-error "mevedel [/origin/project/]: Review is no longer shared")
+                         (should-error
+                          (mevedel-collaboration-show-share
+                           (list :kind 'room :label "Review" :data-buffer data
+                                 :diagnostic-scope "/origin/project/"))
+                          :type 'user-error))))
       (kill-buffer data))))
 
 (mevedel-deftest mevedel-collaboration-stop-share
@@ -417,6 +423,17 @@
       (kill-buffer side-view)
       (kill-buffer side-data)
       (kill-buffer parent-data))))
+
+(mevedel-deftest mevedel-collaboration--room-or-start
+  (:doc "attributes a command refusal without changing the internal session condition")
+  (with-temp-buffer
+    (setq-local mevedel--workspace (mevedel-workspace--create :root "/origin/project/"))
+    (should (equal '(user-error "No active mevedel session in this buffer")
+                   (should-error (mevedel-collaboration--data-buffer-session (current-buffer))
+                                 :type 'user-error)))
+    (should (equal (list 'user-error "mevedel [/origin/project/]: No active mevedel session in this buffer")
+                   (should-error (mevedel-collaboration--room-or-start (current-buffer))
+                                 :type 'user-error)))))
 
 (mevedel-deftest mevedel-collaboration-view
   (:doc "discloses secrets and bearer-link scope before starting")

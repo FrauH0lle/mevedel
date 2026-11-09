@@ -1365,7 +1365,7 @@ adopt prompt.  Returns the messages the session produced."
               (mevedel-patch-review-submit)
               (should-not result)
               (should (string-search
-                       "Conflict: File changed during review: two.txt"
+                       (format "mevedel [%s]: File changed during review: two.txt (patch conflict)" root)
                        (buffer-substring-no-properties
                         (point-min) mevedel-view--input-marker))))
             (should (equal "old one\n"

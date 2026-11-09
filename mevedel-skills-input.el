@@ -12,6 +12,7 @@
 
 (require 'gptel)
 (require 'mevedel-mention-bindings)
+(require 'mevedel-utilities)
 
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (predicate &rest sequences))
@@ -621,6 +622,7 @@ agent's final result as the assistant side of that turn and
 runs the normal post-response hooks so the view and persistence layers
 observe the completed response."
   (let* ((request mevedel--current-request)
+         (scope (mevedel-diagnostic-scope (current-buffer)))
          (render-data (plist-get outcome :render-data))
          (hook-audits (plist-get outcome :hook-audits))
          (result (or (plist-get outcome :result)
@@ -661,8 +663,8 @@ observe the completed response."
         (condition-case err
             (run-hook-with-args 'gptel-post-response-functions start end)
           (error
-           (display-warning
-            'mevedel
+           (mevedel-diagnostic-warning
+            scope 'mevedel
             (format "Fork post-response hook failed: %s"
                     (error-message-string err))
             :warning)))
@@ -682,7 +684,7 @@ A command preceded only by indentation takes its whole line with it."
       command-pos)))
 
 (defun mevedel-skills-input--handle-user-skill-outcome
-    (skill outcome delete-start region-end continue-fn)
+    (skill outcome delete-start region-end continue-fn &optional scope)
   "Apply user skill OUTCOME in the current data buffer.
 
 SKILL is the invoked user skill.  DELETE-START and REGION-END bound
@@ -690,7 +692,8 @@ the original `$skill' text.
 
 CONTINUE-FN, when non-nil, resumes the original `gptel-send' after an
 inline body has been inserted.  Fork outcomes suppress that send and
-insert their result when the retained agent finishes."
+insert their result when the retained agent finishes.  Async callers supply
+SCOPE before preparation can switch session ownership."
   (pcase (plist-get outcome :status)
     ('ok
      (pcase (plist-get outcome :kind)
@@ -717,11 +720,15 @@ insert their result when the retained agent finishes."
         (mevedel-skills-input-insert-fork-result outcome)
         'skill)
        (_
-        (message "Skill '%s' returned an unsupported outcome: %S"
+        (mevedel-diagnostic-message
+         (or scope (mevedel-diagnostic-scope (current-buffer)))
+         "Skill '%s' returned an unsupported outcome: %S"
                  (mevedel-skill-name skill) outcome)
         'unknown)))
     (_
-     (message "Skill '%s' failed: %s"
+     (mevedel-diagnostic-message
+      (or scope (mevedel-diagnostic-scope (current-buffer)))
+      "Skill '%s' failed: %s"
               (mevedel-skill-name skill)
               (plist-get outcome :message))
      'unknown)))
@@ -752,6 +759,7 @@ Returns:
           nil
         (when skill
           (let* ((buffer (current-buffer))
+                 (scope (mevedel-diagnostic-scope buffer))
                  ;; Preparation is asynchronous whenever the body injects, so
                  ;; the draft can move, shrink, or be replaced before the
                  ;; outcome arrives.  Markers follow an edit where integers
@@ -784,17 +792,17 @@ Returns:
                             skill outcome
                             (marker-position delete-start)
                             (marker-position region-end)
-                            continue-fn)
+                            continue-fn scope)
                          ;; Activation happened before preparation, so the
                          ;; skill's permission rules, model, and effort are
                          ;; staged in this buffer.  Abandoning without
                          ;; releasing them would apply them to whatever the
                          ;; user sends next.
                          (mevedel-skills-input-clear-pending)
-                         (message
+                         (mevedel-diagnostic-message scope
                           (if (eq (plist-get outcome :kind) 'fork)
-                              "mevedel: skill draft changed during preparation; the fork agent's result was discarded"
-                            "mevedel: skill draft changed during preparation, not sent")))))
+                              "skill draft changed during preparation; the fork agent's result was discarded"
+                            "skill draft changed during preparation, not sent")))))
                  (set-marker delete-start nil)
                  (set-marker region-end nil)))
              :origin 'user)
@@ -863,7 +871,9 @@ CALLBACK receives (:status ok :attachments LIST) or an error plist."
                (delq nil (mapcar (lambda (attachment)
                                    (plist-get attachment :message))
                                  attachments))))
-    (message "mevedel: %s" (mapconcat #'identity warnings "; ")))
+    (mevedel-diagnostic-message
+     (mevedel-diagnostic-scope (current-buffer))
+     "%s" (mapconcat #'identity warnings "; ")))
   (let ((records
          (mapcan (lambda (attachment)
                    (copy-sequence (plist-get attachment :invoked-skills)))
@@ -891,7 +901,8 @@ without blocking the send."
               (text (buffer-substring (car region) (cdr region)))
               (mentions (mevedel-skills-input--inline-skill-mentions
                          text session allow-root)))
-    (let ((buffer (current-buffer)))
+    (let* ((buffer (current-buffer))
+           (scope (mevedel-diagnostic-scope buffer)))
       (mevedel-skills-input--prepare-inline-attachments
        mentions
        (lambda (outcome)
@@ -907,7 +918,7 @@ without blocking the send."
                   (funcall continue-fn)))
                (_
                 (mevedel-skills-input-clear-pending)
-                (message "Inline skill failed: %s"
+                (mevedel-diagnostic-message scope "Inline skill failed: %s"
                          (or (plist-get outcome :message)
                              "unknown error"))))))))
       'skill)))

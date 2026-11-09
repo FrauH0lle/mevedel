@@ -55,6 +55,12 @@
 (declare-function mevedel-telemetry-record "mevedel-telemetry" (session event &rest props))
 (autoload 'mevedel-telemetry-record "mevedel-telemetry")
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-warning "mevedel-utilities" (scope type message &optional level buffer-name))
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-warning "mevedel-utilities")
+
 (defcustom mevedel-journal-enabled t
   "Capture completed workspace work for the journal when non-nil.
 Disabling capture preserves existing entries, pending work, and evidence pins."
@@ -332,7 +338,7 @@ scheduler itself declines work while exit inhibits scheduling."
       (when (mevedel-journal-capture-seal session buffer trigger captures)
         (mevedel-journal-process-schedule (mevedel-session-workspace session)))
     (error
-     (display-warning 'mevedel
+     (mevedel-diagnostic-warning (mevedel-diagnostic-scope session) 'mevedel
                       (format "Journal capture sealing failed: %s" (error-message-string err))
                       :warning))))
 

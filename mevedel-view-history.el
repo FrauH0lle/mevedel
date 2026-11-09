@@ -179,10 +179,10 @@ does not substitute its own navigation behavior there."
   (let ((cmd (lookup-key (current-global-map) key)))
     (if (commandp cmd)
         (call-interactively cmd)
-      (user-error "%s is undefined" (key-description key)))))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "%s is undefined" (key-description key)))))
 
-(defun mevedel-view-history--rename-bad-file (path)
-  "Rename corrupt input history PATH to PATH.bad when possible."
+(defun mevedel-view-history--rename-bad-file (path scope)
+  "Rename corrupt input history PATH to PATH.bad, reporting with SCOPE."
   (when (file-exists-p path)
     (let ((bad (concat path ".bad")))
       (condition-case err
@@ -191,7 +191,8 @@ does not substitute its own navigation behavior there."
               (delete-file bad))
             (rename-file path bad))
         (error
-         (display-warning
+         (mevedel-diagnostic-warning
+          scope
           'mevedel
           (format "Could not rename corrupt input history %s: %s"
                   path (error-message-string err))
@@ -292,11 +293,13 @@ to `.bad' and ignored."
           (mevedel-view-history--set-entries entries)))
       (when problem
         (mevedel--warn-once
+         (mevedel-diagnostic-scope (or session (mevedel-view-history--session)))
          (list 'view-history-load path)
          "Input history unreadable at %s: %s; starting empty"
          path (error-message-string problem))
         (when malformed-p
-          (mevedel-view-history--rename-bad-file path))))))
+          (mevedel-view-history--rename-bad-file
+           path (mevedel-diagnostic-scope (or session (mevedel-view-history--session)))))))))
 
 (defun mevedel-view-history-save (&optional view-buffer)
   "Persist VIEW-BUFFER input history."
@@ -339,6 +342,7 @@ to `.bad' and ignored."
             (error
              (setq mevedel-view-history--save-failed t)
              (mevedel--warn-once
+              (mevedel-diagnostic-scope session)
               (list 'view-history-save path)
               "Input history save failed at %s: %s"
               path (error-message-string err)))))))))
@@ -354,7 +358,7 @@ to `.bad' and ignored."
       (mevedel-view-history--call-global-key (kbd "M-p"))
     (let ((ring (mevedel-view-history--ensure-ring)))
       (when (ring-empty-p ring)
-        (user-error "No input history"))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No input history"))
       (unless mevedel-view-history--index
         (setq mevedel-view-history--stored-incomplete
               (mevedel-view-history--input-text)))
@@ -373,7 +377,7 @@ to `.bad' and ignored."
       (mevedel-view-history--call-global-key (kbd "M-n"))
     (cond
      ((null mevedel-view-history--index)
-      (user-error "Not browsing input history"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Not browsing input history"))
      ((> mevedel-view-history--index 0)
       (setq mevedel-view-history--index
             (1- mevedel-view-history--index))
@@ -434,7 +438,7 @@ request."
            (index 0)
            (done nil))
       (when (null entries)
-        (user-error "No input history"))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No input history"))
       (setq mevedel-view-history--stored-incomplete stored
             mevedel-view-history--index nil)
       (unwind-protect
@@ -494,7 +498,7 @@ request."
   (interactive)
   (let ((entries (mevedel-view-history--entries)))
     (when (null entries)
-      (user-error "No input history"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No input history"))
     (let* ((choice (completing-read "Input history: " entries nil t))
            (entry (cl-find choice entries :test #'string=)))
       (goto-char (mevedel-view--input-start))

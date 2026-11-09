@@ -35,6 +35,12 @@
                   "mevedel-pending-inputs" (&optional data-buffer))
 (defvar mevedel--view-buffer)
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-message "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(autoload 'mevedel-diagnostic-message "mevedel-utilities")
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+
 (defvar-local mevedel-readiness--claude nil
   "Claude readiness learned in this root buffer.
 A plist with :key, :state (`ready', `failed' or `checking'), the failure
@@ -69,7 +75,8 @@ already left its own request issue."
         (progn
           (when checked (message "mevedel: Claude is ready"))
           (when session (mevedel-readiness--resume session "authentication")))
-      (message "mevedel: Claude is not ready: %s" failure)
+      (mevedel-diagnostic-message
+       (mevedel-diagnostic-scope session) "Claude is not ready: %s" failure)
       ;; Informational: blocking would also wedge Goal, plan and directive
       ;; sends, which never pass the composer's readiness check.
       (when (and session checked

@@ -9,7 +9,7 @@
 
 (require 'mevedel-engine)
 
-(eval-when-compile (require 'mevedel-utilities))
+(require 'mevedel-utilities)
 (require 'mevedel-report)
 
 (require 'cl-lib)
@@ -234,6 +234,14 @@
 (declare-function mevedel-transcript-restore-properties "mevedel-transcript-restore" (&optional only-if-missing))
 (autoload 'mevedel-transcript-restore-properties "mevedel-transcript-restore")
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-warning "mevedel-utilities" (scope type message &optional level buffer-name))
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+(autoload 'mevedel-diagnostic-warning "mevedel-utilities")
+
 ;; `mevedel-view'
 (defvar mevedel--data-buffer)
 
@@ -418,17 +426,17 @@ carries the plan-entry plist."
           (get-text-property (line-beginning-position) 'mevedel-plan-entry))
          (session mevedel-session-rewind--plan-buffer-session))
     (unless entry
-      (user-error "No restore plan row at point"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "No restore plan row at point"))
     (unless session
-      (user-error "Plan buffer has no associated session"))
+      (mevedel-diagnostic-user-error 'unavailable "Plan buffer has no associated session"))
     (let* ((path (plist-get entry :path))
            (action (plist-get entry :action))
            (backup-name (plist-get entry :backup-name)))
       (pcase action
         ('delete
-         (user-error "Row is a delete action; nothing to diff against"))
+         (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Row is a delete action; nothing to diff against"))
         ('noop
-         (user-error "Row is a noop; nothing to diff"))
+         (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Row is a noop; nothing to diff"))
         (_
          (let ((backup-path (make-temp-file "mevedel-rewind-backup-")))
            (unwind-protect
@@ -1540,7 +1548,7 @@ head CAS."
                       (mevedel-session-rewind--install-rewind-buffer
                        buffer staging-buffer session target))
                   (error
-                   (display-warning
+                   (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                     'mevedel
                     (concat
                      (format
@@ -1559,7 +1567,7 @@ head CAS."
                          (plist-get target :cum-turn))
                         (mevedel-instruction-store-rewind-end session t))
                     (error
-                     (display-warning
+                     (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                       'mevedel
                       (format
                        "Portable project Rewind committed, but the instruction store still holds the discarded activity; it is pruned before the next request or at resume: %s"
@@ -1571,7 +1579,7 @@ head CAS."
                          session buffer nil directives t)
                       (error "Published instruction snapshot is unavailable"))
                   (error
-                   (display-warning
+                   (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                     'mevedel
                     (format
                      "Portable project Rewind committed, but instructions did not refresh: %s"
@@ -1584,7 +1592,7 @@ head CAS."
                        (plist-get target :cum-turn))
                       (mevedel--restore-preserved-directives workspace))
                   (error
-                   (display-warning
+                   (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                     'mevedel
                     (format
                      "Portable project Rewind committed, but directives did not refresh: %s"
@@ -1594,7 +1602,7 @@ head CAS."
                   (mevedel-session-rewind--refresh-restored-buffers
                    plan (list :succeeded (length plan)))
                 (error
-                 (display-warning
+                 (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                   'mevedel
                   (format
                    "Portable project Rewind committed, but buffers did not refresh: %s"
@@ -1606,7 +1614,7 @@ head CAS."
           (condition-case store-error
               (mevedel-instruction-store-rewind-end session nil)
             (error
-             (display-warning
+             (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
               'mevedel
               (format "Rewind rolled back; its instruction store intent is dropped later: %s"
                       (error-message-string store-error))))))
@@ -1811,7 +1819,7 @@ returned, exactly as it was."
                   (mevedel-instruction-store-rewind-end session t)
                   (setq store-reloaded t))
               (error
-               (display-warning
+               (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                 'mevedel
                 (format "Rewind committed, but the instruction store still holds the discarded activity; it is pruned before the next request or at resume: %s"
                         (error-message-string err))))))
@@ -1819,7 +1827,7 @@ returned, exactly as it was."
               (mevedel-session-rewind--refresh-restored-buffers
                plan (list :succeeded (length plan)))
             (error
-             (display-warning
+             (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
               'mevedel
               (format "Rewind committed, but buffers could not refresh: %s"
                       (error-message-string err)))))
@@ -1830,7 +1838,7 @@ returned, exactly as it was."
                 (mevedel-session-artifacts-save-instructions
                  session buffer t))
             (error
-             (display-warning
+             (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
               'mevedel
               (format "Rewind committed, but directives could not refresh: %s"
                       (error-message-string err)))))
@@ -1876,7 +1884,7 @@ returned, exactly as it was."
             (error
              ;; An intent left behind names the original turn count, so
              ;; the next resolution drops it without pruning anything.
-             (display-warning
+             (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
               'mevedel
               (format "Rewind rolled back; its instruction store intent is dropped later: %s"
                       (error-message-string err))))))
@@ -2258,7 +2266,7 @@ and the file plan the caller confirmed."
                        (list :segment
                              (or (mevedel-session-current-segment session) 1))))
                   (error
-                   (display-warning
+                   (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                     'mevedel
                     (concat
                      (format
@@ -2270,7 +2278,7 @@ and the file plan the caller confirmed."
                   (mevedel-session-artifacts-load-instructions
                    session buffer nil directives t)
                 (error
-                 (display-warning
+                 (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                   'mevedel
                   (format
                    "Session restored, but instructions did not refresh: %s"
@@ -2283,7 +2291,7 @@ and the file plan the caller confirmed."
                        plan (list :succeeded (length plan))))
                     (mevedel-session-recovery-refresh-session-buffers session))
                 (error
-                 (display-warning
+                 (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                   'mevedel
                   (format "Session restored, but buffers did not refresh: %s"
                           (error-message-string refresh-error))
@@ -2382,16 +2390,19 @@ uncaptured filesystem effects and workspace directive records a Rewind
 pruned do not come back."
   (interactive)
   (let* ((buffer (mevedel-session-rewind--command-buffer))
-         (session (buffer-local-value 'mevedel--session buffer)))
+         (session (buffer-local-value 'mevedel--session buffer))
+         (scope (mevedel-diagnostic-scope (or session buffer))))
     (unless session
-      (user-error "Active buffer has no mevedel session"))
-    (mevedel-engine-assert-local-history session "Redo")
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope buffer) "Active buffer has no mevedel session"))
+    (mevedel-with-diagnostic-errors scope
+      (mevedel-engine-assert-local-history session "Redo"))
     (unless (mevedel-session-codec-portable-authority-p session)
-      (user-error
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session)
        "Only a portable project session publishes restorable heads"))
-    (let ((heads (mevedel-session-rewind-published-heads session)))
+    (let ((heads (mevedel-with-diagnostic-errors scope
+                   (mevedel-session-rewind-published-heads session))))
       (unless heads
-        (user-error "Session has no other published head"))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Session has no other published head"))
       (let* ((table (mapcar
                      (lambda (entry)
                        (cons (mevedel-session-rewind--published-head-label
@@ -2404,13 +2415,14 @@ pruned do not come back."
                (mapcar #'car table) nil t nil nil (caar table)))
              (entry (cdr (assoc choice table))))
         (unless entry
-          (user-error "No published head selected"))
-        (when (mevedel-session-rewind-restore-head
-               session buffer (plist-get entry :head)
-               (lambda (impact)
-                 (yes-or-no-p
-                  (mevedel-session-rewind--restore-confirmation
-                   session entry impact))))
+          (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "No published head selected"))
+        (when (mevedel-with-diagnostic-errors scope
+                (mevedel-session-rewind-restore-head
+                 session buffer (plist-get entry :head)
+                 (lambda (impact)
+                   (yes-or-no-p
+                    (mevedel-session-rewind--restore-confirmation
+                     session entry impact)))))
           (with-current-buffer buffer
             (mevedel--run-session-start-hooks "restore"))
           (message "mevedel: restored %s to %s"
@@ -2472,7 +2484,7 @@ be the step that rejects a session."
     mevedel--data-buffer)
    ((and (boundp 'mevedel--session) mevedel--session)
     (current-buffer))
-   (t (user-error "Not in a mevedel chat or view buffer"))))
+   (t (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Not in a mevedel chat or view buffer"))))
 
 (defun mevedel-rewind ()
   "Pick one of your prompts and Rewind the session to just before it.
@@ -2483,15 +2495,18 @@ re-asking it possible.  To keep a turn and discard only what follows,
 Rewind from the view with point on that turn's response."
   (interactive)
   (let* ((buffer (mevedel-session-rewind--command-buffer))
-         (session (buffer-local-value 'mevedel--session buffer)))
+         (session (buffer-local-value 'mevedel--session buffer))
+         (scope (mevedel-diagnostic-scope (or session buffer))))
     (unless session
-      (user-error "Active buffer has no mevedel session"))
-    (mevedel-session-rewind-assert-stable-source
-     session buffer "rewinding")
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope buffer) "Active buffer has no mevedel session"))
+    (mevedel-with-diagnostic-errors scope
+      (mevedel-session-rewind-assert-stable-source
+       session buffer "rewinding"))
     (let* ((candidates
-            (mevedel-session-rewind--prompt-candidates session)))
+            (mevedel-with-diagnostic-errors scope
+              (mevedel-session-rewind--prompt-candidates session))))
       (unless candidates
-        (user-error "Session has no recorded user prompts"))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Session has no recorded user prompts"))
       (let* ((lookup (make-hash-table :test #'equal)))
         (dolist (c candidates)
           (puthash (car c) (cdr c) lookup))
@@ -2505,7 +2520,8 @@ Rewind from the view with point on that turn's response."
                          default))
                (target (gethash chosen lookup)))
           (when target
-            (mevedel-session-rewind-rewind buffer target 'before)))))))
+            (mevedel-with-diagnostic-errors scope
+              (mevedel-session-rewind-rewind buffer target 'before))))))))
 
 
 (provide 'mevedel-session-rewind)

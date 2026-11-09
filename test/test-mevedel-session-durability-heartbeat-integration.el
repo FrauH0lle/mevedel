@@ -24,7 +24,7 @@
   (let ((run (symbol-function 'mevedel-session-control-fs-run-program-async))
         launched resume)
     (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program-async)
-               (lambda (operations callback)
+               (lambda (operations callback &optional scope)
                  (let ((hold (not launched)))
                    (setq launched t)
                    (funcall run operations
@@ -34,7 +34,8 @@
                                         (lambda ()
                                           (setq resume nil)
                                           (funcall callback results error)))
-                                (funcall callback results error))))))))
+                                (funcall callback results error)))
+                            scope)))))
       (unwind-protect
           (progn
             (mevedel-session-durability-heartbeat session)

@@ -765,14 +765,16 @@ the targets behind."
                  (unless (eq (plist-get result :status) 'mismatch)
                    (mevedel-session-control-fs-program-value result))
                (error
-                (display-warning
+                (mevedel-diagnostic-warning
+                 (mevedel-diagnostic-scope (plist-get preparation :diagnostic-scope))
                  'mevedel
                  (format "Could not remove sandbox mount target %s: %s"
                          (plist-get operation :path) (error-message-string err))
                  :warning))))
            operations (mevedel-session-control-fs-run-program operations))
         (error
-         (display-warning
+         (mevedel-diagnostic-warning
+          (mevedel-diagnostic-scope (plist-get preparation :diagnostic-scope))
           'mevedel
           (format "Could not remove sandbox mount targets %s: %s"
                   (mapcar (lambda (operation) (plist-get operation :path)) operations)
@@ -1405,7 +1407,7 @@ WORKDIR identifies the execution target that the pending child will use."
 (defun mevedel-sandbox--confined-preparation
     (command workdir writable-roots executable mount-proc-p
              additional-permissions &optional temporary-root candidates
-             landlock)
+             landlock scope)
   "Prepare COMMAND in WORKDIR with WRITABLE-ROOTS using EXECUTABLE.
 MOUNT-PROC-P requests a fresh proc filesystem for the PID namespace.
 ADDITIONAL-PERMISSIONS is the validated additive execution profile.
@@ -1413,7 +1415,7 @@ TEMPORARY-ROOT is the writable temporary directory exempt from
 protected-path glob discovery.  CANDIDATES wraps already discovered paths.
 LANDLOCK is the probe's :landlock fact; with its launcher, a local command
 reaches only the host Unix sockets `mevedel-sandbox--socket-allow-list'
-names."
+names.  SCOPE identifies the originating workspace for local diagnostics."
   (let* ((canonical-workdir
           (file-name-as-directory (mevedel-file-truename workdir)))
          (roots (mevedel-sandbox--canonical-directories writable-roots)))
@@ -1470,8 +1472,10 @@ names."
                                 (mevedel-sandbox--git-ssh-start
                                  command canonical-workdir roots)
                               (error
-                               (message "mevedel: Git SSH broker unavailable: %s"
-                                        (error-message-string err))
+                               (mevedel-diagnostic-message
+                                (mevedel-diagnostic-scope scope)
+                                "Git SSH broker unavailable: %s"
+                                (error-message-string err))
                                nil)))))
                  (facts (append
                          (list :sandbox 'bubblewrap
@@ -1539,6 +1543,7 @@ names."
                      command)
                     (plist-get plan :grants) canonical-workdir))))
             (list :state 'confined
+                  :diagnostic-scope (mevedel-diagnostic-scope scope)
                   :command
                   (mevedel-sandbox--fd-backed-command
                    (cons executable arguments)
@@ -1550,7 +1555,8 @@ names."
                   :facts facts))
         (error
          (mevedel-sandbox--git-ssh-stop broker)
-         (mevedel-sandbox-cleanup protected)
+         (mevedel-sandbox-cleanup
+          (plist-put protected :diagnostic-scope (mevedel-diagnostic-scope scope)))
          (signal (car err) (cdr err)))))))
 
 
@@ -1560,7 +1566,7 @@ names."
 (defun mevedel-sandbox-prepare
     (command workdir writable-roots
              &optional additional-permissions sandbox-permissions mode
-             temporary-root candidates)
+             temporary-root candidates scope)
   "Prepare child COMMAND for WORKDIR and WRITABLE-ROOTS.
 
 Return a plist with :state, :command, and :facts.  Confined preparations also
@@ -1575,7 +1581,8 @@ SANDBOX-PERMISSIONS may be `require-escalated' after explicit approval.
 MODE defaults to the global sandbox mode.  TEMPORARY-ROOT names the
 writable temporary directory that protected-path glob discovery skips.
 CANDIDATES is the private, single-invocation discovery result used by
-`mevedel-sandbox-prepare-start'; it never survives a launch attempt."
+`mevedel-sandbox-prepare-start'; it never survives a launch attempt.
+SCOPE identifies the originating workspace for local diagnostics."
   (setq mode (mevedel-sandbox-mode-normalize
               (or mode mevedel-sandbox-mode)))
   (if (and (eq sandbox-permissions 'require-escalated)
@@ -1610,7 +1617,7 @@ CANDIDATES is the private, single-invocation discovery result used by
                   (plist-get availability :executable)
                   (plist-get availability :mount-proc)
                   additional-permissions temporary-root candidates
-                  (plist-get availability :landlock))
+                  (plist-get availability :landlock) scope)
                (error
                 (mevedel-sandbox--refused-preparation
                  'refused (error-message-string err))))
@@ -1625,7 +1632,7 @@ CANDIDATES is the private, single-invocation discovery result used by
 (defun mevedel-sandbox-prepare-start
     (callback start-process command workdir writable-roots
               &optional additional-permissions sandbox-permissions mode
-              temporary-root)
+              temporary-root scope)
   "Prepare COMMAND, yielding during native protected-directory discovery.
 Arguments after START-PROCESS follow `mevedel-sandbox-prepare'.
 START-PROCESS receives an argv and a terminal callback, owns the discovery
@@ -1702,7 +1709,7 @@ Remote and non-native pattern discovery keep their synchronous behavior."
                       (mevedel-sandbox-prepare
                        command workdir writable-roots additional-permissions
                        sandbox-permissions mode temporary-root
-                       (list candidates)))))
+                       (list candidates) scope))))
                (error (refuse (error-message-string err)))))))
       (if (and (eq system-type 'gnu/linux)
                (not (file-remote-p workdir))
@@ -1727,7 +1734,7 @@ Remote and non-native pattern discovery keep their synchronous behavior."
             (error (refuse (error-message-string err))))
         (deliver (mevedel-sandbox-prepare
                   command workdir writable-roots additional-permissions
-                  sandbox-permissions mode temporary-root)))
+                  sandbox-permissions mode temporary-root nil scope)))
       (lambda ()
         (unless done
           (setq done t pending nil)

@@ -32,6 +32,14 @@
 (autoload 'mevedel-telemetry-memory-pass-start "mevedel-telemetry")
 (autoload 'mevedel-telemetry-record-workspace "mevedel-telemetry")
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-warning "mevedel-utilities" (scope type message &optional level buffer-name))
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+(autoload 'mevedel-diagnostic-warning "mevedel-utilities")
+
 (defcustom mevedel-memory-consolidation-min-hours 24
   "Minimum hours between successful journal-bearing general memory reviews.
 Focused and note-only reviews do not move this clock.  Explicit commands
@@ -157,7 +165,8 @@ a candidate, so shared notes are cleaned up even with journaling disabled."
   (unless (or mevedel-memory-pass--inhibit-scheduling
               (eq mevedel-memory-consolidation-mode 'manual)
               (gethash (mevedel-memory-store--claim-directory workspace) mevedel-memory-pass--drains))
-    (let ((cached (mevedel-workspace-memory-schedule workspace)) opportunity queued-at)
+    (let ((cached (mevedel-workspace-memory-schedule workspace))
+          (scope (mevedel-diagnostic-scope workspace)) opportunity queued-at)
       (unless (or (gethash workspace mevedel-memory-pass--pending)
                   (and (equal (plist-get cached :hours) mevedel-memory-consolidation-min-hours)
                        (equal (plist-get cached :digests) mevedel-memory-consolidation-min-digests)
@@ -190,7 +199,7 @@ a candidate, so shared notes are cleaned up even with journaling disabled."
                      ;; but allow the next activity offer.
                      (when (eq opportunity (mevedel-workspace-memory-schedule workspace))
                        (plist-put opportunity :after 0))))
-               (error (display-warning 'mevedel
+               (error (mevedel-diagnostic-warning scope 'mevedel
                                        (format "Automatic memory review failed: %s" (error-message-string err))
                                        :warning))))))))))
 
@@ -304,7 +313,7 @@ application errors, recovery requirements, caller closure or
 	automatic timing gates, not ownership or request limits."
   (when (or (mevedel-memory-pass-drain-status workspace)
             (mevedel-memory-pass-running workspace))
-    (user-error "Memory consolidation is already running"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Memory consolidation is already running"))
   (let* ((root (copy-sequence (mevedel-workspace-root workspace)))
          (key (mevedel-memory-store--claim-directory workspace))
          (state (list :workspace workspace :root root :key key :origin-buffer (current-buffer)
@@ -312,7 +321,7 @@ application errors, recovery requirements, caller closure or
                       :callback callback :batch 0 :status 'queued :timer nil)))
     (unless (equal root (mevedel-workspace-root workspace)) (error "Memory drain workspace changed"))
     (when (or (gethash key mevedel-memory-pass--drains) (gethash key mevedel-memory-pass--running))
-      (user-error "Memory consolidation is already running"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Memory consolidation is already running"))
     (puthash key state mevedel-memory-pass--drains)
     (plist-put state :timer (run-at-time 0 nil #'mevedel-memory-pass--drain-step state))
     state))
@@ -380,10 +389,10 @@ in the cockpit for an explicit decision."
   (condition-case err
       (let ((outcome (mevedel-memory-notes-supersede workspace accepted)))
         (when (> (cdr outcome) 0)
-          (display-warning 'mevedel (format "%d older shared-note decisions could not be superseded"
+          (mevedel-diagnostic-warning (mevedel-diagnostic-scope workspace) 'mevedel (format "%d older shared-note decisions could not be superseded"
                                             (cdr outcome))
                            :warning)))
-    (error (display-warning 'mevedel (format "Superseding older shared-note decisions failed: %s"
+    (error (mevedel-diagnostic-warning (mevedel-diagnostic-scope workspace) 'mevedel (format "Superseding older shared-note decisions failed: %s"
                                              (error-message-string err))
                             :warning))))
 
@@ -664,7 +673,7 @@ The retry ends after an idle attempt or invalidation of its original actor."
                        (when (eq state (gethash key mevedel-memory-pass--running))
                          (remhash key mevedel-memory-pass--running))
                        (when (or (plist-get outcome :error) (> (plist-get outcome :unapplied-count) 0))
-                         (display-warning 'mevedel
+                         (mevedel-diagnostic-warning (mevedel-diagnostic-scope workspace) 'mevedel
                                           (format "Deferred memory application needs attention; see the memory cockpit%s"
                                                   (if-let* ((failure (plist-get outcome :error))) (concat ": " failure) ""))
                                           :warning)))))))))
@@ -672,7 +681,7 @@ The retry ends after an idle attempt or invalidation of its original actor."
          (cancel-timer (plist-get retry :timer))
          (when (eq retry (gethash workspace mevedel-memory-pass--deferred))
            (remhash workspace mevedel-memory-pass--deferred))
-         (display-warning 'mevedel (format "Held shared-note decisions failed: %s"
+         (mevedel-diagnostic-warning (mevedel-diagnostic-scope workspace) 'mevedel (format "Held shared-note decisions failed: %s"
                                            (error-message-string err))
                           :warning))))))
 
@@ -1202,7 +1211,7 @@ from the automatic or drain queue owner; direct starts omit admission dwell."
 	(error "Memory consolidation is already running")))
     (when (mevedel-journal-cleanup-active-p workspace)
       (if automatic (cl-return-from mevedel-memory-pass-start nil)
-	(user-error "Journal cleanup is running; retry memory consolidation when it finishes")))
+	(mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Journal cleanup is running; retry memory consolidation when it finishes")))
     (mevedel-workspace-identity-ensure root)
     (unless (equal root (mevedel-workspace-root workspace))
       (error "Memory consolidation workspace changed"))
@@ -1241,7 +1250,7 @@ from the automatic or drain queue owner; direct starts omit admission dwell."
 		     (when-let* ((failure (plist-get (plist-get state :result) :recovery-required)))
 		       ;; The cancelled drain's callback may no longer be current.
 		       ;; Settlement failure must still be visible, not quiet loss.
-		       (display-warning 'mevedel
+		       (mevedel-diagnostic-warning (mevedel-diagnostic-scope workspace) 'mevedel
 					(format "Memory admission %s needs recovery: %s" (plist-get claim :owner) failure)
 					:warning)))))
       (when (gethash key mevedel-memory-pass--running)

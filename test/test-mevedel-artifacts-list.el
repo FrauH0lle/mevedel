@@ -16,6 +16,7 @@
 (require 'mevedel-artifact-store)
 (require 'mevedel-artifacts-list)
 (require 'mevedel-cockpit)
+(require 'mevedel-collaboration)
 (require 'mevedel-collaboration-artifact)
 (require 'mevedel-collaboration-artifact-room)
 (require 'mevedel-remote-artifact)
@@ -570,12 +571,29 @@
           (setq reply '(:error "Node 22.4 or newer is required"))
           (mevedel-test--with-captured-messages messages
             (mevedel-artifacts-new-shared-item "document" "Notes"))
-          (should (string-match-p "not created: Node 22.4" messages))
+          (should (string-match-p "Node 22.4.*was not created" messages))
           (setq reply '(:id "ab12" :attach-error "Disk full"))
           (mevedel-test--with-captured-messages messages
             (mevedel-artifacts-new-shared-item "document" "Notes"))
-          (should (string-match-p "shared://ab12.*not attached.*Disk full" messages))
-          (should (string-match-p "shared://ab12.*could not open.*No browser" messages))))))
+          (should (string-match-p "Disk full.*shared://ab12.*not attached" messages))
+          (should (string-match-p "No browser.*shared://ab12.*could not open" messages))))))
+
+  :doc "attributes a deferred failure from another buffer without changing reply data"
+  (let* ((workspace (mevedel-workspace--create :root "/tmp/artifact-owner"))
+         (reply '(:error "Failed at 50%"))
+         messages)
+    (with-temp-buffer
+      (setq-local mevedel--workspace (mevedel-workspace--create :root "/tmp/other"))
+      (mevedel-test--with-captured-messages messages
+        (mevedel-artifacts-list--created reply "document" "Notes" workspace nil nil)))
+    (should (equal messages
+                   "mevedel [/tmp/artifact-owner]: Failed at 50%; document \"Notes\" was not created\n"))
+    (should (equal reply '(:error "Failed at 50%")))
+    (mevedel-test--with-captured-messages messages
+      (mevedel-artifacts-list--created
+       (list :error "mevedel [/tmp/other]: Failed") "document" "Notes" workspace nil nil))
+    (should (equal messages
+                   "mevedel [/tmp/artifact-owner]: Failed; document \"Notes\" was not created\n")))
 
   :doc "leaves another workspace's cockpit and its selection alone"
   (mevedel-artifacts-list-test--with-store

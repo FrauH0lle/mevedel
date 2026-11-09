@@ -67,7 +67,11 @@
 (declare-function mevedel--duration-label "mevedel-utilities" (seconds))
 (declare-function mevedel--timer-pending-p "mevedel-utilities" (timer))
 (declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
+                  "mevedel-utilities" (scope key format &rest args))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(autoload 'mevedel--warn-once "mevedel-utilities")
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+
 
 ;; `mevedel-view'
 (declare-function mevedel-view--cancel-scheduled-render "mevedel-view"
@@ -1061,7 +1065,8 @@ since, so deciding there would freeze a spinner that is about to appear."
                (setq mevedel-view--spinner-probe-timer nil)
                (when (mevedel-view--spinner-active-p)
                  (mevedel-view--start-spinner-timer t)))))))
-      (mevedel--ui-timer-activate timer)
+      (mevedel--ui-timer-activate
+       timer nil (mevedel-diagnostic-scope mevedel--data-buffer))
       (setq mevedel-view--spinner-probe-timer timer))))
 
 (defun mevedel-view--probe-spinner-visibility ()
@@ -1117,7 +1122,8 @@ a window resize."
              (time-add nil (seconds-to-time
                             (mevedel-view--spinner-next-delay
                              plan (mevedel-view--animation-seconds))))))
-    (mevedel--ui-timer-activate timer metadata-only)))
+    (mevedel--ui-timer-activate
+     timer metadata-only (mevedel-diagnostic-scope mevedel--data-buffer))))
 
 (defun mevedel-view--start-spinner-timer (&optional resumed)
   "Start one view timer at the next needed visual or metadata cadence.
@@ -1868,8 +1874,9 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
           (mevedel-view-render-live-update data-buf))
       (error
        (mevedel--warn-once
+        (mevedel-diagnostic-scope data-buf)
         'view-stream-agent-render
-        "Live agent transcript render failed: %s"
+        "%s (Live agent transcript render failed)"
         (error-message-string err))))))
 
 (defun mevedel-view--schedule-tool-boundary-render (data-buf)
@@ -2049,7 +2056,8 @@ on its canonical child records; it must not decorate the whole envelope."
                            (list (mevedel-view--pending-tool-claim-key event)
                                  (plist-get event :name)
                                  (mevedel-tool-display-string
-                                  (plist-get event :name) (plist-get event :args))))
+                                  (plist-get event :name) (plist-get event :args)
+                                  (mevedel-diagnostic-scope data))))
                      (setq mevedel-view--pending-tool-calls
                            (append mevedel-view--pending-tool-calls (list entry))))
                    (setcdr (nthcdr 2 entry) (list (list :tool-use-id id)))
@@ -2107,7 +2115,7 @@ running in the turn's trailing activity run."
               (detail (if (equal name "WaitAgent")
                           "agents"
                         (mevedel-tool-display-string
-                         name (plist-get args :args)))))
+                         name (plist-get args :args) (mevedel-diagnostic-scope data-buf)))))
           ;; One entry per call, not per key: identical parallel calls
           ;; share a fingerprint, and collapsing them would drop the
           ;; running row while the other call is still running.
@@ -2290,8 +2298,9 @@ NO-PROGRESS suppresses active-turn presentation."
             ;; every running decoration.
             (error
              (mevedel--warn-once
+              (mevedel-diagnostic-scope mevedel--data-buffer)
               'view-stream-stop-render
-              "Stopped turn render failed: %s" (error-message-string err)))))
+              "%s (Stopped turn render failed)" (error-message-string err)))))
         (mevedel-view--retire-pending-tool-rows)
         (setq mevedel-view--pending-tool-calls nil))
     (mevedel-view-stream--release-turn)))
@@ -2396,8 +2405,9 @@ NO-PROGRESS suppresses active-turn presentation."
                ;; `mevedel-view-rerender-debounce', so it normally runs
                ;; after the release below.
                (mevedel--warn-once
+                (mevedel-diagnostic-scope data-buf)
                 'view-stream-terminal-render
-                "Terminal response render failed: %s"
+                "%s (Terminal response render failed)"
                 (error-message-string err))
                (mevedel-view-rerender view-buf)))
           (mevedel-view-stream--release-turn)))))

@@ -9,6 +9,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 ;; `gptel'
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (defvar gptel--fsm-last)
@@ -84,22 +86,25 @@ Unrelated gptel requests pass ARGS to ORIG-FN unchanged."
   (if-let* ((buffer (mevedel-gptel-bridge--steering-buffer)))
       (with-current-buffer buffer
         (when (bound-and-true-p mevedel--agent-invocation)
-          (user-error "Use SendMessage to steer a retained agent"))
+          (mevedel-diagnostic-user-error (mevedel-diagnostic-scope buffer)
+                                         "Use SendMessage to steer a retained agent"))
         (unless (buffer-live-p mevedel--view-buffer)
-          (user-error "Open the mevedel session view to steer"))
+          (mevedel-diagnostic-user-error (mevedel-diagnostic-scope buffer)
+                                         "Open the mevedel session view to steer"))
         (let ((request mevedel--current-request)
-              (view mevedel--view-buffer))
+              (view mevedel--view-buffer)
+              (scope (mevedel-diagnostic-scope buffer)))
           (unless request
-            (user-error "No active root turn to steer"))
+            (mevedel-diagnostic-user-error scope "No active root turn to steer"))
           (with-current-buffer view
             (when mevedel-view--side-conversation-p
-              (user-error "Steering is unavailable in a side conversation"))
+              (mevedel-diagnostic-user-error scope "Steering is unavailable in a side conversation"))
             (let ((input (read-string "Steering instructions for this turn: ")))
               (unless (string-blank-p input)
                 (unless (and (buffer-live-p buffer) (buffer-live-p view)
                              (eq request (buffer-local-value
                                           'mevedel--current-request buffer)))
-                  (user-error "The root turn changed while entering steering"))
+                  (mevedel-diagnostic-user-error scope "The root turn changed while entering steering"))
                 (mevedel-view--send-root input))))))
     (apply orig-fn args)))
 
@@ -107,9 +112,11 @@ Unrelated gptel requests pass ARGS to ORIG-FN unchanged."
     (orig-fn &optional calls overlay info)
   "Keep ORIG-FN's CALLS rejection out of managed mevedel requests.
 OVERLAY and INFO identify the original gptel confirmation UI."
-  (if (mevedel-gptel-bridge--steering-buffer
-       (or info (and (overlayp overlay) (overlay-get overlay 'info))))
-      (user-error "Use mevedel's permission feedback or composer to steer")
+  (if-let* ((buffer (mevedel-gptel-bridge--steering-buffer
+                    (or info (and (overlayp overlay) (overlay-get overlay 'info))))))
+      (mevedel-diagnostic-user-error
+       (mevedel-diagnostic-scope buffer)
+       "Use mevedel's permission feedback or composer to steer")
     (funcall orig-fn calls overlay info)))
 
 (defun mevedel-gptel-bridge-install ()
@@ -135,7 +142,9 @@ OVERLAY and INFO identify the original gptel confirmation UI."
                           mevedel--data-buffer (current-buffer))
     (when (and (bound-and-true-p mevedel--session)
                (mevedel-engine-external-p gptel-backend))
-      (user-error "The gptel request controls are unavailable for this engine; use mevedel's model menu for model and effort, or its tools menu"))))
+      (mevedel-diagnostic-user-error
+       (mevedel-diagnostic-scope (current-buffer))
+       "The gptel request controls are unavailable for this engine; use mevedel's model menu for model and effort, or its tools menu"))))
 
 (defun mevedel-gptel-bridge--active-p ()
   "Return non-nil while a view-launched gptel bridge is restoring."
@@ -307,7 +316,8 @@ run once this state replaces it."
                       (or (get-buffer-window view-buffer t)
                           (selected-window)))))
     (unless (and view-buffer data-buffer)
-      (user-error "No mevedel session cockpit here"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope origin)
+                                     "No mevedel session cockpit here"))
     (with-current-buffer data-buffer
       (mevedel-gptel-bridge--assert-menu-backend)
       (setq-local gptel--set-buffer-locally t))

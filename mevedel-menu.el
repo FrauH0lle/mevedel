@@ -357,7 +357,8 @@
   (let ((context (mevedel-cockpit-current-context)))
     (unless (and (mevedel-cockpit-context-view-buffer context)
                  (mevedel-cockpit-context-data-buffer context))
-      (user-error "No mevedel session cockpit here"))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope context)
+                                   "No mevedel session cockpit here"))
     context))
 
 (defun mevedel-menu--display-buffer (buffer alist)
@@ -738,7 +739,8 @@ FULL-NAME keeps the complete label for completion candidates."
                     (nth (- last-command-event ?1)
                          mevedel-menu--share-entries))))
     (unless entry
-      (user-error "No share on that key"))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope)
+                                   "No share on that key"))
     (mevedel-menu--setup 'mevedel-menu--share-item entry)))
 
 (defun mevedel-menu--share-choose ()
@@ -761,7 +763,8 @@ FULL-NAME keeps the complete label for completion candidates."
                    entry))
            (mevedel-menu--shares))))
     (unless choices
-      (user-error "No active shares or recorded lobbies"))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope context)
+                                   "No active shares or recorded lobbies"))
     (let ((entry (cdr (assoc (completing-read "Share: " choices nil t)
                              choices))))
       (when entry
@@ -809,7 +812,10 @@ FULL-NAME keeps the complete label for completion candidates."
   (interactive)
   (let ((buffer (plist-get (transient-scope) :data-buffer)))
     (unless (buffer-live-p buffer)
-      (user-error "That session is no longer open"))
+      (mevedel-diagnostic-user-error
+       (mevedel-diagnostic-scope (or (plist-get (transient-scope) :directory)
+                                    buffer 'unavailable))
+       "That session is no longer open"))
     (mevedel--display-chat-buffer buffer)))
 
 (defun mevedel-menu--share-item-links ()
@@ -1373,7 +1379,7 @@ state rather than as a fourth permission choice."
   (interactive)
   (let ((candidates (mevedel-model-candidates)))
     (unless candidates
-      (user-error "No registered gptel models"))
+      (mevedel-diagnostic-user-error 'global "No registered gptel models"))
     (let* ((scope (transient-scope))
            (label (completing-read "Model: " candidates nil t))
            (provider (cdr (assoc label candidates)))
@@ -1499,7 +1505,8 @@ asked, such as a collaboration guest's turn."
       ('gptel
        (mevedel-menu--open-gptel))
       (_
-       (user-error "Unknown cockpit area: %s" area)))))
+       (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope context)
+                                     "Unknown cockpit area: %s" area)))))
 
 (defun mevedel-menu--send ()
   "Send the current composer from the view buffer."
@@ -2066,7 +2073,8 @@ that stopped meanwhile."
     ("x" mevedel-menu--share-item-stop
      :description mevedel-menu--share-item-stop-description)]]
   (interactive)
-  (user-error "Choose a share on the Share surface"))
+  (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope)
+                               "Choose a share on the Share surface"))
 
 (transient-define-prefix mevedel-menu--control ()
   "Session control cockpit surface.

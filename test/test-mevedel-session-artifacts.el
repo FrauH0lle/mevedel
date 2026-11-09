@@ -738,12 +738,12 @@
         (dolist (authority '(pid-lock portable))
           (let ((err (should-error
                       (mevedel-session-artifacts-inspect-cold-session
-                       directory authority)
+                       directory authority nil directory)
                       :type 'user-error)))
             (should
              (equal
-              (format "No authoritative transcript segment is available: %s"
-                      directory)
+              (format "mevedel [%s]: No authoritative transcript segment is available: %s"
+                      directory directory)
               (error-message-string err)))))
       (delete-directory directory t)))
   :doc "kills a partially initialized buffer when mode setup fails"

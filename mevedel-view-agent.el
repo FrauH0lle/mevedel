@@ -122,9 +122,17 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--duration-label "mevedel-utilities" (seconds))
-(autoload 'mevedel--duration-label "mevedel-utilities")
 (declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
+                  "mevedel-utilities" (scope key format &rest args))
+(declare-function mevedel-diagnostic-message "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format &rest args))
+(autoload 'mevedel--duration-label "mevedel-utilities")
+(autoload 'mevedel--warn-once "mevedel-utilities")
+(autoload 'mevedel-diagnostic-message "mevedel-utilities")
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+
 
 ;; `mevedel-view'
 (declare-function mevedel-view--display-fragment-keymap "mevedel-view" (&rest maps))
@@ -691,7 +699,8 @@ window the user moved into history meanwhile keeps its start."
 
 (defun mevedel-view--agent-live-transcript-dispatch (function &rest args)
   "Call stream FUNCTION with ARGS for every view of the current agent buffer."
-  (let ((agent-buf (current-buffer)))
+  (let* ((agent-buf (current-buffer))
+         (scope (mevedel-diagnostic-scope agent-buf)))
     (dolist (view (mevedel-view--agent-transcript-views-for-data agent-buf))
       (condition-case err
           (with-current-buffer view
@@ -704,8 +713,9 @@ window the user moved into history meanwhile keeps its start."
             (force-mode-line-update))
         (error
          (mevedel--warn-once
+          scope
           'view-agent-live-update
-          "Live agent transcript update failed: %s"
+          "%s (Live agent transcript update failed)"
           (error-message-string err))))))
   nil)
 
@@ -762,7 +772,8 @@ window the user moved into history meanwhile keeps its start."
   (when-let* (((mevedel-agent-invocation-p invocation))
               (agent-buf (mevedel-agent-invocation-buffer invocation))
               ((buffer-live-p agent-buf)))
-    (let ((views (mevedel-view--agent-transcript-views-for-data agent-buf)))
+    (let ((views (mevedel-view--agent-transcript-views-for-data agent-buf))
+          (scope (mevedel-diagnostic-scope agent-buf)))
       (dolist (view views)
         (when (buffer-live-p view)
           (with-current-buffer view
@@ -784,8 +795,9 @@ window the user moved into history meanwhile keeps its start."
                      (force-mode-line-update t))
                  (error
                   (mevedel--warn-once
+                   scope
                    'view-agent-start-update
-                   "Starting live agent transcript update failed: %s"
+                   "%s (Starting live agent transcript update failed)"
                    (error-message-string err)))))
              t))))
       views)))
@@ -799,6 +811,7 @@ retained projections that can follow another turn."
               (agent-buf (mevedel-agent-invocation-buffer invocation))
               ((buffer-live-p agent-buf)))
     (let* ((views (mevedel-view--agent-transcript-views-for-data agent-buf))
+           (scope (mevedel-diagnostic-scope agent-buf))
            (status (mevedel-agent-invocation-transcript-status invocation))
            (started (mevedel-agent-invocation-started-at invocation))
            (elapsed (and started
@@ -829,8 +842,9 @@ retained projections that can follow another turn."
                          (mevedel-view-render--full-now))))
                  (error
                   (mevedel--warn-once
+                   scope
                    'view-agent-final-update
-                   "Final live agent transcript update failed: %s"
+                   "%s (Final live agent transcript update failed)"
                    (error-message-string err)))))
              nil #'mevedel-view-stream--release-turn))))
       views)))
@@ -841,7 +855,7 @@ Saved transcript file buffers are killed with the view.  Retained
 conversation buffers are left alone."
   (interactive)
   (unless mevedel-view--agent-transcript-p
-    (user-error "Not an agent transcript view"))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Not an agent transcript view"))
   (let ((parent mevedel-view--agent-transcript-parent-view))
     (mevedel-view--kill-agent-transcript-view (current-buffer))
     (when (buffer-live-p parent)
@@ -872,7 +886,7 @@ usual.  Keyboard invocation outside an attribution signals a user error."
      ((and event (eventp event))
       (mouse-set-point event))
      (t
-      (user-error "No transcript at point")))))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No transcript at point")))))
 
 (defun mevedel-view--session ()
   "Return the root session displayed by the current view, or nil."
@@ -920,9 +934,9 @@ Signals `user-error' when no transcript source can be opened."
          (save-path (and session (mevedel-session-save-path session)))
          (rel-path (and entry (plist-get entry :path))))
     (unless (or record pair)
-      (user-error "Unknown agent path: %s" agent-path))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Unknown agent path: %s" agent-path))
     (unless (or entry (buffer-live-p conversation-buffer))
-      (user-error "No transcript entry for agent path: %s" agent-path))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No transcript entry for agent path: %s" agent-path))
     (if (buffer-live-p conversation-buffer)
         (append (list :agent-path agent-path
                       :status status
@@ -946,14 +960,14 @@ Signals `user-error' when no transcript source can be opened."
                                          "unknown"))
                 entry)
       (unless save-path
-        (user-error "Parent session has no save-path"))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Parent session has no save-path"))
       (unless (mevedel-agent-persistence-transcript-path-p
                rel-path save-path)
-        (user-error "Transcript path failed validation: %s" rel-path))
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Transcript path failed validation: %s" rel-path))
       (let ((logical-path (expand-file-name rel-path save-path)))
         (unless (mevedel-session-artifacts-artifact-present-p
                  session rel-path)
-          (user-error "Transcript artifact missing: %s" logical-path))
+          (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Transcript artifact missing: %s" logical-path))
         (append (list :agent-path agent-path
                       :status status
                       :entry entry
@@ -1104,13 +1118,14 @@ PARENT-VIEW is the session view that opened the transcript."
   "Open the rendered agent handle at point or AGENT-PATH."
   (interactive)
   (let ((path (or agent-path
-                  (get-text-property (point) 'mevedel-view-agent-path))))
+                  (get-text-property (point) 'mevedel-view-agent-path)))
+        (scope (mevedel-diagnostic-scope (current-buffer))))
     (unless path
-      (user-error "No agent handle at point"))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No agent handle at point"))
     (condition-case err
         (mevedel-view-open-agent-transcript path)
       (user-error
-       (message "%s" (error-message-string err))))))
+       (mevedel-diagnostic-message scope "%s" (error-message-string err))))))
 
 (defun mevedel-view-open-agent-transcript (agent-path)
   "Open canonical AGENT-PATH's read-only transcript inspection view.

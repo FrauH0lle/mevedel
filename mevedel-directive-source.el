@@ -6,6 +6,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 ;; `cl-lib' is a runtime dependency, not a compile-time one: these owners
 ;; call `cl-lib' functions -- `cl-remove', `cl-some', `cl-find' -- and
 ;; `cl-lib' autoloads none of them.  Loading this module compiled and
@@ -1045,7 +1047,8 @@ session saves.  A failure is reported and retried by the next flush."
         (mevedel-instruction-store-sync workspace)
       (error
        (mevedel-instruction-store-touch workspace)
-       (message "mevedel: instruction not yet written to the store: %s"
+       (mevedel-diagnostic-message (mevedel-diagnostic-scope workspace)
+                "%s (instruction not yet written to the store)"
                 (error-message-string err))))))
 
 (defun mevedel--retire-instruction-identity (id workspace)

@@ -112,7 +112,8 @@
   "Return the background-work cockpit session for CONTEXT."
   (or (mevedel-cockpit-context-session
        (or context (mevedel-cockpit-surface-context)))
-      (user-error "No mevedel session in this buffer")))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope context)
+                                   "No mevedel session in this buffer")))
 
 (defun mevedel-background-list--agent-p (item)
   "Return non-nil when cockpit ITEM is an agent rather than an execution."
@@ -271,7 +272,8 @@
   "Return the selected item, signalling unless it is an execution."
   (let ((item (mevedel-cockpit-surface-selected)))
     (when (mevedel-background-list--agent-p item)
-      (user-error "Selected item is an agent, not an execution"))
+      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope)
+                                   "Selected item is an agent, not an execution"))
     item))
 
 (defun mevedel-background-list--call-control (function &rest args)
@@ -282,21 +284,24 @@
         (apply function session id args)
       (mevedel-execution-not-found
        (mevedel-cockpit-surface-refresh)
-       (user-error "Execution %s is no longer live" id)))))
+       (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session)
+                                     "Execution %s is no longer live" id)))))
 
 (defun mevedel-background-list--interrupt-agent (item)
   "Interrupt agent ITEM's current turn, reporting the outcome."
   (if (mevedel-agent-control-interrupt-user
        (mevedel-background-list--session) (plist-get item :path))
       (message "mevedel: agent %s interrupted" (plist-get item :path))
-    (message "mevedel: agent %s has no active turn" (plist-get item :path)))
+    (mevedel-diagnostic-message (mevedel-cockpit-diagnostic-scope)
+                                "Agent %s has no active turn" (plist-get item :path)))
   (mevedel-cockpit-surface-refresh))
 
 (defun mevedel-background-list-send-input ()
   "Send one newline-terminated input line to the selected PTY execution."
   (interactive)
   (unless (plist-get (mevedel-background-list--selected-execution) :tty)
-    (user-error "Selected execution uses closed pipe input"))
+    (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope)
+                                 "Selected execution uses closed pipe input"))
   (mevedel-background-list--call-control
    #'mevedel-execution-write-user
    (concat (read-string "PTY input: ") "\n")))
@@ -328,7 +333,8 @@ An agent stays retained after its turn is interrupted."
         (mevedel-view-open-agent-transcript (plist-get item :path))
       (let ((path (plist-get item :artifact-path)))
         (unless (and path (file-readable-p path))
-          (user-error "Execution artifact is no longer available"))
+          (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope)
+                                       "Execution artifact is no longer available"))
         (find-file path)))))
 
 (defun mevedel-background-list-quit ()

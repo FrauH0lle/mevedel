@@ -12,6 +12,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 (eval-when-compile (require 'cl-lib))
 (require 'mevedel-buddy)
 (require 'mevedel-plan)
@@ -77,7 +79,7 @@ Nonblank ARGS outrank everything the session itself knows."
 Without ARGS the brief comes from the session.  `off' forgets this
 project's brief and turns `mevedel-buddy-global-mode' off."
   (let ((session (or (bound-and-true-p mevedel--session)
-                     (user-error "No mevedel session in this buffer")))
+                     (mevedel-diagnostic-user-error 'unavailable "No mevedel session in this buffer")))
         (args (string-trim (or args "")))
         (scope-key (mevedel-buddy-directory-scope-key default-directory)))
     (if (equal args "off")
@@ -87,10 +89,10 @@ project's brief and turns `mevedel-buddy-global-mode' off."
           (mevedel-buddy-global-mode -1)
           (message "mevedel: Buddy off"))
       (unless scope-key
-        (user-error "Buddy needs a project to watch; %s"
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Buddy needs a project to watch; %s"
                     "this session is not in one"))
       (let ((brief (or (mevedel-buddy-feed--brief session args)
-                       (user-error "Nothing to feed Buddy yet; %s"
+                       (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Nothing to feed Buddy yet; %s"
                                    "use /buddy WHAT YOU ARE BUILDING"))))
         (mevedel-buddy-set-brief scope-key (car brief) (cdr brief))
         (mevedel-buddy-global-mode 1)
