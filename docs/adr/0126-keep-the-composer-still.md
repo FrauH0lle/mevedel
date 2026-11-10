@@ -71,8 +71,18 @@ vscroll preservation. Merely restoring its numeric value is insufficient: with
 a pending optional window start, native redisplay can reset that value and then
 relocate point after the preserving call has returned. A native graphical
 regression covers that ordering through the setter. Redundant setters remain
-avoided; a numeric no-op does not repair externally poisoned native state. This
-corrects the demonstrated setter mechanism, not the unattributed live incidents.
+avoided.
+
+That request lasts for one redisplay, and every `set-window-start` lets the
+next redisplay recompute a start inside a wrapped line when text around it
+changed. Recomputation takes the forced-start path, which clears unpreserved
+vscroll and then moves point off a bottom row the reset clips. Writers often
+restore an unchanged viewport after an earlier redisplay consumed the request,
+so live views lost the composer this way during streaming and completion. Both
+preserving entries therefore end by renewing preservation of each displaying
+window's current nonzero vscroll. Renewal sets only the native flag: the value is
+unchanged and nothing is redrawn. A native graphical regression covers a reader
+whose start lies inside a wrapped paragraph.
 
 Draft commands capture blank pixels before their first mutation and repair only
 newly created blank space after the command. Insertion-before-deletion commands

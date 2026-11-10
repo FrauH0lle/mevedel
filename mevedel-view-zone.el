@@ -38,6 +38,7 @@
 (declare-function mevedel-view--clamp-window-starts "mevedel-view-composer"
                   (tails &optional force))
 (declare-function mevedel-view--composer-anchors "mevedel-view-composer" ())
+(declare-function mevedel-view--keep-native-vscroll "mevedel-view-composer" ())
 (declare-function mevedel-view--history-reader-windows "mevedel-view-composer" ())
 (declare-function mevedel-view--input-start "mevedel-view-composer" ())
 (declare-function mevedel-view--position-screen-y
@@ -694,7 +695,9 @@ Stale text, such as text that outlived lost local state, still needs one."
   (when-let* ((mark (plist-get state :mark)))
     (set-marker (mark-marker) (min (point-max) mark)))
   (setq mark-active (plist-get state :mark-active)
-        deactivate-mark (plist-get state :deactivate-mark)))
+        deactivate-mark (plist-get state :deactivate-mark))
+  ;; Also on unwind after a failed mutation, which skips the reconcile's tail.
+  (mevedel-view--keep-native-vscroll))
 
 (defun mevedel-view-zone--call-preserving (zone thunk)
   "Call THUNK with uniform view-state preservation for ZONE."
@@ -1068,7 +1071,8 @@ live zone text keeps its current bounds until reconciliation finishes."
                                       (not (memq (car tail) lost-starts)))
 				 (memq (car tail) visited-windows)))
 			   window-tails)
-               lost-starts))
+               lost-starts)
+              (mevedel-view--keep-native-vscroll))
             (if fragments
 		region
               (when region

@@ -1373,6 +1373,19 @@ On terminals the same API uses character cells as pixels."
   (unless (= (window-vscroll window t) (cdr viewport))
     (set-window-vscroll window (cdr viewport) t t)))
 
+(defun mevedel-view--keep-native-vscroll ()
+  "Ask the next redisplay to keep each window's pixel scrolling.
+Run after restoring window starts.  `set-window-start' lets redisplay
+recompute a start inside a wrapped line when text around it changed;
+that clears pixel scrolling unless preservation was requested since the
+previous redisplay, and then moves point off a bottom row the reset
+clips.  The request lasts for one redisplay, so renew it after every
+restoration, including numeric no-ops."
+  (dolist (window (get-buffer-window-list (current-buffer) nil t))
+    (let ((vscroll (window-vscroll window t)))
+      (unless (zerop vscroll)
+        (set-window-vscroll window vscroll t t)))))
+
 (defun mevedel-view--composer-anchors ()
   "Return (WINDOW . Y) for each window editing the visible composer.
 Y is a pixel coordinate relative to the window body.
@@ -1924,7 +1937,8 @@ found without scanning the rest of the buffer."
                                                            (memq (car tail) readers))
 					       (not (memq (car tail) lost-starts)))))
 				    tails)
-			lost-starts)))
+			lost-starts)
+		       (mevedel-view--keep-native-vscroll)))
 		 (when region
                    (mevedel-view--release-render-anchor mevedel-view--pww-current-anchor)
                    (mevedel-view--release-render-anchor mevedel-view--pww-mark-anchor)
