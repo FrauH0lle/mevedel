@@ -3289,7 +3289,11 @@ COLLAPSED-ONLY requests a cached summary without retaining large bodies."
                              (mevedel-view--prepare-tool-segment data-buf seg-start seg-end)))
                (rendering (or (plist-get prepared :pending)
                               (mevedel-view--render-prepared-tool prepared data-buf collapsed-only))))
-          (when (and key rendering (plist-get prepared :cacheable))
+          ;; A live execution's header reads transient progress (elapsed time,
+          ;; output) that the source-based key cannot see.  Caching it would
+          ;; freeze one snapshot per key, and render paths would alternate.
+          (when (and key rendering (plist-get prepared :cacheable)
+                     (not (eq (plist-get rendering :status) 'running)))
             (puthash key (plist-put (copy-sequence rendering) :group-child nil) cache))
           rendering))))
 

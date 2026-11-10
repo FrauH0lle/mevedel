@@ -5797,6 +5797,38 @@
             (should (equal "CacheTool: one" (plist-get first :header)))
             (should (equal "CacheTool: two" (plist-get second :header)))
             (should (= 2 calls)))))))
+  :doc "running renderings are not cached; settled ones are"
+  ;; A live execution's header carries elapsed time from transient progress,
+  ;; which the source-based cache key cannot see.
+  (let ((mevedel-view--tool-rendering-cache (make-hash-table :test #'equal))
+        (status 'running)
+        (calls 0))
+    (mevedel-tool-register
+     (mevedel-tool--create
+      :name "CacheTool"
+      :category "mevedel"
+      :renderer (lambda (_name _args _result _data)
+                  (cl-incf calls)
+                  (list :header (format "CacheTool: %d" calls)
+                        :status status
+                        :initially-collapsed-p t))))
+    (with-temp-buffer
+      (insert "(:name \"CacheTool\" :args (:query \"thing\"))\none\n")
+      (let ((start (point-min)) (end (point-max)))
+        (should (equal "CacheTool: 1" (plist-get (mevedel-view--segment-rendering
+                                                   (current-buffer) start end t)
+                                                  :header)))
+        (should (equal "CacheTool: 2" (plist-get (mevedel-view--segment-rendering
+                                                   (current-buffer) start end t)
+                                                  :header)))
+        (should (equal "CacheTool: 3" (plist-get (mevedel-view--segment-rendering
+                                                   (current-buffer) start end)
+                                                  :header)))
+        (should (= 0 (hash-table-count mevedel-view--tool-rendering-cache)))
+        (setq status 'success)
+        (mevedel-view--segment-rendering (current-buffer) start end t)
+        (mevedel-view--segment-rendering (current-buffer) start end t)
+        (should (= 4 calls)))))
   :doc "malformed tool text still returns nil"
   (with-temp-buffer
     (insert "not a tool")
