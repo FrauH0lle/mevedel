@@ -202,8 +202,10 @@
                   "mevedel-transcript" (segments segment))
 (declare-function mevedel-transcript--skip-leading-properties-drawer
 		  "mevedel-transcript" (pos))
-(declare-function mevedel-transcript--skip-leading-summary-block
-		  "mevedel-transcript" (pos))
+(declare-function mevedel-transcript-summary-source
+		  "mevedel-transcript" (scan-start &optional agent-p))
+(declare-function mevedel-transcript-summary-body
+		  "mevedel-transcript" (source))
 (declare-function mevedel-transcript--system-reminder-range-at-point
 		  "mevedel-transcript" (limit))
 (declare-function mevedel-transcript--tool-block-bounds-for-run
@@ -2213,7 +2215,7 @@ Execution outcome remains independent of lifecycle and disclosure state."
           (and (not agent-p)
                (not group-p)
                (mevedel-view--split-rendering-tool-header header))))
-    (if (memq vtype '(system-reminder-summary thinking-summary))
+    (if (memq vtype '(system-reminder-summary thinking-summary compaction-summary))
         header
       (let ((line
              (cond
@@ -7435,6 +7437,24 @@ RAW, when supplied, is the already copied SEG-START..SEG-END text."
         (mevedel-view--user-turn-text
          (list (list 'user data-start data-end)) data-buf)))))
 
+(defun mevedel-view--disclosure-rendering
+    (data-buf vtype data-start data-end &optional collapsed-only)
+  "Return the tool rendering behind a VTYPE disclosure, or nil.
+The section is DATA-START..DATA-END in DATA-BUF.  Nil means it has no tool
+rendering and builds its own text.  The
+compaction summary never does, so it skips the tool parse.  COLLAPSED-ONLY
+requests summary-only renderer work."
+  (cond
+   ((eq vtype 'compaction-summary) nil)
+   ((eq vtype 'tool-group)
+    (mevedel-view--tool-group-rendering-from-source
+     data-buf data-start data-end))
+   (t
+    (let ((candidate (mevedel-view--segment-rendering
+                      data-buf data-start data-end collapsed-only)))
+      (and (eq vtype (or (plist-get candidate :vtype) 'tool-summary))
+           candidate)))))
+
 (defun mevedel-view-render-insert-expanded-disclosure
     (data-buf source vtype header)
   "Insert expanded VTYPE content from SOURCE in DATA-BUF.
@@ -7451,15 +7471,8 @@ Return the normalized source coordinates used for the insertion."
          (data-start (car source))
          (data-end (cdr source))
          (rendering
-          (if (eq vtype 'tool-group)
-              (mevedel-view--tool-group-rendering-from-source
-               data-buf data-start data-end)
-            (let ((candidate
-                   (mevedel-view--segment-rendering
-                    data-buf data-start data-end)))
-              (and (eq vtype
-                       (or (plist-get candidate :vtype) 'tool-summary))
-                   candidate))))
+          (mevedel-view--disclosure-rendering
+           data-buf vtype data-start data-end))
          (start (point)))
     (if rendering
         (progn
@@ -7474,6 +7487,13 @@ Return the normalized source coordinates used for the insertion."
           (setq text
                 (mevedel-view--fontify-as
                  (string-trim (mevedel-view--clean-reasoning-text text))
+                 'markdown-mode)))
+        (when (eq vtype 'compaction-summary)
+          (setq header (concat (mevedel-view--compaction-header t) "\n")
+                text
+                (mevedel-view--fontify-as
+                 (with-current-buffer data-buf
+                   (mevedel-transcript-summary-body source))
                  'markdown-mode)))
         (when (eq vtype 'response)
           (setq text (mevedel-view--fontify-response (string-trim text))))
@@ -7534,7 +7554,7 @@ Return the normalized source coordinates used for the insertion."
           (mevedel-view--decorate-markdown-in-range start (point)))
         (when (memq vtype
                     '(thinking-summary tool-summary prompt-summary
-                      system-reminder-summary agent-handle))
+                      system-reminder-summary agent-handle compaction-summary))
           (add-text-properties
            body-start (point) '(line-prefix "    " wrap-prefix "    ")))
         (mevedel-view-render-add-display-properties start (point) vtype)))
@@ -7554,15 +7574,8 @@ The result contains normalized `:source', `:summary', and `:face' values."
          (data-start (car source))
          (data-end (cdr source))
          (rendering
-          (if (eq vtype 'tool-group)
-              (mevedel-view--tool-group-rendering-from-source
-               data-buf data-start data-end)
-            (let ((candidate
-                   (mevedel-view--segment-rendering
-                    data-buf data-start data-end t)))
-              (and (eq vtype
-                       (or (plist-get candidate :vtype) 'tool-summary))
-                   candidate))))
+          (mevedel-view--disclosure-rendering
+           data-buf vtype data-start data-end t))
          (summary
           (if rendering
               (mevedel-view--rendering-header-block rendering)
@@ -7571,6 +7584,7 @@ The result contains normalized `:source', `:summary', and `:face' values."
                (mevedel-view--tool-one-liner data-buf data-start data-end))
               ('thinking-summary
                (mevedel-view--thinking-summary data-buf data-start data-end))
+              ('compaction-summary (mevedel-view--compaction-header))
               ('response
                (mevedel-view--response-summary
                 data-buf data-start data-end))
@@ -7592,6 +7606,7 @@ The result contains normalized `:source', `:summary', and `:face' values."
             ((or 'tool-summary 'tool-group 'agent-handle 'prompt-summary)
              'mevedel-view-tool-summary)
             ('thinking-summary 'mevedel-view-thinking-summary)
+            ('compaction-summary 'mevedel-view-separator)
             ('response 'mevedel-view-response-summary)
             ('hook-context 'mevedel-view-hook-context)
             ('hook-audit 'mevedel-view-hook-audit)
@@ -8389,32 +8404,44 @@ Blank gaps and indentation between lines are allowed."
                       (throw 'found candidate)))))
               (forward-line 1))))))))
 
+(defun mevedel-view--compaction-header (&optional open)
+  "Return the compaction row's header text.
+A trailing marker says the row expands: `▸' collapsed, `▾' when OPEN."
+  (propertize (concat "--- conversation compacted --- " (if open "▾" "▸"))
+              'font-lock-face 'mevedel-view-separator))
+
 (defun mevedel-view--insert-compaction-indicator
-    (view-buf &optional hook-audits source)
-  "Insert a compacted-conversation indicator into VIEW-BUF.
-HOOK-AUDITS are optional audit records attached to the skipped summary.
-SOURCE is the source range of the skipped summary in the data buffer."
+    (view-buf data-buf source &optional hook-audits)
+  "Insert the compaction summary row into VIEW-BUF.
+SOURCE is the summary's (START . END) range in DATA-BUF.  The row is a
+source-backed disclosure, collapsed by default: expanding it shows the
+summary the model received.  HOOK-AUDITS are audit records attached to it."
   (when (buffer-live-p view-buf)
     (with-current-buffer view-buf
       (save-excursion
         (goto-char mevedel-view--input-marker)
         (set-marker-insertion-type mevedel-view--input-marker t)
         (unwind-protect
-            (progn
-              (insert
-               (propertize "--- conversation compacted ---\n"
-                           'read-only t
-                           'keymap mevedel-view--display-map
-                           'front-sticky '(read-only keymap)
-                           'rear-nonsticky '(read-only keymap)
-                           'font-lock-face
-                           'mevedel-view-separator))
-              (when hook-audits
-                (let ((audit-start (point)))
-                  (dolist (audit hook-audits)
-                    (mevedel-view--insert-hook-audit-block audit source))
-                  (mevedel-view-render-add-display-properties
-                   audit-start (point) 'hook-audit))))
+            (let* ((source (mevedel-view-disclosure-source-range
+                            data-buf (car source) (cdr source)))
+                   (saved (mevedel-view-disclosure-state-entry
+                           source 'compaction-summary))
+                   (start (point)))
+              (mevedel-view--insert-rendered-tool
+               (list :header (mevedel-view--compaction-header
+                              (and saved (not (cdr saved))))
+                     :vtype 'compaction-summary
+                     :initially-collapsed-p t
+                     :body-mode 'markdown-mode
+                     ;; Only a remembered expansion needs the body now; a
+                     ;; collapsed row costs nothing.
+                     :body (and saved (not (cdr saved))
+                                (with-current-buffer data-buf
+                                  (mevedel-transcript-summary-body source)))
+                     :hook-audits hook-audits)
+               source)
+              (mevedel-view-render-add-display-properties
+               start (point) 'compaction-summary))
           (set-marker-insertion-type mevedel-view--input-marker nil))))))
 
 (defun mevedel-view--summary-hook-audits (data-buf start end)
@@ -8476,39 +8503,15 @@ Call after restoring properties.  This does not mutate the view."
                   ((markerp transcript-start))
                   ((eq (marker-buffer transcript-start) data-buf)))
         (setq scan-start (max scan-start (marker-position transcript-start))))
-      (when (eq (get-text-property scan-start 'face) 'shadow)
-        (setq scan-start
-              (or (next-single-property-change scan-start 'face nil (point-max))
-                  (point-max)))
-        (let ((summary-start scan-start))
-          (save-excursion
-            (goto-char scan-start)
-            (when (re-search-forward "^#\\+end_summary\n\\|^```\n" nil t)
-              (setq scan-start (point))))
-          (setq summary-source (cons summary-start scan-start))))
-      (let ((after-summary
-             (mevedel-transcript--skip-leading-summary-block scan-start)))
-        (when (> after-summary scan-start)
-          (unless summary-source
-            (setq summary-source (cons scan-start after-summary)))
-          (setq scan-start after-summary)))
-      ;; Agents keep their task anchor ahead of the summary.  Discover it only
-      ;; during full-history preparation, never on the streaming/grouping path.
-      (when (and (not summary-source)
-                 (buffer-local-value 'mevedel-view--agent-transcript-p view-buf))
-        (save-excursion
-          ;; Walk producer-owned runs, not task text.  gptel persists ignored
-          ;; wrappers in GPTEL_BOUNDS.  The role tag alone grants no ownership.
-          (let ((position scan-start))
-            (while (and (not summary-source) (< position (point-max)))
-              (when (eq (get-text-property position 'gptel) 'ignore)
-                (goto-char position)
-                (when (looking-at "#\\+begin_summary mevedel-role=compaction-summary[ \t]*$")
-                  (let ((end (mevedel-transcript--skip-leading-summary-block position)))
-                    (when (> end position)
-                      (setq summary-source (cons position end))))))
-              (setq position (next-single-property-change
-                              position 'gptel nil (point-max)))))))
+      ;; Agents keep their task anchor ahead of the summary.  Discovery stays
+      ;; in full-history preparation, never on the streaming/grouping path.
+      (pcase-let ((`(,source . ,next)
+                   (mevedel-transcript-summary-source
+                    scan-start
+                    (buffer-local-value 'mevedel-view--agent-transcript-p
+                                        view-buf))))
+        (setq summary-source source
+              scan-start next))
       (let ((summary-audits
              (and summary-source
                   (mevedel-view--summary-hook-audits
@@ -8803,7 +8806,7 @@ turn.  SAVED-STATES restores matching disclosure state."
          last-current-assistant-turn-data-start last-turn-role)
     (when-let* ((summary-source (plist-get plan :summary-source)))
       (mevedel-view--insert-compaction-indicator
-       view-buf (plist-get plan :summary-audits) summary-source))
+       view-buf data-buf summary-source (plist-get plan :summary-audits)))
     (with-current-buffer data-buf
       (save-restriction
         (narrow-to-region (plist-get plan :start) (plist-get plan :end))
@@ -9257,7 +9260,7 @@ Until the complete plan is ready, keep the previous view in place."
                    (mevedel-view--full-rerender-reset data live-data historical agent)
                    (when-let* ((summary (plist-get plan :summary-source)))
                      (mevedel-view--insert-compaction-indicator
-                      view (plist-get plan :summary-audits) summary))
+                      view data summary (plist-get plan :summary-audits)))
                    (dolist (turn (plist-get plan :turns))
                      (goto-char mevedel-view--input-marker)
                      (let ((start (copy-marker (point) nil)))

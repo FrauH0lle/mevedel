@@ -607,19 +607,24 @@ pause, and failure pause unchanged; the session sidecar persists them as usual.
 
 Old segment files remain on disk and stay available through
 `mevedel-rewind`. The live view skips the leading summary block when
-rendering the visible transcript and shows a compacted-conversation
-separator in its place, while the summary remains model-visible for
-future requests. Expanded tool rows surviving in the preserved tail
+rendering the visible transcript and shows a collapsed
+`--- conversation compacted --- ▸` row (`▾` while open) in its place, while the summary remains
+model-visible for future requests. Expanding the row shows what the model
+received: the handoff preface, including the native Claude label, and the
+summary, without the block's wrapper lines. Its body is built only when
+opened, and the fold state follows the ordinary source-backed rules. Every
+engine writes the same summary block, so gptel, native Claude and agent
+compaction share one row, and older compacted sessions need no migration.
+Expanded tool rows surviving in the preserved tail
 remain expanded after the view rebuild; rows archived with the old segment
 do not transfer their disclosure state into the successor.
 Agent compaction rewrites the agent's conversation buffer in place, so its
 completion also rebuilds every open transcript view of that agent and
 re-anchors live streaming to the preserved tail. A view left on its old
 projection would otherwise treat the rewritten buffer as the in-flight turn.
-Agent inspection shows the same compacted-conversation separator, retaining
-the task anchor and hiding the model-visible summary in both live and saved
-transcripts. Summary discovery runs only during full-history preparation;
-ordinary streaming does not rescan history for it.
+Agent inspection shows the same collapsed row, retaining the task anchor, in
+both live and saved transcripts. Summary discovery runs only during
+full-history preparation; ordinary streaming does not rescan history for it.
 Only producer-owned ignored wrappers establish an agent summary's ownership;
 literal tagged summary examples in task text remain visible.
 

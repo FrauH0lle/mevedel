@@ -298,7 +298,11 @@ These changes preserve an active composer draft, including multiline input.
 
 Full rerenders parse the data buffer through
 `mevedel-transcript-segments`, after skipping gptel-org leading
-metadata and any leading compaction summary. `mevedel-view.el` owns the
+metadata and any leading compaction summary, which
+`mevedel-transcript-summary-source` locates for the view and the browser
+projection alike. The summary appears as a `compaction-summary` disclosure
+row, collapsed by default: `--- conversation compacted --- ▸` opens to the
+summary the model received, with `▾` while open. `mevedel-view.el` owns the
 surrounding view coordination, while `mevedel-view-render.el` owns turn
 grouping and projection and `mevedel-view-disclosure.el` owns source-backed
 fold state and actions. Transcript span classification, tool block recovery,

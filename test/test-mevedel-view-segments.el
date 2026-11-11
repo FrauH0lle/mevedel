@@ -175,6 +175,32 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
     (should (eq (mevedel-view-segments-display-buffer)
                 mevedel-view-segments--buffer))))
 
+(mevedel-deftest mevedel-view-segments/compaction-summary ()
+  ,test
+  (test)
+  :doc "an archived segment's own summary opens in the read-only view"
+  (mevedel-view-segments-test--with-view
+    (with-temp-file (mevedel-session-artifacts-segment-path directory 2)
+      (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n"
+              "#+begin_summary mevedel-role=compaction-summary\n"
+              "Archived handoff\n#+end_summary\n\n"
+              "Second prompt\nArchived answer two\n"))
+    (mevedel-view-go-to-segment 2)
+    (should (= 2 (mevedel-view-segments-current-number)))
+    (should (string-search "conversation compacted" (buffer-string)))
+    (should-not (string-search "Archived handoff" (buffer-string)))
+    (save-excursion
+      (goto-char (point-min))
+      (search-forward "conversation compacted")
+      (mevedel-view-toggle-section))
+    (should (string-search "Archived handoff" (buffer-string)))
+    (should (string-search "Second prompt" (buffer-string)))
+    (should (= 1 (mevedel-view-test--count-substring
+                  "conversation compacted" (buffer-string))))
+    ;; The live segment shows no compaction row.
+    (mevedel-view-go-to-segment 3)
+    (should-not (string-search "conversation compacted" (buffer-string)))))
+
 (mevedel-deftest mevedel-view-segments-initialize ()
   ,test
   (test)

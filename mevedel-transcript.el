@@ -89,6 +89,54 @@ transcript to read one small value."
           (point))
       pos)))
 
+(defun mevedel-transcript-summary-source (scan-start &optional agent-p)
+  "Return (SOURCE . NEXT) for the compaction summary near SCAN-START.
+SOURCE is the summary's (START . END) range in the current buffer, or nil
+when there is none.  NEXT is where ordinary transcript content begins.
+A leading summary starts at SCAN-START.  With AGENT-P, one behind the
+agent's task anchor counts too, found by walking `gptel' ignore runs:
+only a producer-owned wrapper grants ownership, never the role tag alone.
+The walk is a full-history step, so streaming paths must not call it."
+  (let (source)
+    (when (eq (get-text-property scan-start 'face) 'shadow)
+      (setq scan-start
+            (or (next-single-property-change scan-start 'face nil (point-max))
+                (point-max)))
+      (let ((summary-start scan-start))
+        (save-excursion
+          (goto-char scan-start)
+          (when (re-search-forward "^#\\+end_summary\n\\|^```\n" nil t)
+            (setq scan-start (point))))
+        (setq source (cons summary-start scan-start))))
+    (let ((after-summary (mevedel-transcript--skip-leading-summary-block scan-start)))
+      (when (> after-summary scan-start)
+        (unless source
+          (setq source (cons scan-start after-summary)))
+        (setq scan-start after-summary)))
+    (when (and (not source) agent-p)
+      (save-excursion
+        (let ((position scan-start))
+          (while (and (not source) (< position (point-max)))
+            (when (eq (get-text-property position 'gptel) 'ignore)
+              (goto-char position)
+              (when (looking-at "#\\+begin_summary mevedel-role=compaction-summary[ \t]*$")
+                (let ((end (mevedel-transcript--skip-leading-summary-block position)))
+                  (when (> end position)
+                    (setq source (cons position end))))))
+            (setq position (next-single-property-change
+                            position 'gptel nil (point-max)))))))
+    (cons source scan-start)))
+
+(defun mevedel-transcript-summary-body (source)
+  "Return the text of summary range SOURCE without its wrapper lines.
+SOURCE is (START . END) in the current buffer, as markers or positions.  The
+result is what the model received: the handoff preface plus the summary."
+  (let ((text (buffer-substring-no-properties (car source) (cdr source))))
+    (string-trim
+     (replace-regexp-in-string
+      "\\`[ \t\n]*#\\+begin_summary[^\n]*\n\\|\n?#\\+end_summary[ \t\n]*\\'" ""
+      text))))
+
 (defun mevedel-transcript--after-leading-system-reminders ()
   "Return first position after leading system-reminder blocks."
   (save-excursion

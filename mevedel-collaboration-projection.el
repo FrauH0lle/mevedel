@@ -69,6 +69,12 @@
                   "mevedel-transcript" (limit))
 (declare-function mevedel-transcript-segments
                   "mevedel-transcript" (start end))
+(declare-function mevedel-transcript-summary-source
+                  "mevedel-transcript" (scan-start &optional agent-p))
+(declare-function mevedel-transcript-summary-body
+                  "mevedel-transcript" (source))
+(declare-function mevedel-transcript--skip-leading-properties-drawer
+                  "mevedel-transcript" (pos))
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--strip-hook-audit-blocks
@@ -1356,6 +1362,24 @@ owner; omitted means the root transcript."
         (dolist (segment segments)
           (when (eq (car segment) 'render-data)
             (puthash (cadr segment) (caddr segment) following-render-data)))
+        ;; A compacted segment starts with the summary the model received.
+        ;; The segmenter skips that block, so project it here, ahead of the
+        ;; segment's own records.  It is bounded like any record's text.
+        (when-let* ((source (car (mevedel-transcript-summary-source
+                                  (mevedel-transcript--skip-leading-properties-drawer
+                                   (point-min))
+                                  ;; An owner path marks an agent transcript.
+                                  (and own-path t))))
+                    (text (mevedel-transcript-summary-body source))
+                    ((not (string-empty-p text))))
+          (push (mevedel-collaboration--scoped
+                 (mevedel-collaboration--record
+                  (mevedel-collaboration--stable-record-id "compaction" text)
+                  "compaction" :revision 0
+                  :text (mevedel-collaboration--truncate-bytes
+                         text mevedel-collaboration--max-record-text-bytes))
+                 (mevedel-collaboration--scope-at ranges items (car source)))
+                records))
         (dolist (segment segments)
           (while (and breadcrumbs (< (plist-get (car breadcrumbs) :start)
                                      (cadr segment)))

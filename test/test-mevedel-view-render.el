@@ -2416,7 +2416,7 @@
                                 count t
                                 do (setq start (match-end 0)))))))))
 
-  :doc "marks skipped leading compaction summary in rotated segment"
+  :doc "shows a rotated segment's compaction summary only when expanded"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
       (let ((start (point)))
@@ -2429,18 +2429,77 @@
     (mevedel-view-test--insert-data data-buf "Actual prompt\n" nil)
     (mevedel-view-test--insert-data data-buf "Actual reply\n" 'response)
     (with-current-buffer view-buf
+      (cl-flet ((text () (buffer-substring-no-properties
+                          (point-min) mevedel-view--input-marker))
+                (toggle () (save-excursion
+                             (goto-char (point-min))
+                             (search-forward "conversation compacted")
+                             (mevedel-view-toggle-section)))
+                (count-marker ()
+                  (mevedel-view-test--count-substring
+                   "conversation compacted"
+                   (buffer-substring-no-properties
+                    (point-min) mevedel-view--input-marker))))
+        (mevedel-view--full-rerender)
+        ;; Collapsed by default: the marker alone, no body or wrapper lines.
+        (should-not (string-match-p "Summary should stay out of view" (text)))
+        (should (= 1 (count-marker)))
+        (should (string-match-p "Actual prompt" (text)))
+        (should (string-match-p "Actual reply" (text)))
+        ;; The marker says the row expands, and flips while it is open.
+        (should (string-match-p "conversation compacted --- ▸" (text)))
+        (toggle)
+        (should (string-match-p "Summary should stay out of view" (text)))
+        (should (string-match-p "conversation compacted --- ▾" (text)))
+        (should-not (string-match-p "begin_summary\\|end_summary" (text)))
+        (should (= 1 (count-marker)))
+        ;; An explicit expansion survives a rerender.
+        (mevedel-view--full-rerender)
+        (should (string-match-p "Summary should stay out of view" (text)))
+        (should (= 1 (count-marker)))
+        (toggle)
+        (should-not (string-match-p "Summary should stay out of view" (text)))
+        (should (string-match-p "conversation compacted --- ▸" (text)))
+        (should (= 1 (count-marker))))))
+
+  :doc "an uncompacted transcript shows no compaction row"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Actual prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Actual reply\n" 'response)
+    (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
-        (should-not (string-match-p "Summary should stay out of view" text))
-        (should (= 1 (cl-loop with start = 0
-                              while (string-match
-                                     "conversation compacted"
-                                     text start)
-                              count t
-                              do (setq start (match-end 0)))))
-        (should (string-match-p "Actual prompt" text))
-        (should (string-match-p "Actual reply" text)))))
+      (should-not (string-match-p "conversation compacted" (buffer-string)))
+      (should (string-match-p "Actual reply" (buffer-string)))))
+
+  :doc "hook audits attached to the summary render once beside the row"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert (mevedel-session-artifacts-summary-block "Audited body") "\n"))
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t)
+            (audit (list :type 'tool-context :event "PreToolUse"
+                         :handlers (list (list :source 'project-file
+                                               :description "Project handler"
+                                               :reason "Why"
+                                               :contexts (list "Ctx"))))))
+        (mevedel-view--insert-compaction-indicator
+         view-buf data-buf
+         (with-current-buffer data-buf (cons (point-min) (point-max)))
+         (list audit)))
+      (cl-flet ((text () (buffer-substring-no-properties
+                          (point-min) mevedel-view--input-marker)))
+        (should (= 1 (mevedel-view-test--count-substring
+                      "conversation compacted" (text))))
+        (should (= 1 (mevedel-view-test--count-substring
+                      "PreToolUse hook added context" (text))))
+        (should-not (string-search "Audited body" (text)))
+        (save-excursion
+          (goto-char (point-min))
+          (search-forward "conversation compacted")
+          (mevedel-view-toggle-section))
+        (should (string-search "Audited body" (text)))
+        (should (= 1 (mevedel-view-test--count-substring
+                      "PreToolUse hook added context" (text)))))))
 
   :doc "preserves in-flight live tail when data has no assistant replacement yet"
   (mevedel-view-test--with-buffers

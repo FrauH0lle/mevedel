@@ -103,6 +103,25 @@
                          (mevedel-turn-busy-p buffer))))
               (with-current-buffer view
                 (should (equal "> Preserve my draft\nand its second line"
+                               (mevedel-view--input-text)))
+                ;; The native summary is collapsed, then opens on demand with
+                ;; the Claude-labelled preface the model received.
+                (should (string-search "conversation compacted" (buffer-string)))
+                (should-not (string-search "DURABLE NATIVE SUMMARY" (buffer-string)))
+                (save-excursion
+                  (goto-char (point-min))
+                  (search-forward "conversation compacted")
+                  (mevedel-view-toggle-section))
+                (should (string-search "DURABLE NATIVE SUMMARY" (buffer-string)))
+                (should (string-search "retained compaction summary follows"
+                                       (buffer-string)))
+                (should-not (string-search "begin_summary" (buffer-string)))
+                (save-excursion
+                  (goto-char (point-min))
+                  (search-forward "conversation compacted")
+                  (mevedel-view-toggle-section))
+                (should-not (string-search "DURABLE NATIVE SUMMARY" (buffer-string)))
+                (should (equal "> Preserve my draft\nand its second line"
                                (mevedel-view--input-text))))
               (kill-buffer view)
               (let ((path (mevedel-session-save-path session)))

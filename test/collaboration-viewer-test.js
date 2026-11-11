@@ -890,6 +890,56 @@ function testRequestSummaryRendering() {
                    ['turn ai', 'turn summary', 'turn ai']);
 }
 
+// A compacted segment starts with one quiet row that opens to the summary
+// the model received. Closed, it never parses the summary; an open choice
+// survives rebuilds; it never joins an activity group.
+function testCompactionRendering() {
+  const window = {getSelection: () => null};
+  const document = {createElement: tag => new Element(tag)};
+  const context = {window, document};
+  installMarkdown(context, Element);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/renderer.js', 'utf8'), context);
+  const renderer = window.mevedelTranscriptRenderer;
+  const record = {id: 'compaction-1', kind: 'compaction', revision: 0,
+    text: 'Handoff preface.\n\n## Goal\n- **Continue** the work.',
+    activity: {id: 'tools', summary: 'Read 2 files', status: 'completed'}};
+  const turn = renderer.renderRecord(record);
+  assert.equal(turn.dataset.role, 'summary');
+  assert.equal(turn.activity, undefined, 'a compaction row never joins tool activity');
+  assert.equal(findByClass(turn, 'tool'), null);
+  assert.equal(findByClass(turn, 'who'), null);
+  assert.equal(findByClass(turn, 'glyph'), null);
+  const fold = turn.disclosures.get('compaction');
+  assert.equal(fold.tagName, 'details');
+  assert.equal(fold.open, false, 'collapsed by default');
+  assert.equal(textOf(fold.children[0]), 'Conversation compacted');
+  assert.equal(findByClass(turn, 'compaction-body'), null, 'a closed row builds no body');
+
+  fold.open = true;
+  fold.dispatch('toggle');
+  assert.match(textOf(findByClass(fold, 'compaction-body')), /Handoff preface\./);
+  assert.match(textOf(findByClass(fold, 'compaction-body')), /Continue the work\./);
+  fold.dispatch('toggle');
+  assert.equal(fold.children.filter(child => child.className === 'compaction-body').length, 1,
+               'reopening does not duplicate the body');
+
+  // A rebuild restores an open choice with its body, and a closed one stays closed.
+  const rebuilt = renderer.renderRecord({...record}, null, null, turn);
+  assert.equal(rebuilt.disclosures.get('compaction').open, true);
+  assert.match(textOf(findByClass(rebuilt, 'compaction-body')), /Continue the work\./);
+  rebuilt.disclosures.get('compaction').open = false;
+  const closed = renderer.renderRecord({...record}, null, null, rebuilt);
+  assert.equal(closed.disclosures.get('compaction').open, false);
+  assert.equal(findByClass(closed, 'compaction-body'), null);
+
+  const ledger = new Element('div');
+  const tool = id => renderer.renderRecord({id, kind: 'tool', name: 'Read',
+    activity: {...record.activity, id}});
+  ledger.append(tool('t1'), turn, tool('t2'));
+  renderer.groupActivity(ledger);
+  assert.equal(ledger.children[1], turn, 'the row stays between, not inside, tool groups');
+}
+
 function testThinkingRendering() {
   const nodes = Object.fromEntries(['history', 'agent-panel', 'agent-transcript'].map(
     id => [id, new Element('div')]));
@@ -1017,6 +1067,7 @@ async function main() {
   await testWaitFor();
   testCompletionRendering();
   testRequestSummaryRendering();
+  testCompactionRendering();
   testThinkingRendering();
   await runNotificationTests();
   await testItemConversations();

@@ -1000,7 +1000,18 @@
           (should-not (string-match-p "Private handoff" (buffer-string)))
           (should (string-match-p "Continued response" (buffer-string)))
           (should (equal draft (mevedel-view--input-text)))
-          (should (= (point) (+ (mevedel-view--input-start) 4))))))))
+          (should (= (point) (+ (mevedel-view--input-start) 4)))
+          ;; Expanding shows what the model received: preface and summary.
+          (save-excursion
+            (goto-char (point-min))
+            (search-forward "conversation compacted")
+            (mevedel-view-toggle-section))
+          (should (string-match-p "Private handoff" (buffer-string)))
+          (should (string-match-p "Another language model started"
+                                  (buffer-string)))
+          (should-not (string-match-p "begin_summary\\|end_summary"
+                                      (buffer-string)))
+          (should (equal draft (mevedel-view--input-text))))))))
 
 (mevedel-deftest mevedel--compact-agent-terminal-failure ()
   ,test

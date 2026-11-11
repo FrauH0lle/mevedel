@@ -196,7 +196,7 @@ anchor instead.")
 (defvar mevedel-view-disclosure--collapsible-vtypes
   '(thinking-summary tool-summary tool-group response request-failure
     agent-handle prompt-summary hook-context hook-audit tool-child
-    user-input-summary system-reminder-summary)
+    user-input-summary system-reminder-summary compaction-summary)
   "View types that `mevedel-view-toggle-section' treats as section folds.
 Turn-level folds (`turn-header', `turn-summary') are handled
 separately.  Regions with other vtypes are navigable but not

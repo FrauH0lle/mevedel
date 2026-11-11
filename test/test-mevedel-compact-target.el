@@ -818,7 +818,33 @@
                 (should (string-search "Output after compaction." text)))
               (mevedel-view--full-rerender)
               (should (= 1 (mevedel-view-test--count-substring
-                            "--- conversation compacted ---" (buffer-string))))))
+                            "--- conversation compacted ---" (buffer-string))))
+              ;; The summary opens on demand and keeps one marker.
+              (should-not (string-search "## Goal" (buffer-string)))
+              (save-excursion
+                (goto-char (point-min))
+                (search-forward "conversation compacted")
+                (mevedel-view-toggle-section))
+              (should (string-search "## Goal" (buffer-string)))
+              (should-not (string-search "begin_summary" (buffer-string)))
+              (should (= 1 (mevedel-view-test--count-substring
+                            "--- conversation compacted ---" (buffer-string))))
+              ;; Streaming after compaction keeps the open row, then it closes.
+              (with-current-buffer agent-buffer
+                (let ((start (point-max)))
+                  (goto-char start)
+                  (insert "More output.\n")
+                  (put-text-property start (point) 'gptel 'response)))
+              (mevedel-view-render-live-update agent-buffer)
+              (should (string-search "More output." (buffer-string)))
+              (should (string-search "## Goal" (buffer-string)))
+              (should (= 1 (mevedel-view-test--count-substring
+                            "--- conversation compacted ---" (buffer-string))))
+              (save-excursion
+                (goto-char (point-min))
+                (search-forward "conversation compacted")
+                (mevedel-view-toggle-section))
+              (should-not (string-search "## Goal" (buffer-string)))))
         (kill-buffer view))))
 
   :doc "cold batched inspection shows one marker and preserves the parent draft"
@@ -858,7 +884,31 @@
               (should (string-search "Keep this task." (buffer-string)))
               (should (string-search "Recent tail." (buffer-string)))
               (should-not (string-search "Private summary body." (buffer-string)))
-              (should-not (string-search "begin_summary" (buffer-string))))
+              (should-not (string-search "begin_summary" (buffer-string)))
+              (save-excursion
+                (goto-char (point-min))
+                (search-forward "conversation compacted")
+                (mevedel-view-toggle-section))
+              (should (string-search "Private summary body." (buffer-string)))
+              (should-not (string-search "begin_summary" (buffer-string)))
+              (save-excursion
+                (goto-char (point-min))
+                (search-forward "conversation compacted")
+                (mevedel-view-toggle-section))
+              (should-not (string-search "Private summary body." (buffer-string)))
+              ;; A batched cold render restores the open choice.
+              (save-excursion
+                (goto-char (point-min))
+                (search-forward "conversation compacted")
+                (mevedel-view-toggle-section))
+              (mevedel-view--full-rerender)
+              (save-window-excursion
+                (switch-to-buffer view)
+                (while mevedel-view-render--batch
+                  (mevedel-view-render--batch-step view mevedel-view-render--batch)))
+              (should (string-search "Private summary body." (buffer-string)))
+              (should (= 1 (mevedel-view-test--count-substring
+                            "--- conversation compacted ---" (buffer-string)))))
             (with-current-buffer parent-view
               (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
               (should (= (point) (+ (mevedel-view--input-start) 4)))))

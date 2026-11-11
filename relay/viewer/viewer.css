@@ -403,6 +403,8 @@ div.request-summary::after, .request-summary > summary::after {
   overflow-wrap: anywhere;
   font: .8rem/1.5 var(--font-mono);
 }
+/* The compaction row reads as a rule with a label; its body is the summary. */
+.compaction-body { margin: .5rem 0 0; color: var(--ink); font-size: .9375rem; }
 .execution-status.failed { color: var(--failed); }
 .execution-result-link { border: 0; padding: 0; background: none; color: var(--accent); cursor: pointer; text-decoration: underline; font: inherit; }
 .execution-result-dialog { width: min(850px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; background: var(--surface); color: var(--ink); border: 1px solid var(--rule-strong); border-radius: 6px; }

@@ -445,6 +445,31 @@
       (kill-buffer data)
       (delete-directory directory t))))
 
+(mevedel-deftest mevedel-collaboration--history-records-compaction
+  (:doc "an archived segment projects its leading summary as a compaction record")
+  (let* ((directory (make-temp-file "mevedel-history-compaction-" t))
+         (session (mevedel-session--create :name "history-compaction"
+                                           :save-path directory
+                                           :authority-mode 'pid-lock
+                                           :current-segment 2)))
+    (unwind-protect
+        (progn
+          (with-temp-file (mevedel-session-artifacts-segment-path directory 1)
+            (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n"
+                    (mevedel-session-artifacts-summary-block "Archived handoff")
+                    "\nQuestion\n"))
+          (let* ((records (mevedel-collaboration--history-records
+                           (list :session session :data-buffer nil) 1))
+                 (summary (car records)))
+            (should (equal "compaction" (plist-get summary :kind)))
+            (should (string-prefix-p "history-1-compaction-"
+                                     (plist-get summary :id)))
+            (should (string-suffix-p "Archived handoff" (plist-get summary :text)))
+            (should (equal '("compaction" "user")
+                           (mapcar (lambda (record) (plist-get record :kind))
+                                   records)))))
+      (delete-directory directory t))))
+
 (mevedel-deftest mevedel-collaboration-forwarded-execution-compaction-dedup
   (:doc "first readable mailbox owns breadcrumb across archives and current transcript")
   (let* ((directory (make-temp-file "mevedel-history-execution-" t))

@@ -255,7 +255,7 @@
 
   function roleOf(record) {
     if (record.kind === 'user') return record.guest ? 'guest' : 'you';
-    if (record.kind === 'request-summary') return 'summary';
+    if (record.kind === 'request-summary' || record.kind === 'compaction') return 'summary';
     return 'ai';
   }
 
@@ -652,6 +652,29 @@
       content.append(details);
       turn.append(el('div', 'rail'), content);
       return restore();
+    }
+    if (record.kind === 'compaction') {
+      // Quiet and ungrouped like a request's closing rule. The summary the
+      // model received opens on demand; a closed row never parses it.
+      const content = el('div', 'content');
+      const details = el('details', 'request-summary compaction');
+      turn.disclosures.set('compaction', details);
+      let built = false;
+      const build = () => {
+        if (built) return;
+        built = true;
+        const body = el('div', 'compaction-body');
+        body.append(renderMarkdown(record.text || ''));
+        details.append(body);
+      };
+      details.addEventListener('toggle', () => { if (details.open) build(); });
+      details.append(el('summary', '', 'Conversation compacted'));
+      content.append(details);
+      turn.append(content);
+      restore();
+      // A rebuilt row restores an open choice before it is attached.
+      if (details.open) build();
+      return turn;
     }
     if (record.kind === 'request-summary') {
       // Quiet and ungrouped: no rail glyph, speaker, scope chip or activity.

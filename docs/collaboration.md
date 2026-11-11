@@ -1299,6 +1299,14 @@ brings its heading back into view and returns keyboard focus there.
 Archived and agent transcripts use the live conversation's compact grouping:
 consecutive assistant text and tool calls share one visible speaker label.
 
+A compacted segment starts with the summary the model received. The host
+projects it as one leading `compaction` record, bounded like any record's text,
+whose identity follows its text. The viewer shows it as a quiet **Conversation
+compacted** rule, collapsed by default, that opens to the summary rendered as
+Markdown. The body is built when the row is first opened, and an open choice
+survives rebuilds. This holds for the live conversation, archived segments and
+agent transcripts and archives; item discussion histories carry no summary.
+
 Substantive native thinking appears as a separate **Thinking** disclosure,
 open by default, with a muted header. It splits tool activity runs and never
 hides inside their folds. Explicit expansion or collapse survives streaming

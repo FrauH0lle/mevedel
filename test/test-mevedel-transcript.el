@@ -1493,6 +1493,66 @@ still my prompt
     (should (= (point-min)
                (mevedel-transcript--skip-leading-summary-block (point-min))))))
 
+(mevedel-deftest mevedel-transcript-summary-source ()
+  ,test
+  (test)
+  :doc "finds a leading summary and the position after it"
+  (with-temp-buffer
+    (insert "#+begin_summary mevedel-role=compaction-summary\nsummary\n#+end_summary\nlive\n")
+    (pcase-let ((`(,source . ,next)
+                 (mevedel-transcript-summary-source (point-min))))
+      (should (= (point-min) (car source)))
+      (should (string-suffix-p "#+end_summary\n"
+                               (buffer-substring-no-properties
+                                (car source) (cdr source))))
+      (should (equal "live\n" (buffer-substring-no-properties next (point-max))))))
+  :doc "reports no summary and an unchanged start for an uncompacted buffer"
+  (with-temp-buffer
+    (insert "live\n")
+    (should (equal (cons nil (point-min))
+                   (mevedel-transcript-summary-source (point-min) t))))
+  :doc "an agent summary behind its task anchor needs producer ownership"
+  (with-temp-buffer
+    (insert "Task anchor.\n")
+    (let ((start (point)))
+      (insert (propertize "#+begin_summary mevedel-role=compaction-summary\n"
+                          'gptel 'ignore)
+              "agent summary"
+              (propertize "\n#+end_summary\n" 'gptel 'ignore))
+      (insert "live\n")
+      (should-not (car (mevedel-transcript-summary-source (point-min))))
+      (let ((source (car (mevedel-transcript-summary-source (point-min) t))))
+        (should (= start (car source)))
+        (should (string-match-p "agent summary"
+                                (buffer-substring-no-properties
+                                 (car source) (cdr source)))))))
+  :doc "a literal example in ordinary text is not an agent summary"
+  (with-temp-buffer
+    (insert "Task anchor.\n#+begin_summary mevedel-role=compaction-summary\nx\n#+end_summary\n")
+    (should-not (car (mevedel-transcript-summary-source (point-min) t)))))
+
+(mevedel-deftest mevedel-transcript-summary-body ()
+  ,test
+  (test)
+  :doc "returns the text between the wrapper lines"
+  (with-temp-buffer
+    (insert "#+begin_summary mevedel-role=compaction-summary\nPreface.\n\n## Goal\n- Go\n#+end_summary\n")
+    (should (equal "Preface.\n\n## Goal\n- Go"
+                   (mevedel-transcript-summary-body
+                    (cons (point-min) (point-max))))))
+  :doc "ignores the blank lines a leading summary range includes"
+  (with-temp-buffer
+    (insert "#+begin_summary\nBody.\n#+end_summary\n\n\nlive\n")
+    (should (equal "Body."
+                   (mevedel-transcript-summary-body
+                    (car (mevedel-transcript-summary-source (point-min)))))))
+  :doc "keeps a nested example's lines and accepts markers"
+  (with-temp-buffer
+    (insert "#+begin_summary\nA\n#+begin_src org\nB\n#+end_src\n#+end_summary\n")
+    (should (equal "A\n#+begin_src org\nB\n#+end_src"
+                   (mevedel-transcript-summary-body
+                    (cons (copy-marker (point-min)) (copy-marker (point-max))))))))
+
 
 
 (defun mevedel-transcript-test--all-gptel-prop-p (start end expected)
