@@ -1888,11 +1888,9 @@
       (with-current-buffer data-buf
         (setq-local mevedel--workspace workspace
                     mevedel--session session)
-        (let ((start (point)))
-          (insert "#+begin_summary mevedel-role=compaction-summary\n"
-                  "Only effective compacted context remains.\n"
-                  "#+end_summary\n")
-          (put-text-property start (point) 'face 'shadow)))
+        (insert "#+begin_summary mevedel-role=compaction-summary\n"
+                "Only effective compacted context remains.\n"
+                "#+end_summary\n"))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (goto-char (mevedel-view--input-start))

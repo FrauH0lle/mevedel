@@ -97,22 +97,10 @@ A leading summary starts at SCAN-START.  With AGENT-P, one behind the
 agent's task anchor counts too, found by walking `gptel' ignore runs:
 only a producer-owned wrapper grants ownership, never the role tag alone.
 The walk is a full-history step, so streaming paths must not call it."
-  (let (source)
-    (when (eq (get-text-property scan-start 'face) 'shadow)
-      (setq scan-start
-            (or (next-single-property-change scan-start 'face nil (point-max))
-                (point-max)))
-      (let ((summary-start scan-start))
-        (save-excursion
-          (goto-char scan-start)
-          (when (re-search-forward "^#\\+end_summary\n\\|^```\n" nil t)
-            (setq scan-start (point))))
-        (setq source (cons summary-start scan-start))))
-    (let ((after-summary (mevedel-transcript--skip-leading-summary-block scan-start)))
-      (when (> after-summary scan-start)
-        (unless source
-          (setq source (cons scan-start after-summary)))
-        (setq scan-start after-summary)))
+  (let* ((after-summary (mevedel-transcript--skip-leading-summary-block scan-start))
+         (source (and (> after-summary scan-start)
+                      (prog1 (cons scan-start after-summary)
+                        (setq scan-start after-summary)))))
     (when (and (not source) agent-p)
       (save-excursion
         (let ((position scan-start))
