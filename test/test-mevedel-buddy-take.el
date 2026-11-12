@@ -89,5 +89,26 @@
       (should-not (string-search "Buddy watches" (mevedel-take-test--labels)))
       (should (equal "before\nselected code\nafter\n" (buffer-string))))))
 
+(mevedel-deftest mevedel-notes-list-take
+  (:quiet t)
+  ,test
+  (test)
+  :doc "source menu and list toggle Take and drop without source-letter bindings"
+  (mevedel-take-test--with-source
+    (let ((note (mevedel-note-create "Implement the goal")))
+      (cl-letf (((symbol-function 'read-multiple-choice)
+                 (lambda (_prompt choices &rest _) (assq ?t choices))))
+        (mevedel-note-menu note))
+      (should (eq 'taken (mevedel-notes-attention-state note)))
+      (should (eq 'self-insert-command (key-binding "t")))
+      (let ((list-buffer (mevedel-notes-list workspace)))
+        (with-current-buffer list-buffer
+          (goto-char (point-min)) (search-forward "Implement the goal")
+          (call-interactively (key-binding "T"))
+          (should (string-search "unsent" (buffer-string)))
+          (goto-char (point-min)) (search-forward "Implement the goal")
+          (call-interactively (key-binding "T"))
+          (should (string-search "Buddy watches" (buffer-string))))))))
+
 (provide 'test-mevedel-buddy-take)
 ;;; test-mevedel-buddy-take.el ends here

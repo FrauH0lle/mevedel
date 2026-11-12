@@ -198,11 +198,12 @@ Restore only the selected note's file, not every stashed source file."
 
 (defun mevedel-notes--actions-hint (&optional note)
   "Return the current modified-key menu hint for NOTE."
-  (format "%s: send, edit, done, %s"
+  (format "%s: send, %s, edit, done, %s"
           (if-let* ((key (where-is-internal #'mevedel--ov-actions-dispatch
                                            mevedel-note-actions-map t)))
               (key-description key)
             "M-x mevedel-note-menu")
+          (if (and note (eq 'taken (overlay-get note 'mevedel-note-state))) "drop" "take")
           (if (and note (eq 'buddy (overlay-get note 'mevedel-note-author)))
               "dismiss, keep" "delete")))
 
@@ -509,6 +510,9 @@ Return its live source overlay, retaining its text, tags and attachments."
                    (append '((?s "send" "Send or reopen the note conversation")
                              (?e "edit" "Edit note text")
                              (?x "done" "Mark note done"))
+                           (if (eq 'taken (overlay-get note 'mevedel-note-state))
+                               '((?t "drop" "Stop watching this note"))
+                             '((?t "take" "Implement yourself with Buddy watching")))
                            (if (eq 'buddy (overlay-get note 'mevedel-note-author))
                                '((?d "dismiss" "Dismiss this remark")
                                  (?k "keep" "Keep as your own note"))
@@ -516,6 +520,9 @@ Return its live source overlay, retaining its text, tags and attachments."
                            (when (overlay-get note 'mevedel-note-legacy-history)
                              '((?h "history" "Inspect read-only pre-migration history"))))))
         (?s (mevedel-note-send note))
+        (?t (if (eq 'taken (overlay-get note 'mevedel-note-state))
+                (mevedel-note-drop note)
+              (mevedel-note-take note)))
         (?e (mevedel-note-edit
              (read-string "Note: " (overlay-get note 'mevedel-note-text)) note))
         (?x (mevedel-note-done note))

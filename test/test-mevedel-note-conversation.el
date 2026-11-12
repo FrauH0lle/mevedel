@@ -169,6 +169,28 @@
     (should (= 1 (length sent)))
     (mevedel-note-conversation-test--answer (car sent) "Sent through the menu.")))
 
+(mevedel-deftest mevedel-note-send/buddy-ownership
+  (:quiet t)
+  ,test
+  (test)
+  :doc "send transfers a Buddy remark before creating its durable conversation"
+  (mevedel-note-conversation-test--with-source
+    (require 'mevedel-buddy-note)
+    (let ((note (mevedel-note-create "Fix what Buddy found")))
+      (overlay-put note 'mevedel-note-author 'buddy)
+      (let ((view (mevedel-note-send note)))
+        (should (eq 'user (overlay-get note 'mevedel-note-author)))
+        (should (overlay-get note 'mevedel-note-kept-from-buddy))
+        (mevedel-note-conversation-test--answer (car sent) "Fixed in this conversation.")
+        (with-current-buffer view
+          (should (string-search "Fixed in this conversation." (buffer-string)))))
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (let ((restored (with-current-buffer source (mevedel-notes--at-point))))
+        (should (eq 'user (overlay-get restored 'mevedel-note-author)))
+        (should (overlay-get restored 'mevedel-note-kept-from-buddy))
+        (should (overlay-get restored 'mevedel-note-session-id))))))
+
 (mevedel-deftest mevedel-note-send/chat-selection-isolation
   (:quiet t)
   ,test

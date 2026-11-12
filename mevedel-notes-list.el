@@ -42,6 +42,7 @@ Called when folding as well as refreshing: use only cached state, never I/O.")
     (define-key map (kbd "t") #'mevedel-notes-list-tags)
     (define-key map (kbd "e") #'mevedel-notes-list-edit)
     (define-key map (kbd "s") #'mevedel-notes-list-send)
+    (define-key map (kbd "T") #'mevedel-notes-list-take)
     (define-key map (kbd "g") #'mevedel-notes-list-refresh)
     (define-key map (kbd "q") #'mevedel-window-quit)
     map)
@@ -49,8 +50,8 @@ Called when folding as well as refreshing: use only cached state, never I/O.")
 
 (define-derived-mode mevedel-notes-list-mode tabulated-list-mode "Notes"
   "Workspace notes grouped by the attention they need.
-Use v or RET to visit, s to send, e to edit text, t to edit tags, d to delete,
-x for done, r to restore, TAB to fold recently closed, g to refresh
+Use v or RET to visit, s to send, T to take/drop, e to edit, t for tags,
+d to delete, x for done, r to restore, TAB to fold recently closed, g to refresh
 and q to return to the invoking window."
   (setq tabulated-list-format
         [("#" 5 nil) ("Where" 26 nil) ("By" 14 nil)
@@ -72,7 +73,9 @@ and q to return to the invoking window."
            (replace-regexp-in-string "[\n\r\t]+" " "
                                      (or (plist-get props 'mevedel-note-text) ""))
            (format "%s%s" (or (plist-get note :closed-reason)
-                               (mevedel-notes-attention-state props))
+                               (if (eq 'taken (mevedel-notes-attention-state props))
+                                   "taken; Buddy watches"
+                                 (mevedel-notes-attention-state props)))
                    (if (plist-get note :source-missing) "; source missing" ""))
            (mapconcat #'symbol-name (plist-get props 'mevedel-note-tags) ", ")))))
 
@@ -170,6 +173,15 @@ and q to return to the invoking window."
   "Mark the selected open note done without changing its code."
   (interactive)
   (mevedel-note-done (mevedel-notes-list--selected-note))
+  (mevedel-notes-list-refresh))
+
+(defun mevedel-notes-list-take ()
+  "Take the selected note, or drop it if it is already taken."
+  (interactive)
+  (let ((note (mevedel-notes-list--selected-note)))
+    (if (eq 'taken (overlay-get note 'mevedel-note-state))
+        (mevedel-note-drop note)
+      (mevedel-note-take note)))
   (mevedel-notes-list-refresh))
 
 (defun mevedel-notes-list-restore ()

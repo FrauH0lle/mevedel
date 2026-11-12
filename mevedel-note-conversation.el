@@ -184,6 +184,9 @@ ordinary request-time transform, where media has an active request owner."
                                            (with-current-buffer (overlay-buffer note)
                                              (file-name-directory buffer-file-name)))))
              (session (buffer-local-value 'mevedel--session data)))
+        (dolist (item notes)
+          (when (eq 'buddy (overlay-get item 'mevedel-note-author))
+            (mevedel-buddy-keep-note item)))
         (with-current-buffer data
           (if id
               (mevedel-note-conversation-setup)
