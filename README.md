@@ -266,10 +266,30 @@ in the echo area. `mevedel-note-edit`, `mevedel-note-delete`, and
 `mevedel-note-menu` are available through `M-x` too. Deleting a note never edits
 its source code. Creating or editing a note does not send anything to a model.
 
+`M-x mevedel-notes-list` lists the whole workspace, including unopened files,
+grouped by attention state. Use `v` or `RET` to visit, `e` to edit, `t` to edit
+tags, `d` to delete, `g` to refresh and `q` to close. Listing does not open the
+source files. `M-x mevedel-note-set-tags` also edits the tags at point; an empty
+answer removes every tag.
+
+Mention `@note:3` in a chat to attach that note's current code and text, or
+`@note:{parser and not tests}` to attach notes matching a tag query. Numbers bind
+to the selected note's identity, while tag queries re-evaluate current matches.
+Empty or unmatched queries attach nothing and report that clearly. Notes are
+never automatic prompt context. The mode line summarizes working, ready and
+stale notes in the current workspace using only in-memory state.
+
 Notes use the workspace instruction store, not a session's private state, and
-survive reloads wherever the workspace already has a `.mevedel/` state directory.
-As with references, a directory without workspace state keeps them in memory
-until instructions are exported or a session first creates that state directory.
+appear when their source file is opened, without starting a session or Buddy.
+The file-visit hook discovers only local stores; remote visits restore notes
+already remembered by this Emacs, without observing the remote store. Resume or
+an explicit workspace operation loads remote state.
+
+The first note in a recognized project (VCS or project.el) creates `.mevedel/`
+and saves the note. If the project's `.gitignore` does not cover `.mevedel/`,
+the command tells you; it never changes your ignore policy. Outside a project,
+an existing workspace state directory still saves notes. Otherwise notes stay
+in memory, and a one-time message says they are not saved there.
 The store and exports now use instruction format 2; a format-1 installation
 refuses them without clearing its live instructions or overwriting the file.
 Format-1 stores are not loaded by this version.

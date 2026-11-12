@@ -106,6 +106,8 @@
 (autoload 'mevedel-note-delete "mevedel-notes" nil t)
 (autoload 'mevedel-note-edit "mevedel-notes" nil t)
 (autoload 'mevedel-note-menu "mevedel-notes" nil t)
+(autoload 'mevedel-note-set-tags "mevedel-notes" nil t)
+(autoload 'mevedel-notes-list "mevedel-notes-list" nil t)
 (autoload 'mevedel-menu "mevedel-menu" nil t)
 (autoload 'mevedel-menu-open "mevedel-menu" nil t)
 (autoload 'mevedel-open-directive-activity "mevedel-directive-activity" nil t)

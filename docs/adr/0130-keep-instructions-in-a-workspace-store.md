@@ -73,10 +73,12 @@ written before they carried it imports only on the version that wrote it.
 mark the workspace and are written after the command, at every session save,
 and at exit. While a minibuffer is active the write waits: editing a request
 there changes it on every keystroke, and it is written once the command that
-read it returns. A store is created automatically only where `.mevedel/`
-already exists. Otherwise, adding an instruction to a file in some directory
-would make that directory resolve as a workspace; an import there does not
-create one either. `mevedel-save-instructions` and `mevedel-load-instructions`
+read it returns. The first note in a recognized project root (VCS or project.el)
+creates `.mevedel/` and its store. Outside a project, an existing `.mevedel/`
+still permits automatic store creation; otherwise notes stay in memory with a
+one-time notice that they are not saved, and no workspace state is created.
+Other instruction creation and imports do not create workspace state either.
+`mevedel-save-instructions` and `mevedel-load-instructions`
 remain export and import. An import replaces the store after its
 confirmation. It is refused unless this client last observed exactly the
 store's current record, so it cannot discard instructions it never saw. An
@@ -159,3 +161,14 @@ that distinction.
   between recording an attempt and that save, the attempt can reach the store
   without its turn committing. It then keeps a turn number the next turn
   reuses, as a lost turn's attempt already did in memory.
+
+## Decision history
+
+### 2026-11-12: First-note activation in recognized projects
+
+Previously all automatic store creation required an existing `.mevedel/`
+directory. Notes now persist without a start button: the first note may create
+state at a recognized VCS or project.el root, and reports missing `.gitignore`
+coverage without changing ignore policy. Arbitrary directories still do not
+become workspaces merely because a note was created there; those notes stay in
+memory and announce that limitation once.

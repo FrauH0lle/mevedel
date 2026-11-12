@@ -66,7 +66,7 @@ A child that outlives two minutes is killed and fails the test."
                                   artifacts gptel chat chat-in-directory tools renderers
                                   live-execution claude native-btw lobby room discuss implement
                                   directive-preview-implement directive-preview-discuss
-                                  directive-answer))
+                                  directive-answer notes))
                 (run entry scenario))
               ;; The first send saves a session that a second Emacs resumes.
               (run entry 'send state)

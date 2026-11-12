@@ -198,6 +198,8 @@ Chat / view
   mevedel-directive-source.el directive anchor/presentation lifecycle and command-scoped instruction replacement
   mevedel-overlay-ui.el       instruction overlay actions and rendering
   mevedel-notes.el            source note create/edit/delete, labels and entry hints
+  mevedel-notes-list.el       workspace notes grouped by attention, visit/edit/tag/delete actions
+  mevedel-note-mentions.el    explicit note number/tag attachments, current code and UUID lookup
   mevedel-mentions.el         @ref and @file mention expansion
   mevedel-directive-persistence.el  workspace directive record codec
   mevedel-persistence.el      workspace instruction store, export/import, restore

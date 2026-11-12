@@ -70,6 +70,12 @@
 (declare-function mevedel-mention-bindings-valid-p
                   "mevedel-mention-bindings" (text))
 
+;; `mevedel-note-mentions'
+(declare-function mevedel-note-mentions-handle "mevedel-note-mentions" (info))
+(declare-function mevedel-note-mentions-resolve "mevedel-note-mentions" (identity workspace))
+(autoload 'mevedel-note-mentions-handle "mevedel-note-mentions")
+(autoload 'mevedel-note-mentions-resolve "mevedel-note-mentions")
+
 ;; `mevedel-overlays'
 (declare-function mevedel--filter-references
                   "mevedel-overlays" (query &optional workspace))
@@ -273,6 +279,12 @@ an absolute pathname even when the path is currently unavailable."
           (and session (mevedel-session-working-directory session)))
          (result (mevedel-mention-bindings-copy-text text)))
     (mevedel-mentions--bind-user-input-matches
+     result "@note:\\([0-9]+\\)" 'note
+     (lambda (captures)
+       (when-let* ((note (mevedel-note-mentions-resolve
+                          (string-to-number (car captures)) workspace)))
+         (list :note-uuid (plist-get note :uuid)))))
+    (mevedel-mentions--bind-user-input-matches
      result "@ref:\\([0-9]+\\)" 'ref
      (lambda (captures)
        (when-let* ((ref (mevedel--resolve-ref-by-id
@@ -358,7 +370,8 @@ to drill down instead."
 ;;; Mention dispatch
 
 (defvar mevedel-mention-handlers
-  `(("@ref:\\(?:\\([0-9]+\\)\\|{\\([^}]+\\)}\\)"
+  `(("@note:\\(?:\\([0-9]+\\)\\|{\\([^}]*\\)}\\)" note mevedel-note-mentions-handle)
+    ("@ref:\\(?:\\([0-9]+\\)\\|{\\([^}]+\\)}\\)"
      ref mevedel--handle-ref-mention)
     ("@agent:\\([[:alnum:]_-]+\\)" nil mevedel--handle-agent-mention)
     (,mevedel-mention-bindings-mcp-regexp mcp mevedel--handle-mcp-mention)
@@ -703,6 +716,19 @@ media encoding.  Staged bytes expire with REQUEST.  No chat buffer's
                (mevedel--all-allowed-roots chat-buffer)))
         (and workspace-root (list workspace-root)))))
 
+(defun mevedel-mentions-read-permission-context (info path)
+  "Return the normalized Read permission context for mention INFO at PATH."
+  (let* ((session (plist-get info :session))
+         (chat-buffer (or (plist-get info :chat-buffer) (current-buffer))))
+    (with-current-buffer chat-buffer
+      (mevedel-permission--invocation-context
+       :tool-name "Read" :session session
+       :workspace (and session (mevedel-session-workspace session))
+       :request (and (boundp 'mevedel--current-request) mevedel--current-request)
+       :buffer chat-buffer :path path
+       :workspace-root (plist-get info :workspace-root)
+       :allowed-roots (mevedel-mentions--allowed-roots info)))))
+
 (defun mevedel--handle-file-mention (info)
   "Handler for @file:path mentions.
 See `mevedel-mention-handlers' for the INFO plist shape.
@@ -745,20 +771,8 @@ optional strings from the `#L<start>[-<end>]' suffix."
                          (expand-file-name save-path))))
               (when (string-prefix-p root expanded)
                 (substring expanded (length root))))))
-         (workspace-root (plist-get info :workspace-root))
-         (chat-buffer (or (plist-get info :chat-buffer) (current-buffer)))
          (permission-context
-          (with-current-buffer chat-buffer
-            (mevedel-permission--invocation-context
-             :tool-name "Read"
-             :session session
-             :workspace (and session (mevedel-session-workspace session))
-             :request (and (boundp 'mevedel--current-request)
-                           mevedel--current-request)
-             :buffer chat-buffer
-             :path expanded
-             :workspace-root workspace-root
-             :allowed-roots (mevedel-mentions--allowed-roots info))))
+          (mevedel-mentions-read-permission-context info expanded))
          (display-path (concat path range-label))
          (dedup-key (cons 'file (cons expanded range-label)))
          (deny-placeholder
@@ -952,7 +966,11 @@ Do not call Read on this file again unless you need a different range.\n\n\
 (defun mevedel-mentions--valid-mention-context-p (match-beg)
   "Return non-nil when a mention starting at MATCH-BEG should be live.
 
-A mention is considered live when both of the following hold:
+A mention is considered live when all of the following hold:
+
+  0. It is not marked `mevedel-mention-literal' by a context producer.
+     This property keeps generated context readable without activating
+     mention-shaped tokens contained in the attached code.
 
   1. It is not inside a gptel-owned region.  Specifically, rejects
      `gptel' text-property values `response', `ignore', and `(tool
@@ -965,7 +983,8 @@ A mention is considered live when both of the following hold:
      \\=`@file:foo\\=' and quoted forms like \"@file:foo\" are
      treated as references to the syntax, not live invocations."
   (let ((g (get-text-property match-beg 'gptel)))
-    (and (not (memq g '(response ignore)))
+    (and (not (get-text-property match-beg 'mevedel-mention-literal))
+         (not (memq g '(response ignore)))
          (not (and (consp g) (eq (car g) 'tool)))
          (or (= match-beg (point-min))
              (memq (char-syntax (char-before match-beg))

@@ -281,6 +281,7 @@ shape, links, and directive activity.  Calls are idempotent."
     mevedel-uuid
     mevedel-instruction-type
     mevedel-note-text
+    mevedel-note-tags
     mevedel-note-author
     mevedel-note-state
     mevedel-span
@@ -1183,8 +1184,9 @@ Returns an empty string if there is no directive text."
         (mevedel-directive-invalidate-plan parent-record)))
      (t (error "Directive record not found")))))
 
-(defun mevedel--restore-subdirectives-in-buffer (workspace buffer file)
-  "Restore parent-owned directive details for FILE in BUFFER."
+(defun mevedel--restore-subdirectives-in-buffer (workspace buffer file &optional lexical)
+  "Restore parent-owned directive details for FILE in BUFFER.
+LEXICAL compares file names as strings, without filesystem I/O."
   (let ((mevedel--instruction-state-key-override
          (mevedel--instruction-workspace-key workspace)))
     (mevedel--instruction-activate-workspace workspace)
@@ -1200,7 +1202,9 @@ Returns an empty string if there is no directive text."
           (dolist (record (mevedel-directive-subdirectives owner))
             (let ((anchor (mevedel-subdirective-anchor record)))
               (when (and (stringp (plist-get anchor :file))
-                         (file-equal-p file (plist-get anchor :file)))
+                         (if lexical
+                             (equal file (plist-get anchor :file))
+                           (file-equal-p file (plist-get anchor :file))))
                 (if-let* ((overlay
                            (cl-find (mevedel-subdirective-id record)
                                     instructions
@@ -1226,8 +1230,9 @@ Returns an empty string if there is no directive text."
                       (cl-incf restored)))))))))
       restored)))
 
-(defun mevedel--restore-source-missing-directives (buffer)
-  "Reattach exact unambiguous source-missing directives returning in BUFFER."
+(defun mevedel--restore-source-missing-directives (buffer &optional lexical)
+  "Reattach exact unambiguous source-missing directives returning in BUFFER.
+LEXICAL compares file names as strings, without filesystem I/O."
   (let* ((workspace (mevedel--instruction-buffer-workspace buffer))
          (file (buffer-file-name buffer))
          (restored 0))
@@ -1235,7 +1240,9 @@ Returns an empty string if there is no directive text."
       (dolist (record (mevedel-workspace-directives workspace))
         (let ((anchor (mevedel-directive-anchor record)))
           (when (and (eq 'source-missing (plist-get anchor :state))
-                     (file-equal-p file (plist-get anchor :file)))
+                     (if lexical
+                         (equal file (plist-get anchor :file))
+                       (file-equal-p file (plist-get anchor :file))))
             (with-current-buffer buffer
               ;; Without evidence there is nothing to resolve against;
               ;; the raw 0/0 fallback would signal inside find-file.
@@ -1248,7 +1255,7 @@ Returns an empty string if there is no directive text."
                 (cl-incf restored))))))
       (cl-incf restored
                (mevedel--restore-subdirectives-in-buffer
-                workspace buffer file)))
+                workspace buffer file lexical)))
     restored))
 
 (provide 'mevedel-directive-source)

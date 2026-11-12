@@ -424,12 +424,13 @@ holds failures."
 (defun mevedel-graphical-check--capture-notes (output)
   "Capture source note labels under OUTPUT using real source commands."
   (require 'mevedel-notes)
+  (require 'mevedel-notes-list)
   (let* ((directory (make-temp-file "mevedel-graphical-notes-" t))
          (file (file-name-concat directory "example.el"))
          (workspace (mevedel-workspace--create
                      :type 'file :id directory :root directory :name "notes"))
          (mevedel--instruction-states (make-hash-table :test #'equal))
-         source)
+         source list-buffer)
     (unwind-protect
         (progn
           (write-region
@@ -448,7 +449,8 @@ holds failures."
             (mevedel-note-create "Use an index if this lookup becomes frequent"))
           (goto-char (point-min))
           (forward-line 6)
-          (mevedel-note-create "Keep the ordering stable")
+          (overlay-put (mevedel-note-create "Keep the ordering stable")
+                       'mevedel-note-attention-state 'ready)
           (goto-char (point-max))
           (forward-line -1)
           (mevedel-note-create)
@@ -460,7 +462,16 @@ holds failures."
           (let ((coding-system-for-write 'no-conversion))
             (with-temp-file (file-name-concat output "notes.png")
               (set-buffer-multibyte nil)
+              (insert (x-export-frames nil 'png))))
+          (setq list-buffer (mevedel-notes-list workspace))
+          (delete-other-windows)
+          (goto-char (point-min))
+          (redisplay t)
+          (let ((coding-system-for-write 'no-conversion))
+            (with-temp-file (file-name-concat output "notes-list.png")
+              (set-buffer-multibyte nil)
               (insert (x-export-frames nil 'png)))))
+      (when (buffer-live-p list-buffer) (kill-buffer list-buffer))
       (when (buffer-live-p source) (kill-buffer source))
       (delete-directory directory t))))
 

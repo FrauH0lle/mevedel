@@ -11,6 +11,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'project)
 (require 'mevedel-directive-source)
 (require 'mevedel-instruction-registry)
 (require 'mevedel-overlay-ui)
@@ -24,6 +25,138 @@
 
 (defvar-local mevedel-notes--last-hinted nil
   "Note most recently announced by the local entry hint.")
+
+(defvar mevedel-notes--unsaved-noticed nil
+  "Nonproject roots whose in-memory-only note status was announced.")
+
+(defun mevedel-notes--state-ignored-p (root)
+  "Return non-nil when ROOT's Git ignore policy covers `.mevedel/'."
+  (with-temp-buffer
+    (let ((default-directory root))
+      (and (condition-case nil
+               (zerop (process-file
+                       "git" nil (list t nil) nil
+                       "-c" "core.excludesFile=/dev/null"
+                       "check-ignore" "--no-index" "-v" ".mevedel/"))
+             (file-error nil))
+           (string-match-p
+            "\\(?:\\`\\|/\\)\\.gitignore:[0-9]+:[^!\n]"
+            (buffer-string))))))
+
+(defvar mevedel-notes-attention-state-functions nil
+  "Functions deriving attention state from a note's properties plist.
+The first non-nil result wins.  Called from redisplay: use only in-memory
+state, never load features, perform I/O, or mutate the supplied properties.")
+
+(defun mevedel-notes-attention-state (properties)
+  "Return a note's attention state from PROPERTIES, a plist or live overlay.
+Transient workflow attention takes precedence over persisted lifecycle."
+  (or (if (overlayp properties)
+          (overlay-get properties 'mevedel-note-attention-state)
+        (plist-get properties 'mevedel-note-attention-state))
+      (and mevedel-notes-attention-state-functions
+           (run-hook-with-args-until-success
+            'mevedel-notes-attention-state-functions
+            (if (overlayp properties) (overlay-properties properties) properties)))
+      (if (overlayp properties)
+          (overlay-get properties 'mevedel-note-state)
+        (plist-get properties 'mevedel-note-state))
+      'unsent))
+
+(defun mevedel-notes-mode-line ()
+  "Return this buffer's cached-workspace note attention summary.
+Only inspect in-memory records.  Never discover a workspace, visit a file,
+or observe a store from redisplay."
+  (when-let* ((key (or (when-let* ((workspace
+                                   (or (bound-and-true-p mevedel--workspace)
+                                       (and (bound-and-true-p mevedel--session)
+                                            (mevedel-session-workspace mevedel--session)))))
+                         (mevedel--instruction-workspace-key workspace))
+                       mevedel--instruction-current-state-key))
+              (state (gethash key mevedel--instruction-states)))
+    (let ((working 0) (ready 0) (stale 0))
+      (dolist (entry (plist-get state :instructions))
+        (dolist (note (if (bufferp (car entry)) (cdr entry)
+                       (plist-get (cdr entry) :instructions)))
+          (let ((properties (if (overlayp note) note (plist-get note :properties))))
+            (when (eq (if (overlayp note)
+                          (overlay-get note 'mevedel-instruction-type)
+                        (plist-get properties 'mevedel-instruction-type)) 'note)
+              (pcase (mevedel-notes-attention-state properties)
+                ('working (cl-incf working))
+                ('ready (cl-incf ready))
+                ('stale (cl-incf stale)))))))
+      (when (> (+ working ready stale) 0)
+        (concat " Notes: "
+                (string-join
+                 (delq nil (list (and (> working 0) (format "%d working" working))
+                                 (and (> ready 0) (format "%d ready" ready))
+                                 (and (> stale 0) (format "%d stale" stale))))
+                 ", "))))))
+
+(unless (listp global-mode-string)
+  (setq global-mode-string (list global-mode-string)))
+(add-to-list 'global-mode-string '(:eval (mevedel-notes-mode-line)) t)
+
+(defun mevedel-notes--entries (workspace)
+  "Return lightweight open note snapshots in WORKSPACE without visiting files.
+Each snapshot holds :file, :line, :properties and :uuid.  Stashed positions
+refer to the last observed source; visiting the note re-anchors it."
+  (let (notes)
+    (dolist (entry (plist-get (mevedel--instruction-state
+                             (mevedel--instruction-workspace-key workspace))
+                            :instructions))
+      (if (bufferp (car entry))
+          (when (buffer-live-p (car entry))
+            (with-current-buffer (car entry)
+              (save-restriction
+                (widen)
+                (dolist (note (cdr entry))
+                  (when (and (overlay-buffer note)
+                             (eq (overlay-get note 'mevedel-instruction-type) 'note))
+                    (push (list :file buffer-file-name
+                                :line (line-number-at-pos (overlay-start note))
+                                :uuid (overlay-get note 'mevedel-uuid)
+                                :properties
+                                (plist-put (mevedel--instruction-persisted-properties note)
+                                           'mevedel-note-attention-state
+                                           (overlay-get note 'mevedel-note-attention-state)))
+                          notes))))))
+        (dolist (note (plist-get (cdr entry) :instructions))
+          (let ((properties (plist-get note :properties))
+                (content (plist-get (cdr entry) :original-content)))
+            (when (eq (plist-get properties 'mevedel-instruction-type) 'note)
+              (push (list :file (car entry)
+                          :line (if content
+                                    (1+ (cl-count ?\n content :end
+                                                  (min (length content)
+                                                       (max 0 (1- (plist-get note :overlay-start))))))
+                                  1)
+                          :uuid (plist-get properties 'mevedel-uuid)
+                          :properties (copy-tree properties))
+                    notes))))))
+    (sort notes (lambda (a b)
+                  (< (plist-get (plist-get a :properties) 'mevedel-id)
+                     (plist-get (plist-get b :properties) 'mevedel-id))))))
+
+(defun mevedel-notes--resolve (identity workspace)
+  "Return the live note with numeric ID or UUID IDENTITY in WORKSPACE.
+Restore only the selected note's file, not every stashed source file."
+  (when-let* ((entry (cl-find-if
+                     (lambda (note)
+                       (equal identity (if (integerp identity)
+                                           (plist-get (plist-get note :properties) 'mevedel-id)
+                                         (plist-get note :uuid))))
+                     (mevedel-notes--entries workspace))))
+    (let ((file (plist-get entry :file))
+          (uuid (plist-get entry :uuid))
+          (mevedel--instruction-state-key-override
+           (mevedel--instruction-workspace-key workspace)))
+      (mevedel--restore-file-instructions file nil workspace)
+      (when-let* ((buffer (find-buffer-visiting file)))
+        (cl-find uuid (cdr (assq buffer (mevedel--instruction-alist)))
+                 :key (lambda (note) (overlay-get note 'mevedel-uuid))
+                 :test #'equal)))))
 
 (defun mevedel-notes--display-text (note)
   "Return NOTE's bounded, single-line display text, keeping authored text intact."
@@ -92,6 +225,27 @@
       (user-error "No note at point")))
 
 ;;;###autoload
+(defun mevedel-note-set-tags (tags &optional note)
+  "Replace NOTE's tags with TAGS, a list of symbols.
+Default to the note at point.  An empty list removes every tag."
+  (interactive
+   (let* ((note (mevedel-notes--at-point))
+          (tags (overlay-get note 'mevedel-note-tags)))
+     (list (mapcar #'intern
+                   (completing-read-multiple
+                    "Tags (empty removes all): " (mapcar #'symbol-name tags)
+                    nil nil (mapconcat #'symbol-name tags ",")))
+           note)))
+  (setq note (or note (mevedel-notes--at-point)))
+  (let ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note))))
+    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+      (unless (and (proper-list-p tags) (cl-every #'symbolp tags))
+        (user-error "Tags must be a list of symbols"))
+      (overlay-put note 'mevedel-note-tags (delete-dups (copy-sequence tags)))
+      (mevedel-notes--render note)
+      (mevedel-instruction-store-touch workspace))))
+
+;;;###autoload
 (defun mevedel-note-edit (text &optional note)
   "Replace NOTE's text with TEXT; default to the note at point."
   (interactive (let ((note (mevedel-notes--at-point)))
@@ -139,6 +293,26 @@ An empty string creates a code-only note.  Return the note overlay."
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
       (unless buffer-file-name
         (user-error "Notes need a source file"))
+      (unless (file-directory-p (mevedel-workspace-state-dir workspace))
+        (if-let* ((project (mevedel-workspace--project-current
+                           (file-name-directory buffer-file-name))))
+            (progn
+              (setq workspace (mevedel-workspace-get-or-create
+                               'project (project-root project) (project-root project)
+                               (project-name project)))
+              (setq-local mevedel--workspace workspace)
+              (make-directory (mevedel-workspace-state-dir workspace) t)
+              (unless (mevedel-notes--state-ignored-p
+                       (mevedel-workspace-root workspace))
+                (mevedel-diagnostic-message
+                 (mevedel-diagnostic-scope workspace)
+                 "Created .mevedel/; it is not covered by the project's .gitignore")))
+          (let ((root (mevedel-workspace-root workspace)))
+            (unless (member root mevedel-notes--unsaved-noticed)
+              (push root mevedel-notes--unsaved-noticed)
+              (mevedel-diagnostic-message
+               (mevedel-diagnostic-scope workspace)
+               "Notes outside a project are not saved")))))
       (let* ((region (use-region-p))
              (note (mevedel--create-instruction-overlay-in
                     (current-buffer)
