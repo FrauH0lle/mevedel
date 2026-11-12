@@ -421,6 +421,49 @@ holds failures."
             (mevedel-view-toggle-section)))
         (export "tool-groups-expanded")))))
 
+(defun mevedel-graphical-check--capture-notes (output)
+  "Capture source note labels under OUTPUT using real source commands."
+  (require 'mevedel-notes)
+  (let* ((directory (make-temp-file "mevedel-graphical-notes-" t))
+         (file (file-name-concat directory "example.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'file :id directory :root directory :name "notes"))
+         (mevedel--instruction-states (make-hash-table :test #'equal))
+         source)
+    (unwind-protect
+        (progn
+          (write-region
+           ";;; Example source notes\n\n(defun find-user (users id)\n  (seq-find (lambda (user) (= (car user) id)) users))\n\n(defun active-users (users)\n  (seq-filter #'cdr users))\n\n;; A code-only note can keep context for later.\n"
+           nil file nil 'silent)
+          (setq source (find-file-noselect file))
+          (switch-to-buffer source)
+          (delete-other-windows)
+          (setq-local mevedel--workspace workspace)
+          (goto-char (point-min))
+          (forward-line 3)
+          (search-forward "seq-find")
+          (let ((transient-mark-mode t))
+            (set-mark (- (point) 8))
+            (activate-mark)
+            (mevedel-note-create "Use an index if this lookup becomes frequent"))
+          (goto-char (point-min))
+          (forward-line 6)
+          (mevedel-note-create "Keep the ordering stable")
+          (goto-char (point-max))
+          (forward-line -1)
+          (mevedel-note-create)
+          (font-lock-ensure)
+          (goto-char (point-min))
+          (set-window-start nil (point-min))
+          (message nil)
+          (redisplay t)
+          (let ((coding-system-for-write 'no-conversion))
+            (with-temp-file (file-name-concat output "notes.png")
+              (set-buffer-multibyte nil)
+              (insert (x-export-frames nil 'png)))))
+      (when (buffer-live-p source) (kill-buffer source))
+      (delete-directory directory t))))
+
 (defun mevedel-graphical-check--child (output)
   "Run the graphical checks, save diagnostics in OUTPUT, and always exit."
   (let ((status 1))
@@ -431,6 +474,7 @@ holds failures."
           (sit-for 0.2)
           (mevedel-graphical-check--capture output)
           (mevedel-graphical-check--capture-tool-groups output)
+          (mevedel-graphical-check--capture-notes output)
           (require 'ert)
           (dolist (file mevedel-graphical-check--files)
             (load (file-name-concat mevedel-graphical-check--root "test" file) nil t))

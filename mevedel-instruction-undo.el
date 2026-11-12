@@ -46,7 +46,15 @@
          (links (overlay-get overlay 'mevedel-links)))
     (list :overlay identity
           :start (overlay-start overlay) :end (overlay-end overlay)
-          :properties (mevedel--instruction-persisted-properties overlay)
+          :properties
+          (let ((properties (mevedel--instruction-persisted-properties overlay)))
+            ;; Source geometry undo must not rewind a note's authored text or
+            ;; lifecycle.  Those fields stay on its existing identity object.
+            (if (eq (overlay-get overlay 'mevedel-instruction-type) 'note)
+                (cl-loop for (prop value) on properties by #'cddr
+                         unless (string-prefix-p "mevedel-note-" (symbol-name prop))
+                         append (list prop value))
+              properties))
           :replacement (overlay-get overlay 'mevedel-replacement-pending)
           :replacement-growing (overlay-get overlay 'mevedel-replacement-growing)
           :record record :owner (car owner)
@@ -183,7 +191,9 @@ redo, so surviving overlay coordinates are never installed in the wrong text."
                                      :key #'mevedel-subdirective-id :test #'equal))
                                   (mevedel-directive-attempts owner))))))))
         ;; An explicit archive/removal after the edit wins over old text undo.
-        (when eligible
+        (when (and eligible
+                   (not (and (eq (overlay-get overlay 'mevedel-instruction-type) 'note)
+                             (overlay-get overlay 'mevedel-marked-for-deletion))))
           (mevedel--instruction-replacement-forget overlay)
           (dolist (live (copy-sequence (alist-get buffer (mevedel--instruction-alist))))
             (when (equal uuid (overlay-get live 'mevedel-uuid))
@@ -192,7 +202,7 @@ redo, so surviving overlay coordinates are never installed in the wrong text."
                        (not (plist-get state :preserve-record))
                        (not (mevedel-directive-p (mevedel--directive-source-record live))))
                   (mevedel--delete-instruction live buffer)
-                (delete-overlay live))
+                (mevedel--delete-instruction-overlay live))
               (setf (alist-get buffer (mevedel--instruction-alist))
                     (delq live (alist-get buffer (mevedel--instruction-alist))))))
           (when (plist-get state :start)

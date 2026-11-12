@@ -202,6 +202,13 @@ Each value is a plist with keys `:instructions', `:id-counter',
                         (nth 2 snapshot) (nth 3 snapshot)
                         (nth 1 snapshot)))))))
 
+(defun mevedel--delete-instruction-overlay (instruction)
+  "Remove INSTRUCTION and its auxiliary label presentation."
+  (when-let* ((label (overlay-get instruction 'mevedel-label-overlay)))
+    (delete-overlay label)
+    (overlay-put instruction 'mevedel-label-overlay nil))
+  (delete-overlay instruction))
+
 (defun mevedel--clear-instruction-state (&optional workspace)
   "Delete all visible instruction overlays in WORKSPACE and clear its state."
   (let ((mevedel--instruction-state-key-override
@@ -210,7 +217,7 @@ Each value is a plist with keys `:instructions', `:id-counter',
       (when (bufferp (car entry))
         (dolist (instr (cdr entry))
           (when (overlayp instr)
-            (delete-overlay instr)))))
+            (mevedel--delete-instruction-overlay instr)))))
     (setf (mevedel--instruction-alist) nil)
     (setq mevedel--highlighted-instruction nil)
     (setf (mevedel--instruction-id-counter) 0)

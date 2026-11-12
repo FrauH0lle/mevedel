@@ -236,6 +236,7 @@ finally:
                     ((symbol-function 'mevedel-graphical-check--capture) #'ignore)
                     ((symbol-function 'mevedel-graphical-check--capture-tool-groups)
                      #'ignore)
+                    ((symbol-function 'mevedel-graphical-check--capture-notes) #'ignore)
                     ((symbol-function 'set-frame-size) #'ignore)
                     ((symbol-function 'sit-for) #'ignore)
                     ((symbol-function 'ert-run-tests-batch) (lambda (_) stats))

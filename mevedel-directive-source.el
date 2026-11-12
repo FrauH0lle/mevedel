@@ -280,6 +280,9 @@ shape, links, and directive activity.  Calls are idempotent."
     mevedel-id
     mevedel-uuid
     mevedel-instruction-type
+    mevedel-note-text
+    mevedel-note-author
+    mevedel-note-state
     mevedel-span
     mevedel-instruction-collapse-p
     mevedel-links
@@ -1139,7 +1142,7 @@ BUFFER is required in order to perform cleanup on a dead instruction."
     (let ((ov-buffer (overlay-buffer instruction)))
       (when (buffer-live-p ov-buffer)
         (let ((children (mevedel--child-instructions instruction)))
-          (delete-overlay instruction)
+          (mevedel--delete-instruction-overlay instruction)
           (dolist (child children)
             (mevedel--update-instruction-overlay child t)))))
     (let ((id (mevedel--instruction-id instruction)))

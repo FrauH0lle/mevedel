@@ -648,7 +648,7 @@ FILE-CONTENTS."
                       :instructions instrs)
                 (car (assoc buffer (mevedel--instruction-alist)))
                 (buffer-file-name buffer))
-          (mapc #'delete-overlay
+          (mapc #'mevedel--delete-instruction-overlay
                 (mevedel--instructions-in (point-min) (point-max))))))))
 
 (defun mevedel--reference-list-info (refs)

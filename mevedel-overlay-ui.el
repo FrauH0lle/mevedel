@@ -122,6 +122,12 @@
                   "mevedel-models" (&optional buffer))
 (autoload 'mevedel-model-current-provider-label "mevedel-models")
 
+;; `mevedel-notes'
+(declare-function mevedel-note-menu "mevedel-notes" (&optional note))
+(declare-function mevedel-notes--render "mevedel-notes" (note))
+(autoload 'mevedel-note-menu "mevedel-notes" nil t)
+(autoload 'mevedel-notes--render "mevedel-notes")
+
 ;; `mevedel-overlay-ui'
 (declare-function mevedel--ov-actions-abort
                   "mevedel-overlay-ui" (&optional instructions))
@@ -405,12 +411,14 @@ active chat session."
       (?m (mevedel--ov-actions-model directive))
       (?b (mevedel--ov-actions-dispatch directive t)))))
 
-(defun mevedel--ov-actions-dispatch (&optional instruction ci)
+(cl-defun mevedel--ov-actions-dispatch (&optional instruction ci)
   "Dispatch actions for a successful instruction overlay.
 
 INSTRUCTION is the overlay to dispatch actions for, CI is true for
 interactive calls."
   (interactive (list (mevedel--ov-actions-getov) t))
+  (when (eq (overlay-get instruction 'mevedel-instruction-type) 'note)
+    (cl-return-from mevedel--ov-actions-dispatch (mevedel-note-menu instruction)))
   (let ((choice)
         (instruction-type (mevedel--instruction-type instruction)))
     (pcase-let* ((request-owner
@@ -626,6 +634,10 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
   :doc "Keymap for `mevedel' reference overlay actions at point."
   "M-m" #'mevedel--ov-actions-dispatch)
 
+(defvar-keymap mevedel-note-actions-map
+  :doc "Modified-key menu for notes; plain letters always edit source."
+  "M-m" #'mevedel--ov-actions-dispatch)
+
 (defvar-keymap mevedel-directive-actions-map
   :doc "Keymap for `mevedel' directive overlay actions at point."
   "M-m" #'mevedel--ov-actions-dispatch)
@@ -644,6 +656,7 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
   "M-m" #'mevedel--ov-actions-dispatch)
 
 (defvar mevedel--actions-maps '(mevedel-reference-actions-map
+                                mevedel-note-actions-map
                                 mevedel-directive-actions-map
                                 mevedel-directive-processing-actions-map
                                 mevedel-directive-succeeded-actions-map
@@ -1055,10 +1068,18 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
     (overlay-put
      instruction 'face `(:extend t :background ,bg-color))))
 
-(defun mevedel--update-instruction-overlay-tree
+(cl-defun mevedel--update-instruction-overlay-tree
     (instruction update-children priority parent)
   "Render INSTRUCTION and optionally UPDATE-CHILDREN.
 PRIORITY is the inherited priority and PARENT is the tree parent."
+  (when (eq (overlay-get instruction 'mevedel-instruction-type) 'note)
+    (overlay-put instruction 'priority priority)
+    (mevedel-notes--render instruction)
+    (when update-children
+      (dolist (child (mevedel--child-instructions instruction))
+        (mevedel--update-instruction-overlay-tree
+         child update-children (1+ priority) instruction)))
+    (cl-return-from mevedel--update-instruction-overlay-tree instruction))
   (let* ((instruction-type
           (mevedel--instruction-type instruction))
          (padding
@@ -1105,7 +1126,8 @@ PRIORITY is the inherited priority and PARENT is the tree parent."
   "Update INSTRUCTION's presentation and optionally UPDATE-CHILDREN."
   (let* ((parent (mevedel--parent-instruction instruction))
          (priority (if parent
-                       (1+ (overlay-get parent 'priority))
+                       (1+ (or (overlay-get parent 'priority)
+                               mevedel--default-instruction-priority))
                      mevedel--default-instruction-priority)))
     ;; Presentation must not delete authored data when an edit makes two
     ;; ranges equal.  Creation validates conflicts at its own boundary.
@@ -1127,7 +1149,12 @@ select one via `completing-read'.  If only one overlay exists, return it
 directly.  Return nil if no overlays exist at point."
   (let* ((ovs (mevedel--instructions-at (point)))
          (ov-strings (cl-loop for ov in ovs
-                              collect (string-trim (overlay-get ov 'before-string))))
+                              collect (string-trim
+                                       (or (overlay-get ov 'before-string)
+                                           (when-let* ((label (overlay-get
+                                                              ov 'mevedel-label-overlay)))
+                                             (overlay-get label 'after-string))
+                                           ""))))
          (ov-map (cl-mapcar #'cons ov-strings ovs))
          selection)
     (if (length> ovs 1)

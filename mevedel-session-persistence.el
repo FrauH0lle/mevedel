@@ -409,14 +409,6 @@
 ;;
 ;;; Customization
 
-(defcustom mevedel-sessions-directory (file-name-concat ".mevedel" "sessions")
-  "Directory where session persistence files live.
-
-Relative paths resolve against the workspace root at save time;
-absolute paths are used as-is."
-  :type 'directory
-  :group 'mevedel)
-
 (defcustom mevedel-file-history-max-snapshot-bytes (* 1024 1024)
   "Soft size cap (bytes) for individual pre-turn file checkpoints.
 

@@ -132,7 +132,7 @@ instruction restoration process.")
 (defvar mevedel--inhibit-source-missing-restore nil
   "Non-nil while a historical instruction snapshot is being installed.")
 
-(defconst mevedel-instruction-store-format-version 1
+(defconst mevedel-instruction-store-format-version 2
   "Format of the workspace instruction store and instruction exports.
 Independent of the package version, so two installations of different
 versions can share one workspace and import each other's exports.")

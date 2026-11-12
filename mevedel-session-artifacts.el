@@ -164,7 +164,6 @@
 (declare-function mevedel-session-persistence-update-transcript-entry "mevedel-session-persistence" (session agent-id updates))
 (declare-function mevedel-session-persistence-write-current-buffer-atomically "mevedel-session-persistence" (path))
 (defvar mevedel-file-history-max-snapshot-bytes)
-(defvar mevedel-sessions-directory)
 (autoload 'mevedel-session-persistence-authoritative-buffer
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-first-user-message
@@ -431,6 +430,14 @@ rerender."
 
 ;;
 ;;; Session paths
+
+(defcustom mevedel-sessions-directory (file-name-concat ".mevedel" "sessions")
+  "Directory where session persistence files live.
+
+Relative paths resolve against the workspace root at save time;
+absolute paths are used as-is."
+  :type 'directory
+  :group 'mevedel)
 
 (defun mevedel-session-artifacts-sanitize (name)
   "Return NAME with everything outside `[A-Za-z0-9_-]' replaced with `_'."

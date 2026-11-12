@@ -487,7 +487,7 @@ Return the new workspace struct."
     (test-mevedel-instruction-store--directive source "one")
     (should (eq 'ok (plist-get (mevedel-instruction-store--read workspace) :status)))
     (dolist (case '(("(:format 99 :directives nil)" . unsupported)
-                    ("(:format 1 :ids nil :directives ((:id 7)) :files nil)" . corrupt)
+                    ("(:format 2 :ids nil :directives ((:id 7)) :files nil)" . corrupt)
                     ("(:format 1 :ids nil" . corrupt)
                     ("(:format 1 :ids nil :directives nil :files nil) extra" . corrupt)))
       (with-temp-file (mevedel-instruction-store-path workspace)

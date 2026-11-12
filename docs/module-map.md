@@ -197,6 +197,7 @@ Chat / view
   mevedel-overlays.el         instruction geometry, tags, context, prompts
   mevedel-directive-source.el directive anchor/presentation lifecycle and command-scoped instruction replacement
   mevedel-overlay-ui.el       instruction overlay actions and rendering
+  mevedel-notes.el            source note create/edit/delete, labels and entry hints
   mevedel-mentions.el         @ref and @file mention expansion
   mevedel-directive-persistence.el  workspace directive record codec
   mevedel-persistence.el      workspace instruction store, export/import, restore

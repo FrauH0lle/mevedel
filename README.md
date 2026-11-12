@@ -253,6 +253,29 @@ The rest of this README is intentionally manual-style. The main moving parts are
   compaction, memory, and `@` mentions are documented below, with deeper design
   notes linked from [Documentation](#documentation).
 
+### Notes
+
+Use `M-x mevedel-note-create` in a source file to mark the active region, or
+the current line when no region is active. The text is optional: submitting an
+empty answer keeps a code-only note. A label below the code shows the note's
+number, author, text, unsent state and next actions. Notes follow source edits.
+
+Inside a note, `M-m` (or `mevedel-ov-dispatch-key`) opens its edit/delete menu.
+Plain letters still insert source text; entering a note also shows its actions
+in the echo area. `mevedel-note-edit`, `mevedel-note-delete`, and
+`mevedel-note-menu` are available through `M-x` too. Deleting a note never edits
+its source code. Creating or editing a note does not send anything to a model.
+
+Notes use the workspace instruction store, not a session's private state, and
+survive reloads wherever the workspace already has a `.mevedel/` state directory.
+As with references, a directory without workspace state keeps them in memory
+until instructions are exported or a session first creates that state directory.
+The store and exports now use instruction format 2; a format-1 installation
+refuses them without clearing its live instructions or overwriting the file.
+Format-1 stores are not loaded by this version.
+
+References and directives remain available alongside notes.
+
 ### References and directives
 
 References are pieces of context selected from normal buffers. Directives are
