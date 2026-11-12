@@ -142,7 +142,15 @@ Return an ordinary tool result immediately; no tool callback is retained."
 When SELECTED is non-nil, prepare only those reviewed changes."
   (let ((record (mevedel-note-change--record note))
         changes conflicts)
-    (when (eq 'stale (mevedel-notes-attention-state note))
+    (when (or (eq 'stale (mevedel-notes-attention-state note))
+              (cl-some
+               (lambda (entry)
+                 (let ((props (plist-get entry :properties)))
+                   (and (equal (plist-get record :id)
+                               (plist-get (plist-get props 'mevedel-note-prepared-change) :id))
+                        (eq 'stale (plist-get props 'mevedel-note-attention-state)))))
+               (mevedel-notes--entries
+                (mevedel--instruction-buffer-workspace (overlay-buffer note)))))
       (user-error "Change stale; re-ask on current code or merge"))
     (dolist (change (or selected (plist-get record :changes)))
       (let* ((path (plist-get change :path))

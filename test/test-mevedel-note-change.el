@@ -165,6 +165,27 @@
         (should (string-search "merge" (error-message-string err))))
       (should (equal "my before\nold\nafter\n" (buffer-string))))
     (should (equal "my before\nold\nafter\n" (mevedel-test--read-file file))))
+  :doc "a nonstale batch sibling cannot apply a proposal whose other note is stale"
+  (mevedel-note-change-test--with-note
+    (let ((sibling (with-current-buffer source
+                     (goto-char (point-min))
+                     (forward-line 2)
+                     (let ((item (mevedel-note-create "Other request")))
+                       (overlay-put item 'mevedel-note-state 'sent)
+                       (overlay-put item 'mevedel-note-session-id
+                                    (mevedel-session-session-id session))
+                       (move-overlay note (point-min) (overlay-start item))
+                       item))))
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n-after\n+AFTER\n*** End Patch")
+      (with-current-buffer source
+        (goto-char (point-min))
+        (insert "my ")
+        (save-buffer))
+      (should (eq 'stale (mevedel-notes-attention-state note)))
+      (should (eq 'ready (mevedel-notes-attention-state sibling)))
+      (should-error (mevedel-note-apply-change sibling) :type 'user-error)
+      (should (equal "my before\nold\nafter\n" (mevedel-test--read-file file)))))
   :doc "apply preserves unsaved disjoint visiting text in the applied pair"
   (mevedel-note-change-test--with-note
     (mevedel-note-change-test--propose
