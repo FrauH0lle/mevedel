@@ -14,7 +14,7 @@
   "Resolve BUFFER's Rewind PLAN for TARGET and BOUNDARY without source writes.
 RESOLUTIONS holds already resolved newer turns.  Confirmation resumes Rewind."
   (let* ((session (buffer-local-value 'mevedel--session buffer))
-         (tick (with-current-buffer buffer (buffer-modified-tick)))
+         (tick (with-current-buffer buffer (buffer-chars-modified-tick)))
          (history (copy-tree (mevedel-session-file-snapshots session)))
          (turn (plist-get target :cum-turn))
          (prepared (mevedel-session-rewind--prepare-buffers-for-restore
@@ -46,7 +46,7 @@ RESOLUTIONS holds already resolved newer turns.  Confirmation resumes Rewind."
                 "*Rewind merge*" (nreverse sections)
                 (lambda (changes)
                   (unless (and (buffer-live-p buffer)
-                               (= tick (with-current-buffer buffer (buffer-modified-tick)))
+                               (= tick (with-current-buffer buffer (buffer-chars-modified-tick)))
                                (equal history (mevedel-session-file-snapshots session)))
                     (user-error "Conversation changed; restart Rewind"))
                   (dolist (change changes)

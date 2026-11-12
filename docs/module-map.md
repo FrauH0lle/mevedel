@@ -114,6 +114,7 @@ Data model
 
 Chat / view
   mevedel-chat.el             session lifecycle
+  mevedel-session-rewind-merge.el staged smerge resolutions for atomic Rewind
   mevedel-directive-request.el  directive prompts, dispatch, and settlement
   mevedel-side-conversation.el  ephemeral /btw conversation lifecycle
   mevedel-directive-activity.el  read-only workspace directive inspector

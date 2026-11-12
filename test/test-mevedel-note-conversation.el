@@ -46,6 +46,7 @@
           (mevedel-session-persistence--cleanup-throttle (make-hash-table :test #'equal))
           (mevedel-instruction-store--dirty nil)
           (mevedel-instruction-store--failed nil)
+          (mevedel-notes--unsaved-noticed nil)
           (mevedel-journal-enabled nil)
           (gptel--known-tools (copy-tree gptel--known-tools))
           (gptel--known-presets (copy-tree gptel--known-presets))
@@ -215,7 +216,7 @@
   (:quiet t)
   ,test
   (test)
-  :doc "Rewind reverses the applied first-turn proposal in its own note session"
+  :doc "Rewind reverses only its applied first turn, keeping another session and user edits"
   (mevedel-note-conversation-test--with-source
     (let* ((note (mevedel-note-create "Improve this code"))
            (view (mevedel-note-send note))
@@ -228,13 +229,27 @@
       (mevedel-note-apply-change note)
       (should (equal "outside-before\nfirst proposal\noutside-after\n"
                      (mevedel-test--read-file file)))
+      (with-current-buffer source
+        (goto-char (point-max)) (forward-line -1)
+        (let* ((other (mevedel-note-create "Another conversation"))
+               (other-view (mevedel-note-send other))
+               (other-data (buffer-local-value 'mevedel--data-buffer other-view)))
+          (with-current-buffer other-data
+            (mevedel-tool-patch-handler
+             #'ignore
+             '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-outside-after\n+other session\n*** End Patch")))
+          (mevedel-note-conversation-test--answer (car sent) "Another change.")
+          (mevedel-note-apply-change other)
+          (with-current-buffer other-view (mevedel-note-conversation-close))))
+      (with-current-buffer source
+        (goto-char (point-min)) (insert "user edit\n") (save-buffer))
       (with-current-buffer view
         (cl-letf (((symbol-function 'completing-read)
                    (lambda (_prompt collection &rest _)
                      (car (all-completions "" collection))))
                   ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
           (mevedel-rewind)))
-      (should (equal "outside-before\nselected code\noutside-after\n"
+      (should (equal "user edit\noutside-before\nselected code\nother session\n"
                      (mevedel-test--read-file file)))))
   :doc "Rewind before first turn preserves the current note and makes it sendable again"
   (mevedel-note-conversation-test--with-source
@@ -268,7 +283,60 @@
         (mevedel-note-send note))
       (should (= 2 (length sent)))
       (should (equal id (overlay-get note 'mevedel-note-session-id)))
-      (mevedel-note-conversation-test--answer (car sent) "Sent again."))))
+      (mevedel-note-conversation-test--answer (car sent) "Sent again.")))
+  :doc "sending a note without initial workspace storage still supports Rewind"
+  (mevedel-note-conversation-test--with-source
+    (delete-directory (file-name-concat root ".mevedel") t)
+    (let* ((note (mevedel-note-create "Ephemeral request"))
+           (view (mevedel-note-send note)))
+      (mevedel-note-conversation-test--answer (car sent) "An ephemeral answer.")
+      (mevedel-note-edit "Current ephemeral request" note)
+      ;; Session startup establishes storage even outside a project.
+      (should (file-exists-p (mevedel-instruction-store-path workspace)))
+      (with-current-buffer view
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (_prompt collection &rest _)
+                     (car (all-completions "" collection))))
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+          (mevedel-rewind)))
+      (with-current-buffer source
+        (goto-char (point-min)) (forward-line 1)
+        (let ((restored (mevedel-notes--at-point)))
+          (should (eq 'unsent (overlay-get restored 'mevedel-note-state)))
+          (should (equal "Current ephemeral request" (overlay-get restored 'mevedel-note-text)))))))
+  :doc "batch Rewind unsends closed and unvisited notes without losing their anchors"
+  (mevedel-note-conversation-test--with-source
+    (let* ((first (mevedel-note-create "First"))
+           (second (progn (forward-line 1) (mevedel-note-create "Second")))
+           (second-id (overlay-get second 'mevedel-uuid))
+           (other-file (file-name-concat root "other.txt"))
+           (other-buffer (progn (write-region "unvisited code\n" nil other-file nil 'silent)
+                                (find-file-noselect other-file)))
+           (third (with-current-buffer other-buffer
+                    (setq-local mevedel--workspace workspace)
+                    (mevedel-note-create "Third")))
+           (view (mevedel-note-send-batch (list first second third))))
+      (mevedel-note-conversation-test--answer (car sent) "One batch.")
+      (mevedel-note-done second)
+      (kill-buffer other-buffer)
+      (should-not (find-buffer-visiting other-file))
+      (with-current-buffer view
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (_prompt collection &rest _)
+                     (car (all-completions "" collection))))
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+          (mevedel-rewind)))
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (let ((restored (mevedel-note-restore second-id workspace)))
+        (should (eq 'unsent (overlay-get restored 'mevedel-note-state)))
+        (should (equal "Second" (overlay-get restored 'mevedel-note-text))))
+      (with-current-buffer (find-file-noselect other-file)
+        (setq-local mevedel--workspace workspace)
+        (goto-char (point-min))
+        (let ((restored (mevedel-notes--at-point)))
+          (should (eq 'unsent (overlay-get restored 'mevedel-note-state)))
+          (should (equal "Third" (overlay-get restored 'mevedel-note-text))))))))
 
 (mevedel-deftest mevedel-note-send/taken
   (:quiet t)
