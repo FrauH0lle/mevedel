@@ -98,6 +98,8 @@ Return an ordinary tool result immediately; no tool callback is retained."
   "Prepare NOTE's waiting changes against current source, without writes."
   (let ((record (mevedel-note-change--record note))
         changes conflicts)
+    (when (eq 'stale (mevedel-notes-attention-state note))
+      (user-error "Change stale; re-ask on current code or merge"))
     (dolist (change (plist-get record :changes))
       (let* ((path (plist-get change :path))
              (before (cl-find path (plist-get record :before)

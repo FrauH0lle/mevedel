@@ -125,7 +125,23 @@
       (should (eq 'stale (mevedel-notes-attention-state note)))
       (should-error (mevedel-note-apply-change note) :type 'user-error)
       (should (equal "before\nmy old\nafter\n" (buffer-string)))
-      (should (equal "before\nold\nafter\n" (mevedel-test--read-file file))))))
+      (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))))
+  :doc "apply refuses a saved nonoverlapping edit inside the noted code"
+  (mevedel-note-change-test--with-note
+    (with-current-buffer source
+      (move-overlay note (point-min) (point-max)))
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (with-current-buffer source
+      (goto-char (point-min))
+      (insert "my ")
+      (save-buffer)
+      (should (eq 'stale (mevedel-notes-attention-state note)))
+      (let ((err (should-error (mevedel-note-apply-change note) :type 'user-error)))
+        (should (string-search "re-ask" (error-message-string err)))
+        (should (string-search "merge" (error-message-string err))))
+      (should (equal "my before\nold\nafter\n" (buffer-string))))
+    (should (equal "my before\nold\nafter\n" (mevedel-test--read-file file)))))
 
 (mevedel-deftest mevedel-note-merge-change
   (:quiet t)
