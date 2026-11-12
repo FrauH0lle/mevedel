@@ -822,6 +822,9 @@ the editable composer body.
             #'mevedel-view--resume-on-window-change nil t)
   (add-hook 'window-scroll-functions
             #'mevedel-view--resume-on-window-scroll nil t)
+  ;; Keep pixel scrolling a forced redisplay start would drop under the caret.
+  (add-hook 'pre-redisplay-functions #'mevedel-view--note-redisplay-vscroll nil t)
+  (add-hook 'window-scroll-functions #'mevedel-view--restore-redisplay-vscroll nil t)
   ;; Resizing (`delete-other-windows', a taller frame) can bring a span
   ;; into view without scrolling, and changes the rail's width.
   (add-hook 'window-size-change-functions
@@ -1807,6 +1810,26 @@ then move the cursor within the draft, or out of it."
              (fboundp 'mevedel-view--recheck-spinner-after-redisplay)
              (mevedel-view--spinner-active-p))
     (mevedel-view--recheck-spinner-after-redisplay)))
+
+(defun mevedel-view--note-redisplay-vscroll (window)
+  "Remember the start and pixel vscroll WINDOW is about to display.
+Writers and commands have finished here, so this is the intended viewport
+for `mevedel-view--restore-redisplay-vscroll'."
+  (set-window-parameter window 'mevedel-view--redisplay-viewport
+                        (cons (window-start window) (window-vscroll window t))))
+
+(defun mevedel-view--restore-redisplay-vscroll (window start)
+  "Restore pixel vscroll native redisplay dropped at WINDOW's unchanged START.
+Redisplay recomputes and forces a start inside a wrapped line when text
+around it changed; unless preservation was requested for that very pass,
+it clears vscroll and then moves point off the clipped bottom row.  It runs
+these hooks between the reset and that cursor check, so restoring the
+viewport noted before redisplay keeps both point and the composer."
+  (when-let* ((noted (window-parameter window 'mevedel-view--redisplay-viewport))
+              ((eql start (car noted)))
+              ((> (cdr noted) 0))
+              ((zerop (window-vscroll window t))))
+    (set-window-vscroll window (cdr noted) t t)))
 
 (defun mevedel-view--resume-on-window-resize (window)
   "Refit the rail and prompt, and update animation, after WINDOW resized.

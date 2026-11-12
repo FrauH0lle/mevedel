@@ -84,6 +84,12 @@ window's current nonzero vscroll. Renewal sets only the native flag: the value i
 unchanged and nothing is redrawn. A native graphical regression covers a reader
 whose start lies inside a wrapped paragraph.
 
+Renewal cannot reach a reset in a redisplay pass that no writer precedes. So the
+view also notes each window's start and vscroll just before redisplay, and its
+scroll hook restores that vscroll if redisplay dropped it at the same start. The
+hook runs after the reset and before redisplay relocates point, so the caret
+stays. Commands and writers run before the note, so their own scrolling is kept.
+
 Draft commands capture blank pixels before their first mutation and repair only
 newly created blank space after the command. Insertion-before-deletion commands
 must capture before insertion too: a temporary extra line is not the original

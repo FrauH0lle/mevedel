@@ -285,6 +285,83 @@
                 (should (= 3 (window-vscroll window t)))))))
       (when (frame-live-p frame) (delete-frame frame t)))))
 
+(mevedel-deftest mevedel-view--restore-redisplay-vscroll
+  (:before-each ((skip-unless (display-graphic-p))
+                 (should (member "DejaVu Sans Mono" (font-family-list)))))
+  (let* ((frame-resize-pixelwise t)
+         (resize-mini-windows nil)
+         (unread-command-events nil)
+         (frame (make-frame '((font . "DejaVu Sans Mono-11")
+                              (width . 80) (height . 30)))))
+    (unwind-protect
+        (with-selected-frame frame
+          (with-temp-buffer
+            (switch-to-buffer (current-buffer))
+            (setq-local header-line-format "Static header" mode-line-format nil
+                        truncate-lines nil word-wrap nil line-spacing nil
+                        scroll-margin 0 scroll-conservatively 101
+                        auto-window-vscroll nil)
+            (dotimes (n 300) (insert (format "row %03d\n" n)))
+            ;; The window start falls inside this wrapped line.
+            (insert (make-string 1200 ?w) "\n")
+            (dotimes (n 25) (insert (format "tail %02d\n" n)))
+            (insert "> synthetic")
+            (when ,guard
+              (add-hook 'pre-redisplay-functions
+                        #'mevedel-view--note-redisplay-vscroll nil t)
+              (add-hook 'window-scroll-functions
+                        #'mevedel-view--restore-redisplay-vscroll nil t))
+            (redisplay t)
+            (let* ((window (selected-window))
+                   (target (point-max))
+                   (row-height (line-pixel-height))
+                   (body-target (- (* 27 row-height) 2))
+                   (deadline (+ (float-time) 5))
+                   start)
+              ;; Re-aim at one exact body: a fresh frame can report its body
+              ;; before its first configure settles.
+              (while (and (/= body-target (window-body-height window t))
+                          (< (float-time) deadline))
+                (set-frame-height frame (+ (frame-text-height frame)
+                                           (- body-target (window-body-height window t)))
+                                  nil t)
+                (setq unread-command-events nil)
+                (sit-for 0.05)
+                (redisplay t))
+              (redisplay t)
+              (should (= body-target (window-body-height window t)))
+              (goto-char target)
+              (setq start (save-excursion (vertical-motion -26 window) (point)))
+              (should-not (eq (char-before start) ?\n))
+              (set-window-start window start t)
+              (set-window-vscroll window 3 t t)
+              ;; This redisplay consumes the one-shot preservation request.
+              (redisplay t)
+              (should (= 3 (window-vscroll window t)))
+              (should (= 2 (length (pos-visible-in-window-p target window t))))
+              ;; A writer changes text above the start and restores it
+              ;; without renewing native preservation.
+              (save-excursion (goto-char (point-min)) (insert "new\n"))
+              (setq start (+ start 4) target (+ target 4))
+              (goto-char target)
+              (set-window-start window start t)
+              (redisplay t)
+              (ert-info ((format "Point %S of %S, start %S, vscroll %S"
+                                 (point) target (window-start window)
+                                 (window-vscroll window t)))
+                (should (= start (window-start window)))
+                (if ,guard
+                    (progn
+                      (should (= (point) target))
+                      (should (= 3 (window-vscroll window t))))
+                  ;; Control: the native reset this guards against happens.
+                  (should (/= (point) target))
+                  (should (zerop (window-vscroll window t))))))))
+      (when (frame-live-p frame) (delete-frame frame t))))
+  (guard)
+  :doc "Control: without the guard, native redisplay drops pixel scrolling and moves point" nil
+  :doc "The guard restores pixel scrolling native redisplay dropped at an unchanged start" t)
+
 (mevedel-deftest mevedel-view-geometry-reading-anchor ()
   (progn
     (skip-unless (display-graphic-p))
