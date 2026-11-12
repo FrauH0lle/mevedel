@@ -137,7 +137,7 @@ to the decision bearing that ID.
 | 0105 | Cockpit Surfaces Follow Three Archetypes | [ADR 0105](0105-cockpit-surfaces-follow-three-archetypes.md) |
 | 0106 | The Directive Frame Is A Child Frame, Not An Overlay | [ADR 0106](0106-directive-frame-is-a-child-frame.md) |
 | 0107 | Non-Owner Buffers Follow Published State | [ADR 0107](0107-non-owner-buffers-follow-published-state.md) |
-| 0108 | Buddy notes are not instructions | [ADR 0108](0108-buddy-notes-are-not-instructions.md) |
+| 0108 | Buddy remarks are workspace notes | [ADR 0108](0108-buddy-notes-are-not-instructions.md) |
 | 0109 | Edit patch changes side by side | [ADR 0109](0109-edit-patch-changes-side-by-side.md) |
 | 0110 | Request config lives in the sidecar, not Org properties | [ADR 0110](0110-request-config-lives-in-the-sidecar-not-org-properties.md) |
 | 0111 | Run programmatic tool calls in a closed machine | [ADR 0111](0111-run-programmatic-tool-calls-in-a-closed-machine.md) |

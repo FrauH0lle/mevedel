@@ -64,6 +64,7 @@
 (autoload 'mevedel-buddy-abort "mevedel-buddy" nil t)
 (autoload 'mevedel-buddy-clear-changes "mevedel-buddy" nil t)
 (autoload 'mevedel-buddy-dismiss-note "mevedel-buddy-note" nil t)
+(autoload 'mevedel-buddy-keep-note "mevedel-buddy-note" nil t)
 (autoload 'mevedel-buddy-dismiss-notes "mevedel-buddy-note" nil t)
 (autoload 'mevedel-buddy-global-mode "mevedel-buddy" nil t)
 (autoload 'mevedel-buddy-guide "mevedel-buddy" nil t)

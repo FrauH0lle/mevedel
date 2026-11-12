@@ -1,53 +1,60 @@
-# Buddy notes are not instructions
+# Buddy remarks are workspace notes
 
 Status: accepted
 
 ## Current decision
 
-Buddy notes are model-authored annotations attached to a source line. They are
-overlays in a source buffer, which makes them look like a third instruction
-flavour beside references and directives. They are not one, and they must not
-become one.
+Buddy remarks are ordinary workspace notes with author `buddy`. They use the
+same identity, source anchor, label and workspace instruction-store record as
+user notes. Buddy's request-local index is rebuilt from that canonical store;
+it is not another durable database. The review tools still only read captured
+source and maintain remarks. Buddy never edits source code or curated memory.
 
-An instruction is user-authored and source-linked: a reference contributes
-context, a directive asks for work and owns durable activity. A note is neither.
-It is not user-authored, asks for no work, and it survives no restart. It is pure
-presentation with no durable identity at all — which is the same distinction
-ADR 0087 draws when it keeps directive identity outside the source overlay,
-taken to its limit.
-
-The mechanism follows from that. Instruction enumeration selects overlays
-carrying the `mevedel-instruction` property; navigation, tinting, priority,
-persistence, deletion, and subdirective resolution all key off it. A note that
-never sets that property is therefore invisible to every one of those paths
-without any of them being modified, and without a third value being added to
-`mevedel-instruction-type`.
+A subsequent review receives the existing remarks and can update or retract
+them. Retraction removes the record outright: a resolved concern is not a user
+deletion, and may be raised again if it returns. Keeping a remark changes its
+author to `user`, preserving its identity,
+text and kept-from-Buddy metadata. Buddy no longer owns it. A user edit or keep
+while a review runs also invalidates the review's older mutation authority.
+Dismissal uses the shared closed-note lifecycle with reason `dismissed`, not
+separate Buddy persistence. Recently closed count/age limits bound how long
+that rejected advice remains available to the model.
 
 ## Rationale and alternatives
 
-The alternative — notes as instructions with an ephemeral flag — was rejected
-because it inverts the burden. Every existing instruction code path would have
-to learn to skip them, and each new one would have to remember to. Under this
-decision a path only sees notes if it deliberately asks for the note property.
+Purely ephemeral annotations repeat the same advice after every restart and
+require a second set of source actions and rendering rules. Once notes have a
+shared workspace identity and explicit authorship, that separation no longer
+earns its cost. Persistence keeps earlier advice available to the next review;
+an exact repeat on the same line reuses the existing note rather than adding
+another label. Prompt context remains bounded, without capping open remarks.
+
+Store writes are batched at the review boundary, including a review abandoned
+after successful note tool calls. Measurements on a real SSH/TRAMP workspace
+found five separate writes took 2,150 ms median versus 435 ms for five additions
+and one checked sync (seven samples each). Per-remark writes would impose that
+avoidable remote cost. Batching reuses the public store's lock, hash precondition,
+merge and failure-retry behavior; it does not introduce another writer.
 
 ## Consequences
 
-- Note overlays must never set `mevedel-instruction`. This is the whole
-  contract; a single `overlay-put` would silently enrol notes in instruction
-  navigation, tinting, and workspace persistence.
-- Notes cannot be persisted by the directive record codec, cannot be rewound,
-  and do not appear in the directive activity surface. All three are intended:
-  notes are re-derived from current buffer state rather than restored.
-- Buddy owns note lifecycle end to end, including dropping a killed buffer's
-  notes, because no instruction machinery will do it on Buddy's behalf.
+- Buddy remarks carry `mevedel-instruction-type note` and persist through the
+  ordinary instruction record codec, not the legacy directive activity codec.
+- The shared label renderer replaces Buddy's separate current-line/eol layout
+  and its per-line relayout hook. No new rendering timer is introduced.
+- Closing a source buffer drops only Buddy's transient review entries. The
+  store retains the note for the next visit or Emacs process.
+- Review ownership, exact-buffer allowlisting and bounded captured markers
+  remain mandatory. Shared note storage grants no source-editing tool.
 
 ## Decision history
 
-The original design considered a third instruction type and an audit of every
-binary reference/directive assumption. Reading the enumeration predicate showed
-that omitting the instruction marker property provides structural separation.
-An ephemeral flag on instructions would instead require every present and future
-caller to remember to skip notes.
+Originally Buddy notes deliberately omitted `mevedel-instruction`, making them
+invisible to instruction navigation and persistence. That avoided teaching
+every binary reference/directive path to skip ephemeral annotations. The notes
+redesign reverses that choice: one persistent note concept now has explicit
+authorship, and restart-safe advice and common actions are required. The old
+structural exclusion would prevent those capabilities rather than protect them.
 
 Buddy was ported from [llm-buddy](https://github.com/ahyatt/llm-buddy). The port
 avoided adding its `llm` provider abstraction beside gptel. At the time of that
