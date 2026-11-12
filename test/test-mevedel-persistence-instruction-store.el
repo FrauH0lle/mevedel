@@ -100,14 +100,9 @@ Return the new workspace struct."
    (mevedel-workspace-root workspace) (mevedel-workspace-name workspace)))
 
 (defun test-mevedel-instruction-store--listed (workspace)
-  "Return the directive choices `mevedel-list-directives' offers in WORKSPACE."
-  (let (offered)
-    (cl-letf (((symbol-function 'completing-read)
-               (lambda (_prompt choices &rest _)
-                 (setq offered (mapcar (lambda (choice) (cdr choice)) choices))
-                 (throw 'listed nil))))
-      (catch 'listed (mevedel-list-directives workspace)))
-    (sort (mapcar #'mevedel-directive-request offered) #'string<)))
+  "Observe WORKSPACE's store and return its retained legacy requests."
+  (mevedel-instruction-store-observe workspace)
+  (test-mevedel-instruction-store--requests workspace))
 
 (defun test-mevedel-instruction-store--record (workspace)
   "Return WORKSPACE's store record."
@@ -193,7 +188,7 @@ Return the new workspace struct."
               ((symbol-function 'mevedel-instruction-store-observe) #'ignore))
       (let ((fresh (test-mevedel-instruction-store--reactivate workspace)))
         (should-not (mevedel-workspace-directives fresh)))))
-  :doc "opening a listing observes another client's change"
+  :doc "observing the store reads another client's change"
   (test-mevedel-instruction-store--with-workspace (workspace source)
     (let* ((overlay (test-mevedel-instruction-store--directive source "mine"))
            (uuid (overlay-get overlay 'mevedel-uuid)))

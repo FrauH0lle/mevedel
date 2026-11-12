@@ -39,21 +39,15 @@
 ;; `mevedel-chat'
 (declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch))
 
-;; `mevedel-directive'
-(declare-function mevedel-directive-actions "mevedel-directive" (directive))
-
 ;; `mevedel-directive-activity'
 (declare-function mevedel-open-directive-activity
                   "mevedel-directive-activity"
-                  (&optional directive workspace))
-(autoload 'mevedel-open-directive-activity "mevedel-directive-activity" nil t)
+                  (history workspace))
+(autoload 'mevedel-open-directive-activity "mevedel-directive-activity")
 
 ;; `mevedel-directive-frame'
 (declare-function mevedel-directive-frame-refresh
                   "mevedel-directive-frame" ())
-
-;; `mevedel-directive-request'
-
 
 ;; `mevedel-execution-telemetry'
 (declare-function mevedel-execution-telemetry-sandbox-summary-class
@@ -64,14 +58,13 @@
                   "mevedel-execution-transcript"
                   (data-buffer tool-use-id))
 
+;; `mevedel-notes'
+(declare-function mevedel-notes-legacy-histories "mevedel-notes" (workspace))
+(autoload 'mevedel-notes-legacy-histories "mevedel-notes")
+
 ;; `mevedel-overlay-ui'
 (declare-function mevedel-overlay-ui-directive-action-label
                   "mevedel-overlay-ui" (action))
-
-;; `mevedel-overlays'
-(declare-function mevedel--directive-action-context
-                  "mevedel-overlays" (record workspace))
-(autoload 'mevedel--directive-action-context "mevedel-overlays")
 
 ;; `mevedel-plan'
 (declare-function mevedel-plan-extract-proposed "mevedel-plan" (text))
@@ -113,19 +106,6 @@
 (autoload 'mevedel-session-rewind-rewind-checkpoint "mevedel-session-rewind")
 
 ;; `mevedel-structs'
-(declare-function mevedel-directive-attempt-checkpoint
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempt-patch
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempt-sequence
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-discussion "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-discussion-turn-attempt-index
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-discussion-turn-sequence
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-active-elapsed-seconds
                   "mevedel-structs" (request &optional now))
 (declare-function mevedel-request-directive-uuid "mevedel-structs" (cl-x) t)
@@ -141,7 +121,6 @@
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (defvar mevedel--agent-invocation)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
@@ -6127,7 +6106,7 @@ is stored as a leading code-formatted action (\"`implement` Text\")."
      (t trimmed))))
 
 (defun mevedel-view--directive-metadata-context (directive)
-  "Return `(RECORD WORKSPACE ATTEMPT ATTEMPT-INDEX)' for DIRECTIVE metadata."
+  "Return `(HISTORY WORKSPACE ATTEMPT)' for frozen DIRECTIVE metadata."
   (when-let* ((data-buffer (mevedel-view-segments-display-buffer))
               ((buffer-live-p data-buffer))
               (session
@@ -6138,27 +6117,14 @@ is stored as a leading code-formatted action (\"`implement` Text\")."
               (workspace (mevedel-session-workspace session))
               (record
                (cl-find (plist-get directive :directive-id)
-                        (mevedel-workspace-directives workspace)
-                        :key #'mevedel-directive-id :test #'equal)))
-    (let* ((attempt
-            (and (eq (plist-get directive :activity-kind) 'attempt)
-                 (cl-find (plist-get directive :sequence)
-                          (mevedel-directive-attempts record)
-                          :key #'mevedel-directive-attempt-sequence)))
-           (discussion
-            (and (eq (plist-get directive :activity-kind) 'discussion)
-                 (cl-find (plist-get directive :sequence)
-                          (mevedel-directive-discussion record)
-                          :key #'mevedel-directive-discussion-turn-sequence)))
-           (attempt-index
-            (if attempt
-                (1+ (cl-position
-                     attempt (mevedel-directive-attempts record)
-                     :test #'eq))
-              (and discussion
-                   (mevedel-directive-discussion-turn-attempt-index
-                    discussion)))))
-      (list record workspace attempt attempt-index))))
+                        (mevedel-notes-legacy-histories workspace)
+                        :key (lambda (history) (plist-get history :id))
+                        :test #'equal)))
+    (list record workspace
+          (and (eq (plist-get directive :activity-kind) 'attempt)
+               (cl-find (plist-get directive :sequence)
+                        (plist-get record :attempts)
+                        :key (lambda (attempt) (plist-get attempt :sequence)))))))
 
 (defun mevedel-view--directive-checkpoint-buffer (checkpoint)
   "Return the live execution buffer matching CHECKPOINT, or nil."
@@ -6172,25 +6138,25 @@ is stored as a leading code-formatted action (\"`implement` Text\")."
 (defun mevedel-view-directive-actions (directive)
   "Choose a state-correct action for the rendered DIRECTIVE turn."
   (interactive (list (get-text-property (point) 'mevedel-view-directive)))
-  (pcase-let* ((`(,record ,workspace ,attempt ,_attempt-index)
+  (pcase-let* ((`(,record ,workspace ,attempt)
                 (or (mevedel-view--directive-metadata-context directive)
                     (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Directive record is unavailable")))
                (choices
                 (append
                  (when (and attempt
                             (not (string-empty-p
-                                  (or (mevedel-directive-attempt-patch attempt)
+                                  (or (plist-get attempt :patch)
                                       ""))))
                    '((?p "view patch")))
                  (when (and attempt
-                            (mevedel-directive-attempt-checkpoint attempt))
+                            (plist-get attempt :checkpoint))
                    '((?w "rewind before this implementation")))
                  '((?o "inspect"))))
                (choice (car (read-multiple-choice "Directive action: " choices))))
     (pcase choice
       (?p (mevedel--replace-patch-buffer
-           (mevedel-directive-attempt-patch attempt)))
-      (?w (let ((checkpoint (mevedel-directive-attempt-checkpoint attempt)))
+           (plist-get attempt :patch)))
+      (?w (let ((checkpoint (plist-get attempt :checkpoint)))
             (mevedel-session-rewind-rewind-checkpoint
              workspace checkpoint
              (mevedel-view--directive-checkpoint-buffer checkpoint))))
@@ -7710,7 +7676,7 @@ synthesizes a preview with tool counters."
                (1 " · 1 tool call")
                (_ (format " · %d tool calls" tool-count)))
              (if-let* ((patch (and attempt
-                                   (mevedel-directive-attempt-patch attempt)))
+                                   (plist-get attempt :patch)))
                        ((not (string-empty-p patch))))
                  (let ((additions 0)
                        (deletions 0))

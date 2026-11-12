@@ -83,6 +83,8 @@
                   "mevedel-file-state" (cache changes))
 (declare-function mevedel-file-cache-detect-external-changes
                   "mevedel-file-state" (cache))
+(autoload 'mevedel-file-cache-consume-external-changes "mevedel-file-state")
+(autoload 'mevedel-file-cache-detect-external-changes "mevedel-file-state")
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-consume-session-context

@@ -312,27 +312,19 @@
 
 
 (mevedel-deftest mevedel-session-rewind-rewind-checkpoint
-  (:doc "resumes a cold session without replacing workspace directive records")
-  (let* ((record (mevedel-directive--create
-                  :id "directive" :request "Request"
-                  :anchor '(:state attached)))
-         (workspace (mevedel-workspace--create
+  (:doc "resumes a cold session and rewinds before the checkpoint turn")
+  (let* ((workspace (mevedel-workspace--create
                      :type 'file :id "checkpoint" :root "/tmp"
-                     :name "checkpoint" :directives (list record)))
+                     :name "checkpoint"))
          (session (mevedel-session--create :session-id "cold-session"))
          (buffer (generate-new-buffer " *checkpoint-rewind*"))
-         reset-records resumed restored rewound)
+         resumed rewound)
     (unwind-protect
         (progn
           (with-current-buffer buffer
             (setq-local mevedel--session session))
           (cl-letf
-              (((symbol-function
-                 'mevedel--reset-instructions-preserving-directives)
-                (lambda (_ records) (push records reset-records)))
-               ((symbol-function 'mevedel--restore-preserved-directives)
-                (lambda (_) (setq restored t)))
-               ((symbol-function 'mevedel-session-persistence-resume-id)
+              (((symbol-function 'mevedel-session-persistence-resume-id)
                 (lambda (owner session-id)
                   (setq resumed (list owner session-id))
                   buffer))
@@ -349,10 +341,6 @@
              (mevedel-session-rewind-rewind-checkpoint
               workspace '(:session-id "cold-session" :turn 4))))
           (should (equal (list workspace "cold-session") resumed))
-          (should restored)
-          (should (= 2 (length reset-records)))
-          (should (cl-every (lambda (records) (equal (list record) records))
-                            reset-records))
           (should (eq buffer (car rewound)))
           (should (= 4 (plist-get (cadr rewound) :cum-turn)))
           ;; Rewinding before an implementation discards that attempt.
@@ -584,7 +572,6 @@
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (let* ((session (mevedel-session-create "main" workspace))
-           (sid (mevedel-session-session-id session))
            (buffer (generate-new-buffer "*test-rollback-other-session*"))
            (source-file (file-name-concat tempdir "source.el"))
            (attempt (lambda (owner turn sequence)
@@ -595,7 +582,7 @@
                        :captured-at "2026-11-07T00:00:00+0100"
                        :checkpoint (list :session-id owner :turn turn))))
            (restore (symbol-function 'mevedel-session-rewind-execute-restore))
-           source mine theirs doomed)
+           source theirs doomed)
       (unwind-protect
           (progn
             (test-mevedel-session-persistence--reset-instructions)
@@ -608,15 +595,11 @@
                 (forward-line (1- line))
                 (mevedel--create-directive-in source (point) (+ 5 (point)) nil
                                               (format "line %d" line))))
-            (setq mine (cl-find "line 1" (mevedel-workspace-directives workspace)
-                                :key #'mevedel-directive-request :test #'equal)
-                  theirs (cl-find "line 2" (mevedel-workspace-directives workspace)
+            (setq theirs (cl-find "line 2" (mevedel-workspace-directives workspace)
                                   :key #'mevedel-directive-request :test #'equal)
                   doomed (cl-find "line 3" (mevedel-workspace-directives workspace)
                                   :key #'mevedel-directive-request :test #'equal))
-            (setf (mevedel-directive-session-id mine) sid
-                  (mevedel-directive-attempts mine) (list (funcall attempt sid 1 1))
-                  (mevedel-directive-session-id theirs) "other-session"
+            (setf (mevedel-directive-session-id theirs) "other-session"
                   (mevedel-directive-attempts theirs)
                   (list (funcall attempt "other-session" 1 1))
                   (mevedel-directive-session-id doomed) "other-session")
@@ -650,8 +633,6 @@
                                (error "Injected Rewind failure")))))
                   (should-error (mevedel-session-rewind-rewind buffer target)))))
             (should (= 1 (mevedel-session-turn-count session)))
-            (should (memq mine (mevedel-workspace-directives workspace)))
-            (should (= 1 (length (mevedel-directive-attempts mine))))
             (should (= 2 (length (mevedel-directive-attempts theirs))))
             (should-not (memq doomed (mevedel-workspace-directives workspace))))
         (when-let* ((impact (get-buffer "*mevedel-rewind-impact*")))
@@ -1333,7 +1314,7 @@
                (buf (generate-new-buffer "*test-rewind-rollback*"))
                (path-a (file-name-concat tempdir "a.el"))
                (path-b (file-name-concat tempdir "b.el"))
-               target record)
+               target)
           (unwind-protect
               (with-current-buffer buf
                 (org-mode)
@@ -1371,42 +1352,9 @@
                  (mevedel-session-artifacts-sidecar-path
                   (mevedel-session-save-path session))
                  (mevedel-session-artifacts-build-sidecar session buf))
-                (setq record
-                      (mevedel-directive--create
-                       :id "rollback-directive" :request "Keep me"
-                       :anchor '(:state source-missing) :state 'failed
-                       :subdirectives
-                       (list
-                        (mevedel-subdirective--create
-                         :id "current-child" :request "Current"
-                         :anchor '(:state attached)))
-                       :attempts
-                       (list
-                        (mevedel-directive-attempt--create
-                         :directive-request "Keep me" :outcome 'success
-                         :checkpoint
-                         (list :session-id
-                               (mevedel-session-session-id session)
-                               :turn 1))
-                        (mevedel-directive-attempt--create
-                         :directive-request "Keep me" :outcome 'error
-                         :consumed-subdirectives
-                         (list
-                          (mevedel-subdirective--create
-                           :id "consumed-child" :request "Consumed"
-                           :anchor '(:state attached)))
-                         :checkpoint
-                         (list :session-id
-                               (mevedel-session-session-id session)
-                               :turn 2)))))
-                (mevedel-workspace-add-directive workspace record)
                 (let* ((plan
                         (mevedel-session-rewind-restore-plan session 1 t))
                        (before-buffer (buffer-string))
-                       (before-attempts
-                        (mevedel-directive-attempts record))
-                       (before-subdirectives
-                        (mevedel-directive-subdirectives record))
                        (before-state
                         (mevedel-session-codec-serialize session))
                        (sidecar-path
@@ -1434,14 +1382,7 @@
                           (mevedel-session-artifacts--file-text path-a)))
                   (should
                    (equal "new-b"
-                          (mevedel-session-artifacts--file-text path-b)))
-                  (should (equal (list record)
-                                 (mevedel-workspace-directives workspace)))
-                  (should (eq before-attempts
-                              (mevedel-directive-attempts record)))
-                  (should (eq before-subdirectives
-                              (mevedel-directive-subdirectives record)))
-                  (should (eq 'failed (mevedel-directive-state record)))))
+                          (mevedel-session-artifacts--file-text path-b)))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)))
       (delete-directory tempdir t)
@@ -1544,12 +1485,8 @@
                  ((symbol-function
                    'mevedel-session-artifacts-load-instructions)
                   (lambda (&rest _) t))
-                 ((symbol-function 'mevedel-workspace-rewind-directives)
-                  #'ignore)
                  ((symbol-function
                    'mevedel-session-artifacts-save-instructions)
-                  #'ignore)
-                 ((symbol-function 'mevedel--restore-preserved-directives)
                   #'ignore)
                  ((symbol-function
                    'mevedel-session-rewind--refresh-restored-buffers)
@@ -1681,10 +1618,6 @@
                      ((symbol-function
                        'mevedel-session-artifacts-load-instructions)
                       (lambda (&rest _) t))
-                     ((symbol-function 'mevedel-workspace-rewind-directives)
-                      #'ignore)
-                     ((symbol-function 'mevedel--restore-preserved-directives)
-                      #'ignore)
                      ((symbol-function
                        'mevedel-session-rewind--refresh-restored-buffers)
                       #'ignore))
@@ -1790,10 +1723,6 @@
                      ((symbol-function
                        'mevedel-session-artifacts-load-instructions)
                       (lambda (&rest _) (push 'instructions followed) t))
-                     ((symbol-function 'mevedel-workspace-rewind-directives)
-                      (lambda (&rest _) (push 'directives followed)))
-                     ((symbol-function 'mevedel--restore-preserved-directives)
-                      #'ignore)
                      ((symbol-function
                        'mevedel-session-rewind--refresh-restored-buffers)
                       (lambda (&rest _) (push 'buffers followed))))
@@ -1811,7 +1740,7 @@
                 (should (equal generation
                                (plist-get (mevedel-session-lease session)
                                           :generation)))
-                (should (equal '(instructions directives buffers)
+                (should (equal '(instructions buffers)
                                (nreverse followed)))
                 (should (string-match-p "did not install" warning))
                 (should (string-match-p "Beginning of buffer" warning))
@@ -2906,27 +2835,6 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
-
-(mevedel-deftest mevedel-session-rewind--directive-capture-gaps
-  (:doc "reports untracked effects belonging to discarded directive attempts")
-  (let* ((workspace
-          (mevedel-workspace--create
-           :type 'file :id "capture-gaps" :root "/tmp" :name "capture-gaps"))
-         (session (mevedel-session-create "main" workspace))
-         (attempt
-          (mevedel-directive-attempt--create
-           :checkpoint '(:session-id "session" :turn 3)
-           :untracked-effects '(("Bash" . "untracked command effects"))))
-         (directive
-          (mevedel-directive--create :id "directive" :attempts (list attempt))))
-    (setf (mevedel-session-session-id session) "session")
-    (mevedel-workspace-set-directives workspace (list directive))
-    (should
-     (equal '((:path "Directive directive via Bash"
-               :reason "untracked command effects"))
-            (mevedel-session-rewind--directive-capture-gaps session 3)))
-    (should-not
-     (mevedel-session-rewind--directive-capture-gaps session 4))))
 
 (provide 'test-mevedel-session-rewind)
 ;;; test-mevedel-session-rewind.el ends here

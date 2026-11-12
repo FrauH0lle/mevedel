@@ -37,12 +37,6 @@
 (declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
 (autoload 'mevedel--run-session-start-hooks "mevedel-chat")
 
-;; `mevedel-directive'
-(declare-function mevedel-workspace-rewind-directives "mevedel-directive" (workspace session-id target-turn))
-(declare-function mevedel-workspace-set-directives "mevedel-directive" (workspace directives))
-(autoload 'mevedel-workspace-rewind-directives "mevedel-directive")
-(autoload 'mevedel-workspace-set-directives "mevedel-directive")
-
 ;; `mevedel-execution'
 (declare-function mevedel-execution-session-live-p "mevedel-execution" (session))
 (autoload 'mevedel-execution-session-live-p "mevedel-execution")
@@ -53,14 +47,13 @@
 (autoload 'mevedel-execution-target-create "mevedel-execution-target")
 (autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
 
+;; `mevedel-notes'
+(declare-function mevedel-notes-legacy-histories "mevedel-notes" (workspace))
+(autoload 'mevedel-notes-legacy-histories "mevedel-notes")
+
 ;; `mevedel-persistence'
-(declare-function mevedel--reset-instructions-preserving-directives "mevedel-persistence" (workspace directives))
-(declare-function mevedel--restore-preserved-directives "mevedel-persistence" (workspace))
 (declare-function mevedel-instruction-store-rewind-begin "mevedel-persistence" (session surviving-turn prune-from))
 (declare-function mevedel-instruction-store-rewind-end "mevedel-persistence" (session committed))
-(autoload 'mevedel--reset-instructions-preserving-directives
-  "mevedel-persistence")
-(autoload 'mevedel--restore-preserved-directives "mevedel-persistence")
 (autoload 'mevedel-instruction-store-rewind-begin "mevedel-persistence")
 (autoload 'mevedel-instruction-store-rewind-end "mevedel-persistence")
 (defvar mevedel-instruction-store--inhibit)
@@ -189,15 +182,6 @@
   "mevedel-session-recovery")
 
 ;; `mevedel-structs'
-(declare-function mevedel-directive-attempt-checkpoint "mevedel-structs" (cl-x))
-(declare-function mevedel-directive-attempt-sequence "mevedel-structs" (cl-x))
-(declare-function mevedel-directive-attempt-untracked-effects "mevedel-structs" (cl-x))
-(declare-function mevedel-directive-attempts "mevedel-structs" (cl-x))
-(declare-function mevedel-directive-discussion "mevedel-structs" (cl-x))
-(declare-function mevedel-directive-discussion-turn-checkpoint "mevedel-structs" (cl-x))
-(declare-function mevedel-directive-discussion-turn-sequence "mevedel-structs" (cl-x))
-(declare-function mevedel-directive-id "mevedel-structs" (cl-x))
-(declare-function mevedel-directive-session-id "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x))
 (declare-function mevedel-session-chapters "mevedel-structs" (cl-x))
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x))
@@ -221,7 +205,6 @@
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x))
 (declare-function mevedel-session-updated-at "mevedel-structs" (cl-x))
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x))
-(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x))
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
@@ -460,11 +443,11 @@ RESOLUTIONS supplies checked intermediate states from the merge editor."
     (let ((session-id (mevedel-session-session-id session)))
       (cl-loop
        for directive in
-       (mevedel-workspace-directives workspace)
+       (mevedel-notes-legacy-histories workspace)
        append
        (cl-loop
-        for attempt in (mevedel-directive-attempts directive)
-        for checkpoint = (mevedel-directive-attempt-checkpoint attempt)
+        for attempt in (plist-get directive :attempts)
+        for checkpoint = (plist-get attempt :checkpoint)
         when (and (equal session-id (plist-get checkpoint :session-id))
                   (>= (or (plist-get checkpoint :turn) 0) target-turn))
         append
@@ -472,9 +455,9 @@ RESOLUTIONS supplies checked intermediate states from the merge editor."
          (lambda (effect)
            (list :path
                  (format "Directive %s via %s"
-                         (mevedel-directive-id directive) (car effect))
+                         (plist-get directive :id) (car effect))
                  :reason (cdr effect)))
-         (mevedel-directive-attempt-untracked-effects attempt)))))))
+         (plist-get attempt :untracked-effects)))))))
 
 (defvar-local mevedel-session-rewind--plan-buffer-session nil
   "Buffer-local session for the `*mevedel-rewind-impact*' buffer.
@@ -1537,8 +1520,6 @@ step that fails afterwards has to name its own frame."
   "Commit portable project SESSION, BUFFER, TARGET, and file PLAN through one
 head CAS.  BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
   (let* ((workspace (mevedel-session-workspace session))
-         (directives (copy-sequence
-                      (mevedel-workspace-directives workspace)))
          (save-path (mevedel-session-save-path session))
          (publication
           (or (mevedel-session-publication session)
@@ -1642,8 +1623,8 @@ head CAS.  BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
               (mevedel-session-rewind--copy-rewind-session-state
                candidate session)
               ;; The head is committed and cannot be rolled back, so a
-              ;; failed buffer install must not abandon the instruction,
-              ;; directive, and buffer refreshes that follow it.
+              ;; failed buffer install must not abandon the instruction
+              ;; and buffer refreshes that follow it.
               (let (install-backtrace)
                 (condition-case install-error
                     (handler-bind
@@ -1667,11 +1648,7 @@ head CAS.  BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                   ;; records here and in the store, and take presentations
                   ;; from the store instead of the historical snapshot.
                   (condition-case store-error
-                      (progn
-                        (mevedel-workspace-rewind-directives
-                         workspace (mevedel-session-session-id session)
-                         (plist-get target :cum-turn))
-                        (mevedel-instruction-store-rewind-end session t))
+                      (mevedel-instruction-store-rewind-end session t)
                     (error
                      (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                       'mevedel
@@ -1682,7 +1659,7 @@ head CAS.  BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                 (condition-case instruction-error
                     (unless
                         (mevedel-session-artifacts-load-instructions
-                         session buffer nil directives t)
+                         session buffer nil nil t)
                       (error "Published instruction snapshot is unavailable"))
                   (error
                    (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
@@ -1690,19 +1667,6 @@ head CAS.  BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                     (format
                      "Portable project Rewind committed, but instructions did not refresh: %s"
                      (error-message-string instruction-error))
-                    :warning)))
-                (condition-case directive-error
-                    (progn
-                      (mevedel-workspace-rewind-directives
-                       workspace (mevedel-session-session-id session)
-                       (plist-get target :cum-turn))
-                      (mevedel--restore-preserved-directives workspace))
-                  (error
-                   (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
-                    'mevedel
-                    (format
-                     "Portable project Rewind committed, but directives did not refresh: %s"
-                     (error-message-string directive-error))
                     :warning))))
               (condition-case refresh-error
                   (mevedel-session-rewind--refresh-restored-buffers
@@ -1783,58 +1747,11 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
     (mevedel-session-rewind--commit-local-rewind
      session buffer target plan boundary replan)))
 
-(defun mevedel-session-rewind--rewinds-directive-p (directive session-id)
-  "Return non-nil when a Rewind of SESSION-ID can change DIRECTIVE.
-That is a directive bound to SESSION-ID, or one holding its activity."
-  (or (equal session-id (mevedel-directive-session-id directive))
-      (cl-some (lambda (checkpoint)
-                 (equal session-id (plist-get checkpoint :session-id)))
-               (append (mapcar #'mevedel-directive-attempt-checkpoint
-                               (mevedel-directive-attempts directive))
-                       (mapcar #'mevedel-directive-discussion-turn-checkpoint
-                               (mevedel-directive-discussion directive))))))
-
-(defun mevedel-session-rewind--restore-activity
-    (start current session-id checkpoint sequence)
-  "Return START's SESSION-ID activity with CURRENT's other activity.
-CHECKPOINT and SEQUENCE read an entry's checkpoint and sequence.  A
-rollback restores only what this Rewind can have pruned; entries other
-sessions appended meanwhile stay.  Without such entries START itself is
-returned, exactly as it was."
-  (let* ((own (lambda (entry)
-                (equal session-id
-                       (plist-get (funcall checkpoint entry) :session-id))))
-         (others (cl-remove-if own current)))
-    (if (equal others (cl-remove-if own start))
-        start
-      (sort (append (cl-remove-if-not own start) others)
-            (lambda (a b) (< (or (funcall sequence a) 0)
-                             (or (funcall sequence b) 0)))))))
-
 (defun mevedel-session-rewind--commit-local-rewind
     (session buffer target plan &optional boundary replan)
   "Commit local SESSION, BUFFER, TARGET, and file PLAN as one Rewind.
 BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
   (let* ((workspace (mevedel-session-workspace session))
-         (directives (copy-sequence
-                      (mevedel-workspace-directives workspace)))
-         (sid (mevedel-session-session-id session))
-         ;; Only directives this Rewind can change are restored on
-         ;; rollback; others may meanwhile change in other sessions.
-         (directive-state
-          (mapcar
-           (lambda (directive)
-             (list directive
-                   :anchor (copy-tree (mevedel-directive-anchor directive))
-                   :state (mevedel-directive-state directive)
-                   :subdirectives
-                   (mevedel-directive-subdirectives directive)
-                   :attempts (mevedel-directive-attempts directive)
-                   :discussion (mevedel-directive-discussion directive)))
-           (cl-remove-if-not
-            (lambda (directive)
-              (mevedel-session-rewind--rewinds-directive-p directive sid))
-            directives)))
          (save-path (mevedel-session-save-path session))
          (parent (file-name-directory (directory-file-name save-path)))
          (temporary-root
@@ -1861,7 +1778,7 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
          ;; The workspace store changes only after the commit point; until
          ;; then a durable intent lets recovery finish or drop the prune.
          (mevedel-instruction-store--inhibit workspace)
-         store-intent store-reloaded
+         store-intent
          file-backups source-moved published session-installed
          file-restore-started buffer-install-started committed
          rollback-failures)
@@ -1912,11 +1829,8 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
             (unless
                 (mevedel-session-artifacts-load-instructions
                  session buffer (1- (plist-get target :cum-turn))
-                 (mevedel-workspace-directives workspace) t)
+                 nil t)
               (error "Instruction restore failed during Rewind")))
-          (mevedel-workspace-rewind-directives
-           workspace (mevedel-session-session-id session)
-           (plist-get target :cum-turn))
           (mevedel-session-artifacts-save-instructions
            session buffer t)
           (delete-directory rollback-path t)
@@ -1924,9 +1838,7 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                 committed t)
           (when store-intent
             (condition-case err
-                (progn
-                  (mevedel-instruction-store-rewind-end session t)
-                  (setq store-reloaded t))
+                (mevedel-instruction-store-rewind-end session t)
               (error
                (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                 'mevedel
@@ -1941,11 +1853,8 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
               (format "Rewind committed, but buffers could not refresh: %s"
                       (error-message-string err)))))
           (condition-case err
-              (progn
-                (unless store-reloaded
-                  (mevedel--restore-preserved-directives workspace))
-                (mevedel-session-artifacts-save-instructions
-                 session buffer t))
+              (mevedel-session-artifacts-save-instructions
+               session buffer t)
             (error
              (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
               'mevedel
@@ -1953,37 +1862,6 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                       (error-message-string err)))))
           t)
       (unless committed
-        (dolist (entry directive-state)
-          (let ((directive (car entry)))
-            (setf (mevedel-directive-anchor directive)
-                  (copy-tree (plist-get (cdr entry) :anchor))
-                  (mevedel-directive-state directive)
-                  (plist-get (cdr entry) :state)
-                  (mevedel-directive-subdirectives directive)
-                  (plist-get (cdr entry) :subdirectives)
-                  (mevedel-directive-attempts directive)
-                  (mevedel-session-rewind--restore-activity
-                   (plist-get (cdr entry) :attempts)
-                   (mevedel-directive-attempts directive)
-                   sid #'mevedel-directive-attempt-checkpoint
-                   #'mevedel-directive-attempt-sequence)
-                  (mevedel-directive-discussion directive)
-                  (mevedel-session-rewind--restore-activity
-                   (plist-get (cdr entry) :discussion)
-                   (mevedel-directive-discussion directive)
-                   sid #'mevedel-directive-discussion-turn-checkpoint
-                   #'mevedel-directive-discussion-turn-sequence))))
-        ;; Restore the records this Rewind can change; keep another
-        ;; session's additions and deletions made meanwhile.
-        (mevedel-workspace-set-directives
-         workspace
-         (let ((current (mevedel-workspace-directives workspace)))
-           (append (cl-remove-if-not
-                    (lambda (record)
-                      (or (memq record current) (assq record directive-state)))
-                    directives)
-                   (cl-remove-if (lambda (record) (memq record directives))
-                                 current))))
         (when session-installed
           (mevedel-session-rewind-copy-session-state
            original-state session))
@@ -2033,7 +1911,7 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                 (unless store-intent
                   (mevedel-session-artifacts-load-instructions
                    session buffer original-turn
-                   (mevedel-workspace-directives workspace) t))
+                   nil t))
                 (mevedel-session-persistence-notify-session-event
                  session 'rerender))
             (error
@@ -2318,8 +2196,6 @@ and the file plan the caller confirmed."
          (source (copy-sequence session))
          (staging-buffer (generate-new-buffer " *mevedel-restore-staging*"))
          (workspace (mevedel-session-workspace session))
-         (directives (copy-sequence
-                      (mevedel-workspace-directives workspace)))
          candidate plan file-backups file-restore-started committed
          rollback-failures)
     (setf (mevedel-session-publication source) publication)
@@ -2431,7 +2307,7 @@ and the file plan the caller confirmed."
                     :warning))))
               (condition-case instruction-error
                   (mevedel-session-artifacts-load-instructions
-                   session buffer nil directives t)
+                   session buffer nil nil t)
                 (error
                  (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                   'mevedel
@@ -2594,15 +2470,8 @@ BUFFER is the already-live execution session when available."
     (unless (and (stringp session-id) (natnump turn))
       (user-error "Malformed implementation checkpoint"))
     (unless buffer
-      (let ((records (copy-sequence
-                      (mevedel-workspace-directives workspace))))
-        (mevedel--reset-instructions-preserving-directives workspace records)
-        (unwind-protect
-            (setq buffer
-                  (mevedel-session-persistence-resume-id
-                   workspace session-id))
-          (mevedel--reset-instructions-preserving-directives workspace records)
-          (mevedel--restore-preserved-directives workspace))))
+      (setq buffer
+            (mevedel-session-persistence-resume-id workspace session-id)))
     (unless buffer
       (user-error "Execution session is unavailable: %s" session-id))
     (let* ((session (buffer-local-value 'mevedel--session buffer))

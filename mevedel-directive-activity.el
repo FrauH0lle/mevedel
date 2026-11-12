@@ -7,7 +7,7 @@
 
 ;;; Commentary:
 
-;; Projects one workspace-owned directive record into a read-only inspector.
+;; Projects a migrated note's persisted history plist into a read-only inspector.
 ;; Historical activity never starts a new model request.
 
 ;;; Code:
@@ -21,105 +21,16 @@
 
 ;; `mevedel-chat'
 (declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch))
-(declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
-
-;; `mevedel-directive'
-(declare-function mevedel-directive-actions "mevedel-directive" (directive))
-(declare-function mevedel-directive-request-changed-p
-                  "mevedel-directive" (directive))
-
-;; `mevedel-directive-source'
-(declare-function mevedel--directive-record
-                  "mevedel-directive-source" (directive))
-(declare-function mevedel--reattach-directive
-                  "mevedel-directive-source"
-                  (record workspace buffer start end))
-(declare-function mevedel--reconcile-directive-sources
-                  "mevedel-directive-source" (workspace))
-(declare-function mevedel-archive-directive
-                  "mevedel-directive-source" (record workspace))
 
 ;; `mevedel-instruction-registry'
-(declare-function mevedel--instruction-buffer-workspace
-                  "mevedel-instruction-registry" (buffer))
 (declare-function mevedel--instruction-with-uuid
                   "mevedel-instruction-registry" (uuid &optional workspace))
 
-;; `mevedel-overlay-ui'
-(declare-function mevedel--ov-actions-getov "mevedel-overlay-ui" ())
-
-;; `mevedel-overlays'
-(declare-function mevedel--directive-action-context
-                  "mevedel-overlays" (record workspace))
-(declare-function mevedel--topmost-instruction
-                  "mevedel-overlays" (instruction &optional of-type pred))
-
-;; `mevedel-persistence'
-(declare-function mevedel-instruction-store-observe
-                  "mevedel-persistence" (workspace))
-(autoload 'mevedel-instruction-store-observe "mevedel-persistence")
-
-;; `mevedel-session-rewind'
-(declare-function mevedel-session-rewind-rewind-checkpoint
-                  "mevedel-session-rewind"
-                  (workspace checkpoint &optional buffer))
-
 ;; `mevedel-structs'
-(declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempt-action
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempt-capture
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempt-captured-at
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempt-checkpoint
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempt-covered-files
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempt-directive-request
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempt-gaps
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempt-outcome
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempt-patch
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempt-request
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempt-result
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempt-sequence
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempt-untracked-effects
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-discussion "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-discussion-turn-attempt-index
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-discussion-turn-checkpoint
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-discussion-turn-message
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-discussion-turn-outcome
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-discussion-turn-request
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-discussion-turn-result
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-discussion-turn-sequence
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-p "mevedel-structs" (cl-x))
-(declare-function mevedel-directive-planning "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-planning-enabled
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-create
                   "mevedel-structs" (name workspace &optional directory))
-(declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 
@@ -144,8 +55,6 @@
 (defvar mevedel-view--status-marker)
 
 ;; `mevedel-view-render'
-(declare-function mevedel-view--collapse-settled-directive-turns
-                  "mevedel-view-render" (&optional collapse-newest))
 (declare-function mevedel-view--group-transcript-turns
                   "mevedel-view-render" (segments data-buf))
 (declare-function mevedel-view--render-turn
@@ -166,9 +75,6 @@
 (autoload 'mevedel-view-zone-previous "mevedel-view-zone" nil t)
 (autoload 'mevedel-view-zone-reconcile "mevedel-view-zone")
 
-;; `mevedel-workspace'
-(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
-
 ;; `org-src'
 (declare-function org-escape-code-in-string "org-src" (string))
 (autoload 'org-escape-code-in-string "org-src")
@@ -177,10 +83,7 @@
   "Workspace owning the inspected directive.")
 
 (defvar-local mevedel-directive-activity--directive nil
-  "Workspace directive rendered in the current inspector.")
-
-(defvar-local mevedel-directive-activity--frozen nil
-  "Non-nil when inspecting a note's immutable pre-migration history.")
+  "Frozen history plist rendered in the current inspector.")
 
 (defvar-local mevedel-directive-activity--transcript-buffer nil
   "Synthetic record transcript rendered by the shared view machinery.")
@@ -225,30 +128,30 @@
    (append
     (mapcar (lambda (attempt)
               (list :kind 'attempt
-                    :sequence (mevedel-directive-attempt-sequence attempt)
+                    :sequence (plist-get attempt :sequence)
                     :entry attempt))
-            (mevedel-directive-attempts directive))
+            (plist-get directive :attempts))
     (mapcar (lambda (turn)
               (list :kind 'discussion
                     :sequence
-                    (mevedel-directive-discussion-turn-sequence turn)
+                    (plist-get turn :sequence)
                     :entry turn))
-            (mevedel-directive-discussion directive))
+            (plist-get directive :discussion))
     (mapcar (lambda (turn)
               (list :kind 'planning
                     :sequence (plist-get turn :sequence)
                     :entry turn))
-            (mevedel-directive-planning directive)))
+            (plist-get directive :planning)))
    (lambda (left right)
      (< (or (plist-get left :sequence) 0)
         (or (plist-get right :sequence) 0)))))
 
 (defun mevedel-directive-activity--attempt-details (attempt)
   "Return durable capture and checkpoint details for ATTEMPT."
-  (let* ((checkpoint (mevedel-directive-attempt-checkpoint attempt))
-         (covered (mevedel-directive-attempt-covered-files attempt))
-         (gaps (mevedel-directive-attempt-gaps attempt))
-         (effects (mevedel-directive-attempt-untracked-effects attempt)))
+  (let* ((checkpoint (plist-get attempt :checkpoint))
+         (covered (plist-get attempt :covered-files))
+         (gaps (plist-get attempt :gaps))
+         (effects (plist-get attempt :untracked-effects)))
     (string-join
      (delq
       nil
@@ -256,10 +159,10 @@
        (format "Capture: %s"
                (capitalize
                 (symbol-name
-                 (or (mevedel-directive-attempt-capture attempt)
+                 (or (plist-get attempt :capture)
                      'incomplete))))
        (format "Captured at: %s"
-               (or (mevedel-directive-attempt-captured-at attempt)
+               (or (plist-get attempt :captured-at)
                    "unknown"))
        (format "Checkpoint: %s turn %s"
                (or (plist-get checkpoint :session-id) "unavailable")
@@ -284,7 +187,7 @@
   (mevedel-directive-activity--kill-transcript)
   (let ((buffer (generate-new-buffer " *mevedel-directive-inspector-data*"))
         (workspace mevedel-directive-activity--workspace)
-        (id (mevedel-directive-id directive)))
+        (id (plist-get directive :id)))
     (with-current-buffer buffer
       (org-mode)
       (setq-local gptel-response-separator "\n\n"
@@ -296,40 +199,28 @@
                (sequence (plist-get item :sequence))
                (attempt-p (eq kind 'attempt))
                (planning-p (eq kind 'planning))
-               (checkpoint
-                (cond (attempt-p
-                       (mevedel-directive-attempt-checkpoint entry))
-                      (planning-p (plist-get entry :checkpoint))
-                      (t
-                       (mevedel-directive-discussion-turn-checkpoint entry))))
+               (checkpoint (plist-get entry :checkpoint))
                (turn (plist-get checkpoint :turn))
                (message
                 (cond (attempt-p
-                       (or (mevedel-directive-attempt-directive-request entry)
-                           (mevedel-directive-request directive)))
+                       (or (plist-get entry :directive-request)
+                           (plist-get directive :request)))
                       (planning-p
                        (or (plist-get entry :message) "Plan directive"))
                       (t
-                       (mevedel-directive-discussion-turn-message entry))))
-               (request
-                (cond (attempt-p (mevedel-directive-attempt-request entry))
-                      (planning-p (plist-get entry :request))
-                      (t (mevedel-directive-discussion-turn-request entry))))
+                       (plist-get entry :message))))
+               (request (plist-get entry :request))
                (result
                 (cond
                  (attempt-p
                     (concat
-                     (mevedel-directive-attempt-result entry)
+                     (plist-get entry :result)
                      "\n\n"
                      (mevedel-directive-activity--attempt-details entry)))
-                 (planning-p (plist-get entry :result))
-                 (t (mevedel-directive-discussion-turn-result entry))))
-               (outcome
-                (cond (attempt-p (mevedel-directive-attempt-outcome entry))
-                      (planning-p (plist-get entry :outcome))
-                      (t (mevedel-directive-discussion-turn-outcome entry))))
+                 (t (plist-get entry :result))))
+               (outcome (plist-get entry :outcome))
                (action (cond
-                        (attempt-p (mevedel-directive-attempt-action entry))
+                        (attempt-p (plist-get entry :action))
                         (planning-p 'plan)
                         (t 'discuss)))
                (start
@@ -376,9 +267,7 @@
                        segments data-buffer)))
           (with-current-buffer inspector
             (dolist (turn turns)
-              (mevedel-view--render-turn turn data-buffer))
-            (unless mevedel-directive-activity--frozen
-              (mevedel-view--collapse-settled-directive-turns t)))))
+              (mevedel-view--render-turn turn data-buffer)))))
       (let ((pos (point-min))
             (limit (marker-position mevedel-view--input-marker)))
         (while (< pos limit)
@@ -401,12 +290,11 @@
                   pos 'mevedel-view-directive nil limit)
                  limit)
              'mevedel-view-zone-entry (plist-get item :entry))
-            (when mevedel-directive-activity--frozen
-              (put-text-property
-               pos (or (next-single-property-change
-                        pos 'mevedel-view-directive nil limit) limit)
-               'mevedel-view-zone-activate
-               #'mevedel-directive-activity--require-writable)))
+            (put-text-property
+             pos (or (next-single-property-change
+                      pos 'mevedel-view-directive nil limit) limit)
+             'mevedel-view-zone-activate
+             #'mevedel-directive-activity--require-writable))
           (setq pos (or (next-single-property-change
                          pos 'mevedel-view-directive nil limit)
                         limit)))))))
@@ -415,7 +303,7 @@
   "Refresh the current read-only directive inspector."
   (interactive)
   (unless (and mevedel-directive-activity--workspace
-               (mevedel-directive-p mevedel-directive-activity--directive))
+               (plist-get mevedel-directive-activity--directive :id))
     (mevedel-diagnostic-user-error (mevedel-diagnostic-scope mevedel-directive-activity--workspace) "No directive inspector is associated with this buffer"))
   (let ((inhibit-read-only t))
     (mevedel-directive-activity--kill-transcript)
@@ -429,38 +317,41 @@
           mevedel-view--input-marker nil)
     (erase-buffer)
     (mevedel-view-zone-forget 'directive-inspector))
-  (unless mevedel-directive-activity--frozen
-    (mevedel--reconcile-directive-sources
-     mevedel-directive-activity--workspace))
   (let* ((inhibit-read-only t)
          (directive mevedel-directive-activity--directive)
          (entries (mevedel-directive-activity--entries directive))
-         (state (or (mevedel-directive-state directive) 'ready))
+         (attempt (car (last (plist-get directive :attempts))))
+         (state
+          (cond
+           ((and attempt (not (equal (plist-get directive :request)
+                                     (plist-get attempt :directive-request))))
+            "Ready · request changed")
+           (attempt
+            (pcase (plist-get attempt :outcome)
+              ('success "Implemented") ('aborted "Aborted") (_ "Failed")))
+           ((cl-some (lambda (turn)
+                       (and (eq (plist-get turn :outcome) 'success)
+                            (equal (plist-get directive :request)
+                                   (plist-get turn :directive-request))))
+                     (plist-get directive :discussion))
+            "Discussed")
+           (t "Ready")))
          (anchor-state
-          (or (plist-get (mevedel-directive-anchor directive) :state)
+          (or (plist-get (plist-get directive :anchor) :state)
               'source-missing)))
     (mevedel-view-zone-reconcile
      'directive-inspector (point-min) (point-max)
      (append
       `((:namespace directive-inspector :id request
 		    :label-left ,(propertize "** Request" 'face 'outline-2)
-		    :body ,(mevedel-directive-request directive) :navigatable t)
+		    :body ,(plist-get directive :request) :navigatable t)
         (:namespace directive-inspector :id state
 		    :label-left ,(propertize "** State" 'face 'outline-2)
-		    :body ,(if (mevedel-directive-request-changed-p directive)
-			       "Ready · request changed"
-			     (capitalize
-			      (replace-regexp-in-string "-" " "
-							(symbol-name state))))
+		    :body ,state
 		    :navigatable t)
         (:namespace directive-inspector :id planning
 		    :label-left ,(propertize "** Planning" 'face 'outline-2)
-		    :body ,(cond
-			    (mevedel-directive-activity--frozen
-			     "Read-only pre-migration history")
-			    ((mevedel-directive-planning-enabled directive)
-				     "On")
-				    (t "Off"))
+		    :body "Read-only pre-migration history"
 		    :navigatable t)
         (:namespace directive-inspector :id anchor
 		    :label-left ,(propertize "** Anchor" 'face 'outline-2)
@@ -486,107 +377,49 @@
 
 (defun mevedel-directive-activity--require-writable ()
   "Refuse actions that would change frozen pre-migration history."
-  (when mevedel-directive-activity--frozen
-    (mevedel-diagnostic-user-error
-     (mevedel-diagnostic-scope mevedel-directive-activity--workspace)
-     "Pre-migration history is read-only; send the note for a new conversation")))
+  (mevedel-diagnostic-user-error
+   (mevedel-diagnostic-scope mevedel-directive-activity--workspace)
+   "Pre-migration history is read-only; send the note for a new conversation"))
 
-(defun mevedel-directive-activity--source-directive ()
-  "Return a validated source overlay for the inspected directive."
-  (plist-get
-   (mevedel--directive-action-context
-    mevedel-directive-activity--directive
-    mevedel-directive-activity--workspace)
-   :directive))
 
 (defun mevedel-directive-activity--attempt-at-point ()
   "Return the implementation attempt at point, or nil."
   (let ((entry (get-text-property (point) 'mevedel-view-zone-entry)))
     (and (memq entry
-               (mevedel-directive-attempts
-                mevedel-directive-activity--directive))
+               (plist-get mevedel-directive-activity--directive :attempts))
          entry)))
 
-(defun mevedel-directive-activity--attempt-index-at-point ()
-  "Return the one-based implementation-attempt index at point."
-  (when-let* ((attempt (mevedel-directive-activity--attempt-at-point)))
-    (1+ (cl-position
-         attempt
-         (mevedel-directive-attempts
-          mevedel-directive-activity--directive)
-         :test #'eq))))
 
 (defun mevedel-directive-activity-view-patch ()
   "Open the implementation attempt at point in the patch viewer."
   (interactive)
   (let* ((attempt (mevedel-directive-activity--attempt-at-point))
-         (patch (and attempt (mevedel-directive-attempt-patch attempt))))
+         (patch (and attempt (plist-get attempt :patch))))
     (unless (and patch (not (string-empty-p patch)))
       (mevedel-diagnostic-user-error (mevedel-diagnostic-scope mevedel-directive-activity--workspace) "Attempt has no captured patch"))
     (mevedel--replace-patch-buffer patch)))
 
 (defun mevedel-directive-activity-rewind ()
-  "Rewind the shared execution session before the attempt at point."
+  "Refuse rewinding from read-only pre-migration history."
   (interactive)
-  (mevedel-directive-activity--require-writable)
-  (require 'mevedel-session-rewind)
-  (let* ((attempt (mevedel-directive-activity--attempt-at-point))
-         (checkpoint
-          (and attempt (mevedel-directive-attempt-checkpoint attempt))))
-    (unless checkpoint
-      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope mevedel-directive-activity--workspace) "Point is not on an implementation attempt"))
-    (let* ((session-id (plist-get checkpoint :session-id))
-           (buffer
-            (cl-loop
-             for (_ . candidate) in
-             (mevedel--workspace-sessions
-              mevedel-directive-activity--workspace)
-             when (equal
-                   session-id
-                   (mevedel-session-session-id
-                    (buffer-local-value 'mevedel--session candidate)))
-             return candidate)))
-      (mevedel-session-rewind-rewind-checkpoint
-       mevedel-directive-activity--workspace checkpoint buffer))))
+  (mevedel-directive-activity--require-writable))
 
-(defun mevedel-directive-activity-reattach (file start end)
-  "Reattach the inspected directive to FILE from START to END."
-  (interactive
-   (progn
-     (mevedel-directive-activity--require-writable)
-     (let* ((anchor
-           (mevedel-directive-anchor
-            mevedel-directive-activity--directive))
-          (file (read-file-name "Reattach to file: " nil
-                                (plist-get anchor :file) t))
-          (buffer (find-file-noselect file)))
-     (list file
-           (read-number "Start buffer position: "
-                        (with-current-buffer buffer (point-min)))
-           (read-number "End buffer position: "
-                        (with-current-buffer buffer (point-max)))))))
-  (mevedel-directive-activity--require-writable)
-  (mevedel--reattach-directive
-   mevedel-directive-activity--directive
-   mevedel-directive-activity--workspace
-   (find-file-noselect file) start end)
-  (mevedel-directive-activity-refresh))
+(defun mevedel-directive-activity-reattach (_file _start _end)
+  "Refuse changing the historical anchor, ignoring _FILE, _START and _END."
+  (interactive (list nil nil nil))
+  (mevedel-directive-activity--require-writable))
 
 (defun mevedel-directive-activity-archive ()
-  "Archive the inspected directive."
+  "Refuse archiving read-only pre-migration history."
   (interactive)
-  (mevedel-directive-activity--require-writable)
-  (mevedel-archive-directive
-   mevedel-directive-activity--directive
-   mevedel-directive-activity--workspace)
-  (mevedel-directive-activity-refresh))
+  (mevedel-directive-activity--require-writable))
 
 (defun mevedel-directive-activity-goto-source ()
   "Visit the inspected directive's attached source."
   (interactive)
   (let ((overlay
          (mevedel--instruction-with-uuid
-          (mevedel-directive-id mevedel-directive-activity--directive)
+          (plist-get mevedel-directive-activity--directive :id)
           mevedel-directive-activity--workspace)))
     (unless (overlayp overlay)
       (mevedel-diagnostic-user-error (mevedel-diagnostic-scope mevedel-directive-activity--workspace) "Directive has no live attached source"))
@@ -597,88 +430,25 @@
 ;;
 ;;; Opening and selection
 
-(defun mevedel-open-directive-activity (&optional directive workspace frozen)
-  "Open DIRECTIVE's read-only inspector in WORKSPACE.
-FROZEN permits an unregistered historical record and refuses all mutations."
-  (interactive (list (mevedel--ov-actions-getov)))
-  (pcase-let* ((`(,workspace ,record)
-                (cond
-                 ((overlayp directive)
-                  (let* ((owner
-                          (mevedel--topmost-instruction directive 'directive))
-                         (workspace
-                          (mevedel--instruction-buffer-workspace
-                           (overlay-buffer owner))))
-                    (list workspace (mevedel--directive-record owner))))
-                 ((and workspace (mevedel-directive-p directive)
-                       (or frozen (memq directive
-                                        (mevedel-workspace-directives workspace))))
-                  (list workspace directive))
-                 (t (mevedel-diagnostic-user-error
-                     (mevedel-diagnostic-scope (or workspace (current-buffer)))
-                     "No directive selected"))))
-               (buffer
-                (get-buffer-create
-                 (format "*mevedel:directive:%s@%s*"
-                         (mevedel-directive-id record)
-                         (mevedel-workspace-id workspace)))))
+(defun mevedel-open-directive-activity (history workspace)
+  "Open frozen HISTORY's read-only inspector in WORKSPACE.
+HISTORY is the persisted plist on a migrated note, never a live record."
+  (unless (and workspace (listp history) (stringp (plist-get history :id)))
+    (mevedel-diagnostic-user-error
+     (mevedel-diagnostic-scope workspace) "No historical directive selected"))
+  (let ((buffer
+         (get-buffer-create
+          (format "*mevedel:directive:%s@%s*"
+                  (plist-get history :id) (mevedel-workspace-id workspace)))))
     (with-current-buffer buffer
       (unless (derived-mode-p 'mevedel-directive-activity-mode)
         (mevedel-directive-activity-mode))
       (setq-local mevedel-directive-activity--workspace workspace
-                  mevedel-directive-activity--directive record
-                  mevedel-directive-activity--frozen frozen)
+                  mevedel-directive-activity--directive (copy-tree history))
       (mevedel-directive-activity-refresh)
       (goto-char (point-min)))
     (pop-to-buffer-same-window buffer)
     buffer))
-
-(defun mevedel-directive-activity--choose-directive (workspace archived-p)
-  "Choose a directive in WORKSPACE whose archive state is ARCHIVED-P."
-  (let* ((workspace (or workspace (mevedel-workspace)))
-         ;; Opening a listing observes the store, so it shows what other
-         ;; sessions and Emacs instances wrote since the last observation.
-         (_ (condition-case err
-                (mevedel-instruction-store-observe workspace)
-              (mevedel-instruction-store-unreadable
-               (mevedel-diagnostic-warning (mevedel-diagnostic-scope workspace)
-                                          'mevedel (error-message-string err) :warning))))
-         (_ (unless archived-p
-              (mevedel--reconcile-directive-sources workspace)))
-         (directives
-          (cl-remove-if-not
-           (lambda (directive)
-             (eq archived-p
-                 (eq 'archived
-                     (plist-get (mevedel-directive-anchor directive) :state))))
-           (mevedel-workspace-directives workspace))))
-    (unless directives
-      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) (if archived-p
-                      "Workspace has no archived directives"
-                    "Workspace has no directives")))
-    (let* ((choices
-            (mapcar
-             (lambda (directive)
-               (cons (format "%s  %s"
-                             (mevedel-directive-id directive)
-                             (replace-regexp-in-string
-                              "\n" " "
-                              (mevedel-directive-request directive)))
-                     directive))
-             directives))
-           (choice (completing-read "Directive: " choices nil t)))
-      (mevedel-open-directive-activity
-       (alist-get choice choices nil nil #'equal) workspace))))
-
-(defun mevedel-list-directives (&optional workspace)
-  "Choose and inspect an active directive in WORKSPACE."
-  (interactive)
-  (mevedel-directive-activity--choose-directive workspace nil))
-
-(defun mevedel-list-archived-directives (&optional workspace)
-  "Choose and inspect an archived directive in WORKSPACE."
-  (interactive)
-  (mevedel-directive-activity--choose-directive workspace t))
 
 (provide 'mevedel-directive-activity)
 

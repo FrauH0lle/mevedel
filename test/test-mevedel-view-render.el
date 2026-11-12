@@ -13,6 +13,8 @@
 (require 'mevedel-agent-conversation)
 (require 'mevedel-directive)
 (require 'mevedel-directive-activity)
+(require 'mevedel-notes)
+(require 'mevedel-persistence)
 (require 'mevedel-view)
 (require 'mevedel-view-audit)
 (require 'mevedel-view-render)
@@ -1377,52 +1379,88 @@
                     :type 'user-error)))
 
   :doc "opens the activity inspector from a rendered directive turn"
-  (let* ((attempt
-          (mevedel-directive-attempt--create
-           :sequence 1 :action 'implement
-           :checkpoint '(:session-id "main" :turn 3)))
-         (workspace
-          (mevedel-workspace--create
-           :type 'file :id "directive-actions" :root "/tmp"
-           :name "directive-actions"))
-         (record
-          (mevedel-directive--create
-           :id "directive-1" :request "Explain this" :state 'discussed
-           :anchor '(:state source-missing)
-           :attempts (list attempt)
-           :discussion
-           (list
-            (mevedel-directive-discussion-turn--create
-             :sequence 2 :attempt-index 1))))
+  ;; A real format-1 store migrates on observation; the rendered turn's
+  ;; directive then lives only as its note's frozen history.
+  (let* ((directory (file-name-as-directory
+                     (make-temp-file "directive-actions-" t)))
+         (store (file-name-concat directory ".mevedel/instructions.el"))
+         (mevedel--instruction-states (make-hash-table :test #'equal))
+         (mevedel-workspace--registry (make-hash-table :test #'equal))
+         (mevedel-instruction-store--dirty nil)
+         (mevedel-instruction-store--failed nil)
+         (workspace (mevedel-workspace-get-or-create
+                     'file directory directory "directive-actions"))
          (session (mevedel-session-create "main" workspace))
-         dispatched)
-    (mevedel-workspace-set-directives workspace (list record))
-    (mevedel-view-test--with-buffers
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session)
-        (insert
-         (mevedel--format-hook-audit-record
-          '(:type directive-turn-boundary :edge start
-            :directive-id "directive-1" :action discuss :turn 4)))
-        (insert "Explain this :discuss:\n:PROMPT:\nFull request\n:END:\n")
-        (insert (propertize "Complete answer.\n" 'gptel 'response))
-        (insert
-         (mevedel--format-hook-audit-record
-          '(:type directive-turn-boundary :edge end
-            :directive-id "directive-1" :action discuss :turn 4
-            :outcome success :activity-kind discussion :sequence 2))))
-      (with-current-buffer view-buf
-        (setq-local mevedel--session session)
-        (cl-letf (((symbol-function 'read-multiple-choice)
-                   (lambda (&rest _) '(?o "inspect")))
-                  ((symbol-function 'mevedel-open-directive-activity)
-                   (lambda (&rest args) (setq dispatched args))))
-          (mevedel-view--full-rerender)
-          (goto-char (point-min))
-          (search-forward "◆ directi…")
-          (mevedel-view-activate-at-point)
-          (should (equal (list record workspace)
-                         dispatched))))))
+         history dispatched)
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory store) t)
+          (write-region "Explain this\n" nil
+                        (file-name-concat directory "source.el") nil 'silent)
+          (write-region
+           (prin1-to-string
+            '(:format 1 :ids (:id-counter 1 :used-ids (1) :retired-ids nil)
+		      :rewinds nil
+		      :files (("source.el" :original-content "Explain this\n"
+			       :instructions
+			       ((:overlay-start 1 :overlay-end 13
+						:anchor (:uuid "directive-1" :text "Explain this")
+						:properties (mevedel-instruction t mevedel-id 1
+										 mevedel-uuid "directive-1"
+										 mevedel-instruction-type directive)))))
+		      :directives
+		      ((:id "directive-1" :request "Explain this"
+			    :anchor (:state attached :file "source.el" :start 1 :end 13
+					    :evidence (:uuid "directive-1" :text "Explain this"))
+			    :subdirectives nil :session-id "main" :planning-enabled nil
+			    :skills nil :plan nil :planning nil
+			    :attempts ((:sequence 1 :action implement
+						  :directive-request "Explain this"
+						  :request "Explain this" :result "Done"
+						  :outcome success :patch "" :capture complete
+						  :covered-files nil :gaps nil :untracked-effects nil
+						  :captured-at "2026-08-07T00:00:00+0200"
+						  :checkpoint (:session-id "main" :turn 3)
+						  :plan nil :plan-context nil :plan-selection nil
+						  :consumed-subdirectives nil))
+			    :discussion ((:sequence 2 :directive-request "Explain this"
+						    :message "Question" :request "Full request"
+						    :result "Complete answer." :outcome success
+						    :attempt-index 1
+						    :checkpoint (:session-id "main" :turn 4)))))))
+           nil store nil 'silent)
+          (mevedel-instruction-store-observe workspace)
+          (setq history (car (mevedel-notes-legacy-histories workspace)))
+          (should (equal "directive-1" (plist-get history :id)))
+	  (mevedel-view-test--with-buffers
+	   (with-current-buffer data-buf
+             (setq-local mevedel--session session)
+             (insert
+              (mevedel--format-hook-audit-record
+               '(:type directive-turn-boundary :edge start
+		       :directive-id "directive-1" :action discuss :turn 4)))
+             (insert "Explain this :discuss:\n:PROMPT:\nFull request\n:END:\n")
+             (insert (propertize "Complete answer.\n" 'gptel 'response))
+             (insert
+              (mevedel--format-hook-audit-record
+               '(:type directive-turn-boundary :edge end
+		       :directive-id "directive-1" :action discuss :turn 4
+		       :outcome success :activity-kind discussion :sequence 2))))
+	   (with-current-buffer view-buf
+             (setq-local mevedel--session session)
+             (cl-letf (((symbol-function 'read-multiple-choice)
+			(lambda (&rest _) '(?o "inspect")))
+                       ((symbol-function 'mevedel-open-directive-activity)
+			(lambda (&rest args) (setq dispatched args))))
+               (mevedel-view--full-rerender)
+               (goto-char (point-min))
+               (search-forward "◆ directi…")
+               (mevedel-view-activate-at-point)
+               (should (equal (list history workspace)
+                              dispatched))))))
+      (setq mevedel-instruction-store--dirty nil)
+      (remove-hook 'post-command-hook #'mevedel-instruction-store-flush)
+      (delete-directory directory t)))
 
   :doc "suppresses modification hooks while rebuilding rendered transcript"
   (mevedel-view-test--with-buffers
@@ -7195,20 +7233,16 @@
            :type 'file :id "directive-rewind" :root "/tmp"
            :name "directive-rewind"))
          (attempt
-          (mevedel-directive-attempt--create
-           :sequence 1 :action 'implement
-           :checkpoint '(:session-id "real" :turn 2)))
-         (record
-          (mevedel-directive--create
-           :id "directive-1" :state 'implemented
-           :attempts (list attempt)))
+          '(:sequence 1 :action implement
+            :checkpoint (:session-id "real" :turn 2)))
+         (history (list :id "directive-1" :attempts (list attempt)))
          captured)
     (with-temp-buffer
       (setq-local mevedel--data-buffer (current-buffer)
                   mevedel--session
                   (mevedel-session--create :authority-mode 'pid-lock :session-id "synthetic"))
       (cl-letf (((symbol-function 'mevedel-view--directive-metadata-context)
-                 (lambda (_) (list record workspace attempt 1)))
+                 (lambda (_) (list history workspace attempt)))
                 ((symbol-function 'read-multiple-choice)
                  (lambda (&rest _) '(?w "rewind")))
                 ((symbol-function
@@ -7224,14 +7258,13 @@
   (test)
   :doc "folded implementation summaries include patch statistics"
   (let ((attempt
-         (mevedel-directive-attempt--create
-          :patch "--- a/file\n+++ b/file\n-old\n+new\n+second\n")))
+         '(:patch "--- a/file\n+++ b/file\n-old\n+new\n+second\n")))
     (with-temp-buffer
       (insert "tool\n")
       (put-text-property (point-min) (point-max)
                          'mevedel-view-type 'tool-summary)
       (cl-letf (((symbol-function 'mevedel-view--directive-metadata-context)
-                 (lambda (_directive) (list nil nil attempt 1))))
+                 (lambda (_directive) (list nil nil attempt))))
         (should
          (equal "◆ directi… · Implement · T2 · Implemented · 1 tool call · +2 −1 · RET: actions"
                 (mevedel-view--directive-turn-summary

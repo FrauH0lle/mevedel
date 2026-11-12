@@ -28,12 +28,8 @@
 
 ;; `mevedel-directive-activity'
 (declare-function mevedel-open-directive-activity "mevedel-directive-activity"
-                  (&optional directive workspace frozen))
+                  (history workspace))
 (autoload 'mevedel-open-directive-activity "mevedel-directive-activity")
-
-;; `mevedel-directive-persistence'
-(declare-function mevedel--deserialize-directives "mevedel-directive-persistence"
-                  (serialized base-directory))
 
 ;; `mevedel-persistence'
 (defvar mevedel-instructions-restored-hook)
@@ -551,6 +547,28 @@ Return its live source overlay, retaining its text, tags and attachments."
                                      (+ (point) end-column))))))))
 
 ;;;###autoload
+(defun mevedel-notes-legacy-histories (workspace)
+  "Return WORKSPACE's frozen histories without visiting source files.
+The plists belong to the instruction state; callers must not mutate them."
+  (let* ((state (mevedel--instruction-state
+                 (mevedel--instruction-workspace-key workspace)))
+         histories)
+    (dolist (entry (plist-get state :instructions))
+      (dolist (note (if (bufferp (car entry)) (cdr entry)
+                     (plist-get (cdr entry) :instructions)))
+        (when-let* ((history
+                     (if (overlayp note)
+                         (overlay-get note 'mevedel-note-legacy-history)
+                       (plist-get (plist-get note :properties)
+                                  'mevedel-note-legacy-history))))
+          (push history histories))))
+    (dolist (entry (plist-get state :closed-notes))
+      (when-let* ((history
+                   (plist-get (plist-get (plist-get entry :instruction) :properties)
+                              'mevedel-note-legacy-history)))
+        (push history histories)))
+    (nreverse histories)))
+
 (defun mevedel-note-history (&optional note)
   "Open NOTE's frozen pre-migration history in the directive inspector."
   (interactive)
@@ -559,12 +577,8 @@ Return its live source overlay, retaining its text, tags and attachments."
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
       (unless (overlay-get note 'mevedel-note-legacy-history)
         (user-error "Note has no pre-migration history"))
-      (require 'mevedel-directive-persistence)
       (mevedel-open-directive-activity
-       (car (mevedel--deserialize-directives
-             (list (copy-tree (overlay-get note 'mevedel-note-legacy-history)))
-             (mevedel-workspace-root workspace)))
-       workspace t))))
+       (overlay-get note 'mevedel-note-legacy-history) workspace))))
 
 ;;;###autoload
 (defun mevedel-note-menu (&optional note)

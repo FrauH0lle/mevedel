@@ -1,386 +1,203 @@
-;;; test-mevedel-directive-activity.el -- Directive inspector tests -*- lexical-binding: t -*-
+;;; test-mevedel-directive-activity.el -- Directive history inspector tests -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
-;; Contract tests for the read-only workspace directive inspector.
+;; Open migrated directive history through a note's history command, from a
+;; real format-1 store and source file.
 
 ;;; Code:
 
 (require 'mevedel)
+(require 'mevedel-notes)
+(require 'mevedel-persistence)
 (require 'mevedel-directive-activity)
-(require 'mevedel-overlays)
-(require 'mevedel-session-rewind)
-(require 'mevedel-structs)
-(require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
-(require 'mevedel-instruction-test-support
-         (file-name-concat
-          (file-name-directory
-           (or buffer-file-name load-file-name byte-compile-current-file))
-          "mevedel-instruction-test-support"))
+(defun mevedel-directive-activity-test--store ()
+  "Return a format-1 store whose directive has settled activity."
+  '(:format 1 :ids (:id-counter 7 :used-ids (7) :retired-ids nil)
+    :rewinds nil
+    :files (("source.el" :original-content "first code\nsecond code\n"
+             :instructions
+             ((:overlay-start 1 :overlay-end 11
+               :anchor (:uuid "old-directive" :text "first code")
+               :properties (mevedel-instruction t mevedel-id 7
+                            mevedel-uuid "old-directive"
+                            mevedel-instruction-type directive)))))
+    :directives
+    ((:id "old-directive" :request "Explain this code"
+      :anchor (:state attached :file "source.el" :start 1 :end 11
+               :evidence (:uuid "old-directive" :text "first code"))
+      :subdirectives nil :session-id "main" :planning-enabled t
+      :skills nil :plan nil
+      :planning ((:sequence 3 :action request-changes
+                  :directive-request "Explain this code"
+                  :implementation-prompt "Plan prompt"
+                  :request "Plan request" :result "Plan result"
+                  :outcome success :checkpoint (:session-id "main" :turn 3)))
+      :attempts ((:sequence 2 :action request-changes
+                  :directive-request "Explain this code"
+                  :request "Implement request" :result "Implemented"
+                  :outcome success
+                  :patch "diff --git a/source.el b/source.el\n"
+                  :capture incomplete :covered-files ("source.el")
+                  :gaps (("other.el" . "capture failed"))
+                  :untracked-effects (("Bash" . "untracked command effects"))
+                  :captured-at "2026-08-07T00:00:00+0200"
+                  :checkpoint (:session-id "main" :turn 2)
+                  :plan nil :plan-context nil :plan-selection nil
+                  :consumed-subdirectives nil))
+      :discussion ((:sequence 1 :directive-request "Explain this code"
+                    :message "Question" :request "Question prompt"
+                    :result "Answer" :outcome success :attempt-index nil
+                    :checkpoint (:session-id "main" :turn 4)))))))
 
-(defun mevedel-directive-activity-test--fixture ()
-  "Return workspace, source buffer, overlay, and durable record."
-  (let* ((workspace (mevedel-workspace--create
-                     :type 'file :id "inspector" :root "/tmp"
-                     :name "inspector"))
-         (source (generate-new-buffer " *directive-inspector-source*")))
-    (with-current-buffer source
-      (insert "source")
-      (setq-local mevedel--workspace workspace)
-      (let ((overlay
-             (mevedel--create-directive-in
-              source (point-min) (point-max) nil "Explain this code")))
-        (list workspace source overlay
-              (car (mevedel-workspace-directives workspace)))))))
-
-(defun mevedel-directive-activity-test--discard (fixture)
-  "Discard buffers created for FIXTURE."
-  (dolist (buffer (buffer-list))
-    (when (or (eq buffer (nth 1 fixture))
-              (and (buffer-live-p buffer)
-                   (eq (car fixture)
-                       (buffer-local-value
-                        'mevedel-directive-activity--workspace buffer))))
-      (with-current-buffer buffer
-        (setq-local kill-buffer-hook nil))
-      (kill-buffer buffer))))
-
-(defun mevedel-directive-activity-test--attempt ()
-  "Return one durable implementation attempt."
-  (mevedel-directive-attempt--create
-   :sequence 1 :action 'request-changes
-   :directive-request "Explain this code"
-   :request "Implement request" :result "Implemented"
-   :outcome 'success :patch "diff --git a/a b/a"
-   :capture 'incomplete :covered-files '("/tmp/a.el")
-   :gaps '(("/tmp/b.el" . "capture failed"))
-   :untracked-effects '(("Bash" . "untracked command effects"))
-   :captured-at "2026-08-07T00:00:00+0200"
-   :checkpoint '(:session-id "main" :turn 2)))
-
-(mevedel-deftest mevedel-directive-activity--attempt-details
-  ()
-  ,test
-  (test)
-  :doc "renders capture quality, coverage, gaps, timestamp, and checkpoint"
-  (let ((text
-         (mevedel-directive-activity--attempt-details
-          (mevedel-directive-activity-test--attempt))))
-    (should (string-match-p "Capture: Incomplete" text))
-    (should (string-match-p "Captured at: 2026-08-07" text))
-    (should (string-match-p "Checkpoint: main turn 2" text))
-    (should (string-match-p "Covered files: /tmp/a.el" text))
-    (should (string-match-p "File gaps: /tmp/b.el" text))
-    (should (string-match-p "Untracked effects: Bash" text))))
+(defmacro mevedel-directive-activity-test--history (&rest body)
+  "Migrate a real store, open its note's history, then run BODY.
+BODY sees the visited SOURCE buffer and the HISTORY inspector buffer."
+  (declare (indent 0))
+  `(let* ((directory (make-temp-file "directive-history-" t))
+          (file (file-name-concat directory "source.el"))
+          (store (file-name-concat directory ".mevedel/instructions.el"))
+          (mevedel--instruction-states (make-hash-table :test #'equal))
+          (mevedel-workspace--registry (make-hash-table :test #'equal))
+          (mevedel-instruction-store--dirty nil)
+          (mevedel-instruction-store--failed nil)
+          (buffers (buffer-list))
+          source history)
+     (save-window-excursion
+       (unwind-protect
+           (progn
+             (make-directory (file-name-directory store) t)
+             (write-region "first code\nsecond code\n" nil file nil 'silent)
+             (write-region (prin1-to-string
+                            (mevedel-directive-activity-test--store))
+                           nil store nil 'silent)
+             (mevedel-workspace-get-or-create 'file directory directory "history")
+             (setq source (find-file-noselect file))
+             (with-current-buffer source
+               (goto-char (point-min))
+               (setq history (mevedel-note-history)))
+             ,@body)
+         ;; History, its transcript and the patch viewer are all new buffers.
+         (dolist (buffer (buffer-list))
+           (unless (memq buffer buffers) (kill-buffer buffer)))
+         (setq mevedel-instruction-store--dirty nil)
+         (remove-hook 'post-command-hook #'mevedel-instruction-store-flush)
+         (delete-directory directory t)))))
 
 (mevedel-deftest mevedel-open-directive-activity
-  (:vars
-   ((mevedel--instruction-states (make-hash-table :test #'equal))
-    (mevedel--instruction-current-state-key :global)))
+  (:quiet t)
   ,test
   (test)
-  :doc "opens one read-only inspector without a composer or live transcript"
-  (let* ((fixture (mevedel-directive-activity-test--fixture))
-         (workspace (nth 0 fixture))
-         (overlay (nth 2 fixture))
-         (record (nth 3 fixture)))
-    (unwind-protect
-        (cl-letf (((symbol-function 'pop-to-buffer-same-window)
-                   (lambda (buffer &rest _) buffer)))
-          (let ((inspector (mevedel-open-directive-activity overlay)))
-            (with-current-buffer inspector
-              (should (derived-mode-p 'mevedel-directive-activity-mode))
-              (should-not (derived-mode-p 'mevedel-view-mode))
-              (should buffer-read-only)
-              (should (eq workspace mevedel-directive-activity--workspace))
-              (should (eq record mevedel-directive-activity--directive))
-              (should (string-match-p "Explain this code" (buffer-string)))
-              (should (string-match-p "No activity yet" (buffer-string)))
-              (should-not (boundp 'mevedel-directive-activity--input-marker)))))
-      (mevedel-directive-activity-test--discard fixture))))
+  :doc "inspects a migrated note's stored history plist and its patch"
+  (mevedel-directive-activity-test--history
+    (let* ((note (cl-find-if
+                  (lambda (overlay)
+                    (overlay-get overlay 'mevedel-note-legacy-history))
+                  (with-current-buffer source
+                    (overlays-in (point-min) (point-max)))))
+           (plist (overlay-get note 'mevedel-note-legacy-history))
+           (workspace (mevedel--instruction-buffer-workspace source))
+           (shown (with-current-buffer history
+                    (should (derived-mode-p 'mevedel-directive-activity-mode))
+                    (should buffer-read-only)
+                    (should (string-match-p "Request changes · T2"
+                                            (buffer-string)))
+                    (goto-char (point-min))
+                    (search-forward "Request changes · T2")
+                    (mevedel-directive-activity-view-patch)
+                    (buffer-substring-no-properties (point-min) (point-max)))))
+      (should (cl-find-if
+               (lambda (buffer)
+                 (and (string-prefix-p "*mevedel:patch@" (buffer-name buffer))
+                      (with-current-buffer buffer
+                        (string-match-p "diff --git a/source\\.el"
+                                        (buffer-string)))))
+               (buffer-list)))
+      ;; The persisted plist alone opens the same history, with no live record.
+      (should (equal "old-directive" (plist-get plist :id)))
+      (with-current-buffer (mevedel-open-directive-activity plist workspace)
+        (should buffer-read-only)
+        (should (equal shown (buffer-substring-no-properties
+                              (point-min) (point-max))))))))
+
+(mevedel-deftest mevedel-note-history
+  (:quiet t)
+  ,test
+  (test)
+  :doc "opens migrated activity read-only, outside the session view"
+  (mevedel-directive-activity-test--history
+    (with-current-buffer history
+      (should (derived-mode-p 'mevedel-directive-activity-mode))
+      (should-not (derived-mode-p 'mevedel-view-mode))
+      (should buffer-read-only)
+      (should (string-match-p "Explain this code" (buffer-string)))))
+  :doc "renders every activity kind and the attempt's capture details"
+  (mevedel-directive-activity-test--history
+    (with-current-buffer history
+      (let ((text (buffer-string)))
+        (should (string-match-p "Request changes · T2" text))
+        (should (string-match-p "Discuss · T4" text))
+        (should (string-match-p "Plan · T3" text))
+        (should (string-match-p "Implemented" text))
+        (should (string-match-p "Answer" text))
+        (should (string-match-p "Capture: Incomplete" text))
+        (should (string-match-p "Captured at: 2026-08-07" text))
+        (should (string-match-p "Checkpoint: main turn 2" text))
+        (should (string-match-p "Covered files: .*source\\.el" text))
+        (should (string-match-p "File gaps: .*other\\.el (capture failed)"
+                                text))
+        (should (string-match-p "Untracked effects: Bash" text))))))
 
 (mevedel-deftest mevedel-directive-activity-refresh
-  (:vars
-   ((mevedel--instruction-states (make-hash-table :test #'equal))
-    (mevedel--instruction-current-state-key :global)))
+  (:quiet t)
   ,test
   (test)
-  :doc "resolves each row to the entry of its own activity kind"
-  ;; An activity sequence is unique across the three collections when
-  ;; mevedel allocates it, but a corrupt record can repeat one, and the
-  ;; rows resolve back to a durable entry the destructive Rewind acts on.
-  (let* ((fixture (mevedel-directive-activity-test--fixture))
-         (record (nth 3 fixture))
-         (attempt (mevedel-directive-activity-test--attempt))
-         (turn (mevedel-directive-discussion-turn--create
-                :sequence 2 :directive-request "Explain this code"
-                :message "Question" :request "Question prompt"
-                :result "Answer" :outcome 'success
-                :checkpoint '(:session-id "main" :turn 4)))
-         (inspector (generate-new-buffer " *directive-inspector*")))
-    (unwind-protect
-        (progn
-          (setf (mevedel-directive-attempt-sequence attempt) 2
-                (mevedel-directive-attempts record) (list attempt)
-                (mevedel-directive-discussion record) (list turn)
-                (mevedel-directive-state record) 'implemented)
-          (with-current-buffer inspector
-            (mevedel-directive-activity-mode)
-            (setq-local mevedel-directive-activity--workspace (nth 0 fixture)
-                        mevedel-directive-activity--directive record)
-            (mevedel-directive-activity-refresh)
-            (let (entries)
-              (goto-char (point-min))
-              (while (< (point) (point-max))
-                (when-let* ((entry (get-text-property
-                                    (point) 'mevedel-view-zone-entry)))
-                  (push entry entries))
-                (goto-char (or (next-single-property-change
-                                (point) 'mevedel-view-zone-entry)
-                               (point-max))))
-              (should (memq attempt entries))
-              (should (memq turn entries)))))
-      (kill-buffer inspector)
-      (mevedel-directive-activity-test--discard fixture)))
-
-  :doc "projects immutable attempts through the ordinary transcript renderer"
-  (let* ((fixture (mevedel-directive-activity-test--fixture))
-         (record (nth 3 fixture))
-         (inspector (generate-new-buffer " *directive-inspector*")))
-    (unwind-protect
-        (progn
-          (setf (mevedel-directive-attempts record)
-                (list (mevedel-directive-activity-test--attempt))
-                (mevedel-directive-planning-enabled record) t
-                (mevedel-directive-planning record)
-                (list (list :sequence 2 :action 'request-changes
-                            :directive-request "Explain this code"
-                            :request "Plan request" :result "Plan result"
-                            :outcome 'success
-                            :checkpoint '(:session-id "main" :turn 3)))
-                (mevedel-directive-state record) 'implemented)
-          (with-current-buffer inspector
-            (mevedel-directive-activity-mode)
-            (setq-local mevedel-directive-activity--workspace (nth 0 fixture)
-                        mevedel-directive-activity--directive record)
-            (mevedel-directive-activity-refresh)
-            (should buffer-read-only)
-            (should (string-match-p
-                     "◆ .+ · Request changes · T2 · Implemented"
-                     (buffer-string)))
-            (should (string-match-p "Plan · T3" (buffer-string)))
-            (should (string-match-p "PLAN.+On" (buffer-string)))
-            (should (buffer-live-p
-                     mevedel-directive-activity--transcript-buffer))
-            (with-current-buffer mevedel-directive-activity--transcript-buffer
-              (should (mevedel-session-execution-target mevedel--session)))
-            (goto-char (point-min))
-            (search-forward "◆ ")
-            (mevedel-view-toggle-section)
-            (should (string-match-p "Implemented" (buffer-string)))
-            (should (string-match-p "Capture: Incomplete" (buffer-string)))
-            (should (string-match-p "Checkpoint: main turn 2"
-                                    (buffer-string)))
-            (kill-buffer (nth 1 fixture))
-            (mevedel-directive-activity-refresh)
-            (should (string-match-p "Request changes · T2 · excluded"
-                                    (buffer-string)))
-            (should (string-match-p "Implemented" (buffer-string)))
-            (mevedel-directive-activity-refresh)
-            (should (= 1 (how-many "Request changes · T2"
-                                   (point-min) (point-max))))
-            (setf (mevedel-directive-attempts record) nil
-                  (mevedel-directive-planning record) nil
-                  (mevedel-directive-state record) nil)
-            (mevedel-directive-activity-refresh)
-            (should-not (string-match-p "T2" (buffer-string)))
-            (should (string-match-p "No activity yet" (buffer-string)))
-            (should-not mevedel-directive-activity--transcript-buffer)))
-      (kill-buffer inspector)
-      (mevedel-directive-activity-test--discard fixture))))
-
-(mevedel-deftest mevedel-directive-activity-rewind
-  ()
-  ,test
-  (test)
-  :doc "rewinds from the selected attempt checkpoint"
-  (let* ((attempt (mevedel-directive-activity-test--attempt))
-         (record (mevedel-directive--create :attempts (list attempt)))
-         captured)
-    (with-temp-buffer
-      (mevedel-directive-activity-mode)
-      (setq-local mevedel-directive-activity--workspace 'workspace
-                  mevedel-directive-activity--directive record)
-      (let ((inhibit-read-only t))
-        (insert "attempt")
-        (put-text-property (point-min) (point-max)
-                           'mevedel-view-zone-entry attempt))
-      (goto-char (point-min))
-      (cl-letf (((symbol-function 'mevedel--workspace-sessions)
-                 (lambda (_) nil))
-                ((symbol-function
-                  'mevedel-session-rewind-rewind-checkpoint)
-                 (lambda (&rest args) (setq captured args))))
-        (mevedel-directive-activity-rewind))
-      (should (equal (list 'workspace '(:session-id "main" :turn 2) nil)
-                     captured)))))
-
-(mevedel-deftest mevedel-directive-activity-goto-source
-  (:vars
-   ((mevedel--instruction-states (make-hash-table :test #'equal))
-    (mevedel--instruction-current-state-key :global)))
-  ,test
-  (test)
-  :doc "visits the live attached source overlay"
-  (let* ((fixture (mevedel-directive-activity-test--fixture)) visited)
-    (unwind-protect
-        (with-temp-buffer
-          (mevedel-directive-activity-mode)
-          (setq-local mevedel-directive-activity--workspace (nth 0 fixture)
-                      mevedel-directive-activity--directive (nth 3 fixture))
-          (cl-letf (((symbol-function 'pop-to-buffer)
-                     (lambda (buffer &rest _)
-                       (setq visited buffer)
-                       (set-buffer buffer))))
-            (mevedel-directive-activity-goto-source))
-          (should (eq (nth 1 fixture) visited))
-          (with-current-buffer visited
-            (should (= (point-min) (point)))))
-      (mevedel-directive-activity-test--discard fixture))))
+  :doc "re-renders frozen history in place without duplicating rows"
+  (mevedel-directive-activity-test--history
+    (with-current-buffer history
+      (mevedel-directive-activity-refresh)
+      (mevedel-directive-activity-refresh)
+      (should buffer-read-only)
+      (should (= 1 (how-many "Request changes · T2" (point-min) (point-max))))
+      (should (= 1 (how-many "Discuss · T4" (point-min) (point-max)))))))
 
 (mevedel-deftest mevedel-directive-activity-view-patch
-  ()
+  (:quiet t)
   ,test
   (test)
-  :doc "opens the selected immutable attempt patch"
-  (let* ((attempt (mevedel-directive-activity-test--attempt))
-         (record (mevedel-directive--create :attempts (list attempt)))
-         captured)
-    (with-temp-buffer
-      (mevedel-directive-activity-mode)
-      (setq-local mevedel-directive-activity--directive record)
-      (let ((inhibit-read-only t))
-        (insert "attempt")
-        (put-text-property (point-min) (point-max)
-                           'mevedel-view-zone-entry attempt))
+  :doc "opens the attempt row's patch and refuses a discussion row"
+  (mevedel-directive-activity-test--history
+    (with-current-buffer history
       (goto-char (point-min))
-      (cl-letf (((symbol-function 'mevedel--replace-patch-buffer)
-                 (lambda (patch) (setq captured patch))))
-        (mevedel-directive-activity-view-patch))
-      (should (string-match-p "diff --git" captured)))))
+      (search-forward "Discuss · T4")
+      (should-error (mevedel-directive-activity-view-patch) :type 'user-error)
+      (goto-char (point-min))
+      (search-forward "Request changes · T2")
+      (mevedel-directive-activity-view-patch))
+    (should (cl-find-if
+             (lambda (buffer)
+               (and (string-prefix-p "*mevedel:patch@" (buffer-name buffer))
+                    (with-current-buffer buffer
+                      (string-match-p "diff --git a/source\\.el"
+                                      (buffer-string)))))
+             (buffer-list)))))
 
-(mevedel-deftest mevedel-list-directives
-  (:vars ())
+(mevedel-deftest mevedel-directive-activity-goto-source
+  (:quiet t)
   ,test
   (test)
-  :doc "keeps source-missing directives active while hiding archived records"
-  (let* ((workspace (mevedel-workspace--create
-                     :type 'file :id "list" :root "/tmp" :name "list"))
-         (missing (mevedel-directive--create
-                   :id "missing" :request "missing"
-                   :anchor '(:state source-missing) :state nil))
-         (archived (mevedel-directive--create
-                    :id "archived" :request "archived"
-                    :anchor '(:state archived) :state nil))
-         choices opened)
-    (mevedel-workspace-set-directives workspace (list missing archived))
-    (cl-letf (((symbol-function 'completing-read)
-               (lambda (_prompt collection &rest _)
-                 (setq choices collection)
-                 (caar collection)))
-              ((symbol-function 'mevedel-open-directive-activity)
-               (lambda (directive owner)
-                 (setq opened (list directive owner)))))
-      (mevedel-list-directives workspace))
-    (should (= 1 (length choices)))
-    (should (string-match-p "missing" (caar choices)))
-    (should (equal (list missing workspace) opened))))
-
-(mevedel-deftest mevedel-list-archived-directives
-  (:vars ())
-  ,test
-  (test)
-  :doc "keeps archived activity inspectable outside the active list"
-  (let* ((workspace (mevedel-workspace--create
-                     :type 'file :id "archive-list" :root "/tmp"
-                     :name "archive-list"))
-         (active (mevedel-directive--create
-                  :id "active" :request "active"
-                  :anchor '(:state source-missing) :state nil))
-         (archived (mevedel-directive--create
-                    :id "archived" :request "history"
-                    :anchor '(:state archived) :state 'implemented))
-         choices opened)
-    (mevedel-workspace-set-directives workspace (list active archived))
-    (cl-letf (((symbol-function 'completing-read)
-               (lambda (_prompt collection &rest _)
-                 (setq choices collection)
-                 (caar collection)))
-              ((symbol-function 'mevedel-open-directive-activity)
-               (lambda (directive owner)
-                 (setq opened (list directive owner)))))
-      (mevedel-list-archived-directives workspace))
-    (should (= 1 (length choices)))
-    (should (string-match-p "archived" (caar choices)))
-    (should (equal (list archived workspace) opened))))
-
-(mevedel-deftest mevedel-directive-activity-reattach
-  (:vars
-   ((mevedel--instruction-states (make-hash-table :test #'equal))
-    (mevedel--instruction-current-state-key :global)))
-  ,test
-  (test)
-  :doc "reattaches the activity record through the explicit activity action"
-  (let* ((fixture (mevedel-instruction-test--source-fixture))
-         (workspace (nth 1 fixture))
-         (file (nth 2 fixture))
-         (source (nth 3 fixture))
-         (record (nth 5 fixture))
-         (activity (generate-new-buffer " *mevedel-reattach-activity*")))
-    (unwind-protect
-        (progn
-          (with-current-buffer source
-            (mevedel--mark-buffer-source-missing source))
-          (with-current-buffer activity
-            (mevedel-directive-activity-mode)
-            (setq-local mevedel-directive-activity--workspace workspace
-                        mevedel-directive-activity--directive record)
-            (mevedel-directive-activity-reattach file 1 7))
-          (should (eq 'attached
-                      (plist-get (mevedel-directive-anchor record) :state))))
-      (when (buffer-live-p activity) (kill-buffer activity))
-      (mevedel-instruction-test--discard-source fixture))))
-
-(mevedel-deftest mevedel-directive-activity-archive
-  (:vars
-   ((mevedel--instruction-states (make-hash-table :test #'equal))
-    (mevedel--instruction-current-state-key :global)))
-  ,test
-  (test)
-  :doc "archives the current record through the activity action"
-  (let* ((fixture (mevedel-instruction-test--source-fixture))
-         (workspace (nth 1 fixture))
-         (record (nth 5 fixture))
-         (activity (generate-new-buffer " *mevedel-archive-activity*")))
-    (unwind-protect
-        (progn
-          (setf (mevedel-directive-attempts record)
-                (list (mevedel-instruction-test--attempt)))
-          (with-current-buffer activity
-            (mevedel-directive-activity-mode)
-            (setq-local mevedel-directive-activity--workspace workspace
-                        mevedel-directive-activity--directive record)
-            (mevedel-directive-activity-archive))
-          (should (eq 'archived
-                      (plist-get (mevedel-directive-anchor record) :state))))
-      (when (buffer-live-p activity) (kill-buffer activity))
-      (mevedel-instruction-test--discard-source fixture))))
+  :doc "visits the migrated note's location in the real source file"
+  (mevedel-directive-activity-test--history
+    (with-current-buffer source (goto-char (point-max)))
+    (with-current-buffer history (mevedel-directive-activity-goto-source))
+    (should (eq source (window-buffer (selected-window))))
+    (should (= 1 (window-point (selected-window))))))
 
 (provide 'test-mevedel-directive-activity)
 

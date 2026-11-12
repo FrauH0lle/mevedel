@@ -267,11 +267,9 @@ overlay the choices appear only in the minibuffer."
 
 
 (defun mevedel--ov-actions-dispatch (&optional instruction _ci)
-  "Open the note menu or inspect historical INSTRUCTION."
+  "Open the note menu for INSTRUCTION."
   (interactive (list (mevedel--ov-actions-getov) t))
-  (if (eq (overlay-get instruction 'mevedel-instruction-type) 'note)
-      (mevedel-note-menu instruction)
-    (mevedel-open-directive-activity instruction)))
+  (mevedel-note-menu instruction))
 
 
 (defun mevedel--ov-actions-archive (&optional instruction)
@@ -779,7 +777,7 @@ directly.  Return nil if no overlays exist at point."
   (dolist (spec '((link mevedel-link-instructions mevedel-instruction-registry)
                   (unlink mevedel-unlink-instructions mevedel-instruction-registry)
                   (abort mevedel-abort mevedel-chat)
-                  (activity mevedel-open-directive-activity mevedel-directive-activity)
+                  (activity mevedel-note-history mevedel-notes)
                   (modify mevedel-modify-directive mevedel-overlays)))
     (let ((name (nth 0 spec))
           (target (nth 1 spec))

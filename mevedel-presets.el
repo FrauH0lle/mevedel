@@ -443,8 +443,13 @@ read at teardown, so one selected during the request wins."
 (defun mevedel-preset-restore-session (session &optional buffer)
   "Reapply SESSION's selected preset in BUFFER.
 A preset that is no longer registered blocks requests until a replacement
-preset is applied."
+preset is applied, except retired directive discussions resume as ordinary chat."
   (when-let* ((name (mevedel-session-preset-name session)))
+    (when (eq name 'mevedel-discuss)
+      (setq name 'mevedel-implement)
+      (mevedel-diagnostic-message
+       (mevedel-diagnostic-scope session)
+       "Saved mevedel-discuss preset retired; using mevedel-implement"))
     (if (assq name mevedel-preset--registry)
         (mevedel-preset-apply name buffer)
       (mevedel-recovery-report session "preset" 'configuration
