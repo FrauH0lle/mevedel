@@ -21,6 +21,8 @@
 ;; `mevedel-note-conversation'
 (autoload 'mevedel-note-send "mevedel-note-conversation" nil t)
 (autoload 'mevedel-note-send-batch "mevedel-note-conversation" nil t)
+(autoload 'mevedel-note-reask "mevedel-note-conversation" nil t)
+(autoload 'mevedel-note-apply-change "mevedel-note-change" nil t)
 
 ;; `mevedel-directive-activity'
 (declare-function mevedel-open-directive-activity "mevedel-directive-activity"
@@ -486,8 +488,13 @@ Return its live source overlay, retaining its text, tags and attachments."
                                  (?k "keep" "Keep as your own note"))
                              '((?d "delete" "Delete note without changing code")))
                            (when (overlay-get note 'mevedel-note-legacy-history)
-                             '((?h "history" "Inspect read-only pre-migration history"))))))
+                             '((?h "history" "Inspect read-only pre-migration history")))
+                           (when (overlay-get note 'mevedel-note-prepared-change)
+                             '((?a "apply" "Apply prepared change")
+                               (?r "re-ask" "Ask again on current code"))))))
         (?s (mevedel-note-send note))
+        (?a (mevedel-note-apply-change note))
+        (?r (mevedel-note-reask note))
         (?e (mevedel-note-edit
              (read-string "Note: " (overlay-get note 'mevedel-note-text)) note))
         (?x (mevedel-note-done note))

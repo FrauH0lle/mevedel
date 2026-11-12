@@ -23,12 +23,18 @@
 (require 'mevedel-structs)
 (require 'mevedel-view-composer)
 
+;; `mevedel-note-change'
+(declare-function mevedel-note-change--note "mevedel-note-change" (&optional note))
+(autoload 'mevedel-note-apply-change "mevedel-note-change" nil t)
+
 ;; `gptel'
 (defvar gptel--known-presets)
 
 (defvar-keymap mevedel-note-conversation-mode-map
   :doc "Note conversation actions; ordinary characters remain composer input."
   "C-c C-c" #'mevedel-view-send
+  "C-c C-a" #'mevedel-note-apply-change
+  "C-c C-n" #'mevedel-note-reask
   "C-c C-v" #'mevedel-note-show-sent
   "C-c C-q" #'mevedel-note-conversation-close
   "C-c C-z" #'mevedel-note-conversation-close)
@@ -214,6 +220,29 @@ ordinary request-time transform, where media has an active request owner."
 Default to the note at point.  Return the focused conversation view."
   (interactive)
   (mevedel-note-conversation--send-notes (list (or note (mevedel-notes--at-point)))))
+
+;;;###autoload
+(defun mevedel-note-reask (&optional note)
+  "Ask NOTE's conversation again using the batch's current marked code."
+  (interactive)
+  (require 'mevedel-note-change)
+  (setq note (mevedel-note-change--note note))
+  (let* ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note)))
+         (id (overlay-get note 'mevedel-note-session-id)))
+    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+      (unless id (user-error "Send the note before re-asking"))
+      (let* ((notes (cl-loop for entry in (mevedel-notes--entries workspace)
+                             when (equal id (plist-get (plist-get entry :properties)
+                                                       'mevedel-note-session-id))
+                             collect (mevedel-notes--resolve (plist-get entry :uuid) workspace)))
+             (data (or (mevedel-session-control-transfer-root-buffer-for-id id)
+                       (mevedel-session-persistence-resume-id workspace id)
+                       (user-error "Note conversation is unavailable: %s" id))))
+        (with-current-buffer data
+          (mevedel--submit-generated-turn
+           (concat "Reconsider the request on the current code below. Replace the waiting change; do not apply it.\n\n"
+                   (mapconcat (lambda (item) (mevedel-note-conversation--prompt item mevedel--session))
+                              notes "\n\n"))))))))
 
 ;;;###autoload
 (defun mevedel-note-send-batch (notes)

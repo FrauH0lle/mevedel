@@ -46,6 +46,27 @@ Return an ordinary tool result immediately; no tool callback is retained."
                          "The user can apply, review, or re-ask later.\n\n" text))
       result)))
 
+(defun mevedel-note-change--note (&optional note)
+  "Return live NOTE, the source note at point, or this conversation's note."
+  (let* ((data (if (buffer-live-p mevedel--data-buffer) mevedel--data-buffer (current-buffer)))
+         (session (buffer-local-value 'mevedel--session data))
+         (workspace (and session (mevedel-session-workspace session))))
+    (setq note
+          (or note
+              (mevedel--highest-priority-instruction (mevedel--instructions-at (point) 'note))
+              (when session
+                (when-let* ((entry (cl-find-if
+                                   (lambda (entry)
+                                     (equal (mevedel-session-session-id session)
+                                            (plist-get (plist-get entry :properties)
+                                                       'mevedel-note-session-id)))
+                                   (mevedel-notes--entries workspace))))
+                  (mevedel-notes--resolve (plist-get entry :uuid) workspace)))))
+    (unless (and (overlayp note) (overlay-buffer note)
+                 (eq (overlay-get note 'mevedel-instruction-type) 'note))
+      (user-error "No live note here"))
+    note))
+
 (defun mevedel-note-change--record (note)
   "Return NOTE's waiting change, or refuse."
   (or (overlay-get note 'mevedel-note-prepared-change)
@@ -110,7 +131,7 @@ Return an ordinary tool result immediately; no tool callback is retained."
 (defun mevedel-note-apply-change (&optional note)
   "Apply NOTE's prepared change as one undo step, refusing newer source edits."
   (interactive)
-  (setq note (or note (mevedel-notes--at-point)))
+  (setq note (mevedel-note-change--note note))
   (let ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note))))
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
       (let ((record (mevedel-note-change--record note))

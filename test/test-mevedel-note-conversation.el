@@ -21,6 +21,7 @@
 (require 'mevedel-journal-process)
 (require 'gptel-openai)
 (require 'mevedel-file-state)
+(require 'mevedel-tool-patch)
 (require 'mevedel-engine-test-support
          (file-name-concat
           (file-name-directory
@@ -168,6 +169,40 @@
       (call-interactively #'mevedel-note-menu))
     (should (= 1 (length sent)))
     (mevedel-note-conversation-test--answer (car sent) "Sent through the menu.")))
+
+(mevedel-deftest mevedel-note-reask
+  (:quiet t)
+  ,test
+  (test)
+  :doc "re-ask sends current noted code and a fresh change can be applied"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Improve this code"))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view)))
+      (mevedel-note-conversation-test--answer (car sent) "I can improve it.")
+      (with-current-buffer data
+        (mevedel-tool-patch-handler
+         #'ignore
+         '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-selected code\n+first proposal\n*** End Patch")))
+      (with-current-buffer source
+        (goto-char (overlay-start note))
+        (insert "current ")
+        (save-buffer))
+      (with-current-buffer view
+        (call-interactively (key-binding (kbd "C-c C-n"))))
+      (should (= 2 (length sent)))
+      (should (string-search "current selected code"
+                             (gptel--json-encode
+                              (plist-get (gptel-fsm-info (car sent)) :data))))
+      (mevedel-note-conversation-test--answer (car sent) "Here is a fresh change.")
+      (with-current-buffer data
+        (mevedel-tool-patch-handler
+         #'ignore
+         '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-current selected code\n+fresh proposal\n*** End Patch")))
+      (with-current-buffer view
+        (call-interactively (key-binding (kbd "C-c C-a"))))
+      (with-current-buffer source
+        (should (equal "outside-before\nfresh proposal\noutside-after\n" (buffer-string)))))))
 
 (mevedel-deftest mevedel-note-send/chat-selection-isolation
   (:quiet t)
