@@ -163,8 +163,10 @@ ordinary request-time transform, where media has an active request owner."
                (mapconcat (lambda (item) (plist-get item :body))
                           (plist-get expansion :reminder-items) "\n\n"))))))
 
-(defun mevedel-note-conversation--send-notes (notes)
-  "Send or reopen NOTES in one session and return its focused view."
+(cl-defun mevedel-note-conversation--send-notes (notes &key no-display defer-write)
+  "Send or reopen NOTES in one session and return its view.
+NO-DISPLAY leaves windows and focus alone.  DEFER-WRITE leaves the store
+sync to the caller's batch."
   (unless notes (user-error "Choose at least one note"))
   (let* ((note (car notes))
          (workspace (mevedel--instruction-buffer-workspace (overlay-buffer note))))
@@ -176,7 +178,7 @@ ordinary request-time transform, where media has an active request owner."
                             (mevedel--instruction-workspace-key
                              (mevedel--instruction-buffer-workspace (overlay-buffer item)))))
           (user-error "Send notes from one workspace together")))
-      (let* ((origin (cons (selected-window) (copy-marker (point))))
+      (let* ((origin (unless no-display (cons (selected-window) (copy-marker (point)))))
              (id (overlay-get note 'mevedel-note-session-id))
              (_ (unless (cl-every
                          (lambda (item) (equal id (overlay-get item 'mevedel-note-session-id)))
@@ -201,7 +203,9 @@ ordinary request-time transform, where media has an active request owner."
           (if id
               (mevedel-note-conversation-setup)
             (mevedel-preset-apply 'mevedel-note data)
-            (mevedel-session-artifacts-save session data nil t))
+            (let ((mevedel-instruction-store--inhibit
+                   (if defer-write t mevedel-instruction-store--inhibit)))
+              (mevedel-session-artifacts-save session data nil t)))
           (when (or (not id)
                     (and (zerop (or (mevedel-session-turn-count session) 0))
                          (eq 'unsent (overlay-get note 'mevedel-note-state))))
@@ -217,22 +221,25 @@ ordinary request-time transform, where media has an active request owner."
             (overlay-put item 'mevedel-note-state 'sent)
             (mevedel-notes--render item))
           (mevedel-instruction-store-touch workspace)
-          (mevedel-instruction-store-flush t))
+          (unless defer-write (mevedel-instruction-store-flush t)))
         (let ((view (buffer-local-value 'mevedel--view-buffer data)))
-          (with-current-buffer view
-            (when mevedel-note-conversation--origin
-              (set-marker (cdr mevedel-note-conversation--origin) nil))
-            (setq-local mevedel-note-conversation--origin origin))
-          (mevedel-directive-frame-display note view t)
-          (with-current-buffer view (goto-char (point-max)))
+          (unless no-display
+            (with-current-buffer view
+              (when mevedel-note-conversation--origin
+                (set-marker (cdr mevedel-note-conversation--origin) nil))
+              (setq-local mevedel-note-conversation--origin origin))
+            (mevedel-directive-frame-display note view t)
+            (with-current-buffer view (goto-char (point-max))))
           view)))))
 
 ;;;###autoload
-(defun mevedel-note-send (&optional note)
+(cl-defun mevedel-note-send (&optional note &key no-display defer-write)
   "Send NOTE in its own session, or reopen its existing conversation.
-Default to the note at point.  Return the focused conversation view."
+Default to the note at point.  Return the conversation view.
+NO-DISPLAY leaves focus alone; DEFER-WRITE lets a batch caller sync the store."
   (interactive)
-  (mevedel-note-conversation--send-notes (list (or note (mevedel-notes--at-point)))))
+  (mevedel-note-conversation--send-notes (list (or note (mevedel-notes--at-point)))
+                                       :no-display no-display :defer-write defer-write))
 
 ;;;###autoload
 (defun mevedel-note-reask (&optional note)
@@ -258,10 +265,11 @@ Default to the note at point.  Return the focused conversation view."
                               notes "\n\n"))))))))
 
 ;;;###autoload
-(defun mevedel-note-send-batch (notes)
-  "Send NOTES together in one conversation and return its focused view.
+(cl-defun mevedel-note-send-batch (notes &key no-display defer-write)
+  "Send NOTES together in one conversation and return its view.
 An already sent batch reopens its session.  Mixing existing conversations
-refuses rather than losing either thread.  Interactively, choose loaded notes."
+refuses rather than losing either thread.  Interactively, choose loaded notes.
+NO-DISPLAY leaves focus alone; DEFER-WRITE lets a batch caller sync the store."
   (interactive
    (progn
      (mevedel--instruction-activate-buffer)
@@ -271,7 +279,8 @@ refuses rather than losing either thread.  Interactively, choose loaded notes."
                                                    (mevedel-notes--display-text note)) note))))
        (list (mapcar (lambda (choice) (cdr (assoc choice choices)))
                      (completing-read-multiple "Send notes: " choices nil t))))))
-  (mevedel-note-conversation--send-notes (delete-dups (copy-sequence notes))))
+  (mevedel-note-conversation--send-notes (delete-dups (copy-sequence notes))
+                                       :no-display no-display :defer-write defer-write))
 
 (provide 'mevedel-note-conversation)
 ;;; mevedel-note-conversation.el ends here

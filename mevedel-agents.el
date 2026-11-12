@@ -274,6 +274,8 @@ default role also inherits the caller's effective specialist identities.
 Freezing these explicit specs preserves membership on later invocations."
   (let* ((name (mevedel-agent-name agent))
          (base (mevedel-agent--declared-specs agent)))
+    ;; Restored frozen specs still need their lazy tool groups registered.
+    (mevedel-tool-ensure "NoteWrite")
     (cond
      ((mevedel-agent-frozen-p agent) base)
      ((equal name "default")
@@ -295,7 +297,7 @@ Freezing these explicit specs preserves membership on later invocations."
      (t
       (cl-delete-duplicates
        (append base
-               '((:tool "ToolSearch") (:tool "ToolCall"))
+               '((:tool "ToolSearch") (:tool "ToolCall") (:discoverable notes))
                mevedel-agent--communication-tool-specs
                (when (mevedel-agent--specs-contain-tool-p base "Agent")
                  mevedel-agent--control-tool-specs))

@@ -20,7 +20,11 @@
 (require 'mevedel-tool-fs-read)
 (require 'mevedel-workspace)
 (require 'mevedel-permission-rules)
-(require 'mevedel-instruction-test-support)
+(require 'mevedel-instruction-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-instruction-test-support"))
 
 ;; Declared in gptel; declared here so `let' binds it dynamically in
 ;; tests that do not load gptel.

@@ -20,6 +20,20 @@
 
 (declare-function mevedel-patch-review-start "mevedel-patch-review" (proposal callback data-buffer))
 
+(defun mevedel-note-change-record (proposal changes data-buffer)
+  "Capture prepared PROPOSAL and CHANGES owned by DATA-BUFFER's current turn."
+  (with-current-buffer data-buffer
+    (let ((session mevedel--session))
+      (list :id (mevedel--create-uuid)
+            :session-id (mevedel-session-session-id session)
+            :turn (if mevedel--current-request
+                      (mevedel-current-turn session)
+                    (or (mevedel-session-turn-count session) 0))
+            :proposal (copy-tree proposal) :changes (copy-tree changes)
+            :before (mapcar (lambda (change)
+                              (mevedel-tool-patch--snapshot (plist-get change :path)))
+                            changes)))))
+
 (defun mevedel-note-prepare-change (proposal changes data-buffer)
   "Hold PROPOSAL and CHANGES for DATA-BUFFER's notes without writing source.
 Return an ordinary tool result immediately; no tool callback is retained."
@@ -31,17 +45,7 @@ Return an ordinary tool result immediately; no tool callback is retained."
                    (equal id (plist-get (plist-get entry :properties)
                                         'mevedel-note-session-id)))
                  (mevedel-notes--entries workspace)))
-         (record (list :id (mevedel--create-uuid)
-                       :session-id id :turn (with-current-buffer data-buffer
-                                              (if mevedel--current-request
-                                                  (mevedel-current-turn session)
-                                                (or (mevedel-session-turn-count session) 0)))
-                       :proposal (copy-tree proposal)
-                       :changes (copy-tree changes)
-                       :before (mapcar (lambda (change)
-                                         (mevedel-tool-patch--snapshot
-                                          (plist-get change :path)))
-                                       changes))))
+         (record (mevedel-note-change-record proposal changes data-buffer)))
     (unless notes (error "No open note owns this conversation"))
     (with-current-buffer data-buffer
       (when mevedel--current-request
@@ -217,7 +221,9 @@ Return an ordinary tool result immediately; no tool callback is retained."
                  (mevedel-note-change--commit note record selected)
                  (funcall done)))
     (mevedel-patch-review-start proposal #'ignore data)
-    (mevedel-note-send note)))
+    (if (overlay-get note 'mevedel-note-session-id)
+        (mevedel-note-send note)
+      (pop-to-buffer (buffer-local-value 'mevedel--view-buffer data)))))
 
 ;;;###autoload
 (defun mevedel-note-apply-change (&optional note review)

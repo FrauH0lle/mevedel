@@ -16,6 +16,8 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-session-codec)
 (require 'mevedel-pipeline)
+(require 'mevedel-presets)
+(require 'mevedel-tools)
 (require 'mevedel-view-disclosure)
 (require 'helpers
          (file-name-concat
@@ -34,6 +36,9 @@
             (mevedel-instruction-store--dirty nil)
             (mevedel-instruction-store--failed nil)
             (mevedel-workspace--registry (make-hash-table :test #'equal))
+            (gptel--known-presets (copy-tree gptel--known-presets))
+            (gptel--known-tools (copy-tree gptel--known-tools))
+            (mevedel-preset--registry (copy-tree mevedel-preset--registry))
             (post-command-hook (copy-sequence post-command-hook))
             (workspace (mevedel-workspace-get-or-create 'file root root "changes"))
             (session (mevedel-session-create "changes" workspace root))
@@ -42,6 +47,8 @@
        (unwind-protect
            (progn
              (make-directory (file-name-concat root ".mevedel"))
+             (mevedel-tools-register)
+             (mevedel--define-presets)
              (write-region "before\nold\nafter\n" nil file nil 'silent)
              (setq source (find-file-noselect file))
              (with-current-buffer source

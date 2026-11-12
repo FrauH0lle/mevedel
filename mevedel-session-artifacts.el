@@ -2296,16 +2296,17 @@ OWN-SAVE-PATH names SESSION, which does not by itself make the workspace
 wait for migration: while waiting, its instructions were restored from
 its own snapshot, so as the only session it holds the whole set.  A
 failure is reported; the session save itself already succeeded."
-  (condition-case err
-      (mevedel-instruction-store-sync
-       (mevedel-session-workspace session) own-save-path)
-    (mevedel-instruction-store-unreadable
-     ;; Reported once; re-reading it at every save would not repair it.
-     (mevedel-diagnostic-message (mevedel-diagnostic-scope session) "%s" (error-message-string err)))
-    (error
-     (mevedel-instruction-store-touch (mevedel-session-workspace session))
-     (mevedel-diagnostic-message (mevedel-diagnostic-scope session) "Instructions not written to the store: %s"
-              (error-message-string err)))))
+  (unless (eq (bound-and-true-p mevedel-instruction-store--inhibit) t)
+    (condition-case err
+        (mevedel-instruction-store-sync
+         (mevedel-session-workspace session) own-save-path)
+      (mevedel-instruction-store-unreadable
+       ;; Reported once; re-reading it at every save would not repair it.
+       (mevedel-diagnostic-message (mevedel-diagnostic-scope session) "%s" (error-message-string err)))
+      (error
+       (mevedel-instruction-store-touch (mevedel-session-workspace session))
+       (mevedel-diagnostic-message (mevedel-diagnostic-scope session) "Instructions not written to the store: %s"
+                (error-message-string err))))))
 
 (defun mevedel-session-artifacts-load-instructions
     (session buffer &optional turn directive-records preserve-directives-p)
