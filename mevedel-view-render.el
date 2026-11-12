@@ -9411,10 +9411,16 @@ PRESERVED-LIVE-TAIL contains any view-only streamed text."
 LIVE-DATA-BUF owns live status.  RENDERING identifies the view.
 HISTORICAL-P suppresses live-only rows.  START-TIME is for diagnostics.
 The projection drew settled history only; in-flight tool calls return
-with the next boundary render of the live turn."
+with a live render of the turn.  Under a projection writer that render
+queues behind it and runs before redisplay, so the running rows never
+disappear from the screen; otherwise it waits for the next boundary render."
   (with-current-buffer (plist-get rendering :view-buffer)
     (when (and (not historical-p) mevedel-view--pending-tool-calls)
-      (mevedel-view--schedule-tool-boundary-render live-data-buf))
+      (if (and mevedel-view-render--owner
+               (mevedel-view-stream-in-flight-turn-start-position)
+               (markerp mevedel-view--data-turn-start))
+          (mevedel-view-render-live-update live-data-buf)
+        (mevedel-view--schedule-tool-boundary-render live-data-buf)))
     (unless mevedel-view--agent-transcript-p
       (mevedel-view-refresh-input-prompt)
       ;; Reset removed these zones too.  Materialize them under the current
