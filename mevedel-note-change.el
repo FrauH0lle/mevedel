@@ -121,8 +121,12 @@ Return an ordinary tool result immediately; no tool callback is retained."
 (defun mevedel-note-change--source-snapshot (disk)
   "Return DISK's snapshot with visiting source text, including unsaved edits."
   (let ((snapshot (copy-sequence disk)))
-    (when-let* ((buffer (find-buffer-visiting (plist-get disk :path))))
+    (when-let* ((buffer (find-buffer-visiting (plist-get disk :path)))
+                ((buffer-modified-p buffer)))
       (with-current-buffer buffer
+        (unless (verify-visited-file-modtime buffer)
+          (user-error "File changed on disk; reconcile unsaved edits before applying or reverting %s"
+                      (plist-get disk :path)))
         (save-restriction
           (widen)
           (setq snapshot (plist-put snapshot :exists t))

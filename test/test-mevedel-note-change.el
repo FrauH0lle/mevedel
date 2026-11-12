@@ -177,6 +177,24 @@
     (should (equal "before\nnew\nafter\nunsaved\n" (mevedel-test--read-file file)))
     (mevedel-note-revert-change note 0)
     (should (equal "before\nold\nafter\nunsaved\n" (mevedel-test--read-file file))))
+  :doc "apply preserves external disk edits and refuses unsaved buffers with outdated disk state"
+  (dolist (modified '(nil t))
+    (mevedel-note-change-test--with-note
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+      (when modified
+        (with-current-buffer source
+          (goto-char (point-max))
+          (insert "unsaved\n")))
+      (with-temp-file file (insert "before\nold\nexternal disk edit\n"))
+      (if modified
+          (progn
+            (should-error (mevedel-note-apply-change note) :type 'user-error)
+            (should (equal "before\nold\nexternal disk edit\n" (mevedel-test--read-file file)))
+            (with-current-buffer source
+              (should (equal "before\nold\nafter\nunsaved\n" (buffer-string)))))
+        (mevedel-note-apply-change note)
+        (should (equal "before\nnew\nexternal disk edit\n" (mevedel-test--read-file file))))))
   :doc "the notes list applies the selected note with the single a key"
   (mevedel-note-change-test--with-note
     (mevedel-note-change-test--propose
@@ -697,6 +715,25 @@
       (mevedel-note-revert-change note 0)
       (should (equal "before\nold\nafter\nunsaved\n" (buffer-string))))
     (should (equal "before\nold\nafter\nunsaved\n" (mevedel-test--read-file file))))
+  :doc "revert preserves external disk edits and refuses outdated unsaved visiting text"
+  (dolist (modified '(nil t))
+    (mevedel-note-change-test--with-note
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+      (mevedel-note-apply-change note)
+      (when modified
+        (with-current-buffer source
+          (goto-char (point-max))
+          (insert "unsaved\n")))
+      (with-temp-file file (insert "before\nnew\nexternal disk edit\n"))
+      (if modified
+          (progn
+            (should-error (mevedel-note-revert-change note 0) :type 'user-error)
+            (should (equal "before\nnew\nexternal disk edit\n" (mevedel-test--read-file file)))
+            (with-current-buffer source
+              (should (equal "before\nnew\nafter\nunsaved\n" (buffer-string)))))
+        (mevedel-note-revert-change note 0)
+        (should (equal "before\nold\nexternal disk edit\n" (mevedel-test--read-file file))))))
   :doc "capture gaps refuse rather than treating an unknown pre-image as file absence"
   (mevedel-note-change-test--with-note
     (setf (mevedel-session-file-snapshots session)
