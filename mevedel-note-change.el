@@ -12,6 +12,10 @@
 (require 'mevedel-notes)
 (require 'mevedel-persistence)
 (require 'mevedel-tool-patch)
+(require 'mevedel-session-artifacts)
+(require 'mevedel-session-control-transfer)
+(require 'mevedel-session-persistence)
+(require 'mevedel-session-publication)
 
 (defun mevedel-note-prepare-change (proposal changes data-buffer)
   "Hold PROPOSAL and CHANGES for DATA-BUFFER's notes without writing source.
@@ -25,6 +29,7 @@ Return an ordinary tool result immediately; no tool callback is retained."
                                         'mevedel-note-session-id)))
                  (mevedel-notes--entries workspace)))
          (record (list :id (mevedel--create-uuid)
+                       :session-id id :turn (or (mevedel-session-turn-count session) 0)
                        :proposal (copy-tree proposal)
                        :changes (copy-tree changes)
                        :before (mapcar (lambda (change)
@@ -114,6 +119,55 @@ Return an ordinary tool result immediately; no tool callback is retained."
                                        (plist-get conflict :end-line))) conflicts ", ")))
     (nreverse changes)))
 
+(defun mevedel-note-change--commit (note record changes)
+  "Commit NOTE's CHANGES and retain their actual pair under RECORD's turn."
+  (let* ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note)))
+         (id (plist-get record :session-id))
+         (data (or (mevedel-session-control-transfer-root-buffer-for-id id)
+                   (mevedel-session-persistence-resume-id workspace id)
+                   (user-error "Note conversation is unavailable: %s" id)))
+         (session (buffer-local-value 'mevedel--session data))
+         (turn (plist-get record :turn))
+         (previous (cdr (assq turn (mevedel-session-file-snapshots session))))
+         (pre (make-hash-table :test #'equal)))
+    (mevedel-session-artifacts-assert-new-mutation-authority session)
+    (dolist (change changes)
+      (let* ((path (plist-get change :path))
+             (old (cdr (assoc path previous)))
+             (name (plist-get old :pre-backup-name)))
+        (puthash path (if old
+                          (and name (mevedel-session-artifacts-read-file-raw
+                                     (mevedel-session-artifacts-backup-path
+                                      (mevedel-session-save-path session) name)))
+                        (plist-get (or (plist-get change :history-before)
+                                       (plist-get change :before)) :bytes)) pre))
+      (when-let* ((buffer (find-buffer-visiting (plist-get change :path))))
+        (with-current-buffer buffer (undo-boundary))))
+    (mevedel-tool-patch-commit changes)
+    (dolist (change changes)
+      (when-let* ((buffer (find-buffer-visiting (plist-get change :path))))
+        (with-current-buffer buffer (undo-boundary))))
+    (let ((mevedel-session-artifacts--collecting-critical-artifacts-p
+           (mevedel-session-codec-portable-authority-p session))
+          (mevedel-session-artifacts--critical-artifacts nil))
+      (mevedel-session-artifacts-snapshot-modified session turn pre)
+      (when mevedel-session-artifacts--critical-artifacts
+        (mevedel-session-publication-publish
+         session (nreverse mevedel-session-artifacts--critical-artifacts) t)))
+    (let ((cell (assq turn (mevedel-session-file-snapshots session))))
+      (setcdr cell (sort (append (cdr cell)
+                                (cl-remove-if (lambda (entry)
+                                                (not (eq 'absent (gethash (car entry) pre 'absent))))
+                                              previous))
+                        (lambda (a b) (string< (car a) (car b))))))
+    (with-current-buffer data
+      (when (and mevedel--current-request (= turn (mevedel-session-turn-count session)))
+        (maphash (lambda (path bytes)
+                   (puthash path bytes (mevedel-request-file-snapshots mevedel--current-request))) pre))
+      (let ((mevedel--current-request nil))
+        (mevedel-session-artifacts-save session data nil t)))
+    (mevedel-note-change--finish note record)))
+
 (defun mevedel-note-change--finish (note record)
   "Clear waiting RECORD from NOTE and its batch siblings after application."
   (let ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note))))
@@ -136,14 +190,7 @@ Return an ordinary tool result immediately; no tool callback is retained."
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
       (let ((record (mevedel-note-change--record note))
             (changes (mevedel-note-change--plan note)))
-        (dolist (change changes)
-          (when-let* ((buffer (find-buffer-visiting (plist-get change :path))))
-            (with-current-buffer buffer (undo-boundary))))
-        (mevedel-tool-patch-commit changes)
-        (dolist (change changes)
-          (when-let* ((buffer (find-buffer-visiting (plist-get change :path))))
-            (with-current-buffer buffer (undo-boundary))))
-        (mevedel-note-change--finish note record)
+        (mevedel-note-change--commit note record changes)
         (message "mevedel: change applied; mark the note done when ready")))))
 
 (provide 'mevedel-note-change)

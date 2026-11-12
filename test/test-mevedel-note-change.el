@@ -13,6 +13,7 @@
 (require 'mevedel-note-merge)
 (require 'mevedel-view)
 (require 'mevedel-session-persistence)
+(require 'mevedel-session-codec)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -52,6 +53,7 @@
                (setq-local default-directory (file-name-as-directory root)
                            mevedel--workspace workspace
                            mevedel--session session))
+             (mevedel-session-artifacts-save session data-buf nil t)
              ,@body)
          (dolist (buffer (cl-set-difference (buffer-list) old-buffers))
            (when (buffer-live-p buffer)
@@ -153,6 +155,37 @@
         (mevedel-note-merge-confirm))
       (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))
       (should (equal "two new\n" (mevedel-test--read-file two))))))
+
+(mevedel-deftest mevedel-note-applied-history
+  (:quiet t)
+  ,test
+  (test)
+  :doc "apply durably records actual bytes under the preparing turn, preserving disjoint edits"
+  (mevedel-note-change-test--with-note
+    (setf (mevedel-session-turn-count session) 7)
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (setf (mevedel-session-turn-count session) 8)
+    (with-current-buffer source
+      (goto-char (point-max))
+      (insert "user addition\n")
+      (save-buffer))
+    (mevedel-note-apply-change note)
+    (should (equal "before\nnew\nafter\nuser addition\n" (mevedel-test--read-file file)))
+    (let* ((saved (mevedel-session-codec-read
+                   (mevedel-session-artifacts-sidecar-path (mevedel-session-save-path session))))
+           (turns (plist-get saved :file-snapshots))
+           (entry (cdr (assoc file (cdr (assq 7 turns))))))
+      (should entry)
+      (should-not (cdr (assq 8 turns)))
+      (should (equal "before\nold\nafter\nuser addition\n"
+                     (mevedel-test--read-file
+                      (mevedel-session-artifacts-backup-path
+                       (mevedel-session-save-path session) (plist-get entry :pre-backup-name)))))
+      (should (equal "before\nnew\nafter\nuser addition\n"
+                     (mevedel-test--read-file
+                      (mevedel-session-artifacts-backup-path
+                       (mevedel-session-save-path session) (plist-get entry :backup-name))))))))
 
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here
