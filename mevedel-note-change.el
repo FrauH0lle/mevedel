@@ -188,7 +188,8 @@ Return an ordinary tool result immediately; no tool callback is retained."
           (overlay-put item 'mevedel-note-prepared-change nil)
           (overlay-put item 'mevedel-note-attention-state nil)
           (mevedel-notes--render item))))
-    (mevedel-instruction-store-touch workspace)))
+    (mevedel-instruction-store-touch workspace)
+    (mevedel-instruction-store-flush t)))
 
 (defun mevedel-note-change--review (note record)
   "Open the existing detailed review for NOTE's waiting RECORD."

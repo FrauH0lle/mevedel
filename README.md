@@ -274,6 +274,22 @@ provider input, including its instructions and tool definitions. `C-c C-q` close
 the frame/window without losing the conversation or draft. Sending a sent note
 reopens its conversation without making another request.
 
+Source-file ApplyPatch changes in a note conversation wait as **change ready**;
+they do not write source or keep the AI's turn open. `C-c C-a` applies the waiting
+change as one source undo step. `C-u C-c C-a` opens the existing detailed patch
+review; confirming a partial selection drops the unselected rest. A newer
+proposal replaces the waiting one, while earlier proposals remain in the
+conversation. Applying does not mark the note done.
+
+An overlapping source edit makes apply refuse and shows **change stale**.
+Use `C-c C-n` in the conversation to re-ask on the current noted code, or
+`C-c C-g` to open a separate three-way smerge editor. Resolve there, then use
+`C-c C-c` to confirm or `C-c C-k` to cancel. Confirmation refuses if the source
+changed again; generated conflict markers never go into the source. Merging
+uses local `git merge-file` on temporary copies, also outside Git repositories.
+Missing local Git gives a clear refusal. Resource-address patches keep their
+ordinary ApplyPatch behavior rather than becoming prepared source changes.
+
 `M-x mevedel-note-send-batch` sends several loaded notes into one conversation.
 Notes already sharing a conversation reopen it together; notes belonging to
 different conversations must be sent separately. Each conversation is a normal

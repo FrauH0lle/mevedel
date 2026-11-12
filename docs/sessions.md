@@ -29,6 +29,22 @@ session's retained `note-input.json`: the first assembled API request, or the
 native provider's system text and submitted content. This is captured at
 dispatch, not regenerated from later source edits.
 
+Ordinary filesystem and TRAMP source patches from ApplyPatch become prepared
+changes, not writes or pending provider callbacks. Their preparation-time base
+and proposal persist on the workspace note record. The latest proposal replaces
+the waiting one; the ordinary tool transcript retains earlier proposals.
+Resource-address patches keep the normal ApplyPatch path.
+
+User apply and confirmed manual merge record the actual application-time pair
+in the note session's existing `:file-snapshots` history, keyed by the turn that
+prepared the change, not whichever turn is current when it is applied. Each
+path entry uses `:version`, `:backup-time`, `:pre-backup-name` and `:backup-name`;
+the names address literal-byte SHA-256 backups under `file-history/`. Manual
+merges use captured visiting text, including unsaved edits, as their pre-image.
+Existing capture gaps remain gaps. A preparation that made no write does not
+claim subsequent user edits as a note change. Confirming a partial detailed
+review records only accepted paths and drops the rest of the waiting proposal.
+
 Original note conversations are excluded from ordinary live and saved chat
 selection. Automatic session cleanup preserves them and does not count them
 against the newest ordinary-session retention floor, including when their notes

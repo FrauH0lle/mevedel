@@ -199,6 +199,8 @@ Chat / view
   mevedel-overlay-ui.el       instruction overlay actions and rendering
   mevedel-notes.el            source note actions, frozen history, labels and entry hints
   mevedel-note-conversation.el isolated durable note send/batch/reopen, composer controls and sent-input inspection
+  mevedel-note-change.el      nonblocking prepared source changes, checked apply, detailed review and actual per-turn application history
+  mevedel-note-merge.el       separate localized three-way smerge editor with checked explicit confirmation
   mevedel-notes-migration.el  one-time backed-up workspace reference/directive conversion
   mevedel-notes-list.el       workspace notes grouped by attention, visit/edit/tag/send/close/restore actions
   mevedel-note-mentions.el    explicit note number/tag attachments, current code and UUID lookup
