@@ -17,6 +17,16 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+(mevedel-deftest mevedel-notes-readme ()
+  ,test
+  (test)
+  :doc "README names recently closed as the destination of dismissed notes"
+  (with-temp-buffer
+    (insert-file-contents
+     (file-name-concat (file-name-directory (locate-library "mevedel")) "README.md"))
+    (should (string-match-p "Done, deleted and dismissed notes[\n ]+share recently closed"
+                            (buffer-string)))))
+
 (defmacro mevedel-notes-test--with-source (&rest body)
   "Run BODY in a real source buffer in a private workspace."
   (declare (indent 0))

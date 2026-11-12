@@ -338,8 +338,9 @@ placeholder. Notes are
 never automatic prompt context. The mode line summarizes working, ready and
 stale notes in the current workspace using only in-memory state.
 
-`M-x mevedel-note-done` explicitly closes a note as done. Done and deleted notes
-share recently closed; `M-x mevedel-note-restore` brings one back with its text,
+`M-x mevedel-note-done` explicitly closes a note as done.
+Done, deleted and dismissed notes share recently closed;
+`M-x mevedel-note-restore` brings one back with its text,
 tags and attachments. Restore follows the old code when it can find it; if the
 code changed, it falls back to the old line and column, clamped to the file.
 Notes never close merely because their code was edited.
