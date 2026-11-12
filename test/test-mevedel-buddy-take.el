@@ -246,5 +246,26 @@ AUTOMATIC exercises the idle review policy without waiting for idle time."
                            tools "add_note" name 40 "Unseen mistake" "significant" "mistake")))) t)
       (should-not (string-search "Unseen mistake" (mevedel-take-test--labels))))))
 
+(mevedel-deftest mevedel-buddy-review/dropped-goal
+  (:quiet t)
+  ,test
+  (test)
+  :doc "dropping a distant taken note withdraws its invitation during a review"
+  (mevedel-take-test--with-source
+    (save-excursion
+      (goto-char (point-max))
+      (dotimes (_ 50) (insert "distant code\n")))
+    (goto-char (point-min)) (forward-line 39)
+    (let ((note (mevedel-note-create "Improve this distant code"))
+          (name (buffer-name)))
+      (mevedel-note-take note)
+      (goto-char (point-min)) (forward-line 1) (insert "edited ")
+      (mevedel-take-test--review
+       (lambda (_prompt tools)
+         (mevedel-note-drop note)
+         (should (stringp (mevedel-take-test--tool
+                           tools "add_note" name 40 "An idea after drop" "significant" "idea")))) t)
+      (should-not (string-search "An idea after drop" (mevedel-take-test--labels))))))
+
 (provide 'test-mevedel-buddy-take)
 ;;; test-mevedel-buddy-take.el ends here
