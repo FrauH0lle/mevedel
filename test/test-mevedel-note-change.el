@@ -215,5 +215,26 @@
                       (mevedel-session-artifacts-backup-path
                        (mevedel-session-save-path session) (plist-get entry :backup-name))))))))
 
+(mevedel-deftest mevedel-note-merge-creation
+  (:quiet t)
+  ,test
+  (test)
+  :doc "merging a new file retains absence, not an empty pre-existing file"
+  (mevedel-note-change-test--with-note
+    (let ((created (file-name-concat root "created.txt")))
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Add File: created.txt\n+created\n*** End Patch")
+      (with-current-buffer (mevedel-note-merge-change note)
+        (goto-char (point-min))
+        (search-forward "<<<<<<<")
+        (smerge-keep-lower)
+        (mevedel-note-merge-confirm))
+      (should (equal "created\n" (mevedel-test--read-file created)))
+      (let* ((saved (mevedel-session-codec-read
+                     (mevedel-session-artifacts-sidecar-path (mevedel-session-save-path session))))
+             (entry (cdr (assoc created (cdr (assq 0 (plist-get saved :file-snapshots)))))))
+        (should entry)
+        (should-not (plist-get entry :pre-backup-name))))))
+
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here
