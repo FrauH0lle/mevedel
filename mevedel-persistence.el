@@ -2089,9 +2089,9 @@ the intent cannot be recorded, which aborts the Rewind."
   "Resolve SESSION's Rewind intent after its outcome is known.
 COMMITTED non-nil means the Rewind passed its commit point: prune the
 session's discarded activity from the store, then reinstall source
-presentations from the store, keeping the directive records Rewind
-already pruned in memory.  The session's historical snapshot is not the
-workspace's current set.  Otherwise drop the intent."
+presentations with held-back writes replayed over that store, keeping the
+directive records Rewind already pruned in memory.  The session's historical
+snapshot is not the workspace's current set.  Otherwise drop the intent."
   (let ((workspace (mevedel-session-workspace session)))
     (when (mevedel-instruction-store--applicable-p workspace)
       (if committed
@@ -2104,16 +2104,23 @@ workspace's current set.  Otherwise drop the intent."
                                           workspace)
                                          :data)))
                     (when (eq 'ok (plist-get current :status))
-                      (let ((mevedel-instruction-store--inhibit t))
+                      (let ((merge (mevedel-instruction-store--merge
+                                    base
+                                    (mevedel-instruction-store--serialize workspace)
+                                    (plist-get current :data)))
+                            (mevedel-instruction-store--inhibit t))
+                        ;; Replay held-back writes over the pruned store.
+                        (mevedel-instruction-store--report-refused
+                         workspace (plist-get merge :refused))
                         (with-temp-buffer
                           (setq-local mevedel--workspace workspace)
                           (mevedel--install-instructions
-                           (plist-get current :data)
+                           (plist-get merge :data)
                            (mevedel-instruction-store--root workspace)
                            nil t workspace
                            (mevedel-workspace-directives workspace) t)))
-                      ;; Presentations now match the store; directive records
-                      ;; match the base memory was in step with.
+                      ;; Keep the store as base so held-back edits flush later;
+                      ;; directive records match the base memory was in step with.
                       (mevedel-instruction-store--observe
                        workspace nil
                        (plist-put (copy-sequence (plist-get current :data))

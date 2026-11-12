@@ -1907,13 +1907,13 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
           (setq buffer-install-started t)
           (mevedel-session-rewind--install-rewind-buffer
            buffer staging-buffer session target)
-          ;; Current records: another session may have added one since
-          ;; this Rewind started, and it is not this Rewind's to drop.
-          (unless
-              (mevedel-session-artifacts-load-instructions
-               session buffer (1- (plist-get target :cum-turn))
-               (mevedel-workspace-directives workspace) t)
-            (error "Instruction restore failed during Rewind"))
+          ;; An active store owns current instructions, including held-back writes.
+          (unless store-intent
+            (unless
+                (mevedel-session-artifacts-load-instructions
+                 session buffer (1- (plist-get target :cum-turn))
+                 (mevedel-workspace-directives workspace) t)
+              (error "Instruction restore failed during Rewind")))
           (mevedel-workspace-rewind-directives
            workspace (mevedel-session-session-id session)
            (plist-get target :cum-turn))
@@ -2030,9 +2030,10 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                      original-buffer)
                     (set-buffer-modified-p original-buffer-modified)
                     (goto-char (min original-point (point-max)))))
-                (mevedel-session-artifacts-load-instructions
-                 session buffer original-turn
-                 (mevedel-workspace-directives workspace) t)
+                (unless store-intent
+                  (mevedel-session-artifacts-load-instructions
+                   session buffer original-turn
+                   (mevedel-workspace-directives workspace) t))
                 (mevedel-session-persistence-notify-session-event
                  session 'rerender))
             (error
