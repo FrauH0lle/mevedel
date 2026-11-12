@@ -617,6 +617,13 @@ present."
             lines))
     (when retained
       (push "- `agent://` - retained agent results for this session." lines))
+    (when (plist-get metadata :notes-p)
+      (push (concat "- `notes://` - read-only marked-code notes in this session's workspace. "
+                    "Use Read to list display numbers and UUID addresses; "
+                    "Read, Glob and Grep accept returned notes://UUID.md addresses. "
+                    "These are distinct from working files under work://shared/; "
+                    "reading a note does not send it or start a conversation.")
+            lines))
     (when (or (plist-get metadata :saved-history-p)
               (seq-some (lambda (entry) (plist-get entry :history-p))
                         (plist-get metadata :agents)))

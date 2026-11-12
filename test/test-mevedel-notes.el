@@ -9,6 +9,8 @@
 (require 'mevedel)
 (require 'mevedel-persistence)
 (require 'mevedel-session-artifacts)
+(defvar mevedel-notes-closed-max-count)
+(defvar mevedel-notes-closed-max-age-days)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -188,7 +190,7 @@
     ;; These stubs supply user input at the minibuffer boundary only.
     (cl-letf (((symbol-function 'read-multiple-choice)
                (lambda (_prompt choices &rest _)
-                 (should (equal '(?s ?e ?d) (mapcar #'car choices)))
+                  (should (equal '(?s ?e ?x ?d) (mapcar #'car choices)))
                  (assq ?e choices)))
               ((symbol-function 'read-string)
                (lambda (&rest _) "After")))
@@ -209,7 +211,22 @@
     (mevedel-instruction-store-flush t)
     (mevedel--clear-instruction-state workspace)
     (mevedel-instruction-store-observe workspace)
-    (should-not (mevedel-notes-test--labels))))
+    (should-not (mevedel-notes-test--labels)))
+  :doc "done is an explicit modified-key menu action, never a plain source key"
+  (mevedel-notes-test--with-source
+    (mevedel-note-create "Close from menu")
+    (should (eq #'self-insert-command (key-binding "x")))
+    (cl-letf (((symbol-function 'read-multiple-choice)
+               (lambda (_prompt choices &rest _)
+                 (or (assq ?x choices) (ert-fail "Missing done action")))))
+      (call-interactively (key-binding (kbd "M-m"))))
+    (should-not (mevedel-notes-test--labels))
+    (mevedel-instruction-store-flush t)
+    (mevedel--clear-instruction-state workspace)
+    (mevedel-instruction-store-observe workspace)
+    (should (eq 'done (plist-get (plist-get (car (mevedel-notes-closed workspace))
+                                           :instruction)
+                                :closed-reason)))))
 
 (mevedel-deftest mevedel-note-entry-hint
   ()
@@ -237,12 +254,26 @@
   (:quiet t)
   ,test
   (test)
+  :doc "finishing a full code deletion never closes a code-only note"
+  (mevedel-notes-test--with-source
+    (mevedel-note-create)
+    (run-hooks 'pre-command-hook)
+    (erase-buffer)
+    (run-hooks 'post-command-hook)
+    (should (= 1 (length (mevedel-notes-test--labels))))
+    (should-not (mevedel-notes-closed workspace t))
+    (save-buffer)
+    (mevedel--clear-instruction-state workspace)
+    (mevedel-instruction-store-observe workspace)
+    (should (= 1 (length (mevedel-notes-test--labels)))))
   :doc "source undo restores note geometry after deleting its entire marked code"
   (mevedel-notes-test--with-source
     (mevedel-note-create "Keep the anchor")
     (buffer-enable-undo)
     (setq buffer-undo-list nil)
+    (run-hooks 'pre-command-hook)
     (delete-region (line-beginning-position) (line-beginning-position 2))
+    (run-hooks 'post-command-hook)
     (undo-boundary)
     (should (= 1 (length (mevedel-notes-test--labels))))
     (undo-only 1)
@@ -287,6 +318,347 @@
       (should (equal bytes (with-temp-buffer
                              (insert-file-contents path) (buffer-string))))
       (should (string-match-p "Keep this" (car (mevedel-notes-test--labels)))))))
+
+(mevedel-deftest mevedel-note-done
+  (:quiet t)
+  ,test
+  (test)
+  :doc "done removes the label and restores the same note after a store reload"
+  (mevedel-notes-test--with-source
+    (mevedel-note-create "Finish this")
+    (mevedel-note-done)
+    (should-not (mevedel-notes-test--labels))
+    (should (equal "before\nselected code\nafter\n" (buffer-string)))
+    (mevedel-instruction-store-flush t)
+    (mevedel--clear-instruction-state workspace)
+    (mevedel-instruction-store-observe workspace)
+    (should-not (mevedel-notes-test--labels))
+    (mevedel-note-restore 1 workspace)
+    (should (string-match-p "Note 1.*Finish this"
+                            (car (mevedel-notes-test--labels)))))
+  :doc "closing a parent note refreshes the surviving nested presentation"
+  (mevedel-notes-test--with-source
+    (let* ((reference (mevedel--create-reference-in source 8 16))
+           (before (overlay-get reference 'before-string))
+           (transient-mark-mode t))
+      (goto-char (point-max))
+      (set-mark (point-min))
+      (activate-mark)
+      (let ((note (mevedel-note-create "Parent")))
+        (mevedel-note-done note))
+      (should (equal-including-properties before (overlay-get reference 'before-string))))))
+
+(mevedel-deftest mevedel-note-restore
+  (:quiet t)
+  ,test
+  (test)
+  :doc "changed code falls back to the old line, not an obsolete character offset"
+  (mevedel-notes-test--with-source
+    (mevedel-note-create "Keep my place")
+    (mevedel-note-delete)
+    (mevedel-instruction-store-flush t)
+    (erase-buffer)
+    (insert "a much longer replacement for the first line\nnew code\nlast\n")
+    (save-buffer)
+    (mevedel--clear-instruction-state workspace)
+    (mevedel-instruction-store-observe workspace)
+    (let ((note (mevedel-note-restore 1 workspace)))
+      (should (= 2 (line-number-at-pos (overlay-start note))))
+      (should (equal "new code" (buffer-substring-no-properties
+                                 (overlay-start note) (overlay-end note)))))
+    (mevedel-instruction-store-flush t)
+    (mevedel--clear-instruction-state workspace)
+    (mevedel-instruction-store-observe workspace)
+    (should (= 1 (length (mevedel-notes-test--labels)))))
+  :doc "display snapshots cannot mutate the closed note restored by the command"
+  (mevedel-notes-test--with-source
+    (mevedel-note-create "Original")
+    (mevedel-note-delete)
+    (let* ((snapshot (car (mevedel-notes-closed workspace)))
+           (props (plist-get (plist-get snapshot :instruction) :properties)))
+      (aset (plist-get props 'mevedel-note-text) 0 ?X))
+    (mevedel-note-restore 1 workspace)
+    (should (string-match-p "Original" (car (mevedel-notes-test--labels)))))
+  :doc "restore outside a narrowing preserves point and places the label at its code"
+  (mevedel-notes-test--with-source
+    (mevedel-note-create "Outside restriction")
+    (mevedel-note-delete)
+    (narrow-to-region 1 7)
+    (goto-char 3)
+    (let ((note (mevedel-note-restore 1 workspace)))
+      (should (= 3 (point)))
+      (should (= 7 (point-max)))
+      (widen)
+      (should (= 8 (overlay-start note)))
+      (let ((label (cl-find-if
+                    (lambda (overlay) (overlay-get overlay 'after-string))
+                    (overlays-in (point-min) (point-max)))))
+        (should (= 21 (overlay-end label))))))
+  :doc "restore loads the workspace store on first use without prior activation"
+  (mevedel-notes-test--with-source
+    (mevedel-note-create "Cold restore")
+    (mevedel-note-delete)
+    (mevedel-instruction-store-flush t)
+    (mevedel--clear-instruction-state workspace)
+    (mevedel-note-restore 1 workspace)
+    (should (string-match-p "Cold restore" (car (mevedel-notes-test--labels)))))
+  :doc "export and reload keep open and closed notes together for an unopened file"
+  (mevedel-notes-test--with-source
+    (mevedel-note-create "Closed")
+    (mevedel-note-done)
+    (forward-line 1)
+    (mevedel-note-create "Still open")
+    (mevedel-instruction-store-flush t)
+    (kill-buffer source)
+    (with-temp-buffer
+      (setq-local mevedel--workspace workspace)
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (let ((path (file-name-concat directory "export.el")))
+        (mevedel-save-instructions path)
+        ;; Inspect the public export, not an in-memory codec helper.
+        (let* ((export (with-temp-buffer
+                         (insert-file-contents path) (read (current-buffer))))
+               (files (plist-get export :files)))
+          (should (equal '("source.el") (mapcar #'car files)))
+          (should (= 2 (length (plist-get (cdar files) :instructions))))
+          (should (stringp (plist-get (cdar files) :content-hash))))
+        (mevedel-load-instructions path)
+        (mevedel-note-restore 1 workspace)))
+    (setq source (find-buffer-visiting file))
+    (with-current-buffer source
+      (should (= 2 (length (mevedel-notes-test--labels)))))))
+
+(mevedel-deftest mevedel-note-close
+  (:quiet t)
+  ,test
+  (test)
+  :doc "done, deleted and dismissed share one persistent closed list with reasons"
+  (mevedel-notes-test--with-source
+    (mevedel-note-create "Done")
+    (mevedel-note-done)
+    (mevedel-note-create "Deleted")
+    (mevedel-note-delete)
+    (mevedel-note-close (mevedel-note-create "Dismissed") 'dismissed)
+    (mevedel-instruction-store-flush t)
+    (mevedel--clear-instruction-state workspace)
+    (mevedel-instruction-store-observe workspace)
+    (should-not (mevedel-notes-test--labels))
+    (should (equal '(deleted dismissed done)
+                   (sort (mapcar (lambda (entry)
+                                   (plist-get (plist-get entry :instruction)
+                                              :closed-reason))
+                                 (mevedel-notes-closed workspace))
+                         #'string-lessp)))
+    (dolist (id '(1 2 3)) (mevedel-note-restore id workspace))
+    (should (= 3 (length (mevedel-notes-test--labels)))))
+  :doc "custom count limit keeps the newest closed notes across reload"
+  (mevedel-notes-test--with-source
+    (let ((mevedel-notes-closed-max-count 2))
+      (dolist (text '("First" "Second" "Third"))
+        (mevedel-note-create text)
+        (mevedel-note-done))
+      (mevedel-instruction-store-flush t)
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (should (= 2 (length (mevedel-notes-closed workspace))))
+      (should-error (mevedel-note-restore 1 workspace) :type 'user-error)
+      (mevedel-note-restore 2 workspace)
+      (mevedel-note-restore 3 workspace)
+      (should (string-match-p "Second" (string-join (mevedel-notes-test--labels))))
+      (should (string-match-p "Third" (string-join (mevedel-notes-test--labels))))))
+  :doc "custom age limit expires at the boundary and cannot be bypassed by restore"
+  (mevedel-notes-test--with-source
+    (let ((mevedel-notes-closed-max-count nil)
+          (mevedel-notes-closed-max-age-days 1)
+          (clock (float-time))
+          (real-time (symbol-function 'float-time)))
+      ;; Only the wall-clock boundary is replaced; store operations stay real.
+      (cl-letf (((symbol-function 'float-time)
+                 (lambda (&optional time)
+                   (if time (funcall real-time time) clock))))
+        (mevedel-note-create "Old")
+        (mevedel-note-delete)
+        (mevedel-instruction-store-flush t)
+        (setq clock (+ clock 86399))
+        (should (= 1 (length (mevedel-notes-closed workspace))))
+        (setq clock (1+ clock))
+        (should-error (mevedel-note-restore 1 workspace) :type 'user-error)
+        (mevedel-instruction-store-flush t)
+        (mevedel--clear-instruction-state workspace)
+        (mevedel-instruction-store-observe workspace)
+        (let ((mevedel-notes-closed-max-age-days nil))
+          (should-not (mevedel-notes-closed workspace))
+          (should-error (mevedel-note-restore 1 workspace) :type 'user-error)))))
+  :doc "imported archived notes are exempt from both ordinary retention limits"
+  (mevedel-notes-test--with-source
+    (mevedel-note-create "Migrated archive")
+    (mevedel-note-done)
+    (let ((path (file-name-concat directory "archive.el")))
+      (mevedel-save-instructions path)
+      ;; Supply the current-format output that archive migration will produce.
+      (let* ((data (with-temp-buffer (insert-file-contents path) (read (current-buffer))))
+             (instruction (car (plist-get (cdar (plist-get data :files)) :instructions))))
+        (setf (plist-get (cdar (plist-get data :files)) :instructions)
+              (list (plist-put instruction :expiry-exempt t)))
+        (write-region (prin1-to-string data) nil path nil 'silent))
+      (let ((mevedel-notes-closed-max-count 0)
+            (mevedel-notes-closed-max-age-days 0))
+        (mevedel-load-instructions path)
+        (mevedel--clear-instruction-state workspace)
+        (mevedel-instruction-store-observe workspace)
+        (mevedel-note-restore 1 workspace)
+        (should (string-match-p "Migrated archive"
+                                (car (mevedel-notes-test--labels))))))))
+
+(mevedel-deftest mevedel-note-source-missing
+  (:quiet t)
+  ,test
+  (test)
+  :doc "a missing source retains an open note and reattaches it when the file returns"
+  (mevedel-notes-test--with-source
+    (mevedel-note-create "Wait for my source")
+    (delete-file file)
+    (run-hooks 'post-command-hook)
+    (should-not (mevedel-notes-closed workspace t))
+    (mevedel-instruction-store-flush t)
+    (kill-buffer source)
+    (mevedel--clear-instruction-state workspace)
+    (mevedel-instruction-store-observe workspace)
+    (let ((export (file-name-concat directory "export.el")))
+      (with-temp-buffer
+        (setq-local mevedel--workspace workspace)
+        (mevedel-save-instructions export))
+      (let* ((data (with-temp-buffer (insert-file-contents export) (read (current-buffer))))
+             (instruction (car (plist-get (cdar (plist-get data :files)) :instructions))))
+        (should (= 1 (length (plist-get data :files))))
+        (should (plist-get (cdar (plist-get data :files)) :source-missing))
+        (should (eq 'unsent (plist-get (plist-get instruction :properties)
+                                      'mevedel-note-state)))))
+    (write-region "before\nselected code\nafter\n" nil file nil 'silent)
+    (setq source (find-file-noselect file))
+    (with-current-buffer source
+      (setq-local mevedel--workspace workspace)
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (should (string-match-p "Wait for my source"
+                              (car (mevedel-notes-test--labels)))))
+    (should-not (mevedel-notes-closed workspace t)))
+  :doc "notes in an open missing-file buffer stay live and serialize once after save"
+  (mevedel-notes-test--with-source
+    (mevedel-note-create "Old")
+    (delete-file file)
+    (run-hooks 'post-command-hook)
+    (should (= 1 (length (mevedel-notes-test--labels))))
+    (goto-char (point-min))
+    (mevedel-note-create "New")
+    (run-hooks 'post-command-hook)
+    (should (= 2 (length (mevedel-notes-test--labels))))
+    (let ((export (file-name-concat directory "export.el")))
+      (mevedel-save-instructions export)
+      (let* ((data (with-temp-buffer (insert-file-contents export) (read (current-buffer))))
+             (files (plist-get data :files)))
+        (should (= 1 (length files)))
+        (should (plist-get (cdar files) :source-missing))
+        (should (= 2 (length (plist-get (cdar files) :instructions)))))
+      (save-buffer)
+      (mevedel-save-instructions export)
+      (let* ((data (with-temp-buffer (insert-file-contents export) (read (current-buffer))))
+             (files (plist-get data :files)))
+        (should (= 1 (length files)))
+        (should-not (plist-get (cdar files) :source-missing))
+        (should (equal '("New" "Old")
+                       (sort (mapcar (lambda (instruction)
+                                       (plist-get (plist-get instruction :properties)
+                                                  'mevedel-note-text))
+                                     (plist-get (cdar files) :instructions))
+                             #'string-lessp)))))
+    (mevedel-instruction-store-flush t)
+    (mevedel--clear-instruction-state workspace)
+    (mevedel-instruction-store-observe workspace)
+    (should (= 2 (length (mevedel-notes-test--labels)))))
+  :doc "the existing local source observation clears missing state when a file returns"
+  (mevedel-notes-test--with-source
+    (mevedel-note-create "Still here")
+    (delete-file file)
+    (run-hooks 'post-command-hook)
+    (write-region "before\nselected code\nafter\n" nil file nil 'silent)
+    (run-hooks 'post-command-hook)
+    (let ((export (file-name-concat directory "export.el")))
+      (mevedel-save-instructions export)
+      (let ((data (with-temp-buffer (insert-file-contents export) (read (current-buffer)))))
+        (should-not (plist-get (cdar (plist-get data :files)) :source-missing))))
+    (should (= 1 (length (mevedel-notes-test--labels))))))
+
+(mevedel-deftest mevedel-delete-instructions/recently-closed
+  (:quiet t)
+  ,test
+  (test)
+  :doc "legacy deletion at point retains a live note in recently closed"
+  (mevedel-notes-test--with-source
+    (mevedel-note-create "Deleted by legacy command")
+    (mevedel-delete-instructions)
+    (should-not (mevedel-notes-test--labels))
+    (mevedel-instruction-store-flush t)
+    (mevedel--clear-instruction-state workspace)
+    (mevedel-instruction-store-observe workspace)
+    (mevedel-note-restore 1 workspace)
+    (should (string-match-p "Deleted by legacy command"
+                            (car (mevedel-notes-test--labels))))))
+
+(mevedel-deftest mevedel-delete-instruction/forget-note
+  (:quiet t)
+  ,test
+  (test)
+  :doc "automatic retraction forgets a note without closing or recycling its number"
+  (mevedel-notes-test--with-source
+    (let ((note (mevedel-note-create "Retracted remark")))
+      (mevedel--delete-instruction note nil t)
+      (should-not (overlay-buffer note)))
+    (should-not (mevedel-notes-test--labels))
+    (should-not (mevedel-notes-closed workspace t))
+    (mevedel-instruction-store-flush t)
+    (mevedel--clear-instruction-state workspace)
+    (mevedel-instruction-store-observe workspace)
+    (should-not (mevedel-notes-test--labels))
+    (should-not (mevedel-notes-closed workspace t))
+    (mevedel-note-create "Next")
+    (should (string-match-p "Note 2" (car (mevedel-notes-test--labels))))))
+
+(mevedel-deftest mevedel-notes-closed
+  (:quiet t)
+  ,test
+  (test)
+  :doc "loaded-only queries skip cold observation and still return isolated snapshots"
+  (mevedel-notes-test--with-source
+    (mevedel-note-create "Original")
+    (mevedel-note-delete)
+    (mevedel-instruction-store-flush t)
+    (mevedel--clear-instruction-state workspace)
+    (should-not (mevedel-notes-closed workspace t))
+    (should (= 1 (length (mevedel-notes-closed workspace))))
+    (let* ((snapshot (car (mevedel-notes-closed workspace t)))
+           (props (plist-get (plist-get snapshot :instruction) :properties)))
+      (aset (plist-get props 'mevedel-note-text) 0 ?X))
+    (mevedel-note-restore 1 workspace)
+    (should (string-match-p "Original" (car (mevedel-notes-test--labels))))))
+
+(mevedel-deftest mevedel-delete-all-instructions/recently-closed
+  (:quiet t)
+  ,test
+  (test)
+  :doc "legacy bulk deletion closes notes but keeps ordinary directive deletion"
+  (mevedel-notes-test--with-source
+    (mevedel-note-create "Keep my history")
+    (let ((directive (mevedel--create-directive-in source 1 7 nil "Old directive")))
+      (should (= 2 (mevedel-delete-all-instructions)))
+      (should-not (overlay-buffer directive)))
+    (should-not (mevedel-notes-test--labels))
+    (mevedel-instruction-store-flush t)
+    (mevedel--clear-instruction-state workspace)
+    (mevedel-instruction-store-observe workspace)
+    (mevedel-note-restore 1 workspace)
+    (should (string-match-p "Keep my history" (car (mevedel-notes-test--labels))))))
 
 (provide 'test-mevedel-notes)
 ;;; test-mevedel-notes.el ends here

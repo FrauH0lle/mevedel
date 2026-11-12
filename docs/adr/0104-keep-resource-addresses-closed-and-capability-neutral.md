@@ -5,7 +5,8 @@ Status: accepted
 ## Current decision
 
 Mevedel exposes one closed resolver for `work://`, `artifact://`, `skill://`,
-`agent://`, `history://`, `memory://`, `mcp://`, and `mevedel://`. An address
+`agent://`, `history://`, `memory://`, `mcp://`, `shared://`, `notes://`, and
+`mevedel://`. An address
 serializes a canonical locator; it grants no authority. Preparation validates
 an opaque attempt and logical authority facts before permission. Authorized
 execution consumes that attempt without reparsing or exposing private backing
@@ -24,6 +25,16 @@ over the same projected text, including unsaved turns. Scoped item and directive
 conversations use it for deliberate retrieval of parent decisions; no new scheme
 or automatic context import is needed. Bare `history://` remains Read-only
 discovery. Curated memory and journal retention are independent of it.
+
+`notes://` projects marked-code notes in the session's workspace through Read,
+Glob and Grep. UUID addresses retain identity while discovery and each document
+show the display number used by `@note:N`. The family is read-only, includes
+retained closed notes, and exposes no conversation history. Code is current
+source content subject to ordinary Read authority, not an unchecked copy of the
+stored anchor. Unopened sources use operation-owned buffers, shared per file
+within the operation, without visiting source or initializing conversations.
+Discovery advertises capability without loading note contents or observing the
+store. Note actions, not ApplyPatch, own mutation.
 
 Standalone and sticky Plan permit ApplyPatch only when every source and
 destination is a non-bare session-owned `work://` descendant outside
@@ -113,6 +124,14 @@ substitute for checking a settled operation's result.
 ## Decision history
 
 All revisions below refine ADR 0104's closed resolver decision.
+
+- **Workspace note reads (2026-11-12).** The notes redesign lets the model
+  inspect what the user marked without automatic prompt inclusion. Neither
+  working files nor conversation history identify workspace instruction records.
+  A closed, read-only `notes://` branch of the existing resolver provides list,
+  read and search without a new tool, cross-workspace selector or mutation
+  capability. Display-number mapping makes UUID identities usable from chats;
+  source permission checks preserve the existing code-access boundary.
 
 - **Long-line recovery (2026-10-24).** An escaped ERT backtrace occupied one
   7,849-character artifact line. Both Read and Grep discarded its decisive tail,

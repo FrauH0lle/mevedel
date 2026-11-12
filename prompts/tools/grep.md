@@ -6,7 +6,7 @@ Use Glob for filenames and Read for a known contiguous range.
   file or directory. Supported resources: `work://`, `artifact://`, a selected `skill://` package,
   `memory://journal/`, `memory://root` or a memory descendant, `history://saved`
   or its descendants, `history://root` or a retained-agent history descendant,
-  `shared://` text views, and `mevedel://` or its descendants.
+  `shared://` text views, `notes://` or a returned note address, and `mevedel://` or its descendants.
   Bare `history://` and `skill://` are Read-only discovery roots; agent and MCP
   addresses do not support Grep.
 - Patterns use ripgrep syntax. For literal parentheses or braces, character

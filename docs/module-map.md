@@ -197,8 +197,12 @@ Chat / view
   mevedel-overlays.el         instruction geometry, tags, context, prompts
   mevedel-directive-source.el directive anchor/presentation lifecycle and command-scoped instruction replacement
   mevedel-overlay-ui.el       instruction overlay actions and rendering
-  mevedel-notes.el            source note create/edit/delete, labels and entry hints
+  mevedel-notes.el            source note actions, frozen history, labels and entry hints
   mevedel-note-conversation.el isolated durable note send/batch/reopen, composer controls and sent-input inspection
+  mevedel-notes-migration.el  one-time backed-up workspace reference/directive conversion
+  mevedel-notes-list.el       workspace notes grouped by attention, visit/edit/tag/delete actions
+  mevedel-note-mentions.el    explicit note number/tag attachments, current code and UUID lookup
+  mevedel-note-resource.el    read-only workspace note documents for Read, Glob and Grep
   mevedel-mentions.el         @ref and @file mention expansion
   mevedel-directive-persistence.el  workspace directive record codec
   mevedel-persistence.el      workspace instruction store, export/import, restore
@@ -292,7 +296,7 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-usage.el       SubscriptionUsage: plain quota readings across subscription backends
   mevedel-buddy.el            edit recording, diff assembly, briefs, review requests
   mevedel-buddy-feed.el       /buddy: feed a session's plan, Goal, or exchange to Buddy
-  mevedel-buddy-note.el       ephemeral note overlays and their model tools
+  mevedel-buddy-note.el       Buddy-authored workspace notes and review-local tools
   mevedel-tools.el            complete tool registration + stable discovery catalog
   mevedel-tools-list.el       native tools cockpit list
 

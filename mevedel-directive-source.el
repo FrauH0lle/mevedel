@@ -65,6 +65,10 @@
 (declare-function mevedel--retire-id "mevedel-instruction-registry" (id))
 (defvar mevedel--instruction-state-key-override)
 
+;; `mevedel-notes'
+(declare-function mevedel-note-delete "mevedel-notes" (&optional note))
+(autoload 'mevedel-note-delete "mevedel-notes")
+
 ;; `mevedel-overlay-ui'
 (declare-function mevedel--update-instruction-overlay
                   "mevedel-overlay-ui"
@@ -148,6 +152,9 @@ context only."
 (defvar-local mevedel--pending-directive-detachments nil
   "Directives wholly covered by the current buffer edit.")
 
+(defvar-local mevedel--buffer-source-missing nil
+  "Non-nil when the last source observation found this buffer's file missing.")
+
 (defvar-local mevedel--pending-instruction-edit nil
   "Instruction geometry and old text captured before a buffer edit.")
 
@@ -197,8 +204,10 @@ the last pending presentation: redo must never reopen a finished scope."
     (when (eq entry (overlay-get overlay 'mevedel-replacement-pending))
       (overlay-put overlay 'mevedel-replacement-pending nil)
       (when (overlay-buffer overlay)
-        (if (< (overlay-start overlay) (overlay-end overlay))
-            ;; A later before-change hook may have rejected the deletion.
+        (if (or (< (overlay-start overlay) (overlay-end overlay))
+                (eq (overlay-get overlay 'mevedel-instruction-type) 'note))
+            ;; A later hook may have rejected the deletion.  Notes also stay
+            ;; open at an empty anchor until explicitly closed by the user.
             (progn
               (overlay-put overlay 'evaporate (plist-get entry :evaporate))
               overlay)
@@ -281,9 +290,14 @@ shape, links, and directive activity.  Calls are idempotent."
     mevedel-uuid
     mevedel-instruction-type
     mevedel-note-text
+    mevedel-note-tags
     mevedel-note-author
     mevedel-note-state
     mevedel-note-session-id
+    mevedel-note-legacy-history
+    mevedel-note-buddy-severity
+    mevedel-note-buddy-code
+    mevedel-note-kept-from-buddy
     mevedel-span
     mevedel-instruction-collapse-p
     mevedel-links
@@ -316,12 +330,16 @@ overlay is restored.")
     (vconcat (mapcar #'mevedel--instruction-serializable-value value)))
    (t value)))
 
-(defun mevedel--instruction-persisted-properties (instruction)
-  "Return serializable persisted properties for INSTRUCTION."
+(defun mevedel--instruction-persisted-properties (instruction &optional source-only)
+  "Return serializable persisted properties for INSTRUCTION.
+SOURCE-ONLY omits note text, history and lifecycle before copying values;
+source geometry undo must leave these authored fields on the live note."
   (let ((raw-properties (overlay-properties instruction))
         properties)
     (dolist (prop mevedel--persisted-instruction-properties)
-      (when (memq prop raw-properties)
+      (when (and (memq prop raw-properties)
+                 (not (and source-only
+                           (string-prefix-p "mevedel-note-" (symbol-name prop)))))
         (setq properties
               (plist-put properties prop
                          (mevedel--instruction-serializable-value
@@ -455,7 +473,7 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
   directive)
 
 (defun mevedel--mark-buffer-source-missing (buffer)
-  "Remove BUFFER's source presentations and retain directives as Source missing."
+  "Retain BUFFER's open notes and detach directives when its file is missing."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (mevedel--instruction-activate-buffer buffer)
@@ -464,7 +482,12 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
              (copy-sequence
               (alist-get buffer (mevedel--instruction-alist)))))
         (dolist (instruction instructions)
-          (if (mevedel--directivep instruction)
+          (cond
+           ((eq (overlay-get instruction 'mevedel-instruction-type) 'note)
+            ;; The buffer is still editable.  Keep notes tracking its code;
+            ;; stashing repeatedly here would duplicate the file entry.
+            nil)
+           ((mevedel--directivep instruction)
               (progn
                 (when-let* ((record (mevedel--directive-record instruction)))
                   (let ((anchor (mevedel-directive-anchor record)))
@@ -480,10 +503,15 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
                            :properties
                            (mevedel--instruction-persisted-properties
                             instruction)))))
-                (mevedel--remove-directive-presentation instruction))
-            (mevedel--delete-instruction instruction buffer)))
-        (setf (mevedel--instruction-alist)
-              (assq-delete-all buffer (mevedel--instruction-alist))))))
+                (mevedel--remove-directive-presentation instruction)))
+           (t (mevedel--delete-instruction instruction buffer))))
+        (if (alist-get buffer (mevedel--instruction-alist))
+            (unless mevedel--buffer-source-missing
+              (setq mevedel--buffer-source-missing t)
+              (mevedel-instruction-store-touch
+               (mevedel--instruction-buffer-workspace buffer)))
+          (setf (mevedel--instruction-alist)
+                (assq-delete-all buffer (mevedel--instruction-alist)))))))
   buffer)
 
 (defun mevedel--reconcile-directive-sources (workspace)
@@ -1098,11 +1126,13 @@ Like source-bound deletion, refuse records with activity."
        (plist-get (plist-get anchor :properties) 'mevedel-id) workspace)))
   (mevedel-workspace-remove-directive workspace record))
 
-(defun mevedel--delete-instruction (instruction &optional buffer)
+(cl-defun mevedel--delete-instruction (instruction &optional buffer forget-note)
   "Delete the INSTRUCTION overlay and return it.
 
 If the overlay is already dead, just perform the cleanup.
-BUFFER is required in order to perform cleanup on a dead instruction."
+BUFFER is required in order to perform cleanup on a dead instruction.
+Live notes move to recently closed unless FORGET-NOTE is non-nil.  That
+exception is for automatic retraction, not explicit user deletion."
   ;; We want to handle this function in two different ways. The first way
   ;; handles regular deletion, i.e. when the function was invoked on an existing
   ;; instruction. The second way is for when the instruction was deleted
@@ -1111,6 +1141,11 @@ BUFFER is required in order to perform cleanup on a dead instruction."
   ;; alive.
   (when (overlay-get instruction 'mevedel-marked-for-deletion)
     (error "Instruction %s already marked for deletion" instruction))
+  (when (and (not forget-note)
+             (buffer-live-p (overlay-buffer instruction))
+             (eq (overlay-get instruction 'mevedel-instruction-type) 'note))
+    (mevedel-note-delete instruction)
+    (cl-return-from mevedel--delete-instruction instruction))
   (let* ((instruction-buffer
           (or (overlay-buffer instruction) buffer (current-buffer)))
          (workspace
@@ -1148,7 +1183,11 @@ BUFFER is required in order to perform cleanup on a dead instruction."
             (mevedel--update-instruction-overlay child t)))))
     (let ((id (mevedel--instruction-id instruction)))
       (with-current-buffer instruction-buffer
-        (mevedel--retire-instruction-identity id workspace)))
+        (mevedel--retire-instruction-identity id workspace)
+        (when (eq (overlay-get instruction 'mevedel-instruction-type) 'note)
+          ;; Old mentions must not redirect to another note after retraction.
+          (setf (mevedel--instruction-retired-ids)
+                (delq id (mevedel--instruction-retired-ids))))))
     (mevedel-instruction-store-touch workspace)
     (setf (cdr (assoc instruction-buffer (mevedel--instruction-alist)))
           (delq instruction
@@ -1184,8 +1223,9 @@ Returns an empty string if there is no directive text."
         (mevedel-directive-invalidate-plan parent-record)))
      (t (error "Directive record not found")))))
 
-(defun mevedel--restore-subdirectives-in-buffer (workspace buffer file)
-  "Restore parent-owned directive details for FILE in BUFFER."
+(defun mevedel--restore-subdirectives-in-buffer (workspace buffer file &optional lexical)
+  "Restore parent-owned directive details for FILE in BUFFER.
+LEXICAL compares file names as strings, without filesystem I/O."
   (let ((mevedel--instruction-state-key-override
          (mevedel--instruction-workspace-key workspace)))
     (mevedel--instruction-activate-workspace workspace)
@@ -1201,7 +1241,9 @@ Returns an empty string if there is no directive text."
           (dolist (record (mevedel-directive-subdirectives owner))
             (let ((anchor (mevedel-subdirective-anchor record)))
               (when (and (stringp (plist-get anchor :file))
-                         (file-equal-p file (plist-get anchor :file)))
+                         (if lexical
+                             (equal file (plist-get anchor :file))
+                           (file-equal-p file (plist-get anchor :file))))
                 (if-let* ((overlay
                            (cl-find (mevedel-subdirective-id record)
                                     instructions
@@ -1227,8 +1269,9 @@ Returns an empty string if there is no directive text."
                       (cl-incf restored)))))))))
       restored)))
 
-(defun mevedel--restore-source-missing-directives (buffer)
-  "Reattach exact unambiguous source-missing directives returning in BUFFER."
+(defun mevedel--restore-source-missing-directives (buffer &optional lexical)
+  "Reattach exact unambiguous source-missing directives returning in BUFFER.
+LEXICAL compares file names as strings, without filesystem I/O."
   (let* ((workspace (mevedel--instruction-buffer-workspace buffer))
          (file (buffer-file-name buffer))
          (restored 0))
@@ -1236,7 +1279,9 @@ Returns an empty string if there is no directive text."
       (dolist (record (mevedel-workspace-directives workspace))
         (let ((anchor (mevedel-directive-anchor record)))
           (when (and (eq 'source-missing (plist-get anchor :state))
-                     (file-equal-p file (plist-get anchor :file)))
+                     (if lexical
+                         (equal file (plist-get anchor :file))
+                       (file-equal-p file (plist-get anchor :file))))
             (with-current-buffer buffer
               ;; Without evidence there is nothing to resolve against;
               ;; the raw 0/0 fallback would signal inside find-file.
@@ -1249,7 +1294,7 @@ Returns an empty string if there is no directive text."
                 (cl-incf restored))))))
       (cl-incf restored
                (mevedel--restore-subdirectives-in-buffer
-                workspace buffer file)))
+                workspace buffer file lexical)))
     restored))
 
 (provide 'mevedel-directive-source)

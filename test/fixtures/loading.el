@@ -176,6 +176,22 @@ temporary one."
                              (push symbol stale))))
                (ert-info ((format "Autoloads their file does not define: %S" stale))
                  (should-not stale))))
+            ('notes
+             (call-process "git" nil nil nil "init" "-q")
+             (write-region ".mevedel/\n" nil ".gitignore" nil 'silent)
+             (write-region "noted code\n" nil "source.el" nil 'silent)
+             (should-not (featurep 'mevedel-notes))
+             (let ((source (find-file-noselect "source.el")))
+               (with-current-buffer source (mevedel-note-create "Cold note"))
+               (should (file-exists-p ".mevedel/instructions.el"))
+               (kill-buffer source))
+             (with-current-buffer (find-file-noselect "source.el")
+               (should (seq-some
+                        (lambda (ov)
+                          (string-match-p "Cold note" (or (overlay-get ov 'after-string) "")))
+                        (overlays-in (point-min) (point-max)))))
+             (should-not (featurep 'mevedel-chat))
+             (should-not (featurep 'mevedel-buddy)))
             ('handoff-progress
              (require 'mevedel-plan-handoff)
              (require 'mevedel-view)
@@ -450,6 +466,27 @@ temporary one."
                  (when (listp renderer) (setq renderer (cdr (assq 'success renderer))))
                  (should (plist-get (funcall renderer (car row) (cadr row) "hello" (caddr row))
                                     :header)))))
+            ('worker-teardown
+             (require 'mevedel-journal-worker)
+             ;; A maintenance Emacs can be inside a synchronous control-fs
+             ;; shell.  Killing Emacs does not wait for that shell to finish.
+             (let* ((ready (file-name-concat root "worker-ready"))
+                    (finished (file-name-concat root "worker-finished"))
+                    (process
+                     (make-process
+                      :name "loading-worker" :buffer nil :noquery t
+                      :connection-type 'pipe :sentinel #'ignore
+                      :command
+                      (list (expand-file-name invocation-name invocation-directory)
+                            "--batch" "-Q" "--eval"
+                            (prin1-to-string
+                             `(call-process "sh" nil nil nil "-c"
+                                            "touch \"$1\"; sleep 0.5; touch \"$2\""
+                                            "loading-worker" ,ready ,finished))))))
+               (push process mevedel-journal-worker--processes)
+               (mevedel-test-loading--await (lambda () (file-exists-p ready)))
+               (advice-add 'mevedel-journal-worker-stop-all :before
+                           (lambda () (should (file-exists-p finished))))))
             ('native-btw
              (mevedel-install)
              (setq gptel-backend (mevedel-claude-code-register) gptel-model 'sonnet)
@@ -648,4 +685,15 @@ temporary one."
           (with-current-buffer buffer (set-buffer-modified-p nil))
           (kill-buffer buffer)))
       (mevedel-uninstall)
+      ;; Cancelling a maintenance Emacs can leave its synchronous control-fs
+      ;; shell running.  Let it finish before stopping delivery and removing
+      ;; its workspace; accept only that process, not timers or callbacks.
+      (when (featurep 'mevedel-journal-worker)
+        (dolist (process (copy-sequence mevedel-journal-worker--processes))
+          (let ((deadline (+ (float-time) 15)))
+            (while (process-live-p process)
+              (when (> (float-time) deadline)
+                (ert-fail "Maintenance child did not exit"))
+              (accept-process-output process 0.02 nil 1))))
+        (mevedel-journal-worker-stop-all))
       (unless state (delete-directory root t)))))

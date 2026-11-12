@@ -1014,11 +1014,19 @@ One of those settles the turn and clears `mevedel--current-request\'."
       (maphash (lambda (filepath _original) (push filepath paths)) snapshots))
     (dolist (filepath (sort paths #'string<))
       (let* ((original (gethash filepath snapshots))
+             coding
              (current (when (file-regular-p filepath)
                         (with-temp-buffer
                           (insert-file-contents filepath)
+                          (setq coding last-coding-system-used)
                           (buffer-string))))
              (relpath (file-relative-name filepath workspace-root)))
+        ;; Captures are literal bytes for Rewind.  This diff is presentation,
+        ;; like the decoded current file above, not a file-history snapshot.
+        (when (stringp original)
+          (setq original
+                (decode-coding-string
+                 original (or coding (detect-coding-string original t) 'undecided))))
         ;; Generate diff if file changed, was deleted, or was created
         (when (and (not (and (listp original)
                              (plist-get original :gap)))

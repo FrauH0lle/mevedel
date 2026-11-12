@@ -137,7 +137,7 @@ to the decision bearing that ID.
 | 0105 | Cockpit Surfaces Follow Three Archetypes | [ADR 0105](0105-cockpit-surfaces-follow-three-archetypes.md) |
 | 0106 | The Directive Frame Is A Child Frame, Not An Overlay | [ADR 0106](0106-directive-frame-is-a-child-frame.md) |
 | 0107 | Non-Owner Buffers Follow Published State | [ADR 0107](0107-non-owner-buffers-follow-published-state.md) |
-| 0108 | Buddy notes are not instructions | [ADR 0108](0108-buddy-notes-are-not-instructions.md) |
+| 0108 | Buddy remarks are workspace notes | [ADR 0108](0108-buddy-notes-are-not-instructions.md) |
 | 0109 | Edit patch changes side by side | [ADR 0109](0109-edit-patch-changes-side-by-side.md) |
 | 0110 | Request config lives in the sidecar, not Org properties | [ADR 0110](0110-request-config-lives-in-the-sidecar-not-org-properties.md) |
 | 0111 | Run programmatic tool calls in a closed machine | [ADR 0111](0111-run-programmatic-tool-calls-in-a-closed-machine.md) |
@@ -191,3 +191,7 @@ to the decision bearing that ID.
 - [ADR 0130: Keep instructions in a workspace store](0130-keep-instructions-in-a-workspace-store.md)
   amends where ADR 0072's Rewind prunes directive activity and ends ADR 0091's
   per-session copies as the durable record.
+
+- [ADR 0131: Rewind reverts recorded changes](0131-rewind-reverts-recorded-changes.md)
+  makes snapshot restoration ADR 0072's explicit force path and revises
+  ADR 0091's objection to independent conversation sessions.

@@ -1,6 +1,6 @@
 # @-mention system
 
-Supports `@ref`, `@file`, `@agent`, `@mcp`.
+Supports `@note`, `@ref`, `@file`, `@agent`, `@mcp`.
 
 Expansion runs as a gptel prompt transform (priority -90) via
 `mevedel--transform-expand-mentions`, dispatching through
@@ -68,6 +68,7 @@ stores `:kind`, the unchanged `:token`, and one canonical locator:
 
 - skill: canonical `SKILL.md` source pathname
 - direct reference: reference UUID
+- direct note: note UUID
 - file: absolute expanded pathname
 - MCP resource: configured server name plus resource URI
 
@@ -112,6 +113,18 @@ schema, send-time binding, and dispatch branches.
 
 ## Mention kinds
 
+- **@note:N** / **@note:{tag query}** — attaches only explicitly selected
+  workspace notes, including code in unopened files. Direct numbers bind the
+  note UUID at send; deleted bound notes never retarget a reused number.
+  Tag queries remain unbound and select the current matching set (`and`, `or`,
+  `not`, and parenthesized groups). Empty and unmatched queries attach nothing
+  and produce an explanatory placeholder and nonblocking message. Attachments
+  contain current code, note text, author and location. Deduplication hashes
+  the complete attachment, so text or location changes also deliver fresh
+  context. The same Read permission check as `@file` runs before probing or
+  restoring source files. Denied, unreadable or missing sources are reported
+  per note without blocking readable matches. Creating, tagging or listing
+  notes never adds them to prompts.
 - **@ref:N** / **@ref:{tag query}** — direct references display their numeric
   ID but bind the selected reference UUID. Completion binds immediately;
   manually typed direct references bind at send when the reference exists.
@@ -181,6 +194,12 @@ schema, send-time binding, and dispatch branches.
 
 Every rejection branch emits a follow-up `<system-reminder>` telling the
 LLM the bracketed placeholder is a system annotation, not user text.
+
+Context producers can mark generated prompt text with the transient
+`mevedel-mention-literal` property. Mention expansion preserves that text rather
+than activating tokens inside supplied code; it does not hide the code from the
+model. Producers must reconstruct this marking on temporary request copies when
+the generated context is rebuilt from persisted transcripts.
 
 ## Expansion flow
 

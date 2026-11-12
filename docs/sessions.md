@@ -2659,20 +2659,30 @@ neither transcript nor session state; Rewind remains a separate explicit
 operation.
 
 Rewind is an in-place logical transaction. It discards historical transcript
-and managed session state after the boundary, restores every captured working-tree file
-to the state that boundary owned, and keeps the same session identity, name,
+and managed session state after the boundary, reverts the discarded turns'
+recorded file changes newest first, and keeps the same session identity, name,
 directory, working directory, and lineage. The candidate session state is the
 single place the boundary is decided; the transcript cutoff, instruction
 snapshot pruning, and remote staging pruning all derive their answers from its
-surviving turn count, and the file plan reads a turn's pre-turn checkpoint for a
-`before` boundary and its post-turn checkpoint for `after`.
+surviving turn count. The file plan uses each discarded turn's before/after
+contents. A `before` boundary includes that turn's changes; `after` keeps them.
+Unrelated current edits survive, including edits between discarded turns.
+Preparation computes the complete plan without writing. If any reversal
+conflicts, Rewind refuses as a whole and lists files, lines and turns. Lines for
+older turns refer to the intermediate text after reversing newer changes.
+Cancel leaves files and conversation unchanged. Force selects the old snapshot
+restore and requires a separate confirmation explicitly warning that newer
+edits will be overwritten. Creation, deletion and binary changes require the
+complete recorded post-state to match, unless the file already equals the
+recorded pre-state and needs no write. See
+[ADR 0131](adr/0131-rewind-reverts-recorded-changes.md) for the revised policy.
 File-workspace sessions stage and swap a session directory with a rollback
 tree.  Portable project sessions leave the directory and control state in
 place and commit one complete replacement manifest through the owned lease
 head.
 The impact lists the discarded prompt suffix in order, including ordinary chat
-and complete directive turns, alongside restored files and every known gap.
-External working-tree changes to captured files are overwritten. Git HEAD and
+and complete directive turns, alongside affected files and every known gap.
+Only the force path overwrites external working-tree changes. Git HEAD and
 the index are not changed, so the impact identifies staged files whose index
 content will diverge from the restored working tree. Failure before the commit
 point rolls back both session and file changes, including a live transcript
