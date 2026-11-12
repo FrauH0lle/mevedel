@@ -18,6 +18,7 @@
 (require 'mevedel-session-codec)
 (require 'mevedel-session-control-fs)
 (require 'mevedel-session-fork)
+(require 'mevedel-session-rewind)
 (require 'mevedel-transport)
 (require 'mevedel-journal-process)
 (require 'gptel-openai)
@@ -48,6 +49,7 @@
           (mevedel-session-persistence--cleanup-throttle (make-hash-table :test #'equal))
           (mevedel-instruction-store--dirty nil)
           (mevedel-instruction-store--failed nil)
+          (mevedel-notes--unsaved-noticed nil)
           (mevedel-journal-enabled nil)
           (gptel--known-tools (copy-tree gptel--known-tools))
           (gptel--known-presets (copy-tree gptel--known-presets))
@@ -174,7 +176,39 @@
                (lambda (_prompt choices &rest _) (assq ?s choices))))
       (call-interactively #'mevedel-note-menu))
     (should (= 1 (length sent)))
-    (mevedel-note-conversation-test--answer (car sent) "Sent through the menu.")))
+    (mevedel-note-conversation-test--answer (car sent) "Sent through the menu."))
+  :doc "a change prepared during the first real note request can be applied and reverted"
+  (mevedel-note-conversation-test--with-source
+    (let* ((source-key (key-binding (kbd "C-c C-b")))
+           (note (mevedel-note-create "Improve this code"))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view)))
+      (should (= 1 (length sent)))
+      (with-current-buffer data
+        (should mevedel--current-request)
+        (mevedel-tool-patch-handler
+         #'ignore
+         '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-selected code\n+improved code\n*** End Patch")))
+      (should (equal "outside-before\nselected code\noutside-after\n"
+                     (mevedel-test--read-file file)))
+      (mevedel-note-conversation-test--answer (car sent) "A prepared improvement.")
+      (with-current-buffer view
+        (call-interactively (key-binding (kbd "C-c C-a"))))
+      (should (equal "outside-before\nimproved code\noutside-after\n"
+                     (mevedel-test--read-file file)))
+      (with-current-buffer source
+        (goto-char (point-min))
+        (should (eq source-key (key-binding (kbd "C-c C-b"))))
+        (goto-char (overlay-start note))
+        (should (eq #'mevedel-note-revert-change (key-binding (kbd "C-c C-b")))))
+      (with-current-buffer view
+        (should (eq #'mevedel-note-revert-change (key-binding (kbd "C-c C-b"))))
+        (call-interactively (key-binding (kbd "C-c C-b"))))
+      (ert-info ("source after reverting")
+        (should (equal "outside-before\nselected code\noutside-after\n"
+                       (mevedel-test--read-file file))))
+      (with-current-buffer view
+        (should (string-search "A prepared improvement." (buffer-string)))))))
 
 (mevedel-deftest mevedel-note-reask
   (:quiet t)
@@ -213,6 +247,132 @@
         (call-interactively (key-binding (kbd "C-c C-a"))))
       (with-current-buffer source
         (should (equal "outside-before\nfresh proposal\noutside-after\n" (buffer-string)))))))
+(mevedel-deftest mevedel-rewind/note-session
+  (:quiet t)
+  ,test
+  (test)
+  :doc "Rewind reverses only its applied first turn, keeping another session and user edits"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Improve this code"))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view)))
+      (with-current-buffer data
+        (mevedel-tool-patch-handler
+         #'ignore
+         '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-selected code\n+first proposal\n*** End Patch")))
+      (mevedel-note-conversation-test--answer (car sent) "Ready to apply.")
+      (mevedel-note-apply-change note)
+      (should (equal "outside-before\nfirst proposal\noutside-after\n"
+                     (mevedel-test--read-file file)))
+      (with-current-buffer source
+        (goto-char (point-max)) (forward-line -1)
+        (let* ((other (mevedel-note-create "Another conversation"))
+               (other-view (mevedel-note-send other))
+               (other-data (buffer-local-value 'mevedel--data-buffer other-view)))
+          (with-current-buffer other-data
+            (mevedel-tool-patch-handler
+             #'ignore
+             '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-outside-after\n+other session\n*** End Patch")))
+          (mevedel-note-conversation-test--answer (car sent) "Another change.")
+          (mevedel-note-apply-change other)
+          (with-current-buffer other-view (mevedel-note-conversation-close))))
+      (with-current-buffer source
+        (goto-char (point-min)) (insert "user edit\n") (save-buffer))
+      (with-current-buffer view
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (_prompt collection &rest _)
+                     (car (all-completions "" collection))))
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+          (mevedel-rewind)))
+      (should (equal "user edit\noutside-before\nselected code\nother session\n"
+                     (mevedel-test--read-file file)))))
+  :doc "Rewind before first turn preserves the current note and makes it sendable again"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Original request"))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view))
+           (id (overlay-get note 'mevedel-note-session-id)))
+      (with-current-buffer data
+        (mevedel-tool-patch-handler
+         #'ignore
+         '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-selected code\n+waiting proposal\n*** End Patch")))
+      (mevedel-note-conversation-test--answer (car sent) "A waiting change.")
+      (mevedel-note-edit "Current request" note)
+      (with-current-buffer view
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (_prompt collection &rest _)
+                     (car (all-completions "" collection))))
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+          (mevedel-rewind)))
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (with-current-buffer source
+        (goto-char (point-min)) (forward-line 1)
+        (setq note (mevedel-notes--at-point))
+        (should (equal "Current request" (overlay-get note 'mevedel-note-text)))
+        (should (= (point) (overlay-start note)))
+        (should (eq 'unsent (overlay-get note 'mevedel-note-state)))
+        (should (equal id (overlay-get note 'mevedel-note-session-id)))
+        (should-not (overlay-get note 'mevedel-note-prepared-change))
+        (should-not (memq (mevedel-notes-attention-state note) '(ready stale)))
+        (mevedel-note-send note))
+      (should (= 2 (length sent)))
+      (should (equal id (overlay-get note 'mevedel-note-session-id)))
+      (mevedel-note-conversation-test--answer (car sent) "Sent again.")))
+  :doc "sending a note without initial workspace storage still supports Rewind"
+  (mevedel-note-conversation-test--with-source
+    (delete-directory (file-name-concat root ".mevedel") t)
+    (let* ((note (mevedel-note-create "Ephemeral request"))
+           (view (mevedel-note-send note)))
+      (mevedel-note-conversation-test--answer (car sent) "An ephemeral answer.")
+      (mevedel-note-edit "Current ephemeral request" note)
+      ;; Session startup establishes storage even outside a project.
+      (should (file-exists-p (mevedel-instruction-store-path workspace)))
+      (with-current-buffer view
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (_prompt collection &rest _)
+                     (car (all-completions "" collection))))
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+          (mevedel-rewind)))
+      (with-current-buffer source
+        (goto-char (point-min)) (forward-line 1)
+        (let ((restored (mevedel-notes--at-point)))
+          (should (eq 'unsent (overlay-get restored 'mevedel-note-state)))
+          (should (equal "Current ephemeral request" (overlay-get restored 'mevedel-note-text)))))))
+  :doc "batch Rewind unsends closed and unvisited notes without losing their anchors"
+  (mevedel-note-conversation-test--with-source
+    (let* ((first (mevedel-note-create "First"))
+           (second (progn (forward-line 1) (mevedel-note-create "Second")))
+           (second-id (overlay-get second 'mevedel-uuid))
+           (other-file (file-name-concat root "other.txt"))
+           (other-buffer (progn (write-region "unvisited code\n" nil other-file nil 'silent)
+                                (find-file-noselect other-file)))
+           (third (with-current-buffer other-buffer
+                    (setq-local mevedel--workspace workspace)
+                    (mevedel-note-create "Third")))
+           (view (mevedel-note-send-batch (list first second third))))
+      (mevedel-note-conversation-test--answer (car sent) "One batch.")
+      (mevedel-note-done second)
+      (kill-buffer other-buffer)
+      (should-not (find-buffer-visiting other-file))
+      (with-current-buffer view
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (_prompt collection &rest _)
+                     (car (all-completions "" collection))))
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+          (mevedel-rewind)))
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (let ((restored (mevedel-note-restore second-id workspace)))
+        (should (eq 'unsent (overlay-get restored 'mevedel-note-state)))
+        (should (equal "Second" (overlay-get restored 'mevedel-note-text))))
+      (with-current-buffer (find-file-noselect other-file)
+        (setq-local mevedel--workspace workspace)
+        (goto-char (point-min))
+        (let ((restored (mevedel-notes--at-point)))
+          (should (eq 'unsent (overlay-get restored 'mevedel-note-state)))
+          (should (equal "Third" (overlay-get restored 'mevedel-note-text))))))))
+
 (mevedel-deftest mevedel-note-send/taken
   (:quiet t)
   ,test
@@ -1018,6 +1178,40 @@
       (with-current-buffer view
         (call-interactively (key-binding (kbd "C-c C-a"))))
       (should (equal "my outside-before\nprepared proposal\noutside-after\n"
+                     (mevedel-test--read-file file))))))
+
+(mevedel-deftest mevedel-tool-note-write/rewind (:quiet t)
+  ,test
+  (test)
+  :doc "a suggestion created during the active note request belongs to its discarded turn"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Review this code and leave a suggestion"))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view))
+           outcome)
+      (should (mevedel-turn-busy-p data))
+      (with-current-buffer data
+        (mevedel-pipeline-run-tool-outcome
+         (mevedel-tool-ensure "NoteWrite") (lambda (value) (setq outcome value))
+         (list :operations
+               (vector (list :action "create" :file_path file :start_line 2
+                             :text "A suggested fix" :prepared_change
+                             "*** Begin Patch\n*** Update File: source.el\n@@\n-selected code\n+suggested code\n*** End Patch"))))
+        (mevedel-test--await 5 "NoteWrite suggestion did not settle" outcome))
+      (ert-info ((format "%S" outcome))
+        (should (eq 'success (plist-get outcome :status))))
+      (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get outcome :result)))
+      (let ((suggestion (mevedel-notes--resolve (match-string 1 (plist-get outcome :result)) workspace)))
+        (mevedel-note-conversation-test--answer (car sent) "The suggestion is ready.")
+        (mevedel-note-apply-change suggestion))
+      (should (equal "outside-before\nsuggested code\noutside-after\n"
+                     (mevedel-test--read-file file)))
+      (with-current-buffer view
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (_prompt collection &rest _) (car (all-completions "" collection))))
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+          (mevedel-rewind)))
+      (should (equal "outside-before\nselected code\noutside-after\n"
                      (mevedel-test--read-file file))))))
 
 (mevedel-deftest mevedel-tool-note-write/send (:quiet t)

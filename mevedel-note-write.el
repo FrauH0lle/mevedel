@@ -120,13 +120,7 @@
     (mevedel-tool-patch--capture-baseline proposal)
     (let ((changes (mevedel-tool-patch-planned-changes proposal)))
       (mevedel-tool-patch-assert-baseline proposal)
-      (list :id (mevedel--create-uuid)
-            :session-id (mevedel-session-session-id session)
-            :turn (or (mevedel-session-turn-count session) 0)
-            :proposal proposal :changes changes
-            :before (mapcar (lambda (change)
-                              (mevedel-tool-patch--snapshot (plist-get change :path)))
-                            changes)))))
+      (mevedel-note-change-record proposal changes (current-buffer)))))
 
 (defun mevedel-tool-note-write (args)
   "Perform the workspace note operations in ARGS, syncing once even on failure."

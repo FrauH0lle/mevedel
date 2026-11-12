@@ -120,6 +120,7 @@
 (autoload 'mevedel-note-send "mevedel-note-conversation" nil t)
 (autoload 'mevedel-note-send-batch "mevedel-note-conversation" nil t)
 (autoload 'mevedel-note-restore "mevedel-notes" nil t)
+(autoload 'mevedel-note-revert-change "mevedel-note-change" nil t)
 (autoload 'mevedel-note-set-tags "mevedel-notes" nil t)
 (autoload 'mevedel-notes-list "mevedel-notes-list" nil t)
 (autoload 'mevedel-menu "mevedel-menu" nil t)

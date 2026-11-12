@@ -45,6 +45,23 @@ Existing capture gaps remain gaps. A preparation that made no write does not
 claim subsequent user edits as a note change. Confirming a partial detailed
 review records only accepted paths and drops the rest of the waiting proposal.
 
+Rewind uses only this conversation's applied pairs. Rewinding before its first
+turn leaves its notes unsent, preserving their current text, anchors and session
+links. Sending again starts a new first turn in that same session. Waiting
+proposals from discarded turns are cleared. These changes settle through the
+workspace store's durable Rewind intent, including for unvisited and recently
+closed notes; restoring a closed note then restores its unsent state.
+
+`mevedel-note-revert-change` reverses one selected applied turn using these actual
+before/after pairs and the shared refuse-if-changed engine. It checks every path
+before the ordinary patch transaction writes anything. Disjoint later edits
+survive; overlaps report current file/line ranges and leave all files unchanged.
+Uncaptured changes and unsaved visiting buffers refuse rather than guessing.
+File history records bytes, not modes; existing modes survive and a restored
+deleted file uses the default mode. Revert neither discards transcript turns nor
+changes their history. Successful reversal restores a done note from recently
+closed; a refused reversal leaves it closed. Deletion itself never undoes code.
+
 Original note conversations are excluded from ordinary live and saved chat
 selection. Cleanup and saved-session deletion preserve them while any live,
 stashed or recently closed note references them. After the last note leaves the
@@ -2711,7 +2728,14 @@ conflicts, Rewind refuses as a whole and lists files, lines and turns. Lines for
 older turns refer to the intermediate text after reversing newer changes.
 Cancel leaves files and conversation unchanged. Force selects the old snapshot
 restore and requires a separate confirmation explicitly warning that newer
-edits will be overwritten. Creation, deletion and binary changes require the
+edits will be overwritten. Merge opens the existing separate smerge editor;
+upper keeps the current intermediate text, lower takes the state before the
+discarded turn. `C-c C-c` accepts resolved conflicts in memory and opens older
+conflicts if necessary; `C-c C-k` cancels without source writes. Once every
+conflict is resolved, the ordinary Rewind confirmation and transaction commit
+all files and the conversation together, rechecking changed sources. Binary
+conflicts cannot be edited in smerge; cancel or explicit force remain available.
+Creation, deletion and binary changes require the
 complete recorded post-state to match, unless the file already equals the
 recorded pre-state and needs no write. See
 [ADR 0131](adr/0131-rewind-reverts-recorded-changes.md) for the revised policy.
