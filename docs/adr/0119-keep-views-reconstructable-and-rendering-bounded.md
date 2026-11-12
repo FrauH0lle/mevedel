@@ -126,7 +126,8 @@ without reparsing hidden results or changing execution identity. Live/composed
 programs and invalid/failed envelopes retain the outer presentation.
 Nested compound rows retain their own metadata and
 depth, so disclosure replacement removes descendants without consuming siblings.
-Failed tool calls stay in their activity group, which takes a red `×` and
+Failed tool calls stay in their activity group, which takes a warning `!`, or
+a red `×` when every call failed, and
 counts them beside their tool, as in `ran 4 commands (2 failed)`; their own
 rows start collapsed with a red `×`. A group header begins with its call count,
 as in `5 calls:`, and ends with a disclosure marker. A row's sandbox disclosure
@@ -677,6 +678,13 @@ only failure sign left. A group header
 also starts with its call count in the tool-name face, like a tool row's
 `Name:`, and ends with `▸`/`▾`, because a bare summary read as a stray line of
 prose with nothing showing that it expands.
+
+### November 2026: partial failure warns
+
+A red `×` on `9 calls: … ran 1 command (1 failed)` read as if the whole batch
+had failed. The group now takes the warning `!` when only some calls failed and
+keeps `×` for a group whose every call failed; the red counts still say which
+tool failed. The browser follows through the shared group `:status`.
 
 In the 2026-11-07 sweep session, Bash rows almost never folded. A read-only
 check of that live view found 202 `◇ Sandbox:` lines, none of them hook-audit

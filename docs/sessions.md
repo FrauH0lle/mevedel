@@ -815,7 +815,9 @@ stops the native prompt at that boundary. The same admitted turn then sends a
 continuation prompt containing the complete captured parts and requires their
 complete user echo before more tools. Concurrent restoration and context batches
 each require that same complete prompt, so unrelated images cannot substitute
-for an omitted steering image. Native
+for an omitted steering image. The hook's stop reason, which the model reads
+beside that prompt, says the turn has not ended; an earlier "will deliver …
+before further work" made a model wait and end the turn after steering. Native
 compaction's `SessionStart` hook cannot stop the prompt, so while a continuation
 is pending a `PreToolUse` hook denies any attempted call and stops the prompt; a
 stop alone does not prevent the call. The conversation, MCP endpoint, transcript and per-turn call identities stay the

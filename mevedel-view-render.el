@@ -7087,8 +7087,11 @@ before expanding children."
             :pending-count (mevedel-view--pending-running-count pending)
             :pending-failed (mevedel-view--pending-failed-count pending)
             :unconfined (plist-get group :unconfined)
-            :status (cond ((> (plist-get group :failed) 0) 'error)
-                          ((plist-get group :warning) 'warning))
+            ;; Only a group whose every call failed is an error; some
+            ;; failures warn, as the summary's own counts say which.
+            :status (let ((failed (plist-get group :failed)))
+                      (cond ((and (> failed 0) (= failed (plist-get group :tools))) 'error)
+                            ((or (> failed 0) (plist-get group :warning)) 'warning)))
             :reader-open reader-p
             ;; A new group must not hide a row the reader already opened or
             ;; is on.  An explicit fold of the group itself still takes

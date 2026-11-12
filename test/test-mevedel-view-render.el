@@ -9570,7 +9570,7 @@
           (should (= 1 (cl-count-if
                         (lambda (line)
                           (string-match-p
-                           "× 9 calls: read 8 files, ran 1 command (1 failed) ▸$" line))
+                           "! 9 calls: read 8 files, ran 1 command (1 failed) ▸$" line))
                         (split-string text "\n"))))
           (should-not (string-match-p "Bash:" text))
           (should-not (string-match-p "Error: command failed" text)))
