@@ -139,6 +139,64 @@ instruction restoration process.")
 Independent of the package version, so two installations of different
 versions can share one workspace and import each other's exports.")
 
+(defcustom mevedel-notes-closed-max-count 100
+  "Maximum number of ordinary notes retained in recently closed.
+Nil disables the count limit.  Zero expires notes immediately on closure.
+Migrated archives marked :expiry-exempt neither expire nor count here."
+  :type '(choice (const :tag "No count limit" nil) natnum)
+  :group 'mevedel)
+
+(defcustom mevedel-notes-closed-max-age-days 30
+  "Maximum age in elapsed days of ordinary recently closed notes.
+Nil disables the age limit.  Expiry is checked on access and store writes;
+it never removes open notes or undoes file changes."
+  :type '(choice (const :tag "No age limit" nil) natnum)
+  :group 'mevedel)
+
+(defun mevedel-instruction-store--retained-closed (instructions)
+  "Return a UUID table of retained closed INSTRUCTIONS, newest first."
+  (let ((keep (make-hash-table :test #'equal))
+        (now (float-time))
+        (count 0))
+    (dolist (instruction (sort (copy-sequence instructions)
+                               (lambda (a b)
+                                 (> (plist-get a :closed-at)
+                                    (plist-get b :closed-at)))))
+      (when (or (plist-get instruction :expiry-exempt)
+                (and (or (null mevedel-notes-closed-max-count)
+                         (< count mevedel-notes-closed-max-count))
+                     (or (null mevedel-notes-closed-max-age-days)
+                         (< (- now (plist-get instruction :closed-at))
+                            (* 86400 mevedel-notes-closed-max-age-days)))))
+        (unless (plist-get instruction :expiry-exempt) (cl-incf count))
+        (puthash (plist-get (plist-get instruction :properties) 'mevedel-uuid)
+                 t keep)))
+    keep))
+
+(defun mevedel-instruction-store-prune-closed (workspace)
+  "Enforce WORKSPACE's recently-closed retention limits in memory.
+The next ordinary store write persists expiry; no timer or remote read runs."
+  (let* ((mevedel--instruction-state-key-override
+          (mevedel--instruction-workspace-key workspace))
+         (state (mevedel--instruction-state
+                 (mevedel--instruction-operation-state-key)))
+         (entries (plist-get state :closed-notes))
+         (keep (mevedel-instruction-store--retained-closed
+                (mapcar (lambda (entry) (plist-get entry :instruction)) entries)))
+         expired)
+    (setf (plist-get state :closed-notes)
+          (cl-remove-if
+           (lambda (entry)
+             (let ((props (plist-get (plist-get entry :instruction) :properties)))
+               (unless (gethash (plist-get props 'mevedel-uuid) keep)
+                 ;; Do not recycle expired numbers: surviving mentions/links
+                 ;; must never silently point to a different note.
+                 (remhash (plist-get props 'mevedel-id)
+                          (mevedel--instruction-id-usage-map))
+                 (setq expired t))))
+           entries))
+    (when expired (mevedel-instruction-store-touch workspace))))
+
 ;;;###autoload
 (defun mevedel-save-instructions (path)
   "Save instruction overlays to PATH.
@@ -184,6 +242,8 @@ contents for position patching if the file changes before restore."
   (mevedel--instruction-activate-buffer)
   (mevedel--reconcile-directive-sources
    (mevedel--instruction-buffer-workspace (current-buffer)))
+  (mevedel-instruction-store-prune-closed
+   (mevedel--instruction-buffer-workspace (current-buffer)))
   (let ((file-alist ())
         (workspace (mevedel--instruction-buffer-workspace (current-buffer)))
         (base-directory (and base-directory
@@ -206,7 +266,10 @@ contents for position patching if the file changes before restore."
                                    (point-min) (point-max))))
                                (entry
                                 (mevedel--instruction-entry-with-metadata
-                                 (list :instructions instrs)
+                                 (list :instructions instrs
+                                       :source-missing
+                                       (buffer-local-value
+                                        'mevedel--buffer-source-missing buffer))
                                  content)))
                           (when include-original-content
                             (setq entry
@@ -230,8 +293,26 @@ contents for position patching if the file changes before restore."
                (unless (or include-original-content
                            (not (listp (cdr cons))))
                  (cl-remf entry :original-content))
-               (push (cons (car cons) entry)
+               (push (cons (if base-directory
+                               (mevedel--file-relative-name-or-absolute
+                                (car cons) base-directory)
+                             (expand-file-name (car cons)))
+                           entry)
                      file-alist)))
+    (dolist (closed (plist-get (mevedel--instruction-state
+                               (mevedel--instruction-operation-state-key))
+                              :closed-notes))
+      (let* ((path (plist-get closed :file))
+             (file (if base-directory
+                       (mevedel--file-relative-name-or-absolute path base-directory)
+                     path))
+             (cell (assoc file file-alist)))
+        (unless cell
+          (setq cell (cons file (list :instructions nil)))
+          (push cell file-alist))
+        (setcdr cell (plist-put (cdr cell) :instructions
+                               (append (plist-get (cdr cell) :instructions)
+                                       (list (plist-get closed :instruction)))))))
     (list :format mevedel-instruction-store-format-version
           :version (mevedel-version)
           :ids (mevedel--instruction-id-state-plist)
@@ -416,7 +497,28 @@ restore when their file is visited."
         (setf (mevedel--instruction-id-counter) (or id-counter 0)
               (mevedel--instruction-id-usage-map) hm
               (mevedel--instruction-retired-ids) retired-ids)))
-    (setf (mevedel--instruction-alist) file-alist)
+    (let (closed)
+      (dolist (entry file-alist)
+        (setcdr entry
+                (plist-put
+                 (cdr entry) :instructions
+                 (cl-remove-if
+                  (lambda (instruction)
+                    (when (eq (plist-get (plist-get instruction :properties)
+                                         'mevedel-note-state)
+                              'closed)
+                      (push (list :file (expand-file-name (car entry) base-directory)
+                                  :instruction instruction)
+                            closed)
+                      t))
+                  (plist-get (cdr entry) :instructions)))))
+      (setf (plist-get (mevedel--instruction-state
+                        (mevedel--instruction-operation-state-key))
+                       :closed-notes)
+            (nreverse closed)))
+    (setf (mevedel--instruction-alist)
+          (cl-remove-if-not (lambda (entry) (plist-get (cdr entry) :instructions))
+                            file-alist))
     (cl-loop for cons in (mevedel--instruction-alist)
              do (when (stringp (car cons))
                   (setf (car cons)
@@ -492,7 +594,19 @@ workspace for a buffer that has none can only cost time or fail."
                      (insert-file-contents file)
                      (buffer-substring-no-properties (point-min) (point-max)))))
               (mevedel--stash-buffer buffer file-contents))
-          (mevedel--mark-buffer-source-missing buffer))))))
+          (mevedel--mark-buffer-source-missing buffer)
+          (save-restriction
+            (widen)
+            (mevedel--stash-buffer buffer))
+          (when-let* ((entry (assoc file (mevedel--instruction-alist))))
+            (setcdr entry (plist-put (cdr entry) :source-missing t))))))))
+
+(defun mevedel--clear-buffer-source-missing ()
+  "Clear the cached missing-source observation after a successful save/restore."
+  (when mevedel--buffer-source-missing
+    (setq mevedel--buffer-source-missing nil)
+    (mevedel-instruction-store-touch
+     (mevedel--instruction-buffer-workspace (current-buffer)))))
 
 (defun mevedel--setup-buffer-hooks (buffer)
   "Set up buffer hooks for instruction restoration on kill/revert.
@@ -502,6 +616,7 @@ reverted, and restores them afterward."
   (add-hook 'kill-buffer-hook #'mevedel--stash-instructions-on-kill)
   (with-current-buffer buffer
     (unless mevedel--buffer-hooks-setup
+      (add-hook 'after-save-hook #'mevedel--clear-buffer-source-missing nil t)
       (add-hook 'post-command-hook
                 (lambda ()
                   ;; Remote files are skipped: this runs after every command,
@@ -511,9 +626,11 @@ reverted, and restores them afterward."
                   ;; source is still caught by the revert and save hooks.
                   (when-let* ((file (buffer-file-name buffer))
                               ((not (file-remote-p file)))
-                              ((not (file-exists-p file)))
-                              ((mevedel--buffer-has-instructions-p buffer)))
-                    (mevedel--mark-buffer-source-missing buffer)))
+                              ((or mevedel--buffer-source-missing
+                                   (mevedel--buffer-has-instructions-p buffer))))
+                    (if (file-exists-p file)
+                        (mevedel--clear-buffer-source-missing)
+                      (mevedel--mark-buffer-source-missing buffer))))
                 nil t)
       (add-hook 'before-revert-hook
                 (lambda ()
@@ -718,6 +835,7 @@ from it without checking or reading FILE on disk."
         (with-current-buffer buffer
           (when workspace
             (setq-local mevedel--workspace workspace))
+          (mevedel--clear-buffer-source-missing)
           (mevedel--setup-buffer-hooks buffer)
           (cl-labels ((restore-overlays
                        (dstbuf instr-maybe-plists &optional raw-position-ok)
@@ -1230,6 +1348,19 @@ LIST holding (UUID . REQUEST-TEXT) for each change of MINE refused."
                              (mevedel-instruction-store--request-text (cdr unit)))
                        refused))))
            units))
+    (let ((keep (mevedel-instruction-store--retained-closed
+                 (cl-loop for unit in units
+                          for instruction = (plist-get (cdr unit) :instr)
+                          when (eq (plist-get (plist-get instruction :properties)
+                                               'mevedel-note-state) 'closed)
+                          collect instruction))))
+      (setq units (cl-remove-if
+                   (lambda (unit)
+                     (let* ((instruction (plist-get (cdr unit) :instr))
+                            (props (plist-get instruction :properties)))
+                       (and (eq (plist-get props 'mevedel-note-state) 'closed)
+                            (not (gethash (car unit) keep)))))
+                   units)))
     (let ((ids (mevedel-instruction-store--assign-ids units origins mine theirs))
           files)
       (dolist (unit units)

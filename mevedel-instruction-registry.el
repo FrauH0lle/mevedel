@@ -223,6 +223,10 @@ Each value is a plist with keys `:instructions', `:id-counter',
     (setf (mevedel--instruction-id-counter) 0)
     (setf (mevedel--instruction-id-usage-map) (make-hash-table))
     (setf (mevedel--instruction-retired-ids) nil)
+    (setf (plist-get (mevedel--instruction-state
+                      (mevedel--instruction-operation-state-key))
+                     :closed-notes)
+          nil)
     ;; Cleared state no longer matches the last observed instruction store,
     ;; so the next store write merges instead of overwriting it.
     (setf (plist-get (mevedel--instruction-state
