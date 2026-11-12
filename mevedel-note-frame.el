@@ -25,13 +25,14 @@
 
 ;; `mevedel-chat'
 
-;; `mevedel-note-source'
 ;; `mevedel-instruction-registry'
 
 ;; `mevedel-models'
 (declare-function mevedel-model-current-label
                   "mevedel-models" (&optional buffer))
 (autoload 'mevedel-model-current-label "mevedel-models")
+
+;; `mevedel-note-source'
 
 ;; `mevedel-overlays'
 (declare-function mevedel--topmost-instruction

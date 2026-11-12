@@ -28,13 +28,14 @@
 (require 'mevedel-notes-activation)
 (require 'mevedel-workspace)
 
+;; `mevedel-instruction-edit'
+(autoload 'mevedel-instruction-replace-buffer-contents "mevedel-instruction-edit")
+
 ;; `mevedel-note-source'
 (declare-function mevedel--mark-buffer-source-missing
                   "mevedel-note-source" (buffer))
 (declare-function mevedel--reconcile-note-sources
                   "mevedel-note-source" (workspace))
-;; `mevedel-instruction-edit'
-(autoload 'mevedel-instruction-replace-buffer-contents "mevedel-instruction-edit")
 
 ;; `mevedel-overlay-ui'
 (declare-function mevedel--update-instruction-overlay

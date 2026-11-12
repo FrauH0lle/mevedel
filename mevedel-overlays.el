@@ -34,14 +34,6 @@
 (autoload 'mevedel--replace-patch-buffer "mevedel-chat")
 (defvar mevedel--view-buffer)
 
-;; `mevedel-note-source'
-(declare-function mevedel--delete-instruction
-                  "mevedel-note-source"
-                  (instruction &optional buffer))
-(declare-function mevedel--instruction-anchor-for-instruction
-                  "mevedel-note-source" (instruction))
-(declare-function mevedel--instruction-persisted-properties
-                  "mevedel-note-source" (instruction))
 ;; `mevedel-instruction-registry'
 (declare-function mevedel--instruction-activate-buffer
                   "mevedel-instruction-registry" (&optional buffer))
@@ -70,6 +62,15 @@
 (declare-function mevedel--instruction-workspace-key
                   "mevedel-instruction-registry" (&optional workspace))
 (defvar mevedel--instruction-state-key-override)
+
+;; `mevedel-note-source'
+(declare-function mevedel--delete-instruction
+                  "mevedel-note-source"
+                  (instruction &optional buffer))
+(declare-function mevedel--instruction-anchor-for-instruction
+                  "mevedel-note-source" (instruction))
+(declare-function mevedel--instruction-persisted-properties
+                  "mevedel-note-source" (instruction))
 
 ;; `mevedel-overlay-ui'
 (declare-function mevedel--update-instruction-overlay

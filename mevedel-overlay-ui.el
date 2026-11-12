@@ -37,11 +37,6 @@
 (autoload 'mevedel--patch-buffer "mevedel-chat")
 (autoload 'mevedel--replace-patch-buffer "mevedel-chat")
 
-;; `mevedel-note-source'
-(declare-function mevedel--delete-instruction
-                  "mevedel-note-source"
-                  (instruction &optional buffer))
-(autoload 'mevedel--delete-instruction "mevedel-note-source")
 ;; `mevedel-instruction-registry'
 (declare-function mevedel--instruction-buffer-workspace
                   "mevedel-instruction-registry" (buffer))
@@ -68,6 +63,12 @@
 (declare-function mevedel-model-current-provider-label
                   "mevedel-models" (&optional buffer))
 (autoload 'mevedel-model-current-provider-label "mevedel-models")
+
+;; `mevedel-note-source'
+(declare-function mevedel--delete-instruction
+                  "mevedel-note-source"
+                  (instruction &optional buffer))
+(autoload 'mevedel--delete-instruction "mevedel-note-source")
 
 ;; `mevedel-notes'
 (declare-function mevedel-note-menu "mevedel-notes" (&optional note))

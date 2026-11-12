@@ -47,10 +47,6 @@
                   "mevedel-artifact-store" (session changes &optional request))
 (autoload 'mevedel-artifact-store-note-writes "mevedel-artifact-store")
 
-;; `mevedel-note-source'
-(declare-function mevedel--mark-buffer-source-missing
-                  "mevedel-note-source" (buffer))
-
 ;; `mevedel-edit-diagnostics'
 (declare-function mevedel-edit-diagnostics-after-edit
                   "mevedel-edit-diagnostics" (buffer path continuation))
@@ -78,6 +74,10 @@
 
 ;; `mevedel-note-change'
 (autoload 'mevedel-note-prepare-change "mevedel-note-change")
+
+;; `mevedel-note-source'
+(declare-function mevedel--mark-buffer-source-missing
+                  "mevedel-note-source" (buffer))
 
 ;; `mevedel-patch-review'
 (declare-function mevedel-patch-review-start

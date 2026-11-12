@@ -36,10 +36,6 @@
 (declare-function mevedel-agent-invocation-transcript-status
 		  "mevedel-agents" (cl-x) t)
 
-;; `mevedel-note-frame'
-(declare-function mevedel-note-frame-refresh
-                  "mevedel-note-frame" ())
-
 ;; `mevedel-execution-telemetry'
 (declare-function mevedel-execution-telemetry-sandbox-summary-class
                   "mevedel-execution-telemetry" (summary))
@@ -48,6 +44,10 @@
 (declare-function mevedel-execution-transcript-pending-render-data
                   "mevedel-execution-transcript"
                   (data-buffer tool-use-id))
+
+;; `mevedel-note-frame'
+(declare-function mevedel-note-frame-refresh
+                  "mevedel-note-frame" ())
 
 ;; `mevedel-plan'
 (declare-function mevedel-plan-extract-proposed "mevedel-plan" (text))

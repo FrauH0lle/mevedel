@@ -30,9 +30,6 @@
 (declare-function mevedel-acp-turn--close-reasoning "mevedel-acp-turn" (request))
 (autoload 'mevedel-acp-turn--close-reasoning "mevedel-acp-turn")
 
-;; `mevedel-note-source'
-(autoload 'mevedel--instruction-initialize-overlay "mevedel-note-source")
-
 ;; `mevedel-engine'
 (declare-function mevedel-engine-info "mevedel-engine" (owner))
 (declare-function mevedel-engine-owner "mevedel-engine" (request))
@@ -67,6 +64,9 @@
                   "mevedel-mention-bindings"
                   (start end binding &optional object))
 (autoload 'mevedel-mention-bindings-ranges "mevedel-mention-bindings")
+
+;; `mevedel-note-source'
+(autoload 'mevedel--instruction-initialize-overlay "mevedel-note-source")
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-turn-owner "mevedel-reminders"
