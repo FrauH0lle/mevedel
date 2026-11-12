@@ -1546,7 +1546,9 @@ reminder names its own type, so the guard needs no second list."
                         #'mevedel-reminders-make-plan-reference
                         #'mevedel-reminders-make-fork-provenance))
       (let ((reminder (funcall make)))
-        (unless (memq (mevedel-reminder-type reminder) existing)
+        (unless (or (memq (mevedel-reminder-type reminder) existing)
+                    (and (eq (mevedel-session-preset-name session) 'mevedel-note)
+                         (eq (mevedel-reminder-type reminder) 'edited-file)))
           (mevedel-session-add-reminder session reminder)))))
   session)
 

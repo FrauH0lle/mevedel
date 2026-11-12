@@ -106,6 +106,8 @@
 (autoload 'mevedel-note-delete "mevedel-notes" nil t)
 (autoload 'mevedel-note-edit "mevedel-notes" nil t)
 (autoload 'mevedel-note-menu "mevedel-notes" nil t)
+(autoload 'mevedel-note-send "mevedel-note-conversation" nil t)
+(autoload 'mevedel-note-send-batch "mevedel-note-conversation" nil t)
 (autoload 'mevedel-menu "mevedel-menu" nil t)
 (autoload 'mevedel-menu-open "mevedel-menu" nil t)
 (autoload 'mevedel-open-directive-activity "mevedel-directive-activity" nil t)
@@ -949,7 +951,7 @@ always prompt for the session name."
             #'mevedel-tool-exec-handle-execution-event)
     (setq mevedel-execution-mailbox-delivery-function nil))
   ;; Remove presets
-  (dolist (preset '(mevedel-discuss mevedel-implement))
+  (dolist (preset '(mevedel-discuss mevedel-implement mevedel-note))
     (setf (alist-get preset gptel--known-presets nil 'remove) nil))
 
   ;; Remove mention expansion from gptel

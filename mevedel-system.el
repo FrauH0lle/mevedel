@@ -756,6 +756,18 @@ catalog rather than its root session's."
   '(workspace-config memory journal environment tools skills active-goal goal-policy resources)
   "Named observations delivered in conversation history for retained requests.")
 
+(defconst mevedel-system-note-context-components
+  '(workspace-config environment tools)
+  "Automatic observations included in independent note conversations.
+Memory, journal, skills, resources, active-goal and goal-policy are excluded.")
+
+(defun mevedel-system-context-components (&optional session)
+  "Return automatic context components for SESSION, defaulting to this session."
+  (if (and (setq session (or session mevedel--session))
+           (eq (mevedel-session-preset-name session) 'mevedel-note))
+      mevedel-system-note-context-components
+    mevedel-system-retained-components))
+
 (mevedel-define-prompt-component resources
   :producer #'mevedel-system--resource-roster)
 
@@ -808,6 +820,11 @@ catalog rather than its root session's."
 (mevedel-define-prompt-profile permission-review
   :workspace-aware nil
   :components '(permission-review-role))
+
+(mevedel-define-prompt-profile note
+  :workspace-aware t
+  :components '(main-role task-policy main-tone tool-orchestration
+                workspace-config environment tools))
 
 (mevedel-define-prompt-profile buddy
   :workspace-aware t

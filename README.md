@@ -258,13 +258,27 @@ The rest of this README is intentionally manual-style. The main moving parts are
 Use `M-x mevedel-note-create` in a source file to mark the active region, or
 the current line when no region is active. The text is optional: submitting an
 empty answer keeps a code-only note. A label below the code shows the note's
-number, author, text, unsent state and next actions. Notes follow source edits.
+number, author, text, state and next actions. Notes follow source edits.
 
-Inside a note, `M-m` (or `mevedel-ov-dispatch-key`) opens its edit/delete menu.
+Inside a note, `M-m` (or `mevedel-ov-dispatch-key`) opens its actions menu.
 Plain letters still insert source text; entering a note also shows its actions
 in the echo area. `mevedel-note-edit`, `mevedel-note-delete`, and
 `mevedel-note-menu` are available through `M-x` too. Deleting a note never edits
 its source code. Creating or editing a note does not send anything to a model.
+
+Choose **send** in that menu, or use `M-x mevedel-note-send`, to open the note's
+own conversation beside the code. Graphical Emacs uses an anchored child frame;
+terminal Emacs uses a side window. Type below the prompt and press `C-c C-c`
+to reply. The transcript above is read-only. `C-c C-v` shows the retained initial
+provider input, including its instructions and tool definitions. `C-c C-q` closes
+the frame/window without losing the conversation or draft. Sending a sent note
+reopens its conversation without making another request.
+
+`M-x mevedel-note-send-batch` sends several loaded notes into one conversation.
+Notes already sharing a conversation reopen it together; notes belonging to
+different conversations must be sent separately. Each conversation is a normal
+saved session with its own history and Rewind. There is no separate Discuss or
+Implement action: the session's permission mode decides whether edits are allowed.
 
 Notes use the workspace instruction store, not a session's private state, and
 survive reloads wherever the workspace already has a `.mevedel/` state directory.

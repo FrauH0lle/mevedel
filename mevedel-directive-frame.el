@@ -598,17 +598,25 @@ the frame and a long one does not cover the buffer behind it."
 With FOCUS non-nil the frame is selected, which is what an explicit user
 action wants; a request dispatch leaves focus where it is.  Falls back to
 an ordinary window when child frames are unavailable."
-  (let ((directive-id
-         (when (overlayp directive)
+  (let* ((note-p (and (overlayp directive)
+                      (eq (overlay-get directive 'mevedel-instruction-type) 'note)))
+         (directive-id
+         (if note-p
+             (format "Note %s" (overlay-get directive 'mevedel-id))
+           (when (overlayp directive)
            (mevedel-directive-id
             (mevedel--directive-record
              (or (mevedel--topmost-instruction directive 'directive)
-                 directive))))))
+                 directive)))))))
     (cond
-     ((not (mevedel-directive-frame--available-p))
+     ((or (not (mevedel-directive-frame--available-p))
+          (and note-p (not (display-graphic-p))))
       (display-buffer view-buffer
-                      '(display-buffer-below-selected
-                        (window-height . 0.4)))
+                      (if note-p
+                          '(display-buffer-in-side-window
+                            (side . right) (window-width . 0.5))
+                        '(display-buffer-below-selected
+                          (window-height . 0.4))))
       (when focus (select-window (get-buffer-window view-buffer t))))
      ;; A frame already showing this exact directive stays where it is.  The
      ;; discuss action displays twice -- once entering composer scope and once
@@ -653,7 +661,7 @@ an ordinary window when child frames are unavailable."
         (make-frame-visible frame)
         (with-current-buffer view-buffer (mevedel-directive-frame-mode 1))
         (mevedel-directive-frame--follow-setup directive)
-        (mevedel-directive-frame--apply-filter)
+        (unless note-p (mevedel-directive-frame--apply-filter))
         (when focus (select-frame-set-input-focus frame))
         frame)))))
 

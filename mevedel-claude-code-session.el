@@ -25,6 +25,11 @@
 (require 'mevedel-transcript)
 (require 'mevedel-turn)
 
+;; `mevedel-note-conversation'
+(declare-function mevedel-note-conversation-record-input
+                  "mevedel-note-conversation" (session data))
+(autoload 'mevedel-note-conversation-record-input "mevedel-note-conversation")
+
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills-request-model-policy "mevedel-skills-invoke" ())
 (autoload 'mevedel-skills-request-model-policy "mevedel-skills-invoke")
@@ -205,9 +210,13 @@ An omitted policy resolves through the common request model resolver."
           (mevedel-claude-code-context-system request system-prompt selected (plist-get history :id)))
         mcp model effort (plist-get history :id) hook-command))
      (lambda ()
-       (mevedel-claude-code-context-prompt
-        request (vconcat (when excerpt (vector `((type . "text") (text . ,excerpt))))
-                         (mevedel-claude-code-context-input request prompt)) history))
+       (let ((input (mevedel-claude-code-context-prompt
+                     request (vconcat (when excerpt (vector `((type . "text") (text . ,excerpt))))
+                                      (mevedel-claude-code-context-input request prompt)) history)))
+         (when (eq (mevedel-session-preset-name session) 'mevedel-note)
+           (mevedel-note-conversation-record-input
+            session (list :system system-prompt :input input)))
+         input))
      tools
      (lambda (id)
        (mevedel-claude-code-history-assert-current history)

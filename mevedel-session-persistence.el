@@ -2164,6 +2164,7 @@ mentions-shown reset to empty hash tables on load."
   "Return picker-relevant fields extracted from current SIDECAR."
   (list :session-id (plist-get sidecar :session-id)
         :session-name (plist-get sidecar :session-name)
+        :preset-name (plist-get sidecar :preset-name)
         :workspace (plist-get sidecar :workspace)
         :created-at (plist-get sidecar :created-at)
         :updated-at (plist-get sidecar :updated-at)
@@ -2707,9 +2708,11 @@ at `size unavailable' rather than hiding the chooser."
   "Return non-nil when SIDECAR, or its summary, is an artifact's conversation.
 The session records its artifact and the artifact names it back; one
 whose artifact is gone is an ordinary session again."
-  (when-let* ((id (plist-get sidecar :dedicated-artifact)))
-    (mevedel-artifact-store-dedicated-p
-     workspace (plist-get sidecar :session-id) id)))
+  (or (and (eq (plist-get sidecar :preset-name) 'mevedel-note)
+           (not (plist-get sidecar :forked-from-session-id)))
+      (when-let* ((id (plist-get sidecar :dedicated-artifact)))
+        (mevedel-artifact-store-dedicated-p
+         workspace (plist-get sidecar :session-id) id))))
 
 (defun mevedel-session-persistence-without-dedicated (workspace entries)
   "Return listing ENTRIES of WORKSPACE without artifact conversations.

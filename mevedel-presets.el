@@ -88,6 +88,10 @@
 (declare-function mevedel-model-merge-workloads
                   "mevedel-models" (additions current))
 
+;; `mevedel-note-conversation'
+(declare-function mevedel-note-conversation-setup "mevedel-note-conversation" ())
+(autoload 'mevedel-note-conversation-setup "mevedel-note-conversation")
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-new-mutation-authority
                   "mevedel-session-artifacts" (session))
@@ -522,6 +526,15 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
                'main
                :retained t
                :session mevedel--session
+               :refresh-buffer (current-buffer))))
+
+  (mevedel-define-preset mevedel-note
+    :description "Independent note conversation; permission mode governs edits"
+    :parents (mevedel-implement)
+    :post (lambda () (mevedel-note-conversation-setup))
+    :system (lambda ()
+              (mevedel-system-build-prompt
+               'note :retained t :session mevedel--session
                :refresh-buffer (current-buffer)))))
 
 (defun mevedel-preset--read-only-rules ()

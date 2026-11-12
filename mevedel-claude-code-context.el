@@ -136,7 +136,7 @@ user attachment."
          (session (mevedel-claude-code-context--session owner))
          (names (if child
                     (mevedel-agent-context-components (mevedel-agent-invocation-agent owner))
-                  mevedel-system-retained-components)))
+                  (mevedel-system-context-components session))))
     (mevedel-context-delivery--observations
      names (mevedel-system--make-context
             (mevedel-session-workspace session)

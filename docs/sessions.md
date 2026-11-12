@@ -5,6 +5,24 @@ filesystem changes across saves and resumes. Project sessions publish state on
 their execution target; file-backed sessions use their own storage authority.
 Compaction, Rewind, and Fork each preserve different parts of that state.
 
+## Note conversations
+
+An explicit note send creates an independent session, not a fork of the active
+chat. A batch of unsent notes shares one session. The workspace instruction
+store keeps only each note's `mevedel-note-session-id`; the normal session
+transcript and file-change history own the conversation. Reopening a sent note
+resumes that session. Closing its child frame or terminal side window leaves
+the session and composer draft alive.
+
+The `mevedel-note` preset uses ordinary editing tools, with edits governed by
+the session permission mode and Plan restrictions. Its automatic observations
+are project instructions, environment and tool capabilities. It does not recall
+memory indexes, journal entries, another chat's history, unrelated notes, or the
+workspace-wide changed-file reminder. `C-c C-v` in the note view opens the
+session's retained `note-input.json`: the first assembled API request, or the
+native provider's system text and submitted content. This is captured at
+dispatch, not regenerated from later source edits.
+
 ## Directive session boundaries
 
 Settled directive work remains a complete first-class turn in its execution

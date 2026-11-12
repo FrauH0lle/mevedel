@@ -17,6 +17,10 @@
 (require 'mevedel-overlays)
 (require 'mevedel-utilities)
 
+;; `mevedel-note-conversation'
+(autoload 'mevedel-note-send "mevedel-note-conversation" nil t)
+(autoload 'mevedel-note-send-batch "mevedel-note-conversation" nil t)
+
 ;; `mevedel-persistence'
 (declare-function mevedel-instruction-store-touch "mevedel-persistence"
                   (&optional workspace))
@@ -36,8 +40,8 @@
   "Return the current modified-key menu hint."
   (if-let* ((key (where-is-internal #'mevedel--ov-actions-dispatch
                                    mevedel-note-actions-map t)))
-      (format "%s: edit, delete" (key-description key))
-    "M-x mevedel-note-menu: edit, delete"))
+      (format "%s: send, edit, delete" (key-description key))
+    "M-x mevedel-note-menu: send, edit, delete"))
 
 (defun mevedel-notes--entry-hint ()
   "Announce the note and its next actions when point enters it."
@@ -65,9 +69,10 @@
                           (overlay-put overlay 'mevedel-note-owner note)
                           (overlay-put note 'mevedel-label-overlay overlay)
                           overlay)))
-             (text (format "\n  Note %s · you · %s · not sent · %s"
+             (text (format "\n  Note %s · you · %s · %s · %s"
                            (overlay-get note 'mevedel-id)
                            (mevedel-notes--display-text note)
+                           (if (overlay-get note 'mevedel-note-session-id) "sent" "not sent")
                            (mevedel-notes--actions-hint))))
         (overlay-put note 'keymap mevedel-note-actions-map)
         (move-overlay label (overlay-start note) end)
@@ -124,8 +129,10 @@
       (setq note (or note (mevedel-notes--at-point)))
       (pcase (car (read-multiple-choice
                    (format "Note %s: " (overlay-get note 'mevedel-id))
-                   '((?e "edit" "Edit note text")
+                   '((?s "send" "Send or reopen the note conversation")
+                     (?e "edit" "Edit note text")
                      (?d "delete" "Delete note without changing code"))))
+        (?s (mevedel-note-send note))
         (?e (mevedel-note-edit
              (read-string "Note: " (overlay-get note 'mevedel-note-text)) note))
         (?d (mevedel-note-delete note))))))
