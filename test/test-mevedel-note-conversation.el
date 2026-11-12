@@ -40,6 +40,8 @@
           (file (file-name-concat root "source.el"))
           (mevedel-sessions-directory (file-name-concat root "sessions"))
           (mevedel--instruction-states (make-hash-table :test #'equal))
+          (mevedel--instruction-current-state-key :global)
+          (mevedel-session-persistence--cleanup-throttle (make-hash-table :test #'equal))
           (mevedel-instruction-store--dirty nil)
           (mevedel-instruction-store--failed nil)
           (mevedel-journal-enabled nil)
@@ -315,6 +317,7 @@
       (with-current-buffer data (mevedel-session-persistence-release-on-kill))
       (mevedel-chat-discard-buffers data t)
       ;; Another store version lacks the local unsaved session reference.
+      (should (eq source (overlay-buffer note)))
       (write-region unsent nil store nil 'silent)
       (mevedel-instruction-store-touch workspace)
       (let ((dirty (copy-sequence mevedel-instruction-store--dirty)))
@@ -322,6 +325,7 @@
         (should (= 0 (mevedel-session-persistence-cleanup-expired workspace t)))
         (should (equal dirty mevedel-instruction-store--dirty)))
       (kill-buffer source)
+      (should-not (overlay-buffer note))
       (write-region unsent nil store nil 'silent)
       (should-not (mevedel-session-persistence-delete workspace path))
       (should (= 0 (mevedel-session-persistence-cleanup-expired workspace t)))
@@ -509,6 +513,30 @@
               (mevedel-session-keep-recent-count 0))
           (should (= 1 (mevedel-session-persistence-cleanup-expired workspace t)))))
       (should (= 0 reads)))))
+
+(mevedel-deftest mevedel-chat-discard-buffers/note-source
+  (:quiet t)
+  ,test
+  (test)
+  :doc "discarding a note conversation leaves its visited source note live and unstashed"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Keep the source label"))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view)))
+      (mevedel-note-conversation-test--answer (car sent) "Only the conversation closes")
+      (should (eq source (overlay-buffer note)))
+      (mevedel-chat-discard-buffers data t)
+      (should-not (buffer-live-p data))
+      (should-not (buffer-live-p view))
+      (should (buffer-live-p source))
+      (should (eq source (overlay-buffer note)))
+      (let ((entries (plist-get (gethash (mevedel--instruction-workspace-key workspace)
+                                        mevedel--instruction-states)
+                                :instructions)))
+        (should (memq note (cdr (assq source entries))))
+        (should-not (assoc file entries)))
+      (with-current-buffer source
+        (should (equal "outside-before\nselected code\noutside-after\n" (buffer-string)))))))
 
 (mevedel-deftest mevedel-note-send/frame-reuse
   (:quiet t)
