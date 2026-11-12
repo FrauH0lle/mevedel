@@ -13,7 +13,7 @@ M-x mevedel-buddy-set-level   set this workspace's Quiet, Watching or Active dia
 M-x mevedel-buddy-review      review now, without waiting for the idle timer
 M-x mevedel-buddy-guide       ask what to build here, rather than what went wrong
 M-x mevedel-buddy-dismiss-note   dismiss the note at point
-M-x mevedel-buddy-dismiss-notes  dismiss every note in this buffer
+M-x mevedel-buddy-dismiss-notes  dismiss every Buddy note in this workspace
 M-x mevedel-buddy-keep-note      keep the remark as your own note
 M-x mevedel-buddy-clear-changes  forget the edits recorded so far
 M-x mevedel-buddy-abort          abandon a review that has wedged

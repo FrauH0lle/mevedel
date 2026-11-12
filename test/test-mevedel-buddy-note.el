@@ -375,8 +375,10 @@
       (should-error (mevedel-buddy-dismiss-note) :type 'user-error))))
 
 (mevedel-deftest mevedel-buddy-dismiss-notes
-  (:after-each (mevedel-test--note-cleanup) :quiet t
-   :doc "`mevedel-buddy-dismiss-notes' clears this buffer's notes only")
+  (:after-each (mevedel-test--note-cleanup) :quiet t)
+  ,test
+  (test)
+  :doc "dismiss-all clears Buddy remarks across this workspace"
   (let* ((here (mevedel-test--note-buffer "cmd-here" "one\ntwo\n"))
          (elsewhere (mevedel-test--note-buffer "cmd-elsewhere" "one\n"))
          (kept (mevedel-test--add-note elsewhere 1 "stays")))
@@ -384,7 +386,29 @@
     (mevedel-test--add-note here 2 "also goes")
     (with-current-buffer here (mevedel-buddy-dismiss-notes))
     (should (null (mevedel-test--note-overlays here)))
-    (should (eq 'active (plist-get (mevedel-buddy-note--find kept) :status)))))
+    (should (eq 'dismissed (plist-get (mevedel-buddy-note--find kept) :status))))
+  :doc "dismiss-all includes unopened files after reload and leaves authored notes alone"
+  (let* ((here (mevedel-test--note-buffer "cmd-current" "one\ntwo\n"))
+         (elsewhere (mevedel-test--note-buffer "cmd-unopened" "one\n"))
+         (other-file (buffer-file-name elsewhere)))
+    (mevedel-test--add-note here 1 "First concern")
+    (mevedel-test--add-note elsewhere 1 "Other concern")
+    (with-current-buffer here
+      (goto-char (point-min))
+      (mevedel-note-create "Keep this user note"))
+    (mevedel-instruction-store-flush t)
+    (kill-buffer elsewhere)
+    (mevedel--clear-instruction-state mevedel-test--note-workspace)
+    (with-current-buffer here
+      (should (= 2 (mevedel-buddy-dismiss-notes))))
+    (push (find-buffer-visiting other-file) mevedel-test--note-buffers)
+    (mevedel--clear-instruction-state mevedel-test--note-workspace)
+    (mevedel-instruction-store-observe mevedel-test--note-workspace)
+    (should (= 2 (length (mevedel-notes-closed mevedel-test--note-workspace))))
+    (with-current-buffer here
+      (should (cl-some (lambda (note)
+                         (equal "Keep this user note" (overlay-get note 'mevedel-note-text)))
+                       (overlays-in (point-min) (point-max)))))))
 
 ;;
 ;;; Scope isolation

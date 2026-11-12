@@ -903,16 +903,28 @@ dismissed so it does not raise the same point again."
       (message "mevedel: note dismissed"))))
 
 ;;;###autoload
-(defun mevedel-buddy-dismiss-notes ()
-  "Dismiss every Buddy note visible in the current buffer."
+(defun mevedel-buddy-dismiss-notes (&optional workspace)
+  "Dismiss every Buddy note in WORKSPACE, syncing once.
+Default to the current workspace and return the number dismissed."
   (interactive)
-  (let ((dismissed 0))
-    (dolist (note (overlays-in (point-min) (point-max)))
-      (when (eq 'buddy (overlay-get note 'mevedel-note-author))
-        (mevedel-buddy-note--dismiss-overlay note)
-        (setq dismissed (1+ dismissed))))
-    (message "mevedel: %d note%s dismissed"
-             dismissed (if (= dismissed 1) "" "s"))))
+  (setq workspace (or workspace (mevedel--instruction-buffer-workspace (current-buffer))))
+  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+    (mevedel-instruction-store-observe workspace)
+    (let ((dismissed 0)
+          (notes (cl-loop for entry in (mevedel-notes--entries workspace)
+                          when (eq 'buddy (plist-get (plist-get entry :properties)
+                                                    'mevedel-note-author))
+                          collect (or (mevedel-notes--resolve (plist-get entry :uuid) workspace)
+                                      (user-error "Source unavailable for note %s; no notes dismissed"
+                                                  (plist-get entry :uuid))))))
+      (unwind-protect
+          (dolist (note notes)
+            (mevedel-buddy-note--dismiss-overlay note)
+            (cl-incf dismissed))
+        (when (> dismissed 0) (mevedel-instruction-store-sync workspace)))
+      (message "mevedel: %d note%s dismissed"
+               dismissed (if (= dismissed 1) "" "s"))
+      dismissed)))
 
 
 (provide 'mevedel-buddy-note)
