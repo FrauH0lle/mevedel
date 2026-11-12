@@ -26,6 +26,8 @@
 (require 'mevedel-instruction-registry)
 (require 'mevedel-overlays)
 (require 'mevedel-utilities)
+(require 'mevedel-notes-activation)
+(require 'mevedel-workspace)
 
 ;; `mevedel-directive'
 (declare-function mevedel-workspace-set-directives "mevedel-directive"
@@ -52,7 +54,7 @@
 (declare-function mevedel--reconcile-directive-sources
                   "mevedel-directive-source" (workspace))
 (declare-function mevedel--restore-source-missing-directives
-                  "mevedel-directive-source" (buffer))
+                  "mevedel-directive-source" (buffer &optional lexical))
 
 ;; `mevedel-instruction-edit'
 (autoload 'mevedel-instruction-replace-buffer-contents "mevedel-instruction-edit")
@@ -687,7 +689,7 @@ Return the restored overlay, or nil when unresolved."
               (puthash uuid bounds parent-ranges))
             ov))))))
 
-(cl-defun mevedel--restore-file-instructions (file &optional message workspace)
+(cl-defun mevedel--restore-file-instructions (file &optional message workspace visited)
   "Restore FILE and its INSTRUCTIONS.
 
 Returns tree values: restored buffer, the amount of instructions restored, and
@@ -695,21 +697,22 @@ the amount of instructions lost to the patching process, if any.
 
 If MESSAGE is non-nil, message the intent of patching outdated files.
 When WORKSPACE is non-nil, associate the restored buffer with it before
-restoring overlays."
+restoring overlays.  VISITED is an already-read source buffer: restore
+from it without checking or reading FILE on disk."
   (let ((mevedel--inhibit-file-patching t))
     (when-let* (((not mevedel--inhibit-source-missing-restore))
-                (buffer (find-buffer-visiting file)))
+                (buffer (or visited (find-buffer-visiting file))))
       (mevedel--instruction-activate-buffer buffer)
-      (mevedel--restore-source-missing-directives buffer))
-    (unless (and (file-exists-p file)
-                 (assoc file (mevedel--instruction-alist)))
+      (mevedel--restore-source-missing-directives buffer visited))
+    (unless (and (assoc file (mevedel--instruction-alist))
+                 (or visited (file-exists-p file)))
       (cl-return-from mevedel--restore-file-instructions (cl-values nil 0 0)))
     (cl-destructuring-bind
         (&key original-content instructions content-hash &allow-other-keys)
         (alist-get file (mevedel--instruction-alist) nil nil #'equal)
       (when (null instructions)
         (error "Malformed file given for restoration"))
-      (let ((buffer (find-file-noselect file))
+      (let ((buffer (or visited (find-file-noselect file)))
             (restored 0)
             (kia 0))
         (with-current-buffer buffer
@@ -740,7 +743,11 @@ restoring overlays."
                           ovs)))
             (if (and original-content
                      mevedel-patch-outdated-instructions
-                     (mevedel--file-outdated-p file))
+                     (if visited
+                         (not (string= original-content
+                                       (buffer-substring-no-properties
+                                        (point-min) (point-max))))
+                       (mevedel--file-outdated-p file)))
                 (progn
                   (when message
                     (message "Patching outdated instructions in buffer '%s'..."
@@ -1913,11 +1920,27 @@ check.  Return LOAD's value."
               (mevedel-instruction-store--observe workspace hash record)
             (user-error "The instruction store changed while importing; load the file again")))))))
 
-(add-hook 'find-file-hook
-          (lambda ()
-            (unless mevedel--inhibit-file-patching
-              (mevedel--instruction-activate-buffer (current-buffer))
-              (mevedel--restore-file-instructions (buffer-file-name (current-buffer))))))
+(defun mevedel-instruction-store-visit (file &optional key root)
+  "Restore visited FILE from cached KEY or the local store at ROOT.
+Only the local discovery path may register and observe a workspace."
+  (let* ((workspace
+          (if root
+              (mevedel-workspace-get-or-create
+               'project root root (mevedel-workspace--project-name root))
+            (gethash key mevedel-workspace--registry)))
+         (mevedel--instruction-state-key-override
+          (or key (mevedel--instruction-workspace-key workspace))))
+    ;; Discovering an ancestor's store does not give it ownership of an
+    ;; unnoted file in a nested project.  Cache ownership only for a match.
+    (when (or (assoc file (mevedel--instruction-alist))
+              (and workspace
+                   (cl-some
+                    (lambda (directive)
+                      (equal file (plist-get (mevedel-directive-anchor directive) :file)))
+                    (mevedel-workspace-directives workspace))))
+      (when workspace
+        (setq-local mevedel--workspace workspace))
+      (mevedel--restore-file-instructions file nil workspace (current-buffer)))))
 
 (provide 'mevedel-persistence)
 

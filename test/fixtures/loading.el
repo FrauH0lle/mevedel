@@ -176,6 +176,22 @@ temporary one."
                              (push symbol stale))))
                (ert-info ((format "Autoloads their file does not define: %S" stale))
                  (should-not stale))))
+            ('notes
+             (call-process "git" nil nil nil "init" "-q")
+             (write-region ".mevedel/\n" nil ".gitignore" nil 'silent)
+             (write-region "noted code\n" nil "source.el" nil 'silent)
+             (should-not (featurep 'mevedel-notes))
+             (let ((source (find-file-noselect "source.el")))
+               (with-current-buffer source (mevedel-note-create "Cold note"))
+               (should (file-exists-p ".mevedel/instructions.el"))
+               (kill-buffer source))
+             (with-current-buffer (find-file-noselect "source.el")
+               (should (seq-some
+                        (lambda (ov)
+                          (string-match-p "Cold note" (or (overlay-get ov 'after-string) "")))
+                        (overlays-in (point-min) (point-max)))))
+             (should-not (featurep 'mevedel-chat))
+             (should-not (featurep 'mevedel-buddy)))
             ('handoff-progress
              (require 'mevedel-plan-handoff)
              (require 'mevedel-view)
