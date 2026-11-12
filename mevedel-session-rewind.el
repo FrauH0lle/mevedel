@@ -1972,10 +1972,9 @@ Return the plan, its recheck function and force choice, or `:abort'."
                   (mevedel-session-rewind--render-rewind-impact
                    session (mevedel-session-rewind--rewind-impact
                             session target plan boundary))
-                  (pcase (if resolutions ?m
-                           (read-char-choice
+                  (pcase (read-char-choice
                             "Rewind conflicts; [c]ancel, [f]orce snapshot restore or [m]erge? "
-                            '(?c ?f ?m)))
+                            '(?c ?f ?m))
                     (?f (setq force t plan (funcall replan)))
                     (?m (throw 'cancel (list :merge plan)))
                     (_ (throw 'cancel :abort))))
@@ -2008,6 +2007,11 @@ just before sending it."
     (let* ((selection (mevedel-session-rewind--prepare-rewind-files
                        session target boundary))
            (prepared (unless (eq selection :abort) (plist-get selection :plan))))
+      (when (eq selection :abort)
+        (when-let* ((impact-buffer (get-buffer "*mevedel-rewind-impact*")))
+          (quit-windows-on impact-buffer t)
+          (when (buffer-live-p impact-buffer)
+            (kill-buffer impact-buffer))))
       (if (plist-get (and (listp selection) selection) :merge)
           (progn
             (when-let* ((impact-buffer (get-buffer "*mevedel-rewind-impact*")))

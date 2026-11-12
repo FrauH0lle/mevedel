@@ -137,6 +137,7 @@ With PATCH, run that ApplyPatch hunk through the real pipeline for capture."
                        ((symbol-function 'yes-or-no-p)
                         (lambda (&rest _) (ert-fail "Conflict was not refused"))))
                (should-not (mevedel-session-rewind-rewind buffer target)))
+             (should-not (get-buffer "*mevedel-rewind-impact*"))
              (should (string-match-p (regexp-quote "[c]ancel") asked))
              (should (equal transcript
                             (with-current-buffer buffer (buffer-string))))
@@ -337,6 +338,41 @@ With PATCH, run that ApplyPatch hunk through the real pipeline for capture."
          (should (equal "one\ntwo\nthree\nuser\n" (mevedel-test--read-file path)))
          (should (equal "clean-0\n" (mevedel-test--read-file
                                       (file-name-concat (file-name-directory path) "other.txt"))))))))
+  :doc "each older conflict offers cancel, force or merge again"
+  (dolist (choice '(?c ?f ?m))
+    (mevedel-test-rewind-reverts--call
+     '(("one\ntwo\nthree\nfour\n" "ONE\ntwo\nthree\nfour\n")
+       ("ONE\ntwo\nthree\nfour\n" "UNO\ntwo\nthree\nfour\n"))
+     "mine\ntwo\nthree\nuser\n"
+     (lambda (buffer target path)
+       (let ((rounds 0)
+             (transcript (with-current-buffer buffer (buffer-string))))
+         (save-window-excursion
+           (cl-letf (((symbol-function 'read-char-choice)
+                      (lambda (_prompt choices &rest _)
+                        (should (equal '(?c ?f ?m) choices))
+                        (if (= 1 (cl-incf rounds)) ?m choice)))
+                     ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+             (mevedel-session-rewind-rewind buffer target)
+             (goto-char (point-min))
+             (search-forward "<<<<<<<")
+             (smerge-keep-upper)
+             (mevedel-note-merge-confirm)
+             (should (= 2 rounds))
+             (should-not (get-buffer "*mevedel-rewind-impact*"))
+             (when (eq choice ?m)
+               (should (derived-mode-p 'mevedel-note-merge-mode))
+               (goto-char (point-min))
+               (search-forward "<<<<<<<")
+               (smerge-keep-lower)
+               (mevedel-note-merge-confirm))
+             (should (equal (pcase choice
+                              (?c "mine\ntwo\nthree\nuser\n")
+                              (?f "one\ntwo\nthree\nfour\n")
+                              (?m "one\ntwo\nthree\nuser\n"))
+                            (mevedel-test--read-file path)))
+             (when (eq choice ?c)
+               (should (equal transcript (with-current-buffer buffer (buffer-string)))))))))))
   :doc "merge starts from the intermediate text after a newer clean reversal"
   (mevedel-test-rewind-reverts--call
    '(("one\ntwo\nthree\nfour\n" "ONE\ntwo\nthree\nfour\n")

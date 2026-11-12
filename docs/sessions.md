@@ -2725,8 +2725,8 @@ Cancel leaves files and conversation unchanged. Force selects the old snapshot
 restore and requires a separate confirmation explicitly warning that newer
 edits will be overwritten. Merge opens the existing separate smerge editor;
 upper keeps the current intermediate text, lower takes the state before the
-discarded turn. `C-c C-c` accepts resolved conflicts in memory and opens older
-conflicts if necessary; `C-c C-k` cancels without source writes. Once every
+discarded turn. `C-c C-c` accepts resolved conflicts in memory; older conflicts
+offer cancel, force or merge again. `C-c C-k` cancels without source writes. Once every
 conflict is resolved, the ordinary Rewind confirmation and transaction commit
 all files and the conversation together, rechecking changed sources. Binary
 conflicts cannot be edited in smerge; cancel or explicit force remain available.
