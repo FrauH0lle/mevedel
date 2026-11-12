@@ -28,6 +28,8 @@
           (mevedel-instruction-store--failed nil)
           (mevedel-buddy--changes (make-hash-table :test #'equal))
           (mevedel-buddy--last-review (make-hash-table :test #'equal))
+          (mevedel-buddy--levels (make-hash-table :test #'equal))
+          (find-file-hook (copy-sequence find-file-hook))
           (mevedel-buddy-note--notes nil)
           (mevedel-buddy-note--changed-workspaces nil)
           (mevedel-buddy-note--prepared-buffers nil)
@@ -109,6 +111,27 @@
           (goto-char (point-min)) (search-forward "Implement the goal")
           (call-interactively (key-binding "T"))
           (should (string-search "Buddy watches" (buffer-string))))))))
+
+(mevedel-deftest mevedel-buddy-set-level
+  (:quiet t)
+  ,test
+  (test)
+  :doc "workspace dial defaults to Active and remembers Quiet independently"
+  (mevedel-take-test--with-source
+    (let ((mevedel-buddy--levels (make-hash-table :test #'equal))
+          (other (mevedel-workspace--create
+                  :type 'file :id "/other/" :root "/other/" :name "other")))
+      (should (eq 'active (mevedel-buddy-level workspace)))
+      (mevedel-buddy-set-level 'quiet workspace)
+      (should (eq 'quiet (mevedel-buddy-level workspace)))
+      (should (eq 'active (mevedel-buddy-level other)))
+      (should mevedel-buddy-mode)
+      (clrhash mevedel-buddy--levels)
+      (mevedel-buddy-mode -1)
+      (mevedel-buddy-mode 1)
+      (should (eq 'quiet (mevedel-buddy-level workspace)))
+      (should-error (mevedel-buddy-set-level 'unknown workspace) :type 'user-error)
+      (should (eq 'quiet (mevedel-buddy-level workspace))))))
 
 (provide 'test-mevedel-buddy-take)
 ;;; test-mevedel-buddy-take.el ends here

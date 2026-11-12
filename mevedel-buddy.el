@@ -71,6 +71,15 @@
 (declare-function mevedel-model-resolve-workload "mevedel-models"
                   (workload &optional explicit-selector explicit-effort))
 
+;; `mevedel-notes'
+(declare-function mevedel-notes--ensure-workspace "mevedel-notes" (workspace))
+
+;; `mevedel-session-control-fs'
+(declare-function mevedel-session-control-fs-read-file "mevedel-session-control-fs"
+                  (path &optional coding-system max-bytes))
+(declare-function mevedel-session-control-fs-write-file "mevedel-session-control-fs"
+                  (path content &optional coding-system))
+
 ;; `mevedel-system'
 (declare-function mevedel-system-build-prompt "mevedel-system"
                   (profile &rest keys))
@@ -153,6 +162,83 @@ An edit that arrives later, or that does not touch the previous
 record's region, starts a record of its own."
   :type 'number
   :group 'mevedel)
+
+
+;;
+;;; Workspace dial
+
+(defvar mevedel-buddy--levels (make-hash-table :test #'equal)
+  "Workspace roots mapped to (LEVEL . WORKSPACE) on Buddy activation.")
+
+(defun mevedel-buddy-level (&optional workspace)
+  "Return WORKSPACE's cached dial level, defaulting to `active'.
+Never read a file or discover a workspace; safe during change recording."
+  (let ((workspace (or workspace (bound-and-true-p mevedel--workspace))))
+    (if workspace
+        (or (car (gethash (file-name-as-directory (mevedel-workspace-root workspace))
+                         mevedel-buddy--levels)) 'active)
+      'active)))
+
+(defun mevedel-buddy--load-level (workspace)
+  "Load WORKSPACE's dial once at a cold Buddy activation boundary."
+  (when workspace
+    (let ((root (file-name-as-directory (mevedel-workspace-root workspace))))
+      (unless (gethash root mevedel-buddy--levels)
+        (require 'mevedel-session-control-fs)
+        (let* ((text (condition-case nil
+                         (string-trim (mevedel-session-control-fs-read-file
+                                       (file-name-concat root ".mevedel" "buddy-level")
+                                       nil 16))
+                       (mevedel-session-control-fs-absent "active")))
+               (level (cdr (assoc text '(("quiet" . quiet) ("watching" . watching)
+                                        ("active" . active))))))
+          (unless level (user-error "Invalid Buddy dial in %s" root))
+          (puthash root (cons level workspace) mevedel-buddy--levels))))))
+
+(defun mevedel-buddy--enable-workspace-buffer ()
+  "Enable tracking only inside a workspace whose Buddy dial is loaded.
+Use lexical path comparison, with no filesystem probes on file visit."
+  (when (and buffer-file-name (mevedel-buddy--tracked-buffer-p))
+    (let ((file (expand-file-name buffer-file-name)) owner longest)
+      (maphash (lambda (root setting)
+                 (when (and (string-prefix-p root file)
+                            (or (null longest) (> (length root) (length longest)))
+                            (or (not (bound-and-true-p mevedel--workspace))
+                                (equal root (file-name-as-directory
+                                             (mevedel-workspace-root mevedel--workspace)))))
+                   (setq longest root owner (cdr setting))))
+               mevedel-buddy--levels)
+      (when owner
+        (setq-local mevedel--workspace owner)
+        (unless mevedel-buddy-mode (mevedel-buddy-mode 1))))))
+
+;;;###autoload
+(defun mevedel-buddy-set-level (level &optional workspace)
+  "Set WORKSPACE's Buddy dial to LEVEL and enable its source buffers.
+LEVEL is `quiet', `watching' or `active'.  Taken notes are watched at every
+level.  The setting is saved in the workspace, not in any conversation."
+  (interactive (list (intern (completing-read
+                             "Buddy: " '("Quiet" "Watching" "Active") nil t nil nil
+                             (capitalize (symbol-name (mevedel-buddy-level)))))))
+  (setq level (if (symbolp level) (intern (downcase (symbol-name level))) level)
+        workspace (or workspace (mevedel-buddy--workspace)))
+  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+    (unless (memq level '(quiet watching active)) (user-error "Unknown Buddy level: %s" level))
+    (unless workspace (user-error "No workspace for Buddy"))
+    (require 'mevedel-session-control-fs)
+    (when buffer-file-name
+      (require 'mevedel-notes)
+      (setq workspace (mevedel-notes--ensure-workspace workspace)))
+    (mevedel-session-control-fs-write-file
+     (file-name-concat (mevedel-workspace-state-dir workspace) "buddy-level")
+     (symbol-name level))
+    (puthash (file-name-as-directory (mevedel-workspace-root workspace))
+             (cons level workspace) mevedel-buddy--levels)
+    (add-hook 'find-file-hook #'mevedel-buddy--enable-workspace-buffer)
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer (mevedel-buddy--enable-workspace-buffer)))
+    (message "mevedel: Buddy %s" (capitalize (symbol-name level))))
+  level)
 
 
 ;;
@@ -1018,6 +1104,7 @@ edits and request state live only in memory."
   :group 'mevedel-buddy
   (if mevedel-buddy-mode
       (progn
+        (mevedel-buddy--load-level (mevedel-buddy--workspace))
         (mevedel-buddy--track-buffer)
         (add-hook 'after-change-functions
                   #'mevedel-buddy--after-change-schedule nil t))

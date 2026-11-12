@@ -70,6 +70,7 @@
 (autoload 'mevedel-buddy-guide "mevedel-buddy" nil t)
 (autoload 'mevedel-buddy-mode "mevedel-buddy" nil t)
 (autoload 'mevedel-buddy-review "mevedel-buddy" nil t)
+(autoload 'mevedel-buddy-set-level "mevedel-buddy" nil t)
 (autoload 'mevedel-note-take "mevedel-notes" nil t)
 (autoload 'mevedel-note-drop "mevedel-notes" nil t)
 (autoload 'mevedel-claude-code-install-adapter "mevedel-claude-code" nil t)
