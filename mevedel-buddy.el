@@ -198,20 +198,14 @@ Never read a file or discover a workspace; safe during change recording."
 
 (defun mevedel-buddy--enable-workspace-buffer ()
   "Enable tracking only inside a workspace whose Buddy dial is loaded.
-Use lexical path comparison, with no filesystem probes on file visit."
+Use exact workspace ownership; never probe unknown remote files."
   (when (and buffer-file-name (mevedel-buddy--tracked-buffer-p))
-    (let ((file (expand-file-name buffer-file-name)) owner longest)
-      (maphash (lambda (root setting)
-                 (when (and (string-prefix-p root file)
-                            (or (null longest) (> (length root) (length longest)))
-                            (or (not (bound-and-true-p mevedel--workspace))
-                                (equal root (file-name-as-directory
-                                             (mevedel-workspace-root mevedel--workspace)))))
-                   (setq longest root owner (cdr setting))))
-               mevedel-buddy--levels)
-      (when owner
-        (setq-local mevedel--workspace owner)
-        (unless mevedel-buddy-mode (mevedel-buddy-mode 1))))))
+    (when-let* ((workspace (or (bound-and-true-p mevedel--workspace)
+                              (unless (file-remote-p buffer-file-name nil 'never)
+                                (mevedel-buddy--workspace))))
+                ((gethash (file-name-as-directory (mevedel-workspace-root workspace))
+                          mevedel-buddy--levels)))
+      (unless mevedel-buddy-mode (mevedel-buddy-mode 1)))))
 
 ;;;###autoload
 (defun mevedel-buddy-set-level (level &optional workspace)
@@ -235,7 +229,7 @@ level.  The setting is saved in the workspace, not in any conversation."
      (symbol-name level))
     (puthash (file-name-as-directory (mevedel-workspace-root workspace))
              (cons level workspace) mevedel-buddy--levels)
-    (add-hook 'find-file-hook #'mevedel-buddy--enable-workspace-buffer)
+    (add-hook 'find-file-hook #'mevedel-buddy--enable-workspace-buffer t)
     (dolist (buffer (buffer-list))
       (with-current-buffer buffer (mevedel-buddy--enable-workspace-buffer)))
     (message "mevedel: Buddy %s" (capitalize (symbol-name level))))

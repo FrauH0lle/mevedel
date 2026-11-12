@@ -267,5 +267,23 @@ AUTOMATIC exercises the idle review policy without waiting for idle time."
                            tools "add_note" name 40 "An idea after drop" "significant" "idea")))) t)
       (should-not (string-search "An idea after drop" (mevedel-take-test--labels))))))
 
+(mevedel-deftest mevedel-buddy-set-level/nested-workspace
+  (:quiet t)
+  ,test
+  (test)
+  :doc "a parent's dial never claims files in an unregistered nested project"
+  (mevedel-take-test--with-source
+    (let* ((child (file-name-concat root "child"))
+           (child-file (file-name-concat child "child.el")))
+      (make-directory child)
+      (should (zerop (call-process "git" nil nil nil "init" "-q" child)))
+      (write-region "child code\n" nil child-file nil 'silent)
+      (mevedel-buddy-set-level 'quiet workspace)
+      (with-current-buffer (find-file-noselect child-file)
+        (should-not mevedel-buddy-mode)
+        (should (equal (file-name-as-directory child)
+                       (file-name-as-directory
+                        (mevedel-workspace-root (mevedel-workspace)))))))))
+
 (provide 'test-mevedel-buddy-take)
 ;;; test-mevedel-buddy-take.el ends here
