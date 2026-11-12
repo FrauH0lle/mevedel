@@ -82,6 +82,9 @@
 (declare-function mevedel--set-instruction-alist-value
                   "mevedel-instruction-registry" (value))
 
+;; `mevedel-note-change'
+(autoload 'mevedel-note-prepare-change "mevedel-note-change")
+
 ;; `mevedel-patch-review'
 (declare-function mevedel-patch-review-start
                   "mevedel-patch-review" (proposal callback data-buffer))
@@ -1974,7 +1977,16 @@ matches fails as it does for a local file."
                  (mevedel-tool-patch--capture-baseline proposal)
                  (let ((changes (mevedel-tool-patch-planned-changes proposal)))
                    (mevedel-tool-patch-assert-baseline proposal)
-                   (if (memq mode '(edits full-auto))
+                   (cond
+                    ((and mevedel--session
+                          (eq (mevedel-session-preset-name mevedel--session) 'mevedel-note)
+                          (not (cl-some
+                                (lambda (operation)
+                                  (mevedel-tool-patch-resource-address-p
+                                   (plist-get operation :rel-path)))
+                                (plist-get proposal :operations))))
+                     (funcall callback (mevedel-note-prepare-change proposal changes data-buffer)))
+                    ((memq mode '(edits full-auto))
                        (let ((result (mevedel-tool-patch-result proposal changes)))
                          (mevedel-tool-patch-apply
                           data-buffer changes (lambda () (funcall callback result))
@@ -1982,9 +1994,10 @@ matches fails as it does for a local file."
                             (if (and (> retries 0)
                                      (eq (car err) 'mevedel-tool-patch-remote-stale))
                                 (fetch (lambda () (proceed (1- retries))))
-                              (fail err)))))
+                              (fail err))))))
+                    (t
                      (require 'mevedel-patch-review)
-                     (mevedel-patch-review-start proposal callback data-buffer))))
+                     (mevedel-patch-review-start proposal callback data-buffer)))))
              (error (fail err)))))
       (condition-case err
           (let ((prepared mevedel-tool-patch-prepared-proposal))
