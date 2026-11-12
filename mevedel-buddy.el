@@ -275,7 +275,8 @@ file, `default-directory' and pinned workspace root used to derive the key.")
   "Return the project scope key for DIRECTORY, or nil outside a project.
 Source buffers and sessions in one project derive the same key here."
   (let ((default-directory (file-name-as-directory directory)))
-    (cdr (ignore-errors (mevedel-workspace--project-workspace)))))
+    (when-let* ((root (cdr (ignore-errors (mevedel-workspace--project-workspace)))))
+      (file-name-as-directory (expand-file-name root)))))
 
 (defun mevedel-buddy--scope-key ()
   "Return the current buffer's scope key.

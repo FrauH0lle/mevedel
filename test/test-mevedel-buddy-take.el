@@ -427,5 +427,22 @@ AUTOMATIC exercises the idle review policy without waiting for idle time."
       (should (overlay-get note 'mevedel-note-kept-from-buddy))
       (should (eq 'taken (mevedel-notes-attention-state note))))))
 
+(mevedel-deftest mevedel-buddy-review/project-brief
+  (:quiet t)
+  ,test
+  (test)
+  :doc "a project brief reaches pinned source notes even under the home directory"
+  (let ((temporary-file-directory (expand-file-name "~/"))
+        (mevedel-buddy--briefs (make-hash-table :test #'equal)))
+    (mevedel-take-test--with-source
+      (make-directory (file-name-concat root ".git"))
+      (mevedel-buddy-set-brief (mevedel-buddy-directory-scope-key root)
+                              "the project request" "SHARED-PROJECT-BRIEF")
+      (mevedel-note-take (mevedel-note-create "Implement this goal"))
+      (should
+       (mevedel-take-test--review
+        (lambda (prompt _tools)
+          (should (string-search "SHARED-PROJECT-BRIEF" prompt))) t)))))
+
 (provide 'test-mevedel-buddy-take)
 ;;; test-mevedel-buddy-take.el ends here
