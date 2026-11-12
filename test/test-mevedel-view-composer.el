@@ -2423,6 +2423,43 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (set-marker mevedel-view--input-marker nil)
         (should (= expected (mevedel-view--prompt-start-position)))))))
 
+(mevedel-deftest mevedel-view--propertize-input-prompt
+  (:doc "Line motion that bypasses the composer remap still stops at the input")
+  ,test
+  (test)
+  :doc "every beginning-of-line style command stops after the prompt"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (goto-char (point-max))
+      (insert "abc")
+      (dolist (command '(beginning-of-line back-to-indentation
+                         move-beginning-of-line))
+        (goto-char (point-max))
+        (call-interactively command)
+        (should (= (point) (mevedel-view--input-start))))
+      (should (equal "abc" (mevedel-view--input-text)))))
+
+  :doc "continuation lines keep their own line start"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (goto-char (point-max))
+      (insert "abc\ndef")
+      (beginning-of-line)
+      (should (= (point) (- (point-max) 3)))))
+
+  :doc "a refreshed prompt keeps the field boundary"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (goto-char (point-max))
+      (insert "abc")
+      (mevedel-view-refresh-input-prompt)
+      (goto-char (point-max))
+      (beginning-of-line)
+      (should (= (point) (mevedel-view--input-start)))
+      (should (eq 'mevedel-view-prompt
+                  (get-text-property (1- (mevedel-view--input-start))
+                                     'field))))))
+
 (mevedel-deftest mevedel-view--update-composer-indent
   (:doc "aligns composer continuation lines with the end of the prompt")
   ,test
@@ -2484,7 +2521,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
       (insert "> first\nsecond")
       (let* ((first-line (save-excursion
                            (goto-char (mevedel-view--input-start))
-                           (line-beginning-position)))
+                           (pos-bol)))
              (second-line (save-excursion
                             (goto-char (mevedel-view--input-start))
                             (forward-line 1)

@@ -187,6 +187,8 @@
                   "mevedel-view-composer" ())
 (declare-function mevedel-view--input-prompt-string
                   "mevedel-view-composer" (&optional mode))
+(declare-function mevedel-view--propertize-input-prompt
+                  "mevedel-view-composer" (start end))
 (declare-function mevedel-view-composer-scope-label
                   "mevedel-view-composer" (&optional scope))
 (declare-function mevedel-view--permission-mode-display
@@ -904,12 +906,7 @@ existing `mevedel--view-buffer' binding untouched.  A
         ;; interaction markers have insertion-type t.
         (let ((start (point)))
           (insert (mevedel-view--input-prompt-string))
-          (add-text-properties
-           start (point)
-           `(read-only t
-             mevedel-view-prompt t
-             front-sticky (read-only mevedel-view-prompt)
-             rear-nonsticky (read-only mevedel-view-prompt font-lock-face)))
+          (mevedel-view--propertize-input-prompt start (point))
           (setq mevedel-view--status-marker (copy-marker start t))
           (setq mevedel-view--interaction-marker (copy-marker start t))
           (setq mevedel-view--input-marker (copy-marker start nil)))))

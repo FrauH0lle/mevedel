@@ -560,6 +560,18 @@
 (defconst mevedel-view--input-prompt "> "
   "Read-only prefix rendered at the start of the input zone.")
 
+(defun mevedel-view--propertize-input-prompt (start end)
+  "Mark START..END as the read-only input prompt.
+The prompt is its own field, so line and word motion stop at the input
+start instead of entering the prompt."
+  (add-text-properties
+   start end
+   '(read-only t
+     mevedel-view-prompt t
+     field mevedel-view-prompt
+     front-sticky (read-only mevedel-view-prompt)
+     rear-nonsticky (read-only mevedel-view-prompt field font-lock-face))))
+
 (defface mevedel-view-directive-scope
   '((t :inherit font-lock-keyword-face :weight bold))
   "Face for directive-scoped composer chrome."
@@ -992,7 +1004,8 @@ only explicit and soft-wrapped continuation lines receive it."
            (indent (make-string
                     (string-width
                      (buffer-substring-no-properties
-                      (save-excursion (goto-char start) (line-beginning-position))
+                      ;; `pos-bol' ignores the prompt field: measure from the true line start.
+                      (save-excursion (goto-char start) (pos-bol))
                       start))
                     ?\s)))
       (overlay-put mevedel-view--composer-display-overlay 'line-prefix indent)
@@ -1705,8 +1718,8 @@ defeat the character-width bound."
        (not wrap-prefix)
        (save-excursion
          (goto-char beg)
-         (let ((start (line-beginning-position))
-               (limit (line-end-position))
+         (let ((start (pos-bol))
+               (limit (pos-eol))
                (properties '(display invisible face font-lock-face composition
                              line-prefix wrap-prefix before-string after-string)))
            (and (<= end limit)
@@ -2374,13 +2387,7 @@ follows `mevedel-view--input-marker'."
                       (set-marker-insertion-type mevedel-view--input-marker nil)
                       (delete-region start end)
                       (insert (mevedel-view--input-prompt-string))
-                      (add-text-properties
-                       start (point)
-                       `(read-only t
-				   mevedel-view-prompt t
-				   front-sticky (read-only mevedel-view-prompt)
-				   rear-nonsticky
-				   (read-only mevedel-view-prompt font-lock-face))))
+                      (mevedel-view--propertize-input-prompt start (point)))
 		  (when (markerp mevedel-view--status-marker)
                     (set-marker-insertion-type
                      mevedel-view--status-marker status-type))
