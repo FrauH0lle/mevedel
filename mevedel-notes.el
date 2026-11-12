@@ -19,8 +19,14 @@
 (require 'mevedel-utilities)
 
 ;; `mevedel-persistence'
+(declare-function mevedel-instruction-store-observe "mevedel-persistence"
+                  (workspace))
+(declare-function mevedel-instruction-store-prune-closed "mevedel-persistence"
+                  (workspace))
 (declare-function mevedel-instruction-store-touch "mevedel-persistence"
                   (&optional workspace))
+(autoload 'mevedel-instruction-store-observe "mevedel-persistence")
+(autoload 'mevedel-instruction-store-prune-closed "mevedel-persistence")
 (autoload 'mevedel-instruction-store-touch "mevedel-persistence")
 
 (defvar-local mevedel-notes--last-hinted nil
@@ -169,8 +175,8 @@ Restore only the selected note's file, not every stashed source file."
   "Return the current modified-key menu hint."
   (if-let* ((key (where-is-internal #'mevedel--ov-actions-dispatch
                                    mevedel-note-actions-map t)))
-      (format "%s: edit, delete" (key-description key))
-    "M-x mevedel-note-menu: edit, delete"))
+      (format "%s: edit, done, delete" (key-description key))
+    "M-x mevedel-note-menu: edit, done, delete"))
 
 (defun mevedel-notes--entry-hint ()
   "Announce the note and its next actions when point enters it."
@@ -261,12 +267,155 @@ Default to the note at point.  An empty list removes every tag."
 
 ;;;###autoload
 (defun mevedel-note-delete (&optional note)
-  "Delete NOTE, defaulting to the note at point, without changing code."
+  "Move NOTE to recently closed as deleted, without changing code.
+NOTE defaults to the note at point.  Restore it with `mevedel-note-restore'."
   (interactive)
-  (let ((workspace (mevedel--instruction-buffer-workspace
-                    (if note (overlay-buffer note) (current-buffer)))))
+  (mevedel-note-close (or note (mevedel-notes--at-point)) 'deleted))
+
+(defun mevedel-note-close (note reason)
+  "Move live NOTE to recently closed with REASON, retaining its attachments.
+REASON is `done', `deleted' or `dismissed'.  Closing never changes source code."
+  (let* ((buffer (overlay-buffer note))
+         (workspace (mevedel--instruction-buffer-workspace buffer))
+         (mevedel--instruction-state-key-override
+          (mevedel--instruction-workspace-key workspace)))
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
-      (mevedel--delete-instruction (or note (mevedel-notes--at-point))))))
+      (unless (memq reason '(done deleted dismissed))
+        (user-error "Unknown close reason: %s" reason))
+      (unless (and buffer (eq (overlay-get note 'mevedel-instruction-type) 'note))
+        (user-error "Not a live note"))
+      (with-current-buffer buffer
+        (let* ((properties (mevedel--instruction-persisted-properties note))
+               (instruction
+                (list :overlay-start (overlay-start note)
+                      :overlay-end (overlay-end note)
+                      :anchor (mevedel--instruction-anchor-for-instruction note)
+                      :closed-position
+                      (save-excursion
+                        (save-restriction
+                          (widen)
+                          (let ((start (overlay-start note))
+                                (end (overlay-end note)))
+                            (list (line-number-at-pos start)
+                                  (progn (goto-char start) (- start (line-beginning-position)))
+                                  (line-number-at-pos end)
+                                  (progn (goto-char end) (- end (line-beginning-position)))))))
+                      :open-state (overlay-get note 'mevedel-note-state)
+                      :closed-reason reason :closed-at (float-time)
+                      :properties (plist-put properties 'mevedel-note-state 'closed))))
+          (push (list :file buffer-file-name :instruction instruction)
+                (plist-get (mevedel--instruction-state
+                            (mevedel--instruction-operation-state-key))
+                           :closed-notes))
+          ;; Explicit closure wins over older source geometry undo.  Reserve the
+          ;; display number until expiry, rather than retiring it on close.
+          (overlay-put note 'mevedel-marked-for-deletion t)
+          (mevedel--delete-instruction-overlay note)
+          (setf (alist-get buffer (mevedel--instruction-alist))
+                (delq note (alist-get buffer (mevedel--instruction-alist))))
+          (mevedel-instruction-store-prune-closed workspace)
+          (mevedel-instruction-store-touch workspace))))))
+
+;;;###autoload
+(defun mevedel-note-done (&optional note)
+  "Explicitly mark NOTE done, defaulting to the note at point."
+  (interactive)
+  (mevedel-note-close (or note (mevedel-notes--at-point)) 'done))
+
+(defun mevedel-notes-closed (&optional workspace loaded-only)
+  "Return snapshots of recently closed notes in WORKSPACE.
+Each entry has :file and :instruction, the serialized note with :closed-reason,
+:closed-at and :open-state.  Callers may change these snapshots freely.
+When LOADED-ONLY is non-nil, inspect only loaded state without observing the
+store.  Retention pruning and snapshot copying still apply."
+  (setq workspace (or workspace (mevedel--instruction-buffer-workspace
+                                (current-buffer))))
+  (unless loaded-only (mevedel-notes--load-closed workspace))
+  (mevedel-instruction-store-prune-closed workspace)
+  (mevedel--instruction-serializable-value
+   (plist-get (mevedel--instruction-state
+               (mevedel--instruction-workspace-key workspace))
+              :closed-notes)))
+
+(defun mevedel-notes--load-closed (workspace)
+  "Load WORKSPACE's store on cold first use of closed-note commands."
+  (unless (plist-get (mevedel--instruction-state
+                      (mevedel--instruction-workspace-key workspace))
+                     :store-observation)
+    (mevedel-instruction-store-observe workspace)))
+
+;;;###autoload
+(defun mevedel-note-restore (id &optional workspace)
+  "Restore the recently closed note with display number or UUID ID in WORKSPACE.
+Return its live source overlay, retaining its text, tags and attachments."
+  (interactive
+   (let* ((workspace (mevedel--instruction-buffer-workspace (current-buffer)))
+          (choices (mapcar
+                    (lambda (entry)
+                      (let* ((instruction (plist-get entry :instruction))
+                             (props (plist-get instruction :properties)))
+                        (cons (format "%s: %s (%s)"
+                                      (plist-get props 'mevedel-id)
+                                      (plist-get props 'mevedel-note-text)
+                                      (plist-get instruction :closed-reason))
+                              (plist-get props 'mevedel-uuid))))
+                    (mevedel-notes-closed workspace))))
+     (list (cdr (assoc (completing-read "Restore note: " choices nil t) choices))
+           workspace)))
+  (setq workspace (or workspace (mevedel--instruction-buffer-workspace
+                                (current-buffer))))
+  (mevedel-notes--load-closed workspace)
+  (mevedel-instruction-store-prune-closed workspace)
+  (let* ((mevedel--instruction-state-key-override
+          (mevedel--instruction-workspace-key workspace))
+         (state (mevedel--instruction-state
+                 (mevedel--instruction-operation-state-key)))
+         (entry (cl-find id (plist-get state :closed-notes)
+                         :key (lambda (entry)
+                                (plist-get
+                                 (plist-get (plist-get entry :instruction) :properties)
+                                 (if (numberp id) 'mevedel-id 'mevedel-uuid)))
+                         :test #'equal)))
+    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+      (unless entry (user-error "No recently closed note %s" id))
+      (let* ((instruction (plist-get entry :instruction))
+             (buffer (find-file-noselect (plist-get entry :file)))
+             (properties (copy-tree (plist-get instruction :properties))))
+        (with-current-buffer buffer
+          (setq-local mevedel--workspace workspace)
+          (plist-put properties 'mevedel-note-state (plist-get instruction :open-state))
+          (let ((note
+                 (save-excursion
+                   (save-restriction
+                     (widen)
+                     (let ((bounds (mevedel-notes--restore-bounds instruction)))
+                       (mevedel--restore-overlay buffer (car bounds) (cdr bounds)
+                                                 properties))))))
+            (setf (plist-get state :closed-notes)
+                  (delq entry (plist-get state :closed-notes)))
+            (push note (alist-get buffer (mevedel--instruction-alist)))
+            (mevedel--setup-buffer-hooks buffer)
+            (save-restriction
+              (widen)
+              (mevedel--update-instruction-overlay note t))
+            (mevedel-instruction-store-touch workspace)
+            note))))))
+
+(defun mevedel-notes--restore-bounds (instruction)
+  "Resolve closed INSTRUCTION in the widened source, falling back to its line."
+  (or (mevedel-persistence-resolve-instruction-anchor
+       (plist-get instruction :overlay-start)
+       (plist-get instruction :overlay-end)
+       (plist-get instruction :anchor) nil)
+      (pcase-let ((`(,line ,column ,end-line ,end-column)
+                   (plist-get instruction :closed-position)))
+        (goto-char (point-min))
+        (forward-line (1- line))
+        (let ((start (min (line-end-position) (+ (point) column))))
+          (goto-char (point-min))
+          (forward-line (1- end-line))
+          (cons start (max start (min (line-end-position)
+                                     (+ (point) end-column))))))))
 
 ;;;###autoload
 (defun mevedel-note-menu (&optional note)
@@ -279,9 +428,11 @@ Default to the note at point.  An empty list removes every tag."
       (pcase (car (read-multiple-choice
                    (format "Note %s: " (overlay-get note 'mevedel-id))
                    '((?e "edit" "Edit note text")
+                     (?x "done" "Mark note done")
                      (?d "delete" "Delete note without changing code"))))
         (?e (mevedel-note-edit
              (read-string "Note: " (overlay-get note 'mevedel-note-text)) note))
+        (?x (mevedel-note-done note))
         (?d (mevedel-note-delete note))))))
 
 ;;;###autoload
