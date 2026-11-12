@@ -310,5 +310,35 @@
                   (mevedel-session-artifacts-sidecar-path (mevedel-session-save-path session)))))
       (should-not (cdr (assq 0 (plist-get saved :file-snapshots)))))))
 
+(mevedel-deftest mevedel-note-merge-freshness
+  (:quiet t)
+  ,test
+  (test)
+  :doc "confirmation refuses source edits made after opening and cancel preserves source and focus"
+  (dolist (save '(nil t))
+    (mevedel-note-change-test--with-note
+      (switch-to-buffer source)
+      (goto-char (overlay-start note))
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+      (let ((origin (point))
+            (merge (mevedel-note-merge-change note)))
+        (with-current-buffer source
+          (goto-char (point-max))
+          (insert "later user edit\n")
+          (when save (save-buffer)))
+        (with-current-buffer merge
+          (goto-char (point-min))
+          (while (search-forward "<<<<<<<" nil t) (smerge-keep-lower))
+          (should-error (mevedel-note-merge-confirm) :type 'user-error)
+          (should (buffer-live-p merge))
+          (mevedel-note-merge-cancel))
+        (should (eq source (window-buffer (selected-window))))
+        (should (= origin (window-point (selected-window))))
+        (with-current-buffer source
+          (should (equal "before\nold\nafter\nlater user edit\n" (buffer-string))))
+        (should (equal (if save "before\nold\nafter\nlater user edit\n" "before\nold\nafter\n")
+                       (mevedel-test--read-file file)))))))
+
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here
