@@ -1153,6 +1153,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                        (mevedel-tool-patch-register)
                        (mevedel-tool-exec--register)
                        (mevedel-tool-goal--register)
+                       (mevedel-tool-note-register)
                        (mevedel-tool-ui--register))
    :after-each (mevedel-tool-clear-registry))
   ,test

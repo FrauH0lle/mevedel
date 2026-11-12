@@ -295,7 +295,7 @@ Freezing these explicit specs preserves membership on later invocations."
      (t
       (cl-delete-duplicates
        (append base
-               '((:tool "ToolSearch") (:tool "ToolCall"))
+               '((:tool "ToolSearch") (:tool "ToolCall") (:discoverable notes))
                mevedel-agent--communication-tool-specs
                (when (mevedel-agent--specs-contain-tool-p base "Agent")
                  mevedel-agent--control-tool-specs))

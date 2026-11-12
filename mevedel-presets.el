@@ -520,6 +520,7 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
     :tools ((:tool "Read") (:tool "Glob") (:tool "Grep")
             (:discoverable read) (:tool "ToolCall") (:tool "ToolSearch")
             (:discoverable code) (:discoverable web)
+            (:discoverable notes)
             (:discoverable (:tool "CreateGoal"))
             (:discoverable (:tool "GetGoal"))
             (:discoverable (:tool "UpdateGoal")))
@@ -545,7 +546,7 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
             (:discoverable (:tool "StopExecution"))
             (:discoverable (:tool "Eval"))
             (:discoverable code) (:discoverable web) (:discoverable elisp)
-            (:discoverable tasks) (:discoverable agents))
+            (:discoverable tasks) (:discoverable agents) (:discoverable notes))
     :agents (worker explorer reviewer verifier)
     :system (lambda ()
               (mevedel-system-build-prompt
@@ -572,7 +573,10 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
      '("Agent" "SendMessage")
      (mapcar
       #'mevedel-tool-name
-      (cl-remove-if #'mevedel-tool-read-only-p (mevedel-tool-all)))))))
+      (cl-remove-if (lambda (tool)
+                      (or (mevedel-tool-read-only-p tool)
+                          (equal "NoteWrite" (mevedel-tool-name tool))))
+                    (mevedel-tool-all)))))))
 
 (defun mevedel-preset-prepare-request (request)
   "Capture effective model, pending skills and authority on admitted REQUEST."

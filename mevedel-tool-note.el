@@ -8,6 +8,7 @@
 
 (require 'mevedel-tool-registry)
 (autoload 'mevedel-tool-note-write "mevedel-note-write")
+(autoload 'mevedel-tool-note-check "mevedel-note-write")
 
 (defun mevedel-tool-note-register ()
   "Register the model's workspace note tool."
@@ -29,7 +30,7 @@ start_line. Text defaults to empty. Tags replace the whole tag list; [] clears.
 Other actions name an existing note's UUID as id (from notes://UUID.md).
 In read-only conversations only create is allowed."
     :handler #'mevedel-tool-note-write
-    :args ((operations array "Note operations, processed in order."
+    :args ((operations array :required "Note operations, processed in order."
                        :items (:type object
                                :required ["action"]
                                :properties
@@ -40,7 +41,7 @@ In read-only conversations only create is allowed."
                                 :end_line (:type integer)
                                 :text (:type string)
                                 :tags (:type array :items (:type string))))))
-    :check-permission (lambda (_tool _args) 'allow)
+    :check-permission #'mevedel-tool-note-check
     :groups (notes)))
 
 (provide 'mevedel-tool-note)

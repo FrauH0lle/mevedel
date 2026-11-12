@@ -1262,6 +1262,7 @@
                        (mevedel-tool-ptc--register)
                        (mevedel-tool-ui--register)
                        (mevedel-tool-task--register)
+                       (mevedel-tool-note-register)
                        (mevedel-tool-introspect--register)
                        ;; Other deftests wipe `mevedel-agent--registry'
                        ;; in their :after-each; re-load to restore the
