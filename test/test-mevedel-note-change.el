@@ -57,7 +57,7 @@
                            mevedel--workspace workspace
                            mevedel--session session))
              (mevedel-session-artifacts-save session data-buf nil t)
-             ,@body)
+             (save-window-excursion ,@body))
          (dolist (buffer (cl-set-difference (buffer-list) old-buffers))
            (when (buffer-live-p buffer)
              (with-current-buffer buffer
