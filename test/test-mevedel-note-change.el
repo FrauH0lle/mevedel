@@ -11,6 +11,7 @@
 (require 'mevedel-note-conversation)
 (require 'mevedel-tool-patch)
 (require 'mevedel-note-merge)
+(require 'mevedel-patch-review)
 (require 'mevedel-view)
 (require 'mevedel-session-persistence)
 (require 'mevedel-session-codec)
@@ -339,6 +340,36 @@
           (should (equal "before\nold\nafter\nlater user edit\n" (buffer-string))))
         (should (equal (if save "before\nold\nafter\nlater user edit\n" "before\nold\nafter\n")
                        (mevedel-test--read-file file)))))))
+
+(mevedel-deftest mevedel-note-reviewed-apply
+  (:quiet t)
+  ,test
+  (test)
+  :doc "prefix apply uses existing detailed review and records only the accepted selection"
+  (mevedel-note-change-test--with-note
+    (let ((two (file-name-concat root "two.txt")))
+      (write-region "two old\n" nil two nil 'silent)
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** Update File: two.txt\n@@\n-two old\n+two new\n*** End Patch")
+      (switch-to-buffer source)
+      (goto-char (overlay-start note))
+      (let ((current-prefix-arg '(4))) (call-interactively #'mevedel-note-apply-change))
+      (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))
+      (with-current-buffer view-buf
+        (goto-char (point-min))
+        (search-forward "M two.txt")
+        (mevedel-patch-review-toggle-selection)
+        (goto-char (point-min))
+        (search-forward "ApplyPatch ·")
+        (mevedel-patch-review-submit))
+      (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))
+      (should (equal "two old\n" (mevedel-test--read-file two)))
+      (should-error (mevedel-note-apply-change note) :type 'user-error)
+      (let* ((saved (mevedel-session-codec-read
+                     (mevedel-session-artifacts-sidecar-path (mevedel-session-save-path session))))
+             (entries (cdr (assq 0 (plist-get saved :file-snapshots)))))
+        (should (assoc file entries))
+        (should-not (assoc two entries))))))
 
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here

@@ -1307,6 +1307,7 @@ the edit moved the region it matches."
 
 (defun mevedel-patch-review--submit (proposal)
   "Apply PROPOSAL's selected changes and settle its review.
+A :commit function uses `mevedel-tool-patch-apply' arguments for note history.
 A change that cannot be applied, now or when a remote artifact's origin
 refuses it later, leaves the review open with the conflict shown."
   (cl-flet ((conflict (err)
@@ -1347,7 +1348,7 @@ refuses it later, leaves the review open with the conflict shown."
               (when changes
                 (mevedel-patch-review--remind-of-revisions proposal))
               (if changes
-                  (mevedel-tool-patch-apply
+                  (funcall (or (plist-get proposal :commit) #'mevedel-tool-patch-apply)
                    (plist-get proposal :data-buffer) changes
                    (lambda () (mevedel--prompt--settle overlay result))
                    #'conflict)

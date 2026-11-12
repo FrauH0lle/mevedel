@@ -17,6 +17,8 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-session-publication)
 
+(declare-function mevedel-patch-review-start "mevedel-patch-review" (proposal callback data-buffer))
+
 (defun mevedel-note-prepare-change (proposal changes data-buffer)
   "Hold PROPOSAL and CHANGES for DATA-BUFFER's notes without writing source.
 Return an ordinary tool result immediately; no tool callback is retained."
@@ -188,17 +190,45 @@ Return an ordinary tool result immediately; no tool callback is retained."
           (mevedel-notes--render item))))
     (mevedel-instruction-store-touch workspace)))
 
+(defun mevedel-note-change--review (note record)
+  "Open the existing detailed review for NOTE's waiting RECORD."
+  (require 'mevedel-patch-review)
+  (let* ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note)))
+         (id (plist-get record :session-id))
+         (data (or (mevedel-session-control-transfer-root-buffer-for-id id)
+                   (mevedel-session-persistence-resume-id workspace id)
+                   (user-error "Note conversation is unavailable: %s" id)))
+         (proposal (copy-tree (plist-get record :proposal))))
+    (mevedel-tool-patch-assert-baseline proposal)
+    (plist-put proposal :commit
+               (lambda (_data selected done _failed)
+                 (unless (equal (plist-get record :id)
+                                (plist-get (overlay-get note 'mevedel-note-prepared-change) :id))
+                   (user-error "The waiting change changed; reopen its review"))
+                 (dolist (change selected)
+                   (plist-put change :before
+                              (cl-find (plist-get change :path) (plist-get record :before)
+                                       :key (lambda (snapshot) (plist-get snapshot :path)) :test #'equal)))
+                 (mevedel-note-change--commit note record selected)
+                 (funcall done)))
+    (mevedel-patch-review-start proposal #'ignore data)
+    (mevedel-note-send note)))
+
 ;;;###autoload
-(defun mevedel-note-apply-change (&optional note)
-  "Apply NOTE's prepared change as one undo step, refusing newer source edits."
-  (interactive)
+(defun mevedel-note-apply-change (&optional note review)
+  "Apply NOTE's prepared change as one undo step, refusing newer source edits.
+With prefix argument REVIEW, open the existing detailed ApplyPatch review.
+Confirming a partial selection drops the rest of this waiting change."
+  (interactive (list nil current-prefix-arg))
   (setq note (mevedel-note-change--note note))
   (let ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note))))
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
       (let ((record (mevedel-note-change--record note))
             (changes (mevedel-note-change--plan note)))
-        (mevedel-note-change--commit note record changes)
-        (message "mevedel: change applied; mark the note done when ready")))))
+        (if review
+            (mevedel-note-change--review note record)
+          (mevedel-note-change--commit note record changes)
+          (message "mevedel: change applied; mark the note done when ready"))))))
 
 (provide 'mevedel-note-change)
 ;;; mevedel-note-change.el ends here
