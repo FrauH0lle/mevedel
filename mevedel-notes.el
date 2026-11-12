@@ -251,7 +251,12 @@ Restore only the selected note's file, not every stashed source file."
                                (min (point-max) (1+ end))))
     (when-let* ((note (overlay-get overlay 'mevedel-note-owner)))
       (if (overlay-buffer note)
-          (mevedel-notes--render note)
+          (progn
+            (when (and (overlay-get note 'mevedel-note-prepared-change)
+                       (<= beg (overlay-end note))
+                       (>= end (overlay-start note)))
+              (overlay-put note 'mevedel-note-attention-state 'stale))
+            (mevedel-notes--render note))
         (delete-overlay overlay)))))
 
 (defun mevedel-notes--at-point ()

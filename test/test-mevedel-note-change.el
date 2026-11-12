@@ -28,6 +28,8 @@
             (mevedel--instruction-states (make-hash-table :test #'equal))
             (mevedel-instruction-store--dirty nil)
             (mevedel-instruction-store--failed nil)
+            (mevedel-workspace--registry (make-hash-table :test #'equal))
+            (post-command-hook (copy-sequence post-command-hook))
             (workspace (mevedel-workspace-get-or-create 'file root root "changes"))
             (session (mevedel-session-create "changes" workspace root))
             (old-buffers (buffer-list))
@@ -99,7 +101,18 @@
       (should-not (eq 'closed (overlay-get note 'mevedel-note-state)))
       (should-not (eq 'ready (mevedel-notes-attention-state note)))
       (undo-only 1)
-      (should (equal "before\nold\nafter\n" (buffer-string))))))
+      (should (equal "before\nold\nafter\n" (buffer-string)))))
+  :doc "editing noted code immediately marks the waiting change stale and refuses apply"
+  (mevedel-note-change-test--with-note
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (with-current-buffer source
+      (goto-char (overlay-start note))
+      (insert "my ")
+      (should (eq 'stale (mevedel-notes-attention-state note)))
+      (should-error (mevedel-note-apply-change note) :type 'user-error)
+      (should (equal "before\nmy old\nafter\n" (buffer-string)))
+      (should (equal "before\nold\nafter\n" (mevedel-test--read-file file))))))
 
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here
