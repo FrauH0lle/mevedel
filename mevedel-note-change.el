@@ -4,6 +4,7 @@
 
 ;; Note-session source patches settle immediately as durable proposals.  User
 ;; commands later apply them through the normal patch transaction and review.
+;; Recorded application pairs support checked reversal without Rewind.
 
 ;;; Code:
 
@@ -328,15 +329,16 @@ note only after success; do not change the conversation or its history."
   (setq workspace (or workspace (mevedel--instruction-buffer-workspace
                                  (if (and (overlayp note) (overlay-buffer note))
                                      (overlay-buffer note) (current-buffer)))))
-  (let* ((target (mevedel-note-change--revert-target note workspace))
-         (id (plist-get (plist-get target :properties) 'mevedel-note-session-id)))
-    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+    (let* ((target (mevedel-note-change--revert-target note workspace))
+           (id (plist-get (plist-get target :properties) 'mevedel-note-session-id)))
       (unless id (user-error "Note has no applied changes"))
       (let* ((data (or (mevedel-session-control-transfer-root-buffer-for-id id)
                        (mevedel-session-persistence-resume-id workspace id)
                        (user-error "Note conversation is unavailable: %s" id)))
              (session (buffer-local-value 'mevedel--session data))
-             (turns (sort (mapcar #'car (mevedel-session-file-snapshots session)) #'>)))
+             (turns (sort (mapcar #'car (cl-remove-if-not
+                                        #'cdr (mevedel-session-file-snapshots session))) #'>)))
         (unless turns (user-error "Note has no applied changes"))
         (setq turn (or turn (if (null (cdr turns)) (car turns)
                              (string-to-number
