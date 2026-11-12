@@ -21,6 +21,9 @@
 ;; `gptel'
 (declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
 
+;; `mevedel-buddy'
+(declare-function mevedel-buddy--guide-payload "mevedel-buddy" (beg end))
+
 ;; `mevedel-notes'
 (declare-function mevedel-note-close "mevedel-notes" (note reason))
 (declare-function mevedel-notes-closed "mevedel-notes" (&optional workspace loaded-only))
@@ -64,9 +67,59 @@ Each note is a plist with `:id', `:buffer', `:line', `:note',
   "Alist of names and exact buffers the running review may touch.
 Nil denies every tool call, including calls after abandonment.")
 
+(defvar mevedel-buddy-note--taken nil
+  "Captured taken-note goals and code owned by the current review.")
+
+(defun mevedel-buddy-note-prepare-taken (payload)
+  "Add taken-note briefs and numbered code to PAYLOAD, capturing their state."
+  (setq mevedel-buddy-note--taken nil)
+  (let (sections)
+    (dolist (entry mevedel-buddy-note--scope-buffers)
+      (with-current-buffer (cdr entry)
+        (save-restriction
+          (widen)
+          (dolist (note (overlays-in (point-min) (point-max)))
+            (when (eq 'taken (overlay-get note 'mevedel-note-state))
+              (push (list :overlay note
+                          :text (overlay-get note 'mevedel-note-text)
+                          :code (buffer-substring-no-properties
+                                 (overlay-start note) (overlay-end note)))
+                    mevedel-buddy-note--taken)
+              (push (format "\nTaken note %s. User's brief: %s\n%s"
+                            (overlay-get note 'mevedel-id)
+                            (or (overlay-get note 'mevedel-note-text) "")
+                            (mevedel-buddy--guide-payload
+                             (overlay-start note) (overlay-end note)))
+                    sections))))))
+    (concat payload (mapconcat #'identity (nreverse sections) "\n"))))
+
+(defun mevedel-buddy-note-looks-done (id)
+  "Say taken note ID looks done if its captured goal and code are still current.
+This is feedback only: the user must explicitly close the note."
+  (if-let* ((record (seq-find
+                    (lambda (record)
+                      (equal (mevedel-buddy-note--integer id)
+                             (overlay-get (plist-get record :overlay) 'mevedel-id)))
+                    mevedel-buddy-note--taken))
+            (note (plist-get record :overlay))
+            (buffer (overlay-buffer note))
+            ((eq buffer (mevedel-buddy-note--scope-buffer (buffer-name buffer))))
+            ((eq 'taken (overlay-get note 'mevedel-note-state)))
+            ((equal (plist-get record :text) (overlay-get note 'mevedel-note-text)))
+            ((not (string-blank-p (or (plist-get record :text) ""))))
+            ((with-current-buffer buffer
+               (equal (plist-get record :code)
+                      (buffer-substring-no-properties (overlay-start note) (overlay-end note))))))
+      (progn
+        (overlay-put note 'mevedel-note-buddy-looks-done t)
+        (mevedel-notes--render note)
+        (format "Note %s looks done; waiting for the user to mark done" id))
+    "Taken note or its goal/code changed; review it again"))
+
 (defun mevedel-buddy-note-finish-review ()
   "Persist the current review's whole change set through the checked store."
-  (setq mevedel-buddy-note--prepared-buffers nil)
+  (setq mevedel-buddy-note--prepared-buffers nil
+        mevedel-buddy-note--taken nil)
   (dolist (record mevedel-buddy-note--notes)
     (unless (plist-get record :overlay)
       (plist-put record :line (mevedel-buddy-note--line record))))
@@ -718,6 +771,12 @@ the review, not once per tool call."
             "or it no longer applies.")
     :args '((:name "note_id" :type integer
              :description "The note_id from the note list."))
+    :category "buddy")
+   (gptel-make-tool
+    :name "note_looks_done"
+    :function (mevedel-buddy-note--live-tool currentp #'mevedel-buddy-note-looks-done)
+    :description "Say a taken note's stated goal looks met. Never closes the note."
+    :args '((:name "note_id" :type integer :description "The taken note's number."))
     :category "buddy")))
 
 

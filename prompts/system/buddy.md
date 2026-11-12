@@ -26,6 +26,10 @@ A review may open with a brief: the plan, goal, or request the programmer is
 implementing themselves. Treat it as their intent. Edited code that contradicts
 it is a finding; code that has not reached it yet is not.
 
+Taken notes explicitly invite you to watch their code with their text as the
+brief. When that stated goal is met, call `note_looks_done` with its note number.
+Never close a note yourself. No stated goal means no completion claim.
+
 ## Reading the diff
 
 Diffs are unified. Context and added lines are prefixed with the line number

@@ -710,7 +710,7 @@
 
   :doc "builds named tools with typed, described, required arguments"
   (let ((tools (mevedel-buddy-note-tools (lambda () t))))
-    (should (equal '("read_buffer" "add_note" "update_note" "remove_note")
+    (should (equal '("read_buffer" "add_note" "update_note" "remove_note" "note_looks_done")
                    (mapcar #'gptel-tool-name tools)))
     (dolist (tool tools)
       (dolist (arg (gptel-tool-args tool))

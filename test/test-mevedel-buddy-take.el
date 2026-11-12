@@ -68,6 +68,31 @@
   (mapconcat (lambda (overlay) (or (overlay-get overlay 'after-string) ""))
              (overlays-in (point-min) (point-max)) ""))
 
+(defun mevedel-take-test--review (answer &optional automatic)
+  "Run a Buddy review with canned tool calls from ANSWER.
+AUTOMATIC exercises the idle review policy without waiting for idle time."
+  (let (failure called)
+    (cl-letf (((symbol-function 'gptel-request)
+               (lambda (prompt &rest keys)
+                 (setq called t)
+                 (with-current-buffer (plist-get keys :buffer)
+                   (condition-case err
+                       (funcall answer prompt gptel-tools)
+                     (error (setq failure err))))
+                 (let ((fsm (plist-get keys :fsm)))
+                   (funcall (car (last (cdr (assq 'DONE (gptel-fsm-handlers fsm)))))
+                            fsm)))))
+      (mevedel-buddy-review automatic)
+      (mevedel-test--await 5 "Buddy review did not settle" (not mevedel-buddy--running)))
+    (when failure (signal (car failure) (cdr failure)))
+    called))
+
+(defun mevedel-take-test--tool (tools name &rest args)
+  "Call model-facing NAME in TOOLS with ARGS."
+  (let ((tool (seq-find (lambda (tool) (equal name (gptel-tool-name tool))) tools)))
+    (should tool)
+    (apply (gptel-tool-function tool) args)))
+
 (mevedel-deftest mevedel-note-take
   (:quiet t)
   ,test
@@ -132,6 +157,31 @@
       (should (eq 'quiet (mevedel-buddy-level workspace)))
       (should-error (mevedel-buddy-set-level 'unknown workspace) :type 'user-error)
       (should (eq 'quiet (mevedel-buddy-level workspace))))))
+
+(mevedel-deftest mevedel-buddy-review/taken
+  (:quiet t)
+  ,test
+  (test)
+  :doc "Quiet watches a taken note without edits and says looks done, never closes"
+  (mevedel-take-test--with-source
+    (mevedel-buddy-set-level 'quiet workspace)
+    (let ((note (mevedel-note-create "The selected code must read selected code"))
+          (position (point)) (window (selected-window)))
+      (mevedel-note-take note)
+      (should
+       (mevedel-take-test--review
+        (lambda (prompt tools)
+          (should (string-search "The selected code must read selected code" prompt))
+          (should (string-search "selected code" prompt))
+          (mevedel-take-test--tool tools "note_looks_done" (overlay-get note 'mevedel-id))) t))
+      (should (string-search "looks done" (mevedel-take-test--labels)))
+      (should (eq 'taken (mevedel-notes-attention-state note)))
+      (should-not (mevedel-notes-closed workspace t))
+      (should (= position (point)))
+      (should (eq window (selected-window)))
+      (mevedel-note-drop note)
+      (should-not (mevedel-take-test--review
+                   (lambda (&rest _) (ert-fail "Quiet spoke after drop")) t)))))
 
 (provide 'test-mevedel-buddy-take)
 ;;; test-mevedel-buddy-take.el ends here

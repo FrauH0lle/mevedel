@@ -239,7 +239,9 @@ Restore only the selected note's file, not every stashed source file."
                              ('buddy "Buddy") ('agent "AI") (_ "you"))
                            (mevedel-notes--display-text note)
                            (if (eq 'taken (overlay-get note 'mevedel-note-state))
-                               "you're on it · Buddy watches"
+                               (if (overlay-get note 'mevedel-note-buddy-looks-done)
+                                   "looks done · done? · Buddy watches"
+                                 "you're on it · Buddy watches")
                              (if (overlay-get note 'mevedel-note-session-id) "sent" "not sent"))
                            (mevedel-notes--actions-hint note))))
         (overlay-put note 'keymap mevedel-note-actions-map)
@@ -255,7 +257,9 @@ Restore only the selected note's file, not every stashed source file."
                                (min (point-max) (1+ end))))
     (when-let* ((note (overlay-get overlay 'mevedel-note-owner)))
       (if (overlay-buffer note)
-          (mevedel-notes--render note)
+          (progn
+            (overlay-put note 'mevedel-note-buddy-looks-done nil)
+            (mevedel-notes--render note))
         (delete-overlay overlay)))))
 
 (defun mevedel-notes--at-point ()
@@ -325,6 +329,7 @@ Default to the note at point.  Taking Buddy's remark first keeps it as yours."
       (unless (eq 'taken (overlay-get note 'mevedel-note-state))
         (user-error "Note is not taken"))
       (overlay-put note 'mevedel-note-state 'unsent)
+      (overlay-put note 'mevedel-note-buddy-looks-done nil)
       (mevedel-notes--render note)
       (mevedel-instruction-store-touch workspace)))
   note)

@@ -51,6 +51,7 @@
 ;; `mevedel-buddy-note'
 (declare-function mevedel-buddy-note-capture-markers "mevedel-buddy-note" (buffer-names))
 (declare-function mevedel-buddy-note-finish-review "mevedel-buddy-note" ())
+(declare-function mevedel-buddy-note-prepare-taken "mevedel-buddy-note" (payload))
 (declare-function mevedel-buddy-note-release-markers "mevedel-buddy-note" ())
 (declare-function mevedel-buddy-note-restore "mevedel-buddy-note" ())
 (declare-function mevedel-buddy-note-serialize "mevedel-buddy-note" ())
@@ -812,6 +813,7 @@ started by the idle timer, which an explicit request may preempt."
     (condition-case err
         (progn
           (mevedel-buddy-note-restore)
+          (setq payload (mevedel-buddy-note-prepare-taken payload))
           (mevedel-buddy-note-capture-markers
            (mevedel-buddy--payload-lines payload)))
       (error
@@ -911,14 +913,15 @@ started by the idle timer, which an explicit request may preempt."
   (format "\n\nReport nothing below %s severity.\n"
           mevedel-buddy-severity-floor))
 
-(defun mevedel-buddy--prepare (scope-key changes automatic)
+(defun mevedel-buddy--prepare (scope-key changes automatic &optional taken-names)
   "Prepare CHANGES for SCOPE-KEY one buffer per callback.
 AUTOMATIC retains ordinary review preemption.  A changed source abandons the
-snapshot without retiring edits or sending stale line numbers to a model."
+snapshot without retiring edits or sending stale line numbers to a model.
+TAKEN-NAMES includes watched buffers even when they have no recorded edits."
   (let* ((source (current-buffer))
          (generation (cl-incf mevedel-buddy--generation))
          (through (current-time))
-         (names (mevedel-buddy--changed-buffers changes))
+         (names (delete-dups (append taken-names (mevedel-buddy--changed-buffers changes))))
          (stamps (mapcar
                   (lambda (name)
                     (with-current-buffer name
@@ -965,7 +968,7 @@ snapshot without retiring edits or sending stale line numbers to a model."
                            (schedule .001))
                        (let ((payload (string-join
                                        (seq-remove #'string-empty-p (nreverse sections)) "\n")))
-                         (if (string-empty-p payload)
+                         (if (and (string-empty-p payload) (null taken-names))
                              (mevedel-buddy--settle scope-key through)
                            (setq dispatching t)
                            (mevedel-buddy--request
@@ -977,6 +980,21 @@ snapshot without retiring edits or sending stale line numbers to a model."
                     (mevedel-buddy--abandon 'preparation-failed)))))))))
       (schedule .001))))
 
+(defun mevedel-buddy--taken-buffers (scope-key)
+  "Return tracked buffers with taken notes in SCOPE-KEY."
+  (let (names)
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer
+        (when (and (bound-and-true-p mevedel-buddy-mode)
+                   (equal scope-key (mevedel-buddy--scope-key))
+                   (save-restriction
+                     (widen)
+                     (seq-some (lambda (note)
+                                 (eq 'taken (overlay-get note 'mevedel-note-state)))
+                               (overlays-in (point-min) (point-max)))))
+          (push (buffer-name) names))))
+    names))
+
 (defun mevedel-buddy-review (&optional automatic)
   "Review the edits recorded for the current buffer's scope.
 
@@ -985,13 +1003,14 @@ user.  Returns non-nil when preparation was scheduled."
   (interactive)
   (require 'mevedel-transport)
   (let* ((scope-key (mevedel-buddy--scope-key))
+         (taken (mevedel-buddy--taken-buffers scope-key))
          (changes (seq-filter #'mevedel-buddy--live-change-p
                               (mevedel-buddy--changes-for-scope scope-key))))
     (cond
-     ((null changes) nil)
+     ((and (null changes) (null taken)) nil)
      (mevedel-buddy--running nil)
      (t
-      (mevedel-buddy--prepare scope-key changes automatic)
+      (mevedel-buddy--prepare scope-key changes automatic taken)
       t))))
 
 
@@ -1107,7 +1126,9 @@ edits and request state live only in memory."
         (mevedel-buddy--load-level (mevedel-buddy--workspace))
         (mevedel-buddy--track-buffer)
         (add-hook 'after-change-functions
-                  #'mevedel-buddy--after-change-schedule nil t))
+                  #'mevedel-buddy--after-change-schedule nil t)
+        (when (member (buffer-name) (mevedel-buddy--taken-buffers (mevedel-buddy--scope-key)))
+          (mevedel-buddy--schedule)))
     (mevedel-buddy--cancel-timer)
     (mevedel-buddy--untrack-buffer)
     (remove-hook 'after-change-functions
