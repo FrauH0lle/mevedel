@@ -39,9 +39,12 @@
                   "mevedel-execution-target" (target path))
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
+(declare-function mevedel-execution-target-same-path-domain-p
+                  "mevedel-execution-target" (left right))
 (autoload 'mevedel-execution-target-identity "mevedel-execution-target")
 (autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
 (autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
+(autoload 'mevedel-execution-target-same-path-domain-p "mevedel-execution-target")
 
 ;; `mevedel-plugin-registry'
 (declare-function mevedel-plugin-hooks "mevedel-plugin-registry" (cl-x) t)
@@ -1762,14 +1765,26 @@ record only that context was added, without duplicating the body."
     (handler event-plist session)
   "Return HANDLER's execution directory for EVENT-PLIST and SESSION."
   (let* ((source (plist-get handler :source))
+         (plugin-root (and (eq source 'plugin)
+                           (or (plist-get handler :plugin-root)
+                               (plist-get handler :source-root))))
          (directory
           (file-name-as-directory
            (or (pcase source
                  ('project-file (plist-get event-plist :workspace-root))
                  ('user (plist-get handler :source-root))
                  ('user-file (plist-get handler :source-root))
-                 ('plugin (or (plist-get handler :plugin-root)
-                              (plist-get handler :source-root))))
+                 ('plugin
+                  (cl-find-if
+                   (lambda (candidate)
+                     (and candidate
+                          (or (not plugin-root)
+                              (mevedel-execution-target-same-path-domain-p
+                               plugin-root candidate))))
+                   (list (plist-get event-plist :cwd)
+                         (and session (mevedel-session-working-directory session))
+                         (plist-get event-plist :workspace-root)
+                         plugin-root))))
                (plist-get event-plist :cwd)
                (plist-get event-plist :workspace-root)
                default-directory)))
@@ -1778,6 +1793,9 @@ record only that context was added, without duplicating the body."
       (signal 'mevedel-execution-target-error
               (list "Command hook has no trusted execution origin")))
     (when target
+      ;; Check the code's origin even when it runs from the conversation cwd.
+      (when (and plugin-root (file-remote-p plugin-root))
+        (mevedel-execution-target-native-path target plugin-root))
       (cond
        ((file-remote-p directory)
         (mevedel-execution-target-native-path target directory))

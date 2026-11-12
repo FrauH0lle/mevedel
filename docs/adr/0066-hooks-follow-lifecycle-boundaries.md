@@ -35,6 +35,13 @@ not settle the hook or change its existing timeout and cancellation contract.
 Hook approvals and fallback approvals recheck current hard restrictions at
 settlement in every mode, including before permission queue admission.
 
+Plugin commands use captured event `:cwd`, falling back to session working
+directory, workspace root, then plugin origin, selecting only candidates on the
+plugin's execution target. Client-local plugins in remote sessions stay local
+in their plugin root. Plugin origin validation remains independent and refuses
+foreign-target plugins. Project-file/user hook cwd and plugin root/data
+environment values retain their existing contracts.
+
 ## Rationale and alternatives
 
 A provider request is too low-level a lifecycle boundary: tool continuations,
@@ -49,6 +56,12 @@ trusted by content and read as data; command execution follows the resource's
 origin, so a local user hook does not silently become remote code. Adding each
 new handler transport would require its own permission and cancellation contract.
 
+Plugin installation location identifies executable resources, not the work a
+conversation is about. Workspace-aware hooks need the captured conversation cwd
+so repository discovery inspects that work rather than the plugin itself.
+Plugin-root environment variables locate bundled scripts and resources without
+coupling their paths to the process cwd or changing execution targets.
+
 ## Consequences
 
 Post-use hooks can change feedback but cannot undo completed side effects.
@@ -57,6 +70,13 @@ a supported event can block an operation. Structured decisions make consequentia
 changes auditable without injecting arbitrary stdout or stderr into model context.
 
 ## Decision history
+
+Plugin hooks originally launched from their installation root, keeping relative
+bundled paths usable but making Ponytail map the plugin instead of the
+conversation workspace. Working-directory selection now prefers captured event
+context with same-target fallbacks; bundled paths must use plugin-root variables.
+The change separates work location from executable origin without relaxing
+origin validation or moving client-local plugins onto remote session targets.
 
 A review probe delivered a local command's exit sentinel while its separate
 stderr pipe still had unread output. The runner destroyed that pipe before

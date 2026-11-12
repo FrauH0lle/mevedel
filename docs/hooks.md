@@ -158,8 +158,16 @@ stdout/stderr.  Execution follows the configuration resource's origin:
   root through the target's Emacs file handler;
 - user defcustom commands run locally from `user-emacs-directory`, user-file
   commands run locally from the directory containing the user hook file; and
-- plugin commands discovered inside the project run on the session target from
-  the plugin root; client-local plugin commands remain local there.
+- plugin commands keep their origin's execution target, but use the captured
+  event `:cwd` as their working directory. If unavailable, they fall back to the
+  session working directory, then the workspace root, then the plugin origin
+  directory. Each candidate must belong to the plugin's execution target;
+  candidates on other targets are skipped. A client-local plugin in a remote
+  session therefore remains local in its plugin root.
+
+Plugin origin validation is independent of working-directory selection: a
+workspace cwd cannot make a foreign-target plugin valid. Project-file and user
+hooks keep the working directories listed above.
 
 Commands executed on a remote session target inherit that target's shell
 environment.  Mevedel does not forward the client's `process-environment`;
@@ -208,6 +216,11 @@ Plugin command hooks receive compatibility environment variables:
 - `PLUGIN_DATA`, `CLAUDE_PLUGIN_DATA`, and `MEVEDEL_PLUGIN_DATA` point at
   `<workspace>/.mevedel/state/plugin-data/<plugin-name>` and are created before
   the command starts.
+
+Plugin scripts and bundled resources must be located through a plugin-root
+variable, for example `"$MEVEDEL_PLUGIN_ROOT/scripts/check.sh"`, not a relative
+installation path. The working directory identifies the conversation's work;
+it does not relocate the plugin root or change the root/data environment values.
 
 For a project plugin on a remote target, all six values use target-native
 paths.  A plugin root naming another execution target is refused before the
