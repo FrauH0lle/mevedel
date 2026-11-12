@@ -330,5 +330,28 @@ AUTOMATIC exercises the idle review policy without waiting for idle time."
       (should (string-search "Buddy watches" (mevedel-take-test--labels)))
       (should (eq 'active (mevedel-buddy-level workspace))))))
 
+(mevedel-deftest mevedel-buddy-review/workspace-scope
+  (:quiet t)
+  ,test
+  (test)
+  :doc "a parent's review cannot inherit a different pinned workspace's taken goal"
+  (mevedel-take-test--with-source
+    (should (zerop (call-process "git" nil nil nil "init" "-q" root)))
+    (mevedel-buddy-set-level 'active workspace)
+    (let* ((child (file-name-concat root "child"))
+           (child-file (file-name-concat child "child.el")))
+      (make-directory (file-name-concat child ".mevedel") t)
+      (write-region "private child code\n" nil child-file nil 'silent)
+      (with-current-buffer (find-file-noselect child-file)
+        (setq-local mevedel--workspace
+                    (mevedel-workspace-get-or-create 'project child child "child"))
+        (mevedel-buddy-set-level 'quiet mevedel--workspace)
+        (mevedel-note-take (mevedel-note-create "Private child goal")))
+      (insert "parent edit ")
+      (should (mevedel-take-test--review
+               (lambda (prompt _tools)
+                 (should-not (string-search "Private child goal" prompt))
+                 (should-not (string-search "private child code" prompt))) t)))))
+
 (provide 'test-mevedel-buddy-take)
 ;;; test-mevedel-buddy-take.el ends here

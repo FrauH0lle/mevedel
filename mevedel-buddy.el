@@ -267,7 +267,7 @@ lines.")
 `project-current' caches its answer only when it finds a project, so a
 buffer outside one would re-walk the directory tree to the filesystem
 root on every keystroke.  IDENTITY contains the buffer name, visited
-file, and `default-directory' used to derive the key.")
+file, `default-directory' and pinned workspace root used to derive the key.")
 
 (put 'mevedel-buddy--scope-cache 'permanent-local t)
 
@@ -282,8 +282,10 @@ Source buffers and sessions in one project derive the same key here."
 
 Buffers in a project share that project's key so edits made across
 several of its files are reviewed together.  A buffer outside any
-project is its own scope."
-  (let ((identity (list (buffer-name) buffer-file-name default-directory)))
+project is its own scope.  An already pinned workspace takes precedence."
+  (let* ((root (when (bound-and-true-p mevedel--workspace)
+                 (file-name-as-directory (mevedel-workspace-root mevedel--workspace))))
+         (identity (list (buffer-name) buffer-file-name default-directory root)))
     (if (equal identity (car-safe mevedel-buddy--scope-cache))
         (cdr mevedel-buddy--scope-cache)
       (when mevedel-buddy--scope-cache
@@ -297,7 +299,7 @@ project is its own scope."
           (when reschedule
             (mevedel-buddy--schedule))))
       (let ((scope-key
-             (or (mevedel-buddy-directory-scope-key default-directory)
+             (or root (mevedel-buddy-directory-scope-key default-directory)
                  (concat "buffer:" (buffer-name)))))
         (setq mevedel-buddy--scope-cache (cons identity scope-key))
         scope-key))))
