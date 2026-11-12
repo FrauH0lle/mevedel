@@ -226,8 +226,7 @@
        data-buf "*** Begin Patch\n*** Add File: created.txt\n+created\n*** End Patch")
       (with-current-buffer (mevedel-note-merge-change note)
         (goto-char (point-min))
-        (search-forward "<<<<<<<")
-        (smerge-keep-lower)
+        (while (search-forward "<<<<<<<" nil t) (smerge-keep-lower))
         (mevedel-note-merge-confirm))
       (should (equal "created\n" (mevedel-test--read-file created)))
       (let* ((saved (mevedel-session-codec-read
@@ -251,6 +250,30 @@
                    (mevedel-session-artifacts-sidecar-path (mevedel-session-save-path session))))
            (entry (cdr (assoc file (cdr (assq 0 (plist-get saved :file-snapshots)))))))
       (should (equal "pre-turn capture unavailable" (plist-get entry :gap))))))
+
+(mevedel-deftest mevedel-note-merge-disjoint
+  (:quiet t)
+  ,test
+  (test)
+  :doc "choosing AI for a conflicting hunk keeps disjoint user edits in the same file"
+  (mevedel-note-change-test--with-note
+    (with-current-buffer source
+      (goto-char (point-max))
+      (insert "middle1\nmiddle2\nmiddle3\ntail\n")
+      (save-buffer))
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (with-current-buffer source
+      (goto-char (overlay-start note))
+      (insert "my ")
+      (goto-char (point-max))
+      (insert "user addition\n"))
+    (with-current-buffer (mevedel-note-merge-change note)
+      (goto-char (point-min))
+      (while (search-forward "<<<<<<<" nil t) (smerge-keep-lower))
+      (mevedel-note-merge-confirm))
+    (should (equal "before\nnew\nafter\nmiddle1\nmiddle2\nmiddle3\ntail\nuser addition\n"
+                   (mevedel-test--read-file file)))))
 
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here

@@ -32,11 +32,35 @@
         (save-restriction (widen) (buffer-substring-no-properties (point-min) (point-max))))
     (decode-coding-string (or (plist-get (mevedel-tool-patch--snapshot path) :bytes) "") coding)))
 
-(defun mevedel-note-merge--insert-side (text)
-  "Insert TEXT with a tagged separator when it has no final newline."
-  (insert text)
-  (unless (or (string-empty-p text) (string-suffix-p "\n" text))
-    (insert (propertize "\n" 'mevedel-note-merge-padding t 'rear-nonsticky t))))
+(defun mevedel-note-merge--insert-three-way (section)
+  "Insert SECTION's three-way merge with only overlapping lines in conflict."
+  (let* ((directory (make-temp-file "mevedel-note-merge-" t))
+         (files (mapcar (lambda (name) (file-name-concat directory name)) '("yours" "base" "ai")))
+         (texts (mapcar (lambda (key) (plist-get section key)) '(:yours :seen :proposed)))
+         (start (point))
+         (default-directory temporary-file-directory)
+         (coding-system-for-read 'utf-8-unix)
+         (coding-system-for-write 'utf-8-unix))
+    (unwind-protect
+        (progn
+          (cl-mapc (lambda (text file) (write-region text nil file nil 'silent)) texts files)
+          (let ((status (apply #'call-process "git" nil t nil "merge-file" "--stdout" "--diff3"
+                               "-L" "yours now" "-L" "what the AI saw" "-L" "AI" "--" files)))
+            (unless (and (integerp status) (<= 0 status) (<= status 127))
+              (error "Three-way merge failed: %s" status)))
+          ;; Git adds separators at EOF inside a conflict, not to resolved text.
+          (when (and (>= (- (point) start) (length ">>>>>>> AI\n"))
+                     (equal (buffer-substring-no-properties (- (point) (length ">>>>>>> AI\n")) (point))
+                            ">>>>>>> AI\n"))
+            (save-excursion
+              (cl-mapc
+               (lambda (text marker)
+                 (when (and (not (string-empty-p text)) (not (string-suffix-p "\n" text)))
+                   (goto-char (point-max))
+                   (when (re-search-backward marker start t)
+                     (put-text-property (1- (point)) (point) 'mevedel-note-merge-padding t))))
+               texts '("^||||||| what the AI saw$" "^=======$" "^>>>>>>> AI$")))))
+      (delete-directory directory t))))
 
 ;;;###autoload
 (defun mevedel-note-merge-change (&optional note)
@@ -76,13 +100,7 @@
             (insert (propertize (format "File: %s\n" (plist-get section :path))
                                 'read-only t 'rear-nonsticky t))
             (plist-put section :start (copy-marker (point)))
-            (insert "<<<<<<< yours now\n")
-            (mevedel-note-merge--insert-side (plist-get section :yours))
-            (insert "||||||| what the AI saw\n")
-            (mevedel-note-merge--insert-side (plist-get section :seen))
-            (insert "=======\n")
-            (mevedel-note-merge--insert-side (plist-get section :proposed))
-            (insert ">>>>>>> AI\n")
+            (mevedel-note-merge--insert-three-way section)
             (plist-put section :end (copy-marker (point))))
           (dolist (section mevedel-note-merge--sections)
             (set-marker-insertion-type (plist-get section :end) t))
