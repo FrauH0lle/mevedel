@@ -451,5 +451,29 @@
       (mevedel-note-merge-confirm))
     (should (equal "before\nmy old" (mevedel-test--read-file file)))))
 
+(mevedel-deftest mevedel-note-revert-change
+  (:quiet t)
+  ,test
+  (test)
+  :doc "revert uses the actual applied pair and preserves later disjoint edits"
+  (mevedel-note-change-test--with-note
+    (setf (mevedel-session-turn-count session) 7)
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (with-current-buffer source
+      (goto-char (point-max))
+      (insert "before application\n")
+      (save-buffer))
+    (mevedel-note-apply-change note)
+    (with-current-buffer source
+      (goto-char (point-min))
+      (insert "later user edit\n")
+      (save-buffer)
+      (mevedel-note-revert-change note 7)
+      (should (equal "later user edit\nbefore\nold\nafter\nbefore application\n"
+                     (buffer-string))))
+    (should (equal "later user edit\nbefore\nold\nafter\nbefore application\n"
+                   (mevedel-test--read-file file)))))
+
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here
