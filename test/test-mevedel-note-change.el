@@ -451,5 +451,180 @@
       (mevedel-note-merge-confirm))
     (should (equal "before\nmy old" (mevedel-test--read-file file)))))
 
+(mevedel-deftest mevedel-note-revert-change
+  (:quiet t)
+  ,test
+  (test)
+  :doc "revert uses the actual applied pair and preserves later disjoint edits"
+  (mevedel-note-change-test--with-note
+    (setf (mevedel-session-turn-count session) 7)
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (with-current-buffer source
+      (goto-char (point-max))
+      (insert "before application\n")
+      (save-buffer))
+    (mevedel-note-apply-change note)
+    (with-current-buffer source
+      (goto-char (point-min))
+      (insert "later user edit\n")
+      (save-buffer)
+      (mevedel-note-revert-change note 7)
+      (should (equal "later user edit\nbefore\nold\nafter\nbefore application\n"
+                     (buffer-string))))
+    (should (equal "later user edit\nbefore\nold\nafter\nbefore application\n"
+                   (mevedel-test--read-file file))))
+  :doc "a done note reopens only after a successful reversal, including after store reload"
+  (mevedel-note-change-test--with-note
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (mevedel-note-apply-change note)
+    (let ((uuid (overlay-get note 'mevedel-uuid)))
+      (mevedel-note-done note)
+      (mevedel-instruction-store-flush t)
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (with-current-buffer source
+        (goto-char (point-min))
+        (forward-line 1)
+        (delete-region (line-beginning-position) (line-end-position))
+        (insert "later replacement")
+        (save-buffer))
+      (should-error (mevedel-note-revert-change uuid 0 workspace) :type 'user-error)
+      (should (= 1 (length (mevedel-notes-closed workspace))))
+      (with-current-buffer source
+        (goto-char (point-min))
+        (forward-line 1)
+        (delete-region (line-beginning-position) (line-end-position))
+        (insert "new")
+        (save-buffer))
+      (mevedel-note-revert-change uuid 0 workspace)
+      (should-not (mevedel-notes-closed workspace))
+      (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))
+      (let ((restored (mevedel-notes--resolve uuid workspace)))
+        (should restored)
+        (should (eq 'sent (overlay-get restored 'mevedel-note-state))))
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (should-not (mevedel-notes-closed workspace))
+      (should (mevedel-notes--resolve uuid workspace))))
+  :doc "the source key reverts the only applied turn without offering empty turns"
+  (mevedel-note-change-test--with-note
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (mevedel-note-apply-change note)
+    (mevedel-session-artifacts-snapshot-modified session 1 (make-hash-table :test #'equal))
+    (with-current-buffer source
+      (goto-char (overlay-start note))
+      (call-interactively (lookup-key mevedel-note-actions-map (kbd "C-c C-b"))))
+    (should (equal "before\nold\nafter\n" (mevedel-test--read-file file))))
+  :doc "overlap reports shifted current lines and refuses every file in the change"
+  (mevedel-note-change-test--with-note
+    (let ((two (file-name-concat root "two.txt")))
+      (write-region "two before\ntwo old\ntwo after\n" nil two nil 'silent)
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** Update File: two.txt\n@@\n-two old\n+two new\n*** End Patch")
+      (mevedel-note-apply-change note)
+      (write-region "user heading\ntwo before\nnewer user code\ntwo after\n" nil two nil 'silent)
+      (let ((err (should-error (mevedel-note-revert-change note 0) :type 'user-error)))
+        (should (string-search "two.txt:3-3" (error-message-string err))))
+      (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))
+      (should (equal "user heading\ntwo before\nnewer user code\ntwo after\n"
+                     (mevedel-test--read-file two)))))
+  :doc "deleting a note never undoes source, and explicit revert restores creation/deletion"
+  (mevedel-note-change-test--with-note
+    (let ((old (file-name-concat root "old.txt"))
+          (new (file-name-concat root "new.txt"))
+          (uuid (overlay-get note 'mevedel-uuid)))
+      (write-region "removed file\n" nil old nil 'silent)
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Delete File: old.txt\n*** Add File: new.txt\n+created file\n*** End Patch")
+      (mevedel-note-apply-change note)
+      (mevedel-note-delete note)
+      (should-not (file-exists-p old))
+      (should (equal "created file\n" (mevedel-test--read-file new)))
+      (mevedel-note-revert-change uuid 0 workspace)
+      (should (equal "removed file\n" (mevedel-test--read-file old)))
+      (should-not (file-exists-p new))
+      (should (eq 'deleted (plist-get (plist-get (car (mevedel-notes-closed workspace))
+                                                :instruction) :closed-reason)))))
+  :doc "revert of a manual merge restores its actual unsaved pre-image"
+  (mevedel-note-change-test--with-note
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (with-current-buffer source
+      (goto-char (overlay-start note))
+      (insert "my "))
+    (with-current-buffer (mevedel-note-merge-change note)
+      (goto-char (point-min))
+      (search-forward "<<<<<<<")
+      (smerge-keep-lower)
+      (goto-char (point-min))
+      (search-forward "new")
+      (replace-match "resolved")
+      (mevedel-note-merge-confirm))
+    (should (equal "before\nresolved\nafter\n" (mevedel-test--read-file file)))
+    (mevedel-note-revert-change note 0)
+    (should (equal "before\nmy old\nafter\n" (mevedel-test--read-file file))))
+  :doc "reverting an earlier turn leaves a later applied turn and the conversation intact"
+  (mevedel-note-change-test--with-note
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (mevedel-note-apply-change note)
+    (setf (mevedel-session-turn-count session) 1)
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-after\n+second turn\n*** End Patch")
+    (mevedel-note-apply-change note)
+    (let ((history (copy-tree (mevedel-session-file-snapshots session)))
+          (transcript (with-current-buffer data-buf (buffer-string))))
+      (mevedel-note-revert-change note 0)
+      (should (equal "before\nold\nsecond turn\n" (mevedel-test--read-file file)))
+      (should (equal history (mevedel-session-file-snapshots session)))
+      (should (= 1 (mevedel-session-turn-count session)))
+      (should (equal transcript (with-current-buffer data-buf (buffer-string))))))
+  :doc "literal CRLF bytes survive session reload and later disjoint edits"
+  (mevedel-note-change-test--with-note
+    (with-current-buffer source
+      (set-buffer-file-coding-system 'utf-8-dos)
+      (save-buffer))
+    (should (equal "before\r\nold\r\nafter\r\n"
+                   (mevedel-session-artifacts-read-file-raw file)))
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (mevedel-note-apply-change note)
+    (should (equal "before\r\nnew\r\nafter\r\n"
+                   (mevedel-session-artifacts-read-file-raw file)))
+    (mevedel-session-persistence-lock-release (mevedel-session-save-path session) session)
+    (kill-buffer data-buf)
+    (with-current-buffer source
+      (goto-char (point-max))
+      (insert "later\n")
+      (save-buffer)
+      (mevedel-note-revert-change note 0))
+    (should (equal "before\r\nold\r\nafter\r\nlater\r\n"
+                   (mevedel-session-artifacts-read-file-raw file))))
+  :doc "unsaved visiting edits refuse without changing the buffer or disk"
+  (mevedel-note-change-test--with-note
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (mevedel-note-apply-change note)
+    (with-current-buffer source
+      (goto-char (point-max))
+      (insert "unsaved\n")
+      (should-error (mevedel-note-revert-change note 0) :type 'user-error)
+      (should (buffer-modified-p))
+      (should (equal "before\nnew\nafter\nunsaved\n" (buffer-string))))
+    (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file))))
+  :doc "capture gaps refuse rather than treating an unknown pre-image as file absence"
+  (mevedel-note-change-test--with-note
+    (setf (mevedel-session-file-snapshots session)
+          (list (list 0 (cons file '(:version 1 :gap "pre-turn capture unavailable")))))
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (mevedel-note-apply-change note)
+    (let ((err (should-error (mevedel-note-revert-change note 0) :type 'user-error)))
+      (should (string-search "pre-turn capture unavailable" (error-message-string err))))
+    (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))))
+
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here

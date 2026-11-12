@@ -14,6 +14,41 @@
 (defvar-local mevedel-note-merge--record nil "Prepared change captured on opening.")
 (defvar-local mevedel-note-merge--sections nil "Source snapshots and editable regions.")
 (defvar-local mevedel-note-merge--origin nil "Window state to restore on close.")
+(defvar-local mevedel-note-merge--commit nil "Optional owner callback for resolved changes.")
+
+(defun mevedel-note-merge-open (name sections commit)
+  "Open NAME with editable three-way SECTIONS and confirmation callback COMMIT.
+Each section supplies :path, :disk, :coding, :yours, :seen and :proposed.
+Optional :source-yours checks source text separately from intermediate :yours.
+COMMIT receives resolved changes and owns closing the editor on success."
+  (let ((default-directory temporary-file-directory))
+    (unless (executable-find "git")
+      (user-error "Three-way merge requires a local git executable")))
+  (dolist (section sections)
+    (when (cl-some (lambda (key) (string-search "\0" (plist-get section key)))
+                  '(:yours :seen :proposed))
+      (user-error "Cannot merge binary source")))
+  (let ((merge (generate-new-buffer name))
+        (origin (list (selected-window) (current-buffer) (copy-marker (point))
+                      (window-start) (window-dedicated-p (selected-window)))))
+    (with-current-buffer merge
+      (mevedel-note-merge-mode)
+      (setq-local mevedel-note-merge--origin origin
+                  mevedel-note-merge--sections sections
+                  mevedel-note-merge--commit commit)
+      (dolist (section sections)
+        (insert (propertize (format "File: %s\n" (plist-get section :path))
+                            'read-only t 'rear-nonsticky t))
+        (plist-put section :start (copy-marker (point)))
+        (mevedel-note-merge--insert-three-way section)
+        (plist-put section :end (copy-marker (point))))
+      (dolist (section sections)
+        (set-marker-insertion-type (plist-get section :end) t))
+      (goto-char (point-min))
+      (set-buffer-modified-p nil))
+    (set-window-dedicated-p (selected-window) nil)
+    (switch-to-buffer merge)
+    merge))
 
 (defvar-keymap mevedel-note-merge-mode-map
   "C-c C-c" #'mevedel-note-merge-confirm
@@ -97,27 +132,12 @@
             (user-error "Cannot merge binary source; re-ask on current code"))
           (push (list :path path :disk disk :coding coding :yours yours :seen seen
                       :proposed proposed :change change) sections)))
-      (let ((merge (generate-new-buffer (format "*Note %s merge*" (overlay-get note 'mevedel-id))))
-            (origin (list (selected-window) (current-buffer) (copy-marker (point))
-                          (window-start) (window-dedicated-p (selected-window)))))
+      (let ((merge (mevedel-note-merge-open
+                    (format "*Note %s merge*" (overlay-get note 'mevedel-id))
+                    (nreverse sections) nil)))
         (with-current-buffer merge
-          (mevedel-note-merge-mode)
           (setq-local mevedel-note-merge--note note
-                      mevedel-note-merge--record record
-                      mevedel-note-merge--origin origin
-                      mevedel-note-merge--sections (nreverse sections))
-          (dolist (section mevedel-note-merge--sections)
-            (insert (propertize (format "File: %s\n" (plist-get section :path))
-                                'read-only t 'rear-nonsticky t))
-            (plist-put section :start (copy-marker (point)))
-            (mevedel-note-merge--insert-three-way section)
-            (plist-put section :end (copy-marker (point))))
-          (dolist (section mevedel-note-merge--sections)
-            (set-marker-insertion-type (plist-get section :end) t))
-          (goto-char (point-min))
-          (set-buffer-modified-p nil))
-        (set-window-dedicated-p (selected-window) nil)
-        (switch-to-buffer merge)
+                      mevedel-note-merge--record record))
         merge))))
 
 (defun mevedel-note-merge-cancel ()
@@ -145,9 +165,10 @@
                          (mevedel--instruction-buffer-workspace (overlay-buffer note))))
          changes)
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
-      (unless (and workspace
-                   (equal (plist-get record :id)
-                          (plist-get (overlay-get note 'mevedel-note-prepared-change) :id)))
+      (unless (or mevedel-note-merge--commit
+                  (and workspace
+                       (equal (plist-get record :id)
+                              (plist-get (overlay-get note 'mevedel-note-prepared-change) :id))))
         (user-error "The note or waiting change changed; reopen the merge"))
       (when (text-property-any (point-min) (point-max) 'mevedel-note-merge-marker t)
         (user-error "Resolve all conflict markers before confirming"))
@@ -155,7 +176,8 @@
         (let* ((path (plist-get section :path))
                (coding (plist-get section :coding))
                (text (buffer-substring (plist-get section :start) (plist-get section :end))))
-          (unless (and (equal (plist-get section :yours) (mevedel-note-merge--text path coding))
+          (unless (and (equal (or (plist-get section :source-yours) (plist-get section :yours))
+                              (mevedel-note-merge--text path coding))
                        (mevedel-change-same-p (plist-get section :disk)
                                               (mevedel-tool-patch--snapshot path)))
             (user-error "Source changed again: %s; reopen the merge" path))
@@ -173,8 +195,10 @@
                       :mode (or (plist-get (plist-get section :disk) :mode)
                                 (plist-get (plist-get section :change) :mode))) changes)))
       (setq changes (nreverse changes))
-      (mevedel-note-change--commit note record changes)
-      (mevedel-note-merge-cancel))))
+      (if mevedel-note-merge--commit
+          (funcall mevedel-note-merge--commit changes)
+        (mevedel-note-change--commit note record changes)
+        (mevedel-note-merge-cancel)))))
 
 (provide 'mevedel-note-merge)
 ;;; mevedel-note-merge.el ends here

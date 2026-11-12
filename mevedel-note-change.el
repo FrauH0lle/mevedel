@@ -4,6 +4,7 @@
 
 ;; Note-session source patches settle immediately as durable proposals.  User
 ;; commands later apply them through the normal patch transaction and review.
+;; Recorded application pairs support checked reversal without Rewind.
 
 ;;; Code:
 
@@ -31,7 +32,10 @@ Return an ordinary tool result immediately; no tool callback is retained."
                                         'mevedel-note-session-id)))
                  (mevedel-notes--entries workspace)))
          (record (list :id (mevedel--create-uuid)
-                       :session-id id :turn (or (mevedel-session-turn-count session) 0)
+                       :session-id id :turn (with-current-buffer data-buffer
+                                              (if mevedel--current-request
+                                                  (mevedel-current-turn session)
+                                                (or (mevedel-session-turn-count session) 0)))
                        :proposal (copy-tree proposal)
                        :changes (copy-tree changes)
                        :before (mapcar (lambda (change)
@@ -170,7 +174,7 @@ Return an ordinary tool result immediately; no tool callback is retained."
                                               previous))
                         (lambda (a b) (string< (car a) (car b))))))
     (with-current-buffer data
-      (when (and mevedel--current-request (= turn (mevedel-session-turn-count session)))
+      (when (and mevedel--current-request (= turn (mevedel-request-turn mevedel--current-request)))
         (maphash (lambda (path bytes)
                    (puthash path bytes (mevedel-request-file-snapshots mevedel--current-request))) pre))
       (let ((mevedel--current-request nil))
@@ -230,6 +234,125 @@ Confirming a partial selection drops the rest of this waiting change."
             (mevedel-note-change--review note record)
           (mevedel-note-change--commit note record changes)
           (message "mevedel: change applied; mark the note done when ready"))))))
+
+(defun mevedel-note-change--revert-plan (session turn)
+  "Prepare SESSION's applied TURN for reversal, refusing all conflicts."
+  (let ((entries (cdr (assq turn (mevedel-session-file-snapshots session))))
+        changes conflicts)
+    (unless entries (user-error "No applied change at turn %s" turn))
+    (dolist (entry entries)
+      (let* ((path (car entry))
+             (record (cdr entry))
+             (current (mevedel-tool-patch--snapshot path))
+             (buffer (find-buffer-visiting path)))
+        (when (plist-get record :gap)
+          (user-error "Cannot revert uncaptured change at %s: %s"
+                      path (plist-get record :gap)))
+        (when (and buffer (buffer-modified-p buffer))
+          (user-error "Save or undo unsaved edits before reverting %s" path))
+        (cl-labels ((snapshot (name)
+                      (list :path path :exists (and name t)
+                            :bytes (and name (mevedel-session-artifacts-read-file-raw
+                                              (mevedel-session-artifacts-backup-path
+                                               (mevedel-session-save-path session) name)))
+                            ;; File history records bytes, not modes; retain today's mode.
+                            :mode (and name (plist-get current :mode)))))
+          (let* ((before (snapshot (plist-get record :pre-backup-name)))
+                 (after (snapshot (plist-get record :backup-name)))
+                 (prepared (if (mevedel-change-same-p before current)
+                               (list :after current)
+                             (mevedel-change-prepare before after current t)))
+                 (result (plist-get prepared :after)))
+            (setq conflicts (append conflicts (plist-get prepared :conflicts)))
+            (when (and result (not (mevedel-change-same-p result current)))
+              (let ((coding (if buffer (buffer-local-value 'buffer-file-coding-system buffer)
+                              (if (plist-get current :exists)
+                                  (cdr (mevedel-tool-patch--read-file path t)) 'utf-8-unix))))
+                (push (list :path path :before current
+                            :action (if (plist-get result :exists) 'write 'delete)
+                            :bytes (plist-get result :bytes)
+                            :content (and (plist-get result :exists)
+                                          (decode-coding-string (plist-get result :bytes) coding))
+                            :mode (plist-get result :mode)) changes)))))))
+    (when conflicts
+      (user-error "Cannot revert; changed lines at %s"
+                  (mapconcat (lambda (conflict)
+                               (format "%s:%d-%d" (plist-get conflict :path)
+                                       (plist-get conflict :start-line)
+                                       (plist-get conflict :end-line))) conflicts ", ")))
+    (nreverse changes)))
+
+(defun mevedel-note-change--revert-target (note workspace)
+  "Resolve live or closed NOTE in WORKSPACE, prompting without a context note."
+  (mevedel-notes--load-closed workspace)
+  (let* ((entries (append (mevedel-notes--entries workspace)
+                          (mapcar (lambda (entry)
+                                    (let* ((instruction (plist-get entry :instruction))
+                                           (props (plist-get instruction :properties)))
+                                      (list :properties props
+                                            :uuid (plist-get props 'mevedel-uuid)
+                                            :closed-reason (plist-get instruction :closed-reason))))
+                                  (mevedel-notes-closed workspace t))))
+         (at-point (mevedel--highest-priority-instruction
+                    (mevedel--instructions-at (point) 'note)))
+         (data (if (buffer-live-p mevedel--data-buffer) mevedel--data-buffer (current-buffer)))
+         (session (buffer-local-value 'mevedel--session data))
+         (id (or (if (overlayp note) (overlay-get note 'mevedel-uuid) note)
+                 (and at-point (overlay-get at-point 'mevedel-uuid))
+                 (when session
+                   (plist-get
+                    (cl-find (mevedel-session-session-id session) entries
+                             :key (lambda (entry)
+                                    (plist-get (plist-get entry :properties) 'mevedel-note-session-id))
+                             :test #'equal) :uuid))
+                 (let ((choices (mapcar
+                                 (lambda (entry)
+                                   (let ((props (plist-get entry :properties)))
+                                     (cons (format "%s: %s%s" (plist-get props 'mevedel-id)
+                                                   (plist-get props 'mevedel-note-text)
+                                                   (if (plist-get entry :closed-reason)
+                                                       " (closed)" ""))
+                                           (plist-get entry :uuid)))) entries)))
+                   (unless choices (user-error "No notes here"))
+                   (cdr (assoc (completing-read "Revert change of note: " choices nil t) choices))))))
+    (or (cl-find id entries :test #'equal
+                 :key (lambda (entry)
+                        (if (numberp id) (plist-get (plist-get entry :properties) 'mevedel-id)
+                          (plist-get entry :uuid))))
+        (user-error "No note %s" id))))
+
+;;;###autoload
+(defun mevedel-note-revert-change (&optional note turn workspace)
+  "Revert one applied TURN of NOTE without rewinding its conversation.
+NOTE is a live overlay, display number or UUID in WORKSPACE; default to the
+source or conversation note, or prompt.  When TURN is omitted, select from
+the recorded applied turns.  Refuse if affected lines changed.  Reopen a done
+note only after success; do not change the conversation or its history."
+  (interactive)
+  (setq workspace (or workspace (mevedel--instruction-buffer-workspace
+                                 (if (and (overlayp note) (overlay-buffer note))
+                                     (overlay-buffer note) (current-buffer)))))
+  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+    (let* ((target (mevedel-note-change--revert-target note workspace))
+           (id (plist-get (plist-get target :properties) 'mevedel-note-session-id)))
+      (unless id (user-error "Note has no applied changes"))
+      (let* ((data (or (mevedel-session-control-transfer-root-buffer-for-id id)
+                       (mevedel-session-persistence-resume-id workspace id)
+                       (user-error "Note conversation is unavailable: %s" id)))
+             (session (buffer-local-value 'mevedel--session data))
+             (turns (sort (mapcar #'car (cl-remove-if-not
+                                        #'cdr (mevedel-session-file-snapshots session))) #'>)))
+        (unless turns (user-error "Note has no applied changes"))
+        (setq turn (or turn (if (null (cdr turns)) (car turns)
+                             (string-to-number
+                              (completing-read "Revert applied turn: "
+                                               (mapcar #'number-to-string turns) nil t)))))
+        (mevedel-session-artifacts-assert-new-mutation-authority session)
+        (mevedel-tool-patch-commit (mevedel-note-change--revert-plan session turn))
+        (when (eq 'done (plist-get target :closed-reason))
+          (mevedel-note-restore (plist-get target :uuid) workspace)
+          (mevedel-instruction-store-flush t))
+        (message "mevedel: note change reverted")))))
 
 (provide 'mevedel-note-change)
 ;;; mevedel-note-change.el ends here

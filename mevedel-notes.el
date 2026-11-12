@@ -23,6 +23,7 @@
 (autoload 'mevedel-note-send-batch "mevedel-note-conversation" nil t)
 (autoload 'mevedel-note-reask "mevedel-note-conversation" nil t)
 (autoload 'mevedel-note-apply-change "mevedel-note-change" nil t)
+(autoload 'mevedel-note-revert-change "mevedel-note-change" nil t)
 (autoload 'mevedel-note-merge-change "mevedel-note-merge" nil t)
 
 ;; `mevedel-directive-activity'
@@ -549,12 +550,15 @@ Return its live source overlay, retaining its text, tags and attachments."
                              '((?d "delete" "Delete note without changing code")))
                            (when (overlay-get note 'mevedel-note-legacy-history)
                              '((?h "history" "Inspect read-only pre-migration history")))
+                           (when (overlay-get note 'mevedel-note-session-id)
+                             '((?u "revert" "Revert an applied change, preserving later edits")))
                            (when (overlay-get note 'mevedel-note-prepared-change)
                              '((?a "apply" "Apply prepared change")
                                (?r "re-ask" "Ask again on current code")
                                (?m "merge" "Resolve in a three-way view"))))))
         (?s (mevedel-note-send note))
         (?a (mevedel-note-apply-change note))
+        (?u (mevedel-note-revert-change note))
         (?r (mevedel-note-reask note))
         (?m (mevedel-note-merge-change note))
         (?t (if (eq 'taken (overlay-get note 'mevedel-note-state))

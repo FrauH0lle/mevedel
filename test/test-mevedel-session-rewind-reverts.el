@@ -12,8 +12,10 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
 (require 'mevedel-session-rewind)
+(require 'mevedel-session-rewind-merge)
 (require 'mevedel-pipeline)
 (require 'mevedel-tool-patch)
+(require 'mevedel-note-merge)
 
 (defun mevedel-test-rewind-reverts--call (turns current check &optional patch)
   "Record TURNS, install CURRENT bytes, and call CHECK in a real session.
@@ -280,7 +282,105 @@ With PATCH, run that ApplyPatch hunk through the real pipeline for capture."
          (should (mevedel-session-rewind-rewind buffer target)))
        (should (equal "one\ntwo\n" (mevedel-session-artifacts-read-file-raw path)))
        (should (equal mtime (file-attribute-modification-time
-                            (file-attributes path))))))))
+                            (file-attributes path)))))))
+  :doc "merge resolves overlaps without writing until the complete Rewind commits"
+  (mevedel-test-rewind-reverts--call
+   '(("one\ntwo\nthree\nfour\n" "ONE\ntwo\nthree\nfour\n"))
+   "mine\ntwo\nthree\nuser\n"
+   (lambda (buffer target path)
+     (let ((transcript (with-current-buffer buffer (buffer-string))))
+       (save-window-excursion
+         (cl-letf (((symbol-function 'read-char-choice)
+                    (lambda (_prompt choices &rest _)
+                      (should (memq ?m choices)) ?m))
+                   ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+           (should-not (mevedel-session-rewind-rewind buffer target))
+           (should (derived-mode-p 'mevedel-note-merge-mode))
+           (should-not (get-buffer "*mevedel-rewind-impact*"))
+           (should (equal transcript (with-current-buffer buffer (buffer-string))))
+           (should (equal "mine\ntwo\nthree\nuser\n"
+                          (mevedel-session-artifacts-read-file-raw path)))
+           (should-error (mevedel-note-merge-confirm) :type 'user-error)
+           (with-current-buffer buffer
+             (put-text-property (point-min) (point-max) 'fontified t))
+           (goto-char (point-min))
+           (search-forward "<<<<<<<")
+           (smerge-keep-lower)
+           (mevedel-note-merge-confirm)
+           (should (equal "one\ntwo\nthree\nuser\n"
+                          (mevedel-session-artifacts-read-file-raw path)))
+           (should (equal "clean-0\n"
+                          (mevedel-session-artifacts-read-file-raw
+                           (file-name-concat (file-name-directory path) "other.txt"))))
+           (with-current-buffer buffer
+             (should-not (string-match-p "Prompt" (buffer-string)))))))))
+  :doc "merge chains conflicting turns newest first and writes neither round early"
+  (mevedel-test-rewind-reverts--call
+   '(("one\ntwo\nthree\nfour\n" "ONE\ntwo\nthree\nfour\n")
+     ("ONE\ntwo\nthree\nfour\n" "UNO\ntwo\nthree\nfour\n"))
+   "mine\ntwo\nthree\nuser\n"
+   (lambda (buffer target path)
+     (save-window-excursion
+       (cl-letf (((symbol-function 'read-char-choice) (lambda (&rest _) ?m))
+                 ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+         (mevedel-session-rewind-rewind buffer target)
+         (goto-char (point-min)) (search-forward "<<<<<<<")
+         (smerge-keep-upper)
+         (mevedel-note-merge-confirm)
+         (should (derived-mode-p 'mevedel-note-merge-mode))
+         (should (equal "mine\ntwo\nthree\nuser\n" (mevedel-test--read-file path)))
+         (should (equal "clean-2\n" (mevedel-test--read-file
+                                      (file-name-concat (file-name-directory path) "other.txt"))))
+         (goto-char (point-min)) (search-forward "<<<<<<<")
+         (smerge-keep-lower)
+         (mevedel-note-merge-confirm)
+         (should (equal "one\ntwo\nthree\nuser\n" (mevedel-test--read-file path)))
+         (should (equal "clean-0\n" (mevedel-test--read-file
+                                      (file-name-concat (file-name-directory path) "other.txt"))))))))
+  :doc "merge starts from the intermediate text after a newer clean reversal"
+  (mevedel-test-rewind-reverts--call
+   '(("one\ntwo\nthree\nfour\n" "ONE\ntwo\nthree\nfour\n")
+     ("mine\ntwo\nthree\nfour\n" "mine\ntwo\nTHREE\nfour\n"))
+   "mine\ntwo\nTHREE\nuser\n"
+   (lambda (buffer target path)
+     (save-window-excursion
+       (cl-letf (((symbol-function 'read-char-choice) (lambda (&rest _) ?m))
+                 ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+         (mevedel-session-rewind-rewind buffer target)
+         (should-not (string-search "THREE" (buffer-string)))
+         (goto-char (point-min)) (search-forward "<<<<<<<")
+         (smerge-keep-lower)
+         (mevedel-note-merge-confirm)
+         (should (equal "one\ntwo\nthree\nuser\n" (mevedel-test--read-file path)))))))
+  :doc "merge cancellation and source changes leave all files and history untouched"
+  (dolist (action '(cancel source final))
+    (mevedel-test-rewind-reverts--call
+     '(("one\ntwo\n" "ONE\ntwo\n")) "mine\ntwo\n"
+     (lambda (buffer target path)
+       (let ((transcript (with-current-buffer buffer (buffer-string))))
+         (save-window-excursion
+           (cl-letf (((symbol-function 'read-char-choice) (lambda (&rest _) ?m))
+                     ((symbol-function 'yes-or-no-p)
+                      (lambda (&rest _)
+                        (when (eq action 'final)
+                          (write-region "later\ntwo\n" nil path nil 'silent))
+                        t)))
+             (mevedel-session-rewind-rewind buffer target)
+             (let ((merge (current-buffer)))
+               (if (eq action 'cancel)
+                   (mevedel-note-merge-cancel)
+                 (goto-char (point-min)) (search-forward "<<<<<<<")
+                 (smerge-keep-lower)
+                 (when (eq action 'source)
+                   (write-region "later\ntwo\n" nil path nil 'silent))
+                 (should-error (mevedel-note-merge-confirm))
+                 (when (buffer-live-p merge)
+                   (with-current-buffer merge (mevedel-note-merge-cancel))))
+               (should (equal (if (eq action 'cancel) "mine\ntwo\n" "later\ntwo\n")
+                              (mevedel-test--read-file path)))
+               (should (equal "clean-1\n" (mevedel-test--read-file
+                                            (file-name-concat (file-name-directory path) "other.txt"))))
+               (should (equal transcript (with-current-buffer buffer (buffer-string))))))))))))
 
 (provide 'test-mevedel-session-rewind-reverts)
 ;;; test-mevedel-session-rewind-reverts.el ends here

@@ -26,6 +26,7 @@
 ;; `mevedel-note-change'
 (declare-function mevedel-note-change--note "mevedel-note-change" (&optional note))
 (autoload 'mevedel-note-apply-change "mevedel-note-change" nil t)
+(autoload 'mevedel-note-revert-change "mevedel-note-change" nil t)
 (autoload 'mevedel-note-merge-change "mevedel-note-merge" nil t)
 
 ;; `gptel'
@@ -35,6 +36,7 @@
   :doc "Note conversation actions; ordinary characters remain composer input."
   "C-c C-c" #'mevedel-view-send
   "C-c C-a" #'mevedel-note-apply-change
+  "C-c C-b" #'mevedel-note-revert-change
   "C-c C-n" #'mevedel-note-reask
   "C-c C-g" #'mevedel-note-merge-change
   "C-c C-v" #'mevedel-note-show-sent
@@ -199,7 +201,10 @@ ordinary request-time transform, where media has an active request owner."
           (if id
               (mevedel-note-conversation-setup)
             (mevedel-preset-apply 'mevedel-note data)
-            (mevedel-session-artifacts-save session data nil t)
+            (mevedel-session-artifacts-save session data nil t))
+          (when (or (not id)
+                    (and (zerop (or (mevedel-session-turn-count session) 0))
+                         (eq 'unsent (overlay-get note 'mevedel-note-state))))
             (mevedel--submit-generated-turn
              (mapconcat (lambda (item) (mevedel-note-conversation--prompt item session))
                         notes "\n\n"))))
