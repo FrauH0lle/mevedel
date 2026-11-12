@@ -15,6 +15,8 @@
 (require 'mevedel-view)
 (require 'mevedel-session-persistence)
 (require 'mevedel-session-codec)
+(require 'mevedel-pipeline)
+(require 'mevedel-view-disclosure)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -370,6 +372,44 @@
              (entries (cdr (assq 0 (plist-get saved :file-snapshots)))))
         (should (assoc file entries))
         (should-not (assoc two entries))))))
+
+(mevedel-deftest mevedel-note-change-replacement
+  (:quiet t)
+  ,test
+  (test)
+  :doc "newer ApplyPatch replaces waiting work while both proposals stay readable in the conversation"
+  (mevedel-note-change-test--with-note
+    (setf (mevedel-session-permission-mode session) 'full-auto)
+    (with-current-buffer data-buf
+      (insert "*** Improve this note\n")
+      (dolist (replacement '("first proposal" "second proposal"))
+        (let* ((tool (mevedel-tool-ensure "ApplyPatch"))
+               (provider (mevedel-tool-gptel-tool tool))
+               (args (list :patch (format "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+%s\n*** End Patch" replacement)))
+               (gptel-include-tool-results t)
+               answer)
+          (mevedel-pipeline-run-tool tool (lambda (value) (setq answer value)) args)
+          (should (string-search "Prepared" answer))
+          (goto-char (point-max))
+          (gptel--display-tool-results
+           (list (list provider args answer))
+           (list :buffer data-buf :position (point-marker) :callback #'gptel--insert-response
+                 :tools (list provider)
+                 :tool-use (list (list :id replacement :name "ApplyPatch" :args args :result answer)))))))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (goto-char (point-min))
+      (while (search-forward "✓ ApplyPatch" nil t)
+        (let ((row (match-beginning 0)))
+          (when (get-text-property row 'mevedel-view-collapsed)
+            (goto-char row)
+            (mevedel-view-toggle-section))
+          (forward-line 1)))
+      (should (string-search "first proposal" (buffer-string)))
+      (should (string-search "second proposal" (buffer-string))))
+    (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))
+    (mevedel-note-apply-change note)
+    (should (equal "before\nsecond proposal\nafter\n" (mevedel-test--read-file file)))))
 
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here
