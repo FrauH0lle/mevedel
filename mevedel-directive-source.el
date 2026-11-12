@@ -293,6 +293,7 @@ shape, links, and directive activity.  Calls are idempotent."
     mevedel-note-tags
     mevedel-note-author
     mevedel-note-state
+    mevedel-note-legacy-history
     mevedel-span
     mevedel-instruction-collapse-p
     mevedel-links
@@ -325,12 +326,16 @@ overlay is restored.")
     (vconcat (mapcar #'mevedel--instruction-serializable-value value)))
    (t value)))
 
-(defun mevedel--instruction-persisted-properties (instruction)
-  "Return serializable persisted properties for INSTRUCTION."
+(defun mevedel--instruction-persisted-properties (instruction &optional source-only)
+  "Return serializable persisted properties for INSTRUCTION.
+SOURCE-ONLY omits note text, history and lifecycle before copying values;
+source geometry undo must leave these authored fields on the live note."
   (let ((raw-properties (overlay-properties instruction))
         properties)
     (dolist (prop mevedel--persisted-instruction-properties)
-      (when (memq prop raw-properties)
+      (when (and (memq prop raw-properties)
+                 (not (and source-only
+                           (string-prefix-p "mevedel-note-" (symbol-name prop)))))
         (setq properties
               (plist-put properties prop
                          (mevedel--instruction-serializable-value

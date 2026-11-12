@@ -190,6 +190,9 @@
 (defvar-local mevedel-directive-activity--directive nil
   "Workspace directive rendered in the current inspector.")
 
+(defvar-local mevedel-directive-activity--frozen nil
+  "Non-nil when inspecting a note's immutable pre-migration history.")
+
 (defvar-local mevedel-directive-activity--transcript-buffer nil
   "Synthetic record transcript rendered by the shared view machinery.")
 
@@ -390,7 +393,8 @@
           (with-current-buffer inspector
             (dolist (turn turns)
               (mevedel-view--render-turn turn data-buffer))
-            (mevedel-view--collapse-settled-directive-turns t))))
+            (unless mevedel-directive-activity--frozen
+              (mevedel-view--collapse-settled-directive-turns t)))))
       (let ((pos (point-min))
             (limit (marker-position mevedel-view--input-marker)))
         (while (< pos limit)
@@ -412,7 +416,13 @@
              (or (next-single-property-change
                   pos 'mevedel-view-directive nil limit)
                  limit)
-             'mevedel-view-zone-entry (plist-get item :entry)))
+             'mevedel-view-zone-entry (plist-get item :entry))
+            (when mevedel-directive-activity--frozen
+              (put-text-property
+               pos (or (next-single-property-change
+                        pos 'mevedel-view-directive nil limit) limit)
+               'mevedel-view-zone-activate
+               #'mevedel-directive-activity--require-writable)))
           (setq pos (or (next-single-property-change
                          pos 'mevedel-view-directive nil limit)
                         limit)))))))
@@ -435,8 +445,9 @@
           mevedel-view--input-marker nil)
     (erase-buffer)
     (mevedel-view-zone-forget 'directive-inspector))
-  (mevedel--reconcile-directive-sources
-   mevedel-directive-activity--workspace)
+  (unless mevedel-directive-activity--frozen
+    (mevedel--reconcile-directive-sources
+     mevedel-directive-activity--workspace))
   (let* ((inhibit-read-only t)
          (directive mevedel-directive-activity--directive)
          (entries (mevedel-directive-activity--entries directive))
@@ -460,11 +471,15 @@
 		    :navigatable t)
         (:namespace directive-inspector :id planning
 		    :label-left ,(propertize "** Planning" 'face 'outline-2)
-		    :body ,(if (mevedel-directive-planning-enabled directive)
-                               "On · s: settings"
-                             "Off · s: settings")
-		    :activate mevedel-directive-activity-settings
-		    :help-echo "RET: edit directive settings"
+		    :body ,(cond
+			    (mevedel-directive-activity--frozen
+			     "Read-only pre-migration history")
+			    ((mevedel-directive-planning-enabled directive)
+			     "On · s: settings")
+			    (t "Off · s: settings"))
+		    ,@(unless mevedel-directive-activity--frozen
+			'(:activate mevedel-directive-activity-settings
+			  :help-echo "RET: edit directive settings"))
 		    :navigatable t)
         (:namespace directive-inspector :id anchor
 		    :label-left ,(propertize "** Anchor" 'face 'outline-2)
@@ -487,6 +502,13 @@
 
 ;;
 ;;; Actions
+
+(defun mevedel-directive-activity--require-writable ()
+  "Refuse actions that would change frozen pre-migration history."
+  (when mevedel-directive-activity--frozen
+    (mevedel-diagnostic-user-error
+     (mevedel-diagnostic-scope mevedel-directive-activity--workspace)
+     "Pre-migration history is read-only; send the note for a new conversation")))
 
 (defun mevedel-directive-activity--source-directive ()
   "Return a validated source overlay for the inspected directive."
@@ -516,6 +538,7 @@
 (defun mevedel-directive-activity-discuss ()
   "Enter shared composer discussion scope for this directive."
   (interactive)
+  (mevedel-directive-activity--require-writable)
   (if (memq 'discuss
             (mevedel-directive-actions
              mevedel-directive-activity--directive))
@@ -532,6 +555,7 @@
 (defun mevedel-directive-activity-request-changes ()
   "Enter shared composer Request changes scope."
   (interactive)
+  (mevedel-directive-activity--require-writable)
   (mevedel-view-enter-directive-scope
    mevedel-directive-activity--directive 'request-changes nil
    mevedel-directive-activity--workspace))
@@ -539,6 +563,7 @@
 (defun mevedel-directive-activity-retry ()
   "Enter shared composer Retry scope."
   (interactive)
+  (mevedel-directive-activity--require-writable)
   (mevedel-view-enter-directive-scope
    mevedel-directive-activity--directive 'retry nil
    mevedel-directive-activity--workspace))
@@ -546,12 +571,14 @@
 (defun mevedel-directive-activity-implement-this ()
   "Implement the inspected directive using its local discussion."
   (interactive)
+  (mevedel-directive-activity--require-writable)
   (mevedel--implement-discussion
    (mevedel-directive-activity--source-directive)))
 
 (defun mevedel-directive-activity-settings ()
   "Edit settings for the inspected directive."
   (interactive)
+  (mevedel-directive-activity--require-writable)
   (mevedel--ov-actions-settings
    (mevedel-directive-activity--source-directive))
   (mevedel-directive-activity-refresh))
@@ -568,6 +595,7 @@
 (defun mevedel-directive-activity-rewind ()
   "Rewind the shared execution session before the attempt at point."
   (interactive)
+  (mevedel-directive-activity--require-writable)
   (require 'mevedel-session-rewind)
   (let* ((attempt (mevedel-directive-activity--attempt-at-point))
          (checkpoint
@@ -591,7 +619,9 @@
 (defun mevedel-directive-activity-reattach (file start end)
   "Reattach the inspected directive to FILE from START to END."
   (interactive
-   (let* ((anchor
+   (progn
+     (mevedel-directive-activity--require-writable)
+     (let* ((anchor
            (mevedel-directive-anchor
             mevedel-directive-activity--directive))
           (file (read-file-name "Reattach to file: " nil
@@ -601,7 +631,8 @@
            (read-number "Start buffer position: "
                         (with-current-buffer buffer (point-min)))
            (read-number "End buffer position: "
-                        (with-current-buffer buffer (point-max))))))
+                        (with-current-buffer buffer (point-max)))))))
+  (mevedel-directive-activity--require-writable)
   (mevedel--reattach-directive
    mevedel-directive-activity--directive
    mevedel-directive-activity--workspace
@@ -611,6 +642,7 @@
 (defun mevedel-directive-activity-archive ()
   "Archive the inspected directive."
   (interactive)
+  (mevedel-directive-activity--require-writable)
   (mevedel-archive-directive
    mevedel-directive-activity--directive
    mevedel-directive-activity--workspace)
@@ -632,8 +664,9 @@
 ;;
 ;;; Opening and selection
 
-(defun mevedel-open-directive-activity (&optional directive workspace)
-  "Open DIRECTIVE's read-only inspector in WORKSPACE."
+(defun mevedel-open-directive-activity (&optional directive workspace frozen)
+  "Open DIRECTIVE's read-only inspector in WORKSPACE.
+FROZEN permits an unregistered historical record and refuses all mutations."
   (interactive (list (mevedel--ov-actions-getov)))
   (pcase-let* ((`(,workspace ,record)
                 (cond
@@ -645,8 +678,8 @@
                            (overlay-buffer owner))))
                     (list workspace (mevedel--directive-record owner))))
                  ((and workspace (mevedel-directive-p directive)
-                       (memq directive
-                             (mevedel-workspace-directives workspace)))
+                       (or frozen (memq directive
+                                        (mevedel-workspace-directives workspace))))
                   (list workspace directive))
                  (t (mevedel-diagnostic-user-error
                      (mevedel-diagnostic-scope (or workspace (current-buffer)))
@@ -660,7 +693,8 @@
       (unless (derived-mode-p 'mevedel-directive-activity-mode)
         (mevedel-directive-activity-mode))
       (setq-local mevedel-directive-activity--workspace workspace
-                  mevedel-directive-activity--directive record)
+                  mevedel-directive-activity--directive record
+                  mevedel-directive-activity--frozen frozen)
       (mevedel-directive-activity-refresh)
       (goto-char (point-min)))
     (pop-to-buffer-same-window buffer)

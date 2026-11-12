@@ -18,6 +18,15 @@
 (require 'mevedel-overlays)
 (require 'mevedel-utilities)
 
+;; `mevedel-directive-activity'
+(declare-function mevedel-open-directive-activity "mevedel-directive-activity"
+                  (&optional directive workspace frozen))
+(autoload 'mevedel-open-directive-activity "mevedel-directive-activity")
+
+;; `mevedel-directive-persistence'
+(declare-function mevedel--deserialize-directives "mevedel-directive-persistence"
+                  (serialized base-directory))
+
 ;; `mevedel-persistence'
 (declare-function mevedel-instruction-store-observe "mevedel-persistence"
                   (workspace))
@@ -420,6 +429,22 @@ Return its live source overlay, retaining its text, tags and attachments."
                                      (+ (point) end-column))))))))
 
 ;;;###autoload
+(defun mevedel-note-history (&optional note)
+  "Open NOTE's frozen pre-migration history in the directive inspector."
+  (interactive)
+  (setq note (or note (mevedel-notes--at-point)))
+  (let ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note))))
+    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+      (unless (overlay-get note 'mevedel-note-legacy-history)
+        (user-error "Note has no pre-migration history"))
+      (require 'mevedel-directive-persistence)
+      (mevedel-open-directive-activity
+       (car (mevedel--deserialize-directives
+             (list (copy-tree (overlay-get note 'mevedel-note-legacy-history)))
+             (mevedel-workspace-root workspace)))
+       workspace t))))
+
+;;;###autoload
 (defun mevedel-note-menu (&optional note)
   "Show the actions menu for NOTE, defaulting to the note at point."
   (interactive)
@@ -429,13 +454,17 @@ Return its live source overlay, retaining its text, tags and attachments."
       (setq note (or note (mevedel-notes--at-point)))
       (pcase (car (read-multiple-choice
                    (format "Note %s: " (overlay-get note 'mevedel-id))
-                   '((?e "edit" "Edit note text")
-                     (?x "done" "Mark note done")
-                     (?d "delete" "Delete note without changing code"))))
+                   (append
+                    '((?e "edit" "Edit note text")
+                      (?x "done" "Mark note done")
+                      (?d "delete" "Delete note without changing code"))
+                    (when (overlay-get note 'mevedel-note-legacy-history)
+                      '((?h "history" "Inspect read-only pre-migration history"))))))
         (?e (mevedel-note-edit
              (read-string "Note: " (overlay-get note 'mevedel-note-text)) note))
         (?x (mevedel-note-done note))
-        (?d (mevedel-note-delete note))))))
+        (?d (mevedel-note-delete note))
+        (?h (mevedel-note-history note))))))
 
 ;;;###autoload
 (defun mevedel-note-create (&optional text)

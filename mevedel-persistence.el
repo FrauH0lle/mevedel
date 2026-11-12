@@ -59,6 +59,10 @@
 ;; `mevedel-instruction-edit'
 (autoload 'mevedel-instruction-replace-buffer-contents "mevedel-instruction-edit")
 
+;; `mevedel-notes-migration'
+(declare-function mevedel-notes-migrate-store "mevedel-notes-migration"
+                  (workspace bytes data))
+
 ;; `mevedel-overlay-ui'
 (declare-function mevedel--update-instruction-overlay
                   "mevedel-overlay-ui"
@@ -1022,7 +1026,7 @@ or `corrupt'."
           (list :status 'corrupt :reason "Not an instruction store record"))
          ((not (eql (plist-get form :format)
                     mevedel-instruction-store-format-version))
-          (list :status 'unsupported
+          (list :status 'unsupported :data form
                 :reason (format "Unsupported store format %S"
                                 (plist-get form :format))))
          (t
@@ -1051,8 +1055,14 @@ bytes read, the precondition a later write names."
       (if (eq (plist-get result :status) 'absent)
           (list :status 'absent)
         (let ((bytes (mevedel-session-control-fs-program-value result)))
-          (append (list :hash (secure-hash 'sha256 bytes))
-                  (mevedel-instruction-store--decode bytes workspace)))))))
+          (let ((decoded (mevedel-instruction-store--decode bytes workspace)))
+            (if (and (eq (plist-get decoded :status) 'unsupported)
+                     (eql (plist-get (plist-get decoded :data) :format) 1))
+                (progn
+                  (require 'mevedel-notes-migration)
+                  (mevedel-notes-migrate-store
+                   workspace bytes (plist-get decoded :data)))
+              (append (list :hash (secure-hash 'sha256 bytes)) decoded))))))))
 
 (defun mevedel-instruction-store--write (workspace expected data)
   "Replace WORKSPACE's store with DATA while it still has hash EXPECTED.
