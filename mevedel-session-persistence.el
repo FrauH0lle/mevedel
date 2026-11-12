@@ -3148,18 +3148,22 @@ is the sweep's reference snapshot, or `unread' to obtain it here.
 Return non-nil only when the directory was deleted."
   (and (not (mevedel-journal-pins-present-p save-path))
        (let ((sidecar (condition-case nil
-                          (mevedel-session-codec-read
-                           (mevedel-session-artifacts-sidecar-path save-path))
+                          (let ((data (mevedel-session-codec-read
+                                       (mevedel-session-artifacts-sidecar-path save-path))))
+                            (and (listp data) data))
                         (error nil))))
          (not
-          (when (mevedel-session-persistence--note-p sidecar)
+          (when (or (mevedel-session-persistence--note-p sidecar)
+                    (not (and (plist-member sidecar :preset-name)
+                              (symbolp (plist-get sidecar :preset-name)))))
             (when (eq note-session-ids 'unread)
               (require 'mevedel-persistence)
               (setq note-session-ids
                     (mevedel-instruction-store-note-session-ids workspace)))
             (or (eq note-session-ids t)
-                (null (plist-get sidecar :session-id))
-                (member (plist-get sidecar :session-id) note-session-ids)))))
+                (member (plist-get sidecar :session-id) note-session-ids)
+                (member (file-name-nondirectory (directory-file-name save-path))
+                        note-session-ids)))))
        (if portable
            (mevedel-session-durability-delete-abandoned
             save-path max-age-seconds)
@@ -3223,7 +3227,8 @@ workspace was swept too recently."
                       (mevedel-session-artifacts-sidecar-path save-path))
                      (sidecar
                       (condition-case nil
-                          (mevedel-session-codec-read sidecar-path)
+                          (let ((data (mevedel-session-codec-read sidecar-path)))
+                            (and (listp data) data))
                         (error nil)))
                      (parsed-time
                       (mevedel-session-persistence--observed-update-time
@@ -3233,15 +3238,20 @@ workspace was swept too recently."
                                        (and parsed-time (float-time parsed-time))
                                        (plist-get sidecar :session-id))))
                   (cond
-                   ((mevedel-session-persistence--note-p sidecar)
+                   ((or (mevedel-session-persistence--note-p sidecar)
+                        (not (and (plist-member sidecar :preset-name)
+                                  (symbolp (plist-get sidecar :preset-name)))))
                     (when (eq note-session-ids 'unread)
                       (require 'mevedel-persistence)
                       (setq note-session-ids
                             (mevedel-instruction-store-note-session-ids workspace)))
                     (unless (or (eq note-session-ids t)
-                                (null (plist-get sidecar :session-id))
-                                (member (plist-get sidecar :session-id) note-session-ids))
-                      (push candidate note-candidates)))
+                                (member (plist-get sidecar :session-id) note-session-ids)
+                                (member (file-name-nondirectory (directory-file-name save-path))
+                                        note-session-ids))
+                      (if (mevedel-session-persistence--note-p sidecar)
+                          (push candidate note-candidates)
+                        (push candidate candidates))))
                    ((not (mevedel-session-persistence--dedicated-p workspace sidecar))
                     (push candidate candidates)))))))
           ;; The newest sessions are exempt regardless of age: the chooser

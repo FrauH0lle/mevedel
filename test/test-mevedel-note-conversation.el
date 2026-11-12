@@ -448,6 +448,68 @@
         (should-not (file-directory-p child-path))
         (should (file-directory-p (mevedel-session-save-path session)))))))
 
+(mevedel-deftest mevedel-session-persistence-cleanup-expired/note-missing-metadata
+  (:quiet t)
+  ,test
+  (test)
+  :doc "corrupt or missing session metadata cannot erase a referenced conversation"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Keep despite metadata loss"))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view))
+           (session (buffer-local-value 'mevedel--session data))
+           (path (mevedel-session-save-path session))
+           (sidecar (mevedel-session-artifacts-sidecar-path path))
+           (mevedel-session-max-age-days 0)
+           (mevedel-session-keep-recent-count 0))
+      (mevedel-note-conversation-test--answer (car sent) "A recoverable answer")
+      (with-current-buffer source (mevedel-note-done note))
+      (mevedel-instruction-store-flush t)
+      (with-current-buffer data (mevedel-session-persistence-release-on-kill))
+      (mevedel-chat-discard-buffers data t)
+      (dolist (contents '("(" "(:version \"unknown\")"
+                         "(:preset-name \"mevedel-note\")" nil))
+        (if contents
+            (write-region contents nil sidecar nil 'silent)
+          (delete-file sidecar))
+        (should-not (mevedel-session-persistence-delete workspace path))
+        (should (= 0 (mevedel-session-persistence-cleanup-expired workspace t)))
+        (should (file-directory-p path)))
+      (let ((mevedel-notes-closed-max-count 0))
+        (should-not (mevedel-notes-closed workspace)))
+      (mevedel-instruction-store-flush t)
+      (should (= 1 (mevedel-session-persistence-cleanup-expired workspace t)))
+      (should-not (file-directory-p path)))))
+
+(mevedel-deftest mevedel-session-persistence-cleanup-expired/ordinary-no-note-read
+  (:quiet t)
+  ,test
+  (test)
+  :doc "ordinary cleanup and deletion add no instruction-store reads"
+  (mevedel-note-conversation-test--with-source
+    (let ((store (file-name-concat root ".mevedel" "instructions.el"))
+          (read-file (symbol-function 'mevedel-session-control-fs-read-file))
+          (reads 0)
+          paths)
+      (dotimes (n 2)
+        (let* ((data (mevedel--chat-buffer (format "ordinary-%d" n) t workspace))
+               (session (buffer-local-value 'mevedel--session data)))
+          (with-current-buffer data
+            (mevedel--insert-local-user-turn "Ordinary conversation")
+            (mevedel-session-artifacts-save session data nil t)
+            (mevedel-session-persistence-release-on-kill))
+          (push (mevedel-session-save-path session) paths)
+          (mevedel-chat-discard-buffers data t)))
+      (cl-letf (((symbol-function 'mevedel-session-control-fs-read-file)
+                 (lambda (file &optional coding max-bytes)
+                   (when (equal file store) (cl-incf reads))
+                   (funcall read-file file coding max-bytes))))
+        (should (mevedel-session-persistence-delete workspace (pop paths)))
+        (let ((mevedel-session-max-age-days 0)
+              (mevedel-session-keep-recent-count 0))
+          (should (= 1 (mevedel-session-persistence-cleanup-expired workspace t)))))
+      (should (= 0 reads)))))
+
 (mevedel-deftest mevedel-note-send/frame-reuse
   (:quiet t)
   ,test
