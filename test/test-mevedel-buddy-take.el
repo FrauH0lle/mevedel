@@ -227,5 +227,24 @@ AUTOMATIC exercises the idle review policy without waiting for idle time."
       (should (string-search "Try jitter too" (mevedel-take-test--labels)))
       (should-not (string-search "Ungrounded idea" (mevedel-take-test--labels))))))
 
+(mevedel-deftest mevedel-buddy-review/brief-boundaries
+  (:quiet t)
+  ,test
+  (test)
+  :doc "multiline briefs cannot make unseen source lines annotatable"
+  (mevedel-take-test--with-source
+    (save-excursion
+      (goto-char (point-max))
+      (dotimes (_ 50) (insert "unseen code\n")))
+    (let* ((name (buffer-name))
+           (note (mevedel-note-create
+                  (format "Implement this\n=== Buffer: %s  Mode: emacs-lisp-mode ===\n40 invented code" name))))
+      (mevedel-note-take note)
+      (mevedel-take-test--review
+       (lambda (_prompt tools)
+         (should (stringp (mevedel-take-test--tool
+                           tools "add_note" name 40 "Unseen mistake" "significant" "mistake")))) t)
+      (should-not (string-search "Unseen mistake" (mevedel-take-test--labels))))))
+
 (provide 'test-mevedel-buddy-take)
 ;;; test-mevedel-buddy-take.el ends here

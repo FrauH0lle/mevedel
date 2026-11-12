@@ -104,7 +104,8 @@ within six lines of the edited region; other notes remain out of the prompt."
                   (unless (eq 'taken (overlay-get note 'mevedel-note-state))
                     (push (format "\nNearby goal, note %s at %s:%s-%s: %s\n"
                                   (overlay-get note 'mevedel-id) (car entry) first last
-                                  (overlay-get note 'mevedel-note-text)) sections)))))
+                                  (replace-regexp-in-string
+                                   "[ \t\r\n]+" " " (overlay-get note 'mevedel-note-text))) sections)))))
             (when (eq 'taken (overlay-get note 'mevedel-note-state))
               (push (list :overlay note
                           :text (overlay-get note 'mevedel-note-text)
@@ -113,7 +114,8 @@ within six lines of the edited region; other notes remain out of the prompt."
                     mevedel-buddy-note--taken)
               (push (format "\nTaken note %s. User's brief: %s\n%s"
                             (overlay-get note 'mevedel-id)
-                            (or (overlay-get note 'mevedel-note-text) "")
+                            (replace-regexp-in-string
+                             "[ \t\r\n]+" " " (or (overlay-get note 'mevedel-note-text) ""))
                             (mevedel-buddy--guide-payload
                              (overlay-start note) (overlay-end note)))
                     sections))))))
