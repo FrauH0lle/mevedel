@@ -275,5 +275,19 @@
     (should (equal "before\nnew\nafter\nmiddle1\nmiddle2\nmiddle3\ntail\nuser addition\n"
                    (mevedel-test--read-file file)))))
 
+(mevedel-deftest mevedel-note-merge-missing-git
+  (:quiet t)
+  ,test
+  (test)
+  :doc "merge refuses clearly without a local git executable and never changes source"
+  (mevedel-note-change-test--with-note
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (let ((exec-path nil))
+      (should (string-search "local git"
+                             (error-message-string
+                              (should-error (mevedel-note-merge-change note) :type 'user-error)))))
+    (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))))
+
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here
