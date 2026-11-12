@@ -10,6 +10,7 @@
 (require 'mevedel-notes)
 (require 'mevedel-note-conversation)
 (require 'mevedel-tool-patch)
+(require 'mevedel-note-merge)
 (require 'mevedel-view)
 (require 'mevedel-session-persistence)
 (require 'helpers
@@ -139,7 +140,19 @@
         (mevedel-note-merge-confirm))
       (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))
       (with-current-buffer source
-        (should (equal "before\nnew\nafter\n" (buffer-string)))))))
+        (should (equal "before\nnew\nafter\n" (buffer-string))))))
+  :doc "multi-file merge regions never include another file's header or result"
+  (mevedel-note-change-test--with-note
+    (let ((two (file-name-concat root "two.txt")))
+      (write-region "two old\n" nil two nil 'silent)
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** Update File: two.txt\n@@\n-two old\n+two new\n*** End Patch")
+      (with-current-buffer (mevedel-note-merge-change note)
+        (goto-char (point-min))
+        (while (search-forward "<<<<<<<" nil t) (smerge-keep-lower))
+        (mevedel-note-merge-confirm))
+      (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))
+      (should (equal "two new\n" (mevedel-test--read-file two))))))
 
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here
