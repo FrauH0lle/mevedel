@@ -449,8 +449,10 @@ session."
                       (run-hook-wrapped
                        'kill-buffer-hook
                        (lambda (hook)
-                         (let ((kill-buffer-hook nil))
-                           (ignore-errors (funcall hook)))
+                         (when (buffer-live-p buffer)
+                           (with-current-buffer buffer
+                             (let ((kill-buffer-hook nil))
+                               (ignore-errors (funcall hook)))))
                          nil))))))
             (with-current-buffer buffer
               (when discard-modifications (set-buffer-modified-p nil))
