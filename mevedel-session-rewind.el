@@ -383,11 +383,17 @@ nothing to do.  When BEFORE-TURN is non-nil, target the pre-turn checkpoint."
   (list :path path :exists (and name t)
         :bytes (and name (mevedel-session-rewind-read-backup session name))))
 
-(defun mevedel-session-rewind--revert-plan (session cum-turn before-turn)
+(defvar mevedel-session-rewind--merge-resolutions nil
+  "Dynamically scoped, checked resolutions while resuming a Rewind merge.")
+
+(autoload 'mevedel-session-rewind-merge-open "mevedel-session-rewind-merge")
+
+(defun mevedel-session-rewind--revert-plan (session cum-turn before-turn &optional resolutions)
   "Prepare reversals of SESSION's discarded changes at CUM-TURN.
 BEFORE-TURN includes that turn.  Reverse newest first in memory, preserving
 unrelated current edits.  Return ordinary restore entries with literal
-`:bytes' and a checked `:before' state; never write during preparation."
+`:bytes' and a checked `:before' state; never write during preparation.
+RESOLUTIONS supplies checked intermediate states from the merge editor."
   (let ((states (make-hash-table :test #'equal))
         (originals (make-hash-table :test #'equal))
         (conflicts (make-hash-table :test #'equal))
@@ -407,13 +413,20 @@ unrelated current edits.  Return ordinary restore entries with literal
                             session path (plist-get (cdr entry) :pre-backup-name)))
                    (after (mevedel-session-rewind--recorded-state
                            session path (plist-get (cdr entry) :backup-name)))
-                   (result (if (mevedel-change-same-p before current)
-                               (list :after current)
-                             (mevedel-change-prepare before after current t))))
+                   (resolution (cdr (assoc (cons path (car turn)) resolutions)))
+                   (result
+                    (cond
+                     (resolution
+                      (unless (mevedel-change-same-p current (plist-get resolution :before))
+                        (user-error "Source changed since Rewind merge: %s" path))
+                      (list :after (plist-get resolution :after)))
+                     ((mevedel-change-same-p before current) (list :after current))
+                     (t (mevedel-change-prepare before after current t)))))
               (if-let* ((found (plist-get result :conflicts)))
                   (puthash path
                            (list :path path :action 'conflict
-                                 :turn (car turn) :conflicts found)
+                                 :turn (car turn) :conflicts found
+                                 :current current :base after :proposed before)
                            conflicts)
                 (puthash path (plist-get result :after) states)))))))
     (maphash
@@ -2065,16 +2078,17 @@ the selected turn leaves the reader to guess whether it survives."
             (mevedel-session-rewind--redo-availability session))))
 
 (defun mevedel-session-rewind--prepare-rewind-files (session target boundary)
-  "Prepare SESSION files for TARGET and BOUNDARY, offering cancel or force.
+  "Prepare SESSION files for TARGET and BOUNDARY, offering cancel, force or merge.
 Return the plan, its recheck function and force choice, or `:abort'."
   (catch 'cancel
     (let* ((turn (plist-get target :cum-turn))
            (before-p (not (eq boundary 'after)))
            (force nil)
+           (resolutions mevedel-session-rewind--merge-resolutions)
            (replan (lambda ()
                      (if force
                          (mevedel-session-rewind-restore-plan session turn before-p)
-                       (mevedel-session-rewind--revert-plan session turn before-p))))
+                       (mevedel-session-rewind--revert-plan session turn before-p resolutions))))
            (select
             (lambda ()
               (let ((plan (funcall replan)))
@@ -2082,11 +2096,13 @@ Return the plan, its recheck function and force choice, or `:abort'."
                   (mevedel-session-rewind--render-rewind-impact
                    session (mevedel-session-rewind--rewind-impact
                             session target plan boundary))
-                  (if (= ?f (read-char-choice
-                             "Rewind conflicts; [c]ancel or [f]orce snapshot restore? "
-                             '(?c ?f)))
-                      (setq force t plan (funcall replan))
-                    (throw 'cancel :abort)))
+                  (pcase (if resolutions ?m
+                           (read-char-choice
+                            "Rewind conflicts; [c]ancel, [f]orce snapshot restore or [m]erge? "
+                            '(?c ?f ?m)))
+                    (?f (setq force t plan (funcall replan)))
+                    (?m (throw 'cancel (list :merge plan)))
+                    (_ (throw 'cancel :abort))))
                 plan)))
            (plan (mevedel-session-rewind--prepare-buffers-for-restore
                   session turn (funcall select) "Rewind" before-p select)))
@@ -2114,7 +2130,13 @@ just before sending it."
     (let* ((selection (mevedel-session-rewind--prepare-rewind-files
                        session target boundary))
            (prepared (unless (eq selection :abort) (plist-get selection :plan))))
-      (unless (eq selection :abort)
+      (if (plist-get (and (listp selection) selection) :merge)
+          (progn
+            (mevedel-session-rewind-merge-open
+             buffer target boundary (plist-get selection :merge)
+             mevedel-session-rewind--merge-resolutions)
+            nil)
+        (unless (eq selection :abort)
         (let ((impact
                (mevedel-session-rewind--rewind-impact
                 session target prepared boundary)))
@@ -2151,7 +2173,7 @@ just before sending it."
                          (plist-get target :turn)
                          (plist-get impact :discarded-turns)
                          (if (= 1 (plist-get impact :discarded-turns)) "" "s"))
-                t))))))))
+                t)))))))))
 
 
 ;;
