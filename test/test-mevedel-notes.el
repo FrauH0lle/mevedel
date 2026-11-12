@@ -247,6 +247,54 @@
         (run-hooks 'post-command-hook))
       (should (string-match-p "Note 1" messages)))))
 
+(mevedel-deftest mevedel-note-entry-hint-search
+  ()
+  ,test
+  (test)
+  :doc "note entry does not replace an isearch prompt or consume the later hint"
+  (mevedel-notes-test--with-source
+    (mevedel-note-create "Search target")
+    (let ((isearch-mode t) messages)
+      (mevedel-test--with-captured-messages messages
+        (run-hooks 'post-command-hook))
+      (should (equal "" messages)))
+    (let (messages)
+      (mevedel-test--with-captured-messages messages
+        (run-hooks 'post-command-hook))
+      (should (string-match-p "Note 1.*Search target" messages))))
+  :doc "keyboard macros do not emit note-entry hints"
+  (mevedel-notes-test--with-source
+    (mevedel-note-create "Macro target")
+    (let ((executing-kbd-macro t) messages)
+      (mevedel-test--with-captured-messages messages
+        (run-hooks 'post-command-hook))
+      (should (equal "" messages)))))
+
+(mevedel-deftest mevedel-note-prepared-source-edits
+  (:quiet t)
+  ,test
+  (test)
+  :doc "inserting a newline just after noted code preserves its ready change"
+  (mevedel-notes-test--with-source
+    (let ((note (mevedel-note-create "Waiting change")))
+      (overlay-put note 'mevedel-note-prepared-change '(:test t))
+      (overlay-put note 'mevedel-note-attention-state 'ready)
+      (goto-char (overlay-end note))
+      (insert "\n")
+      (should (equal "selected code" (buffer-substring-no-properties
+                                      (overlay-start note) (overlay-end note))))
+      (should (eq 'ready (mevedel-notes-attention-state note)))
+      (goto-char (1+ (overlay-start note)))
+      (insert "X")
+      (should (eq 'stale (mevedel-notes-attention-state note)))))
+  :doc "deleting the final noted character still makes its change stale"
+  (mevedel-notes-test--with-source
+    (let ((note (mevedel-note-create "Waiting change")))
+      (overlay-put note 'mevedel-note-prepared-change '(:test t))
+      (overlay-put note 'mevedel-note-attention-state 'ready)
+      (delete-region (1- (overlay-end note)) (overlay-end note))
+      (should (eq 'stale (mevedel-notes-attention-state note))))))
+
 (mevedel-deftest mevedel-note-source-undo
   (:quiet t)
   ,test

@@ -225,15 +225,17 @@ Restore only the selected note's file, not every stashed source file."
 
 (defun mevedel-notes--entry-hint ()
   "Announce the note and its next actions when point enters it."
-  (let ((note (mevedel--highest-priority-instruction
-               (mevedel--instructions-at (point) 'note))))
-    (unless (eq note mevedel-notes--last-hinted)
-      (setq mevedel-notes--last-hinted note)
-      (when note
-        (message "Note %s · %s · %s"
-                 (overlay-get note 'mevedel-id)
-                 (mevedel-notes--display-text note)
-                 (mevedel-notes--actions-hint note))))))
+  (unless (or (bound-and-true-p isearch-mode) executing-kbd-macro
+              (active-minibuffer-window))
+    (let ((note (mevedel--highest-priority-instruction
+                 (mevedel--instructions-at (point) 'note))))
+      (unless (eq note mevedel-notes--last-hinted)
+        (setq mevedel-notes--last-hinted note)
+        (when note
+          (message "Note %s · %s · %s"
+                   (overlay-get note 'mevedel-id)
+                   (mevedel-notes--display-text note)
+                   (mevedel-notes--actions-hint note)))))))
 
 (defun mevedel-notes--render (note)
   "Render NOTE's label below its code."
@@ -274,16 +276,19 @@ Restore only the selected note's file, not every stashed source file."
     (add-hook 'after-change-functions #'mevedel-notes--after-change nil t)
     (add-hook 'post-command-hook #'mevedel-notes--entry-hint nil t)))
 
-(defun mevedel-notes--after-change (beg end _old-length)
-  "Reposition labels touched by BEG..END, including edits after noted code."
+(defun mevedel-notes--after-change (beg end old-length)
+  "Reposition labels touched by BEG..END after replacing OLD-LENGTH characters."
   (dolist (overlay (overlays-in (max (point-min) (1- beg))
                                (min (point-max) (1+ end))))
     (when-let* ((note (overlay-get overlay 'mevedel-note-owner)))
       (if (overlay-buffer note)
           (progn
             (when (and (overlay-get note 'mevedel-note-prepared-change)
-                       (<= beg (overlay-end note))
-                       (>= end (overlay-start note)))
+                       (if (zerop old-length)
+                           (and (< beg (overlay-end note))
+                                (> end (overlay-start note)))
+                         (and (<= beg (overlay-end note))
+                              (>= end (overlay-start note)))))
               (overlay-put note 'mevedel-note-attention-state 'stale))
             (overlay-put note 'mevedel-note-buddy-looks-done nil)
             (mevedel-notes--render note))

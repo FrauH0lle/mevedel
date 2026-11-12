@@ -203,11 +203,11 @@
     (mevedel-note-change-test--propose
      data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
     (with-current-buffer source
-      (goto-char (overlay-start note))
+      (goto-char (1+ (overlay-start note)))
       (insert "my ")
       (should (eq 'stale (mevedel-notes-attention-state note)))
       (should-error (mevedel-note-apply-change note) :type 'user-error)
-      (should (equal "before\nmy old\nafter\n" (buffer-string)))
+      (should (equal "before\nomy ld\nafter\n" (buffer-string)))
       (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))))
   :doc "apply refuses a saved nonoverlapping edit inside the noted code"
   (mevedel-note-change-test--with-note
@@ -216,15 +216,15 @@
     (mevedel-note-change-test--propose
      data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
     (with-current-buffer source
-      (goto-char (point-min))
+      (goto-char (1+ (point-min)))
       (insert "my ")
       (save-buffer)
       (should (eq 'stale (mevedel-notes-attention-state note)))
       (let ((err (should-error (mevedel-note-apply-change note) :type 'user-error)))
         (should (string-search "re-ask" (error-message-string err)))
         (should (string-search "merge" (error-message-string err))))
-      (should (equal "my before\nold\nafter\n" (buffer-string))))
-    (should (equal "my before\nold\nafter\n" (mevedel-test--read-file file))))
+      (should (equal "bmy efore\nold\nafter\n" (buffer-string))))
+    (should (equal "bmy efore\nold\nafter\n" (mevedel-test--read-file file))))
   :doc "a nonstale batch sibling cannot apply a proposal whose other note is stale"
   (mevedel-note-change-test--with-note
     (let ((sibling (with-current-buffer source
@@ -239,13 +239,13 @@
       (mevedel-note-change-test--propose
        data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n-after\n+AFTER\n*** End Patch")
       (with-current-buffer source
-        (goto-char (point-min))
+        (goto-char (1+ (point-min)))
         (insert "my ")
         (save-buffer))
       (should (eq 'stale (mevedel-notes-attention-state note)))
       (should (eq 'ready (mevedel-notes-attention-state sibling)))
       (should-error (mevedel-note-apply-change sibling) :type 'user-error)
-      (should (equal "my before\nold\nafter\n" (mevedel-test--read-file file)))))
+      (should (equal "bmy efore\nold\nafter\n" (mevedel-test--read-file file)))))
   :doc "apply preserves unsaved disjoint visiting text in the applied pair"
   (mevedel-note-change-test--with-note
     (mevedel-note-change-test--propose

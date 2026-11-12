@@ -261,7 +261,7 @@
          #'ignore
          '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-selected code\n+first proposal\n*** End Patch")))
       (with-current-buffer source
-        (goto-char (overlay-start note))
+        (goto-char (+ 9 (overlay-start note)))
         (insert "current ")
         (save-buffer))
       (should (eq 'stale (mevedel-notes-attention-state note)))
@@ -270,7 +270,7 @@
       (with-current-buffer view
         (call-interactively (key-binding (kbd "C-c C-n"))))
       (should (= 2 (length sent)))
-      (should (string-search "current selected code"
+      (should (string-search "selected current code"
                              (gptel--json-encode
                               (plist-get (gptel-fsm-info (car sent)) :data))))
       (with-current-buffer view
@@ -284,7 +284,7 @@
       (with-current-buffer data
         (mevedel-tool-patch-handler
          #'ignore
-         '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-current selected code\n+fresh proposal\n*** End Patch")))
+         '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-selected current code\n+fresh proposal\n*** End Patch")))
       (should (eq 'ready (mevedel-notes-attention-state note)))
       (with-current-buffer view
         (call-interactively (key-binding (kbd "C-c C-a"))))
