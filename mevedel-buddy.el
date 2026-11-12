@@ -181,19 +181,26 @@ Never read a file or discover a workspace; safe during change recording."
       'active)))
 
 (defun mevedel-buddy--load-level (workspace)
-  "Load WORKSPACE's dial once at a cold Buddy activation boundary."
+  "Load WORKSPACE's dial once at its first review, defaulting to Active."
   (when workspace
     (let ((root (file-name-as-directory (mevedel-workspace-root workspace))))
       (unless (gethash root mevedel-buddy--levels)
         (require 'mevedel-session-control-fs)
-        (let* ((text (condition-case nil
-                         (string-trim (mevedel-session-control-fs-read-file
-                                       (file-name-concat root ".mevedel" "buddy-level")
-                                       nil 16))
-                       (mevedel-session-control-fs-absent "active")))
-               (level (cdr (assoc text '(("quiet" . quiet) ("watching" . watching)
-                                        ("active" . active))))))
-          (unless level (user-error "Invalid Buddy dial in %s" root))
+        (let ((level
+               (condition-case err
+                   (let* ((text (string-trim
+                                 (mevedel-session-control-fs-read-file
+                                  (file-name-concat root ".mevedel" "buddy-level") nil 16)))
+                          (level (cdr (assoc text '(("quiet" . quiet) ("watching" . watching)
+                                                   ("active" . active))))))
+                     (or level (error "Invalid Buddy dial in %s" root)))
+                 (mevedel-session-control-fs-absent 'active)
+                 (error
+                  (mevedel-diagnostic-warning
+                   (mevedel-diagnostic-scope workspace) 'mevedel
+                   (format "Could not read Buddy dial; using Active: %s"
+                           (error-message-string err)) :warning)
+                  'active))))
           (puthash root (cons level workspace) mevedel-buddy--levels))))))
 
 (defun mevedel-buddy--enable-workspace-buffer ()

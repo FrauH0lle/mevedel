@@ -314,5 +314,21 @@ AUTOMATIC exercises the idle review policy without waiting for idle time."
             (should (= 1 reads)))
         (advice-remove 'mevedel-session-control-fs-read-file counter)))))
 
+(mevedel-deftest mevedel-buddy-review/invalid-dial
+  (:quiet t)
+  ,test
+  (test)
+  :doc "an invalid saved dial falls back once without stranding a taken note"
+  (mevedel-take-test--with-source
+    (write-region "invalid" nil (file-name-concat root ".mevedel/buddy-level") nil 'silent)
+    (let ((note (mevedel-note-create "Keep my taken note")))
+      (mevedel-note-take note)
+      (should (mevedel-take-test--review
+               (lambda (prompt _tools)
+                 (should (string-search "Workspace dial: active" prompt))) t))
+      (should (eq 'taken (mevedel-notes-attention-state note)))
+      (should (string-search "Buddy watches" (mevedel-take-test--labels)))
+      (should (eq 'active (mevedel-buddy-level workspace))))))
+
 (provide 'test-mevedel-buddy-take)
 ;;; test-mevedel-buddy-take.el ends here
