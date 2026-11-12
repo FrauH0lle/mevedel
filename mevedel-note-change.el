@@ -34,6 +34,35 @@
                               (mevedel-tool-patch--snapshot (plist-get change :path)))
                             changes)))))
 
+(defun mevedel-note-change--base-extent (note record)
+  "Return NOTE's zero-based line extent in RECORD's base coordinates."
+  (with-current-buffer (overlay-buffer note)
+    (save-restriction
+      (widen)
+      (when-let* ((before (cl-find buffer-file-name (plist-get record :before)
+                                  :key (lambda (item) (plist-get item :path)) :test #'equal)))
+        (let* ((start (1- (line-number-at-pos (overlay-start note))))
+               (end (line-number-at-pos (max (overlay-start note) (1- (overlay-end note)))))
+               (bytes (encode-coding-string
+                       (buffer-substring-no-properties (point-min) (point-max))
+                       buffer-file-coding-system))
+               (base (or (plist-get before :bytes) ""))
+               (start-offset 0) (end-offset 0) touched)
+          (unless (equal bytes base)
+            (dolist (run (mevedel-change--runs bytes base))
+              (pcase-let ((`(,a ,b ,c ,d) run))
+                (when (<= b start)
+                  (cl-incf start-offset (- (- d c) (- b a))))
+                (when (<= b end)
+                  (cl-incf end-offset (- (- d c) (- b a))))
+                (when (mevedel-change--overlap-p start end a b)
+                  (push run touched)))))
+          (list :path buffer-file-name
+                :start-line (apply #'min (+ start start-offset)
+                                   (mapcar (lambda (run) (nth 2 run)) touched))
+                :end-line (apply #'max (+ end end-offset)
+                                 (mapcar (lambda (run) (nth 3 run)) touched))))))))
+
 (defun mevedel-note-change--touches-p (note record)
   "Return non-nil when RECORD changes NOTE's marked source lines."
   (with-current-buffer (overlay-buffer note)
@@ -81,6 +110,10 @@ Return an ordinary tool result immediately; no tool callback is retained."
     (setq notes (or (cl-remove-if-not
                      (lambda (note) (mevedel-note-change--touches-p note record)) notes)
                     notes))
+    (setq record (plist-put record :note-extents
+                            (delq nil (mapcar (lambda (note)
+                                                (mevedel-note-change--base-extent note record))
+                                              notes))))
     (with-current-buffer data-buffer
       (when mevedel--current-request
         (let ((snapshots (mevedel-request-file-snapshots mevedel--current-request)))
@@ -161,6 +194,26 @@ When SELECTED is non-nil, prepare only those reviewed changes."
                (mevedel-notes--entries
                 (mevedel--instruction-buffer-workspace (overlay-buffer note)))))
       (user-error "Change stale; re-ask on current code or merge"))
+    (dolist (before (plist-get record :before))
+      (let* ((path (plist-get before :path))
+             (extents (cl-remove-if-not
+                       (lambda (extent) (equal path (plist-get extent :path)))
+                       (plist-get record :note-extents))))
+        (when extents
+          (let ((current (mevedel-note-change--source-snapshot
+                          (mevedel-tool-patch--snapshot path))))
+            (cond
+             ((not (eq (plist-get before :exists) (plist-get current :exists)))
+              (push (list :path path :start-line 1 :end-line 1) conflicts))
+             ((not (equal (plist-get before :bytes) (plist-get current :bytes)))
+              (dolist (run (mevedel-change--runs (or (plist-get before :bytes) "")
+                                               (or (plist-get current :bytes) "")))
+                (when (cl-some (lambda (extent)
+                                 (mevedel-change--overlap-p
+                                  (plist-get extent :start-line) (plist-get extent :end-line)
+                                  (nth 0 run) (nth 1 run))) extents)
+                  (push (list :path path :start-line (1+ (nth 2 run))
+                              :end-line (max (1+ (nth 2 run)) (nth 3 run))) conflicts)))))))))
     (dolist (change (or selected (plist-get record :changes)))
       (let* ((path (plist-get change :path))
              (before (cl-find path (plist-get record :before)

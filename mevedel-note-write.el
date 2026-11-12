@@ -151,6 +151,10 @@
                        (mevedel-note-set-tags
                         (mapcar #'intern (append (plist-get operation :tags) nil)) note))
                      (when prepared
+                       (setq prepared
+                             (plist-put prepared :note-extents
+                                        (delq nil (list (mevedel-note-change--base-extent
+                                                         note prepared)))))
                        (overlay-put note 'mevedel-note-prepared-change prepared)
                        (overlay-put note 'mevedel-note-attention-state 'ready))
                      (mevedel-notes--render note))

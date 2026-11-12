@@ -10,6 +10,7 @@
 (require 'mevedel-notes)
 (require 'mevedel-notes-list)
 (require 'mevedel-note-conversation)
+(require 'mevedel-note-write)
 (require 'mevedel-tool-patch)
 (require 'mevedel-note-merge)
 (require 'mevedel-patch-review)
@@ -260,7 +261,32 @@
       (should (commandp (key-binding "a")))
       (call-interactively (key-binding "a"))
       (should-not (string-search "ready" (buffer-string))))
-    (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))))
+    (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file))))
+  :doc "apply refuses a nonoverlapping external disk edit inside the noted code"
+  (mevedel-note-change-test--with-note
+    (with-current-buffer source
+      (move-overlay note (point-min) (point-max)))
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (with-temp-file file (insert "external before\nold\nafter\n"))
+    (should-error (mevedel-note-apply-change note) :type 'user-error)
+    (should (eq 'stale (mevedel-notes-attention-state note)))
+    (should (equal "external before\nold\nafter\n" (mevedel-test--read-file file))))
+  :doc "NoteWrite prepared suggestions also refuse external edits inside their note"
+  (mevedel-note-change-test--with-note
+    (with-current-buffer data-buf
+      (mevedel-tool-note-write
+       (list :operations
+             (vector (list :action "create" :file_path "source.txt"
+                           :start_line 1 :end_line 3 :text "AI request"
+                           :prepared_change
+                           "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")))))
+    (with-temp-file file (insert "external before\nold\nafter\n"))
+    (with-current-buffer (mevedel-notes-list workspace)
+      (goto-char (point-min))
+      (search-forward "AI request")
+      (should-error (call-interactively (key-binding "a")) :type 'user-error))
+    (should (equal "external before\nold\nafter\n" (mevedel-test--read-file file)))))
 
 (mevedel-deftest mevedel-note-merge-change
   (:quiet t)
@@ -527,7 +553,27 @@
       (goto-char (point-min))
       (search-forward "ApplyPatch ·")
       (mevedel-patch-review-submit))
-    (should (equal "before\nnew\nafter\nunsaved\n" (mevedel-test--read-file file)))))
+    (should (equal "before\nnew\nafter\nunsaved\n" (mevedel-test--read-file file))))
+  :doc "partial review refuses disk edits inside the owning note in an unselected file"
+  (mevedel-note-change-test--with-note
+    (let ((two (file-name-concat root "two.txt")))
+      (write-region "two old\n" nil two nil 'silent)
+      (with-current-buffer source
+        (move-overlay note (point-min) (point-max)))
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** Update File: two.txt\n@@\n-two old\n+two new\n*** End Patch")
+      (mevedel-note-apply-change note t)
+      (with-current-buffer view-buf
+        (goto-char (point-min))
+        (search-forward "M source.txt")
+        (mevedel-patch-review-toggle-selection)
+        (with-temp-file file (insert "external before\nold\nafter\n"))
+        (goto-char (point-min))
+        (search-forward "ApplyPatch ·")
+        (mevedel-patch-review-submit))
+      (should (equal "two old\n" (mevedel-test--read-file two)))
+      (should (eq 'stale (mevedel-notes-attention-state note)))
+      (should (equal "external before\nold\nafter\n" (mevedel-test--read-file file))))))
 
 (mevedel-deftest mevedel-note-change-replacement
   (:quiet t)
