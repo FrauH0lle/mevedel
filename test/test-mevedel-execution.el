@@ -11,6 +11,7 @@
 (require 'mevedel-agents)
 (require 'mevedel-execution)
 (require 'mevedel-execution-process)
+(require 'mevedel-permission-rules)
 (require 'mevedel-resource)
 (require 'mevedel-sandbox)
 (require 'mevedel-structs)
@@ -408,6 +409,8 @@
                 (funcall cancel)
                 (funcall cancel))
               (test-mevedel-execution--wait (lambda () result))
+              (ert-info ((format "mode=%S cancel=%S result=%S" mode cancel-p result))
+                (should-not (plist-get result :error)))
               (should (= 1 settlements))
               (should-not callback-saw-placeholder)
               (should (equal (if cancel-p "ready" "readydone")
@@ -1443,6 +1446,9 @@
                             "tool-results" "executions"))
          (mevedel-sandbox-mode 'off)
          (temporary-artifact-directory (file-name-concat root "artifacts"))
+         (finish (file-name-concat root "finish"))
+         (finish-yielded (file-name-concat root "finish-yielded"))
+         (finish-pending (file-name-concat root "finish-pending"))
          (resolutions 0)
          (count (lambda (original &rest args)
                   (cl-incf resolutions)
@@ -1451,20 +1457,33 @@
     (advice-add 'mevedel-resource-artifact-address :around count)
     (unwind-protect
         (progn
-          (mevedel-execution-start-bash
-           (lambda (value) (setq initial value))
-           :session session :owner "main" :owner-context session
-           :command '("sh" "-c" "printf first; sleep .2; printf second")
-           :tool-args '(:command "printf first; sleep .2; printf second")
-           :workdir root :writable-roots (list root)
-           :artifact-directory artifact-directory :yield-time-ms 10)
+          (let ((arm (symbol-function 'mevedel-execution--arm-managed-timers)))
+            (cl-letf (((symbol-function 'mevedel-execution--arm-managed-timers)
+                       (lambda (record)
+                         ;; The first observation must follow output, not shell startup.
+                         (test-mevedel-execution--wait
+                          (lambda ()
+                            (equal "first"
+                                   (mevedel-execution--record-output-head record))))
+                         (funcall arm record))))
+              (mevedel-execution-start-bash
+               (lambda (value) (setq initial value))
+               :session session :owner "main" :owner-context session
+               :command (list "sh" "-c"
+                              "printf first; while test ! -e \"$1\"; do sleep .01; done; printf second"
+                              "artifact-address" finish)
+               :workdir root :writable-roots (list root)
+               :artifact-directory artifact-directory :yield-time-ms 10)))
           (test-mevedel-execution--wait (lambda () initial))
+          (should (eq 'running (plist-get (plist-get initial :facts) :state)))
           (setq id (plist-get (plist-get initial :facts) :execution-id))
           (let ((address (plist-get (plist-get initial :facts) :output-path)))
             (should (string-prefix-p "artifact://executions/" address))
             (should-not (file-name-absolute-p address))
             (should-not (string-match-p (regexp-quote root) address)))
+          (with-temp-file finish)
           (setq final (test-mevedel-execution--observe session id))
+          (should (eq 'completed (plist-get (plist-get final :facts) :state)))
           (should (equal (plist-get (plist-get initial :facts) :output-path)
                          (plist-get (plist-get final :facts) :output-path)))
           ;; Its events share one resolution of the unchanged spool path.
@@ -1474,12 +1493,15 @@
           (mevedel-execution-start-bash
            (lambda (value) (setq yielded value))
            :session session :owner "main" :owner-context session
-           :command '("sh" "-c" "sleep .2; printf yielded")
-           :tool-args '(:command "sleep .2; printf yielded")
+           :command (list "sh" "-c"
+                          "while test ! -e \"$1\"; do sleep .01; done; printf yielded"
+                          "artifact-address" finish-yielded)
            :workdir root :writable-roots (list root)
            :artifact-directory temporary-artifact-directory :yield-time-ms 10)
           (test-mevedel-execution--wait (lambda () yielded))
+          (should (eq 'running (plist-get (plist-get yielded :facts) :state)))
           (should-not (plist-get (plist-get yielded :facts) :output-path))
+          (with-temp-file finish-yielded)
           (mevedel-execution-start-bash
            (lambda (value) (setq foreground value))
            :session session :owner "main" :owner-context session
@@ -1493,8 +1515,9 @@
           (mevedel-execution-start-bash
            (lambda (value) (setq pending-final value))
            :session session :owner "main" :owner-context session
-           :command '("sh" "-c" "sleep .2; printf pending")
-           :tool-args '(:command "sleep .2; printf pending")
+           :command (list "sh" "-c"
+                          "while test ! -e \"$1\"; do sleep .01; done; printf pending"
+                          "artifact-address" finish-pending)
            :workdir root :writable-roots (list root)
            :artifact-directory temporary-artifact-directory
            :yield-time-ms nil)
@@ -1509,6 +1532,7 @@
             (should (string-match-p "\.mevedel-pending-executions"
                                     spool))
             (should-not (mevedel-resource-artifact-address spool session)))
+          (with-temp-file finish-pending)
           (test-mevedel-execution--wait (lambda () pending-final)))
       (advice-remove 'mevedel-resource-artifact-address count)
       (mevedel-execution-teardown-session session)
