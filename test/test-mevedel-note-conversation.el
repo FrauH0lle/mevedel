@@ -22,6 +22,7 @@
 (require 'mevedel-transport)
 (require 'mevedel-journal-process)
 (require 'gptel-openai)
+(require 'gptel-transient)
 (require 'mevedel-file-state)
 (require 'mevedel-tool-patch)
 (require 'mevedel-pipeline)
@@ -118,7 +119,12 @@
     (let* ((note (mevedel-note-create "Why is this selected?"))
            (view (mevedel-note-send note)))
       (should (eq view (window-buffer (selected-window))))
-      (should (window-parameter (selected-window) 'window-side))
+      (if (display-graphic-p)
+          (progn
+            (should (eq (selected-frame) mevedel-directive-frame--frame))
+            (should (eq (frame-parent (selected-frame))
+                        (window-frame (get-buffer-window source t)))))
+        (should (eq 'right (window-parameter (selected-window) 'window-side))))
       (should (= 1 (length sent)))
       (mevedel-note-conversation-test--answer (car sent) "It is the selected code.")
       (with-current-buffer view
@@ -610,8 +616,11 @@
         (setq view (mevedel-note-send (mevedel-note-restore uuid workspace))))
       (should (= 1 (length sent)))
       (mevedel-test--await 5 "Restored note answer did not render"
-        (with-current-buffer view
-          (string-search "An answer after restoration" (buffer-string)))))))
+        (progn
+          ;; Restored views defer rendering until redisplay observes their window.
+          (redisplay t)
+          (with-current-buffer view
+            (string-search "An answer after restoration" (buffer-string))))))))
 
 (mevedel-deftest mevedel-session-persistence-cleanup-expired/note-uncertainty
   (:quiet t)
