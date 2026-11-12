@@ -321,8 +321,8 @@ Explicit review and guidance requests are not limited by the automatic dial.
 
 `M-x mevedel-notes-list` lists the whole workspace, including unopened files,
 grouped by attention state. Use `v` or `RET` to visit, `e` to edit, `t` to edit
-tags, `T` to take or drop, `s` to send or reopen, `d` to delete, `x` to mark done,
-`g` to refresh and `q` to close. Recently
+tags, `T` to take or drop, `s` to send or reopen, `a` to apply, `d` to delete,
+`x` to mark done, `g` to refresh and `q` to close. Recently
 closed notes form a folded group: `TAB` toggles it, the State column shows the
 close reason, and `r` restores the selected note. Listing does not open source
 files. Missing sources show their last observed state without probing each file.

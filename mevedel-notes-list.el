@@ -42,6 +42,7 @@ Called when folding as well as refreshing: use only cached state, never I/O.")
     (define-key map (kbd "t") #'mevedel-notes-list-tags)
     (define-key map (kbd "e") #'mevedel-notes-list-edit)
     (define-key map (kbd "s") #'mevedel-notes-list-send)
+    (define-key map (kbd "a") #'mevedel-notes-list-apply)
     (define-key map (kbd "T") #'mevedel-notes-list-take)
     (define-key map (kbd "g") #'mevedel-notes-list-refresh)
     (define-key map (kbd "q") #'mevedel-window-quit)
@@ -50,8 +51,8 @@ Called when folding as well as refreshing: use only cached state, never I/O.")
 
 (define-derived-mode mevedel-notes-list-mode tabulated-list-mode "Notes"
   "Workspace notes grouped by the attention they need.
-Use v or RET to visit, s to send, T to take/drop, e to edit, t for tags,
-d to delete, x for done, r to restore, TAB to fold recently closed, g to refresh
+Use v or RET to visit, s to send, a to apply, T to take/drop, e to edit,
+t for tags, d to delete, x for done, r to restore, TAB to fold, g to refresh
 and q to return to the invoking window."
   (setq tabulated-list-format
         [("#" 5 nil) ("Where" 26 nil) ("By" 14 nil)
@@ -168,6 +169,12 @@ and q to return to the invoking window."
         (view (mevedel-note-send (mevedel-notes-list--selected-note))))
     (with-current-buffer list-buffer (mevedel-notes-list-refresh))
     view))
+
+(defun mevedel-notes-list-apply ()
+  "Apply the selected note's prepared change."
+  (interactive)
+  (mevedel-note-apply-change (mevedel-notes-list--selected-note))
+  (mevedel-notes-list-refresh))
 
 (defun mevedel-notes-list-done ()
   "Mark the selected open note done without changing its code."

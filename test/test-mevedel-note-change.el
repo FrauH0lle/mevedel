@@ -8,6 +8,7 @@
 
 (require 'mevedel)
 (require 'mevedel-notes)
+(require 'mevedel-notes-list)
 (require 'mevedel-note-conversation)
 (require 'mevedel-tool-patch)
 (require 'mevedel-note-merge)
@@ -175,7 +176,18 @@
       (should (equal "before\nnew\nafter\nunsaved\n" (buffer-string))))
     (should (equal "before\nnew\nafter\nunsaved\n" (mevedel-test--read-file file)))
     (mevedel-note-revert-change note 0)
-    (should (equal "before\nold\nafter\nunsaved\n" (mevedel-test--read-file file)))))
+    (should (equal "before\nold\nafter\nunsaved\n" (mevedel-test--read-file file))))
+  :doc "the notes list applies the selected note with the single a key"
+  (mevedel-note-change-test--with-note
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (with-current-buffer (mevedel-notes-list workspace)
+      (goto-char (point-min))
+      (search-forward "Improve this")
+      (should (commandp (key-binding "a")))
+      (call-interactively (key-binding "a"))
+      (should-not (string-search "ready" (buffer-string))))
+    (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))))
 
 (mevedel-deftest mevedel-note-merge-change
   (:quiet t)
