@@ -9,6 +9,7 @@ notes. They survive restarts and never edit your code.
 ```
 M-x mevedel-buddy-mode        watch this buffer
 M-x mevedel-buddy-global-mode watch every buffer in `mevedel-buddy-tracked-modes'
+M-x mevedel-buddy-set-level   set this workspace's Quiet, Watching or Active dial
 M-x mevedel-buddy-review      review now, without waiting for the idle timer
 M-x mevedel-buddy-guide       ask what to build here, rather than what went wrong
 M-x mevedel-buddy-dismiss-note   dismiss the note at point
@@ -18,6 +19,36 @@ M-x mevedel-buddy-clear-changes  forget the edits recorded so far
 M-x mevedel-buddy-abort          abandon a review that has wedged
 /buddy [BRIEF|off]               from a session: implement it yourself, with Buddy
 ```
+
+## Workspace dial and taken notes
+
+`mevedel-buddy-set-level` saves one level per workspace in `.mevedel/buddy-level`
+and enables tracking in its source buffers. The default is **Active**:
+
+- **Quiet:** no unasked remarks, except on taken-note code.
+- **Watching:** likely mistakes around recent edits, at your pause; no ideas.
+- **Active:** Watching plus ideas near a known goal: a taken note or an authored
+  note near the edit. Elsewhere it behaves like Watching.
+
+The dial governs automatic reviews only. Explicit `mevedel-buddy-review` and
+`mevedel-buddy-guide` requests bypass it and its idea-nearness restriction.
+The saved value is read once, at the workspace's first review, not while
+recording keystrokes or restoring source notes. An absent setting means Active;
+an invalid or unreadable setting reports a diagnostic and also uses Active.
+
+`mevedel-note-take` turns on Buddy for that source buffer and invites review of
+the note's code with its text as the brief, at every dial level. Use **take** in
+the note's modified-key menu or `T` in the notes list. The label says **Buddy
+watches**. Buddy may mark it **looks done** when its stated goal is met, but
+never closes it: `mevedel-note-done` is explicit. Editing the goal or its code
+retires earlier completion feedback.
+
+**Drop** (`mevedel-note-drop`, or `T` again in the list) returns the note to
+unsent, retaining its conversation and source code. Sending a taken note makes
+it sent. Dropping, sending or closing ends that note's invitation; ordinary
+dial-based reviews may still run. Restoring taken source notes after a restart
+resumes their tracking without reading the dial. Unknown remote files remain
+unclaimed on visit; explicit Buddy activation uses normal workspace detection.
 
 ## Feeding a session to Buddy
 
@@ -60,7 +91,7 @@ when they fire, what they are sent, and what the prompt permits.
 | Input | consolidated diff of recent edits | region, or whole buffer |
 | Uses change tracking | yes | no |
 | Requires `mevedel-buddy-mode` | yes | no |
-| May speculate | no | yes |
+| May suggest ideas | Active, near a known goal | yes |
 | Default when unsure | stay silent | say something |
 
 They are separate because their noise economics are opposite. Unasked review
@@ -88,9 +119,9 @@ work. Abandonment preserves unreviewed changes and closes the tool scope.
 
 ## Scope
 
-Buddy is workspace-scoped, not buffer-scoped. Changes are keyed by the project
-root when the buffer has one, and by buffer name otherwise, so edits spread
-across several files of one project are reviewed together. That is what lets
+Buddy is workspace-scoped, not buffer-scoped. Changes are keyed by the pinned
+workspace root when present, otherwise by project root or buffer name, so edits
+spread across several files of one workspace are reviewed together. That is what lets
 the model see a caller and its callee change in the same round.
 
 Buddy uses no session. It derives its workspace from the source buffer, the way
@@ -98,14 +129,15 @@ directive dispatch already does, so it works on a file you have not started a
 conversation about. A live session is used only to attribute telemetry when one
 happens to exist.
 
-Workspace detection reads `default-directory`, not `buffer-file-name`, so a
-brand-new unsaved buffer in a project still gets `AGENTS.md` and persistent
+Without a pinned workspace, detection reads `default-directory`, not
+`buffer-file-name`, so a brand-new unsaved buffer in a project still gets
+`AGENTS.md` and persistent
 memory in its prompt. That matters most for guidance, where "what should this
 module need" depends on project conventions.
 
 The cached scope is bound to the buffer name, visited file, and
-`default-directory` that produced it. Changing any of them discards that
-buffer's old edit records and resets its pending review timer before deriving
+`default-directory` and pinned workspace root that produced it. Changing any of
+them discards that buffer's old edit records and resets its pending review timer before deriving
 the new scope. A buffer cannot carry one project's edits or prompt context into
 another project merely by changing what it visits.
 
@@ -132,6 +164,8 @@ the closed record survives the ordinary count/age retention limits. It is not
 a permanent mute rule. Keep changes the author to you, retaining the note's
 identity, text and kept-from-Buddy metadata. Buddy cannot subsequently update
 or retract a kept note, including from a review already in flight.
+Sending or taking a Buddy remark first performs that same ownership transfer,
+so it cannot be retracted after acquiring a conversation or becoming taken.
 
 All remark mutations in one review are synced together once at settlement,
 including successful tool calls before an abandoned review. The normal checked
@@ -158,6 +192,11 @@ A review covers the **region around your change**, not only the lines you
 touched. The payload carries six lines of context either side of each change,
 and every numbered line in it can carry a note — so a bug sitting next to an
 edit gets named even though you did not introduce it this round.
+Quiet limits new remarks to taken-note code; Watching refuses ideas; Active
+permits ideas only within six lines of a captured authored goal whose text
+still matches. Taken goals are included even without a pending edit, and
+completion feedback is accepted only while both the goal and captured code
+still match the live taken note.
 
 It does not stop there. `read_buffer` returns a bounded range of a buffer
 already in the review, for a question the diff raised but cannot settle — a

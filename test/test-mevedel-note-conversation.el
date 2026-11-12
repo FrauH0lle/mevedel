@@ -169,6 +169,30 @@
     (should (= 1 (length sent)))
     (mevedel-note-conversation-test--answer (car sent) "Sent through the menu.")))
 
+(mevedel-deftest mevedel-note-send/taken
+  (:quiet t)
+  ,test
+  (test)
+  :doc "sending a taken note ends watching, including with an existing conversation"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Implement this myself"))
+           (view (mevedel-note-send (mevedel-note-take note))))
+      (should (eq 'sent (overlay-get note 'mevedel-note-state)))
+      (mevedel-note-conversation-test--answer (car sent) "A retained answer.")
+      (with-current-buffer view (mevedel-note-conversation-close))
+      (with-current-buffer source
+        (mevedel-note-take note)
+        (should (eq view (mevedel-note-send note)))
+        (should (eq 'sent (overlay-get note 'mevedel-note-state)))
+        (should (= 1 (length sent)))
+        (with-current-buffer view (mevedel-note-conversation-close))
+        (mevedel--clear-instruction-state workspace)
+        (mevedel-instruction-store-observe workspace)
+        (with-current-buffer source
+          (goto-char (point-min)) (forward-line 1)
+          (should (eq 'sent (overlay-get (mevedel-notes--at-point)
+                                        'mevedel-note-state))))))))
+
 (mevedel-deftest mevedel-note-send/buddy-ownership
   (:quiet t)
   ,test
