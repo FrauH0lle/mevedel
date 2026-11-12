@@ -411,10 +411,10 @@ ROOT-OBSERVATION is the recovery-root probe from this admission's program."
          (mevedel-session-control-fs-delete-file
           (plist-get recovery :marker)))
        (let ((root (mevedel-session-recovery--root session-dir)))
-         (when (and (mevedel-session-control-fs-directory-p root)
-                    (null (mevedel-session-control-fs-list-directory
-                           root "\\`[^.]")))
-           (mevedel-session-control-fs-delete-directory root)))
+         (when (mevedel-session-control-fs-directory-p root)
+           (mevedel-session-control-fs-program-value
+            (car (mevedel-session-control-fs-run-program
+                  (list (list :op 'delete-empty-directory :path root)))))))
        t))))
 
 (defun mevedel-session-recovery-record-failure

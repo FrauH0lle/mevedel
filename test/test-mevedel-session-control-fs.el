@@ -166,6 +166,40 @@ streams over stdin."
           (should (equal "one\n" (plist-get (nth 1 (car settled)) :value))))
       (delete-directory root t)))
 
+  :doc "async and sync programs share the stable parent lock"
+  (let* ((root (make-temp-file "mevedel-control-lock-" t))
+         (path (file-name-concat root "value"))
+         (pause (file-name-concat root "paused"))
+         (mevedel-session-control-fs--test-pause-file pause)
+         first second)
+    (unwind-protect
+        (progn
+          (mevedel-session-control-fs-run-program-async
+           (list (list :op 'write :path path :content "first"))
+           (lambda (results error) (setq first (list results error))) nil root)
+          (with-timeout (10 (ert-fail "Locked program never paused"))
+            (while (not (file-exists-p pause)) (accept-process-output nil 0.01)))
+          (should (mevedel-session-control-fs-async-busy-p root))
+          (let ((mevedel-session-control-fs--test-pause-file nil))
+            (mevedel-session-control-fs-run-program-async
+             (list (list :op 'verify :path path :content "first")
+                   (list :op 'write :path path :content "second"))
+             (lambda (results error) (setq second (list results error))) nil root))
+          (accept-process-output nil 0.05)
+          (should-not second)
+          (write-region "" nil (concat pause ".continue") nil 'silent)
+          (with-timeout (10 (ert-fail "Locked programs never settled"))
+            (while (not (and first second)) (accept-process-output nil 0.01)))
+          (should-not (cadr first))
+          (should-not (cadr second))
+          (should-not (mevedel-session-control-fs-async-busy-p root))
+          (should (equal '(ok ok) (mapcar (lambda (r) (plist-get r :status))
+                                         (car second))))
+          (should (equal "second" (mevedel-session-control-fs-read-file path))))
+      (write-region "" nil (concat pause ".continue") nil 'silent)
+      (mevedel-session-control-fs-wait-async)
+      (delete-directory root t)))
+
   :doc "runs synchronously where the editor is about to exit"
   (let* ((root (make-temp-file "mevedel-control-async-" t))
          (mevedel-session-control-fs--async-wait t)

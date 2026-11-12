@@ -751,7 +751,8 @@ the command will resize the directive in the following manner:
 Without prefix ARG, discover persisted workspace sessions first.  The entry
 chooser offers a new session, ordinary resume, read-only inspection of an
 active writer, inert transcript inspection for incompatible sessions, or
-confirmed takeover of an expired lease.  With no persisted sessions, retain
+confirmed takeover of an expired lease.  Recovery-blocked sessions offer
+Recover, Discard, and Cancel.  With no persisted sessions, retain
 the live-buffer behavior: create \"main\", switch to the sole live session, or
 prompt among multiple live sessions.
 

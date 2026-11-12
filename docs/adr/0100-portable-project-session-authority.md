@@ -39,11 +39,22 @@ Retention applies to both profiles with the same age cap and newest-session
 floor. A portable session is deleted only through its own lease protocol: an
 abandoned head (absent, released without a transfer reservation, or an expired
 active or claiming record without unsettled mutation) must also have its last
-renewal older than the cap. A head in another lease format is accepted only
-when its numeric expiry is itself older than the cap. Cleanup claims the next generation, rechecks
-recovery markers and journal pins, and deletes the directory in one program
-after proving the claim's bytes are still the newest generation. A competing
-claim from another client therefore always wins.
+renewal older than the cap. Unreadable or unsupported generation records are
+unknown authority and keep the session. Cleanup claims the next generation and
+uses the same final deletion boundary as explicitly confirmed discard: exact
+owned bytes, newest generation, target-clock deadline, and no retained recovery
+or journal pins. Election and deletion programs share the stable sessions-parent
+directory's target-side lock. Delayed activation verifies its exact candidate
+before writing, rather than recreating a removed candidate. No lock spans user
+confirmation or journal processing.
+
+The chooser exposes recovery-blocked, unowned sessions with Recover, Discard,
+and Cancel. Discard revalidates session/publication, workspace, and target
+identity without restoring the conversation. It abandons recovery and settles
+captures through their existing owners before deletion; unsupported evidence
+remains blocked. Confirmation acknowledges permanent data loss and that prior
+writers have stopped, not proof of process termination. A later failure may keep
+the session after approved capture omissions or recovery abandonment completed.
 
 A missing or contradictory authority profile is an error. The session codec
 accepts one current format without automatic migration or a dual reader. The
@@ -170,5 +181,11 @@ same reason as from exit cleanup.
 That run also kept 24 expired sessions whose August lease records predate
 `:transfer-generation`. Current code cannot interpret or resume them, so
 treating every invalid head as owned would have kept them forever. Liveness in
-every lease format is an expiry renewed within minutes, so a numeric expiry a
-whole cap behind is accepted as abandoned; a head without one is still kept.
+every lease format was treated as an expiry renewed within minutes, so a numeric
+expiry a whole cap behind was accepted as abandoned; a head without one was kept.
+Crash-session discard replaces that permissive fallback with strict generation
+validation: the existing head reader could skip unreadable records and thereby
+mistake unknown authority for absence. Recovery blockers are now visible rather
+than silently bypassed. Review also established that a single unlocked
+verify/newest/delete program still allowed a competing claim between proof and
+deletion; the shared election/deletion lock closes that cooperating-client race.

@@ -468,7 +468,7 @@ it read-only instead of corrupting the writer's transcript.
 
 | Command                  | Command Description                                                |
 |--------------------------|--------------------------------------------------------------------|
-| `mevedel`                | Pick a saved session to resume, join, or take over, or start a new one. |
+| `mevedel`                | Pick a saved session to resume, join, take over, recover, or explicitly discard, or start a new one. |
 | `mevedel-take-control`   | Take control of a read-only session; requests it when a live client holds the lease. |
 | `mevedel-release-control`| Hand the lease back and keep watching the session read-only.        |
 | `mevedel-toggle-follow`  | Toggle whether a non-owner view follows the owner's published turns. |

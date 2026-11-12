@@ -283,6 +283,15 @@ Unready checkpoints also appear as recovery work, including damaged descriptors;
 retired captures remain outside the pending list. Inspection does not acquire
 source authority or repair storage.
 
+The session chooser also identifies journal pins as a session-cleanup blocker.
+Recover opens this inspector when pins are the only blocker. Explicit session
+Discard uses the same capture owner as per-job discard: accepted digests recover
+instead of being overwritten, and omissions persist before source pins release.
+Unready, orphaned, unreadable, or foreign-owned captures can refuse session
+deletion. It never removes pins directly or searches another workspace's journal.
+Capture settlement can complete even when later session deletion fails; accepted
+omissions remain durable and the retained session reports the remaining blocker.
+
 Explicit discard remains available when journaling is disabled. It cancels a
 matching request owned by this client, records an immutable omission before
 releasing the source pin, and removes the raw evidence bundle. It cannot take

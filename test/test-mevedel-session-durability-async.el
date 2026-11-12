@@ -1067,6 +1067,75 @@ signals a `user-error', so a gated operation must stop before any I/O."
       (should (eq 'lost (plist-get (mevedel-session-lease session) :state)))
       (should-not (plist-get (mevedel-session-lease session) :bytes)))))
 
+(mevedel-deftest mevedel-session-durability-heartbeat/reclaim-discard
+  (:doc "delayed async reclaim activation and abort verify the exact claiming record")
+  (dolist (abort '(nil t))
+    (test-mevedel-durability-async--with-lease (root session)
+      (let* ((directory (file-name-concat root ".lease"))
+             (parent (mevedel-session-control-fs-physical-path
+                      (file-name-directory (directory-file-name root))))
+             (head (mevedel-session-durability--lease-head directory))
+             (run (symbol-function 'mevedel-session-control-fs-run-program-async))
+             (claim nil)
+             warnings
+             (settled nil))
+        (plist-put head :renewed-at 0)
+        (plist-put head :expires-at 1)
+        (mevedel-session-durability--write-generation directory head)
+        (mevedel-test--with-captured-diagnostics warnings
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program-async)
+                     (lambda (operations callback &optional scope lock-directory)
+                       (let ((creating (eq 'create (plist-get (car operations) :op))))
+                         (when creating
+                           (should (equal parent lock-directory))
+                           (setq claim (plist-get (car operations) :path))
+                           (when abort
+                             (mevedel-session-durability--write-generation
+                              directory (plist-put (copy-sequence head) :buffer "changed"))))
+                         (when (and claim
+                                    (eq 'verify (plist-get (car operations) :op))
+                                    (equal claim (plist-get (car operations) :path)))
+                           (setq settled t)
+                           (should (equal parent lock-directory)))
+                         (funcall run operations
+                                  (lambda (results error)
+                                    (when (and creating (not error))
+                                      (mevedel-session-control-fs-delete-file claim))
+                                    (funcall callback results error))
+                                  scope lock-directory)))))
+            (mevedel-session-durability-heartbeat session)
+            (with-timeout (10 (ert-fail "Reclaim did not settle"))
+              (while (mevedel-session-lease-renewal-job session)
+                (accept-process-output nil 0.01)))))
+        (should (string-match-p "heartbeat failed" warnings))
+        (ert-info ((format "Captured heartbeat diagnostics: %S" warnings))
+          (should claim))
+        (should settled)
+        (should-not (file-exists-p claim))
+        (should (eq 'lost (plist-get (mevedel-session-lease session) :state)))))))
+
+(mevedel-deftest mevedel-session-durability-heartbeat/reclaim-malformed
+  (:doc "async reclaim refuses unreadable predecessors without pruning their evidence")
+  (test-mevedel-durability-async--with-lease (root session)
+    (let* ((directory (file-name-concat root ".lease"))
+           (head (mevedel-session-durability--lease-head directory))
+           (path (mevedel-session-durability--generation-path directory 2))
+           warnings)
+      (plist-put head :renewed-at 0)
+      (plist-put head :expires-at 1)
+      (mevedel-session-durability--write-generation directory head)
+      (write-region "(:generation" nil path nil 'silent)
+      (mevedel-test--with-captured-diagnostics warnings
+        (mevedel-session-durability-heartbeat session)
+        (with-timeout (10 (ert-fail "Reclaim did not settle"))
+          (while (mevedel-session-lease-renewal-job session)
+            (accept-process-output nil 0.01))))
+      (should (eq 'lost (plist-get (mevedel-session-lease session) :state)))
+      (should (file-exists-p path))
+      (should (equal "(:generation"
+                     (with-temp-buffer (insert-file-contents path) (buffer-string))))
+      (should (equal head (mevedel-session-durability--lease-head directory))))))
+
 (provide 'test-mevedel-session-durability-async)
 
 ;;; test-mevedel-session-durability-async.el ends here

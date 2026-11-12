@@ -1512,7 +1512,20 @@ Each failure is reported and does not stop the rest."
 
 (add-hook 'kill-emacs-hook #'mevedel-session-control-fs--exit-cleanup 90)
 
-(defun mevedel-session-control-fs-run-program-async (operations callback &optional scope)
+(defun mevedel-session-control-fs-async-busy-p (directory)
+  "Return non-nil while a local asynchronous program addresses DIRECTORY.
+Include completed programs awaiting callback delivery: their continuations may
+still mutate storage after the target process has exited.  No target I/O runs."
+  (let* ((directory (mevedel-session-control-fs-physical-path directory))
+         (prefix (file-name-as-directory directory)))
+    (seq-some (lambda (job)
+                (seq-some (lambda (path)
+                            (or (equal directory path) (string-prefix-p prefix path)))
+                          (nth 2 job)))
+              mevedel-session-control-fs--async-jobs)))
+
+(defun mevedel-session-control-fs-run-program-async
+    (operations callback &optional scope lock-directory)
   "Run OPERATIONS as one control program, then call CALLBACK.
 
 CALLBACK receives RESULTS, as `mevedel-session-control-fs-run-program'
@@ -1538,15 +1551,20 @@ process when the program runs asynchronously, and nil otherwise.
 `mevedel-session-control-fs-wait-async' waits for programs in flight.
 
 SCOPE is the captured diagnostic root, or `unavailable' for ownerless work.
-Nothing orders an asynchronous program against other programs on the same
-target: callers serialize the ones that touch the same files."
+LOCK-DIRECTORY serializes the whole program with synchronous and asynchronous
+programs using that same physical directory, exactly as in the synchronous API.
+Without it callers must serialize programs touching the same files."
   (let ((remote (file-remote-p (plist-get (car operations) :path))))
+    (when lock-directory
+      (setq lock-directory (mevedel-session-control-fs-physical-path lock-directory))
+      (unless (equal remote (file-remote-p lock-directory))
+        (error "Control lock crosses execution targets")))
     (if (or mevedel-session-control-fs--async-wait
             (null operations)
             (and remote (not (mevedel-session-control-fs--pipe-capable-p remote))))
         (let (results failure)
           (condition-case err
-              (setq results (mevedel-session-control-fs-run-program operations))
+              (setq results (mevedel-session-control-fs-run-program operations lock-directory))
             (error (setq failure err)))
           (funcall callback results failure)
           nil)
@@ -1558,7 +1576,10 @@ target: callers serialize the ones that touch the same files."
              (output (generate-new-buffer " *mevedel-control-fs-async*"))
              (stderr (generate-new-buffer " *mevedel-control-fs-async-stderr*"))
              (staged (list nil))
-             (job (list staged scope))
+             (job (list staged scope
+                        (mapcar (lambda (op)
+                                  (mevedel-session-control-fs-physical-path
+                                   (plist-get op :path))) operations)))
              ;; The transport queue coalesces work under `equal' keys, and
              ;; JOB is structurally equal across programs that stage
              ;; nothing: an uninterned symbol keeps each delivery its own.
@@ -1682,11 +1703,14 @@ target: callers serialize the ones that touch the same files."
                                (append
                                 (list bash "-p" "-c"
                                       mevedel-session-control-fs--program-script
-                                      "mevedel-session-control-fs" "" "" "0")
+                                      "mevedel-session-control-fs"
+                                      (or mevedel-session-control-fs--test-pause-file "")
+                                      (if lock-directory (file-local-name lock-directory) "") "0")
                                 arguments)
                              (list bash "-p" "-c"
                                    mevedel-session-control-fs--pipe-bootstrap
-                                   bash "" "" "0"))
+                                   bash (or mevedel-session-control-fs--test-pause-file "")
+                                   (if lock-directory (file-local-name lock-directory) "") "0"))
                            :connection-type 'pipe :coding 'no-conversion
                            :file-handler t :noquery t
                            :sentinel

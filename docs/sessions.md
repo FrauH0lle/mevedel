@@ -1431,8 +1431,10 @@ alongside `Start new session`:
 | `available` | `Resume` | acquire the lease, writable |
 | `foreign` | `Join` | read-only, following the owner |
 | `expired` | `Take over` | confirmed takeover |
+| unowned, with recovery blockers | `Recover` | choose Recover, Discard, or Cancel |
 
-The verb comes from the lease alone. Whether the workspace is local or
+Ordinary verbs come from the lease; recovery blockers add a separate decision.
+Whether the workspace is local or
 reached over TRAMP is a property of the client's vantage point, not of the
 session: two machines see one session directory through different path
 spellings, and what decides the outcome is whether anybody is writing it.
@@ -1449,8 +1451,27 @@ share project files and points to a Worktree Fork for isolation. Accepting this
 general advisory suppresses it for the rest of the Emacs process, across
 workspaces; refusing or quitting still cancels the start and leaves the advisory
 unacknowledged. Lease takeover and destructive-action confirmations remain
-per action. An expired lease does not warn: its writer is gone, which is the
-reason that row offers a takeover in the first place.
+per action. An expired ordinary lease does not trigger the shared-files advisory:
+it no longer grants writing authority. Expiry does not prove that the former
+client or a child process has stopped.
+
+An unowned portable session retained for interrupted publication, unresolved
+mutation, recovery data, or journal pins shows `cleanup blocked: REASON`.
+These are distinct from ordinary age and newest-session retention exemptions.
+`Recover` uses normal restore/takeover without clearing recovery evidence; manual
+recovery names its retained directory. A session blocked only by journal pins
+opens the workspace's journal jobs inspector. `Discard` requires a fresh,
+per-action confirmation of permanent transcript/recovery loss and that the prior
+client and its child writers have stopped. Project-file effects remain.
+The command validates the selected session, committed publication, workspace
+identity, and target incarnation without restoring conversation buffers. A live
+owner, reserved transfer, pending local control program, changed target, or
+unreadable authority prevents discard. Capture settlement uses journal ownership;
+unready, orphaned, malformed, or foreign-owned captures can still prevent deletion.
+Approved capture omissions or recovery abandonment may survive a later failure;
+the session remains and the error reports that partial progress. Discard refreshes
+the chooser, even after removing its last session; it never implicitly creates a
+replacement. Cancel and declining confirmation do not mutate session storage.
 
 A failure before the manifest-head compare-and-set retains the current and
 previously retained staged sources as one transient local recovery, surfaces
@@ -3107,15 +3128,19 @@ session open in this Emacs and otherwise deletes through
 `mevedel-session-durability-delete-abandoned`: the lease head must be absent,
 released without a control-transfer reservation, or an expired active or
 claiming record without unsettled mutation, and its last renewal must also be
-older than the cap. A head in another lease format (such as records written
-before control transfer added `:transfer-generation`) qualifies only when its
-numeric expiry is itself older than the cap; no owner of any format leaves its
-expiry that far behind. Unchanged saves keep the sidecar's `:updated-at`, so the
+older than the cap. Unreadable or unsupported lease generations remain protected:
+a failed record read is not proof of absent authority. Unchanged saves keep the sidecar's `:updated-at`, so the
 renewal is the later proof of use. Cleanup claims the next lease generation
-without prompting, rechecks recovery markers and pins, and deletes the
-directory in one control program only after proving its claim is still the
-newest generation. A competing claim from another client keeps the session,
-and any kept session's claim is released.
+without prompting. Both automatic cleanup and explicit discard serialize their
+final deletion with all synchronous and asynchronous lease-election programs on
+the physical sessions-parent directory's target-side lock. The locked program
+verifies the exact owned bytes, newest generation, fresh target-clock deadline,
+and absence of retained pins and recovery data before deleting the whole session.
+Delayed claim activation must still prove its exact candidate exists, so it cannot
+recreate a generation beneath a deleted session. A competing claim keeps the
+session, and any kept session's cleanup claim is released. Locks cover only short
+target programs, not prompts or journal processing. This coordinates cooperating
+clients; it does not stop a surviving, previously admitted child writer.
 
 Chooser cleanup still runs before incompatibility discovery. Consequently an
 expired session may be deleted before it can appear as an `Inspect` row.

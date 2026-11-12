@@ -104,7 +104,12 @@ dispatch is cancelled, the stored outcome is still delivered once, from a
 zero-second transport timer: neither lost nor replaced by an invented error.
 A request that fails to launch calls the callback before returning, once.
 Nothing orders an asynchronous program against others on the same target;
-callers serialize the ones that touch the same files.
+callers serialize the ones that touch the same files. Both carriers accept the
+same pinned lock directory. Portable session elections and final deletion use
+the stable sessions parent through that boundary, including asynchronous
+own-expiry reclaim; adding a lock only to deletion would not serialize claims.
+Pending local programs remain busy until their completion callback is delivered,
+so explicit session discard cannot delete beneath a queued continuation.
 
 Two to 32 independent unbounded reads may use GNU tar in the same process, keeping
 all proved parents open, refusing symlink leaves, and disabling inherited
