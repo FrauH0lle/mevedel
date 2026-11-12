@@ -117,7 +117,7 @@ Chat / view
   mevedel-directive-request.el  directive prompts, dispatch, and settlement
   mevedel-side-conversation.el  ephemeral /btw conversation lifecycle
   mevedel-directive-activity.el  read-only workspace directive inspector
-  mevedel-directive-frame.el  directive-anchored child frame and transcript filter
+  mevedel-directive-frame.el  directive/note-anchored child frame; directive-only transcript filter
   mevedel-directive-plan.el   directive-owned planning and approval workflow
   mevedel-transcript.el       transcript span classification for view/persistence/compaction
   mevedel-transcript-source.el per-consumer hook-proven transcript change frontiers
@@ -198,8 +198,9 @@ Chat / view
   mevedel-directive-source.el directive anchor/presentation lifecycle and command-scoped instruction replacement
   mevedel-overlay-ui.el       instruction overlay actions and rendering
   mevedel-notes.el            source note actions, frozen history, labels and entry hints
+  mevedel-note-conversation.el isolated durable note send/batch/reopen, composer controls and sent-input inspection
   mevedel-notes-migration.el  one-time backed-up workspace reference/directive conversion
-  mevedel-notes-list.el       workspace notes grouped by attention, visit/edit/tag/delete actions
+  mevedel-notes-list.el       workspace notes grouped by attention, visit/edit/tag/send/close/restore actions
   mevedel-note-mentions.el    explicit note number/tag attachments, current code and UUID lookup
   mevedel-note-resource.el    read-only workspace note documents for Read, Glob and Grep
   mevedel-mentions.el         @ref and @file mention expansion

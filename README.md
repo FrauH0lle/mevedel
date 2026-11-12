@@ -258,17 +258,39 @@ The rest of this README is intentionally manual-style. The main moving parts are
 Use `M-x mevedel-note-create` in a source file to mark the active region, or
 the current line when no region is active. The text is optional: submitting an
 empty answer keeps a code-only note. A label below the code shows the note's
-number, author, text, unsent state and next actions. Notes follow source edits.
+number, author, text, state and next actions. Notes follow source edits.
 
-Inside a note, `M-m` (or `mevedel-ov-dispatch-key`) opens its edit/done/delete menu.
+Inside a note, `M-m` (or `mevedel-ov-dispatch-key`) opens its actions menu.
 Plain letters still insert source text; entering a note also shows its actions
 in the echo area. `mevedel-note-edit`, `mevedel-note-delete`, and
 `mevedel-note-menu` are available through `M-x` too. Deleting a note never edits
 its source code. Creating or editing a note does not send anything to a model.
 
+Choose **send** in that menu, or use `M-x mevedel-note-send`, to open the note's
+own conversation beside the code. Graphical Emacs uses an anchored child frame;
+terminal Emacs uses a side window. Type below the prompt and press `C-c C-c`
+to reply. The transcript above is read-only. `C-c C-v` shows the retained initial
+provider input, including its instructions and tool definitions. `C-c C-q` closes
+the frame/window without losing the conversation or draft. Sending a sent note
+reopens its conversation without making another request.
+
+`M-x mevedel-note-send-batch` sends several loaded notes into one conversation.
+Notes already sharing a conversation reopen it together; notes belonging to
+different conversations must be sent separately. Each conversation is a normal
+saved session with its own history and Rewind. There is no separate Discuss or
+Implement action: the session's permission mode decides whether edits are allowed.
+The original note's preset is fixed, but model, effort and permission mode remain
+changeable. Explicit forks are ordinary chats and may change preset too.
+Note sessions include the ordinary skills, resources and memory capabilities,
+not another conversation's history, journal digests, edited-files reminder or
+active Goal. Explicitly mentioned notes and the selected code are frozen at send
+time. Note conversations stay out of the ordinary chat chooser and automatic
+session cleanup; reopen them from their notes instead.
+
 `M-x mevedel-notes-list` lists the whole workspace, including unopened files,
 grouped by attention state. Use `v` or `RET` to visit, `e` to edit, `t` to edit
-tags, `d` to delete, `x` to mark done, `g` to refresh and `q` to close. Recently
+tags, `s` to send or reopen, `d` to delete, `x` to mark done, `g` to refresh and
+`q` to close. Recently
 closed notes form a folded group: `TAB` toggles it, the State column shows the
 close reason, and `r` restores the selected note. Listing does not open source
 files. Missing sources show their last observed state without probing each file.

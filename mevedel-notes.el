@@ -18,6 +18,10 @@
 (require 'mevedel-overlays)
 (require 'mevedel-utilities)
 
+;; `mevedel-note-conversation'
+(autoload 'mevedel-note-send "mevedel-note-conversation" nil t)
+(autoload 'mevedel-note-send-batch "mevedel-note-conversation" nil t)
+
 ;; `mevedel-directive-activity'
 (declare-function mevedel-open-directive-activity "mevedel-directive-activity"
                   (&optional directive workspace frozen))
@@ -191,7 +195,7 @@ Restore only the selected note's file, not every stashed source file."
 
 (defun mevedel-notes--actions-hint (&optional note)
   "Return the current modified-key menu hint for NOTE."
-  (format "%s: edit, done, %s"
+  (format "%s: send, edit, done, %s"
           (if-let* ((key (where-is-internal #'mevedel--ov-actions-dispatch
                                            mevedel-note-actions-map t)))
               (key-description key)
@@ -225,11 +229,12 @@ Restore only the selected note's file, not every stashed source file."
                           (overlay-put overlay 'mevedel-note-owner note)
                           (overlay-put note 'mevedel-label-overlay overlay)
                           overlay)))
-             (text (format "\n  Note %s · %s · %s · not sent · %s"
+             (text (format "\n  Note %s · %s · %s · %s · %s"
                            (overlay-get note 'mevedel-id)
                            (pcase (overlay-get note 'mevedel-note-author)
                              ('buddy "Buddy") ('agent "AI") (_ "you"))
                            (mevedel-notes--display-text note)
+                           (if (overlay-get note 'mevedel-note-session-id) "sent" "not sent")
                            (mevedel-notes--actions-hint note))))
         (overlay-put note 'keymap mevedel-note-actions-map)
         (move-overlay label (overlay-start note) end)
@@ -466,7 +471,8 @@ Return its live source overlay, retaining its text, tags and attachments."
       (setq note (or note (mevedel-notes--at-point)))
       (pcase (car (read-multiple-choice
                    (format "Note %s: " (overlay-get note 'mevedel-id))
-                   (append '((?e "edit" "Edit note text")
+                   (append '((?s "send" "Send or reopen the note conversation")
+                             (?e "edit" "Edit note text")
                              (?x "done" "Mark note done"))
                            (if (eq 'buddy (overlay-get note 'mevedel-note-author))
                                '((?d "dismiss" "Dismiss this remark")
@@ -474,6 +480,7 @@ Return its live source overlay, retaining its text, tags and attachments."
                              '((?d "delete" "Delete note without changing code")))
                            (when (overlay-get note 'mevedel-note-legacy-history)
                              '((?h "history" "Inspect read-only pre-migration history"))))))
+        (?s (mevedel-note-send note))
         (?e (mevedel-note-edit
              (read-string "Note: " (overlay-get note 'mevedel-note-text)) note))
         (?x (mevedel-note-done note))

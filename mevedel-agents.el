@@ -325,7 +325,7 @@ so without them it would lack workspace guidance and environment facts."
             (mevedel-agent-invocation-agent owner)))
         (cl-remove-if (lambda (name)
                         (memq name mevedel-agent--root-only-components))
-                      mevedel-system-retained-components)))))
+                      (mevedel-system-context-components mevedel--session))))))
 
 (defun mevedel-agent-resolve-role (role)
   "Resolve optional ROLE to an agent definition or signal a user error."

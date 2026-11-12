@@ -179,7 +179,7 @@ Use the recipient's selected components; never give a worker the root Goal."
                (names (if invocation
                           (mevedel-agent-context-components
                            (mevedel-agent-invocation-agent invocation))
-                        mevedel-system-retained-components))
+                        (mevedel-system-context-components mevedel--session)))
                (context (mevedel-system--make-context
                          (mevedel-session-workspace mevedel--session)
                          (mevedel-conversation-working-directory mevedel--session)

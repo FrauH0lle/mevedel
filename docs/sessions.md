@@ -5,6 +5,41 @@ filesystem changes across saves and resumes. Project sessions publish state on
 their execution target; file-backed sessions use their own storage authority.
 Compaction, Rewind, and Fork each preserve different parts of that state.
 
+## Note conversations
+
+An explicit note send creates an independent session, not a fork of the active
+chat. A batch of unsent notes shares one session. The workspace instruction
+store keeps only each note's `mevedel-note-session-id`; the normal session
+transcript and file-change history own the conversation. Reopening a sent note
+resumes that session. Closing its child frame or terminal side window leaves
+the session and composer draft alive.
+
+The `mevedel-note` preset is the original note session's fixed identity. Ordinary preset
+changes are refused; model, effort, permission mode and temporary request-only
+presets remain available. It uses ordinary editing tools, with edits governed by
+the session permission mode and Plan restrictions. Its automatic observations
+include project instructions, environment, tools, the skills roster, resource
+descriptions and memory. It excludes journal digests, another chat's history,
+unrelated notes, the workspace-wide changed-file reminder, the active Goal and
+Goal policy. Explicit note/ref mentions in the note text expand once at send time; the
+captured code and attachments cannot expand further mentions after reload.
+Other authored mentions use the ordinary request-time attachment path.
+`C-c C-v` in the note view opens the
+session's retained `note-input.json`: the first assembled API request, or the
+native provider's system text and submitted content. This is captured at
+dispatch, not regenerated from later source edits.
+
+Original note conversations are excluded from ordinary live and saved chat
+selection. Automatic session cleanup preserves them and does not count them
+against the newest ordinary-session retention floor, including when their notes
+are recently closed or the instruction store is unreadable. This is conservative:
+automatic cleanup also keeps the conversation after the note record expires.
+Explicit Conversation and Worktree forks remain ordinary discoverable sessions,
+may change preset, and follow ordinary cleanup rules.
+Reusing an existing directive child frame clears its old filter; note answers
+are never hidden by directive filtering. The notes list's `s` action sends or
+reopens its selected note, and its working state uses cached live session state.
+
 ## Directive session boundaries
 
 Settled directive work remains a complete first-class turn in its execution
