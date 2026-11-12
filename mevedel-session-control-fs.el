@@ -936,6 +936,17 @@ writes preserve the existing framing and the caller's remote-operation guard."
         (process-send-region process start end)
         (setq start end)))))
 
+(defun mevedel-session-control-fs--send-eof (process)
+  "Close PROCESS's input, accepting a child that finished meanwhile."
+  (when (process-live-p process)
+    (condition-case err
+        (process-send-eof process)
+      (error
+       (unless (and (not (process-live-p process))
+                    (string-match-p "\\`Process .* not running:"
+                                    (error-message-string err)))
+         (signal (car err) (cdr err)))))))
+
 (defun mevedel-session-control-fs--run-over-pipe
     (remote bash request output flags)
   "Run the program for REMOTE with BASH, streaming REQUEST's buffer on stdin.
@@ -970,7 +981,7 @@ as one remote operation for `mevedel-transport-busy-p'."
                (mevedel-session-control-fs--send-request-buffer process))
              (with-current-buffer request
                (mevedel-session-control-fs--send-request-buffer process))
-             (process-send-eof process)
+             (mevedel-session-control-fs--send-eof process)
              (while (or (process-live-p process)
                         (accept-process-output process 0 nil 1))
                (accept-process-output process 0.05 nil 1))
@@ -1780,7 +1791,7 @@ target: callers serialize the ones that touch the same files."
                    (with-temp-buffer
                      (mevedel-session-control-fs--insert-program-request fields)
                      (mevedel-session-control-fs--send-request-buffer process)))
-                 (process-send-eof process)
+                 (mevedel-session-control-fs--send-eof process)
                  process)))
           ((error quit)
            (unless settled
