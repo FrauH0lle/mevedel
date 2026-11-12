@@ -52,6 +52,16 @@ proposals from discarded turns are cleared. These changes settle through the
 workspace store's durable Rewind intent, including for unvisited and recently
 closed notes; restoring a closed note then restores its unsent state.
 
+`mevedel-note-revert-change` reverses one selected applied turn using these actual
+before/after pairs and the shared refuse-if-changed engine. It checks every path
+before the ordinary patch transaction writes anything. Disjoint later edits
+survive; overlaps report current file/line ranges and leave all files unchanged.
+Uncaptured changes and unsaved visiting buffers refuse rather than guessing.
+File history records bytes, not modes; existing modes survive and a restored
+deleted file uses the default mode. Revert neither discards transcript turns nor
+changes their history. Successful reversal restores a done note from recently
+closed; a refused reversal leaves it closed. Deletion itself never undoes code.
+
 Original note conversations are excluded from ordinary live and saved chat
 selection. Cleanup and saved-session deletion preserve them while any live,
 stashed or recently closed note references them. After the last note leaves the

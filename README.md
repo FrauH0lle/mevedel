@@ -290,6 +290,14 @@ uses local `git merge-file` on temporary copies, also outside Git repositories.
 Missing local Git gives a clear refusal. Resource-address patches keep their
 ordinary ApplyPatch behavior rather than becoming prepared source changes.
 
+Use **revert** in the note menu, or `C-c C-b` at the note or in its conversation,
+to reverse one applied turn without Rewind. Choose a turn if several changed
+files. Revert preserves disjoint later edits and refuses with file/line ranges
+if the changed lines were edited again; save or undo unsaved source edits first.
+`M-x mevedel-note-revert-change` also offers recently closed notes when invoked
+away from a note. A successful revert reopens a done note; deleting a note never
+reverts its code changes.
+
 `M-x mevedel-note-send-batch` sends several loaded notes into one conversation.
 Notes already sharing a conversation reopen it together; notes belonging to
 different conversations must be sent separately. Each conversation is a normal
