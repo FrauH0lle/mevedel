@@ -18,6 +18,7 @@
 (require 'mevedel-session-codec)
 (require 'mevedel-session-control-fs)
 (require 'mevedel-session-fork)
+(require 'mevedel-session-rewind)
 (require 'mevedel-transport)
 (require 'mevedel-journal-process)
 (require 'gptel-openai)
@@ -210,6 +211,65 @@
         (call-interactively (key-binding (kbd "C-c C-a"))))
       (with-current-buffer source
         (should (equal "outside-before\nfresh proposal\noutside-after\n" (buffer-string)))))))
+(mevedel-deftest mevedel-rewind/note-session
+  (:quiet t)
+  ,test
+  (test)
+  :doc "Rewind reverses the applied first-turn proposal in its own note session"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Improve this code"))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view)))
+      (with-current-buffer data
+        (mevedel-tool-patch-handler
+         #'ignore
+         '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-selected code\n+first proposal\n*** End Patch")))
+      (mevedel-note-conversation-test--answer (car sent) "Ready to apply.")
+      (mevedel-note-apply-change note)
+      (should (equal "outside-before\nfirst proposal\noutside-after\n"
+                     (mevedel-test--read-file file)))
+      (with-current-buffer view
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (_prompt collection &rest _)
+                     (car (all-completions "" collection))))
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+          (mevedel-rewind)))
+      (should (equal "outside-before\nselected code\noutside-after\n"
+                     (mevedel-test--read-file file)))))
+  :doc "Rewind before first turn preserves the current note and makes it sendable again"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Original request"))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view))
+           (id (overlay-get note 'mevedel-note-session-id)))
+      (with-current-buffer data
+        (mevedel-tool-patch-handler
+         #'ignore
+         '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-selected code\n+waiting proposal\n*** End Patch")))
+      (mevedel-note-conversation-test--answer (car sent) "A waiting change.")
+      (mevedel-note-edit "Current request" note)
+      (with-current-buffer view
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (_prompt collection &rest _)
+                     (car (all-completions "" collection))))
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+          (mevedel-rewind)))
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (with-current-buffer source
+        (goto-char (point-min)) (forward-line 1)
+        (setq note (mevedel-notes--at-point))
+        (should (equal "Current request" (overlay-get note 'mevedel-note-text)))
+        (should (= (point) (overlay-start note)))
+        (should (eq 'unsent (overlay-get note 'mevedel-note-state)))
+        (should (equal id (overlay-get note 'mevedel-note-session-id)))
+        (should-not (overlay-get note 'mevedel-note-prepared-change))
+        (should-not (memq (mevedel-notes-attention-state note) '(ready stale)))
+        (mevedel-note-send note))
+      (should (= 2 (length sent)))
+      (should (equal id (overlay-get note 'mevedel-note-session-id)))
+      (mevedel-note-conversation-test--answer (car sent) "Sent again."))))
+
 (mevedel-deftest mevedel-note-send/taken
   (:quiet t)
   ,test

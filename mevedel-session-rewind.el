@@ -2127,6 +2127,8 @@ just before sending it."
            session target))
     (mevedel-session-rewind-assert-stable-source
      session buffer "rewinding")
+    (when (eq (mevedel-session-preset-name session) 'mevedel-note)
+      (mevedel-instruction-store-sync (mevedel-session-workspace session)))
     (let* ((selection (mevedel-session-rewind--prepare-rewind-files
                        session target boundary))
            (prepared (unless (eq selection :abort) (plist-get selection :plan))))

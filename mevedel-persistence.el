@@ -1802,7 +1802,7 @@ session's turn count would move past it."
                ((eql turn (plist-get intent :to))
                 (setq record (mevedel-instruction-store--prune
                               workspace record session-id
-                              (plist-get intent :prune-from))))
+                              (plist-get intent :prune-from) turn)))
                ((eql turn (plist-get intent :from)))
                (t (user-error "Rewind of session %s from turn %d to %d does not match its committed turn %s"
                               session-id (plist-get intent :from)
@@ -1812,6 +1812,9 @@ session's turn count would move past it."
                                                        intents :test #'equal)))
             (when-let* ((hash (mevedel-instruction-store--write
                                workspace (plist-get theirs :hash) record)))
+              (dolist (intent intents)
+                (when (eql turn (plist-get intent :to))
+                  (mevedel-instruction-store--rewind-live-notes workspace session-id turn)))
               (mevedel-instruction-store--settled workspace theirs hash record)
               (mevedel-instruction-store--owe workspace session-id nil)
               (setq result 'resolved))))))
@@ -1831,11 +1834,53 @@ records live code still holds."
     (when (equal (plist-get observed :hash) (plist-get before :hash))
       (mevedel-instruction-store--observe workspace nil record))))
 
-(defun mevedel-instruction-store--prune (workspace data session-id target-turn)
+(defun mevedel-instruction-store--rewind-note (instruction session-id surviving-turn)
+  "Rewind INSTRUCTION's note activity owned by SESSION-ID past SURVIVING-TURN.
+Mutate only lifecycle properties; preserve its text, anchor and session link."
+  (let* ((props (plist-get instruction :properties))
+         (change (plist-get props 'mevedel-note-prepared-change)))
+    (when (equal session-id (plist-get props 'mevedel-note-session-id))
+      (when (zerop surviving-turn)
+        (when (eq 'sent (plist-get props 'mevedel-note-state))
+          (plist-put props 'mevedel-note-state 'unsent))
+        (when (eq 'sent (plist-get instruction :open-state))
+          (plist-put instruction :open-state 'unsent)))
+      (when (and (equal session-id (plist-get change :session-id))
+                 (> (or (plist-get change :turn) 0) surviving-turn))
+        (plist-put props 'mevedel-note-prepared-change nil)
+        (plist-put props 'mevedel-note-attention-state nil))))
+  instruction)
+
+(defun mevedel-instruction-store--rewind-live-notes (workspace session-id turn)
+  "Apply committed SESSION-ID Rewind to TURN to WORKSPACE's current notes.
+Keep memory in step with the new merge base, including crash recovery."
+  (let ((state (mevedel--instruction-state (mevedel--instruction-workspace-key workspace))))
+    (dolist (file (plist-get state :instructions))
+      (if (bufferp (car file))
+          (dolist (note (cdr file))
+            (let* ((before (overlay-properties note))
+                   (instruction (list :properties (copy-sequence before)))
+                   (after (plist-get (mevedel-instruction-store--rewind-note
+                                      instruction session-id turn) :properties)))
+              (unless (equal before after)
+                (dolist (key '(mevedel-note-state mevedel-note-prepared-change mevedel-note-attention-state))
+                  (overlay-put note key (plist-get after key)))
+                (mevedel--update-instruction-overlay note t))))
+        (dolist (instruction (plist-get (cdr file) :instructions))
+          (mevedel-instruction-store--rewind-note instruction session-id turn))))
+    (dolist (closed (plist-get state :closed-notes))
+      (mevedel-instruction-store--rewind-note (plist-get closed :instruction) session-id turn))))
+
+(defun mevedel-instruction-store--prune (workspace data session-id target-turn surviving-turn)
   "Return WORKSPACE's DATA without SESSION-ID's activity from TARGET-TURN on.
 Only directives holding such activity go through the Rewind prune, which
 also returns consumed subdirectives and re-derives the Plan; applying it
-to records without that activity could change their Plan."
+to records without that activity could change their Plan.
+Notes retain their text and anchor and discard activity past SURVIVING-TURN."
+  (setq data (copy-tree data))
+  (dolist (file (plist-get data :files))
+    (dolist (instruction (plist-get (cdr file) :instructions))
+      (mevedel-instruction-store--rewind-note instruction session-id surviving-turn)))
   (let* ((root (mevedel-instruction-store--root workspace))
          (records (mevedel--deserialize-directives (plist-get data :directives) root))
          (affected

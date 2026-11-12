@@ -12,6 +12,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
 (require 'mevedel-session-rewind)
+(require 'mevedel-session-rewind-merge)
 (require 'mevedel-pipeline)
 (require 'mevedel-tool-patch)
 (require 'mevedel-note-merge)

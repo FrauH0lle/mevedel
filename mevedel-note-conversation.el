@@ -199,7 +199,10 @@ ordinary request-time transform, where media has an active request owner."
           (if id
               (mevedel-note-conversation-setup)
             (mevedel-preset-apply 'mevedel-note data)
-            (mevedel-session-artifacts-save session data nil t)
+            (mevedel-session-artifacts-save session data nil t))
+          (when (or (not id)
+                    (and (zerop (or (mevedel-session-turn-count session) 0))
+                         (eq 'unsent (overlay-get note 'mevedel-note-state))))
             (mevedel--submit-generated-turn
              (mapconcat (lambda (item) (mevedel-note-conversation--prompt item session))
                         notes "\n\n"))))

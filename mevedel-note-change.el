@@ -31,7 +31,10 @@ Return an ordinary tool result immediately; no tool callback is retained."
                                         'mevedel-note-session-id)))
                  (mevedel-notes--entries workspace)))
          (record (list :id (mevedel--create-uuid)
-                       :session-id id :turn (or (mevedel-session-turn-count session) 0)
+                       :session-id id :turn (with-current-buffer data-buffer
+                                              (if mevedel--current-request
+                                                  (mevedel-current-turn session)
+                                                (or (mevedel-session-turn-count session) 0)))
                        :proposal (copy-tree proposal)
                        :changes (copy-tree changes)
                        :before (mapcar (lambda (change)
@@ -170,7 +173,7 @@ Return an ordinary tool result immediately; no tool callback is retained."
                                               previous))
                         (lambda (a b) (string< (car a) (car b))))))
     (with-current-buffer data
-      (when (and mevedel--current-request (= turn (mevedel-session-turn-count session)))
+      (when (and mevedel--current-request (= turn (mevedel-request-turn mevedel--current-request)))
         (maphash (lambda (path bytes)
                    (puthash path bytes (mevedel-request-file-snapshots mevedel--current-request))) pre))
       (let ((mevedel--current-request nil))
