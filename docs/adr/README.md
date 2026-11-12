@@ -191,3 +191,7 @@ to the decision bearing that ID.
 - [ADR 0130: Keep instructions in a workspace store](0130-keep-instructions-in-a-workspace-store.md)
   amends where ADR 0072's Rewind prunes directive activity and ends ADR 0091's
   per-session copies as the durable record.
+
+- [ADR 0131: Rewind reverts recorded changes](0131-rewind-reverts-recorded-changes.md)
+  makes snapshot restoration ADR 0072's explicit force path and revises
+  ADR 0091's objection to independent conversation sessions.

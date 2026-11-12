@@ -8,6 +8,7 @@
 ;;; Code:
 
 (require 'mevedel-engine)
+(require 'mevedel-change)
 
 (require 'mevedel-utilities)
 (require 'mevedel-report)
@@ -371,13 +372,73 @@ nothing to do.  When BEFORE-TURN is non-nil, target the pre-turn checkpoint."
      (lambda (e) (eq 'noop (plist-get e :action)))
      (nreverse plan))))
 
+(defun mevedel-session-rewind--file-state (path)
+  "Read PATH's current existence and literal bytes for checked Rewind."
+  (let ((exists (file-exists-p path)))
+    (list :path path :exists exists
+          :bytes (and exists (mevedel-session-artifacts-read-file-raw path)))))
+
+(defun mevedel-session-rewind--recorded-state (session path name)
+  "Read SESSION's recorded PATH state from backup NAME, or absence."
+  (list :path path :exists (and name t)
+        :bytes (and name (mevedel-session-rewind-read-backup session name))))
+
+(defun mevedel-session-rewind--revert-plan (session cum-turn before-turn)
+  "Prepare reversals of SESSION's discarded changes at CUM-TURN.
+BEFORE-TURN includes that turn.  Reverse newest first in memory, preserving
+unrelated current edits.  Return ordinary restore entries with literal
+`:bytes' and a checked `:before' state; never write during preparation."
+  (let ((states (make-hash-table :test #'equal))
+        (originals (make-hash-table :test #'equal))
+        (conflicts (make-hash-table :test #'equal))
+        plan)
+    (dolist (turn (sort (copy-sequence (mevedel-session-file-snapshots session))
+                       (lambda (a b) (> (car a) (car b)))))
+      (when (>= (car turn) (if before-turn cum-turn (1+ cum-turn)))
+        (dolist (entry (cdr turn))
+          (unless (or (plist-get (cdr entry) :gap)
+                      (gethash (car entry) conflicts))
+            (let* ((path (car entry))
+                   (current (or (gethash path states)
+                                (let ((state (mevedel-session-rewind--file-state path)))
+                                  (puthash path state originals)
+                                  state)))
+                   (before (mevedel-session-rewind--recorded-state
+                            session path (plist-get (cdr entry) :pre-backup-name)))
+                   (after (mevedel-session-rewind--recorded-state
+                           session path (plist-get (cdr entry) :backup-name)))
+                   (result (if (mevedel-change-same-p before current)
+                               (list :after current)
+                             (mevedel-change-prepare before after current t))))
+              (if-let* ((found (plist-get result :conflicts)))
+                  (puthash path
+                           (list :path path :action 'conflict
+                                 :turn (car turn) :conflicts found)
+                           conflicts)
+                (puthash path (plist-get result :after) states)))))))
+    (maphash
+     (lambda (path state)
+       (let ((original (gethash path originals)))
+         (unless (or (gethash path conflicts)
+                     (mevedel-change-same-p original state))
+           (push (list :path path
+                       :action (cond ((not (plist-get state :exists)) 'delete)
+                                     ((not (plist-get original :exists)) 'create)
+                                     (t 'restore))
+                       :before original :bytes (plist-get state :bytes))
+                 plan))))
+     states)
+    (maphash (lambda (_path entry) (push entry plan)) conflicts)
+    (mevedel-session-rewind--sorted-file-plan plan)))
+
 (defun mevedel-session-rewind--checkpoint-gaps (session cum-turn)
-  "Return known SESSION checkpoint gaps before CUM-TURN."
-  (cl-loop for (path . checkpoint)
-           in (mevedel-session-rewind-state-at-turn
-               session cum-turn t)
-           when (plist-get checkpoint :gap)
-           collect (list :path path :reason (plist-get checkpoint :gap))))
+  "Return known SESSION checkpoint gaps from CUM-TURN onwards."
+  (cl-loop for (turn . entries) in (mevedel-session-file-snapshots session)
+           when (>= turn cum-turn)
+           append (cl-loop for (path . checkpoint) in entries
+                           when (plist-get checkpoint :gap)
+                           collect (list :path path :turn turn
+                                         :reason (plist-get checkpoint :gap)))))
 
 (defun mevedel-session-rewind--directive-capture-gaps
     (session target-turn)
@@ -433,6 +494,10 @@ carries the plan-entry plist."
            (action (plist-get entry :action))
            (backup-name (plist-get entry :backup-name)))
       (pcase action
+        ('conflict
+         (mevedel-diagnostic-user-error
+          (mevedel-diagnostic-scope session)
+          "Rewind conflict; cancel or force snapshot restore"))
         ('delete
          (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Row is a delete action; nothing to diff against"))
         ('noop
@@ -444,8 +509,10 @@ carries the plan-entry plist."
                  (with-temp-buffer
                    (set-buffer-multibyte nil)
                    (insert
-                    (mevedel-session-rewind-read-backup
-                     session backup-name))
+                    (if (plist-member entry :bytes)
+                        (plist-get entry :bytes)
+                      (mevedel-session-rewind-read-backup
+                       session backup-name)))
                    (let ((coding-system-for-write 'no-conversion))
                      (write-region nil nil backup-path nil 'silent)))
                  (diff (or (and (file-exists-p path) path) "/dev/null")
@@ -457,15 +524,23 @@ carries the plan-entry plist."
   (let* ((path        (plist-get entry :path))
          (action      (plist-get entry :action))
          (backup-name (plist-get entry :backup-name)))
+    (when (and (plist-member entry :before)
+               (not (mevedel-change-same-p
+                     (plist-get entry :before)
+                     (mevedel-session-rewind--file-state path))))
+      (error "Captured file changed before Rewind write: %s" path))
     (pcase action
+      ('conflict (error "Unresolved Rewind conflict: %s" path))
       ('noop nil)
       ('delete
        (when (file-exists-p path)
          (delete-file path)))
       ((or 'create 'restore 'overwrite)
        (let ((content
-              (mevedel-session-rewind-read-backup
-               session backup-name)))
+              (if (plist-member entry :bytes)
+                  (plist-get entry :bytes)
+                (mevedel-session-rewind-read-backup
+                 session backup-name))))
          (let ((dir (file-name-directory path)))
            (when (and dir (not (file-directory-p dir)))
              (make-directory dir t)))
@@ -516,7 +591,7 @@ entries are not attempted.  The user-visible report goes to
     (nreverse (cl-remove-duplicates buffers))))
 
 (defun mevedel-session-rewind--prepare-buffers-for-restore
-    (session cum-turn plan &optional operation before-turn)
+    (session cum-turn plan &optional operation before-turn replan)
   "Prepare visiting buffers before restoring PLAN for SESSION at CUM-TURN.
 
 If modified buffers visit affected files, prompt the user to save,
@@ -525,7 +600,8 @@ after saves.  Returns `:abort' when the restore should be abandoned.
 
 OPERATION names the operation in the prompt and defaults to Rewind.
 BEFORE-TURN selects the pre-turn checkpoint when the plan is recomputed,
-as Rewind needs; a restore targets the state at CUM-TURN itself."
+as Rewind needs; a restore targets the state at CUM-TURN itself.
+REPLAN, when non-nil, recomputes the plan after saves instead."
   (let ((current-plan plan)
         (operation (or operation "Rewind"))
         done)
@@ -549,8 +625,9 @@ as Rewind needs; a restore targets the state at CUM-TURN itself."
               (lambda ()
                 (memq (current-buffer) buffers)))
              (setq current-plan
-                   (mevedel-session-rewind-restore-plan
-                    session cum-turn before-turn)))
+                   (if replan (funcall replan)
+                     (mevedel-session-rewind-restore-plan
+                      session cum-turn before-turn))))
             (?d
              (dolist (buf buffers)
                (with-current-buffer buf
@@ -911,9 +988,9 @@ default -- when it is discarded with everything later."
         (< (plist-get a :cum-turn) (plist-get b :cum-turn))))
      :checkpoint-gaps
      (append
-      (mevedel-session-rewind--checkpoint-gaps session target-turn)
+      (mevedel-session-rewind--checkpoint-gaps session first-discarded)
       (mevedel-session-rewind--directive-capture-gaps
-       session target-turn))
+       session first-discarded))
      :external-overwrites
      (cl-count 'overwrite file-plan
                :key (lambda (entry) (plist-get entry :action)))
@@ -939,6 +1016,9 @@ default -- when it is discarded with everything later."
   "Display inspectable SESSION Rewind IMPACT."
   (let* ((target (plist-get impact :target))
          (plan (plist-get impact :file-plan))
+         (restored-count (cl-count-if-not
+                          (lambda (entry) (eq (plist-get entry :action) 'conflict))
+                          plan))
          (gaps (plist-get impact :checkpoint-gaps))
          (staged (plist-get impact :staged-files))
          (discarded-prompts (plist-get impact :discarded-prompts))
@@ -958,7 +1038,7 @@ default -- when it is discarded with everything later."
 										   (plist-get impact :surviving-turns)))
 								   (insert (format "Turns discarded: %d\n"
 										   (plist-get impact :discarded-turns)))
-								   (insert (format "Captured files restored: %d\n" (length plan)))
+								   (insert (format "Captured files restored: %d\n" restored-count))
 								   (insert (format "Checkpoint coverage: %s\n"
 										   (if gaps
 										       (format "incomplete (%d known gap%s)"
@@ -990,6 +1070,18 @@ default -- when it is discarded with everything later."
 										 (insert "\n"))
 									       (unless discarded-prompts (insert "No session events discarded.\n"))
 									       (buffer-string)))
+                   (list :id 'conflicts :title "Conflicts" :body
+                         (with-temp-buffer
+                           (dolist (entry plan)
+                             (dolist (conflict (plist-get entry :conflicts))
+                               (insert (format "%s: lines %d-%d (reverting turn %d)\n"
+                                               (plist-get entry :path)
+                                               (plist-get conflict :start-line)
+                                               (plist-get conflict :end-line)
+                                               (plist-get entry :turn)))))
+                           (unless (zerop (buffer-size))
+                             (insert "Nothing has been changed. Lines refer to the text after newer turns are reverted.\n"))
+                           (buffer-string)))
                    (list :id 'files :title "File changes and coverage gaps" :body (with-temp-buffer
 										    (dolist (gap gaps)
 										      (insert (format "gap       %s (%s)\n"
@@ -1428,9 +1520,9 @@ step that fails afterwards has to name its own frame."
    session 'rerender))
 
 (defun mevedel-session-rewind--commit-remote-rewind
-    (session buffer target plan &optional boundary)
+    (session buffer target plan &optional boundary replan)
   "Commit portable project SESSION, BUFFER, TARGET, and file PLAN through one
-head CAS."
+head CAS.  BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
   (let* ((workspace (mevedel-session-workspace session))
          (directives (copy-sequence
                       (mevedel-workspace-directives workspace)))
@@ -1490,9 +1582,10 @@ head CAS."
                   session candidate target staging-path staging-buffer
                   publication)
                  (let ((rechecked
-                        (mevedel-session-rewind-restore-plan
-                         session (plist-get target :cum-turn)
-                         (not (eq boundary 'after)))))
+                        (if replan (funcall replan)
+                          (mevedel-session-rewind-restore-plan
+                           session (plist-get target :cum-turn)
+                           (not (eq boundary 'after))))))
                    (unless
                        (equal
                         (mevedel-session-rewind--sorted-file-plan plan)
@@ -1668,13 +1761,14 @@ head CAS."
     t))
 
 (defun mevedel-session-rewind--commit-rewind
-    (session buffer target plan &optional boundary)
-  "Commit SESSION, BUFFER, TARGET, and file PLAN as one recoverable Rewind."
+    (session buffer target plan &optional boundary replan)
+  "Commit SESSION, BUFFER, TARGET, and file PLAN as one recoverable Rewind.
+BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
   (if (mevedel-session-codec-portable-authority-p session)
       (mevedel-session-rewind--commit-remote-rewind
-       session buffer target plan boundary)
+       session buffer target plan boundary replan)
     (mevedel-session-rewind--commit-local-rewind
-     session buffer target plan boundary)))
+     session buffer target plan boundary replan)))
 
 (defun mevedel-session-rewind--rewinds-directive-p (directive session-id)
   "Return non-nil when a Rewind of SESSION-ID can change DIRECTIVE.
@@ -1705,8 +1799,9 @@ returned, exactly as it was."
                              (or (funcall sequence b) 0)))))))
 
 (defun mevedel-session-rewind--commit-local-rewind
-    (session buffer target plan &optional boundary)
-  "Commit local SESSION, BUFFER, TARGET, and file PLAN as one Rewind."
+    (session buffer target plan &optional boundary replan)
+  "Commit local SESSION, BUFFER, TARGET, and file PLAN as one Rewind.
+BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
   (let* ((workspace (mevedel-session-workspace session))
          (directives (copy-sequence
                       (mevedel-workspace-directives workspace)))
@@ -1770,9 +1865,10 @@ returned, exactly as it was."
           (mevedel-session-rewind--stage-rewind
            session candidate target staging-path staging-buffer)
           (let ((rechecked
-                 (mevedel-session-rewind-restore-plan
-                  session (plist-get target :cum-turn)
-                  (not (eq boundary 'after)))))
+                 (if replan (funcall replan)
+                   (mevedel-session-rewind-restore-plan
+                    session (plist-get target :cum-turn)
+                    (not (eq boundary 'after))))))
             (unless (equal
                      (mevedel-session-rewind--sorted-file-plan plan)
                      (mevedel-session-rewind--sorted-file-plan rechecked))
@@ -1968,6 +2064,35 @@ the selected turn leaves the reader to guess whether it survives."
             (if (= 1 (length plan)) "" "s")
             (mevedel-session-rewind--redo-availability session))))
 
+(defun mevedel-session-rewind--prepare-rewind-files (session target boundary)
+  "Prepare SESSION files for TARGET and BOUNDARY, offering cancel or force.
+Return the plan, its recheck function and force choice, or `:abort'."
+  (catch 'cancel
+    (let* ((turn (plist-get target :cum-turn))
+           (before-p (not (eq boundary 'after)))
+           (force nil)
+           (replan (lambda ()
+                     (if force
+                         (mevedel-session-rewind-restore-plan session turn before-p)
+                       (mevedel-session-rewind--revert-plan session turn before-p))))
+           (select
+            (lambda ()
+              (let ((plan (funcall replan)))
+                (when (cl-some (lambda (entry) (plist-get entry :conflicts)) plan)
+                  (mevedel-session-rewind--render-rewind-impact
+                   session (mevedel-session-rewind--rewind-impact
+                            session target plan boundary))
+                  (if (= ?f (read-char-choice
+                             "Rewind conflicts; [c]ancel or [f]orce snapshot restore? "
+                             '(?c ?f)))
+                      (setq force t plan (funcall replan))
+                    (throw 'cancel :abort)))
+                plan)))
+           (plan (mevedel-session-rewind--prepare-buffers-for-restore
+                  session turn (funcall select) "Rewind" before-p select)))
+      (if (eq plan :abort) :abort
+        (list :plan plan :replan replan :force force)))))
+
 (defun mevedel-session-rewind-rewind (buffer target &optional boundary)
   "Rewind BUFFER's session in place to stable assistant TARGET.
 
@@ -1986,13 +2111,10 @@ just before sending it."
            session target))
     (mevedel-session-rewind-assert-stable-source
      session buffer "rewinding")
-    (let* ((turn (plist-get target :cum-turn))
-           (before-p (not (eq boundary 'after)))
-           (plan (mevedel-session-rewind-restore-plan session turn before-p))
-           (prepared
-            (mevedel-session-rewind--prepare-buffers-for-restore
-             session turn plan "Rewind" before-p)))
-      (unless (eq prepared :abort)
+    (let* ((selection (mevedel-session-rewind--prepare-rewind-files
+                       session target boundary))
+           (prepared (unless (eq selection :abort) (plist-get selection :plan))))
+      (unless (eq selection :abort)
         (let ((impact
                (mevedel-session-rewind--rewind-impact
                 session target prepared boundary)))
@@ -2001,13 +2123,17 @@ just before sending it."
             (mevedel-session-rewind--render-rewind-impact session impact)
             (let ((confirmed
                    (yes-or-no-p
-                    (mevedel-session-rewind--rewind-confirmation
-                     session impact))))
+                    (concat
+                     (when (plist-get selection :force)
+                       "Force snapshot restore (overwrite newer edits). ")
+                     (mevedel-session-rewind--rewind-confirmation
+                      session impact)))))
               (when confirmed
                 (mevedel-session-artifacts-assert-mutation-authority
                  session buffer)
                 (mevedel-session-rewind--commit-rewind
-                 session buffer target prepared boundary))
+                 session buffer target prepared boundary
+                 (plist-get selection :replan)))
               (when-let* ((impact-buffer
                            (get-buffer "*mevedel-rewind-impact*")))
                 (quit-windows-on impact-buffer t)

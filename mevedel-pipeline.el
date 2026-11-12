@@ -1223,7 +1223,8 @@ Missing files are stored as nil; unreadable paths retain a diagnostic gap."
         (condition-case err
             (let ((original (when (file-exists-p abs-path)
                               (with-temp-buffer
-                                (insert-file-contents abs-path)
+                                (set-buffer-multibyte nil)
+                                (insert-file-contents-literally abs-path)
                                 (buffer-string)))))
               (puthash abs-path original snapshots))
           (error

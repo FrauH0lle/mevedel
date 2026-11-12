@@ -2,6 +2,10 @@
 
 Status: accepted. Incorporates ADR 0088.
 
+[ADR 0131: Rewind reverts recorded changes](0131-rewind-reverts-recorded-changes.md)
+revises the competing-snapshot objection to a session per conversation below.
+It does not change the directive rendering decision in this record.
+
 ## Current decision
 
 Directive requests remain conversationally isolated while rendering their full

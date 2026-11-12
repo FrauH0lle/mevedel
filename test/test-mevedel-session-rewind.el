@@ -991,12 +991,18 @@
                      (mevedel-session-rewind--prompt-candidates
                       session)))))
               (setf (mevedel-session-file-snapshots session)
-                    `((1 . ((,missing . (:backup-name "missing"
+                    `((1 . ((,missing . (:backup-name nil
                                          :pre-backup-name "missing"
                                          :version 1))))))
+              (mevedel-session-artifacts--file-history-write-backup
+               (mevedel-session-save-path session) "missing" "original")
               (cl-letf (((symbol-function 'display-buffer) #'ignore)
                         ((symbol-function 'yes-or-no-p)
-                         (lambda (&rest _) t)))
+                         (lambda (&rest _)
+                           (delete-file
+                            (mevedel-session-artifacts-backup-path
+                             (mevedel-session-save-path session) "missing"))
+                           t)))
                 (should-error
                  (mevedel-session-rewind-rewind buffer target)))
               (should (get-buffer "*mevedel-rewind-impact*"))
@@ -1349,7 +1355,9 @@
                         (append
                          (mevedel-session-file-snapshots session)
                          `((2 . ((,path . (:backup-name ,backup
-                                         :pre-backup-name ,backup
+                                         :pre-backup-name
+                                         ,(mevedel-session-artifacts--file-history-backup-name
+                                           "first")
                                          :version 2))))))))
                 (write-region "second" nil path nil 'silent)
                 (mevedel-session-codec-write

@@ -2,6 +2,11 @@
 
 Status: accepted
 
+The default file policy is revised by
+[ADR 0131: Rewind reverts recorded changes](0131-rewind-reverts-recorded-changes.md).
+The whole-file restoration and external-overwrite descriptions below now apply
+to the explicit force path; the transaction, boundaries and Redo remain current.
+
 ## Current decision
 
 Rewind truncates the current session and transactionally restores captured files
