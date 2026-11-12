@@ -89,7 +89,6 @@
 (autoload 'mevedel-compact "mevedel-compact" nil t)
 (autoload 'mevedel-delete-all-directives "mevedel-overlays" nil t)
 (autoload 'mevedel-delete-all-instructions "mevedel-overlays" nil t)
-(autoload 'mevedel-delete-all-references "mevedel-overlays" nil t)
 (autoload 'mevedel-diff-apply-buffer "mevedel-diff-apply" nil t)
 (autoload 'mevedel-evil-setup "mevedel-evil" nil t)
 (autoload 'mevedel-gptel-bridge-open "mevedel-gptel-bridge" nil t)
@@ -727,23 +726,6 @@ buffers."
                    count (if (/= count 1) "s" "")
                    buffers (if (/= buffers 1) "s" ""))))
       count)))
-
-;;;###autoload
-(defun mevedel-create-reference ()
-  "Create a reference instruction within the selected region.
-
-If a region is selected but partially covers an existing reference, then
-the command will resize the reference in the following manner:
-
-  - If the mark is located INSIDE the reference (i.e., the point is
-    located OUTSIDE the reference) then the reference will be expanded
-    to the point.
-  - If the mark is located OUTSIDE the reference (i.e., the point is
-    located INSIDE the reference) then the reference will be shrunk to
-    the point."
-  (interactive)
-  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope (mevedel-workspace))
-    (mevedel--create-instruction 'reference)))
 
 ;;;###autoload
 (defun mevedel-create-directive ()

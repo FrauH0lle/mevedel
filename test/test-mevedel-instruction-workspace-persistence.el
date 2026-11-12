@@ -15,12 +15,19 @@
 
 ;;; Code:
 
+(require 'mevedel-notes)
+
 (require 'mevedel)
 (require 'helpers
          (file-name-concat
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-instruction-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-instruction-test-support"))
 (require 'mevedel-session-test-support
          (file-name-concat
           (file-name-directory
@@ -89,9 +96,10 @@ Mirrors the call in `mevedel-session-persistence--restore-buffer'."
         #'string<))
 
 (defun test-mevedel-instruction-ws--reference-count (workspace source)
-  "Return how many live references SOURCE holds in WORKSPACE."
+  "Return how many live notes SOURCE holds in WORKSPACE."
   (mevedel--instruction-activate-workspace workspace)
-  (cl-count-if #'mevedel--referencep
+  (cl-count-if (lambda (instruction)
+                               (eq 'note (overlay-get instruction 'mevedel-instruction-type)))
                (alist-get source (mevedel--instruction-alist))))
 
 (defun test-mevedel-instruction-ws--activity (workspace)
@@ -112,7 +120,7 @@ Mirrors the call in `mevedel-session-persistence--restore-buffer'."
   (:quiet t)
   ,test
   (test)
-  :doc "case 1: resuming session A keeps directives and references saved by B"
+  :doc "case 1: resuming session A keeps directives and notes saved by B"
   (test-mevedel-instruction-ws--with-workspace (workspace source data)
     (with-current-buffer source
       (mevedel--create-directive-in source (point-min) (+ 5 (point-min))
@@ -122,10 +130,10 @@ Mirrors the call in `mevedel-session-persistence--restore-buffer'."
       (with-current-buffer source
         (mevedel--create-directive-in source (+ 6 (point-min)) (+ 9 (point-min))
                                       nil "made in B")
-        (mevedel--create-reference-in source (point-min) (point-max)))
+        (mevedel-instruction-test--create-note-in source (point-min) (point-max)))
       (let ((b (test-mevedel-instruction-ws--save "b" workspace data)))
         (push b sessions)
-        ;; Control: B's file really holds B's directive and reference.
+        ;; Control: B's file really holds B's directive and note.
         (should (string-match-p "made in B"
                                 (test-mevedel-instruction-ws--snapshot-text b)))
         (should (= 1 (test-mevedel-instruction-ws--reference-count

@@ -3,7 +3,7 @@
 ;;; Commentary:
 
 ;; Notes mark code with optional text.  They share instruction identities,
-;; source edit tracking and the workspace store with references and directives.
+;; source edit tracking and the workspace store with directives.
 ;; Presentation and commands live here; a note never submits a request merely
 ;; by being created or edited.
 

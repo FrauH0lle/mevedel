@@ -6,6 +6,13 @@
 
 ;;; Code:
 
+(require 'mevedel-notes)
+(require 'mevedel-instruction-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-instruction-test-support"))
+
 (require 'mevedel-session-test-support
          (file-name-concat
           (file-name-directory
@@ -1681,7 +1688,7 @@
             (setq source-buf (find-file-noselect source-file))
             (with-current-buffer source-buf
               (setq-local mevedel--workspace workspace)
-              (mevedel--create-reference-in source-buf (point-min) (point-max)))
+              (mevedel-instruction-test--create-note-in source-buf (point-min) (point-max)))
             (setq session (mevedel-session-create "main" workspace))
             (setf (mevedel-session-turn-count session) 1)
             (setq data-buf (generate-new-buffer "*test-data-buf*"))
@@ -1753,7 +1760,7 @@
             (setq source-buf (find-file-noselect source-file))
             (with-current-buffer source-buf
               (setq-local mevedel--workspace workspace)
-              (mevedel--create-reference-in source-buf (point-min) (point-max)))
+              (mevedel-instruction-test--create-note-in source-buf (point-min) (point-max)))
             (setq session (mevedel-session-create "main" workspace))
             (setf (mevedel-session-turn-count session) 1)
             (setq data-buf (generate-new-buffer "*test-data-buf*"))
@@ -2034,7 +2041,7 @@
               (setq-local mevedel--workspace workspace)
               (goto-char (point-min))
               (search-forward "TARGET\n")
-              (mevedel--create-reference-in
+              (mevedel-instruction-test--create-note-in
                source-buf (match-beginning 0) (match-end 0)))
             (setq session (mevedel-session-create "main" workspace))
             (setf (mevedel-session-turn-count session) 1)
@@ -2083,11 +2090,11 @@
               (goto-char (point-min))
               (let ((parent-start (point)))
                 (search-forward "END\n")
-                (mevedel--create-reference-in
+                (mevedel-instruction-test--create-note-in
                  source-buf parent-start (point)))
               (goto-char (point-min))
               (search-forward "child")
-              (mevedel--create-reference-in
+              (mevedel-instruction-test--create-note-in
                source-buf (match-beginning 0) (match-end 0)))
             (setq session (mevedel-session-create "main" workspace))
             (setf (mevedel-session-turn-count session) 1)
@@ -2146,7 +2153,7 @@
               (setq-local mevedel--workspace workspace)
               (goto-char (point-min))
               (search-forward "dup\n")
-              (mevedel--create-reference-in
+              (mevedel-instruction-test--create-note-in
                source-buf (match-beginning 0) (match-end 0)))
             (setq session (mevedel-session-create "main" workspace))
             (setf (mevedel-session-turn-count session) 1)

@@ -53,8 +53,8 @@
             (progn
               (require 'mevedel-overlays)
               (mevedel-delete-all-instructions)
-              (unless (null (mevedel--filter-references nil))
-                (error "Empty core registry returned references"))
+              (unless (null (mevedel--all-instructions))
+                (error "Empty core registry returned instructions"))
               (with-temp-buffer
                 (insert "source")
                 (let* ((workspace
@@ -66,9 +66,9 @@
                   (setq-local mevedel--workspace workspace)
                   (overlay-put instruction 'mevedel-instruction t)
                   (overlay-put instruction 'mevedel-instruction-type
-                               'reference)
+                               'note)
                   (overlay-put instruction 'mevedel-id 1)
-                  (overlay-put instruction 'mevedel-uuid "cold-reference")
+                  (overlay-put instruction 'mevedel-uuid "cold-note")
                   (mevedel--instruction-activate-buffer (current-buffer))
                   (mevedel--set-instruction-alist-value
                    (list (list (current-buffer) instruction)))

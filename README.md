@@ -31,8 +31,8 @@ Key features:
   customized, and try not to interfere with the regular Emacs workflow.
 - Can save your instruction overlays so you won't have to restart the labeling
   process each session.
-- Can categorize your references with tags, and use complex query expressions to
-  determine what to send to the model in directives.
+- Can categorize your notes with tags, and use tag query expressions in
+  `@note:{query}` mentions to choose which notes to attach to a chat.
 - Can easily cycle through between instruction overlays across all buffers.
 - Retained asynchronous child agents plus focused explorer, verifier, and
   reviewer workflows using mevedel’s agent runtime.
@@ -54,7 +54,7 @@ Key features:
   buffer, so older turns stay browsable on disk.
 - Persistent memory (`.mevedel/memory/` and `.agents/memory/`) and project
   instruction files (`AGENTS.md`) for customizing LLM behavior.
-- `@ref`, `@file`, `@agent`, and `@mcp` mention syntax in chat buffers.
+- `@note`, `@file`, `@agent`, and `@mcp` mention syntax in chat buffers.
 
 [output.webm](https://github.com/user-attachments/assets/738c9f8e-2798-466c-875e-5a77bc166a56)
 
@@ -206,10 +206,10 @@ before using Fork, Rewind or Save As with this provider.
 
 ## Usage
 
-mevedel’s function revolves around the creation and manipulation of references
+mevedel’s function revolves around the creation and manipulation of notes
 and directives within your Emacs buffers. Directives are prompts you send to the
-model, while references provide context to help complete these directives more
-accurately.
+model, while notes mark code with optional text that you send or mention when
+you want the model to see it.
 
 The video at the [beginning](#what-does-this-package-do) of this README should
 give you a good impression on the usage.
@@ -218,7 +218,7 @@ You can send your requests to the LLM either via the chat buffer (accessible by
 using `mevedel`) or by creating and submitting a directive.
 
 **Please note:** Requests sent from a directive **DO NOT** use the context of
-the chat buffer, only the current directive and freshly resolved references.
+the chat buffer, only the current directive request and marked code.
 The first accepted directive request binds the directive to an execution
 session. Each directive exchange renders there as a complete chronological turn
 using the ordinary view, tools, permissions, and interactions, but remains
@@ -245,8 +245,8 @@ The rest of this README is intentionally manual-style. The main moving parts are
 
 - Workspaces define the project root, allowed directories, session storage, and
   project-local context.
-- References and directives provide the overlay-based workflow for attaching
-  context and prompts to ordinary buffers.
+- Notes and directives provide the overlay-based workflow for attaching
+  comments and prompts to ordinary buffers.
 - The chat view provides the interactive gptel-backed workbench for ongoing
   conversations, tool calls, permissions, previews, agents, and slash commands.
 - Tools, permissions, inline previews, hooks, skills, agents, sessions,
@@ -255,10 +255,14 @@ The rest of this README is intentionally manual-style. The main moving parts are
 
 ### Notes
 
-Use `M-x mevedel-note-create` in a source file to mark the active region, or
-the current line when no region is active. The text is optional: submitting an
-empty answer keeps a code-only note. A label below the code shows the note's
-number, author, text, state and next actions. Notes follow source edits.
+A note is a marked code range with optional text, created by you or the agent
+(or as a Buddy remark). Use `M-x mevedel-note-create` in a visited source file
+to mark the active region, or the current line when no region is active. The
+text is optional: submitting an empty answer keeps a code-only note. A label
+below the code shows the note's number, author, text, state and next actions.
+Notes follow source edits. A note is unsent, sent, taken or closed (done,
+deleted or dismissed). Its context reaches a prompt only when you send or
+mention it.
 
 Inside a note, `M-m` (or `mevedel-ov-dispatch-key`) opens its actions menu.
 Plain letters still insert source text; entering a note also shows its actions
@@ -330,7 +334,10 @@ files. Missing sources show their last observed state without probing each file.
 Mention `@note:3` in a chat to attach that note's current code and text, or
 `@note:{parser and not tests}` to attach notes matching a tag query. Numbers bind
 to the selected note's identity, while tag queries re-evaluate current matches.
-Empty or unmatched queries attach nothing and report that clearly. Notes are
+`@ref:N` binds the same way. An empty, malformed or unmatched query matches
+nothing and reports that clearly; there is no implicit all-notes or untagged
+match. A note that is no longer available appears as an unavailable
+placeholder. Notes are
 never automatic prompt context. The mode line summarizes working, ready and
 stale notes in the current workspace using only in-memory state.
 
@@ -384,25 +391,22 @@ Conversion never overwrites a different existing backup: resolve that conflict
 before retrying the workspace operation. A matching backup allows an interrupted
 conversion to resume safely.
 
-References and directives remain available alongside notes.
+### Notes and directives
 
-### References and directives
-
-References are pieces of context selected from normal buffers. Directives are
-prompts that can be processed with one of mevedel's presets. A directive gathers
-context from matching references, linked references, and reference commentary;
-then the selected action decides whether the model may edit files, only discuss,
-request focused changes to existing work, or retry a failure.
+Directives are prompts that can be processed with one of mevedel's presets. A
+directive uses its own request; the selected action decides whether the model
+may edit files, only discuss, request focused changes to existing work, or retry
+a failure. Notes are not gathered into directive prompts automatically.
 
 This means there are two complementary workflows:
 
 - Use the chat view for conversational work with accumulated transcript context.
-- Use directives when the prompt should be anchored to explicit buffer overlays
-  and their selected references, independent of the chat transcript.
+- Use directives when the prompt should be anchored to an explicit buffer
+  overlay, independent of the chat transcript.
 
 ### Overlays
 
-All instructions, references or directives, are highlighted in the buffer via an
+All instructions, notes or directives, are highlighted in the buffer via an
 overlay. The overlay contains an action menu which can be toggled via
 `mevedel-ov-dispatch-key` and grants access to common operations.
 
@@ -417,20 +421,22 @@ Deleting all source text covered by a directive leaves a compact, zero-width
 detached row at that position. Its request, attempts, discussions, state, and
 actions remain available. If the file disappears, the workspace record remains
 available as Source missing until exact automatic or explicit reattachment.
-Deleting a complete reference still removes it. Nested directives remain
+Deleting all source text covered by a note does not remove it: the note
+survives with an empty anchor. A missing file shows as source missing in the
+notes list. Nested directives remain
 current details of their topmost parent rather than owning separate activity;
 if the parent detaches, prompts and submissions still consume those durable
 details after their source presentations disappear.
 
 Ordinary undo and redo restore source presentations after complete deletion,
-including references and detached directives, without rewinding directive
+including detached directives, without rewinding directive
 history. Emacs selective undo (`undo-in-region`) does not replay these custom
 overlay undo records, so it only restores text.
 
 Typing over a complete instruction with `delete-selection-mode` preserves its
 identity and covers the replacement text. A full deletion remains pending until
 the current command finishes: inserting at the deletion point in that command
-recovers the instruction, while leaving it empty removes a reference or detaches
+recovers the instruction, while leaving it empty detaches
 a directive. Line selections stay line selections. Separate noninteractive
 delete/insert calls need a single replacement notification or an explicit held
 replacement scope; unrelated later commands do not resurrect deleted instructions.
@@ -438,8 +444,7 @@ Replacing only an instruction's first or last covered line keeps the replacement
 alongside its surviving lines; unrelated adjacent insertions still stay outside.
 Replacing a whole parent and its nested instructions recovers only the outermost
 span: nested directive details/history remain on the parent without source
-presentations, and nested references are removed. Undo restores the nested
-instructions too.
+presentations. Undo restores the nested instructions too.
 
 ![Directive Overlay](.assets/images/ov-actions-menu.png)
 
@@ -500,7 +505,7 @@ applies there (`g` actions use `gr`, and `h`/`j`/`k`/`l` actions use uppercase).
 
 Other table action keys intentionally override normal-state editing commands
 only in those read-only tables. In source buffers, invoke the ordinary
-`mevedel-create-reference`, `mevedel-create-directive`, and
+`mevedel-create-directive` and
 `mevedel-delete-instructions` commands from visual state using your own bindings
 or `M-x`: `V` creates an explicit line span, `v` an explicit character span.
 Block selections are rejected rather than silently flattened. Commands leave
@@ -546,13 +551,12 @@ memory roots, the configured plans directory, and manually configured roots.
 
 | Command                           | Command Description                                                   |
 |-----------------------------------|-----------------------------------------------------------------------|
-| `mevedel-create-reference`        | Create or resize a reference instruction within a region.             |
+| `mevedel-note-create`             | Create a note on the region or current line; text is optional.        |
+| `mevedel-notes-list`              | List the workspace's notes, grouped by attention state.               |
 | `mevedel-create-directive`        | Create or resize a directive instruction at point or within a region. |
-| `mevedel-convert-instructions`    | Convert instructions between reference and directive type at point or within a region. |
 | `mevedel-delete-instructions`     | Remove instructions either at point or within the selected region.    |
-| `mevedel-delete-all-instructions` | Confirm deletion of references and visible directives in the current workspace. |
-| `mevedel-delete-all-references`   | Confirm deletion of references in the current workspace; keep directives. |
-| `mevedel-delete-all-directives`   | Confirm deletion of visible directives and their subdirectives; keep references. |
+| `mevedel-delete-all-instructions` | Confirm deletion of notes and visible directives in the current workspace. |
+| `mevedel-delete-all-directives`   | Confirm deletion of visible directives and their subdirectives.       |
 | `mevedel`                         | Start or switch to a chat session; prefix arg prompts for directory/session. |
 | `mevedel-in-directory`            | Start or switch to a chat session rooted in a workspace subdirectory. |
 | `mevedel-init`                    | Bootstrap or refresh project instruction files.                       |
@@ -575,17 +579,11 @@ records; records without a source presentation do not add to the buffer count.
 | `mevedel-default-chat-preset` | Default preset when `mevedel` is invoked without prefix arg.     |
 | `mevedel-user-dir`            | Global user-state directory for skills, memory, plugins, config, and permissions. Set before mevedel loads. |
 
-- If the region mark started from outside the reference/directive overlay and a
+- If the region mark started from outside the directive overlay and a
   part of it is within the selected region, the instruction will be "shrunk" to
   fit the new region boundaries.
-- If the region mark started from inside the reference/directive overlay, the
+- If the region mark started from inside the directive overlay, the
   instruction will grow to include the entire new selection.
-
-Below is an example of scaling existing instruction overlay (in this case, a
-reference) by invoking the `mevedel-create-reference` command within a region
-that contains one:
-
-[instruction-scaling.webm](https://github.com/user-attachments/assets/7b2f0966-184a-4eda-ad26-8cfc500f9e1d)
 
 ### Sessions
 
@@ -798,81 +796,18 @@ separate instruction file per branch.
 | Command                               | Command Description                                               |
 |---------------------------------------|-------------------------------------------------------------------|
 | `mevedel-modify-directive`            | Modify an existing directive instruction at point.                |
-| `mevedel-modify-reference-commentary` | Modify reference commentary at the current point.                 |
-| `mevedel-add-tags`                    | Add tags to the reference under the point.                        |
-| `mevedel-remove-tags`                 | Remove tags from the reference under the point.                   |
-| `mevedel-modify-directive-tag-query`  | Enter a tag search query for a directive under the current point. |
-| `mevedel-link-instructions`           | Link instructions by their ids.                                   |
-| `mevedel-unlink-instructions`         | Unlink instructions by their ids.                                 |
-
-| Custom Variable                            | Variable Description                                 |
-|--------------------------------------------|------------------------------------------------------|
-| `mevedel-empty-tag-query-matches-all`      | Determines matching behavior of queryless directives |
-| `mevedel-always-match-untagged-references` | Determines matching behavior of untagged references  |
+| `mevedel-note-edit`                   | Edit the note text at point.                                      |
+| `mevedel-note-set-tags`               | Set the tags of the note at point; an empty answer removes all.   |
+| `mevedel-link-instructions`           | Link instruction IDs; links do not attach notes to prompts.       |
+| `mevedel-unlink-instructions`         | Remove links between instruction IDs.                            |
 
 #### Categorization
 
-[tag-query.webm](https://github.com/user-attachments/assets/a5492895-3e20-45b2-bf16-712caacee9e2)
-
-The categorization system in allows you to use tags to label and organize
-references. You can add or remove tags to a reference using the commands
-`mevedel-add-tags` and `mevedel-remove-tags`. Each tag is a symbolic label that
-helps identify the nature or purpose of the reference.
-
-You can also modify the tag query for a directive, which is a way to filter and
-search for references by tags. The tag query uses an infix notation system,
-allowing complex expressions with the operators `and`, `or`, and `not`. For
-example, the query `signature and function and doc` means the directive should
-match references tagged with `signature`, `function`, and `doc`. You may use
-parentheses in these expressions.
-
-Additionally, there are special meta tag symbols that have exclusive meanings:
-
-- `is:bufferlevel`: Returns only references that contain the entire buffer.
-- `is:tagless`: Returns references with no tags whatsoever.
-- `is:directly-tagless`: Returns references which may have inherited tags, but
-  no tags of their own.
-- `is:subreference`: Returns references which have another reference as their
-  parent.
-- `is:with-commentary`: Returns references that directly contain commentary
-  text.
-- `id:<positive-integer>`: Returns references the id matched by
-  `positive-integer`.
-
-`mevedel-empty-tag-query-matches-all` determines the behavior of directives
-without a tag search query. If set to `t`, directives lacking a specific tag
-search query will use all available references. Alternatively, if set to `nil`,
-such directives will not use any references, leading to potentially narrower
-results.
-
-`mevedel-always-match-untagged-references` controls the inclusion of untagged
-references in directive prompts. When set to `t`, untagged references are always
-incorporated into directive references, ensuring comprehensive coverage.
-Conversely, when set to `nil`, untagged references are ignored unless
-`mevedel-empty-tag-query-matches-all` is set to `t`.
-
-#### Commentary
-
-You can add commentaries to references with the
-`mevedel-modify-reference-commentary` command. Commentaries can add extra context
-and information to a reference. Example:
-
-![Ref commentary](.assets/images/ref-commentary.png)
-
-#### Linking
-
-References can be linked to one another, which sets up a dependency or of
-automatic inclusion relationship between the two. This means that when the first
-reference is utilized, it will automatically bring into play the reference it is
-linked to, as well. This chaining of references is recursive: if a linked
-reference is itself linked to another, and so forth, all these links will be
-followed automatically. This continues until either there are no more links to
-follow or a cycle is detected in the linkage graph.
-
-Linked references are also included when a directive is executed from within a
-reference which links to another, in a similar fashion to commentaries.
-
-Currently, linking is only relevant for references.
+Tags label and organize notes. Set them with `mevedel-note-set-tags` (or `t` in
+the notes list). A tag query uses infix notation with the operators `and`, `or`
+and `not`, and parentheses. Notes are selected by tag in a chat with
+`@note:{signature and function and doc}` or `@ref:{query}` mentions, which
+match open notes only. An empty or malformed query matches nothing.
 
 ### Processing
 
@@ -910,7 +845,7 @@ Back to chat action. Discussion persists on the directive record and can be
 promoted with `Implement this` without entering ordinary-chat context.
 After implementation, the directive turn and read-only inspector offer Request
 changes after success or Retry after failure/abort. Both use current repository
-state, fresh references, and only the immediately preceding attempt as model
+state, and only the immediately preceding attempt as model
 context.
 Captured patches belong to immutable attempts and are display/context artifacts,
 not undo data. Rewind before an implementation is the sole implementation undo:
@@ -934,8 +869,6 @@ the patch before applying it.
 |---------------------------------------|-------------------------------------------------------------|
 | `mevedel-next-instruction`            | Cycle through instructions in the forward direction.        |
 | `mevedel-previous-instruction`        | Cycle through instructions in the backward direction.       |
-| `mevedel-next-reference`              | Cycle through references in the forward direction.          |
-| `mevedel-previous-reference`          | Cycle through references in the backward direction.         |
 | `mevedel-next-directive`              | Cycle through directives in the forward direction.          |
 | `mevedel-previous-directive`          | Cycle through directives in the backward direction.         |
 | `mevedel-cycle-instructions-at-point` | Cycle through instructions at the point, highlighting them. |
@@ -944,7 +877,6 @@ the patch before applying it.
 
 | Custom Variable                                  | Variable Description                             |
 |--------------------------------------------------|--------------------------------------------------|
-| `mevedel-reference-color`                        | Tint color for reference overlays                |
 | `mevedel-directive-color`                        | Tint color for directive overlays                |
 | `mevedel-directive-processing-color`             | Tint color for directives being processed        |
 | `mevedel-directive-success-color`                | Tint color for successfully processed directives |
@@ -957,8 +889,7 @@ the patch before applying it.
 
 ### Command index
 
-- `mevedel-create-reference` / `mevedel-create-directive` /
-  `mevedel-convert-instructions`
+- `mevedel-note-create` / `mevedel-notes-list` / `mevedel-create-directive`
 - `mevedel-save-instructions` / `mevedel-load-instructions`
 - `mevedel-implement-directive` / `mevedel-discuss-directive` /
   `mevedel-request-directive-changes` / `mevedel-retry-directive`
@@ -1650,7 +1581,8 @@ prompt to the LLM. Each mention becomes a compact `[kind:KEY -- STATUS]`
 placeholder, with the full content injected as a `<system-reminder>` block
 above the user prompt.
 
-- `@ref:N` / `@ref:{tag query}` — instruction reference by ID or tag.
+- `@note:N` / `@note:{tag query}` — note by number or tag query; `@ref:N` and
+  `@ref:{tag query}` also select notes.
 - `@file:path` / `@file:{path with spaces}` — file or directory contents (with
   optional `#L<start>[-<end>]` to pin a line range). Directories are expanded as
   gitignore-filtered recursive listings, and supported media files are attached
@@ -1705,7 +1637,7 @@ The maintained detail docs live in [`docs/`](docs/):
   mailboxes, task status, and review flow.
 - [`docs/preview.md`](docs/preview.md) — inline diff preview behavior and
   keybindings.
-- [`docs/mentions.md`](docs/mentions.md) — `@ref`, `@file`, `@agent`, and
+- [`docs/mentions.md`](docs/mentions.md) — `@note`, `@ref`, `@file`, `@agent`, and
   `@mcp` expansion.
 - [`docs/skills.md`](docs/skills.md) — `SKILL.md` discovery, local slash
   commands, `$skill` invocation, model-side `Skill`, permissions, and forked skills.

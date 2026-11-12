@@ -2,12 +2,42 @@
 
 ;;; Commentary:
 
-;; Real-file reference, directive, and source fixtures shared by owner tests.
+;; Real-file note, directive, and source fixtures shared by owner tests.
 
 ;;; Code:
 
-(defun mevedel-instruction-test--make-reference (content workspace)
-  "Create a file buffer containing CONTENT and one reference in WORKSPACE."
+(require 'mevedel-notes)
+
+(defun mevedel-instruction-test--create-note-in (buffer start end &optional span)
+  "Create a note in BUFFER from START to END, with optional explicit SPAN.
+Give unnamed geometry fixtures a real source file until BUFFER is killed."
+  (with-current-buffer buffer
+    (unless buffer-file-name
+      (let ((file (make-temp-file "mevedel-note-source-" nil ".txt")))
+        (write-region (point-min) (point-max) file nil 'silent)
+        (setq-local buffer-file-name file)
+        (add-hook 'kill-buffer-hook
+                  (lambda ()
+                    (unlock-file file)
+                    (when (file-exists-p file) (delete-file file))) t t)))
+    (save-mark-and-excursion
+      (let ((transient-mark-mode t)
+            (mark-active t)
+            (mevedel-notes--unsaved-noticed
+             (copy-sequence mevedel-notes--unsaved-noticed)))
+        (goto-char end)
+        (set-mark start)
+        (mevedel-test--with-captured-diagnostics nil
+          (let ((note (mevedel-note-create "")))
+            (when span
+              (overlay-put note 'mevedel-span span)
+              (move-overlay note start end buffer)
+              (mevedel--instruction-normalize-lines note)
+              (mevedel--update-instruction-overlay note t))
+            note))))))
+
+(defun mevedel-instruction-test--make-note (content workspace)
+  "Create a file buffer containing CONTENT and one note in WORKSPACE."
   (let* ((file (make-temp-file "mevedel-overlay-" nil ".txt" content))
          (buffer (find-file-noselect file)))
     (with-current-buffer buffer
@@ -15,7 +45,7 @@
       (setq-local mevedel--workspace workspace)
       (set-buffer-modified-p nil)
       (cons buffer
-            (mevedel--create-reference-in
+            (mevedel-instruction-test--create-note-in
              buffer (point-min) (1- (point-max)))))))
 
 (defun mevedel-instruction-test--discard (cell)

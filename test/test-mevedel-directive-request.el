@@ -66,16 +66,6 @@
                               (should-error (mevedel-in-directory missing) :type 'user-error)))))))
       (delete-directory root t))))
 
-(mevedel-deftest mevedel-create-reference/no-region ()
-  (with-temp-buffer
-    (insert "Unselected source")
-    (let ((workspace (mevedel-workspace--create :root "/source origin/")))
-      (cl-letf (((symbol-function 'mevedel-workspace)
-                 (lambda (&optional _buffer) workspace)))
-        (should-not (mevedel-create-reference))
-        (should (equal "Unselected source" (buffer-string)))
-        (should-not (overlays-in (point-min) (point-max)))))))
-
 (mevedel-deftest mevedel--request-changes-prompt ()
   ,test
   (test)

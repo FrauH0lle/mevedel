@@ -112,7 +112,7 @@ Rewind neither copy nor roll them back. See
 [shared editing](shared-editing.md) for item leases, pending browser drafts,
 operation retries, and native exports.
 
-References and directives likewise live in the workspace's instruction store,
+Notes and directives likewise live in the workspace's instruction store,
 `<workspace>/.mevedel/instructions.el`
 ([ADR 0130](adr/0130-keep-instructions-in-a-workspace-store.md)). A session
 keeps `instructions/turn-NNNNNN.el` snapshots as history and, for now,

@@ -54,7 +54,7 @@ allow `ApplyPatch` there, including session-only proposals; `Eval` is
 unavailable in both.
 
 `mevedel-mention-bindings.el` owns the shared atomic binding lifecycle for
-skills, direct references, files, and MCP resources. Kind-specific discovery,
+skills, direct notes, files, and MCP resources. Kind-specific discovery,
 resolution, content loading, permission checks, and request annotations remain
 in the skill and mention modules. File token recognition and braced-path
 decoding also live in the binding module and are shared with Markdown view
@@ -67,7 +67,6 @@ A binding is a hidden text property on the exact visible mention token. It
 stores `:kind`, the unchanged `:token`, and one canonical locator:
 
 - skill: canonical `SKILL.md` source pathname
-- direct reference: reference UUID
 - direct note: note UUID
 - file: absolute expanded pathname
 - MCP resource: configured server name plus resource URI
@@ -75,10 +74,10 @@ stores `:kind`, the unchanged `:token`, and one canonical locator:
 The binding preserves identity, not contents or authorization. Completion and
 programmatic insertion bind immediately when the exact target is known.
 Remaining manually typed mentions bind at send before async preparation,
-queueing, or input-history insertion. A missing direct reference or unknown
+queueing, or input-history insertion. A missing direct note or unknown
 skill remains unbound because no exact target is known; a file pathname and an
 MCP server/URI pair can bind even while unavailable.
-Reference queries intentionally remain unbound so every dispatch evaluates the
+Note queries intentionally remain unbound so every dispatch evaluates the
 current matching set. Agent mentions also remain unbound because registered
 agent names already provide their live identity.
 
@@ -97,7 +96,7 @@ lock state, indivisible token behavior, or permanent transcript warning.
 
 At actual dispatch, each kind resolves only through its stored locator and
 reads current target state and contents. It never falls back to a same-named
-skill, reused reference number, different pathname, or different MCP server
+skill, reused note number, different pathname, or different MCP server
 name. Current file and MCP access checks still apply; binding is not approval.
 Unavailable, deleted, disconnected, unreadable, or denied targets become
 explicit annotations only in the temporary model request, emit a nonblocking
@@ -118,21 +117,19 @@ schema, send-time binding, and dispatch branches.
   note UUID at send; deleted bound notes never retarget a reused number.
   Tag queries remain unbound and select the current matching set (`and`, `or`,
   `not`, and parenthesized groups). Empty and unmatched queries attach nothing
-  and produce an explanatory placeholder and nonblocking message. Attachments
+  and produce an explanatory placeholder and nonblocking message. A note that
+  is unavailable appears as `[note:LABEL -- unavailable]`. Attachments
   contain current code, note text, author and location. Deduplication hashes
   the complete attachment, so text or location changes also deliver fresh
   context. The same Read permission check as `@file` runs before probing or
   restoring source files. Denied, unreadable or missing sources are reported
   per note without blocking readable matches. Creating, tagging or listing
   notes never adds them to prompts.
-- **@ref:N** / **@ref:{tag query}** — direct references display their numeric
-  ID but bind the selected reference UUID. Completion binds immediately;
-  manually typed direct references bind at send when the reference exists.
-  Queueing and input history preserve that UUID, while dispatch reads the
-  reference's current contents. A deleted bound reference is annotated as
-  unavailable with a nonblocking warning and never falls back to a reused
-  numeric ID. Tag queries remain unbound and re-evaluate current matches at
-  every dispatch.
+- **@ref:N** / **@ref:{tag query}** — `@ref:N` binds the note UUID like
+  `@note:N`; a legacy reference UUID binding names the migrated note.
+  `@ref:{query}` is an explicit tag query over open notes, shown as
+  `[note:{query} -- no matches]` when nothing matches. Empty or malformed
+  queries match nothing; there is no implicit all-notes or untagged match.
 - **@file:path** / **@file:{path with spaces}** — hierarchical file
   completion inserts the bare form; drag/drop and clipboard image paste
   use the braced form when quoting is needed. Completion and programmatic
@@ -230,7 +227,7 @@ suppressed only after accepted delivery.
 - Per-session: `mevedel-session-mentions-shown` keyed on `(KIND . KEY)`
   stores `(turn . content-hash)`; unchanged hashes skip repeated text-reminder
   injection. Media contexts remain part of each request that mentions them;
-  ordinary path/MIME context entries are deduplicated within that request. Direct references use their UUID as `KEY`, so changed
+  ordinary path/MIME context entries are deduplicated within that request. Direct notes use their UUID as `KEY`, so changed
   contents are attached again without allowing displayed-number reuse to
   collide. Files use the absolute pathname plus requested line range; MCP
   resources use server name plus URI. The kind and exact locator prevent
@@ -262,7 +259,7 @@ attachment path as a dropped file. If no clipboard image is available,
 
 ## Completion
 
-`mevedel-ref-capf`, `mevedel-file-capf`, `mevedel-agent-capf`,
+`mevedel-note-capf` (`@note` and `@ref`), `mevedel-file-capf`, `mevedel-agent-capf`,
 `mevedel-mcp-capf` (two-stage: server names at `@mcp:`, resource URIs at
 `@mcp:server:`). Font-lock uses `success`/`shadow`/`link` box faces.
 Registered in `mevedel-install`/`-uninstall`.

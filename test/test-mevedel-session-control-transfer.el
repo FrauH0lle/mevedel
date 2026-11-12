@@ -6,11 +6,18 @@
 
 ;;; Code:
 
+(require 'mevedel-notes)
+
 (require 'helpers
          (file-name-concat
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-instruction-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-instruction-test-support"))
 (require 'mevedel-agent-control)
 (require 'mevedel-execution)
 (require 'mevedel-overlays)
@@ -401,9 +408,11 @@
     (write-region "old transcript" nil old-file nil 'silent)
     (write-region "new transcript" nil new-file nil 'silent)
     (with-current-buffer source-buffer
-      (setq-local mevedel--workspace workspace)
+      (setq-local mevedel--workspace workspace
+                  buffer-file-name (file-name-concat root "source.txt"))
       (insert "reference")
-      (setq reference (mevedel--create-reference-in source-buffer 1 10)
+      (write-region (point-min) (point-max) buffer-file-name nil 'silent)
+      (setq reference (mevedel-instruction-test--create-note-in source-buffer 1 10)
             reference-id (overlay-get reference 'mevedel-uuid)))
     (setf (mevedel-session-save-path session) session-dir
           (mevedel-session-session-id session) "transfer-session"

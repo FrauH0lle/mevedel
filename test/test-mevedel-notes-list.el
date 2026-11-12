@@ -210,10 +210,76 @@
       (mevedel-notes-list-refresh)
       (should-not (string-match-p "review\\|parser" (buffer-string))))))
 
+(mevedel-deftest mevedel-note-capf/unopened
+  (:quiet t)
+  ,test
+  (test)
+  :doc "ordinary completion does not observe an unreadable note store"
+  (mevedel-notes-list-test--workspace
+    (with-temp-file (mevedel-instruction-store-path workspace) (insert "invalid"))
+    (with-temp-buffer
+      (setq-local mevedel--session (mevedel-session-create "plain-completion" workspace))
+      (insert "ordinary word")
+      (should-not (mevedel-note-capf))))
+  :doc "note and ref completion bind unopened notes without visiting source"
+  (mevedel-notes-list-test--workspace
+    (kill-buffer (find-buffer-visiting second))
+    (mevedel--clear-instruction-state workspace)
+    (with-temp-buffer
+      (setq-local mevedel--session (mevedel-session-create "completion" workspace))
+      (dolist (kind '(note ref))
+        (erase-buffer)
+        (insert (format "@%s:" kind))
+        (let* ((completion (mevedel-note-capf))
+               (candidates (all-completions "" (nth 2 completion)))
+               (exit (plist-get (nthcdr 3 completion) :exit-function)))
+          (should (member "2" candidates))
+          (should-not (find-buffer-visiting second))
+          (insert "2")
+          (funcall exit "2" 'finished)
+          (let ((binding (get-text-property 0 'mevedel-mention-binding (buffer-string))))
+            (should (eq kind (plist-get binding :kind)))
+            (should (stringp (plist-get binding (if (eq kind 'note) :note-uuid :reference-uuid))))))))))
+
+(mevedel-deftest mevedel-mentions-install
+  (:quiet t)
+  ,test
+  (test)
+  :doc "note and ref tokens fontify without reference resolvers or store observations"
+  (mevedel-notes-list-test--workspace
+    (with-temp-buffer
+      (rename-buffer "note mention fontification" t)
+      (fundamental-mode)
+      (setq-local mevedel--session (mevedel-session-create "fontification" workspace)
+                  font-lock-defaults '(nil t))
+      (insert "@ref:2 @note:2 @ref:{review} @note:{review}")
+      (mevedel-mentions-install)
+      (font-lock-mode 1)
+      (font-lock-ensure)
+      (goto-char (point-min))
+      (dolist (token '("@ref:2" "@note:2" "@ref:{review}" "@note:{review}"))
+        (search-forward token)
+        (should (get-text-property (match-beginning 0) 'face))))))
+
 (mevedel-deftest mevedel-mentions-expand-user-input-notes
   (:quiet t)
   ,test
   (test)
+  :doc "ref tag mentions select notes explicitly and empty queries attach nothing"
+  (mevedel-notes-list-test--workspace
+    (with-current-buffer (find-buffer-visiting second)
+      (mevedel-note-set-tags '(review)))
+    (let* ((session (mevedel-session-create "ref-notes" workspace))
+           (expansion (mevedel-mentions-expand-user-input "Explain @ref:{review}" session))
+           (body (mapconcat (lambda (item) (plist-get item :body))
+                           (plist-get expansion :reminder-items) "\n")))
+      (should (string-match-p "second code" body))
+      (should-not (string-match-p "first code" body))
+      (setq expansion (mevedel-mentions-expand-user-input "Explain @ref:{}" session))
+      (should (string-match-p "no matches" (plist-get expansion :text)))
+      (should-not (string-match-p "first code\\|second code"
+                                  (mapconcat (lambda (item) (plist-get item :body))
+                                             (plist-get expansion :reminder-items) "\n")))))
   :doc "number mentions attach only selected code from unopened files"
   (mevedel-notes-list-test--workspace
     (kill-buffer (find-buffer-visiting second))

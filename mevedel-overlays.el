@@ -3,8 +3,7 @@
 ;;; Commentary:
 
 ;; Core overlay system for mevedel instructions.  Instructions come in
-;; two flavours: references (provide context, tagged for query) and
-;; directives (LLM prompts that may query references by tag).
+;; two flavours: notes (explicit context) and directives (LLM requests).
 ;;
 ;; This core owns containment and tree queries, tag/context semantics,
 ;; navigation, and prompt assembly.  `mevedel-instruction-registry' owns
@@ -63,8 +62,6 @@
 (declare-function mevedel--create-directive-in
                   "mevedel-directive-source"
                   (buffer start end &optional bodyless directive-text span))
-(declare-function mevedel--create-reference-in
-                  "mevedel-directive-source" (buffer start end &optional span))
 (declare-function mevedel--delete-instruction
                   "mevedel-directive-source"
                   (instruction &optional buffer))
@@ -168,11 +165,6 @@
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 (autoload 'mevedel-workspace "mevedel-workspace")
 
-(defcustom mevedel-reference-color
-  (face-attribute 'font-lock-constant-face :foreground nil 'default)
-  "Color to be used as a tint for reference overlays."
-  :type 'string
-  :group 'mevedel)
 
 (defcustom mevedel-directive-color
   (face-attribute 'font-lock-keyword-face :foreground nil 'default)
@@ -228,33 +220,11 @@ Does not affect the label colors, just the backgrounds."
   :type 'float
   :group 'mevedel)
 
-(defcustom mevedel-empty-tag-query-matches-all t
-  "Determine behavior of directives without a tag search query.
-
-If set to t, directives without a specific tag search query will use all
-available references.  If set to nil, directives without a search query
-will not use any references."
-  :type 'boolean
-  :group 'mevedel)
-
-(defcustom mevedel-always-match-untagged-references t
-  "Control inclusion of untagged references in directive prompts.
-
-When set to t, untagged references are always incorporated into
-directive references, ensuring comprehensive coverage.  When set to nil,
-untagged references are ignored unless
-`mevedel-empty-tag-query-matches-all' is set to t.
-
-A reference is considered untagged when it has no direct tags.
-References can inherit tags from ancestor references and still be
-considered untagged."
-  :type 'boolean
-  :group 'mevedel)
 
 (defcustom mevedel-include-full-instructions t
   "Control whether instructions are fully included in the prompt.
 
-When set to non-nil, the content of directives and references is
+When set to non-nil, the content of directives is
 included in the prompt submitted to the LLM.  When nil, only file and
 line numbers are included.
 
@@ -315,12 +285,6 @@ available."
         (mevedel--update-instruction-overlay topmost-directive t)))
     (mevedel--read-directive directive)))
 
-(defun mevedel-modify-reference-commentary ()
-  "Modify the reference commentary under the point."
-  (interactive)
-  (when-let* ((reference (mevedel--highest-priority-instruction (mevedel--instructions-at (point) 'reference)
-                                                                t)))
-    (mevedel--read-commentary reference)))
 
 (defun mevedel-delete-instructions ()
   "Delete instruction(s) either at point or within the selected region.
@@ -354,7 +318,7 @@ deleted.  Throw a user error if no instructions to delete were found."
 
 (defun mevedel--delete-all-instructions-of-type (type interactivep)
   "Delete instructions of TYPE in the current workspace.
-TYPE is `reference', `directive', or nil for both.  INTERACTIVEP requests
+TYPE is `note', `directive', or nil for both.  INTERACTIVEP requests
 confirmation and offers inclusion of Source-missing directive records.
 Return the deleted count; Source-missing records count once each, without
 contributing to the buffer count.  Archived records are never deleted."
@@ -374,7 +338,7 @@ contributing to the buffer count.  Archived records are never deleted."
                    (eq type (overlay-get instruction 'mevedel-instruction-type))))
              (mevedel--all-instructions))))
          (missing
-          (when (and workspace (not (eq type 'reference)))
+          (when (and workspace (or (null type) (eq type 'directive)))
             (seq-filter
              (lambda (record)
                (eq 'source-missing
@@ -428,7 +392,7 @@ contributing to the buffer count.  Archived records are never deleted."
 
 ;;;###autoload
 (defun mevedel-delete-all-instructions ()
-  "Delete references and visible directives in the current workspace.
+  "Delete notes and visible directives in the current workspace.
 All buffers in that workspace are included.  Without a workspace, operate
 on the shared global bucket of all buffers without a workspace instead.
 Interactively, confirm counts and offer Source-missing directives too,
@@ -437,21 +401,13 @@ defaulting to no.  Archived directives remain; activity requires archiving."
   (mevedel--delete-all-instructions-of-type nil (called-interactively-p 'any)))
 
 ;;;###autoload
-(defun mevedel-delete-all-references ()
-  "Delete references in all buffers of the current workspace, with confirmation.
-Without a workspace, operate on the shared global bucket of all buffers
-without a workspace instead.  Leave directive records and presentations intact."
-  (interactive)
-  (mevedel--delete-all-instructions-of-type 'reference (called-interactively-p 'any)))
-
-;;;###autoload
 (defun mevedel-delete-all-directives ()
   "Delete visible directives and their subdirectives in the current workspace.
 All buffers in that workspace are included.  Without a workspace, operate
 on the shared global bucket of all buffers without a workspace instead.
 Interactively, offer Source-missing records once (default no), then confirm
 counts.  Archived directives remain; activity requires archiving.
-Leave references intact."
+Leave notes intact."
   (interactive)
   (mevedel--delete-all-instructions-of-type 'directive (called-interactively-p 'any)))
 
@@ -467,17 +423,6 @@ Leave references intact."
   (unless (mevedel--cycle-instruction nil 'previous)
     (mevedel--print-instruction-not-found 'previous nil)))
 
-(defun mevedel-next-reference ()
-  "Cycle through references in the forward direction."
-  (interactive)
-  (unless (mevedel--cycle-instruction 'reference 'next)
-    (mevedel--print-instruction-not-found 'next 'reference)))
-
-(defun mevedel-previous-reference ()
-  "Cycle through references in the backward direction."
-  (interactive)
-  (unless (mevedel--cycle-instruction 'reference 'previous)
-    (mevedel--print-instruction-not-found 'previous 'reference)))
 
 (defun mevedel-next-directive ()
   "Cycle through directives in the forward direction."
@@ -546,74 +491,6 @@ This command is useful to see what is actually being sent to the model."
               (define-key local-map (kbd "q") 'quit-window)
               (use-local-map local-map))))))))
 
-(defun mevedel-modify-directive-tag-query ()
-  "Prompt minibuffer to enter a tag search query for a directive.
-
-The directive in question is the directive under the current point.
-
-A tag query is an _infix_ expression, containing symbol atoms and the
-operator symbols: `and', `or', `not'.  If no operator is present between
-two expressions, then an implicit `and' operator is assumed.
-
-Examples:
-  (signature and function and doc)
-  (not dog or not cat)
-  (cat or dog or (sheep and black))
-  ((cat and dog) or (dog and goose))"
-  (interactive)
-  (if-let* ((directive (mevedel--topmost-instruction
-                        (mevedel--highest-priority-instruction (mevedel--instructions-at (point)) t)
-                        'directive)))
-      (let ((query (mevedel--read-tag-query (substring-no-properties
-                                             (or
-                                              (overlay-get directive
-                                                           'mevedel-directive-infix-tag-query-string)
-                                              "")))))
-        (mevedel--set-directive-tag-query directive query))
-    (let ((scope (mevedel-diagnostic-scope
-                  (mevedel--instruction-buffer-workspace (current-buffer)))))
-      (mevedel-diagnostic-user-error scope "No directive at point"))))
-
-(defun mevedel-add-tags (&optional reference)
-  "Add tags to the reference under the point.
-
-Adds specificly to REFERENCE if it is non-nil."
-  (interactive)
-  (let* ((scope (mevedel-diagnostic-scope
-                 (mevedel--instruction-buffer-workspace
-                  (if reference (overlay-buffer reference) (current-buffer)))))
-         (instructions (mevedel--instructions-at (point) 'reference))
-         (instr (or reference (mevedel--highest-priority-instruction instructions t))))
-    (if instr
-        (let* ((existing-tags (mevedel--available-tags))
-               (input (completing-read-multiple "Add tags (or leave empty): "
-                                                existing-tags nil nil))
-               (new-tags (mapcar #'intern input)))
-          (let ((added (mevedel--add-tags instr new-tags)))
-            (message "%d tag%s added" added (if (= added 1) "" "s"))))
-      (mevedel-diagnostic-user-error scope
-                                   "No reference at point"))))
-
-(defun mevedel-remove-tags ()
-  "Remove tags from the reference under the point."
-  (interactive)
-  (let* ((scope (mevedel-diagnostic-scope
-                 (mevedel--instruction-buffer-workspace (current-buffer))))
-         (instructions (mevedel--instructions-at (point) 'reference))
-         (instr (mevedel--highest-priority-instruction instructions t)))
-    (if instr
-        (let ((tags-list (mevedel--reference-tags instr)))
-          (if (null tags-list)
-              (mevedel-diagnostic-user-error scope
-                                           "Reference has no tags of its own to remove")
-            ;; Prompt the user to remove tags.
-            (let* ((input (completing-read-multiple "Remove tags: " tags-list nil t))
-                   (tags-to-remove (mapcar #'intern input)))
-              (let ((removed (mevedel--remove-tags instr tags-to-remove)))
-                (message "%d tag%s removed" removed (if (= removed 1) "" "s"))))))
-      (mevedel-diagnostic-user-error scope
-                                   "No reference at point"))))
-
 
 (defun mevedel--stashed-buffer-instructions (buffer)
   "Return stashed instruction data for all instructions in BUFFER.
@@ -651,134 +528,11 @@ FILE-CONTENTS."
           (mapc #'mevedel--delete-instruction-overlay
                 (mevedel--instructions-in (point-min) (point-max))))))))
 
-(defun mevedel--reference-list-info (refs)
-  "Return a plist with information regarding REFS list.
-
-:buffer-count - Amount of buffers with references from REFS
-:line-count   - Amount of total lines spanned by top-level references"
-  (let ((bufhash (make-hash-table))
-        (buffer-count 0)
-        (line-count 0))
-    (cl-loop
-     for ref in refs
-     do (let ((buffer (overlay-buffer ref))
-              (start (overlay-start ref))
-              (end (overlay-end ref)))
-          (if-let* ((line-ranges (gethash buffer bufhash)))
-              (cl-loop for range in line-ranges
-                       do (cl-destructuring-bind (range-start . range-end) range
-                            (when (<= start range-start range-end end)
-                              (setf (car range) start
-                                    (cdr range) end)
-                              (cl-return)))
-                       finally (puthash buffer (push (cons start end) line-ranges) bufhash))
-            (puthash buffer `((,(overlay-start ref) . ,(overlay-end ref))) bufhash)))
-     finally (setq buffer-count
-                   (hash-table-count bufhash))
-     (maphash (lambda (buffer ranges)
-                (with-current-buffer buffer
-                  (cl-loop for (beg . end) in ranges
-                           do (let ((end-lineno (line-number-at-pos end))
-                                    (beg-lineno (line-number-at-pos beg)))
-                                (setq line-count
-                                      (+ line-count (+ 1 (- end-lineno beg-lineno))))))))
-              bufhash)
-     (cl-return (list :buffer-count buffer-count :line-count line-count)))))
-
-(defun mevedel--reference-list-info-string (refs)
-  "Return a formatted statistics string for REFS.
-
-REFS is a list of references to format.  The string includes hit count,
-buffer count, and line count with proper pluralization."
-  (cl-destructuring-bind (&key buffer-count line-count)
-      (mevedel--reference-list-info refs)
-    (let ((ref-count (length refs)))
-      (format "%d hit%s in %d buffer%s, %d line%s"
-              ref-count
-              (if (= ref-count 1) "" "s")
-              buffer-count
-              (if (= buffer-count 1) "" "s")
-              line-count
-              (if (= line-count 1) "" "s")))))
-
-(defun mevedel--read-tag-query (&optional default)
-  "Prompt user via minibuffer for a tag query text.
-
-DEFAULT is the default query to display in the minibuffer.
-Returns the validated query string."
-  (let ((scope (mevedel-diagnostic-scope
-                (mevedel--instruction-buffer-workspace (current-buffer)))))
-    (minibuffer-with-setup-hook
-        (lambda ()
-          (let ((timer nil)
-                (minibuffer-message))
-            (add-hook 'minibuffer-exit-hook
-                      (lambda ()
-                        (when timer
-                          (cancel-timer timer)))
-                      nil t)
-            (add-hook 'after-change-functions
-                      (lambda (_beg _end _len)
-                        (when timer
-                          (cancel-timer timer))
-                        (setq timer
-                              (run-with-timer
-                               0.5
-                               nil
-                               (lambda ()
-                                 (condition-case err
-                                     (let* ((input (minibuffer-contents))
-                                            (query (read (concat "(" input ")"))))
-                                       (let ((refs (mevedel--filter-references
-                                                    (mevedel--tag-query-prefix-from-infix query))))
-                                         (setq minibuffer-message
-                                               (mevedel--reference-list-info-string refs))))
-                                   (error
-                                    (let ((errmsg (error-message-string err)))
-                                      (setq minibuffer-message
-                                            (mevedel-diagnostic-format scope "%s" errmsg)))))
-                                 (when minibuffer-message
-                                   (set-minibuffer-message minibuffer-message))))))
-                      nil t)))
-      (let ((default (or default "")))
-        (let ((input (read-from-minibuffer "Tag query: " default)))
-          (let ((query (read (format "(%s)" input))))
-            (condition-case err
-                (progn
-                  (mevedel--tag-query-prefix-from-infix query)
-                  (mapconcat (lambda (q) (format "%s" q)) query " "))
-              (error
-               (let ((errmsg (error-message-string err)))
-                 (mevedel-diagnostic-user-error scope "%s" errmsg))))))))))
-
-(defun mevedel--set-directive-tag-query (directive query)
-  "Set the tag query for DIRECTIVE to QUERY string."
-  (let ((scope (mevedel-diagnostic-scope
-                (mevedel--instruction-buffer-workspace (overlay-buffer directive)))))
-    (condition-case err
-        (let ((parsed-prefix-tag-query
-               (mevedel--tag-query-prefix-from-infix (read (concat "(" query ")")))))
-          (overlay-put directive 'mevedel-directive-prefix-tag-query parsed-prefix-tag-query)
-          (if (string-empty-p query)
-              (overlay-put directive 'mevedel-directive-infix-tag-query-string nil)
-            (overlay-put directive
-                         'mevedel-directive-infix-tag-query-string
-                         (mevedel--apply-face-to-match "\\b\\(?:(*not\\|or\\|and\\)\\b\\|(\\|)"
-                                                       (mevedel--apply-face-to-match
-                                                        "\\(:?.+\\)"
-                                                        query
-                                                        'font-lock-constant-face)
-                                                       nil))
-            (mevedel--set-directive-status directive nil))
-          (mevedel--update-instruction-overlay directive t))
-      (error
-       (mevedel-diagnostic-message scope "%s" (error-message-string err))))))
-
 (defun mevedel--print-instruction-not-found (direction type)
   "Print a not found message for the given DIRECTION and TYPE."
   (let ((type-string (pcase type
                        ('directive "directive")
-                       ('reference "reference")
+                       ('note "note")
                        (_ "instruction")))
         (scope (mevedel-diagnostic-scope
                 (mevedel--instruction-buffer-workspace (current-buffer)))))
@@ -787,69 +541,6 @@ Returns the validated query string."
              (if (eq direction 'next) "next" "previous")
              type-string)))
 
-(cl-defun mevedel--reference-matches-query-p (reference query)
-  "Return t only if REFERENCE matches the tag QUERY."
-  (unless reference
-    (cl-return-from mevedel--reference-matches-query-p nil))
-  (let ((atoms (cl-remove-duplicates (cl-remove-if (lambda (elm)
-                                                     (member elm '(not or and nil)))
-                                                   (flatten-tree query)))))
-    (if (and (null atoms) mevedel-empty-tag-query-matches-all)
-        t
-      (let ((tags (mevedel--reference-tags reference t))
-            (direct-tags (mevedel--reference-tags reference nil))
-            (instr-id (lambda (tag) (let ((tagname (symbol-name tag)))
-                                      (when (string-match "^id:\\([1-9][0-9]*\\)$" tagname)
-                                        (string-to-number (match-string 1 tagname)))))))
-        (if (and (null direct-tags) mevedel-always-match-untagged-references)
-            t
-          (let ((atom-bindings (mapcar (lambda (atom)
-                                         (pcase atom
-                                           ('is:bufferlevel
-                                            (mevedel--instruction-bufferlevel-p reference))
-                                           ('is:subreference
-                                            (mevedel--parent-instruction reference 'reference))
-                                           ('is:tagless
-                                            (null tags))
-                                           ('is:directly-tagless
-                                            (null (mevedel--reference-tags reference nil)))
-                                           ('is:with-commentary
-                                            (not (string-empty-p (mevedel--commentary-text reference))))
-                                           (_ (if-let* ((id (funcall instr-id atom)))
-                                                  (= id (mevedel--instruction-id reference))
-                                                (member atom tags)))))
-                                       atoms)))
-            (cl-progv atoms atom-bindings
-              (eval query))))))))
-
-(defun mevedel--filter-references (query &optional workspace)
-  "Return references in WORKSPACE filtered by tag QUERY.
-
-See `mevedel--tag-query-prefix-from-infix' for QUERY format."
-  (let ((mevedel--instruction-state-key-override
-         (or (and workspace (mevedel--instruction-workspace-key workspace))
-             mevedel--instruction-state-key-override))
-        (atoms (cl-remove-duplicates
-                (cl-remove-if (lambda (elm)
-                                (member elm '(not or and nil)))
-                              (flatten-tree query)))))
-    (if (and (null atoms) mevedel-empty-tag-query-matches-all)
-        (mevedel--foreach-instruction instr
-          when (mevedel--referencep instr)
-          collect instr)
-      (mevedel--foreach-instruction instr
-        when (and (mevedel--referencep instr)
-                  (mevedel--reference-matches-query-p instr query))
-        collect instr))))
-
-(defun mevedel--available-tags ()
-  "Return a list of all the tags in the loaded references."
-  (let ((tags-hash (make-hash-table)))
-    (mevedel--foreach-instruction (ref)
-      do (when (mevedel--referencep ref)
-           (cl-loop for tag in (mevedel--reference-tags ref)
-                    do (puthash tag t tags-hash))))
-    (hash-table-keys tags-hash)))
 
 (defun mevedel--cycle-instruction (type direction)
   "Get the next or previous instruction overlay of TYPE.
@@ -896,48 +587,6 @@ Returns the found instruction, if any."
             (setq found-instr instruction)))))
     found-instr))
 
-(defun mevedel--add-tags (reference tags)
-  "Add TAGS to REFERENCE.
-
-TAGS should be a list of symbols.
-Returns the number of new tags added."
-  (let* ((tag-type 'mevedel-reference-tags)
-         (existing-tags (overlay-get reference tag-type))
-         (new-tags (cl-remove-if (lambda (tag) (member tag existing-tags)) tags)))
-    (overlay-put reference tag-type (cl-union existing-tags new-tags :test 'eq))
-    (let ((added (length new-tags)))
-      (when (> added 0)
-        (mevedel--update-instruction-overlay reference t))
-      added)))
-
-(defun mevedel--remove-tags (reference tags)
-  "Remove TAGS from REFERENCE.
-
-TAGS should be a list of symbols.
-Returns the number of tags removed."
-  (let* ((tag-type 'mevedel-reference-tags)
-         (existing-tags (overlay-get reference tag-type))
-         (new-tags (cl-set-difference existing-tags tags :test 'eq)))
-    (overlay-put reference tag-type new-tags)
-    (let ((removed (- (length existing-tags) (length new-tags))))
-      (when (> removed 0)
-        (mevedel--update-instruction-overlay reference t))
-      removed)))
-
-(defun mevedel--inherited-tags (reference)
-  "Return the list of all tags that REFERENCE inherits from its parents."
-  (when-let* ((parent (mevedel--parent-instruction reference 'reference)))
-    (mevedel--reference-tags parent t)))
-
-(defun mevedel--reference-tags (reference &optional include-parent-tags)
-  "Return the list of tags for the given REFERENCE.
-
-If INCLUDE-PARENT-TAGS is non-nil, gets te parent's tags as well."
-  (if (not include-parent-tags)
-      (overlay-get reference 'mevedel-reference-tags)
-    (append (overlay-get reference 'mevedel-reference-tags)
-            (when-let* ((parent (mevedel--parent-instruction reference 'reference)))
-              (mevedel--reference-tags parent t)))))
 
 (defun mevedel--delete-instruction-at (point)
   "Delete the instruction at POINT.
@@ -966,9 +615,11 @@ A directive is empty if it does not have a body or secondary directives."
   "Create or scale an instruction of the given TYPE within the region.
 
 If a region is selected but partially covers an existing instruction,
-then the function will resize it.  See either `mevedel-create-reference'
-or `mevedel-create-directive' for details on how the resizing works.
+then the function will resize it.  See `mevedel-create-directive' for
+details on how the resizing works.
 SPAN, when non-nil, explicitly selects `line' or `char' geometry."
+  (unless (eq type 'directive)
+    (error "Unsupported instruction creation type: %s" type))
   ;; A directive's durable record is anchored to a file: without one it
   ;; can never be reattached after a load, and archiving or detaching it
   ;; would write a record that no longer loads at all.
@@ -1010,120 +661,28 @@ SPAN, when non-nil, explicitly selects `line' or `char' geometry."
             ;; another instruction existing precisely at the start of another.
             (user-error "Instruction intersects with existing instruction"))
           (let* ((buffer (current-buffer))
-                 (instruction (if (eq type 'reference)
-                                  (mevedel--create-reference-in buffer
-                                                                (region-beginning)
-                                                                (region-end) span)
-                                (mevedel-view-call-preserving-window-configuration
-                                 (lambda ()
-                                   ;; Minibuffer input can yield to chat redraws.
-                                   ;; Restore their anchors, not stale raw points.
-                                   (let ((pos (region-beginning)))
-                                     (unless (<= (window-start) pos (window-end))
-                                       (set-window-start (selected-window)
-                                                         (max (point-min)
-                                                              (- (region-beginning)
-                                                                 (- (window-end) (window-start))))))
-                                     (mevedel--create-directive-in buffer
-                                                                   (region-beginning)
-                                                                   (region-end)
-                                                                   nil nil span)))))))
+                 (instruction (mevedel-view-call-preserving-window-configuration
+                               (lambda ()
+                                 ;; Minibuffer input can yield to chat redraws.
+                                 ;; Restore their anchors, not stale raw points.
+                                 (let ((pos (region-beginning)))
+                                   (unless (<= (window-start) pos (window-end))
+                                     (set-window-start (selected-window)
+                                                       (max (point-min)
+                                                            (- (region-beginning)
+                                                               (- (window-end) (window-start))))))
+                                   (mevedel--create-directive-in buffer
+                                                                 (region-beginning)
+                                                                 (region-end)
+                                                                 nil nil span))))))
             (with-current-buffer buffer
-              (deactivate-mark)
-              (when (eq type 'reference)
-                (mevedel-add-tags instruction)))
+              (deactivate-mark))
             instruction)))
     (when (eq type 'directive)
       (prog1 (mevedel--create-directive-in (current-buffer) (point) (point) t)
         (deactivate-mark)))))
 
 ;;;###autoload
-(defun mevedel-convert-instructions ()
-  "Convert instructions between reference and directive type.
-
-If a region is selected, convert every instruction inside it; otherwise
-convert the highest-priority instruction at point.
-
-Conversion recreates the instruction through the canonical creation and
-deletion lifecycles: a new directive gains its durable workspace record,
-and a directive converted away gives its record up, exactly as deletion
-would.  Links to and from the instruction survive under the new
-identity.  Skipped rather than converted: a directive with recorded
-activity (archive it instead), a directive containing nested directives
-(convert those first), and a bodyless directive (a reference cannot be
-empty)."
-  (interactive)
-  (let ((scope (mevedel-diagnostic-scope
-                (mevedel--instruction-buffer-workspace (current-buffer))))
-        (instructions
-         (if (use-region-p)
-             (mevedel--instructions-in (region-beginning) (region-end))
-           (when-let* ((instruction
-                        (mevedel--highest-priority-instruction
-                         (mevedel--instructions-at (point)) t)))
-             (list instruction))))
-        (to-reference 0)
-        (to-directive 0)
-        (skipped nil))
-    (unless instructions
-      (mevedel-diagnostic-user-error scope
-                                   "No instructions to convert"))
-    (when (and (cl-some #'mevedel--referencep instructions)
-               (not (buffer-file-name)))
-      (mevedel-diagnostic-user-error scope
-                                   "Cannot create a directive in a buffer visiting no file"))
-    (deactivate-mark)
-    (dolist (instruction instructions)
-      (let ((buffer (overlay-buffer instruction))
-            (start (overlay-start instruction))
-            (end (overlay-end instruction))
-            (outlinks (mevedel--instruction-outlinks instruction))
-            (inlinks (mevedel--instruction-inlinks instruction))
-            (id (mevedel--instruction-id instruction)))
-        (cl-flet ((relink (new)
-                    (let ((new-id (mevedel--instruction-id new)))
-                      (when outlinks
-                        (mevedel-link-instructions (list new-id) outlinks))
-                      (when inlinks
-                        (mevedel-link-instructions inlinks (list new-id))))
-                    new))
-          (cond
-           ((mevedel--directivep instruction)
-            (cond
-             ((mevedel--bodyless-instruction-p instruction)
-              (push (format "#%d is bodyless" id) skipped))
-             ((when-let* ((record (mevedel--directive-record instruction)))
-                (mevedel-directive-has-activity-p record))
-              (push (format "#%d has activity; archive it instead" id)
-                    skipped))
-             ((mevedel--nested-directives instruction)
-              (push (format "#%d contains nested directives" id) skipped))
-             (t
-              (mevedel--delete-instruction instruction)
-              (relink (mevedel--create-reference-in buffer start end))
-              (cl-incf to-reference))))
-           ((mevedel--referencep instruction)
-            (mevedel--delete-instruction instruction)
-            (relink (mevedel--create-directive-in buffer start end nil ""))
-            (cl-incf to-directive))))))
-    (let ((conversions
-           (delq nil
-                 (list (when (> to-directive 0)
-                         (format "%d to directive%s" to-directive
-                                 (if (= to-directive 1) "" "s")))
-                       (when (> to-reference 0)
-                         (format "%d to reference%s" to-reference
-                                 (if (= to-reference 1) "" "s")))))))
-      (message "mevedel: converted %s%s"
-               (if conversions (string-join conversions ", ") "nothing")
-               (if skipped
-                   (format "; skipped %s" (string-join (nreverse skipped) ", "))
-                 "")))))
-
-(defun mevedel--referencep (instruction)
-  "Return non-nil if INSTRUCTION is a reference."
-  (eq (mevedel--instruction-type instruction) 'reference))
-
 (defun mevedel--directivep (instruction)
   "Return non-nil if INSTRUCTION is a directive."
   (eq (mevedel--instruction-type instruction) 'directive))
@@ -1155,7 +714,7 @@ INSTRUCTIONS list."
 (defun mevedel--instruction-type (instruction)
   "Return the type of the INSTRUCTION overlay.
 
-Instruction type can either be `reference' or `directive'."
+Instruction type can either be `note' or `directive'."
   (if-let* ((type (overlay-get instruction 'mevedel-instruction-type)))
       type
     (error "%s is not an instruction overlay" instruction)))
@@ -1364,17 +923,6 @@ Prefer the highlighted directive when present, otherwise overlay priority."
 Returns an empty string if there is no directive text."
   (mevedel-truncate-directive (mevedel--directive-text directive)))
 
-(defun mevedel--commentary-text (reference)
-  "Return the commentary text of the REFERENCE overlay.
-
-Returns an empty string if there is no commentary."
-  (or (overlay-get reference 'mevedel-commentary) ""))
-
-(defun mevedel--commentary-truncated-text (reference)
-  "Return the truncated commentary text of the REFERENCE overlay.
-
-Returns an empty string if there is no commentary."
-  (or (overlay-get reference 'mevedel-commentary-truncated) ""))
 
 (defcustom mevedel-instructions-truncated-max 100
   "Maximum display length for truncated directive text.
@@ -1426,161 +974,12 @@ TEXT unchanged.  Truncation uses ellipsis to indicate omitted content."
            (mevedel--update-instruction-overlay directive nil))
          (signal 'quit nil))))))
 
-(defun mevedel--read-commentary (reference)
-  "Prompt user to enter a commentary text via minibuffer for REFERENCE."
-  (let ((original-commentary-text (mevedel--commentary-text reference))
-        (set-commentary-text (lambda (reference text)
-                               (let ((text-truncated (mevedel-truncate-directive text)))
-                                 (overlay-put reference 'mevedel-commentary text)
-                                 (overlay-put reference 'mevedel-commentary-truncated text-truncated)
-                                 (unless (overlay-get reference 'mevedel-instruction-collapse-p)
-                                   (overlay-put reference 'mevedel-instruction-collapse-p
-                                                (if (> (length text)
-                                                       mevedel-instructions-truncated-max)
-                                                    'collapse
-                                                  'expand)))))))
-    (minibuffer-with-setup-hook
-        (lambda ()
-          (add-hook 'minibuffer-exit-hook
-                    (lambda ()
-                      (let ((commentary-text (minibuffer-contents)))
-                        (funcall set-commentary-text reference commentary-text)
-                        (mevedel--update-instruction-overlay reference)))
-                    nil t)
-          (add-hook 'after-change-functions
-                    (lambda (_beg _end _len)
-                      (overlay-put reference 'mevedel-commentary (minibuffer-contents))
-                      (mevedel--update-instruction-overlay reference))
-                    nil t))
-      (condition-case _err
-          (read-from-minibuffer "Commentary: " original-commentary-text)
-        (quit
-         (funcall set-commentary-text reference original-commentary-text)
-         (mevedel--update-instruction-overlay reference nil))
-        (signal 'quit nil)))))
-
-(cl-defun mevedel--ancestral-instructions (instruction &optional of-type)
-  "Return a list of ancestors for the current INSTRUCTION.
-
-Optionally filer the by OF-TYPE (either reference or directive)."
-  (if-let* ((parent (mevedel--parent-instruction instruction)))
-      (if (or (null of-type)
-              (eq (mevedel--instruction-type parent) of-type))
-          (cons parent (mevedel--ancestral-instructions parent of-type))
-        (mevedel--ancestral-instructions parent of-type))
-    nil))
-
-(defun mevedel--context (&optional query directive)
-  "Get context plist.
-
-Returns plist with :summary and :references keys, optionally for
-specified DIRECTIVE and tag QUERY."
-  (let* ((pred
-          (lambda (instr)
-            (mevedel--reference-matches-query-p instr
-                                                (or query
-                                                    (when directive
-                                                      (overlay-get directive
-                                                                   'mevedel-directive-prefix-tag-query))))))
-         (toplevel-refs (mevedel--foreach-instruction instr
-                          when (and (mevedel--referencep instr)
-                                    (eq (mevedel--topmost-instruction instr 'reference pred)
-                                        instr))
-                          collect instr))
-         (linked-refs (let ((visited-refs (make-hash-table))
-                            (independent-refs ())
-                            (child-refmap
-                             (let ((ht (make-hash-table)))
-                               (cl-loop for tlr in toplevel-refs
-                                        do (cl-loop for instr in (mevedel--wholly-contained-instructions
-                                                                  (overlay-buffer tlr)
-                                                                  (overlay-start tlr)
-                                                                  (overlay-end tlr))
-                                                    when (and (not (eq instr tlr))
-                                                              (mevedel--referencep instr))
-                                                    do (puthash instr t ht)))
-                               ht)))
-                        (cl-labels ((collect-linked-references-recursively (ref)
-                                      (puthash ref t visited-refs)
-                                      (dolist (linked-id (mevedel--instruction-outlinks ref))
-                                        (let ((linked-ref (mevedel--instruction-with-id linked-id)))
-                                          (when (and linked-ref
-                                                     (mevedel--referencep linked-ref)
-                                                     (not (gethash linked-ref visited-refs)))
-                                            (unless (gethash linked-ref child-refmap)
-                                              (push linked-ref independent-refs))
-                                            (collect-linked-references-recursively linked-ref))))))
-                          (mapc #'collect-linked-references-recursively
-                                (cl-remove-duplicates
-                                 (append (when directive
-                                           (mevedel--ancestral-instructions directive 'reference))
-                                         toplevel-refs
-                                         (flatten-tree
-                                          (mapcar (lambda (instr)
-                                                    (mevedel--ancestral-instructions instr 'reference))
-                                                  toplevel-refs)))))
-                          independent-refs)))
-         (total-refs (cl-remove-if (lambda (ref)
-                                     (and directive (mevedel--subinstruction-of-p ref directive)))
-                                   (cl-union toplevel-refs linked-refs)))
-         (reference-alist (cl-loop for reference in total-refs with alist = ()
-                                   do (push reference (alist-get (overlay-buffer reference) alist))
-                                   finally (progn
-                                             (cl-loop for (_ . references) in alist
-                                                      do (sort references
-                                                               (lambda (x y)
-                                                                 (< (overlay-start x)
-                                                                    (overlay-start y)))))
-                                             (cl-return alist)))))
-    (with-temp-buffer
-      (insert (format "### Reference%s"
-                      (if (> (length total-refs) 1) "s" "")))
-      (cl-loop for (buffer . references) in reference-alist
-               do (dolist (ref references)
-                    (cl-destructuring-bind (ref-info-string ref-string)
-                        (mevedel--overlay-region-info ref)
-                      (let ((markdown-delimiter
-                             (mevedel--delimiting-markdown-backticks ref-string)))
-                        (insert
-                         (concat
-                          "\n\n"
-                          (format "#### Reference #%d" (mevedel--instruction-id ref))
-                          "\n\n"
-                          (format "%s"
-                                  (let ((rel-path
-                                         (with-current-buffer buffer
-                                           (file-relative-name
-                                            (buffer-file-name buffer)
-                                            (mevedel-workspace-root
-                                             (mevedel-workspace))))))
-                                    (if (mevedel--instruction-bufferlevel-p ref)
-                                        (format "File `%s`" rel-path)
-                                      (format "In file `%s`, %s" rel-path ref-info-string))))
-                          (if (or (mevedel--instruction-bufferlevel-p ref)
-                                  (not mevedel-include-full-instructions))
-                              "."
-                            (concat
-                             ":"
-                             (format "\n\n%s\n%s\n%s"
-                                     markdown-delimiter
-                                     ref-string
-                                     markdown-delimiter)))
-
-                          (let ((commentary (mevedel--commentary-text ref)))
-                            (unless (string-empty-p commentary)
-                              (format "\n\nCommentary:\n\n%s"
-                                      (mevedel--markdown-enquote commentary))))))))))
-      (list :summary (if reference-alist (buffer-string) "")
-            :references reference-alist))))
 
 (defun mevedel--directive-llm-prompt (directive)
   "Craft the prompt for the LLM model associated with the DIRECTIVE."
   (when (mevedel--directive-empty-p directive)
     (error "Directive %s is empty" directive))
-  (let* ((context (mevedel--context nil directive))
-         (reference-count (length (flatten-tree (mapcar #'cdr (plist-get context :references)))))
-         (directive-toplevel-reference (mevedel--topmost-instruction directive 'reference))
-         (directive-buffer (overlay-buffer directive))
+  (let* ((directive-buffer (overlay-buffer directive))
          (directive-filename (buffer-file-name directive-buffer))
          (directive-filename-relpath
           (when directive-filename
@@ -1597,10 +996,10 @@ specified DIRECTIVE and tag QUERY."
                          (mevedel-directive-subdirectives
                           (mevedel--directive-record directive))
                        (mevedel--nested-directives directive)))
-                   (sd-typename (if (not (eq (mevedel--directive-status directive)
-                                             'implemented))
-                                    "hint"
-                                  "correction")))
+                    (sd-typename (if (not (eq (mevedel--directive-status directive)
+                                              'implemented))
+                                     "hint"
+                                   "correction")))
                (concat
                 (if (mevedel--instruction-bufferlevel-p directive)
                     ""
@@ -1672,29 +1071,13 @@ treat them as subdirectives, instead."
         (with-temp-buffer
           (insert
            (concat
-            "Listed below" (pcase reference-count
-                             (0 " is a")
-                             (1 " is a single reference and a")
-                             (_ " are references and a"))
-            " directive."
-            (when directive-toplevel-reference
-              (format " Note that the directive is embedded within %s reference."
-                      (if (> reference-count 1) "the" "a")))
-            (unless (zerop reference-count)
-              (concat "\n\n"
-                      (plist-get context :summary)))
+            "Listed below is a directive."
             (format "\n\n### Directive\n\n")
             (format "For %s%s"
                     (if directive-filename
                         (format "file `%s`" directive-filename-relpath)
                       (format "buffer `%s`" (buffer-name directive-buffer)))
-                    expanded-directive-text)
-            (when directive-toplevel-reference
-              (concat "\n\n"
-                      "Recall that the directive is embedded within "
-                      (format "reference #%d in %s."
-                              (mevedel--instruction-id directive-toplevel-reference)
-                              directive-region-info-string)))))
+                    expanded-directive-text)))
           (buffer-substring-no-properties (point-min) (point-max)))))))
 
 (defun mevedel--directive-action-context (record workspace)

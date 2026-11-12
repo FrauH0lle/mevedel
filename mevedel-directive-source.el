@@ -303,15 +303,10 @@ shape, links, and directive activity.  Calls are idempotent."
     mevedel-span
     mevedel-instruction-collapse-p
     mevedel-links
-    mevedel-reference-tags
-    mevedel-commentary
-    mevedel-commentary-truncated
     mevedel-directive-fail-reason
     mevedel-directive-action
     mevedel-directive-model-provider
     mevedel-directive-reasoning-effort
-    mevedel-directive-prefix-tag-query
-    mevedel-directive-infix-tag-query-string
     mevedel-subdirective-typename
     evaporate)
   "Overlay properties that are part of the instruction data model.
@@ -1042,14 +1037,6 @@ SPAN is `line' or `char'; when nil, infer it from the selection bounds."
            (or (mevedel--directive-record directive)
                (error "Directive record not found")))))
 
-(defun mevedel--create-reference-in (buffer start end &optional span)
-  "Create a region reference from START to END in BUFFER with optional SPAN."
-  (let ((ov (mevedel--create-instruction-overlay-in buffer start end span)))
-    (overlay-put ov 'mevedel-instruction-type 'reference)
-    (overlay-put ov 'evaporate t)
-    (mevedel--update-instruction-overlay ov t)
-    (mevedel--instruction-store-write (overlay-buffer ov))
-    ov))
 
 (defun mevedel--create-directive-in (buffer start end &optional bodyless directive-text span)
   "Create a region directive from START to END in BUFFER.

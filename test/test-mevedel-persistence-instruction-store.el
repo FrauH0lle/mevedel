@@ -10,6 +10,8 @@
 
 ;;; Code:
 
+(require 'mevedel-notes)
+
 (require 'mevedel)
 (require 'mevedel-persistence)
 (require 'mevedel-directive)
@@ -175,13 +177,14 @@ Return the new workspace struct."
     (with-current-buffer source
       (goto-char (point-min))
       (forward-line 1)
-      (mevedel--create-reference-in source (point) (line-end-position)))
+      (mevedel-instruction-test--create-note-in source (point) (line-end-position)))
     (let ((fresh (test-mevedel-instruction-store--reactivate workspace)))
       (should (equal '("kept") (test-mevedel-instruction-store--requests fresh)))
       (should (equal '("kept") (test-mevedel-instruction-store--listed fresh)))
       ;; The visited source got its reference back; other files wait for a visit.
       (mevedel--instruction-activate-workspace fresh)
-      (should (= 1 (cl-count-if #'mevedel--referencep
+      (should (= 1 (cl-count-if (lambda (instruction)
+                               (eq 'note (overlay-get instruction 'mevedel-instruction-type)))
                                 (alist-get source (mevedel--instruction-alist)))))))
   :doc "control: without activation the restarted workspace lists nothing"
   (test-mevedel-instruction-store--with-workspace (workspace source)
@@ -344,7 +347,7 @@ Return the new workspace struct."
                 (clone (copy-tree (car (plist-get (cdr entry) :instructions))))
                 (properties (plist-get clone :properties)))
            (setq properties (plist-put properties 'mevedel-id next-id))
-           (setq properties (plist-put properties 'mevedel-instruction-type 'reference))
+           (setq properties (plist-put properties 'mevedel-instruction-type 'note))
            (setq properties (plist-put properties 'mevedel-uuid "their-reference"))
            (setq clone (plist-put clone :properties properties))
            (setq clone (plist-put clone :anchor

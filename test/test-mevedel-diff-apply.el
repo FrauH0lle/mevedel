@@ -4,6 +4,8 @@
 
 ;;; Code:
 
+(require 'mevedel-notes)
+
 (require 'mevedel)
 (require 'mevedel-diff-apply)
 (require 'mevedel-structs)
@@ -13,6 +15,11 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-instruction-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-instruction-test-support"))
 
 
 ;;
@@ -90,14 +97,14 @@ Resolve labels relative to WORKSPACE-ROOT when non-nil."
 
 (defun mevedel-test--overlay-on-text (buffer text type)
   "Register a TYPE instruction overlay on TEXT in BUFFER.
-TYPE is `reference' or `directive'."
+TYPE is `note' or `directive'."
   (with-current-buffer buffer
     (save-excursion
       (goto-char (point-min))
       (unless (re-search-forward (regexp-quote text) nil t)
         (error "Fixture text not found in %s" (buffer-name)))
-      (if (eq type 'reference)
-          (mevedel--create-reference-in
+      (if (eq type 'note)
+          (mevedel-instruction-test--create-note-in
            buffer (match-beginning 0) (match-end 0))
         (mevedel--create-directive-in
          buffer (match-beginning 0) (match-end 0) nil "rename outputs")))))
@@ -179,12 +186,12 @@ Use WORKSPACE-ROOT as its root when non-nil."
   ,test
   (test)
 
-  :doc "keeps a whole-line reference at bol when a diff rewrites its prefix"
+  :doc "keeps a whole-line note at bol when a diff rewrites its prefix"
   (let* ((file (make-temp-file "mevedel-overlay-prefix-" nil ".txt"
                                "before\nProvision old\nafter\n"))
          (buffer (find-file-noselect file))
          (reference (mevedel-test--overlay-on-text
-                     buffer "Provision old\n" 'reference))
+                     buffer "Provision old\n" 'note))
          (diff (mevedel-test--create-diff-buffer
                 "above\nbefore\n# Provision new\nafter\nbelow\n" buffer)))
     (unwind-protect
@@ -195,9 +202,12 @@ Use WORKSPACE-ROOT as its root when non-nil."
           (with-current-buffer buffer
             (goto-char (overlay-start reference))
             (should (bolp)))
-          (should (string-match-p "REFERENCE"
-                                  (substring-no-properties
-                                   (overlay-get reference 'before-string)))))
+          (let ((label (overlay-get reference 'mevedel-label-overlay)))
+            (should (overlayp label))
+            (should (eq buffer (overlay-buffer label)))
+            (should (string-match-p "Note [0-9]+"
+                                    (substring-no-properties
+                                     (overlay-get label 'after-string))))))
       (kill-buffer diff)
       (with-current-buffer buffer (set-buffer-modified-p nil))
       (kill-buffer buffer)
@@ -331,11 +341,11 @@ Lorem ipsum dolor sit amet, consetetur
             (setq directive (mevedel-test--overlay-on-text
                              file-buffer directive-text 'directive)
                   reference-1 (mevedel-test--overlay-on-text
-                               file-buffer reference-1-text 'reference)
+                               file-buffer reference-1-text 'note)
                   reference-2 (mevedel-test--overlay-on-text
-                               file-buffer reference-2-text 'reference)
+                               file-buffer reference-2-text 'note)
                   reference-3 (mevedel-test--overlay-on-text
-                               file-buffer reference-3-text 'reference)
+                               file-buffer reference-3-text 'note)
                   diff-buffer (mevedel-test--create-diff-buffer
                                new-text file-buffer))
             (with-current-buffer diff-buffer
@@ -420,7 +430,7 @@ Lorem ipsum dolor sit amet, consetetur
             (goto-char (point-min))
             (re-search-forward "^target$")
             (setq reference
-                  (mevedel--create-reference-in
+                  (mevedel-instruction-test--create-note-in
                    file-buffer (line-beginning-position) (line-beginning-position 2)))
             (narrow-to-region (overlay-start reference) (overlay-end reference)))
           (setq diff-buffer

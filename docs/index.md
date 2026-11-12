@@ -73,7 +73,7 @@ Read the relevant contracts before planning or changing an unfamiliar area.
   keybindings, mode dispatch, handler return shape
 - [`plan-mode.md`](plan-mode.md) — sticky Plan conversations,
   proposal approval axes, tool boundary, implementation handoff, recovery
-- [`mentions.md`](mentions.md) — `@ref`/`@file`/`@agent`/`@mcp`
+- [`mentions.md`](mentions.md) — `@note`/`@ref`/`@file`/`@agent`/`@mcp`
   expansion, dedup, completion CAPFs
 - [`skills.md`](skills.md) — SKILL.md discovery, `$skill` invocation and local slash
   commands, model-side Skill, allowed-tools, model / effort

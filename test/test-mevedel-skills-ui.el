@@ -6,6 +6,13 @@
 
 ;;; Code:
 
+(require 'mevedel-notes)
+(require 'mevedel-instruction-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-instruction-test-support"))
+
 (require 'mevedel-report-test-support
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name))
@@ -1461,7 +1468,7 @@ spanning lines")))
           (setq ref-buffer (find-file-noselect file))
           (with-current-buffer ref-buffer
             (setq-local mevedel--workspace ws)
-            (setq ref (mevedel--create-reference-in
+            (setq ref (mevedel-instruction-test--create-note-in
                        ref-buffer (point-min) (1- (point-max)))))
           (let ((token (format "@ref:%d" (mevedel--instruction-id ref))))
             (mevedel-skills-test--with-chat-buffer session

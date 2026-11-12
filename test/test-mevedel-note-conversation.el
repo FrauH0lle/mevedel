@@ -33,6 +33,11 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-instruction-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-instruction-test-support"))
 
 (defmacro mevedel-note-conversation-test--with-source (&rest body)
   "Run BODY in a real source file, replacing only the model transport."
@@ -126,7 +131,7 @@
                   (file-name-concat root ".mevedel" "memory" "MEMORY.md") nil 'silent)
     (mevedel-note-create "UNRELATED-NOTE-SECRET")
     (goto-char (point-min))
-    (mevedel--create-reference-in source (point) (line-end-position))
+    (mevedel-instruction-test--create-note-in source (point) (line-end-position))
     (let ((main (mevedel--chat-buffer "main" t workspace)))
       (with-current-buffer main (insert "UNRELATED-CHAT-SECRET")))
     (forward-line 1)

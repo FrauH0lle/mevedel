@@ -6,6 +6,13 @@
 
 ;;; Code:
 
+(require 'mevedel-notes)
+(require 'mevedel-instruction-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-instruction-test-support"))
+
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -4816,12 +4823,12 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (mevedel-view-send)))
       (should (= 1 send-count))
       (dolist (annotation '("[skill:alpha -- unavailable]"
-                            "[ref:2 -- unavailable]"
+                            "[note:2 -- unavailable]"
                             "[file:missing.txt -- does not exist]"
                             "[mcp:docs:file:///guide -- server"))
         (should (string-search annotation request-data)))
       (should-not (string-search "ALPHA SECRET" request-data))
-      (dolist (fragment '("bound skill" "reference" "file" "MCP"))
+      (dolist (fragment '("bound skill" "note" "file" "MCP"))
         (should (seq-some (lambda (text) (string-search fragment text))
                           messages)))
       (with-current-buffer data-buf
@@ -6483,7 +6490,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (should (equal (list scope "queued directive question") captured))
       (should-not (mevedel-session-pending-follow-ups session))))
 
-  :doc "queued direct reference keeps its UUID when the number is reused"
+  :doc "queued direct note keeps its UUID despite injected number reuse"
   (let* ((root (make-temp-file "mevedel-ref-queue-" t))
          (file (file-name-concat root "reference.txt"))
          (ws (mevedel-workspace--create
@@ -6499,7 +6506,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (setq ref-buf (find-file-noselect file))
           (with-current-buffer ref-buf
             (setq-local mevedel--workspace ws)
-            (setq ref (mevedel--create-reference-in
+            (setq ref (mevedel-instruction-test--create-note-in
                        ref-buf (point-min) (1- (point-max)))))
           (let* ((id (mevedel--instruction-id ref))
                  (uuid (overlay-get ref 'mevedel-uuid))
@@ -6539,12 +6546,15 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                                 (get-text-property
                                  history-start 'mevedel-mention-binding history)
                                 :reference-uuid))))
-              (mevedel--delete-instruction ref ref-buf)
+              (mevedel--delete-instruction ref ref-buf t)
               (with-current-buffer ref-buf
+                (should-not (memq id (mevedel--instruction-retired-ids)))
+                ;; Force hostile number reuse to exercise UUID binding, not allocation.
+                (push id (mevedel--instruction-retired-ids))
                 (erase-buffer)
                 (insert "replacement reference body\n")
                 (setq replacement
-                      (mevedel--create-reference-in
+                      (mevedel-instruction-test--create-note-in
                        ref-buf (point-min) (1- (point-max)))))
               (should (= id (mevedel--instruction-id replacement)))
               (with-current-buffer data-buf
@@ -6556,19 +6566,19 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                 (cl-letf (((symbol-function 'message)
                            (lambda (format-string &rest args)
                              (let ((text (apply #'format format-string args)))
-                               (when (string-prefix-p (format "mevedel [%s]: reference" root) text)
+                               (when (string-prefix-p (format "mevedel [%s]: note" root) text)
                                  (setq warning text)))))
                           ((symbol-function 'gptel-send)
                            (lambda (&rest _)
                              (setq request-data
                                    (mevedel-view-test--dry-run-request-data)))))
                   (mevedel-view--drain-follow-up data-buf)))
-              (should (string-search (format "[ref:%d -- unavailable]" id)
+              (should (string-search (format "[note:%d -- unavailable]" id)
                                      request-data))
               (should-not (string-search "replacement reference body"
                                          request-data))
               (should (string-match-p
-                       (concat (regexp-quote (format "mevedel [%s]: reference " root))
+                       (concat (regexp-quote (format "mevedel [%s]: note " root))
                                ".* unavailable")
                        warning))
               (with-current-buffer data-buf

@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Saves and restores source-bound references and workspace-owned directives
+;; Saves and restores source-bound notes and workspace-owned directives
 ;; across Emacs sessions.  The workspace instruction store at the end of this
 ;; file is their durable record; session snapshots and exported save files
 ;; share its shape.  The format records directive identity and authored state

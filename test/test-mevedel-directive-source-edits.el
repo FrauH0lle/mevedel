@@ -6,6 +6,8 @@
 
 ;;; Code:
 
+(require 'mevedel-notes)
+
 (require 'mevedel-directive-source)
 (require 'mevedel-overlays)
 (require 'mevedel-persistence)
@@ -14,6 +16,11 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-instruction-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-instruction-test-support"))
 
 (mevedel-deftest mevedel--instruction-after-change
   (:vars ((mevedel--instruction-states (make-hash-table :test #'equal))
@@ -34,7 +41,7 @@
     (pcase-let ((`(,beg ,end ,text ,expected) case))
       (with-temp-buffer
         (insert "before\nselected\nafter\n")
-        (let ((overlay (mevedel--create-reference-in (current-buffer) 8 17)))
+        (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 8 17)))
           (combine-change-calls beg end
             (delete-region beg end)
             (goto-char beg)
@@ -49,7 +56,7 @@
     (pcase-let ((`(,beg ,end ,text ,start ,finish) case))
       (with-temp-buffer
         (insert "0123456789")
-        (let ((overlay (mevedel--create-reference-in (current-buffer) 3 6)))
+        (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 3 6)))
           (combine-change-calls beg end
             (delete-region beg end)
             (goto-char beg)
@@ -84,7 +91,7 @@
   (dolist (span '(line char nil))
     (with-temp-buffer
       (insert "before\nselected\nafter\n")
-      (let* ((original (mevedel--create-reference-in (current-buffer) 8 17))
+      (let* ((original (mevedel-instruction-test--create-note-in (current-buffer) 8 17))
              (properties (mevedel--instruction-persisted-properties original)))
         (setq properties (plist-put properties 'mevedel-span span))
         (delete-overlay original)

@@ -151,8 +151,10 @@ invariants.  `mevedel-workspace.el` owns workspace registry and state lookup,
   `get-domain`, `get-name`), groups, max-result-size, display argument,
   render transform, renderer, and its provider-facing gptel tool.
 - `mevedel--instruction-states`: workspace-keyed instruction alists and ID state
-- Instruction types: **References** (source-bound context) and **Directives**
-  (workspace-owned prompts with source presentations)
+- Instruction types: **Notes** (marked code with optional text, kept in the
+  workspace instruction store; context reaches a prompt only when sent or
+  mentioned) and **Directives** (workspace-owned prompts with source
+  presentations)
 
 Instruction ownership is split at the durable-record/presentation boundary:
 
@@ -180,14 +182,14 @@ reattach it, and detaching or archiving it would freeze a fileless anchor into
 a record that no longer loads. Deleting an entire directive range preserves its durable
 record and replaces the evaporated range overlay with a compact detached row.
 Co-located detached rows are ordered
-by their former source positions. References keep their source-bound
-evaporation behavior.
+by their former source positions. Note overlays do not evaporate: deleting a
+note's whole source text leaves the note with an empty anchor. A missing file
+is shown as source missing.
 
 Bulk deletion follows the same source-owner cleanup and activity guard as
-single deletion. `mevedel-delete-all-references` and
-`mevedel-delete-all-directives` filter the current workspace's registry without
-resetting its other instruction state; `mevedel-delete-all-instructions` uses
-the same path for both types. Buffers without a workspace share the `:global`
+single deletion. `mevedel-delete-all-directives` filters the current
+workspace's registry without resetting its other instruction state;
+`mevedel-delete-all-instructions` uses the same path. Buffers without a workspace share the `:global`
 bucket. Interactive deletion confirms instruction and buffer counts, with a
 separate default-no question for Source-missing directive records. Archived
 records are not selected, and any selected directive with activity blocks the
@@ -208,7 +210,7 @@ Line instructions keep whole surviving edge lines after edits. Intersecting
 replacements grow both shapes; adjacent insertions do not grow character spans,
 and adjacent whole lines do not grow line spans. Deleting a boundary newline
 joins the neighboring text into the line instruction. Full deletion still
-evaporates references and detaches directives.
+detaches directives.
 
 `mevedel-instruction-edit.el` synchronizes visited source buffers by zero-context
 line-diff runs. Equal-sized changed runs map each old line to its corresponding
@@ -251,7 +253,7 @@ candidates keep their original overlay identity collapsed at the deletion point
 until resolution. A same-position insertion recovers the span over the new text;
 line spans normalize to complete lines. Pending directives keep their activity,
 state, and attached anchor evidence rather than temporarily detaching. With no
-replacement, scope completion removes references or detaches directives using
+replacement, scope completion detaches directives using
 the existing source-owner semantics. Undo records retain the original scope's
 resolution so undo/redo cannot reopen an already completed replacement session.
 Noninteractive primitive edits outside a command or explicit held scope retain
@@ -270,8 +272,8 @@ do not grow the instruction. Scope completion clears this partial-edge intent.
 When separate deletion/insertion replaces an entire parent together with nested
 instructions, only the outermost replaced instruction recovers over the new
 text. Nested directive details keep their durable records and history without
-source presentations, as when their parent fully detaches; nested references
-are removed. Arbitrary typed text does not supply a meaningful nested mapping.
+source presentations, as when their parent fully detaches.
+Arbitrary typed text does not supply a meaningful nested mapping.
 Undo restores the nested presentations, identities, geometry, and links.
 Single-notification replacements can still produce coextensive presentations;
 equal ranges are never each other's geometric parents, and presentation redraw
@@ -297,7 +299,7 @@ parent-owned records. Without an override, the directive inherits the main
 session model at dispatch.
 
 Directive requests submit an explicit string prompt built from the current
-authored request and freshly resolved references, so request construction never
+authored request, so request construction never
 reads surrounding ordinary-chat history. Direct implementation-type prompts
 additionally append the record's persisted skill selection as instruction
 mentions, revalidated against the session at every dispatch; accepted-plan

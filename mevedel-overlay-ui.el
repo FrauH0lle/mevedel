@@ -137,18 +137,12 @@
                   "mevedel-overlays" (instruction))
 (declare-function mevedel--child-instructions
                   "mevedel-overlays" (instruction))
-(declare-function mevedel--commentary-text
-                  "mevedel-overlays" (reference))
-(declare-function mevedel--commentary-truncated-text
-                  "mevedel-overlays" (reference))
 (declare-function mevedel--directive-truncated-text
                   "mevedel-overlays" (directive))
 (declare-function mevedel--directivep "mevedel-overlays" (instruction))
 (declare-function mevedel--highest-priority-instruction
                   "mevedel-overlays"
                   (instructions &optional return-highlighted))
-(declare-function mevedel--inherited-tags
-                  "mevedel-overlays" (reference))
 (declare-function mevedel--instruction-bufferlevel-p
                   "mevedel-overlays" (instruction))
 (declare-function mevedel--instruction-type
@@ -157,9 +151,6 @@
                   "mevedel-overlays" (point &optional type))
 (declare-function mevedel--parent-instruction
                   "mevedel-overlays" (instruction &optional of-type))
-(declare-function mevedel--reference-tags
-                  "mevedel-overlays"
-                  (reference &optional include-parent-tags))
 (declare-function mevedel--topmost-instruction
                   "mevedel-overlays" (instruction &optional of-type pred))
 (declare-function mevedel-delete-instructions "mevedel-overlays" ())
@@ -167,33 +158,26 @@
                   "mevedel-overlays" (directive))
 (autoload 'mevedel--bodyless-instruction-p "mevedel-overlays")
 (autoload 'mevedel--child-instructions "mevedel-overlays")
-(autoload 'mevedel--commentary-text "mevedel-overlays")
-(autoload 'mevedel--commentary-truncated-text "mevedel-overlays")
 (autoload 'mevedel--directive-truncated-text "mevedel-overlays")
 (autoload 'mevedel--directivep "mevedel-overlays")
 (autoload 'mevedel--highest-priority-instruction "mevedel-overlays")
-(autoload 'mevedel--inherited-tags "mevedel-overlays")
 (autoload 'mevedel--instruction-bufferlevel-p "mevedel-overlays")
 (autoload 'mevedel--instruction-type "mevedel-overlays")
 (autoload 'mevedel--instructions-at "mevedel-overlays")
 (autoload 'mevedel--parent-instruction "mevedel-overlays")
-(autoload 'mevedel--reference-tags "mevedel-overlays")
 (autoload 'mevedel--topmost-instruction "mevedel-overlays")
 (autoload 'mevedel-delete-instructions "mevedel-overlays" nil t)
 (autoload 'mevedel-get-directive-patch "mevedel-overlays")
 (defvar mevedel--default-instruction-priority)
 (defvar mevedel--highlighted-instruction)
-(defvar mevedel-always-match-untagged-references)
 (defvar mevedel-directive-color)
 (defvar mevedel-directive-fail-color)
 (defvar mevedel-directive-processing-color)
 (defvar mevedel-directive-success-color)
-(defvar mevedel-empty-tag-query-matches-all)
 (defvar mevedel-highlighted-instruction-color)
 (defvar mevedel-highlighted-instruction-tint-intensity)
 (defvar mevedel-instruction-bg-tint-intensity)
 (defvar mevedel-instruction-label-tint-intensity)
-(defvar mevedel-reference-color)
 (defvar mevedel-subinstruction-tint-coefficient)
 
 ;; `mevedel-skills-core'
@@ -460,8 +444,6 @@ interactive calls."
                           '(?e "expand") '(?e "collapse")))
                      (choices
                      (pcase instruction-type
-                       (`reference `((?t "add-tags") (?r "remove-tags") (?l "link") (?u "unlink") (?c "commentary") (?k "clear")
-                                     ,cycle-choice))
                        (`directive
                         (cond
                           ;; In flight: always reachable activity, and no
@@ -502,7 +484,7 @@ interactive calls."
                           (t `(,@(and activity-choice (list activity-choice))
                                ,@(and continue-plan-choice
                                       (list continue-plan-choice))
-                               (?d "discuss") (?i "implement") (?t "tags") (?m "modify")
+                               (?d "discuss") (?i "implement") (?m "modify")
                                (?p "preview") ,remove-choice
                                ,@(and settings-choice (list settings-choice))
                                ,cycle-choice))))))
@@ -615,8 +597,6 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
     (funcall callback
              (format
               (pcase instruction-type
-                (`reference (substitute-command-keys
-                             "%s Options: show menu \\[mevedel--ov-actions-dispatch]"))
                 (`directive
                  (pcase (when-let* ((directive
                                      (mevedel--highest-priority-instruction
@@ -629,10 +609,6 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
                     (substitute-command-keys
                      "%s Options: show menu \\[mevedel--ov-actions-dispatch]")))))
               (propertize (gptel--model-name gptel-model) 'face 'mode-line-emphasis)))))
-
-(defvar-keymap mevedel-reference-actions-map
-  :doc "Keymap for `mevedel' reference overlay actions at point."
-  "M-m" #'mevedel--ov-actions-dispatch)
 
 (defvar-keymap mevedel-note-actions-map
   :doc "Modified-key menu for notes; plain letters always edit source."
@@ -656,8 +632,7 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
   :doc "Keymap for `mevedel' failed directive overlay actions at point."
   "M-m" #'mevedel--ov-actions-dispatch)
 
-(defvar mevedel--actions-maps '(mevedel-reference-actions-map
-                                mevedel-note-actions-map
+(defvar mevedel--actions-maps '(mevedel-note-actions-map
                                 mevedel-directive-actions-map
                                 mevedel-directive-processing-actions-map
                                 mevedel-directive-succeeded-actions-map
@@ -691,30 +666,26 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
                      (mevedel--directive-status instruction))))
     (overlay-put
      instruction 'keymap
-     (if (eq instruction-type 'reference)
-         mevedel-reference-actions-map
-       (pcase status
-         ((or 'implementing 'discussing)
-          mevedel-directive-processing-actions-map)
-         ((or 'implemented 'discussed)
-          mevedel-directive-succeeded-actions-map)
-         ('aborted mevedel-directive-failed-actions-map)
-         ('failed mevedel-directive-failed-actions-map)
-         (_ mevedel-directive-actions-map))))
+     (pcase status
+       ((or 'implementing 'discussing)
+        mevedel-directive-processing-actions-map)
+       ((or 'implemented 'discussed)
+        mevedel-directive-succeeded-actions-map)
+       ('aborted mevedel-directive-failed-actions-map)
+       ('failed mevedel-directive-failed-actions-map)
+       (_ mevedel-directive-actions-map)))
     (overlay-put
      instruction 'help-echo
      (format
       "%s \\[mevedel--ov-actions-dispatch] for options"
-      (if (eq instruction-type 'reference)
-          "Press"
-        (pcase status
-          ('implementing "Implementation in progress, press")
-          ('discussing "Discussion in progress, press")
-          ('implemented "Request implemented, press")
-          ('discussed "Request discussed, press")
-          ('aborted "Request aborted, press")
-          ('failed "Request failed, press")
-          (_ "Press")))))))
+      (pcase status
+        ('implementing "Implementation in progress, press")
+        ('discussing "Discussion in progress, press")
+        ('implemented "Request implemented, press")
+        ('discussed "Request discussed, press")
+        ('aborted "Request aborted, press")
+        ('failed "Request failed, press")
+        (_ "Press"))))))
 
 (defun mevedel--instruction-directive-typename (instruction parent)
   "Return the display type name for directive INSTRUCTION under PARENT."
@@ -735,10 +706,8 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
          (padding (plist-get presentation :padding))
          (bufferlevel-p (plist-get presentation :bufferlevel-p))
          (parent (plist-get presentation :parent))
-         (parent-bufferlevel-p
-          (plist-get presentation :parent-bufferlevel-p))
          (label "")
-        color)
+         color)
     (cl-labels
         ((append-label (content &optional prefix)
            (setq label
@@ -779,76 +748,8 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
                            (if outlinks "\n" "")
                            (string-join
                             (mapcar #'stylized-id inlinks) ", "))))
-                (format "%s LINKS: "
-                        (if (eq instruction-type 'reference)
-                            "REFERENCE"
-                          "DIRECTIVE"))))))
-         (tags-string (tags common-tags)
-           (string-join
-            (mapcar
-             (lambda (tag)
-               (propertize
-                (symbol-name tag) 'face
-                (if (memq tag common-tags)
-                    'font-lock-warning-face
-                  'font-lock-constant-face)))
-             tags)
-            " ")))
+                "DIRECTIVE LINKS: ")))))
       (pcase instruction-type
-        ('reference
-         (setq color mevedel-reference-color)
-         (cond
-          ((and parent
-                (eq (mevedel--instruction-type parent) 'reference)
-                (not parent-bufferlevel-p))
-           (append-label
-            (format "SUBREFERENCE %s"
-                    (stylized-id
-                     (mevedel--instruction-id instruction)))))
-          (bufferlevel-p
-           (append-label
-            (format "BUFFER REFERENCE %s"
-                    (stylized-id
-                     (mevedel--instruction-id instruction)))))
-          (t
-           (append-label
-            (format "REFERENCE %s"
-                    (stylized-id
-                     (mevedel--instruction-id instruction))))))
-         (let* ((direct-tags (mevedel--reference-tags instruction))
-                (inherited-tags (mevedel--inherited-tags instruction))
-                (common-tags
-                 (cl-intersection inherited-tags direct-tags))
-                (unique-tags
-                 (cl-set-difference direct-tags common-tags)))
-           (when inherited-tags
-             (append-label
-              (tags-string
-               (sort (append inherited-tags) #'string-lessp)
-               common-tags)
-              (if common-tags
-                  "INHERITED & COMMON TAGS: "
-                "INHERITED TAGS: ")))
-           (when unique-tags
-             (append-label
-              (tags-string
-               (sort unique-tags #'string-lessp) common-tags)
-              (if inherited-tags
-                  (if common-tags "UNIQUE TAGS: " "DIRECT TAGS: ")
-                "TAGS: "))))
-         (append-links)
-         (let ((commentary
-                (string-trim
-                 (or
-                  (if (eq
-                       (overlay-get
-                        instruction 'mevedel-instruction-collapse-p)
-                       'collapse)
-                      (mevedel--commentary-truncated-text instruction)
-                    (mevedel--commentary-text instruction))
-                  ""))))
-           (unless (string-empty-p commentary)
-             (append-label commentary "COMMENTARY: "))))
         ('directive
          (pcase (mevedel--directive-status instruction)
            ('planning (append-label "PLANNING"))
@@ -925,18 +826,6 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
                        skills ", ")
             "SKILLS: "))
          (unless (mevedel--parent-instruction instruction 'directive)
-           (if-let* ((query
-                      (overlay-get
-                       instruction
-                       'mevedel-directive-infix-tag-query-string)))
-               (append-label query "TAG QUERY: ")
-             (append-label
-              (cond
-               (mevedel-empty-tag-query-matches-all
-                "REFERENCES ALL")
-               (mevedel-always-match-untagged-references
-                "REFERENCES UNTAGGED ONLY")
-               (t "REFERENCES NOTHING"))))
            (append-links))
          (when (mevedel--detached-directive-p instruction)
            (setq label "")
@@ -945,7 +834,7 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
              "DETACHED · %s · DIRECTIVE %s: %s"
              (upcase
               (symbol-name
-             (or (mevedel--directive-status instruction) 'ready)))
+               (or (mevedel--directive-status instruction) 'ready)))
              (stylized-id (mevedel--instruction-id instruction))
              (string-trim
               (mevedel--directive-truncated-text instruction)))))))
@@ -954,7 +843,6 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
 (defun mevedel--instruction-style (presentation)
   "Apply the computed instruction PRESENTATION."
   (let* ((instruction (plist-get presentation :instruction))
-         (instruction-type (plist-get presentation :type))
          (label (plist-get presentation :label))
          (color (plist-get presentation :color))
          (padding (plist-get presentation :padding))
@@ -988,20 +876,17 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
                        mevedel-instruction-label-tint-intensity)))
               tint)))
          (bg-color
-          (if (and bufferlevel-p
-                   (eq instruction-type 'reference))
-              default-bg
-            (let ((tint
-                   (mevedel--tint
-                    default-bg color
-                    mevedel-instruction-bg-tint-intensity)))
-              (dotimes
-                  (_ (- priority
-                        mevedel--default-instruction-priority))
-                (setq tint
-                      (mevedel--tint
-                       tint color bg-tint-intensity)))
-              tint))))
+          (let ((tint
+                 (mevedel--tint
+                  default-bg color
+                  mevedel-instruction-bg-tint-intensity)))
+            (dotimes
+                (_ (- priority
+                      mevedel--default-instruction-priority))
+              (setq tint
+                    (mevedel--tint
+                     tint color bg-tint-intensity)))
+            tint)))
     (overlay-put instruction 'mevedel-bg-color bg-color)
     (overlay-put instruction 'mevedel-label-color label-color)
     (overlay-put instruction 'priority priority)
@@ -1165,11 +1050,8 @@ directly.  Return nil if no overlays exist at point."
 
 ;; Declare overlay action functions
 (eval-and-compile
-  (dolist (spec '((add-tags mevedel-add-tags mevedel-overlays)
-                  (remove-tags mevedel-remove-tags mevedel-overlays)
-                  (link mevedel-link-instructions mevedel-instruction-registry)
+  (dolist (spec '((link mevedel-link-instructions mevedel-instruction-registry)
                   (unlink mevedel-unlink-instructions mevedel-instruction-registry)
-                  (commentary mevedel-modify-reference-commentary mevedel-overlays)
                   (abort mevedel-abort mevedel-chat)
                   (activity mevedel-open-directive-activity mevedel-directive-activity)
                   (modify mevedel-modify-directive mevedel-overlays)
@@ -1180,7 +1062,6 @@ directly.  Return nil if no overlays exist at point."
                   (implement-this mevedel-implement-discussion-directive mevedel)
                   (request-changes mevedel-request-directive-changes mevedel)
                   (retry mevedel-retry-directive mevedel)
-                  (tags mevedel-modify-directive-tag-query mevedel-overlays)
                   (preview mevedel-preview-directive-prompt mevedel-overlays)))
     (let ((name (nth 0 spec))
           (target (nth 1 spec))

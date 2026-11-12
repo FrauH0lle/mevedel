@@ -226,7 +226,7 @@ the ordinary view action outside the composer."
 (defun mevedel-evil--source-maps ()
   "Offer RET for source actions only in Evil normal state.
 The existing dispatch key and all vanilla bindings remain available."
-  (dolist (symbol '(mevedel-reference-actions-map mevedel-directive-actions-map
+  (dolist (symbol '(mevedel-directive-actions-map
                     mevedel-directive-processing-actions-map
                     mevedel-directive-succeeded-actions-map
                     mevedel-directive-failed-actions-map))
@@ -320,7 +320,7 @@ is harmless.  No evil-collection dependency is needed."
     (eval-after-load 'mevedel-view
       '(eval-after-load 'mevedel-view-composer '(mevedel-evil--composer-keys)))
     (eval-after-load 'mevedel-overlay-ui '(mevedel-evil--source-maps))
-    (dolist (command '(mevedel-create-reference mevedel-create-directive
+    (dolist (command '(mevedel-create-directive
                        mevedel-delete-instructions))
       (evil-set-command-property command :keep-visual t))
     (advice-add 'mevedel--create-instruction :around #'mevedel-evil--selection)

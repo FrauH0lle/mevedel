@@ -52,11 +52,7 @@
             (should-not mevedel--workspace)
             (should-not mevedel--session)
             (should (eq workspace (mevedel--instruction-buffer-workspace buffer)))
-            (dolist (case '((mevedel-delete-instructions "No instruction to delete at point")
-                            (mevedel-modify-directive-tag-query "No directive at point")
-                            (mevedel-add-tags "No reference at point")
-                            (mevedel-remove-tags "No reference at point")
-                            (mevedel-convert-instructions "No instructions to convert")))
+            (dolist (case '((mevedel-delete-instructions "No instruction to delete at point")))
               (should (equal (format "mevedel [%s]: %s" nested (cadr case))
                              (cadr (should-error (call-interactively (car case))
                                                  :type 'user-error)))))
@@ -98,7 +94,7 @@
                  (overlay-put overlay 'priority (nth 3 spec))
                  overlay))
              '((1 10 directive 10) (3 7 directive 20)
-               (4 12 directive 30) (5 8 reference 100)
+               (4 12 directive 30) (5 8 note 100)
                (14 14 directive 40))))
            (root (nth 0 overlays))
            (other (nth 2 overlays)))
@@ -212,110 +208,6 @@
     (insert "source text")
     (should-error (mevedel--create-instruction 'directive)
                   :type 'user-error)))
-
-(mevedel-deftest mevedel-convert-instructions
-  (:quiet t
-   :vars
-   ((mevedel--instruction-states (make-hash-table :test #'equal))
-    (mevedel--instruction-current-state-key :global)))
-  ,test
-  (test)
-
-  :doc "converting a directive away gives up its workspace record"
-  (let* ((fixture (mevedel-instruction-test--source-fixture))
-         (workspace (nth 1 fixture))
-         (buffer (nth 3 fixture))
-         (overlay (nth 4 fixture))
-         (start (overlay-start overlay))
-         (end (overlay-end overlay)))
-    (unwind-protect
-        (with-current-buffer buffer
-          (goto-char (1+ start))
-          (mevedel-convert-instructions)
-          (should-not (mevedel-workspace-directives workspace))
-          (let ((converted (car (mevedel--instructions-at (point)))))
-            (should converted)
-            (should (mevedel--referencep converted))
-            (should (= start (overlay-start converted)))
-            (should (= end (overlay-end converted)))))
-      (mevedel-instruction-test--discard-source fixture)))
-
-  :doc "converting a reference creates a durable directive record"
-  (let* ((fixture (mevedel-instruction-test--source-fixture))
-         (workspace (nth 1 fixture))
-         (buffer (nth 3 fixture))
-         (overlay (nth 4 fixture)))
-    (unwind-protect
-        (with-current-buffer buffer
-          ;; Turn the fixture directive into a reference first, then
-          ;; convert it back and expect a fresh record.
-          (goto-char (1+ (overlay-start overlay)))
-          (mevedel-convert-instructions)
-          (should-not (mevedel-workspace-directives workspace))
-          (mevedel-convert-instructions)
-          (let ((converted (car (mevedel--instructions-at (point)))))
-            (should converted)
-            (should (mevedel--directivep converted))
-            (should (mevedel--directive-record converted))
-            (should (= 1 (length (mevedel-workspace-directives workspace))))))
-      (mevedel-instruction-test--discard-source fixture)))
-
-  :doc "a directive with recorded activity is skipped, not converted"
-  (let* ((fixture (mevedel-instruction-test--source-fixture))
-         (workspace (nth 1 fixture))
-         (buffer (nth 3 fixture))
-         (overlay (nth 4 fixture))
-         (record (nth 5 fixture)))
-    (unwind-protect
-        (with-current-buffer buffer
-          (setf (mevedel-directive-attempts record)
-                (list (mevedel-instruction-test--attempt)))
-          (goto-char (1+ (overlay-start overlay)))
-          (mevedel-convert-instructions)
-          (let ((instruction (car (mevedel--instructions-at (point)))))
-            (should (eq instruction overlay))
-            (should (mevedel--directivep instruction)))
-          (should (= 1 (length (mevedel-workspace-directives workspace)))))
-      (mevedel-instruction-test--discard-source fixture)))
-
-  :doc "refuses reference conversion in a buffer visiting no file"
-  (with-temp-buffer
-    (insert "source text")
-    (setq-local mevedel--workspace
-                (mevedel-workspace--create
-                 :type 'file :id "convert-nofile" :root "/tmp"
-                 :name "convert-nofile"))
-    (let ((reference (mevedel--create-reference-in
-                      (current-buffer) (point-min) (point-max))))
-      (goto-char (1+ (point-min)))
-      (should-error (mevedel-convert-instructions) :type 'user-error)
-      (should (mevedel--referencep
-               (car (mevedel--instructions-at (point)))))
-      (mevedel--delete-instruction reference))))
-
-(mevedel-deftest mevedel--filter-references
-  (:vars
-   ((mevedel--instruction-states (make-hash-table :test #'equal))
-    (mevedel--instruction-current-state-key :global)))
-  ,test
-  (test)
-  :doc "filters only references belonging to the explicit workspace"
-  (let* ((workspace-a (mevedel-workspace--create
-                       :type 'file :id "filter-a" :root "/tmp" :name "filter-a"))
-         (workspace-b (mevedel-workspace--create
-                       :type 'file :id "filter-b" :root "/tmp" :name "filter-b"))
-         (first (mevedel-instruction-test--make-reference "first\n" workspace-a))
-         (second (mevedel-instruction-test--make-reference "second\n" workspace-b)))
-    (overlay-put (cdr first) 'mevedel-reference-tags '(shared))
-    (overlay-put (cdr second) 'mevedel-reference-tags '(shared))
-    (unwind-protect
-        (progn
-          (should (equal (list (cdr first))
-                         (mevedel--filter-references 'shared workspace-a)))
-          (should (equal (list (cdr second))
-                         (mevedel--filter-references 'shared workspace-b))))
-      (mevedel-instruction-test--discard first)
-      (mevedel-instruction-test--discard second))))
 
 (mevedel-deftest mevedel--directive-action-context
   (:vars

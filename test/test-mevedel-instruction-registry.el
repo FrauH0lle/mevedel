@@ -6,6 +6,8 @@
 
 ;;; Code:
 
+(require 'mevedel-notes)
+
 (require 'mevedel-instruction-registry)
 (require 'mevedel-directive-source)
 (require 'mevedel-overlays)
@@ -48,13 +50,13 @@
         (with-temp-buffer
           (setq-local mevedel--workspace workspace)
           (insert "original incoming")
-          (setq original (mevedel--create-reference-in (current-buffer) 1 9)
+          (setq original (mevedel-instruction-test--create-note-in (current-buffer) 1 9)
                 uuid (overlay-get original 'mevedel-uuid)
                 mevedel--highlighted-instruction original
                 rollback (mevedel--instruction-state-rollback workspace))
           (mevedel--clear-instruction-state workspace)
           (setq incoming
-                (mevedel--create-reference-in (current-buffer) 10 18))
+                (mevedel-instruction-test--create-note-in (current-buffer) 10 18))
           (funcall rollback)
           (should-not (overlay-buffer incoming))
           (should (eq original
@@ -77,8 +79,8 @@
                        :type 'file :id "find-a" :root "/tmp" :name "find-a"))
          (workspace-b (mevedel-workspace--create
                        :type 'file :id "find-b" :root "/tmp" :name "find-b"))
-         (first (mevedel-instruction-test--make-reference "first\n" workspace-a))
-         (second (mevedel-instruction-test--make-reference "second\n" workspace-b))
+         (first (mevedel-instruction-test--make-note "first\n" workspace-a))
+         (second (mevedel-instruction-test--make-note "second\n" workspace-b))
          (first-reference (cdr first)))
     (unwind-protect
         (progn
@@ -89,7 +91,7 @@
           (should-not
            (mevedel--instruction-find-unique-live
             (lambda (instruction)
-              (mevedel--referencep instruction)))))
+              (eq 'note (overlay-get instruction 'mevedel-instruction-type))))))
       (mevedel-instruction-test--discard first)
       (mevedel-instruction-test--discard second))))
 
@@ -104,8 +106,8 @@
                        :type 'file :id "id-a" :root "/tmp" :name "id-a"))
          (workspace-b (mevedel-workspace--create
                        :type 'file :id "id-b" :root "/tmp" :name "id-b"))
-         (first (mevedel-instruction-test--make-reference "first\n" workspace-a))
-         (second (mevedel-instruction-test--make-reference "second\n" workspace-b))
+         (first (mevedel-instruction-test--make-note "first\n" workspace-a))
+         (second (mevedel-instruction-test--make-note "second\n" workspace-b))
          (first-reference (cdr first))
          (second-reference (cdr second))
          (id (mevedel--instruction-id first-reference)))
@@ -134,7 +136,7 @@
   :doc "restores a stashed instruction before resolving its UUID"
   (let* ((workspace (mevedel-workspace--create
                      :type 'file :id "restore" :root "/tmp" :name "restore"))
-         (cell (mevedel-instruction-test--make-reference
+         (cell (mevedel-instruction-test--make-note
                 "restored body\n" workspace))
          (buffer (car cell))
          (reference (cdr cell))
@@ -162,9 +164,9 @@
                        :type 'file :id "uuid-a" :root "/tmp" :name "uuid-a"))
          (workspace-b (mevedel-workspace--create
                        :type 'file :id "uuid-b" :root "/tmp" :name "uuid-b"))
-         (first (mevedel-instruction-test--make-reference
+         (first (mevedel-instruction-test--make-note
                  "first body\n" workspace-a))
-         (second (mevedel-instruction-test--make-reference
+         (second (mevedel-instruction-test--make-note
                   "second body\n" workspace-b))
          (first-reference (cdr first))
          (second-reference (cdr second))

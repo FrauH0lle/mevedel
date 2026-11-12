@@ -579,29 +579,6 @@
         (kill-buffer buffer))
       (delete-file file))))
 
-(mevedel-deftest mevedel--create-reference-in
-  (:vars
-   ((mevedel--instruction-states (make-hash-table :test #'equal))
-    (mevedel--instruction-current-state-key :global)))
-  ,test
-  (test)
-  :doc "keeps references source-bound and outside durable directive records"
-  (let* ((workspace (mevedel-workspace--create
-                     :type 'file :id "create-reference" :root "/tmp"
-                     :name "create-reference"))
-         (cell (mevedel-instruction-test--make-reference
-                "reference body\n" workspace)))
-    (unwind-protect
-        (progn
-          (should (overlay-get (cdr cell) 'evaporate))
-          (should-not (mevedel-workspace-directives workspace))
-          (with-current-buffer (car cell)
-            (delete-region (overlay-start (cdr cell))
-                           (overlay-end (cdr cell)))
-            (should-not (overlay-buffer (cdr cell)))
-            (should-not (mevedel--all-instructions))))
-      (mevedel-instruction-test--discard cell))))
-
 (mevedel-deftest mevedel--set-directive-request
   (:vars
    ((mevedel--instruction-states (make-hash-table :test #'equal))

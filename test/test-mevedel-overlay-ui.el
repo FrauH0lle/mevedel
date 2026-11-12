@@ -9,6 +9,7 @@
 (require 'mevedel-overlay-ui)
 (require 'mevedel-directive-source)
 (require 'mevedel-overlays)
+(require 'mevedel-notes)
 (require 'mevedel-instruction-registry)
 (require 'mevedel-chat)
 (require 'mevedel-menu)
@@ -138,22 +139,6 @@
 (mevedel-deftest mevedel--instruction-label ()
   ,test
   (test)
-  :doc "distinguishes a whole-buffer reference in its primary label"
-  (with-temp-buffer
-    (insert "reference")
-    (let ((reference (make-overlay (point-min) (point-max)))
-          (mevedel-reference-color "reference-color"))
-      (overlay-put reference 'mevedel-id 1)
-      (overlay-put reference 'mevedel-instruction-type 'reference)
-      (let ((presentation
-             (mevedel--instruction-label
-              (list :instruction reference :type 'reference
-                    :padding "" :bufferlevel-p t))))
-        (should
-         (string-prefix-p
-          "BUFFER REFERENCE #1"
-          (substring-no-properties (plist-get presentation :label)))))))
-
   :doc "distinguishes a whole-buffer directive in its primary label"
   (with-temp-buffer
     (insert "directive")
@@ -183,31 +168,6 @@
            (string-prefix-p
             "BUFFER DIRECTIVE #2: Update workflow"
             (substring-no-properties (plist-get presentation :label))))))))
-
-  :doc "labels same-type reference links as reference links"
-  (with-temp-buffer
-    (insert "reference")
-    (let ((reference (make-overlay 1 5))
-          (target (make-overlay 2 4))
-          (mevedel-reference-color "reference-color"))
-      (overlay-put reference 'mevedel-id 1)
-      (overlay-put reference 'mevedel-links '(:to (2)))
-      (overlay-put target 'mevedel-id 2)
-      (overlay-put target 'mevedel-instruction-type 'reference)
-      (cl-letf (((symbol-function 'mevedel--instruction-with-id)
-                 (lambda (id) (and (= id 2) target)))
-                ((symbol-function 'mevedel--parent-instruction)
-                 (lambda (&rest _) nil)))
-        (let ((presentation
-               (mevedel--instruction-label
-                (list :instruction reference :type 'reference
-                      :padding ""))))
-          (should (equal (plist-get presentation :color)
-                         "reference-color"))
-          (should (string-match-p
-                   "REFERENCE LINKS: TO: #2"
-                   (substring-no-properties
-                    (plist-get presentation :label))))))))
 
   :doc "shows Ready with a request-changed qualifier after an authored edit"
   (with-temp-buffer
@@ -259,16 +219,16 @@
                    (ert-fail "Style recomputed the parent"))))
         (mevedel--instruction-style
          (list :instruction instruction
-               :type 'reference
-               :label "REFERENCE #1\n child"
-               :color "reference"
+               :type 'directive
+               :label "DIRECTIVE #1\n child"
+               :color "directive"
                :padding " "
                :priority mevedel--default-instruction-priority
                :parent parent)))
       (should (= (overlay-get instruction 'priority)
                  mevedel--default-instruction-priority))
       (should (string-match-p
-               "REFERENCE #1"
+               "DIRECTIVE #1"
                (substring-no-properties
                 (overlay-get instruction 'before-string))))
       (should (overlay-get instruction 'mevedel-bg-color))
@@ -283,10 +243,12 @@
     (let ((parent (make-overlay 1 6))
           (child (make-overlay 2 4))
           rendered)
-      (overlay-put parent 'mevedel-instruction-type 'reference)
+      (overlay-put parent 'mevedel-instruction-type 'note)
       (overlay-put child 'mevedel-instruction-type 'directive)
       (overlay-put child 'mevedel-subdirective-typename "STALE")
-      (cl-letf (((symbol-function 'mevedel--instruction-bufferlevel-p)
+      (cl-letf (((symbol-function 'mevedel-notes--render)
+                 (lambda (note) (push (cons note (overlay-get note 'priority)) rendered)))
+                ((symbol-function 'mevedel--instruction-bufferlevel-p)
                  (lambda (_instruction) nil))
                 ((symbol-function 'mevedel--instruction-label)
                  (lambda (presentation)
@@ -320,8 +282,8 @@
   :doc "renders coextensive instructions without deleting either identity"
   (with-temp-buffer
     (insert "abc")
-    (let ((instruction (mevedel--create-reference-in (current-buffer) 1 2))
-          (other (mevedel--create-reference-in (current-buffer) 1 2)))
+    (let ((instruction (mevedel-instruction-test--create-note-in (current-buffer) 1 2))
+          (other (mevedel-instruction-test--create-note-in (current-buffer) 1 2)))
       (mevedel--update-instruction-overlay instruction t)
       (mevedel--update-instruction-overlay other t)
       (should (overlay-buffer instruction))

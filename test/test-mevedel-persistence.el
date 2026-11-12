@@ -6,12 +6,19 @@
 
 ;;; Code:
 
+(require 'mevedel-notes)
+
 (require 'mevedel)
 (require 'helpers
          (file-name-concat
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-instruction-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-instruction-test-support"))
 
 (mevedel-deftest mevedel--load-instructions-file
   (:vars
@@ -182,7 +189,7 @@
             (search-forward "reference")
             (setq reference-id
                   (overlay-get
-                   (mevedel--create-reference-in
+                   (mevedel-instruction-test--create-note-in
                     source-buffer (match-beginning 0) (match-end 0))
                    'mevedel-uuid))
             (search-forward "directive")

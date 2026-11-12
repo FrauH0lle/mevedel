@@ -8,6 +8,7 @@
 ;;; Code:
 
 (require 'mevedel-overlays)
+(require 'mevedel-notes)
 (require 'mevedel-overlay-ui)
 (require 'mevedel-directive-source)
 (require 'mevedel-directive)
@@ -31,9 +32,9 @@
   :doc "coextensive overlays share a strict outer parent without parenting each other"
   (with-temp-buffer
     (insert "abcdefghij")
-    (let ((outer (mevedel--create-reference-in (current-buffer) 1 11 'char))
-          (first (mevedel--create-reference-in (current-buffer) 3 7 'char))
-          (second (mevedel--create-reference-in (current-buffer) 3 7 'char)))
+    (let ((outer (mevedel-instruction-test--create-note-in (current-buffer) 1 11 'char))
+          (first (mevedel-instruction-test--create-note-in (current-buffer) 3 7 'char))
+          (second (mevedel-instruction-test--create-note-in (current-buffer) 3 7 'char)))
       (dolist (overlay (list first second))
         (should (eq outer (mevedel--parent-instruction overlay)))
         (should (eq outer (mevedel--topmost-instruction overlay))))

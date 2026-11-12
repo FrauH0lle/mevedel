@@ -257,7 +257,7 @@
   (format
    "## TASK: Implement the following request.
 
-Use the supplied references as context for implementing the request.
+Use the supplied code as context for implementing the request.
 
 ### IMPLEMENTATION REQUEST:
 
@@ -267,7 +267,7 @@ Use the supplied references as context for implementing the request.
 (defun mevedel--request-changes-prompt
     (content directive feedback &optional new-context-p)
   "Build focused Request changes context for DIRECTIVE.
-CONTENT contains the current request and freshly resolved references.  FEEDBACK
+CONTENT contains the current request and marked code.  FEEDBACK
 may be empty only when NEW-CONTEXT-P says new subdirectives supply the changes."
   (let* ((attempt (car (last (mevedel-directive-attempts directive))))
          (feedback (string-trim (or feedback ""))))
@@ -281,7 +281,7 @@ may be empty only when NEW-CONTEXT-P says new subdirectives supply the changes."
 Current repository state is authoritative. Inspect it before editing; the
 preceding patch below is historical evidence, not a patch to reapply.
 
-### CURRENT REQUEST AND FRESH REFERENCES:
+### CURRENT REQUEST AND MARKED CODE:
 
 %s
 
@@ -323,7 +323,7 @@ Historical observed patch:
 Current repository state is authoritative. Inspect it before editing; the
 preceding partial patch is diagnostic evidence, not a patch to reapply.
 
-### CURRENT REQUEST AND FRESH REFERENCES:
+### CURRENT REQUEST AND MARKED CODE:
 
 %s%s
 
@@ -414,7 +414,7 @@ discussion.  ATTEMPT-INDEX attaches that implementation result."
     (format
      "## TASK: Answer the following request.
 
-Use the supplied references and discussion as context for answering the request.
+Use the supplied code and discussion as context for answering the request.
 
 ### REQUEST:
 

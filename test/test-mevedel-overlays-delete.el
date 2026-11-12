@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'mevedel-overlays)
+(require 'mevedel-notes)
 (require 'mevedel-directive-source)
 (require 'mevedel-directive)
 (require 'mevedel-instruction-registry)
@@ -28,15 +29,14 @@
   ,test
   (test)
   :doc "commands isolate types and workspaces, including nested directives"
-  (dolist (command '(mevedel-delete-all-references
-                     mevedel-delete-all-directives
+  (dolist (command '(mevedel-delete-all-directives
                      mevedel-delete-all-instructions))
     (let* ((mevedel--instruction-states (make-hash-table :test #'equal))
            (workspace-a (mevedel-workspace--create :type 'file :id "a"))
            (workspace-b (mevedel-workspace--create :type 'file :id "b"))
-           (reference-a (mevedel-instruction-test--make-reference "reference\n" workspace-a))
+           (note-a (mevedel-instruction-test--make-note "note\n" workspace-a))
            (directive-a (mevedel-instruction-test--make-directive "parent detail\n" "Parent" workspace-a))
-           (reference-b (mevedel-instruction-test--make-reference "other\n" workspace-b))
+           (note-b (mevedel-instruction-test--make-note "other\n" workspace-b))
            (directive-b (mevedel-instruction-test--make-directive "other\n" "Other" workspace-b))
            (record (with-current-buffer (car directive-a)
                      (mevedel--directive-record (cdr directive-a))))
@@ -46,7 +46,7 @@
             (with-current-buffer (car directive-a)
               (setq child (mevedel--create-directive-in
                            (current-buffer) 8 14 nil "Detail")))
-            (with-current-buffer (car reference-a)
+            (with-current-buffer (car note-a)
               (cl-letf (((symbol-function 'y-or-n-p)
                          (lambda (prompt) (push prompt prompts) t)))
                 (mevedel-test--with-captured-messages messages
@@ -55,36 +55,29 @@
             (should (string-match-p
                      (if (eq command 'mevedel-delete-all-instructions)
                          "3 instructions in 2 buffers"
-                       (if (eq command 'mevedel-delete-all-references)
-                           "1 reference in 1 buffer"
-                         "2 directives in 1 buffer"))
+                       "2 directives in 1 buffer")
                      (car prompts)))
             (should (string-search
                      (concat "Deleted "
                              (cond
                               ((eq command 'mevedel-delete-all-instructions)
                                "3 instructions in 2 buffers")
-                              ((eq command 'mevedel-delete-all-references)
-                               "1 reference in 1 buffer")
                               (t "2 directives in 1 buffer")))
                      messages))
             (should (eq (not (eq command 'mevedel-delete-all-directives))
-                        (null (overlay-buffer (cdr reference-a)))))
-            (should (eq (eq command 'mevedel-delete-all-references)
-                        (and (overlay-buffer (cdr directive-a)) t)))
-            (should (eq (eq command 'mevedel-delete-all-references)
-                        (and (overlay-buffer child) t)))
-            (should (eq (eq command 'mevedel-delete-all-references)
-                        (and (memq record (mevedel-workspace-directives workspace-a)) t)))
-            (should (overlay-buffer (cdr reference-b)))
+                        (null (overlay-buffer (cdr note-a)))))
+            (should (null (overlay-buffer (cdr directive-a))))
+            (should (null (overlay-buffer child)))
+            (should (null (memq record (mevedel-workspace-directives workspace-a))))
+            (should (overlay-buffer (cdr note-b)))
             (should (overlay-buffer (cdr directive-b)))
             (should (= 1 (length (mevedel-workspace-directives workspace-b)))))
         (mapc #'mevedel-instruction-test--discard
-              (list reference-a directive-a reference-b directive-b)))))
+              (list note-a directive-a note-b directive-b)))))
 
   :doc "all no-workspace buffers share the global bucket, not workspace buckets"
   (let* ((workspace (mevedel-workspace--create :type 'file :id "project"))
-         (project (mevedel-instruction-test--make-reference "project\n" workspace))
+         (project (mevedel-instruction-test--make-note "project\n" workspace))
          (first (generate-new-buffer " *global-first*"))
          (second (generate-new-buffer " *global-second*"))
          overlays)
@@ -93,11 +86,11 @@
           (dolist (buffer (list first second))
             (with-current-buffer buffer
               (insert "global")
-              (push (mevedel--create-reference-in buffer 1 7) overlays)))
+              (push (mevedel-instruction-test--create-note-in buffer 1 7) overlays)))
           (with-current-buffer first
             (mevedel-test--with-captured-messages nil
               (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
-                (call-interactively #'mevedel-delete-all-references))))
+                (call-interactively #'mevedel-delete-all-instructions))))
           (should-not (seq-some #'overlay-buffer overlays))
           (should (overlay-buffer (cdr project))))
       (kill-buffer first)
@@ -108,19 +101,19 @@
   (let* ((fixture (mevedel-instruction-test--source-fixture))
          (workspace (nth 1 fixture))
          (file (nth 2 fixture))
-         (reference (mevedel-instruction-test--make-reference "reference\n" workspace)))
+         (note (mevedel-instruction-test--make-note "note\n" workspace)))
     (unwind-protect
         (progn
           (kill-buffer (nth 3 fixture))
-          (with-current-buffer (car reference)
+          (with-current-buffer (car note)
             (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
               (mevedel-test--with-captured-messages nil
                 (call-interactively #'mevedel-delete-all-directives))))
           (should-not (mevedel-workspace-directives workspace))
-          (should (overlay-buffer (cdr reference))))
+          (should (overlay-buffer (cdr note))))
       (when-let* ((buffer (find-buffer-visiting file)))
         (setf (nth 3 fixture) buffer))
-      (mevedel-instruction-test--discard reference)
+      (mevedel-instruction-test--discard note)
       (mevedel-instruction-test--discard-source fixture))))
 
 (mevedel-deftest mevedel-delete-all-directives
@@ -202,67 +195,23 @@
                               :id-usage-map))))
       (mevedel-instruction-test--discard-source fixture)))
 
-  :doc "activity blocks all deletion before references or directives are removed"
+  :doc "activity blocks all deletion before notes or directives are removed"
   (let* ((fixture (mevedel-instruction-test--source-fixture))
          (workspace (nth 1 fixture))
          (record (nth 5 fixture))
-         (reference (mevedel-instruction-test--make-reference "reference\n" workspace)))
+         (note (mevedel-instruction-test--make-note "note\n" workspace)))
     (unwind-protect
         (progn
           (setf (mevedel-directive-attempts record)
                 (list (mevedel-instruction-test--attempt)))
-          (with-current-buffer (car reference)
+          (with-current-buffer (car note)
             (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
               (should-error (call-interactively #'mevedel-delete-all-instructions)
                             :type 'user-error)))
-          (should (overlay-buffer (cdr reference)))
+          (should (overlay-buffer (cdr note)))
           (should (overlay-buffer (nth 4 fixture)))
           (should (memq record (mevedel-workspace-directives workspace))))
-      (mevedel-instruction-test--discard reference)
-      (mevedel-instruction-test--discard-source fixture))))
-
-(mevedel-deftest mevedel-delete-all-references
-  (:vars ((mevedel--instruction-states (make-hash-table :test #'equal))
-          (mevedel--instruction-current-state-key :global)))
-  ,test
-  (test)
-  :doc "declining the confirmation leaves references and ID state intact"
-  (let* ((workspace (mevedel-workspace--create :type 'file :id "cancel"))
-         (cell (mevedel-instruction-test--make-reference "reference\n" workspace)))
-    (unwind-protect
-        (with-current-buffer (car cell)
-          (let ((state (mevedel--instruction-state
-                        (mevedel--instruction-workspace-key workspace))))
-            (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) nil)))
-              (should-error (call-interactively #'mevedel-delete-all-references)
-                            :type 'user-error))
-            (should (overlay-buffer (cdr cell)))
-            (should (eq state (mevedel--instruction-state
-                               (mevedel--instruction-workspace-key workspace))))))
-      (mevedel-instruction-test--discard cell)))
-
-  :doc "reference deletion preserves Source-missing and archived records without asking about them"
-  (let* ((fixture (mevedel-instruction-test--source-fixture))
-         (workspace (nth 1 fixture))
-         (record (nth 5 fixture))
-         (archived (mevedel-directive--create :id "archive" :anchor '(:state archived)))
-         (reference (mevedel-instruction-test--make-reference "reference\n" workspace))
-         prompts)
-    (unwind-protect
-        (progn
-          (mevedel-workspace-add-directive workspace archived)
-          (delete-file (nth 2 fixture))
-          (mevedel--mark-buffer-source-missing (nth 3 fixture))
-          (with-current-buffer (car reference)
-            (cl-letf (((symbol-function 'y-or-n-p)
-                       (lambda (prompt) (push prompt prompts) t)))
-              (mevedel-test--with-captured-messages nil
-                (call-interactively #'mevedel-delete-all-references))))
-          (should (= 1 (length prompts)))
-          (should (memq record (mevedel-workspace-directives workspace)))
-          (should (memq archived (mevedel-workspace-directives workspace)))
-          (should-not (overlay-buffer (cdr reference))))
-      (mevedel-instruction-test--discard reference)
+      (mevedel-instruction-test--discard note)
       (mevedel-instruction-test--discard-source fixture))))
 
 (mevedel-deftest mevedel--delete-source-missing-directive ()
@@ -314,43 +263,43 @@
           (mevedel--instruction-current-state-key :global)))
   ,test
   (test)
-  :doc "deleting visible or Source-missing directives removes dangling reference links"
+  :doc "deleting visible or Source-missing directives removes dangling note links"
   (dolist (missing '(nil t))
     (let* ((fixture (mevedel-instruction-test--source-fixture))
            (workspace (nth 1 fixture))
            (buffer (nth 3 fixture))
            (directive (nth 4 fixture))
-           (reference (mevedel-instruction-test--make-reference "reference\n" workspace))
+           (note (mevedel-instruction-test--make-note "note\n" workspace))
            (id (mevedel--instruction-id directive)))
       (unwind-protect
           (progn
             (with-current-buffer buffer
               (mevedel-link-instructions
-               (list id) (list (mevedel--instruction-id (cdr reference))))
+               (list id) (list (mevedel--instruction-id (cdr note))))
               (mevedel-link-instructions
-               (list (mevedel--instruction-id (cdr reference))) (list id)))
-            (should (memq id (mevedel--instruction-inlinks (cdr reference))))
+               (list (mevedel--instruction-id (cdr note))) (list id)))
+            (should (memq id (mevedel--instruction-inlinks (cdr note))))
             (when missing
               (delete-file (nth 2 fixture))
               (mevedel--mark-buffer-source-missing buffer))
-            (with-current-buffer (car reference)
+            (with-current-buffer (car note)
               (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
                 (mevedel-test--with-captured-messages nil
                   (call-interactively #'mevedel-delete-all-directives))))
-            (should (overlay-buffer (cdr reference)))
-            (should-not (mevedel--instruction-inlinks (cdr reference)))
-            (should-not (mevedel--instruction-outlinks (cdr reference))))
-        (mevedel-instruction-test--discard reference)
+            (should (overlay-buffer (cdr note)))
+            (should-not (mevedel--instruction-inlinks (cdr note)))
+            (should-not (mevedel--instruction-outlinks (cdr note))))
+        (mevedel-instruction-test--discard note)
         (mevedel-instruction-test--discard-source fixture))))
 
-  :doc "preserved Source-missing links cannot silently target reused reference IDs"
+  :doc "preserved Source-missing links cannot silently target reused note IDs"
   (let* ((fixture (mevedel-instruction-test--source-fixture))
          (workspace (nth 1 fixture))
          (buffer (nth 3 fixture))
          (directive (nth 4 fixture))
          (record (nth 5 fixture))
-         (reference (mevedel-instruction-test--make-reference "reference\n" workspace))
-         (id (mevedel--instruction-id (cdr reference)))
+         (note (mevedel-instruction-test--make-note "note\n" workspace))
+         (id (mevedel--instruction-id (cdr note)))
          replacement)
     (unwind-protect
         (progn
@@ -359,18 +308,18 @@
              (list (mevedel--instruction-id directive)) (list id)))
           (delete-file (nth 2 fixture))
           (mevedel--mark-buffer-source-missing buffer)
-          (with-current-buffer (car reference)
+          (with-current-buffer (car note)
             (mevedel-test--with-captured-messages nil
-              (mevedel-delete-all-references)))
-          (setq replacement (mevedel-instruction-test--make-reference "replacement\n" workspace))
-          (should (= id (mevedel--instruction-id (cdr replacement))))
+              (mevedel-note-delete (cdr note))))
+          (setq replacement (mevedel-instruction-test--make-note "replacement\n" workspace))
+          (should-not (= id (mevedel--instruction-id (cdr replacement))))
           (with-temp-file (nth 2 fixture) (insert "before target after\n"))
           (with-current-buffer buffer
             (set-visited-file-modtime)
             (let ((restored (mevedel--reattach-directive record workspace buffer 8 14)))
-              (should-not (mevedel--instruction-outlinks restored)))))
+              (should (equal (list id) (mevedel--instruction-outlinks restored))))))
       (when replacement (mevedel-instruction-test--discard replacement))
-      (mevedel-instruction-test--discard reference)
+      (mevedel-instruction-test--discard note)
       (mevedel-instruction-test--discard-source fixture))))
 
 (provide 'test-mevedel-overlays-delete)
