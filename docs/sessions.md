@@ -59,7 +59,8 @@ closed notes; restoring a closed note then restores its unsent state.
 before/after pairs and the shared refuse-if-changed engine. It checks every path
 before the ordinary patch transaction writes anything. Disjoint later edits
 survive; overlaps report current file/line ranges and leave all files unchanged.
-Uncaptured changes and unsaved visiting buffers refuse rather than guessing.
+Uncaptured changes refuse rather than guessing. Apply and revert use visiting
+buffer text, preserving disjoint unsaved edits in the result written to source.
 File history records bytes, not modes; existing modes survive and a restored
 deleted file uses the default mode. Revert neither discards transcript turns nor
 changes their history. Successful reversal restores a done note from recently

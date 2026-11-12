@@ -118,13 +118,29 @@ Return an ordinary tool result immediately; no tool callback is retained."
   (or (overlay-get note 'mevedel-note-prepared-change)
       (user-error "No prepared change for this note")))
 
-(defun mevedel-note-change--plan (note)
-  "Prepare NOTE's waiting changes against current source, without writes."
+(defun mevedel-note-change--source-snapshot (disk)
+  "Return DISK's snapshot with visiting source text, including unsaved edits."
+  (let ((snapshot (copy-sequence disk)))
+    (when-let* ((buffer (find-buffer-visiting (plist-get disk :path))))
+      (with-current-buffer buffer
+        (save-restriction
+          (widen)
+          (setq snapshot (plist-put snapshot :exists t))
+          (setq snapshot
+                (plist-put snapshot :bytes
+                           (encode-coding-string
+                            (buffer-substring-no-properties (point-min) (point-max))
+                            buffer-file-coding-system))))))
+    snapshot))
+
+(defun mevedel-note-change--plan (note &optional selected)
+  "Prepare NOTE's waiting changes against current source, without writes.
+When SELECTED is non-nil, prepare only those reviewed changes."
   (let ((record (mevedel-note-change--record note))
         changes conflicts)
     (when (eq 'stale (mevedel-notes-attention-state note))
       (user-error "Change stale; re-ask on current code or merge"))
-    (dolist (change (plist-get record :changes))
+    (dolist (change (or selected (plist-get record :changes)))
       (let* ((path (plist-get change :path))
              (before (cl-find path (plist-get record :before)
                               :key (lambda (snapshot) (plist-get snapshot :path)) :test #'equal))
@@ -135,7 +151,8 @@ Return an ordinary tool result immediately; no tool callback is retained."
                           :mode (when (eq (plist-get change :action) 'write)
                                   (or (plist-get change :mode) (plist-get before :mode)
                                       (default-file-modes)))))
-             (current (mevedel-tool-patch--snapshot path))
+             (disk (mevedel-tool-patch--snapshot path))
+             (current (mevedel-note-change--source-snapshot disk))
              (prepared (mevedel-change-prepare before after current)))
         (setq conflicts (append conflicts (plist-get prepared :conflicts)))
         (unless (plist-get prepared :conflicts)
@@ -144,9 +161,7 @@ Return an ordinary tool result immediately; no tool callback is retained."
                  (coding (if buffer (buffer-local-value 'buffer-file-coding-system buffer)
                            (if (plist-get current :exists)
                                (cdr (mevedel-tool-patch--read-file path t)) 'utf-8-unix))))
-            (when (and buffer (buffer-modified-p buffer))
-              (push (list :path path :start-line 1 :end-line 1) conflicts))
-            (push (list :path path :before current
+            (push (list :path path :before disk :history-before current
                         :action (if (plist-get result :exists) 'write 'delete)
                         :bytes (plist-get result :bytes)
                         :content (and (plist-get result :exists)
@@ -240,11 +255,8 @@ Return an ordinary tool result immediately; no tool callback is retained."
                  (unless (equal (plist-get record :id)
                                 (plist-get (overlay-get note 'mevedel-note-prepared-change) :id))
                    (user-error "The waiting change changed; reopen its review"))
-                 (dolist (change selected)
-                   (plist-put change :before
-                              (cl-find (plist-get change :path) (plist-get record :before)
-                                       :key (lambda (snapshot) (plist-get snapshot :path)) :test #'equal)))
-                 (mevedel-note-change--commit note record selected)
+                 (mevedel-note-change--commit
+                  note record (mevedel-note-change--plan note selected))
                  (funcall done)))
     (mevedel-patch-review-start proposal #'ignore data)
     (if (overlay-get note 'mevedel-note-session-id)
@@ -275,13 +287,12 @@ Confirming a partial selection drops the rest of this waiting change."
     (dolist (entry entries)
       (let* ((path (car entry))
              (record (cdr entry))
-             (current (mevedel-tool-patch--snapshot path))
+             (disk (mevedel-tool-patch--snapshot path))
+             (current (mevedel-note-change--source-snapshot disk))
              (buffer (find-buffer-visiting path)))
         (when (plist-get record :gap)
           (user-error "Cannot revert uncaptured change at %s: %s"
                       path (plist-get record :gap)))
-        (when (and buffer (buffer-modified-p buffer))
-          (user-error "Save or undo unsaved edits before reverting %s" path))
         (cl-labels ((snapshot (name)
                       (list :path path :exists (and name t)
                             :bytes (and name (mevedel-session-artifacts-read-file-raw
@@ -300,7 +311,7 @@ Confirming a partial selection drops the rest of this waiting change."
               (let ((coding (if buffer (buffer-local-value 'buffer-file-coding-system buffer)
                               (if (plist-get current :exists)
                                   (cdr (mevedel-tool-patch--read-file path t)) 'utf-8-unix))))
-                (push (list :path path :before current
+                (push (list :path path :before disk
                             :action (if (plist-get result :exists) 'write 'delete)
                             :bytes (plist-get result :bytes)
                             :content (and (plist-get result :exists)

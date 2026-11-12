@@ -163,7 +163,19 @@
         (should (string-search "re-ask" (error-message-string err)))
         (should (string-search "merge" (error-message-string err))))
       (should (equal "my before\nold\nafter\n" (buffer-string))))
-    (should (equal "my before\nold\nafter\n" (mevedel-test--read-file file)))))
+    (should (equal "my before\nold\nafter\n" (mevedel-test--read-file file))))
+  :doc "apply preserves unsaved disjoint visiting text in the applied pair"
+  (mevedel-note-change-test--with-note
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (with-current-buffer source
+      (goto-char (point-max))
+      (insert "unsaved\n")
+      (mevedel-note-apply-change note)
+      (should (equal "before\nnew\nafter\nunsaved\n" (buffer-string))))
+    (should (equal "before\nnew\nafter\nunsaved\n" (mevedel-test--read-file file)))
+    (mevedel-note-revert-change note 0)
+    (should (equal "before\nold\nafter\nunsaved\n" (mevedel-test--read-file file)))))
 
 (mevedel-deftest mevedel-note-merge-change
   (:quiet t)
@@ -416,7 +428,21 @@
                      (mevedel-session-artifacts-sidecar-path (mevedel-session-save-path session))))
              (entries (cdr (assq 0 (plist-get saved :file-snapshots)))))
         (should (assoc file entries))
-        (should-not (assoc two entries))))))
+        (should-not (assoc two entries)))))
+
+  :doc "detailed review preserves unsaved disjoint source text at confirmation"
+  (mevedel-note-change-test--with-note
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (with-current-buffer source
+      (goto-char (point-max))
+      (insert "unsaved\n")
+      (mevedel-note-apply-change note t))
+    (with-current-buffer view-buf
+      (goto-char (point-min))
+      (search-forward "ApplyPatch ·")
+      (mevedel-patch-review-submit))
+    (should (equal "before\nnew\nafter\nunsaved\n" (mevedel-test--read-file file)))))
 
 (mevedel-deftest mevedel-note-change-replacement
   (:quiet t)
@@ -648,7 +674,7 @@
       (mevedel-note-revert-change note 0))
     (should (equal "before\r\nold\r\nafter\r\nlater\r\n"
                    (mevedel-session-artifacts-read-file-raw file))))
-  :doc "unsaved visiting edits refuse without changing the buffer or disk"
+  :doc "revert preserves unsaved disjoint visiting edits"
   (mevedel-note-change-test--with-note
     (mevedel-note-change-test--propose
      data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
@@ -656,10 +682,9 @@
     (with-current-buffer source
       (goto-char (point-max))
       (insert "unsaved\n")
-      (should-error (mevedel-note-revert-change note 0) :type 'user-error)
-      (should (buffer-modified-p))
-      (should (equal "before\nnew\nafter\nunsaved\n" (buffer-string))))
-    (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file))))
+      (mevedel-note-revert-change note 0)
+      (should (equal "before\nold\nafter\nunsaved\n" (buffer-string))))
+    (should (equal "before\nold\nafter\nunsaved\n" (mevedel-test--read-file file))))
   :doc "capture gaps refuse rather than treating an unknown pre-image as file absence"
   (mevedel-note-change-test--with-note
     (setf (mevedel-session-file-snapshots session)
