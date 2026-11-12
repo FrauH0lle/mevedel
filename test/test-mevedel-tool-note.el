@@ -87,6 +87,21 @@
       (while (not result) (accept-process-output nil 0.01)))
     result))
 
+(mevedel-deftest mevedel-tool-note-register ()
+  ,test
+  (test)
+  :doc "the model contract reserves close, send and done for the user's request"
+  (let ((prompt (mevedel-tool-prompt (mevedel-tool-ensure "NoteWrite"))))
+    (should (string-match-p
+             "Do not close notes, send them or mark them done unless the user asks" prompt)))
+  :doc "the maintained NoteWrite contract reserves close for the user's request"
+  (with-temp-buffer
+    (insert-file-contents
+     (file-name-concat (file-name-directory (locate-library "mevedel-tool-note"))
+                       "docs/tools.md"))
+    (should (string-match-p "Closing, sending and marking[\n ]+done require the user's request"
+                            (buffer-string)))))
+
 (mevedel-deftest mevedel-tool-note-write (:quiet t)
   ,test
   (test)

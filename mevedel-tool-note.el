@@ -20,7 +20,7 @@
 Leave findings on code or manage notes the user asks you to change.
 
 ### When NOT to use
-Do not send notes or mark them done unless the user asks. Creating a note
+Do not close notes, send them or mark them done unless the user asks. Creating a note
 does not send it. Read existing notes with Read at notes:// instead.
 
 ### How to use

@@ -54,7 +54,7 @@ closed rather than changing its source code.
 
 Ordinary note bookkeeping is automatic, subject to explicit deny rules and
 one-shot mutation policy. Plan and other read-only conversations may create
-findings, but cannot change existing notes or send them. Sending and marking
+findings, but cannot change existing notes or send them. Closing, sending and marking
 done require the user's request; this is a model contract, not a permission
 card. A model send starts or reopens the isolated note conversation without
 changing the user's windows, focus or composer draft.
