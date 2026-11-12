@@ -137,11 +137,14 @@
                   "mevedel-pending-inputs" (fsm))
 (declare-function mevedel-pending-inputs-requeue-steering
                   "mevedel-pending-inputs" (session request-id))
+(declare-function mevedel-pending-inputs-schedule-held-input-delivery
+                  "mevedel-pending-inputs" (&optional data-buffer))
 (declare-function mevedel-view--schedule-follow-up-drain
                   "mevedel-pending-inputs" (fsm))
 (autoload 'mevedel-pending-inputs-cockpit-holds-p "mevedel-pending-inputs")
 (autoload 'mevedel-pending-inputs-offer-event-after-turn "mevedel-pending-inputs")
 (autoload 'mevedel-pending-inputs-requeue-steering "mevedel-pending-inputs")
+(autoload 'mevedel-pending-inputs-schedule-held-input-delivery "mevedel-pending-inputs")
 (autoload 'mevedel-view--schedule-follow-up-drain "mevedel-pending-inputs")
 
 ;; `mevedel-permission-mode'
@@ -1066,7 +1069,16 @@ Holds nest across final-patch generation and deferred durable settlement."
       (when-let* ((buffer (mevedel--turn-buffer fsm)))
         (with-current-buffer buffer
           (setq mevedel--turn-settlements-pending
-                (delq fsm mevedel--turn-settlements-pending)))))))
+                (delq fsm mevedel--turn-settlements-pending))
+          ;; A drain offered before the last hold cleared may have refused.
+          (when (plist-get info :mevedel-input-delivery-after-release)
+            (setf (mevedel-engine-info fsm)
+                  (plist-put (mevedel-engine-info fsm)
+                             :mevedel-input-delivery-after-release nil))
+            (when (and (plist-get info :mevedel-turn-settled)
+                       (not (mevedel-turn-busy-p buffer))
+                       (not (mevedel--turn-publication-pending-p fsm)))
+              (mevedel-pending-inputs-schedule-held-input-delivery buffer))))))))
 
 (defun mevedel--defer-turn-steps (fsm steps &optional on-cancel)
   "Run FSM through STEPS with transport ownership and event-loop breaks.
@@ -1296,6 +1308,9 @@ inverting them drops the turn's file-history checkpoints."
              (mevedel--turn-after-publication
               (lambda (m) (mevedel-goal-dispatch-after-turn m t)) machine))
            (lambda (machine)
+             (setf (mevedel-engine-info machine)
+                   (plist-put (mevedel-engine-info machine)
+                              :mevedel-input-delivery-after-release t))
              (mevedel--turn-after-publication
               #'mevedel-view--schedule-follow-up-drain machine))
            (lambda (machine)

@@ -3025,7 +3025,7 @@ turn's later text, live and after reconstruction."
         (mevedel-view-stream-post-tool (car (last calls))))
       (let ((text (mevedel-view-stream-test--history view-buf)))
         (should (string-match-p
-                 "× 4 calls: read 3 files, searched 1 pattern (1 failed) ▸$" text))
+                 "! 4 calls: read 3 files, searched 1 pattern (1 failed) ▸$" text))
         (should-not (string-match-p "Read: a\\|Grep: x" text)))
       (with-current-buffer view-buf
         (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))

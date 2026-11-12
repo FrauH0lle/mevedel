@@ -38,6 +38,7 @@
 (require 'mevedel-tool-ui)
 (require 'mevedel-tools)
 (require 'mevedel-permission-queue)
+(require 'mevedel-pending-inputs)
 (require 'mevedel-persistence)
 (require 'mevedel-review)
 (require 'mevedel-goal)
@@ -5825,19 +5826,39 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   ,test
   (test)
 
-  :doc "deferred settlement blocks sending and preserves a multiline draft"
-  (mevedel-view-test--with-buffers
-    (let ((session (mevedel-session--create
-                    :authority-mode 'pid-lock :name "main"))
-          (draft "> first line\nsecond line"))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session
-                    mevedel--turn-settlements-pending '(settlement)))
-      (with-current-buffer view-buf
-        (goto-char (mevedel-view--input-start))
-        (insert draft)
-        (should-error (mevedel-view-send) :type 'user-error)
-        (should (equal draft (mevedel-view--input-text))))))
+  :doc "both send keys queue once during settlement before and after request teardown"
+  (dolist (engine '(native external torn-down))
+    (dolist (send '(mevedel-view-send mevedel-view-send-follow-up))
+      (mevedel-view-test--with-buffers
+        (let* ((session (mevedel-session--create
+                         :authority-mode 'pid-lock :name "main"))
+               (draft "> 2. **ADR 0091:** may it get that one pointer edit?\nYes")
+               (request
+                (unless (eq engine 'torn-down)
+                  (mevedel-request--create
+                   :id "finished" :session session
+                   :fsm (and (eq engine 'native) (gptel-make-fsm :state 'DONE))
+                   :context (and (eq engine 'external)
+                                 '(:external-history t :mevedel-acp-outcome success))))))
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session
+                        mevedel--current-request request
+                        mevedel--turn-settlements-pending '(settlement)))
+          (cl-letf (((symbol-function
+                      'mevedel-pending-inputs-schedule-held-input-delivery)
+                     #'ignore)
+                    ((symbol-function 'gptel-send)
+                     (lambda (&rest _) (ert-fail "Sent before settlement finished"))))
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert draft)
+              (funcall send)
+              (should (string-empty-p (mevedel-view--input-text)))
+              (should (equal (list draft) (mevedel-view-history--entries)))))
+          (should-not (mevedel-session-pending-steering session))
+          (let ((entries (mevedel-session-pending-follow-ups session)))
+            (should (= 1 (length entries)))
+            (should (equal draft (plist-get (car entries) :input))))))))
 
   :doc "C-c TAB queues independent FIFO follow-ups during an active request"
   (mevedel-view-test--with-buffers

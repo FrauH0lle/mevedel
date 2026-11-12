@@ -3010,6 +3010,11 @@ priority over follow-ups regardless of submission order; FIFO applies within
 each category. While idle, both send keys perform an ordinary immediate send.
 Slash commands cannot become pending input.
 
+While a completed turn is still saving or running its completion hooks, both
+send keys accept ordinary composer text as a queued follow-up. It starts only
+after settlement finishes and the normal delivery holds clear; it cannot steer
+the completed turn or start a new request before its history is published.
+
 The interaction zone shows up to three compact previews per category. Click or
 `RET` on an entry expands its input locally, with one entry open at a time.
 `d` or `DEL` on an entry's header row drops only that entry without a cockpit or
