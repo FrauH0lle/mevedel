@@ -14,7 +14,11 @@
                             (or load-file-name buffer-file-name))
                            "mevedel-session-publication-test-helpers"))
 (require 'mevedel-agent-runtime)
+(require 'mevedel-recovery)
+(require 'mevedel-session-codec)
+(require 'mevedel-session-durability)
 (require 'mevedel-session-persistence)
+(require 'mevedel-session-publication)
 
 (defconst test-mevedel-persistence-async--root-transcript
   "segment-0001.chat.org"
@@ -112,6 +116,71 @@ anew.  The result is a plist of :transcript, :turns, :latest and :mail IDs."
                    "Checkpointed answer"
                    (test-mevedel-persistence-async--disk
                     session test-mevedel-persistence-async--root-transcript))))))
+
+  :doc "root and retained-agent checkpoints re-observe forgotten lease bytes"
+  (test-mevedel-publication-async--fixture
+   (lambda (session root)
+     (let* ((child (generate-new-buffer " *async-forgotten-lease-agent*"))
+            (invocation (mevedel-agent-invocation--create
+                         :agent (mevedel-agent--create :name "worker")
+                         :agent-id "worker--forgotten-lease" :path "/root/worker"
+                         :buffer child :parent-session session
+                         :parent-data-buffer root)))
+       (unwind-protect
+           (progn
+             (mevedel-agent-runtime--setup-transcript invocation child)
+             (with-current-buffer child
+               (setq-local mevedel--session session
+                           mevedel--agent-invocation invocation))
+             (dolist (buffer (list root child))
+               (setf (mevedel-session-lease session)
+                     (mevedel-session-durability--strip-assumption
+                      (mevedel-session-lease session)))
+               (test-mevedel-persistence-async--type buffer "Re-observed checkpoint\n")
+               (should (eq 'pending (mevedel-session-persistence-checkpoint-buffer buffer)))
+               (test-mevedel-persistence-async--idle session)
+               (should-not (buffer-local-value 'mevedel-session--save-failed buffer))
+               (should-not (buffer-modified-p buffer))
+               (should (= 1 (test-mevedel-persistence-async--count
+                             "Re-observed checkpoint"
+                             (test-mevedel-persistence-async--disk
+                              session
+                              (if (eq buffer root)
+                                  test-mevedel-persistence-async--root-transcript
+                                (mevedel-agent-invocation-transcript-relative-path
+                                 invocation))))))))
+         (with-current-buffer child
+           (set-buffer-modified-p nil) (setq-local kill-buffer-hook nil))
+         (kill-buffer child)))))
+
+  :doc "forgotten lease bytes cannot publish over an unseen target head"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let ((cached (mevedel-session-publication session))
+           (directory (mevedel-session-save-path session)))
+       (mevedel-session-publication-publish
+        session
+        (list (list :path (file-name-concat directory "unseen.txt") :content "Keep me")
+              (list :path (file-name-concat directory "session.meta.el")
+                    :content (mevedel-session-artifacts-read-artifact session "session.meta.el" t)
+                    :commit-marker t))
+        t)
+       (let ((target (mevedel-session-publication session)))
+         (should-not (equal (plist-get cached :head) (plist-get target :head)))
+         (setf (mevedel-session-publication session) cached
+               (mevedel-session-lease session)
+               (mevedel-session-durability--strip-assumption
+                (mevedel-session-lease session)))
+         (test-mevedel-persistence-async--type buffer "Stale checkpoint\n")
+         (mevedel-session-persistence-checkpoint-buffer buffer)
+         (test-mevedel-persistence-async--idle session)
+         (should (buffer-local-value 'mevedel-session--save-failed buffer))
+         (should (buffer-modified-p buffer))
+         (should (equal (plist-get target :head)
+                        (mevedel-session-durability-publication-head directory)))
+         (setf (mevedel-session-publication session)
+               (mevedel-session-publication-read directory))
+         (should (equal "Keep me" (test-mevedel-persistence-async--disk session "unseen.txt")))))))
 
   :doc "text typed while the job runs stays unsaved until the next checkpoint"
   (test-mevedel-publication-async--fixture

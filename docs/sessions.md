@@ -1579,9 +1579,14 @@ failed staged-file deletions. A hard process kill cannot run exit cleanup.
 Admission is one program carrying the clock, the lease listing and the bound
 generation's record, the transfer-request listing and the PID-lock and
 recovery-root probes. It admits only the warm case: an owned, newest
-generation with remembered bytes, no recovery marker, no live transfer request
-naming this client, and no quiescing or released state. Anything else fails
-the job and leaves the producer holding its output; the acknowledgement's
+generation whose target record proves this client's live ownership, no recovery
+marker, no live transfer request naming this client, and no quiescing or released
+state. Remembered lease bytes must match when present; absent remembered bytes
+require the same target proof, not a local refusal or an ownership assumption.
+Admission and reservation both require the target publication head to match
+the session's cached snapshot, so re-observation cannot publish over unseen
+artifacts. Anything else fails the job and leaves the producer holding its
+output; the acknowledgement's
 error is a `user-error` naming the first cause the program observed, such as
 an unobserved lease directory, a newer generation or a recovery marker.
 The lease updates that follow, reserve, head commit and finish, name their

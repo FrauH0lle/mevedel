@@ -2451,10 +2451,12 @@ steps."
     (session callback)
   "Reserve SESSION's bounded publication window, then call CALLBACK.
 As `mevedel-session-durability--renew-publication-lease': SUCCESS is non-nil
-when the lease now publishes.  The caller marks publication active."
+when the lease now publishes over SESSION's cached publication head.
+The caller marks publication active."
   (mevedel-session-durability--update-owned-lease-async
    session '(active publishing) 'publishing
-   mevedel-session-publication-lease-seconds callback))
+   mevedel-session-publication-lease-seconds callback
+   nil t (plist-get (mevedel-session-publication session) :head)))
 
 (defun mevedel-session-durability-finish-publication-lease-async
     (session callback)
@@ -2566,13 +2568,17 @@ synchronous admission records them.
 
 CALLBACK receives SUCCESS: t when SESSION's bound lease is this client's live
 newest generation, no recovery marker exists, and no live transfer request
-names this client.  A nil SUCCESS always carries ERROR, as condition data:
+names this client.  Remembered lease bytes, when present, must match the
+target; otherwise the observed record proves ownership without rebinding
+SESSION's lease.  The target head must match SESSION's cached publication.
+A nil SUCCESS always carries ERROR, as condition data:
 a `user-error' naming the first observed cause when the warm path declines
--- a missing save path, session ID, bound lease generation, bytes or
+-- a missing save path, session ID, bound lease generation or
 ownership, a non-portable session, quiescing or released state, an
 unobserved lease directory, a lease record that is not this client's live
-lease, target bytes that differ from the bound ones, a newer generation, a
-recovery marker, or a live transfer request -- and otherwise the error of a
+lease, target bytes that differ from the bound ones, a changed publication
+head, a newer generation, a recovery marker, or a live transfer request --
+and otherwise the error of a
 failed program, an invalid request, or a PID lock.  Local checks (pending
 publication, target incarnation, disclosure, materialization) stay with the
 caller."
@@ -2586,14 +2592,12 @@ caller."
               (session-id (mevedel-session-session-id session))
               (bound (mevedel-session-lease session))
               (generation (plist-get bound :generation))
-              (bytes (plist-get bound :bytes))
               (decline
                (cond
                 ((not session-dir) "Session has no save path")
                 ((not session-id) "Session has no session ID")
                 ((not (natnump generation))
                  "Portable session has no bound lease generation")
-                ((not bytes) "Portable session has no bound lease bytes")
                 ((not (eq 'owned (plist-get bound :state)))
                  "Portable session lease is not owned by this client")
                 ((not (mevedel-session-durability--portable-session-p session))
@@ -2654,9 +2658,13 @@ before launch; JOB and CONTEXT are as for
                ((not (mevedel-session-durability--owned-lease-record-p
                       record directory now))
                 "Portable session lease record is not this client's live lease")
-               ((not (equal (plist-get bound :bytes)
-                            (plist-get observed :bytes)))
+               ((and (plist-get bound :bytes)
+                     (not (equal (plist-get bound :bytes)
+                                 (plist-get observed :bytes))))
                 "Portable session lease on the target differs from the bound lease")
+               ((not (equal (plist-get record :publication-head)
+                            (plist-get (mevedel-session-publication session) :head)))
+                "Portable session publication head changed")
                ((not (equal generation
                             (mevedel-session-durability--newest-generation
                              (plist-get observed :names))))

@@ -1719,8 +1719,8 @@ target: callers serialize the ones that touch the same files."
                      (mevedel-session-control-fs--send-request-buffer process))
                    (with-temp-buffer
                      (mevedel-session-control-fs--insert-program-request fields)
-                     (mevedel-session-control-fs--send-request-buffer process)))
-                 (process-send-eof process)
+                     (mevedel-session-control-fs--send-request-buffer process))
+                   (process-send-eof process))
                  process)))
           ((error quit)
            (unless settled

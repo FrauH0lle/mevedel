@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'mevedel-session-control-fs)
+(require 'mevedel-transport)
 (require 'bytecomp)
 
 (require 'helpers
@@ -247,6 +248,37 @@ streams over stdin."
           (should (equal "hello" (mevedel-session-control-fs-read-file path)))
           (should-not (cl-some (lambda (name) (string-prefix-p ".mevedel-control-fs-staged-" name))
                                (directory-files root))))
+      (delete-directory root t)))
+
+  :doc "an argument-carried child can finish before the launcher resumes"
+  (let* ((root (make-temp-file "mevedel-control-async-finished-" t))
+         (path (file-name-concat root "file"))
+         (spawn (symbol-function 'make-process))
+         (eof (symbol-function 'process-send-eof))
+         (calls 0) (eofs 0) settled)
+    (unwind-protect
+        (cl-letf (((symbol-function 'make-process)
+                   (lambda (&rest args)
+                     (let* ((process (apply spawn args))
+                            (proc (format "/proc/%d" (process-id process)))
+                            (deadline (+ (float-time) 5)))
+                       ;; Reap the real child without dispatching its sentinel.
+                       (while (and (file-exists-p proc) (< (float-time) deadline)))
+                       (should-not (file-exists-p proc))
+                       process)))
+                  ((symbol-function 'process-send-eof)
+                   (lambda (process) (cl-incf eofs) (funcall eof process))))
+          (mevedel-session-control-fs-run-program-async
+           (list (list :op 'write :path path :content "committed"))
+           (lambda (results error)
+             (cl-incf calls)
+             (setq settled (list results error))))
+          (should (mevedel-session-control-fs-wait-async 10))
+          (should (= 1 calls))
+          (should-not (nth 1 settled))
+          (should (eq 'ok (plist-get (car (car settled)) :status)))
+          (should (= 0 eofs))
+          (should (equal "committed" (mevedel-session-control-fs-read-file path))))
       (delete-directory root t)))
 
   :doc "a large local write is staged, never inlined, and its file lives until exit"

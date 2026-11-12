@@ -78,8 +78,11 @@ interpreter paths for later lookup; an ordinary refused operation does not.
 nothing waits for it. It keeps the synchronous carrier's staged payload files,
 so no payload is base64-encoded or sent through a pipe; a request that fits the
 argument bounds travels as arguments and writes nothing to stdin, and a larger
-one streams as above. The job owns its staged files until delivery. Cleanup
-runs from the delivery timer before the callback, never from the sentinel;
+one streams as above. Only streamed requests send EOF: an argument-carried child
+can finish before the launcher resumes, and sending EOF then would replace its
+successful result with a process-not-running error. The job owns its staged
+files until delivery. Cleanup runs from the delivery timer before the callback,
+never from the sentinel;
 it removes unconsumed payloads even when a program stopped early. Failed or
 quit launches clean up before reporting failure. Cleanup errors are diagnostic
 and cannot replace the stored outcome. Each private buffer is cleaned up
