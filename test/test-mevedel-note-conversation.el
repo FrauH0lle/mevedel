@@ -248,6 +248,13 @@
       (should (string-search "current selected code"
                              (gptel--json-encode
                               (plist-get (gptel-fsm-info (car sent)) :data))))
+      (with-current-buffer view
+        (let ((report (call-interactively (key-binding (kbd "C-c C-v")))))
+          (with-current-buffer report
+            (dolist (request sent)
+              (should (string-search
+                       (gptel--json-encode (plist-get (gptel-fsm-info request) :data))
+                       (buffer-string)))))))
       (mevedel-note-conversation-test--answer (car sent) "Here is a fresh change.")
       (with-current-buffer data
         (mevedel-tool-patch-handler

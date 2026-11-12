@@ -84,16 +84,22 @@
         (goto-char (cdr origin))))))
 
 (defun mevedel-note-conversation-record-input (session data)
-  "Retain SESSION's first fully assembled provider input DATA for inspection.
+  "Retain each fully assembled provider input DATA for SESSION's inspection.
 DATA contains request text and tool schemas, never transport credentials."
   (when (eq (mevedel-session-preset-name session) 'mevedel-note)
     (mevedel-session-artifacts-assert-new-mutation-authority session)
-    (let ((file (file-name-concat (mevedel-session-save-path session) "note-input.json")))
-      (unless (file-exists-p file)
-        (mevedel--write-file-atomically file (gptel--json-encode data) 'utf-8-unix #o600)))))
+    (let* ((file (file-name-concat (mevedel-session-save-path session) "note-input.json"))
+           (input (with-temp-buffer
+                    (when (file-exists-p file)
+                      (insert-file-contents file)
+                      (goto-char (point-max))
+                      (insert "\n\n"))
+                    (insert (gptel--json-encode data))
+                    (buffer-string))))
+      (mevedel--write-file-atomically file input 'utf-8-unix #o600))))
 
 (defun mevedel-note-conversation--record-gptel-input ()
-  "Retain the initial gptel input after all context injection has finished."
+  "Retain each gptel input after all context injection has finished."
   (when mevedel--current-request
     (mevedel-note-conversation-record-input
      mevedel--session
@@ -111,7 +117,7 @@ DATA contains request text and tool schemas, never transport credentials."
     (with-current-buffer mevedel--view-buffer (mevedel-note-conversation-mode 1))))
 
 (defun mevedel-note-show-sent ()
-  "Show the exact initial provider input retained for this note conversation."
+  "Show every exact provider input retained for this note conversation."
   (interactive)
   (let* ((data mevedel--data-buffer)
          (session (buffer-local-value 'mevedel--session data))

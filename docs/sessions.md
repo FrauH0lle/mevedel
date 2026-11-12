@@ -25,9 +25,10 @@ Goal policy. Explicit note/ref mentions in the note text expand once at send tim
 captured code and attachments cannot expand further mentions after reload.
 Other authored mentions use the ordinary request-time attachment path.
 `C-c C-v` in the note view opens the
-session's retained `note-input.json`: the first assembled API request, or the
-native provider's system text and submitted content. This is captured at
-dispatch, not regenerated from later source edits.
+session's retained `note-input.json`: every assembled API request, or the
+native provider's system text and submitted content, in dispatch order as
+separate JSON documents. This includes re-asks and follow-ups, captured at
+dispatch rather than regenerated from later source edits.
 
 Ordinary filesystem and TRAMP source patches from ApplyPatch become prepared
 changes, not writes or pending provider callbacks. Their preparation-time base
