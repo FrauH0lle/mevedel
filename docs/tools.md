@@ -43,6 +43,37 @@ Update manuals with the implementation, and retrieve needed detail again after
 context loss or a manual change. Static manuals do not list dynamic capabilities:
 ToolSearch delivers current contracts; the dialect manual lists pure operations.
 
+## Workspace note writes
+
+`NoteWrite` creates, edits, tags, closes, deletes and sends notes through an
+ordered `operations` array. It belongs to the discoverable `notes` group;
+Read, Glob and Grep expose existing notes at `notes://`. Create takes a source
+path and inclusive 1-based line range. Other operations identify a note by UUID.
+Tags replace the complete list. Closing or deleting retains the note in recently
+closed rather than changing its source code.
+
+Ordinary note bookkeeping is automatic, subject to explicit deny rules and
+one-shot mutation policy. Plan and other read-only conversations may create
+findings, but cannot change existing notes or send them. Sending and marking
+done require the user's request; this is a model contract, not a permission
+card. A model send starts or reopens the isolated note conversation without
+changing the user's windows, focus or composer draft.
+
+Creation can attach an ApplyPatch-format `prepared_change`. This captures a
+suggestion without writing source, including in Plan. It uses readable ordinary
+workspace paths, respects ApplyPatch hard denials and protected-path authority,
+and waits for the user's apply command; ask rules do not prompt for preparation.
+An invalid or forbidden suggestion refuses that create operation. Apply uses
+the normal prepared-change stale checks and transaction.
+
+One call syncs the workspace store once, including completed operations before
+a later failure. Such failures report completed operations and their UUID
+addresses so callers do not duplicate them on retry. Sends are batched after
+the other operations. Created notes show `agent` as author. Users can dismiss
+one with `mevedel-note-dismiss`, or all agent-authored notes in the workspace
+with `mevedel-note-dismiss-agent-notes`; the latter also syncs once and leaves
+user and Buddy notes alone.
+
 ## Shared editing
 
 Session-owned collaborative whiteboards and documents are read with Read and

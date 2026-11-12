@@ -23,6 +23,9 @@
 (require 'gptel-openai)
 (require 'mevedel-file-state)
 (require 'mevedel-tool-patch)
+(require 'mevedel-pipeline)
+(require 'mevedel-tool-note)
+(require 'mevedel-note-write)
 (require 'mevedel-engine-test-support
          (file-name-concat
           (file-name-directory
@@ -1016,6 +1019,90 @@
         (call-interactively (key-binding (kbd "C-c C-a"))))
       (should (equal "my outside-before\nprepared proposal\noutside-after\n"
                      (mevedel-test--read-file file))))))
+
+(mevedel-deftest mevedel-tool-note-write/send (:quiet t)
+  ,test
+  (test)
+  :doc "user-requested batch send leaves the current window, point and composer alone"
+  (mevedel-note-conversation-test--with-source
+    (let* ((first (mevedel-note-create "First requested note"))
+           (second (mevedel-note-create "Second requested note"))
+           (main (mevedel--chat-buffer "main" t workspace))
+           (view (buffer-local-value 'mevedel--view-buffer main))
+           (syncs 0)
+           (counter (lambda (&rest _) (cl-incf syncs)))
+           outcome)
+      (switch-to-buffer view)
+      (goto-char (point-max))
+      (insert "> main draft\ncontinued")
+      (let ((text (buffer-string)) (position (point))
+            (window (selected-window)) (start (window-start)))
+        (advice-add 'mevedel-instruction-store-sync :before counter)
+        (unwind-protect
+            (with-current-buffer main
+              (mevedel-pipeline-run-tool-outcome
+               (mevedel-tool-ensure "NoteWrite") (lambda (value) (setq outcome value))
+               (list :operations
+                     (vector (list :action "send" :id (overlay-get first 'mevedel-uuid))
+                             (list :action "send" :id (overlay-get second 'mevedel-uuid)))))
+              (mevedel-test--await 5 "NoteWrite send did not settle" outcome)
+              (ert-info ((format "%S" outcome))
+                (should (eq 'success (plist-get outcome :status)))))
+          (advice-remove 'mevedel-instruction-store-sync counter))
+        (should (eq window (selected-window)))
+        (should (eq view (window-buffer window)))
+        (should (= position (window-point window)))
+        (should (= start (window-start window)))
+        (with-current-buffer view (should (equal text (buffer-string)))))
+      (should (= 1 syncs))
+      (should (= 1 (length sent)))
+      (let ((payload (gptel--json-encode (plist-get (gptel-fsm-info (car sent)) :data))))
+        (should (string-search "First requested note" payload))
+        (should (string-search "Second requested note" payload))
+        (should-not (string-search "main draft" payload)))
+      (mevedel-note-conversation-test--answer (car sent) "Batch answer."))))
+
+(mevedel-deftest mevedel-tool-note-write/review (:quiet t)
+  ,test
+  (test)
+  :doc "reviewing a created suggestion opens review without sending the unsent note"
+  (mevedel-note-conversation-test--with-source
+    (let ((main (mevedel--chat-buffer "main" t workspace)) outcome)
+      (with-current-buffer main
+        (mevedel-pipeline-run-tool-outcome
+         (mevedel-tool-ensure "NoteWrite") (lambda (value) (setq outcome value))
+         (list :operations
+               (vector (list :action "create" :file_path file :start_line 2 :text "Suggestion"
+                             :prepared_change
+                             "*** Begin Patch\n*** Update File: source.el\n@@\n-selected code\n+suggested code\n*** End Patch")))))
+      (mevedel-test--await 5 "NoteWrite did not settle" outcome)
+      (should (eq 'success (plist-get outcome :status)))
+      (let ((note (car (mevedel--all-instructions))))
+        (mevedel-note-apply-change note t)
+        (should-not sent)
+        (should (eq 'unsent (overlay-get note 'mevedel-note-state)))
+        (should (equal "outside-before\nselected code\noutside-after\n" (mevedel-test--read-file file)))))))
+
+(mevedel-deftest mevedel-note-send/store-write (:quiet t)
+  ,test
+  (test)
+  :doc "ordinary send persists its sent state in one store write without a caller flush"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Send normally"))
+           (writes 0)
+           (counter (lambda (outcome)
+                      (when (memq outcome '(written merged replaced)) (cl-incf writes))
+                      outcome)))
+      (advice-add 'mevedel-instruction-store-sync :filter-return counter)
+      (unwind-protect (mevedel-note-send note)
+        (advice-remove 'mevedel-instruction-store-sync counter))
+      (should (= 1 writes))
+      (mevedel-note-conversation-test--answer (car sent) "Normal answer.")
+      (kill-buffer source)
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (let ((restored (mevedel-notes--resolve (overlay-get note 'mevedel-uuid) workspace)))
+        (should (eq 'sent (overlay-get restored 'mevedel-note-state)))))))
 
 (provide 'test-mevedel-note-conversation)
 ;;; test-mevedel-note-conversation.el ends here

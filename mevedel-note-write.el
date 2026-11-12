@@ -13,6 +13,7 @@
 (require 'mevedel-session-artifacts)
 (require 'mevedel-agents)
 (require 'mevedel-presets)
+(require 'mevedel-note-change)
 
 (defun mevedel-note-write--check (args session)
   "Refuse ARGS' existing-note operations for read-only SESSION owners."
@@ -61,6 +62,11 @@
     (unless (and (integerp start) (> start 0) (integerp end) (>= end start))
       (error "Invalid note line range"))
     (with-current-buffer (find-file-noselect file)
+      (when (and mevedel--workspace
+                 (not (equal (mevedel--instruction-workspace-key mevedel--workspace)
+                             (mevedel--instruction-workspace-key
+                              (mevedel-session-workspace session)))))
+        (error "Note source belongs to a different workspace"))
       (setq-local mevedel--workspace (mevedel-session-workspace session))
       (save-mark-and-excursion
         (save-restriction
@@ -85,37 +91,98 @@
     (mevedel-note-write--source (plist-get entry :file) session)
     (or (mevedel-notes--resolve id workspace) (error "Note source is unavailable"))))
 
+(defun mevedel-note-write--prepared (patch session)
+  "Capture suggested PATCH for SESSION without applying it."
+  (let ((proposal (mevedel-tool-patch-parse
+                   patch (mevedel-workspace-root (mevedel-session-workspace session)))))
+    (dolist (operation (plist-get proposal :operations))
+      (when (or (mevedel-tool-patch-resource-address-p (plist-get operation :rel-path))
+                (and (plist-get operation :move-rel-path)
+                     (mevedel-tool-patch-resource-address-p (plist-get operation :move-rel-path))))
+        (error "Prepared note changes need ordinary source paths, not resources")))
+    (dolist (path (mevedel-tool-patch-get-paths-from-proposal proposal))
+      (mevedel-note-write--source path session)
+      (let* ((workspace (mevedel-session-workspace session))
+             (context (mevedel-permission--invocation-context
+                       :tool-name "ApplyPatch" :session session :workspace workspace
+                       :request mevedel--current-request :invocation mevedel--agent-invocation
+                       :buffer (current-buffer) :path path))
+             (decision (mevedel-check-permission-with-metadata
+                        "ApplyPatch" :normalized-context context))
+             (outcome (mevedel-permission-decision-raw-outcome decision)))
+        ;; Preparing is read-only; user apply supplies approval, not a deny override.
+        (when (or (and (eq outcome 'deny) (not (eq (plist-get decision :via) 'plan-mode)))
+                  (eq outcome 'internal-error)
+                  (and (plist-get context :protected-path-p)
+                       (not (plist-get context :resource-granted-p))
+                       (not (eq (plist-get context :mode) 'full-auto))))
+          (error "Prepared change is denied for %s" path))))
+    (mevedel-tool-patch--capture-baseline proposal)
+    (let ((changes (mevedel-tool-patch-planned-changes proposal)))
+      (mevedel-tool-patch-assert-baseline proposal)
+      (list :id (mevedel--create-uuid)
+            :session-id (mevedel-session-session-id session)
+            :turn (or (mevedel-session-turn-count session) 0)
+            :proposal proposal :changes changes
+            :before (mapcar (lambda (change)
+                              (mevedel-tool-patch--snapshot (plist-get change :path)))
+                            changes)))))
+
 (defun mevedel-tool-note-write (args)
   "Perform the workspace note operations in ARGS, syncing once even on failure."
   (let* ((session (or mevedel--session (error "Notes require a session")))
          (workspace (mevedel-session-workspace session))
          (operations (append (plist-get args :operations) nil))
-         changed results)
+         changed results to-send)
     (unless operations (error "Choose at least one note operation"))
     (mevedel-note-write--check args session)
     (mevedel-session-artifacts-assert-new-mutation-authority session)
     (mevedel-instruction-store-observe workspace)
-    (unwind-protect
-        (dolist (operation operations)
-          (let* ((action (plist-get operation :action))
-                 (note (if (equal action "create")
-                           (mevedel-note-write--create operation session)
-                         (mevedel-note-write--resolve (plist-get operation :id) session))))
-            (setq changed t)
-            (pcase action
-              ((or "create" "edit")
-               (when (plist-member operation :text)
-                 (mevedel-note-edit (plist-get operation :text) note))
-               (when (plist-member operation :tags)
-                 (mevedel-note-set-tags
-                  (mapcar #'intern (append (plist-get operation :tags) nil)) note))
-               (mevedel-notes--render note))
-              ((or "close" "done") (mevedel-note-done note))
-              ("delete" (mevedel-note-delete note))
-              (_ (error "Unknown note action: %s" action)))
-            (push (format "%s Note #%s notes://%s.md" action (overlay-get note 'mevedel-id)
-                          (overlay-get note 'mevedel-uuid)) results)))
-      (when changed (mevedel-instruction-store-sync workspace)))
+    (condition-case err
+        (unwind-protect
+            (progn
+              (dolist (operation operations)
+                (let* ((action (plist-get operation :action))
+                       (prepared (when (plist-get operation :prepared_change)
+                                   (unless (equal action "create")
+                                     (error "Attach prepared_change only when creating a note"))
+                                   (mevedel-note-write--prepared
+                                    (plist-get operation :prepared_change) session)))
+                       (note (if (equal action "create")
+                                 (mevedel-note-write--create operation session)
+                               (mevedel-note-write--resolve (plist-get operation :id) session))))
+                  (setq changed t)
+                  (pcase action
+                    ((or "create" "edit")
+                     (when (plist-member operation :text)
+                       (mevedel-note-edit (plist-get operation :text) note))
+                     (when (plist-member operation :tags)
+                       (mevedel-note-set-tags
+                        (mapcar #'intern (append (plist-get operation :tags) nil)) note))
+                     (when prepared
+                       (overlay-put note 'mevedel-note-prepared-change prepared)
+                       (overlay-put note 'mevedel-note-attention-state 'ready))
+                     (mevedel-notes--render note))
+                    ((or "close" "done") (mevedel-note-done note))
+                    ("delete" (mevedel-note-delete note))
+                    ("send" (push note to-send))
+                    (_ (error "Unknown note action: %s" action)))
+                  (unless (equal action "send")
+                    (push (format "%s Note #%s notes://%s.md" action (overlay-get note 'mevedel-id)
+                                  (overlay-get note 'mevedel-uuid)) results))))
+              (when to-send
+                (setq to-send (nreverse to-send))
+                (mevedel-note-send-batch to-send :no-display t :defer-write t)
+                (dolist (note to-send)
+                  (push (format "send Note #%s notes://%s.md" (overlay-get note 'mevedel-id)
+                                (overlay-get note 'mevedel-uuid)) results))))
+          (when changed (mevedel-instruction-store-sync workspace)))
+      (error
+       (error "%s%s" (error-message-string err)
+              (if results
+                  (concat "\nCompleted operations (do not repeat):\n"
+                          (mapconcat #'identity (reverse results) "\n"))
+                ""))))
     (list :result (mapconcat #'identity (nreverse results) "\n"))))
 
 (provide 'mevedel-note-write)

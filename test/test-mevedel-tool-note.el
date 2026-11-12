@@ -162,7 +162,106 @@
             (should (eq 'error (plist-get outcome :status)))
             (should (string-match-p "[Rr]ead-only" (plist-get outcome :result)))))
         (should (string-search "Finding" (mevedel-tool-note-test--read data-buf address)))
-        (should (string-search "unsent" (mevedel-tool-note-test--read data-buf address)))))))
+        (should (string-search "unsent" (mevedel-tool-note-test--read data-buf address))))))
+  :doc "a created note carries a durable prepared change that only the user applies"
+  (mevedel-tool-note-test--workspace
+    (setf (mevedel-session-plan-mode session) t)
+    (let* ((id (mevedel-tool-note-test--create
+                data-buf file :prepared_change
+                "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")))
+      (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))
+      (kill-buffer (find-buffer-visiting file))
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (let ((note (mevedel-notes--resolve id workspace)))
+        (should (string-search "change ready"
+                               (overlay-get (overlay-get note 'mevedel-label-overlay) 'after-string)))
+        (mevedel-note-apply-change note)
+        (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))
+        (should (string-search "unsent"
+                               (mevedel-tool-note-test--read data-buf (concat "notes://" id ".md")))))))
+  :doc "creation refuses to steal a source buffer from a different workspace"
+  (mevedel-tool-note-test--workspace
+    (let* ((nested (file-name-concat root "nested"))
+           (other (mevedel-workspace-get-or-create 'file nested nested "other")))
+      (with-current-buffer (find-file-noselect file)
+        (setq-local mevedel--workspace other))
+      (let ((outcome (mevedel-tool-note-test--write
+                      data-buf (vector (list :action "create" :file_path file :start_line 2)))))
+        (should (eq 'error (plist-get outcome :status)))
+        (should (string-search "different workspace" (plist-get outcome :result))))
+      (with-current-buffer (find-buffer-visiting file)
+        (should (eq other mevedel--workspace)))))
+  :doc "prepared suggestions respect ApplyPatch hard-deny path rules even in Plan"
+  (mevedel-tool-note-test--workspace
+    (setf (mevedel-session-plan-mode session) t
+          (mevedel-session-permission-rules session)
+          (list (list "ApplyPatch" :path file :action 'deny)))
+    (let ((outcome (mevedel-tool-note-test--write
+                    data-buf
+                    (vector (list :action "create" :file_path file :start_line 2
+                                  :prepared_change
+                                  "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")))))
+      (should (eq 'error (plist-get outcome :status)))
+      (should (string-search "Prepared change is denied" (plist-get outcome :result)))
+      (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))))
+  :doc "partial failure reports already-created UUIDs and persists those notes once"
+  (mevedel-tool-note-test--workspace
+    (let ((outcome (mevedel-tool-note-test--write
+                    data-buf
+                    (vector (list :action "create" :file_path file :start_line 2 :text "Kept finding")
+                            (list :action "create" :file_path file :start_line 999)))))
+      (should (eq 'error (plist-get outcome :status)))
+      (should (string-search "Completed" (plist-get outcome :result)))
+      (should (string-match "notes://[a-z0-9-]+\\.md" (plist-get outcome :result)))
+      (let ((address (match-string 0 (plist-get outcome :result))))
+        (kill-buffer (find-buffer-visiting file))
+        (mevedel--clear-instruction-state workspace)
+        (should (string-search "Kept finding" (mevedel-tool-note-test--read data-buf address)))))))
+
+(mevedel-deftest mevedel-note-dismiss-agent-notes (:quiet t)
+  ,test
+  (test)
+  :doc "single and workspace-wide dismissal preserve user notes and sync a batch once"
+  (mevedel-tool-note-test--workspace
+    (let ((first (mevedel-tool-note-test--create data-buf file))
+          (second (mevedel-tool-note-test--create data-buf file)))
+      (with-current-buffer (find-buffer-visiting file)
+        (goto-char (point-min))
+        (mevedel-note-create "Human note"))
+      (mevedel-note-dismiss (mevedel-notes--resolve first workspace))
+      (should (string-search "dismissed" (mevedel-tool-note-test--read
+                                          data-buf (concat "notes://" first ".md"))))
+      (mevedel-note-restore first workspace)
+      (mevedel-instruction-store-flush t)
+      (kill-buffer (find-buffer-visiting file))
+      (mevedel--clear-instruction-state workspace)
+      (let* ((syncs 0) (counter (lambda (&rest _) (cl-incf syncs))))
+        (advice-add 'mevedel-instruction-store-sync :before counter)
+        (unwind-protect
+            (progn
+              (should (= 2 (mevedel-note-dismiss-agent-notes workspace)))
+              (should (= 1 syncs)))
+          (advice-remove 'mevedel-instruction-store-sync counter)))
+      (dolist (id (list first second))
+        (should (string-search "dismissed" (mevedel-tool-note-test--read
+                                            data-buf (concat "notes://" id ".md")))))
+      (let ((listing (mevedel-tool-note-test--read data-buf "notes://")))
+        (should (string-match-p "user unsent" listing)))))
+  :doc "missing sources refuse dismiss-all before it can dismiss a different note at point"
+  (mevedel-tool-note-test--workspace
+    (mevedel-tool-note-test--create data-buf file)
+    (let* ((other (file-name-concat root "other.txt"))
+           (_ (write-region "before\nold\nafter\n" nil other nil 'silent))
+           (id (mevedel-tool-note-test--create data-buf other)))
+      (kill-buffer (find-buffer-visiting file))
+      (delete-file file)
+      (with-current-buffer (find-buffer-visiting other)
+        (goto-char (point-min))
+        (forward-line 1)
+        (should-error (mevedel-note-dismiss-agent-notes workspace) :type 'user-error))
+      (should (string-search "unsent" (mevedel-tool-note-test--read
+                                       data-buf (concat "notes://" id ".md")))))))
 
 (provide 'test-mevedel-tool-note)
 ;;; test-mevedel-tool-note.el ends here

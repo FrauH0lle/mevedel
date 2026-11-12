@@ -205,6 +205,7 @@ Chat / view
   mevedel-notes-list.el       workspace notes grouped by attention, visit/edit/tag/send/close/restore actions
   mevedel-note-mentions.el    explicit note number/tag attachments, current code and UUID lookup
   mevedel-note-resource.el    read-only workspace note documents for Read, Glob and Grep
+  mevedel-note-write.el       model note mutations, read-only authority and batched store sync
   mevedel-mentions.el         @ref and @file mention expansion
   mevedel-directive-persistence.el  workspace directive record codec
   mevedel-persistence.el      workspace instruction store, export/import, restore
@@ -279,6 +280,7 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-fs-search.el   Glob/Grep execution and resource-output privacy
   mevedel-tool-patch-registration.el ApplyPatch catalog and callback autoloads
   mevedel-tool-patch.el       ApplyPatch parse/match/apply engine and rendering
+  mevedel-tool-note.el        NoteWrite catalog and handler autoloads
   mevedel-tool-code.el        XrefReferences, XrefDefinitions, Imenu, Treesitter
   mevedel-tool-exec-permission.el Bash/Eval authority and prompt adapters
   mevedel-tool-exec-registration.el Bash/Eval/execution-control catalog and callback autoloads

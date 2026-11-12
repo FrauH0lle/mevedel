@@ -28,7 +28,11 @@ Pass operations in order; one call performs one store sync. Create needs
 file_path and start_line (1-based); end_line is inclusive and defaults to
 start_line. Text defaults to empty. Tags replace the whole tag list; [] clears.
 Other actions name an existing note's UUID as id (from notes://UUID.md).
-In read-only conversations only create is allowed."
+In read-only conversations only create is allowed. Optional prepared_change
+captures an ApplyPatch-format suggestion without writing source; the user
+applies it. Hard path denials still apply, but preparation needs no approval.
+A batch failure reports completed operations; do not repeat those on retry.
+Send operations run together after the other operations and do not open a view."
     :handler #'mevedel-tool-note-write
     :args ((operations array :required "Note operations, processed in order."
                        :items (:type object
@@ -40,7 +44,9 @@ In read-only conversations only create is allowed."
                                 :start_line (:type integer)
                                 :end_line (:type integer)
                                 :text (:type string)
-                                :tags (:type array :items (:type string))))))
+                                :tags (:type array :items (:type string))
+                                :prepared_change
+                                (:type string :description "Create only: an ApplyPatch-format suggestion, using ordinary source paths in this workspace. It waits for the user to apply; source is unchanged.")))))
     :check-permission #'mevedel-tool-note-check
     :groups (notes)))
 

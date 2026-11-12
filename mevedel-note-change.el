@@ -213,7 +213,9 @@ Return an ordinary tool result immediately; no tool callback is retained."
                  (mevedel-note-change--commit note record selected)
                  (funcall done)))
     (mevedel-patch-review-start proposal #'ignore data)
-    (mevedel-note-send note)))
+    (if (overlay-get note 'mevedel-note-session-id)
+        (mevedel-note-send note)
+      (pop-to-buffer (buffer-local-value 'mevedel--view-buffer data)))))
 
 ;;;###autoload
 (defun mevedel-note-apply-change (&optional note review)

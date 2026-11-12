@@ -293,6 +293,7 @@ Freezing these explicit specs preserves membership on later invocations."
                   when (and tool (member (mevedel-tool-call-name tool) roster))
                   collect (list :discoverable (list :tool (copy-tree path)))))))
      (t
+      (mevedel-tool-ensure "NoteWrite")
       (cl-delete-duplicates
        (append base
                '((:tool "ToolSearch") (:tool "ToolCall") (:discoverable notes))

@@ -45,6 +45,7 @@
 (autoload 'mevedel-instruction-store-observe "mevedel-persistence")
 (autoload 'mevedel-instruction-store-prune-closed "mevedel-persistence")
 (autoload 'mevedel-instruction-store-touch "mevedel-persistence")
+(autoload 'mevedel-instruction-store-sync "mevedel-persistence")
 
 ;; `mevedel-buddy-note'
 (autoload 'mevedel-buddy-dismiss-note "mevedel-buddy-note" nil t)
@@ -208,8 +209,8 @@ Restore only the selected note's file, not every stashed source file."
               (key-description key)
             "M-x mevedel-note-menu")
           (if (and note (eq 'taken (overlay-get note 'mevedel-note-state))) "drop" "take")
-          (if (and note (eq 'buddy (overlay-get note 'mevedel-note-author)))
-              "dismiss, keep" "delete")))
+          (pcase (and note (overlay-get note 'mevedel-note-author))
+            ('buddy "dismiss, keep") ('agent "dismiss") (_ "delete"))))
 
 (defun mevedel-notes--entry-hint ()
   "Announce the note and its next actions when point enters it."
@@ -365,6 +366,39 @@ Default to the note at point.  Taking Buddy's remark first keeps it as yours."
 NOTE defaults to the note at point.  Restore it with `mevedel-note-restore'."
   (interactive)
   (mevedel-note-close (or note (mevedel-notes--at-point)) 'deleted))
+
+;;;###autoload
+(defun mevedel-note-dismiss (&optional note)
+  "Dismiss agent-authored NOTE, defaulting to the note at point."
+  (interactive)
+  (setq note (or note (mevedel-notes--at-point)))
+  (let ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note))))
+    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+      (unless (eq 'agent (overlay-get note 'mevedel-note-author))
+        (user-error "Not an agent-authored note"))
+      (mevedel-note-close note 'dismissed))))
+
+;;;###autoload
+(defun mevedel-note-dismiss-agent-notes (&optional workspace)
+  "Dismiss all agent-authored notes in WORKSPACE, syncing once.
+Return the number dismissed.  User and Buddy notes are left alone."
+  (interactive)
+  (setq workspace (or workspace (mevedel--instruction-buffer-workspace (current-buffer))))
+  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+    (mevedel-instruction-store-observe workspace)
+    (let ((count 0)
+          (notes (cl-loop for entry in (mevedel-notes--entries workspace)
+                          when (eq 'agent (plist-get (plist-get entry :properties)
+                                                    'mevedel-note-author))
+                          collect (or (mevedel-notes--resolve (plist-get entry :uuid) workspace)
+                                      (user-error "Source unavailable for note %s; no notes dismissed"
+                                                  (plist-get entry :uuid))))))
+      (unwind-protect
+          (dolist (note notes)
+            (mevedel-note-dismiss note)
+            (cl-incf count))
+        (when (> count 0) (mevedel-instruction-store-sync workspace)))
+      count)))
 
 (defun mevedel-note-close (note reason)
   "Move live NOTE to recently closed with REASON, retaining its attachments.
@@ -546,7 +580,9 @@ Return its live source overlay, retaining its text, tags and attachments."
                            (if (eq 'buddy (overlay-get note 'mevedel-note-author))
                                '((?d "dismiss" "Dismiss this remark")
                                  (?k "keep" "Keep as your own note"))
-                             '((?d "delete" "Delete note without changing code")))
+                             (if (eq 'agent (overlay-get note 'mevedel-note-author))
+                                 '((?d "dismiss" "Dismiss this agent finding"))
+                               '((?d "delete" "Delete note without changing code"))))
                            (when (overlay-get note 'mevedel-note-legacy-history)
                              '((?h "history" "Inspect read-only pre-migration history")))
                            (when (overlay-get note 'mevedel-note-prepared-change)
@@ -563,9 +599,10 @@ Return its live source overlay, retaining its text, tags and attachments."
         (?e (mevedel-note-edit
              (read-string "Note: " (overlay-get note 'mevedel-note-text)) note))
         (?x (mevedel-note-done note))
-        (?d (if (eq 'buddy (overlay-get note 'mevedel-note-author))
-                (mevedel-buddy-dismiss-note note)
-              (mevedel-note-delete note)))
+        (?d (pcase (overlay-get note 'mevedel-note-author)
+              ('buddy (mevedel-buddy-dismiss-note note))
+              ('agent (mevedel-note-dismiss note))
+              (_ (mevedel-note-delete note))))
         (?k (mevedel-buddy-keep-note note))
         (?h (mevedel-note-history note))))))
 
