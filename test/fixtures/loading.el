@@ -297,19 +297,7 @@ temporary one."
              ;; Memory writes load the patch implementation on demand.
              (should-not (featurep 'mevedel-tool-patch))
              (with-current-buffer (mevedel-test-loading--session)
-               (call-interactively #'mevedel-save-session)
-               ;; This fixture needs ordinary Resume, not a pending-capture inspector.
-               (require 'mevedel-journal-process)
-               (let* ((workspace (mevedel-session-workspace mevedel--session))
-                      (captures (mevedel-journal-capture-list workspace)))
-                 (should captures)
-                 (dolist (capture captures)
-                   (let* ((id (plist-get capture :id))
-                          (omission (mevedel-journal-process-discard workspace id)))
-                     (should (equal "discard" (plist-get omission :class)))
-                     (should (equal omission (mevedel-journal-process-discard workspace id)))))
-                 (should-not (mevedel-journal-pins-present-p
-                              (mevedel-session-save-path mevedel--session))))))
+               (call-interactively #'mevedel-save-session)))
             ('resume
              (mevedel-install)
              (mevedel-test-loading--provider)

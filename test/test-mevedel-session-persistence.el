@@ -3944,6 +3944,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
          (entry '(:save-path "/session/" :summary (:session-name "main")))
          (reads 0)
          (action "Cancel")
+         (reasons '(publishing))
          (restored (generate-new-buffer " *mevedel-recovery-choice*")))
     (unwind-protect
         (cl-letf
@@ -3953,13 +3954,14 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
               (lambda (&rest _) (list :sessions (and entry (list entry)))))
              ((symbol-function 'mevedel-session-durability-cleanup-assessment)
               (lambda (&rest _)
-                '(:state expired :host "laptop" :reasons (publishing)
-                  :recoverable t)))
+                (list :state 'expired :host "laptop" :reasons reasons
+                      :recoverable t)))
              ((symbol-function 'mevedel-session-durability-lease-status)
               (lambda (&rest _) '(:state expired :host "laptop")))
              ((symbol-function 'mevedel-session-persistence--format-session-candidate)
               (lambda (_entry detail)
-                (should (string-match-p "cleanup blocked: interrupted publication" detail))
+                (when (equal reasons '(publishing))
+                  (should (string-match-p "cleanup blocked: interrupted publication" detail)))
                 "main"))
              ((symbol-function 'mevedel--ordered-completion-table)
               (lambda (values &rest _) values))
@@ -3990,6 +3992,11 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
     (setq action "Recover")
     (should (eq restored (mevedel-session-persistence-choose-entry workspace)))
     (should (= 2 reads)))
+  :doc "takes over a session blocked only by pending journal captures without asking"
+  (progn
+    (setq reasons '(journal-pins))
+    (should (eq restored (mevedel-session-persistence-choose-entry workspace)))
+    (should (= 1 reads)))
   :doc "refreshes after discard and never implicitly starts a replacement session"
   (cl-letf (((symbol-function 'mevedel-session-persistence-discard)
              (lambda (selected-workspace selected)

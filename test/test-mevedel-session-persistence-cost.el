@@ -469,9 +469,10 @@ directories -- the existence probes and the lease listings."
                                          (lambda (choice) (string-match-p "cleanup blocked:" choice))
                                          (all-completions "" choices))))
                                (should row)
-                               (dolist (reason '("interrupted publication" "unresolved mutation"
-                                                 "pending journal captures"))
-                                 (should (string-match-p reason row))))
+                               (dolist (reason '("interrupted publication" "unresolved mutation"))
+                                 (should (string-match-p reason row)))
+                               ;; Captures settle unattended, so the row never names them.
+                               (should-not (string-match-p "journal" row)))
                              "Start new session")))
                   (should (eq 'new (mevedel-session-persistence-choose-entry workspace))))
                 (should (= 1 assessments))

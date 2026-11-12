@@ -100,10 +100,6 @@
 (autoload 'mevedel-journal-pins-present-p "mevedel-journal-pins")
 (autoload 'mevedel-journal-pins-observe "mevedel-journal-pins")
 
-;; `mevedel-journal-jobs'
-(declare-function mevedel-journal-jobs "mevedel-journal-jobs" (&optional workspace))
-(autoload 'mevedel-journal-jobs "mevedel-journal-jobs")
-
 ;; `mevedel-journal-process'
 (declare-function mevedel-journal-process-discard "mevedel-journal-process" (workspace id &optional original-source))
 (autoload 'mevedel-journal-process-discard "mevedel-journal-process")
@@ -2657,18 +2653,18 @@ one field with no bound on its length."
     (mevedel-session-control-transfer-root-buffer-for-id session-id)))
 
 (defun mevedel-session-persistence--cleanup-reasons (assessment)
-  "Describe the cleanup blockers in ASSESSMENT."
+  "Describe the cleanup blockers in ASSESSMENT.
+Pending journal captures are omitted: the journal settles them unattended."
   (mapconcat
    (lambda (reason)
      (pcase reason
        ('publishing "interrupted publication")
        ('unsettled-mutation "unresolved mutation")
        ('recovery "recovery data retained")
-       ('journal-pins "pending journal captures")
        ('live-owner "live owner")
        ('transfer-reserved "control transfer reserved")
        (_ "unreadable control data")))
-   (plist-get assessment :reasons) ", "))
+   (remq 'journal-pins (plist-get assessment :reasons)) ", "))
 
 (defun mevedel-session-persistence--entry-authority (workspace entry)
   "Return `(:action LABEL :detail TEXT :held BOOL)' for WORKSPACE session ENTRY.
@@ -2698,7 +2694,9 @@ not trigger another authority read."
            (host (plist-get status :host))
            (elsewhere (and host (not (equal host (system-name))) host)))
       (cond
-       ((plist-get status :recoverable)
+       ((and (plist-get status :recoverable)
+             ;; Pending captures alone are routine; the journal drains them on its own.
+             (remq 'journal-pins (plist-get status :reasons)))
         (list :action "Recover"
               :detail (concat "cleanup blocked: "
                               (mevedel-session-persistence--cleanup-reasons status))
@@ -2910,9 +2908,6 @@ REFRESHED keeps an empty chooser open after deleting its last session."
                          (plist-get entry :save-path) 'portable
                          (plist-get entry :publication)
                          (mevedel-diagnostic-scope workspace))))
-                 ((and (equal action "Recover")
-                       (equal '(journal-pins) (plist-get assessment :reasons)))
-                  (list :action 'inspect :buffer (mevedel-journal-jobs workspace)))
                  (t
                   (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
                     (let ((buffer (mevedel-session-persistence-restore
@@ -2927,8 +2922,6 @@ REFRESHED keeps an empty chooser open after deleting its last session."
                                            (plist-get recovery :directory)))
                                   ((memq 'unsettled-mutation (plist-get assessment :reasons))
                                    "Verify previous processes stopped before M-x mevedel-retry-target-readiness.")
-                                  ((memq 'journal-pins (plist-get assessment :reasons))
-                                   "Inspect pending captures with M-x mevedel-journal-jobs.")
                                   (t "Review the last committed transcript; prior client-local staging may be unavailable."))))
                       buffer))))))))))))
 
