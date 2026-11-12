@@ -46,6 +46,9 @@
 (autoload 'mevedel-buddy-dismiss-note "mevedel-buddy-note" nil t)
 (autoload 'mevedel-buddy-keep-note "mevedel-buddy-note" nil t)
 
+;; `mevedel-buddy'
+(autoload 'mevedel-buddy-mode "mevedel-buddy" nil t)
+
 (defvar-local mevedel-notes--last-hinted nil
   "Note most recently announced by the local entry hint.")
 
@@ -234,7 +237,9 @@ Restore only the selected note's file, not every stashed source file."
                            (pcase (overlay-get note 'mevedel-note-author)
                              ('buddy "Buddy") ('agent "AI") (_ "you"))
                            (mevedel-notes--display-text note)
-                           (if (overlay-get note 'mevedel-note-session-id) "sent" "not sent")
+                           (if (eq 'taken (overlay-get note 'mevedel-note-state))
+                               "you're on it · Buddy watches"
+                             (if (overlay-get note 'mevedel-note-session-id) "sent" "not sent"))
                            (mevedel-notes--actions-hint note))))
         (overlay-put note 'keymap mevedel-note-actions-map)
         (move-overlay label (overlay-start note) end)
@@ -292,6 +297,36 @@ Default to the note at point.  An empty list removes every tag."
       (overlay-put note 'mevedel-note-text text)
       (mevedel-notes--render note)
       (mevedel-instruction-store-touch workspace))))
+
+;;;###autoload
+(defun mevedel-note-take (&optional note)
+  "Take NOTE to implement it yourself, with Buddy watching its code.
+Default to the note at point.  Taking Buddy's remark first keeps it as yours."
+  (interactive)
+  (setq note (or note (mevedel-notes--at-point)))
+  (let ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note))))
+    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+      (when (eq 'buddy (overlay-get note 'mevedel-note-author))
+        (mevedel-buddy-keep-note note))
+      (overlay-put note 'mevedel-note-state 'taken)
+      (with-current-buffer (overlay-buffer note) (mevedel-buddy-mode 1))
+      (mevedel-notes--render note)
+      (mevedel-instruction-store-touch workspace)))
+  note)
+
+;;;###autoload
+(defun mevedel-note-drop (&optional note)
+  "Stop watching taken NOTE and return it to unsent, keeping its conversation."
+  (interactive)
+  (setq note (or note (mevedel-notes--at-point)))
+  (let ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note))))
+    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+      (unless (eq 'taken (overlay-get note 'mevedel-note-state))
+        (user-error "Note is not taken"))
+      (overlay-put note 'mevedel-note-state 'unsent)
+      (mevedel-notes--render note)
+      (mevedel-instruction-store-touch workspace)))
+  note)
 
 ;;;###autoload
 (defun mevedel-note-delete (&optional note)
