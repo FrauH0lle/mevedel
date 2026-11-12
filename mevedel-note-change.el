@@ -44,14 +44,23 @@
         (or (eq 'delete (plist-get change :action))
             (let* ((before (cl-find buffer-file-name (plist-get record :before)
                                     :key (lambda (item) (plist-get item :path)) :test #'equal))
+                   (current (mevedel-note-change--source-snapshot before))
+                   (after (plist-put
+                           (copy-sequence before) :bytes
+                           (or (plist-get change :bytes)
+                               (encode-coding-string (plist-get change :content) 'utf-8-unix))))
+                   (prepared (mevedel-change-prepare before after current))
+                   (runs (or (plist-get prepared :ranges)
+                             (if (plist-get prepared :conflicts)
+                                 (list (list 0 (line-number-at-pos (point-max))))
+                               (mevedel-change--runs
+                                (or (plist-get current :bytes) "")
+                                (or (plist-get (plist-get prepared :after) :bytes) "")))))
                    (start (1- (line-number-at-pos (overlay-start note))))
                    (end (line-number-at-pos (max (overlay-start note) (1- (overlay-end note))))))
               (cl-some (lambda (run)
                          (mevedel-change--overlap-p start end (nth 0 run) (nth 1 run)))
-                       (mevedel-change--runs
-                        (or (plist-get before :bytes) "")
-                        (or (plist-get change :bytes)
-                            (encode-coding-string (plist-get change :content) 'utf-8-unix))))))))))
+                       runs)))))))
 
 (defun mevedel-note-prepare-change (proposal changes data-buffer)
   "Hold PROPOSAL and CHANGES for DATA-BUFFER's notes without writing source.

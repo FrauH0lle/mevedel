@@ -118,7 +118,41 @@
       (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))
       (should (eq 'ready (mevedel-notes-attention-state sibling)))
       (mevedel-note-apply-change sibling)
-      (should (equal "BEFORE\nnew\nafter\n" (mevedel-test--read-file file))))))
+      (should (equal "BEFORE\nnew\nafter\n" (mevedel-test--read-file file)))))
+  :doc "unsaved lines above notes do not attach a proposal to the wrong batch sibling"
+  (mevedel-note-change-test--with-note
+    (let ((sibling (with-current-buffer source
+                     (goto-char (point-min))
+                     (let ((item (mevedel-note-create "Other request")))
+                       (overlay-put item 'mevedel-note-state 'sent)
+                       (overlay-put item 'mevedel-note-session-id
+                                    (mevedel-session-session-id session))
+                       item))))
+      (with-current-buffer source
+        (goto-char (point-min))
+        (insert "heading\n"))
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+      (should (eq 'ready (mevedel-notes-attention-state note)))
+      (should-not (eq 'ready (mevedel-notes-attention-state sibling)))
+      (mevedel-note-apply-change note)
+      (should (equal "heading\nbefore\nnew\nafter\n" (mevedel-test--read-file file)))))
+  :doc "conflicting and disjoint hunks both notify their own batch notes"
+  (mevedel-note-change-test--with-note
+    (let ((sibling (with-current-buffer source
+                     (goto-char (point-min))
+                     (forward-line 2)
+                     (let ((item (mevedel-note-create "Other request")))
+                       (overlay-put item 'mevedel-note-state 'sent)
+                       (overlay-put item 'mevedel-note-session-id
+                                    (mevedel-session-session-id session))
+                       (goto-char (overlay-start note))
+                       (insert "my ")
+                       item))))
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n-after\n+AFTER\n*** End Patch")
+      (should (eq 'ready (mevedel-notes-attention-state note)))
+      (should (eq 'ready (mevedel-notes-attention-state sibling))))))
 
 (mevedel-deftest mevedel-note-apply-change
   (:quiet t)

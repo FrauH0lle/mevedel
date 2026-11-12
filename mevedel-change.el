@@ -84,29 +84,35 @@ replacement reaching a deleted run's gap, must not be guessed through."
 
 (defun mevedel-change--merge (base proposed current path)
   "Prepare BASE to PROPOSED over CURRENT literal bytes at PATH.
-Return (:bytes BYTES) or (:conflicts FILE-LINE-PLISTS)."
+Return :bytes or :conflicts, plus zero-based current-coordinate :ranges."
   (let ((changes (mevedel-change--runs base proposed))
         (intervening (mevedel-change--runs base current))
-        edits conflicts)
+        edits conflicts ranges)
     (dolist (change changes)
       (pcase-let ((`(,start ,end ,new-start ,new-end) change)
                   (offset 0)
+                  (end-offset 0)
                   (touched nil))
         (dolist (other intervening)
           (pcase-let ((`(,a ,b ,c ,d) other))
             (when (mevedel-change--overlap-p start end a b)
               (push other touched))
             (when (<= b start)
-              (setq offset (+ offset (- (- d c) (- b a)))))))
+              (setq offset (+ offset (- (- d c) (- b a)))))
+            (when (<= b end)
+              (setq end-offset (+ end-offset (- (- d c) (- b a)))))))
         (if touched
             (let ((first (1+ (apply #'min (mapcar (lambda (run) (nth 2 run)) touched))))
                   (last (apply #'max (mapcar (lambda (run) (nth 3 run)) touched))))
+              (push (list (min (+ start offset) (1- first))
+                          (max (+ end end-offset) last)) ranges)
               (push (list :path path :start-line first :end-line (max first last)
                           :base-start-line (1+ start) :base-end-line (max (1+ start) end))
                     conflicts))
+          (push (list (+ start offset) (+ end offset)) ranges)
           (push (list (+ start offset) (+ end offset) new-start new-end) edits))))
     (if conflicts
-        (list :conflicts (nreverse conflicts))
+        (list :conflicts (nreverse conflicts) :ranges (nreverse ranges))
       (let ((source-offsets (mevedel-change--line-offsets proposed))
             (current-offsets (mevedel-change--line-offsets current)))
         (with-temp-buffer
@@ -120,7 +126,7 @@ Return (:bytes BYTES) or (:conflicts FILE-LINE-PLISTS)."
               (goto-char (1+ (aref current-offsets start)))
               (insert (substring proposed (aref source-offsets new-start)
                                  (aref source-offsets new-end)))))
-          (list :bytes (buffer-string)))))))
+          (list :bytes (buffer-string) :ranges (nreverse ranges)))))))
 
 (defun mevedel-change-prepare (before after current &optional reverse strict)
   "Prepare a BEFORE/AFTER recorded change against CURRENT, without writing.
@@ -131,6 +137,7 @@ deletion and binary changes require the whole base to match.
 
 Return (:before CURRENT :after SNAPSHOT), or (:conflicts PLISTS).  Conflicts
 contain :path, :start-line and :end-line (one-based current coordinates).
+Text merges also return :ranges, zero-based current line runs for all hunks.
 The caller must collect conflicts before writing and recheck each prepared
 :before snapshot at mutation time.  No partial merged text is returned."
   (let* ((base (if reverse after before))
@@ -160,6 +167,7 @@ The caller must collect conflicts before writing and recheck each prepared
                      (plist-get current :bytes) path)))
         (if (plist-get merged :conflicts) merged
           (list :before current
+                :ranges (plist-get merged :ranges)
                 :after (list :path path :exists t :bytes (plist-get merged :bytes)
                              :mode (if (equal (plist-get base :mode) (plist-get target :mode))
                                        (plist-get current :mode)
