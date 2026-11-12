@@ -50,7 +50,9 @@
 
 ;; `mevedel-buddy-note'
 (declare-function mevedel-buddy-note-capture-markers "mevedel-buddy-note" (buffer-names))
+(declare-function mevedel-buddy-note-finish-review "mevedel-buddy-note" ())
 (declare-function mevedel-buddy-note-release-markers "mevedel-buddy-note" ())
+(declare-function mevedel-buddy-note-restore "mevedel-buddy-note" ())
 (declare-function mevedel-buddy-note-serialize "mevedel-buddy-note" ())
 (declare-function mevedel-buddy-note-tools "mevedel-buddy-note" (currentp))
 (defvar mevedel-buddy-note--scope-buffers)
@@ -650,7 +652,10 @@ changes are offered again."
     (setq mevedel-buddy--timeout-timer nil))
   (when (buffer-live-p mevedel-buddy--request-buffer)
     (kill-buffer mevedel-buddy--request-buffer))
-  (mevedel-buddy-note-release-markers)
+  ;; Preparation can be cancelled before the first request loads note tools.
+  (when (featurep 'mevedel-buddy-note)
+    (mevedel-buddy-note-finish-review)
+    (mevedel-buddy-note-release-markers))
   (setq mevedel-buddy-note--scope-buffers nil
         mevedel-buddy--running nil
         mevedel-buddy--running-automatic nil
@@ -718,8 +723,14 @@ started by the idle timer, which an explicit request may preempt."
                           (when-let* ((buffer (get-buffer name)))
                             (cons name buffer)))
                         buffer-names)))
-    (mevedel-buddy-note-capture-markers
-     (mevedel-buddy--payload-lines payload))
+    (condition-case err
+        (progn
+          (mevedel-buddy-note-restore)
+          (mevedel-buddy-note-capture-markers
+           (mevedel-buddy--payload-lines payload)))
+      (error
+       (mevedel-buddy--settle scope-key nil)
+       (signal (car err) (cdr err))))
     (mevedel-buddy--telemetry 'buddy-review-started
                               :scope scope-key :profile profile
                               :buffers (length buffer-names))
@@ -1001,7 +1012,8 @@ Zero means the minimum interval has elapsed and a review is due."
   "Let a model comment on the edits you make in this buffer.
 
 Notes appear beside the lines they concern.  Nothing is written to
-disk: notes and the edits behind them live only as long as Emacs does."
+source: file-backed remarks persist as workspace notes, while recorded
+edits and request state live only in memory."
   :lighter " Buddy"
   :group 'mevedel-buddy
   (if mevedel-buddy-mode

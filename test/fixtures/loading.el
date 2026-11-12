@@ -466,6 +466,27 @@ temporary one."
                  (when (listp renderer) (setq renderer (cdr (assq 'success renderer))))
                  (should (plist-get (funcall renderer (car row) (cadr row) "hello" (caddr row))
                                     :header)))))
+            ('worker-teardown
+             (require 'mevedel-journal-worker)
+             ;; A maintenance Emacs can be inside a synchronous control-fs
+             ;; shell.  Killing Emacs does not wait for that shell to finish.
+             (let* ((ready (file-name-concat root "worker-ready"))
+                    (finished (file-name-concat root "worker-finished"))
+                    (process
+                     (make-process
+                      :name "loading-worker" :buffer nil :noquery t
+                      :connection-type 'pipe :sentinel #'ignore
+                      :command
+                      (list (expand-file-name invocation-name invocation-directory)
+                            "--batch" "-Q" "--eval"
+                            (prin1-to-string
+                             `(call-process "sh" nil nil nil "-c"
+                                            "touch \"$1\"; sleep 0.5; touch \"$2\""
+                                            "loading-worker" ,ready ,finished))))))
+               (push process mevedel-journal-worker--processes)
+               (mevedel-test-loading--await (lambda () (file-exists-p ready)))
+               (advice-add 'mevedel-journal-worker-stop-all :before
+                           (lambda () (should (file-exists-p finished))))))
             ('native-btw
              (mevedel-install)
              (setq gptel-backend (mevedel-claude-code-register) gptel-model 'sonnet)
@@ -664,8 +685,15 @@ temporary one."
           (with-current-buffer buffer (set-buffer-modified-p nil))
           (kill-buffer buffer)))
       (mevedel-uninstall)
-      ;; The exit hook normally stops maintenance children, but this fixture
-      ;; removes their workspace before exiting.  Stop writers before removal.
+      ;; Cancelling a maintenance Emacs can leave its synchronous control-fs
+      ;; shell running.  Let it finish before stopping delivery and removing
+      ;; its workspace; accept only that process, not timers or callbacks.
       (when (featurep 'mevedel-journal-worker)
+        (dolist (process (copy-sequence mevedel-journal-worker--processes))
+          (let ((deadline (+ (float-time) 15)))
+            (while (process-live-p process)
+              (when (> (float-time) deadline)
+                (ert-fail "Maintenance child did not exit"))
+              (accept-process-output process 0.02 nil 1))))
         (mevedel-journal-worker-stop-all))
       (unless state (delete-directory root t)))))
