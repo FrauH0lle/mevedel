@@ -188,6 +188,9 @@
         (goto-char (overlay-start note))
         (insert "current ")
         (save-buffer))
+      (should (eq 'stale (mevedel-notes-attention-state note)))
+      (should (string-search "change stale"
+                             (overlay-get (overlay-get note 'mevedel-label-overlay) 'after-string)))
       (with-current-buffer view
         (call-interactively (key-binding (kbd "C-c C-n"))))
       (should (= 2 (length sent)))
@@ -199,6 +202,7 @@
         (mevedel-tool-patch-handler
          #'ignore
          '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-current selected code\n+fresh proposal\n*** End Patch")))
+      (should (eq 'ready (mevedel-notes-attention-state note)))
       (with-current-buffer view
         (call-interactively (key-binding (kbd "C-c C-a"))))
       (with-current-buffer source
@@ -661,6 +665,34 @@
                     (should (equal system (alist-get 'system payload)))
                     (should (equal (car prompts) (alist-get 'input payload))))))
             (advice-remove 'mevedel-acp-prompt 'mevedel-note-native-test)))))))
+
+(mevedel-deftest mevedel-note-preparation-during-turn
+  (:quiet t)
+  ,test
+  (test)
+  :doc "a disjoint saved edit during the AI turn survives preparation and later apply"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Improve this code"))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view))
+           result)
+      (should (mevedel-turn-busy-p data))
+      (with-current-buffer source
+        (goto-char (point-min))
+        (insert "my ")
+        (save-buffer))
+      (with-current-buffer data
+        (mevedel-tool-patch-handler
+         (lambda (value) (setq result value))
+         '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-selected code\n+prepared proposal\n*** End Patch")))
+      (should (string-search "Prepared" (plist-get result :result)))
+      (mevedel-note-conversation-test--answer (car sent) "The change is ready when you are.")
+      (should-not (mevedel-turn-busy-p data))
+      (should (eq 'ready (mevedel-notes-attention-state note)))
+      (with-current-buffer view
+        (call-interactively (key-binding (kbd "C-c C-a"))))
+      (should (equal "my outside-before\nprepared proposal\noutside-after\n"
+                     (mevedel-test--read-file file))))))
 
 (provide 'test-mevedel-note-conversation)
 ;;; test-mevedel-note-conversation.el ends here
