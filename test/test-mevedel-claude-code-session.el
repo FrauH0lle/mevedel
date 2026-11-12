@@ -11,7 +11,6 @@
           "mevedel-engine-test-support"))
 (require 'mevedel-claude-code)
 (require 'mevedel-claude-code-context)
-(require 'mevedel-directive-plan)
 (require 'mevedel-journal-store)
 
 (mevedel-deftest mevedel-engine-test--with-claude-session (:quiet t)
@@ -375,27 +374,6 @@
                                   :enum))))
       (should (eq 'mevedel-implement (mevedel-session-preset-name session)))))
 
-  :doc "a request-only preset retains its narrower tool scope"
-  (mevedel-engine-test--with-claude-session
-    (mevedel-tools-register)
-    (mevedel--define-presets)
-    (mevedel-preset-apply 'mevedel-implement)
-    (let (offered)
-      (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                 (mevedel-engine-test--claude-launch
-                  (lambda (&rest _args)
-                    (setq offered (plist-get (mevedel-engine-info mevedel--current-request) :tools))
-                    nil))))
-        (mevedel--insert-user-turn "Discuss only")
-        (mevedel-with-preset 'mevedel-discuss
-          (mevedel--send-request "Discuss only"))
-        (mevedel-test--await 5 "Request-only roster did not settle"
-          (not (mevedel-turn-busy-p buffer))))
-      (should (eq 'success (mevedel-session-last-outcome session)))
-      (should (equal '("Read" "Glob" "Grep" "ToolCall" "ToolSearch")
-                     (mapcar #'gptel-tool-name offered)))
-      (should (eq 'mevedel-implement (mevedel-session-preset-name session)))))
-
   :doc "a raw request-only tool spec is not replaced by the session preset"
   (mevedel-engine-test--with-claude-session
     (mevedel-tools-register)
@@ -606,124 +584,6 @@
           (should (eq request mevedel--current-request))
           (should-not (mevedel-session-external-conversations session)))))))
 
-(mevedel-deftest mevedel--start-directive-discussion/claude (:quiet t)
-  (mevedel-engine-test--with-claude-session
-    (mevedel-request-end)
-    (let* ((file (file-name-concat root "directive.txt"))
-           (source (find-file-noselect file))
-           (mevedel-show-chat-buffer nil)
-           (inhibit-interaction t)
-           (gptel--known-presets (copy-tree gptel--known-presets))
-           (mevedel-preset--registry (copy-tree mevedel-preset--registry))
-           (prompt-response '((stopReason . "end_turn")))
-           launches directive record batches (callbacks 0))
-      (unwind-protect
-          (progn
-            (mevedel-tools-register)
-            (mevedel--define-presets)
-            (setq-local gptel-system-prompt "Directive fixture" gptel-tools nil)
-            (with-current-buffer source
-              (setq-local mevedel--workspace workspace)
-              (insert "alpha\n") (save-buffer)
-              (setq directive (mevedel--create-directive-in
-                               source (point-min) (1- (point-max)) nil "DISCUSS LOCAL"))
-              (setq record (mevedel--directive-record directive))
-              (setf (mevedel-directive-session-id record) (mevedel-session-session-id session))
-              (overlay-put directive 'mevedel-directive-model-provider "Claude Code:haiku"))
-            (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                       (mevedel-engine-test--claude-launch
-                        (lambda (system mcp model effort &optional id hook)
-                          (push (list system model effort id) launches)
-                          (list :meta `((hookCommand . ,hook) (toolBatches . ,batches)
-                                        (promptResponse . ,prompt-response)))))))
-              (cl-labels ((wait ()
-                            (mevedel-test--await 5 "Directive ACP turn did not settle"
-                              (not (mevedel-turn-busy-p buffer))))
-                          (done (err owner)
-                            (should-not err)
-                            (should (mevedel-request-p owner))
-                            (cl-incf callbacks)))
-                (goto-char (point-max))
-                (mevedel--insert-user-turn "ROOT PRIVATE")
-                (mevedel--send-request "ROOT PRIVATE") (wait)
-                (with-current-buffer source
-                  (mevedel--start-directive-discussion directive #'done))
-                (wait)
-                (ert-info ((format "Directive diagnostics: %s" mevedel-test--captured))
-                  (should (= 1 callbacks)))
-                (should-not (nth 3 (car launches)))
-                (should (equal "haiku" (nth 1 (car launches))))
-                (should (equal "sonnet" (gptel--model-name gptel-model)))
-                (let ((answer (mevedel-directive-discussion-turn-result
-                               (car (mevedel-directive-discussion record)))))
-                  (should (string-search "DISCUSS LOCAL" answer))
-                  (should-not (string-search "ROOT PRIVATE" answer)))
-                (with-current-buffer source
-                  (mevedel--discuss-directive-turn directive "SECOND LOCAL" nil #'done))
-                (wait)
-                (should (= 2 callbacks))
-                (should-not (nth 3 (car launches)))
-                (should (equal "haiku" (nth 1 (car launches))))
-                (should (equal "sonnet" (gptel--model-name gptel-model)))
-                (let ((answer (mevedel-directive-discussion-turn-result
-                               (car (last (mevedel-directive-discussion record))))))
-                  (should (string-search "DISCUSS LOCAL" answer))
-                  (should (string-search "SECOND LOCAL" answer))
-                  (should-not (string-search "ROOT PRIVATE" answer)))
-                (goto-char (point-max))
-                (mevedel--insert-user-turn "ROOT FOLLOWUP")
-                (mevedel--send-request "ROOT FOLLOWUP") (wait)
-                (should (equal "fixture-session" (nth 3 (car launches))))
-                (should (= 4 (mevedel-session-turn-count session)))
-                ;; Directive identities are never resumed and need no reference.
-                (should (equal '("root") (mapcar #'car (mevedel-session-external-conversations session))))
-                (should-not mevedel--current-directive-uuid)
-                (let (error-result)
-                  (let ((owner
-                         (with-current-buffer source
-                           (mevedel--discuss-directive-turn
-                            directive "Cancel this turn" nil
-                            (lambda (err _owner) (push err error-result))))))
-                    (mevedel-request-cancel owner))
-                  (wait)
-                  (should (equal '(abort) error-result))
-                  (should (eq 'aborted (mevedel-directive-discussion-turn-outcome
-                                        (car (last (mevedel-directive-discussion record)))))))
-                ;; Even a custom discussion preset exposing a mutator cannot
-                ;; grant it authority over the captured read-only request.
-                (setq batches
-                      (vector (vector
-                               `((name . "ApplyPatch") (id . "directive-patch")
-                                 (args . ((patch . ,(format "*** Begin Patch\n*** Update File: %s\n@@\n-alpha\n+changed\n*** End Patch" file))))))))
-                (let ((mevedel-action-preset-alist
-                       '((implement . mevedel-implement) (discuss . mevedel-implement))))
-                  (with-current-buffer source
-                    (mevedel--discuss-directive-turn directive "Read only" nil #'done)))
-                (wait)
-                (should (= 3 callbacks))
-                (should (equal "alpha\n" (with-temp-buffer (insert-file-contents file) (buffer-string))))
-                (let ((answer (mevedel-directive-discussion-turn-result
-                               (car (last (mevedel-directive-discussion record))))))
-                  (should (string-match-p "denied\\|Denied" answer)))
-                (with-current-buffer source (mevedel--implement-discussion directive #'done))
-                (wait)
-                (should (= 4 callbacks))
-                (should (equal "changed\n" (with-temp-buffer (insert-file-contents file) (buffer-string))))
-                (let ((attempt (car (mevedel-directive-attempts record))))
-                  (should (eq 'success (mevedel-directive-attempt-outcome attempt)))
-                  (should (string-search "+changed" (mevedel-directive-attempt-patch attempt)))
-                  (should (eq 'complete (mevedel-directive-attempt-capture attempt))))
-                (should (= 7 (mevedel-session-turn-count session)))
-                (should (= 7 (plist-get
-                              (car (read-from-string
-                                    (mevedel-session-artifacts-read-artifact session "session.meta.el" t)))
-                              :total-turn-count)))
-                (should-not (string-search "Session auto-save failed" mevedel-test--captured))
-                (should-not (string-search "FSM handler" mevedel-test--captured)))))
-        (when (buffer-live-p source)
-          (with-current-buffer source (set-buffer-modified-p nil))
-          (kill-buffer source))))))
-
 (mevedel-deftest mevedel--send-request/independent-directive-history (:quiet t)
   (mevedel-engine-test--with-session
     (let* ((gptel--known-backends nil)
@@ -756,70 +616,6 @@
             '((1 (:kind directive :cum-turn 1) (:cum-turn 2))))
       (mevedel-model-set-session-provider session provider buffer)
       (should (eq api gptel-backend)))))
-
-(mevedel-deftest mevedel-directive-plan-start/claude (:quiet t)
-  (mevedel-engine-test--with-claude-session
-    (mevedel-request-end)
-    (let* ((source (find-file-noselect (file-name-concat root "planned.txt")))
-           (view (generate-new-buffer " *claude-directive-plan*"))
-           (gptel--known-presets (copy-tree gptel--known-presets))
-           (mevedel-preset--registry (copy-tree mevedel-preset--registry))
-           (mevedel-show-chat-buffer nil) (inhibit-interaction t)
-           (proposal "<proposed_plan>\n# Local plan\n\nChange the captured expression, then run its tests.\n</proposed_plan>")
-           (launches 0) directive record result)
-      (unwind-protect
-          (progn
-            (mevedel-tools-register) (mevedel--define-presets)
-            (mevedel-view--setup view buffer)
-            (with-current-buffer view
-              (goto-char (mevedel-view--input-start))
-              (insert "> ordinary draft\nkeep its second line"))
-            (with-current-buffer source
-              (setq-local mevedel--workspace workspace)
-              (insert "alpha\n") (save-buffer)
-              (setq directive (mevedel--create-directive-in
-                               source (point-min) (1- (point-max)) nil "Implement local expression"))
-              (setq record (mevedel--directive-record directive))
-              (setf (mevedel-directive-session-id record) (mevedel-session-session-id session))
-              (overlay-put directive 'mevedel-directive-model-provider "Claude Code:haiku"))
-            (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                       (mevedel-engine-test--claude-launch
-                        (lambda (_system mcp model _effort &optional id _hook)
-                          (should-not id) (cl-incf launches)
-                          (should (equal (if (= launches 1) "haiku" "sonnet") model))
-                          (list :meta (and (= launches 1) `((responseText . ,proposal))))))))
-              (cl-labels ((wait ()
-                            (mevedel-test--await 5 "Directive Plan ACP turn did not settle"
-                              (not (mevedel-turn-busy-p buffer)))))
-                (with-current-buffer source
-                  (mevedel-directive-plan-start
-                   directive 'implement #'mevedel--implement-directive-prompt
-                   (lambda (err owner) (setq result (list err owner)))))
-                (wait)
-                (should-not result)
-                (should (eq 'proposed (plist-get (mevedel-directive-plan record) :status)))
-                (let* ((entry (mevedel-session-pending-plan-approval session))
-                       (selection (copy-tree (plist-get entry :selection))))
-                  (should entry)
-                  (setq selection (plist-put selection :model-provider "Claude Code:sonnet"))
-                  (mevedel-plan-approval-settle entry (list :accept t :selection selection)))
-                (wait)
-                (ert-info ((format "Plan diagnostics: %s" mevedel-test--captured))
-                  (should result) (should-not (car result)))
-                (should (= 2 launches))
-                (should (eq 'settled (plist-get (mevedel-directive-plan record) :status)))
-                (should-not (mevedel-session-pending-plan-approval session))
-                (should-not (mevedel-session-directive-planning session))
-                (should (string-search "Local plan"
-                                       (mevedel-directive-attempt-request
-                                        (car (mevedel-directive-attempts record)))))
-                (with-current-buffer view
-                  (should (equal "> ordinary draft\nkeep its second line"
-                                 (mevedel-view--input-text)))))))
-        (when (buffer-live-p view) (kill-buffer view))
-        (when (buffer-live-p source)
-          (with-current-buffer source (set-buffer-modified-p nil))
-          (kill-buffer source))))))
 
 (mevedel-deftest mevedel-agent-control-spawn/claude (:quiet t)
   (mevedel-engine-test--with-claude-session

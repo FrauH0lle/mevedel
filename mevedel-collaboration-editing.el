@@ -31,7 +31,6 @@
 (autoload 'mevedel-collaboration-discussions-perform "mevedel-collaboration-discussions")
 
 ;; `mevedel-collaboration-guest'
-(declare-function mevedel-collaboration--guest-directive-id "mevedel-collaboration-guest" (room frame))
 (declare-function mevedel-collaboration--request-id-p "mevedel-collaboration-guest" (value))
 
 ;; `mevedel-collaboration-projection'

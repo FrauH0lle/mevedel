@@ -166,8 +166,11 @@
                                    mevedel-directive-activity-request-changes
                                    mevedel-directive-activity-retry
                                    mevedel-directive-activity-implement-this
-                                   mevedel-directive-activity-settings
-                                   mevedel-directive-activity-rewind
+                                   mevedel-directive-activity-settings))
+                  (should-not (fboundp command)))
+                (dolist (key '("d" "c" "x" "i" "s"))
+                  (should (memq (key-binding (kbd key)) '(nil undefined))))
+                (dolist (command '(mevedel-directive-activity-rewind
                                    mevedel-directive-activity-archive))
                   (should-error (funcall command) :type 'user-error))
                 (should-error (mevedel-directive-activity-reattach file 1 11)

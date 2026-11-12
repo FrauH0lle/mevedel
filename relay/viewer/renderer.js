@@ -280,10 +280,8 @@
     } else {
       who.append(el('span', 'name', 'Tool'));
     }
-    // A turn in a directive or item discussion names it; the chip is also
-    // the way to switch the room into that discussion to reply there.  A
-    // view already inside that discussion supplies no chip.  A deleted
-    // item's turns keep their name but have no discussion to switch to.
+    // Chips open directive history or an item conversation. A deleted
+    // item's turns keep their name but have no conversation to switch to.
     const scope = scopeKey(record);
     const chip = scope && scopeChip(scope);
     if (chip) {
@@ -292,7 +290,8 @@
       button.dataset.scope = scope;
       button.disabled = chip.gone === true;
       button.setAttribute('title', chip.gone ? `${chip.label} was deleted`
-        : `Show and reply in ${chip.label}`);
+        : record.directive ? `Show read-only history for ${chip.label}`
+          : `Show and reply in ${chip.label}`);
       who.append(button);
     }
     return who;

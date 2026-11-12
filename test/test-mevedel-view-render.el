@@ -12,6 +12,7 @@
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-conversation)
 (require 'mevedel-directive)
+(require 'mevedel-directive-activity)
 (require 'mevedel-view)
 (require 'mevedel-view-audit)
 (require 'mevedel-view-render)
@@ -1375,7 +1376,7 @@
       (should-error (mevedel-view-fork-point-at-point)
                     :type 'user-error)))
 
-  :doc "dispatches state-correct actions from a rendered directive turn"
+  :doc "opens the activity inspector from a rendered directive turn"
   (let* ((attempt
           (mevedel-directive-attempt--create
            :sequence 1 :action 'implement
@@ -1413,14 +1414,14 @@
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (cl-letf (((symbol-function 'read-multiple-choice)
-                   (lambda (&rest _) '(?d "continue discussion")))
-                  ((symbol-function 'mevedel-view-enter-directive-scope)
+                   (lambda (&rest _) '(?o "inspect")))
+                  ((symbol-function 'mevedel-open-directive-activity)
                    (lambda (&rest args) (setq dispatched args))))
           (mevedel-view--full-rerender)
           (goto-char (point-min))
           (search-forward "◆ directi…")
           (mevedel-view-activate-at-point)
-          (should (equal (list record 'discuss 1 workspace)
+          (should (equal (list record workspace)
                          dispatched))))))
 
   :doc "suppresses modification hooks while rebuilding rendered transcript"

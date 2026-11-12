@@ -205,68 +205,6 @@
       (kill-buffer inspector)
       (mevedel-directive-activity-test--discard fixture))))
 
-(mevedel-deftest mevedel-directive-activity-request-changes
-  ()
-  ,test
-  (test)
-  :doc "enters Request changes scope for the inspected directive"
-  (let ((record
-         (mevedel-directive--create
-          :request "Request"
-          :attempts
-          (list (mevedel-directive-attempt--create
-                 :directive-request "Request" :outcome 'success))))
-        captured)
-    (with-temp-buffer
-      (mevedel-directive-activity-mode)
-      (setq-local mevedel-directive-activity--workspace 'workspace
-                  mevedel-directive-activity--directive record)
-      (cl-letf (((symbol-function 'mevedel-view-enter-directive-scope)
-                 (lambda (&rest args) (setq captured args))))
-        (mevedel-directive-activity-request-changes))
-      (should (equal (list record 'request-changes nil 'workspace)
-                     captured)))))
-
-(mevedel-deftest mevedel-directive-activity-retry
-  ()
-  ,test
-  (test)
-  :doc "enters Retry scope for the inspected directive"
-  (let ((record
-         (mevedel-directive--create
-          :request "Request"
-          :attempts
-          (list (mevedel-directive-attempt--create
-                 :directive-request "Request" :outcome 'failure))))
-        captured)
-    (with-temp-buffer
-      (mevedel-directive-activity-mode)
-      (setq-local mevedel-directive-activity--workspace 'workspace
-                  mevedel-directive-activity--directive record)
-      (cl-letf (((symbol-function 'mevedel-view-enter-directive-scope)
-                 (lambda (&rest args) (setq captured args))))
-        (mevedel-directive-activity-retry))
-      (should (equal (list record 'retry nil 'workspace) captured)))))
-
-(mevedel-deftest mevedel-directive-activity-implement-this
-  (:vars
-   ((mevedel--instruction-states (make-hash-table :test #'equal))
-    (mevedel--instruction-current-state-key :global)))
-  ,test
-  (test)
-  :doc "dispatches Implement this through the attached source overlay"
-  (let* ((fixture (mevedel-directive-activity-test--fixture)) captured)
-    (unwind-protect
-        (with-temp-buffer
-          (mevedel-directive-activity-mode)
-          (setq-local mevedel-directive-activity--workspace (nth 0 fixture)
-                      mevedel-directive-activity--directive (nth 3 fixture))
-          (cl-letf (((symbol-function 'mevedel--implement-discussion)
-                     (lambda (directive &optional _) (setq captured directive))))
-            (mevedel-directive-activity-implement-this))
-          (should (eq (nth 2 fixture) captured)))
-      (mevedel-directive-activity-test--discard fixture))))
-
 (mevedel-deftest mevedel-directive-activity-rewind
   ()
   ,test
@@ -314,37 +252,6 @@
           (should (eq (nth 1 fixture) visited))
           (with-current-buffer visited
             (should (= (point-min) (point)))))
-      (mevedel-directive-activity-test--discard fixture))))
-
-(mevedel-deftest mevedel-directive-activity-discuss
-  (:vars
-   ((mevedel--instruction-states (make-hash-table :test #'equal))
-    (mevedel--instruction-current-state-key :global)))
-  ,test
-  (test)
-  :doc "dispatches selected-attempt discussion into the shared composer"
-  (let* ((fixture (mevedel-directive-activity-test--fixture))
-         (record (nth 3 fixture))
-         (attempt (mevedel-directive-activity-test--attempt))
-         captured)
-    (setf (mevedel-directive-attempts record) (list attempt)
-          (mevedel-directive-state record) 'implemented)
-    (unwind-protect
-        (with-temp-buffer
-          (mevedel-directive-activity-mode)
-          (setq-local mevedel-directive-activity--workspace (nth 0 fixture)
-                      mevedel-directive-activity--directive record)
-          (let ((inhibit-read-only t))
-            (insert "attempt")
-            (put-text-property (point-min) (point-max)
-                               'mevedel-view-zone-entry attempt))
-          (goto-char (point-min))
-          (cl-letf (((symbol-function 'mevedel-view-enter-directive-scope)
-                     (lambda (&rest args) (setq captured args))))
-            (mevedel-directive-activity-discuss))
-          (should (eq record (nth 0 captured)))
-          (should (eq 'discuss (nth 1 captured)))
-          (should (= 1 (nth 2 captured))))
       (mevedel-directive-activity-test--discard fixture))))
 
 (mevedel-deftest mevedel-directive-activity-view-patch

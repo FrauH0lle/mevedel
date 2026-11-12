@@ -12,7 +12,6 @@
 (require 'mevedel-overlay-ui)
 (require 'mevedel-persistence)
 (require 'mevedel-chat)
-(require 'mevedel-directive-request)
 (require 'mevedel-structs)
 (require 'mevedel-directive)
 (require 'mevedel-workspace)
@@ -64,18 +63,7 @@
               (mevedel-test--with-captured-messages messages
                 (call-interactively #'mevedel-cycle-instructions-at-point))
               (should (equal (format "mevedel [%s]: No instructions at point\n" nested)
-                             messages)))
-            (let ((directive (mevedel--create-directive-in buffer 1 6 nil "Test")))
-              (mevedel--set-directive-status directive 'implementing)
-              (should-not mevedel--workspace)
-              (with-temp-buffer
-                (setq-local mevedel--workspace
-                            (mevedel-workspace--create :root "/tmp/foreign/"))
-                (should (equal
-                         (format "mevedel [%s]: Cannot change the model while the directive is processing"
-                                 nested)
-                         (cadr (should-error (mevedel--ov-actions-model directive)
-                                             :type 'user-error))))))))
+                             messages)))))
       (when (buffer-live-p buffer) (kill-buffer buffer))
       (delete-directory root t))))
 
@@ -109,64 +97,6 @@
         (goto-char 14)
         (should (eq (nth 4 overlays) (mevedel--directive-at-point)))))))
 
-(mevedel-deftest mevedel-preview-directive-prompt ()
-  ,test
-  (test)
-  :doc "previews the planning request when Plan before implementation is on"
-  (with-temp-buffer
-    (insert "directive")
-    (let* ((workspace
-            (mevedel-workspace--create
-             :type 'file :id "preview-plan" :root "/tmp"
-             :name "preview-plan"))
-           (mevedel--workspace workspace)
-           (directive
-            (mevedel--create-directive-in
-             (current-buffer) (point-min) (point-max) nil "Test"))
-           (record (mevedel--directive-record directive)))
-      (setf (mevedel-directive-planning-enabled record) t)
-      (goto-char (point-min))
-      (unwind-protect
-          (progn
-            (cl-letf (((symbol-function 'completing-read)
-                       (lambda (&rest _) "implement")))
-              (mevedel-preview-directive-prompt))
-            (with-current-buffer "*mevedel-directive-preview*"
-              (should (string-search "Create a concrete implementation plan"
-                                     (buffer-string)))
-              (should (string-search "## TASK: Implement"
-                                     (buffer-string)))))
-        (when-let* ((buffer (get-buffer "*mevedel-directive-preview*")))
-          (kill-buffer buffer)))))
-
-  :doc "previews the read-only discussion request without a planning wrap"
-  (with-temp-buffer
-    (insert "directive")
-    (let* ((workspace
-            (mevedel-workspace--create
-             :type 'file :id "preview-discuss" :root "/tmp"
-             :name "preview-discuss"))
-           (mevedel--workspace workspace)
-           (directive
-            (mevedel--create-directive-in
-             (current-buffer) (point-min) (point-max) nil "Test"))
-           (record (mevedel--directive-record directive)))
-      (setf (mevedel-directive-planning-enabled record) t)
-      (goto-char (point-min))
-      (unwind-protect
-          (progn
-            (cl-letf (((symbol-function 'completing-read)
-                       (lambda (&rest _) "discuss")))
-              (mevedel-preview-directive-prompt))
-            (with-current-buffer "*mevedel-directive-preview*"
-              (should (string-search "## TASK: Answer the following request."
-                                     (buffer-string)))
-              (should-not
-               (string-search "Create a concrete implementation plan"
-                              (buffer-string)))))
-        (when-let* ((buffer (get-buffer "*mevedel-directive-preview*")))
-          (kill-buffer buffer))))))
-
 (mevedel-deftest mevedel-get-directive-patch ()
   ,test
   (test)
@@ -196,18 +126,6 @@
                   "")
             (should-not (mevedel-get-directive-patch directive))))
       (kill-buffer buffer))))
-
-(mevedel-deftest mevedel--create-instruction ()
-  ,test
-  (test)
-  :doc "refuses a directive in a buffer that visits no file"
-  ;; The durable record is anchored to a file: without one nothing can
-  ;; reattach it, and archiving or detaching it writes a record that no
-  ;; longer loads.
-  (with-temp-buffer
-    (insert "source text")
-    (should-error (mevedel--create-instruction 'directive)
-                  :type 'user-error)))
 
 (mevedel-deftest mevedel--directive-action-context
   (:vars

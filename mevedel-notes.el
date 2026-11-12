@@ -55,6 +55,10 @@
 ;; `mevedel-buddy'
 (autoload 'mevedel-buddy-mode "mevedel-buddy" nil t)
 
+;; `mevedel-view-composer'
+(declare-function mevedel-view-call-preserving-window-configuration
+                  "mevedel-view-composer" (thunk))
+
 (defvar-local mevedel-notes--last-hinted nil
   "Note most recently announced by the local entry hint.")
 
@@ -640,7 +644,12 @@ Create `.mevedel/' only in a recognized project.  Return the actual workspace."
   "Create a note with optional TEXT on the region or current line.
 An empty string creates a code-only note.  Return the note overlay.
 DEFER-WRITE leaves durability to the caller's batch store sync."
-  (interactive (list (read-string "Note (optional): ")))
+  (interactive
+   (list
+    (if (featurep 'mevedel-view-composer)
+        (mevedel-view-call-preserving-window-configuration
+         (lambda () (read-string "Note (optional): ")))
+      (read-string "Note (optional): "))))
   (let ((workspace (mevedel--instruction-buffer-workspace (current-buffer))))
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
       (unless buffer-file-name

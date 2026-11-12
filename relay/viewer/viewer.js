@@ -1029,7 +1029,8 @@
           'title',
           value === 'all' ? 'Show every turn'
             : value === 'main' ? 'Show only the main conversation'
-              : `Show and reply in ${directiveLabel(value)}`);
+              : itemScope(value) ? `Show and reply in ${directiveLabel(value)}`
+                : `Show read-only history for ${directiveLabel(value)}`);
         if (counts[value]) {
           button.append(el('span', 'cnt', String(counts[value])));
         }
@@ -1057,16 +1058,13 @@
   }
 
   function placeholderForFilter() {
-    if (state.filter === 'all' || state.filter === 'main') {
-      return 'Queue a follow-up for the session…';
-    }
     return itemScope(state.filter)
       ? `Message ${directiveLabel(state.filter)}…`
-      : `Discuss ${directiveLabel(state.filter)}…`;
+      : 'Queue a follow-up for the session…';
   }
 
   // One line under the composer saying what the next send will do: run
-  // an armed invocation, or land in a directive thread.
+  // an armed invocation, or message the main chat or an item conversation.
   function renderComposerScope() {
     if (!composerScope) return;
     composerScope.replaceChildren();
@@ -1094,7 +1092,7 @@
     if (scoped) {
       composerScope.append(itemScope(state.filter)
         ? `Sends to ${directiveLabel(state.filter)} · its own conversation`
-        : `Sends to ${directiveLabel(state.filter)} · discuss`);
+        : 'Sends to Main chat · viewing read-only history');
     }
   }
 
@@ -1593,12 +1591,6 @@
           frame.text = text.trim();
         } else {
           frame.text = text.trim() || 'See the attached file.';
-          // Filtering to a directive sends into that directive's discussion,
-          // so the reply lands in the thread being read. The host drops an id
-          // whose directive is gone and sends to main chat instead.
-          if (filter !== 'all' && filter !== 'main') {
-            frame.directive = filter;
-          }
         }
         if (submittedFiles.length) frame.images = tray.frame(submittedFiles);
         if (!await send(frame)) {

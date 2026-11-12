@@ -238,44 +238,7 @@
     (dolist (pos (list begin-pos roster-pos message-pos
                        deferred-pos))
       (should pos)
-      (should (< pos gate-pos))))
-
-  :doc "installs immutable read-only denial rules on discussion requests"
-  (let* ((workspace (mevedel-workspace--create
-                     :type 'file :id "read-only" :root "/tmp"
-                     :name "read-only"))
-         (session (mevedel-session-create "main" workspace))
-         (buffer (generate-new-buffer " *discussion-request-rules*"))
-         (handlers
-          (mevedel-preset--build-handlers
-           `((WAIT ,#'gptel--handle-wait) (DONE) (ERRS) (ABRT))))
-         (begin-handler (car (mevedel-presets-test--guarded-wait-handlers handlers)))
-         (fsm (gptel-make-fsm :info (list :buffer buffer))))
-    (mevedel-tools-register)
-    (unwind-protect
-        (with-current-buffer buffer
-          (setq-local mevedel--session session
-                      mevedel--current-directive-uuid nil
-                      mevedel--directive-read-only-request-p t)
-          (cl-letf (((symbol-function 'mevedel-goal-capture-request)
-                     #'ignore)
-                    ((symbol-function 'mevedel-skills--drain-pending-context)
-                     #'ignore))
-            (funcall begin-handler fsm))
-          (let ((rules
-                 (mevedel-request-skill-permission-rules
-                  mevedel--current-request)))
-            (should (eq 'deny
-                        (mevedel-permission-rules-action
-                         rules "ApplyPatch")))
-            (should (eq 'deny
-                        (mevedel-permission-rules-action rules "Agent")))
-            (should-not
-             (mevedel-permission-rules-action rules "Read"))))
-      (when (buffer-live-p buffer)
-        (with-current-buffer buffer
-          (mevedel-request-end))
-        (kill-buffer buffer)))))
+      (should (< pos gate-pos)))))
 
 (mevedel-deftest mevedel--add-termination-handler
   (:doc "appends once to graph terminals and abort without changing the input")
@@ -442,43 +405,15 @@
         (should-not (member name deferred)))
       (should (member "ToolSearch" active))))
 
-  :doc "makes directive discussion a hard read-only capability"
-  (let ((mevedel-preset--registry nil)
-        (gptel--known-presets nil))
-    (mevedel-tools-register)
-    (mevedel--define-presets)
-    (let* ((metadata (mevedel-preset--resolved-metadata 'mevedel-discuss))
-           (resolved
-            (mevedel-tool-resolve (plist-get metadata :tool-specs)))
-           (tools (plist-get resolved :active))
-           (names (mapcar #'mevedel-tool-name tools)))
-      (should (cl-every #'mevedel-tool-read-only-p tools))
-      (dolist (name '("Agent" "SendMessage"
-                      "Bash" "Eval" "ApplyPatch"))
-        (should-not (member name names)))
-      ;; Goals stay available to read-only discussion.
-      (should (cl-subsetp '("CreateGoal" "GetGoal" "UpdateGoal")
-                          (mapcar #'mevedel-tool-name
-                                  (plist-get resolved :discoverable))
-                          :test #'equal))
-      (should-not (plist-get metadata :agents))
-      (let ((rules (mevedel-preset--read-only-rules)))
-        (dolist (name '("Agent" "SendMessage"
-                        "Bash" "Eval" "ApplyPatch"))
-          (should (eq 'deny
-                      (mevedel-permission-rules-action rules name))))
-        (should-not
-         (mevedel-permission-rules-action rules "Read")))))
-
   :doc "an explicit empty :agents declaration registers no agents"
-  ;; `plist-get' on the declared-empty list is nil, and nil used to mean
-  ;; "no filter": `mevedel-discuss' declared none and installed all.
+  ;; A declared-empty list must not be mistaken for an absent filter.
   (let ((mevedel-preset--registry nil)
         (gptel--known-presets nil))
     (mevedel-tools-register)
     (mevedel--define-presets)
+    (mevedel-define-preset test-no-agents :agents ())
     (with-temp-buffer
-      (mevedel-agents--setup-for-request 'mevedel-discuss)
+      (mevedel-agents--setup-for-request 'test-no-agents)
       (should-not (mevedel-agents-specs)))
     (with-temp-buffer
       (mevedel-agents--setup-for-request 'mevedel-implement)
@@ -515,7 +450,7 @@
     (mevedel-tools-register)
     (mevedel--define-presets)
     (let ((main (funcall (plist-get
-                          (gptel-get-preset 'mevedel-discuss)
+                          (gptel-get-preset 'mevedel-implement)
                           :system))))
       (should (string-match-p "Task execution protocol" main))
       (should-not (gptel-get-preset 'mevedel-revise)))))
@@ -906,14 +841,16 @@
         (should (equal schemas (gptel--json-encode
                                 (gptel--parse-tools backend gptel-tools))))
         ;; A capability hint must not add tools to a narrower role or request.
-        (mevedel-preset--refresh-tools 'mevedel-discuss)
-        (mevedel-preset--setup-catalog 'mevedel-discuss)
-        (should-not (string-search "TaskWrite" (mevedel-tools-listing-section)))
+        (mevedel-define-preset test-read-only :tools ((:tool "Read")))
+        (mevedel-preset--refresh-tools 'test-read-only)
+        (mevedel-preset--setup-catalog 'test-read-only)
+        (should-not (mevedel-tools-listing-section))
         (dolist (query '("emacs" "plan" "dependencies"))
           (let (result)
             (funcall (gptel-tool-function search)
                      (lambda (value) (setq result value)) query)
             (should (string-prefix-p "No matching tools found." result))))
+        (mevedel-preset--refresh-tools 'mevedel-implement)
         (mevedel-preset--setup-catalog 'mevedel-implement)
         (setq-local mevedel--current-request
                     (mevedel-request--create :ptc-primitives '("TaskList")))
@@ -963,11 +900,7 @@
   ,test
   (test)
   :doc "rejects a parent cycle at definition time, leaving both registries intact"
-  ;; `:parents' is a documented key, and the built-in `mevedel-implement'
-  ;; already inherits from `mevedel-discuss', so pointing discuss back at
-  ;; implement closes a cycle from one line of user configuration.  Resolution
-  ;; is lazy, so the failure surfaces later as `excessive-lisp-nesting', which
-  ;; names neither preset.
+  ;; Reject cycles before lazy resolution loses both names in a nesting error.
   (progn
     (mevedel-preset--define 'test-preset-parent '(:parents nil))
     (mevedel-preset--define 'test-preset '(:parents (test-preset-parent)))
@@ -1228,6 +1161,7 @@
         (gptel--known-presets nil))
     (mevedel-tools-register)
     (mevedel--define-presets)
+    (mevedel-define-preset test-preset :tools ((:tool "Read")) :agents ())
     (with-temp-buffer
       (setq-local mevedel--session (mevedel-session--create :name "test"))
       (mevedel-preset-apply 'mevedel-implement)
@@ -1235,7 +1169,7 @@
             (agents (mevedel-agents-specs))
             (request (mevedel-request--create)))
         (setq-local mevedel--current-request request)
-        (mevedel-with-preset 'mevedel-discuss
+        (mevedel-with-preset 'test-preset
           (should-not (mevedel-agents-specs)))
         (should-not (mevedel-agents-specs))
         (should-not (equal catalog (mevedel-session-tool-catalog

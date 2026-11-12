@@ -10,7 +10,6 @@
 (require 'mevedel-review)
 (require 'mevedel-view)
 (require 'mevedel-workspace-identity)
-(require 'mevedel-directive-request)
 (require 'mevedel-tools)
 (require 'mevedel-agent-exec)
 (require 'mevedel-compact)
@@ -432,65 +431,6 @@
     (should (mevedel-request-p (mevedel-request-begin session)))
     (mevedel-request-end)))
 
-(mevedel-deftest mevedel--process-directive-ownership (:quiet t)
-  ,test
-  (test)
-  :doc "obsolete directive completion archives only its response and preserves the new turn"
-  (let* ((root (make-temp-file "mevedel-directive-ownership-" t))
-         (file (file-name-concat root "sample.txt"))
-         (source (find-file-noselect file))
-         chat machine called)
-    (unwind-protect
-        (with-current-buffer source
-          (insert "alpha\n")
-          (save-buffer)
-          (let ((directive (mevedel--create-directive-in
-                            source (point-min) (1- (point-max)) nil "Change alpha.")))
-            (overlay-put directive 'mevedel-directive-action 'implement)
-            (cl-letf (((symbol-function 'save-some-buffers) #'ignore)
-                      ((symbol-function 'display-buffer) #'ignore)
-                      ((symbol-function 'gptel--apply-preset) #'ignore)
-                      ((symbol-function 'gptel-request)
-                       (lambda (_prompt &rest args)
-                         (setq chat (plist-get args :buffer)
-                               machine (plist-get args :fsm))
-                         (setf (gptel-fsm-info machine)
-                               (list :buffer chat :position (plist-get args :position)))
-                         machine)))
-              (mevedel--process-directive
-               directive '(:system "test") #'mevedel--implement-directive-prompt
-               (lambda (&rest _) (setq called t)))
-              (with-current-buffer chat
-                (goto-char (point-max))
-                (insert "Old answer.\n")
-                (setf (gptel-fsm-info machine)
-                      (plist-put (gptel-fsm-info machine) :mevedel-response-end
-                                 (copy-marker (point-max) nil)))
-                (let* ((replacement (mevedel-request--create
-                                     :id "new-directive" :session mevedel--session))
-                       (record (mevedel--directive-record directive)))
-                  (setq mevedel--current-request replacement
-                        mevedel--current-directive-uuid "new-directive"
-                        mevedel--directive-read-only-request-p t)
-                  (insert "NEW TURN MUST NOT ENTER OLD RESULT\n")
-                  (funcall (plist-get (gptel-fsm-info machine) :mevedel-request-callback)
-                           nil machine)
-                  (should (eq replacement mevedel--current-request))
-                  (should (equal "new-directive" mevedel--current-directive-uuid))
-                  (should mevedel--directive-read-only-request-p)
-                  (should-not called)
-                  (let ((attempt (car (mevedel-directive-attempts record))))
-                    (should (string-match-p "Old answer" (mevedel-directive-attempt-result attempt)))
-                    (should-not (string-match-p "NEW TURN" (mevedel-directive-attempt-result attempt)))))))))
-      (when (buffer-live-p chat)
-        (let ((view (buffer-local-value 'mevedel--view-buffer chat)))
-          (when (buffer-live-p view) (kill-buffer view)))
-        (kill-buffer chat))
-      (when (buffer-live-p source) (kill-buffer source))
-      (mevedel-workspace-clear-registry)
-      (delete-directory root t))))
-
-
 (mevedel-deftest mevedel-request-call-owned (:quiet t)
   ,test
   (test)
@@ -645,40 +585,6 @@
       (should (eq replacement mevedel--current-request))
       (should-not (mevedel-request-cancelled-p replacement))
       (should (= 0 (or (mevedel-session-turn-count session) 0))))))
-
-(mevedel-deftest mevedel--process-directive/ownership (:quiet t)
-  ,test
-  (test)
-  :doc "directive admission rollback does not end a replacement request"
-  (mevedel-turn-ownership-test--with-session
-    (mevedel-request-end)
-    (let ((file (file-name-concat root "source.txt")) source replacement)
-      (with-temp-file file (insert "source\n"))
-      (setq source (find-file-noselect file))
-      (unwind-protect
-          (with-current-buffer source
-            (setq-local mevedel--workspace workspace)
-            (let ((directive
-                   (mevedel--create-directive-in
-                    source (point-min) (1- (point-max)) nil "Change it")))
-              (overlay-put directive 'mevedel-directive-action 'implement)
-              (cl-letf (((symbol-function 'mevedel--directive-session-buffer)
-                         (lambda (&rest _) (cons buffer nil)))
-                        ((symbol-function 'save-some-buffers) #'ignore)
-                        ((symbol-function 'display-buffer) #'ignore)
-                        ((symbol-function 'gptel--apply-preset) #'ignore)
-                        ((symbol-function 'gptel-request)
-                         (lambda (&rest _)
-                           (setq replacement (mevedel-request-begin session))
-                           (error "Injected directive startup failure"))))
-                (should-error
-                 (mevedel--process-directive
-                  directive '(:system "test")
-                  #'mevedel--implement-directive-prompt nil))))
-            (should replacement)
-            (should (eq replacement (buffer-local-value 'mevedel--current-request buffer)))
-            (should-not (mevedel-request-cancelled-p replacement)))
-        (when (buffer-live-p source) (kill-buffer source))))))
 
 (mevedel-deftest mevedel-agent-runtime-dispatch/ownership (:quiet t)
   ,test

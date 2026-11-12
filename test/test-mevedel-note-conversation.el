@@ -479,8 +479,8 @@
         (should (eq child (buffer-local-value 'mevedel--data-buffer
                                              (window-buffer (selected-window)))))
         (with-current-buffer child
-          (mevedel-preset-apply 'mevedel-discuss)
-          (should (eq 'mevedel-discuss (mevedel-session-preset-name mevedel--session))))))))
+          (mevedel-preset-apply 'mevedel-implement)
+          (should (eq 'mevedel-implement (mevedel-session-preset-name mevedel--session))))))))
 
 (mevedel-deftest mevedel-session-persistence-cleanup-expired/note
   (:quiet t)
@@ -842,8 +842,8 @@
       (with-current-buffer data
         (let ((system gptel-system-prompt)
               (tools gptel-tools))
-          (should-error (mevedel-preset-apply 'mevedel-discuss) :type 'user-error)
-          (should-error (gptel-preset 'mevedel-discuss) :type 'user-error)
+          (should-error (mevedel-preset-apply 'mevedel-implement) :type 'user-error)
+          (should-error (gptel-preset 'mevedel-implement) :type 'user-error)
           (should (eq system gptel-system-prompt))
           (should (eq tools gptel-tools)))
         (cl-letf (((symbol-plist 'note-reasoner)
@@ -853,7 +853,7 @@
              mevedel--session (list :backend backend :model 'note-reasoner) data)
             (mevedel-model-set-session-effort mevedel--session 'high data)
             (mevedel-permission-mode-transition 'edits)
-            (mevedel-with-preset 'mevedel-discuss
+            (mevedel-with-preset 'mevedel-implement
               (should (eq 'mevedel-note (mevedel-session-preset-name mevedel--session))))
             (mevedel-preset-apply 'mevedel-note)
             (should (eq 'note-reasoner gptel-model))

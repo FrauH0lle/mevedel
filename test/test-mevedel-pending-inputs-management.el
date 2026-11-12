@@ -121,18 +121,6 @@
         (should (equal "> new draft\nsecond line" (mevedel-view--input-text))))
       (should (eq entry (car (mevedel-session-pending-follow-ups session)))))))
 
-(mevedel-deftest mevedel-pending-inputs--assert-retract-composer ()
-  ,test
-  (test)
-  :doc "refuses a destination scope's saved draft even when the visible composer is empty"
-  (mevedel-pending-management-test--with-session
-    (with-current-buffer view-buf
-      (let ((scope '(:directive-id "d1" :action discuss)))
-        (puthash '("d1" discuss nil) '(:text "> saved\nsecond line")
-                 mevedel-view--composer-drafts)
-        (should-error (mevedel-pending-inputs--assert-retract-composer scope)
-                      :type 'user-error)))))
-
 (mevedel-deftest mevedel-pending-inputs--remove ()
   ,test
   (test)

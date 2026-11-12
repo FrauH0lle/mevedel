@@ -15,7 +15,6 @@
 (require 'mevedel-init)
 (require 'mevedel-agents)
 (require 'mevedel-review)
-(require 'mevedel-directive-request)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 (require 'mevedel-utilities)
@@ -54,25 +53,6 @@
             (goto-char (point-max))
             (search-backward "hello")
             (should-not (get-text-property (point) 'gptel)))))))
-
-  :doc "directive headers retain their boundary record and prompt drawer"
-  (with-temp-buffer
-    (org-mode)
-    (setq-local gptel-response-separator "\n\n")
-    (let ((marker (mevedel--insert-directive-turn
-                   "d1" 2 "Change this" "Exact implementation prompt" 'implement)))
-      (should (= (point-max) (marker-position marker)))
-      (should (string-suffix-p
-               "\n\nChange this :implement:\n:PROMPT:\nExact implementation prompt\n:END:\n"
-               (buffer-string)))
-      (goto-char (point-min))
-      (search-forward "Change this")
-      (should-not (get-text-property (1- (point)) 'gptel))
-      (should (string-prefix-p
-               (mevedel--format-hook-audit-record
-                '(:type directive-turn-boundary :edge start
-                  :directive-id "d1" :action implement :turn 2))
-               (buffer-string)))))
 
   :doc "returns the body offset and retains only trusted transcript properties"
   (with-temp-buffer

@@ -29,7 +29,7 @@
 (declare-function mevedel-instruction-replacement-hold "mevedel-directive-source" (&optional buffer))
 
 ;; `mevedel-overlays'
-(declare-function mevedel--create-instruction "mevedel-overlays" (type &optional span))
+
 
 ;; `mevedel-view'
 (defvar mevedel-view-mode-map)
@@ -320,10 +320,8 @@ is harmless.  No evil-collection dependency is needed."
     (eval-after-load 'mevedel-view
       '(eval-after-load 'mevedel-view-composer '(mevedel-evil--composer-keys)))
     (eval-after-load 'mevedel-overlay-ui '(mevedel-evil--source-maps))
-    (dolist (command '(mevedel-create-directive
-                       mevedel-delete-instructions))
+    (dolist (command '(mevedel-delete-instructions))
       (evil-set-command-property command :keep-visual t))
-    (advice-add 'mevedel--create-instruction :around #'mevedel-evil--selection)
     (advice-add 'mevedel-delete-instructions :around #'mevedel-evil--selection)
     (dolist (command '(evil-change evil-enter-replace-state))
       (advice-add command :around #'mevedel-evil--replacement))

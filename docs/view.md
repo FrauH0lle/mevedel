@@ -220,19 +220,8 @@ to one-line summaries by default. A newest directive turn remains expanded so
 its response stays visible; explicit fold state wins. Every summary expands
 back to the actual turn, which is never replaced by a compact event row.
 
-The shared composer has either chat scope or an explicit directive id/action
-scope. Entering through Discuss, Continue discussion, Discuss result, Request
-changes, Retry, or Implement this stashes the chat draft and shows a compact
-directive header, a distinct prompt prefix, and modeline state. The header names
-the next scoped action; its secondary line shows chat isolation, the effective
-permission mode, `Plan paused` when applicable, and `C-c C-k` for Back to chat.
-Both lines are truncated to the narrowest window showing the view, so the scoped
-prompt is always the same four rows; resizing or displaying the view in a
-window of another width refits them before redisplay.
-Directive scope is sticky across sends and exits only through Back to chat;
-leaving restores the chat draft, and resume always starts in chat scope. Queued
-inputs retain the scope in which they were accepted. Status, agent, task, and
-interaction redraws preserve the active scoped draft and point exactly,
+Status, agent, task, and interaction redraws preserve the composer draft and
+point exactly,
 including a multiline draft whose first editable character is `>`.
 Permission cards in the interaction zone start folded; `TAB` re-renders the
 queue head with its details, which also preserves the draft and point. The
@@ -241,14 +230,6 @@ with zone anchors, so point on the Keys row stays on it when `TAB`, `c`, `n`,
 `p` or `g` redraws text above it; restoring by offset had moved point from the
 Keys row into the middle of the expanded command. The
 [permissions manual](permissions.md) owns what a folded card must show.
-
-Directive prompt construction remains independent of this visible chronology.
-A follow-up uses only durable discussion turns for the current authored request;
-Implement this adds the complete matching discussion, Discuss result can target
-one selected attempt, Request changes uses fresh directive context and the
-immediately preceding successful attempt, and Retry uses the preceding failure
-or abort. Submitted subdirectives disappear only after success, while failed and
-aborted attempts leave them editable in source.
 
 ## Render flow
 
@@ -1256,101 +1237,55 @@ composer.
 
 ## Directive Turns And Inspector
 
-The source actions and `mevedel-list-directives` resolve the topmost workspace
-directive record, bind or resume its execution session, and display that
-session's ordinary MevView, by default in a directive frame anchored at the
-directive. Starting an action appends a directive turn at the
-chronological tip; it never opens another live rendering surface. Full request,
-response, tool, and interaction content remains visible there while provider
-prompt projection keeps it outside ordinary-chat context.
-
-Follow-up actions put the shared composer into directive scope. Prompt preview
-shows the complete next isolated request, including discussion, requested
-changes, retry guidance, or selected-attempt context. Attempt actions can open
-the reusable patch viewer or invoke the session's ordinary Rewind impact and
-confirmation flow through the attempt's exact turn checkpoint; neither path
-creates another history owner.
-
 The explicit read-only directive inspector renders the current request,
 lifecycle and anchor state, implementation attempts, and discussion turns from
 the workspace record. It is the durable access path after compaction, source
 loss, or archive. Opening it replaces the current displayed view rather than
 splitting beside MevView. It owns no composer, streaming, or interaction
-callbacks; View patch, Reattach, Rewind before..., Archive, and scope-entering
-actions dispatch to the record or execution session. Its activity entries fold
+callbacks; View patch, Reattach, Rewind before..., and Archive dispatch to the
+record or execution session. Its activity entries fold
 by default as an overview, and each rendered row resolves back to its own
 durable entry by activity kind and settlement sequence together, because
 Rewind acts on whichever entry the row resolved to. Source overlays expose the Activity action only after
 the directive owns a planning, discussion, or implementation turn.
 
-Plan-before-implementation is configured per top-level directive through the
-source overlay or inspector Settings menu. The main action menu stays compact:
-Settings contains the Plan toggle and model/effort selector, whose label becomes
-`planning model/effort` only while Plan is on. An enabled presentation shows a
-compact `PLAN: ON` hint. Planning and approval derive Planning, Plan Ready, and
-Plan Accepted presentation states without replacing the directive's underlying
-lifecycle. A cancelled proposal remains a draft and exposes Continue Plan,
-which restores the isolated directive composer scope.
-
 ## Directive Frame
 
-The directive frame is a floating child frame anchored at a directive's source
-position that displays that directive's bound execution-session view. It shows
+The retained frame surface displays a note's conversation, anchored at the note's
+source position. It shows
 the real view buffer, so permissions, Ask, patch review, streaming, and the
 composer work in it unmodified and no second renderer exists. See
 [ADR 0106](adr/0106-directive-frame-is-a-child-frame.md) for why an overlay
 cannot host these interactions.
 
-`mevedel-show-chat-buffer` selects `frame`, `window`, or nil for directive
-dispatch. Child frames need a graphical display before Emacs 31, so the frame
-falls back to an ordinary window wherever they are unavailable; every behavior
-except the floating geometry is identical in that fallback.
+An explicit action opens the frame with focus. On a terminal or where child
+frames are unavailable, the conversation opens in a side window.
 
-An explicit action opens the frame with focus. A request dispatch opens it
-without focus, because a request the user just started must not move point.
-Scope-entering actions enter the directive composer scope before displaying, so
-composer input in the frame becomes a follow-up for that directive; frame
-teardown leaves that scope again. Show answer positions point on the rendered
-answer instead, and deliberately does not enter composer scope.
-
-The frame opens below the directive's last line, or flush above its first line
-when there is no room below, so the directive stays readable beside its
+The frame opens below the note's last line, or flush above its first line
+when there is no room below, so the note stays readable beside its
 conversation. Only when neither side has room does the frame take the larger
-side and overlap the directive. Placement uses the frame's actual height, so a
-frame fitted shorter than its maximum stays against its directive. Width stays
+side and overlap the note. Placement uses the frame's actual height, so a
+frame fitted shorter than its maximum stays against its note. Width stays
 a fraction of the parent frame, so in a split layout the frame can extend over
 a neighbouring window.
 
-At most one directive frame exists at a time, and it is dismissed explicitly
-rather than on directive settlement. The frame is anchored to its directive: it
-tracks the directive's screen position as the source buffer scrolls, hides once
-the directive leaves the window, and returns when it scrolls back, so the
-directive and its frame scroll as one thing. Tracking runs from
+At most one frame exists at a time, and it is dismissed explicitly.
+The frame tracks the note's screen position as the source buffer scrolls,
+hides once the note leaves the window, and returns when it scrolls back.
+Tracking runs from
 `window-scroll-functions` and `window-configuration-change-hook` in the source
 buffer, and repositions only on an actual change, because setting a frame
 position from a redisplay hook triggers redisplay again.
 
-Displaying the same directive in its already open frame reuses it without
-rebuilding, so an action that both enters composer scope and dispatches a
-request does not recreate the frame between the two steps. Displaying another
-directive in the shared view retargets the frame's identity, source anchor,
-follow hooks, filter, and close restoration before display. Teardown runs from
+Displaying the same note in its already open frame reuses it without
+rebuilding. Displaying another note retargets the frame's identity, source anchor,
+follow hooks and close restoration before display. Teardown runs from
 `delete-frame-functions`, so dismissing the frame, deleting it with ordinary
-frame commands, or exiting Emacs all restore point and leave the composer
-scope.
+frame commands, or exiting Emacs all restore point.
 
-The frame may filter the displayed transcript to its own directive's turns.
-Filtering marks the turns of every other directive and of ordinary chat with an
-`invisible` text property; content before the first turn, such as the header,
-is never hidden. The invisibility spec that implements this is buffer-local
-rather than window-local, so filtering is skipped whenever the view buffer is
-also displayed outside the frame, and the frame shows the full transcript
-instead. Rendering re-applies the filter, so streamed turns stay hidden.
-
-The frame binds only a filter toggle and a dismiss command, both on `C-c`
-prefixes. Single-letter bindings are impossible because the view buffer holds an
-editable composer, and `C-g` keeps its view meaning of aborting the request. The
-directive scope hint line advertises both keys while the frame is showing.
+`C-c C-z` dismisses the frame. Single-letter bindings are impossible because the
+view buffer holds an editable composer, and `C-g` keeps its view meaning of
+aborting the request.
 
 ### Frame chrome
 
@@ -1358,8 +1293,8 @@ The frame carries its own chrome through **window parameters**, not buffer-local
 settings, because the view buffer is shared with the main view: the main view
 keeps its mode line and its full-width status strip. In the frame the mode line
 is suppressed, fringes are zero, and the tab line is a condensed variant of the
-status strip leading with directive identity, then composer scope, a filter
-marker, request state, model, and tool count. Session facts the parent already
+status strip leading with note identity, then request state, model, and tool
+count. Session facts the parent already
 shows — session name, workspace root, execution target, preset — are
 deliberately absent, because this header has a fraction of the width. The frame
 does not override the header line, so the buffer's

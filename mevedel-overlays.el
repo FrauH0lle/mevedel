@@ -39,19 +39,10 @@
 (autoload 'mevedel-directive-frame-display "mevedel-directive-frame")
 
 ;; `mevedel-directive-plan'
-(declare-function mevedel-directive-plan--planning-prompt
-                  "mevedel-directive-plan"
-                  (implementation-prompt &optional feedback proposal))
-(autoload 'mevedel-directive-plan--planning-prompt "mevedel-directive-plan")
+
 
 ;; `mevedel-directive-request'
-(declare-function mevedel--directive-implementation-prompt
-                  "mevedel-directive-request" (content directive &optional feedback))
-(declare-function mevedel--discuss-directive-prompt
-                  "mevedel-directive-request"
-                  (content &optional directive message attempt-index))
-(autoload 'mevedel--directive-implementation-prompt "mevedel-directive-request")
-(autoload 'mevedel--discuss-directive-prompt "mevedel-directive-request")
+
 
 ;; `mevedel-directive'
 (declare-function mevedel-directive-has-activity-p
@@ -436,61 +427,6 @@ Leave notes intact."
   (unless (mevedel--cycle-instruction 'directive 'previous)
     (mevedel--print-instruction-not-found 'previous 'directive)))
 
-(defun mevedel-preview-directive-prompt ()
-  "Preview directive prompt at the current point.
-
-This command is useful to see what is actually being sent to the model."
-  (interactive)
-  (let ((directive (mevedel--topmost-instruction (car (mevedel--instructions-at (point) 'directive))
-                                                 'directive)))
-    (let* ((record (mevedel--directive-record directive))
-           (state (mevedel-directive-state record))
-           (action (intern (completing-read "Preview action: "
-                                            '("implement" "discuss")
-                                            nil t nil nil "implement")))
-           ;; Feedback and guidance are composed in the multiline scoped
-           ;; composer at submission; the preview shows their slot instead
-           ;; of soliciting throwaway minibuffer text.
-           (request-string
-            (if (eq action 'discuss)
-                (mevedel--discuss-directive-prompt
-                 (mevedel--directive-llm-prompt directive) record)
-              (mevedel--directive-implementation-prompt
-               (mevedel--directive-llm-prompt directive) record
-               (pcase state
-                 ('implemented "[requested changes, composed at submission]")
-                 ((or 'failed 'aborted)
-                  "[optional retry guidance, composed at submission]"))))))
-      ;; Direct implementation runs attach the record's skills at
-      ;; dispatch; mirror the attachment (without session validation)
-      ;; so the preview shows the complete isolated request.
-      (when-let* (((eq action 'implement))
-                  ((not (mevedel-directive-planning-enabled record)))
-                  (skills (mevedel-directive-skills record)))
-        (setq request-string
-              (mevedel-plan-handoff-append-implementation-input
-               request-string (list :skills skills))))
-      (when (and (eq action 'implement)
-                 (mevedel-directive-planning-enabled record))
-        (setq request-string
-              (mevedel-directive-plan--planning-prompt request-string)))
-      (let ((bufname "*mevedel-directive-preview*"))
-        (with-temp-buffer-window bufname
-            '((display-buffer-reuse-window
-               display-buffer-same-window))
-            nil
-          (princ request-string)
-          (with-current-buffer bufname
-            (when-let* ((mode (mevedel-view--markdown-fontify-mode)))
-              (funcall mode))
-            (read-only-mode 1)
-            (visual-line-mode 1)
-            (display-line-numbers-mode 1)
-            (let ((local-map (make-sparse-keymap)))
-              (set-keymap-parent local-map (current-local-map))
-              (define-key local-map (kbd "q") 'quit-window)
-              (use-local-map local-map))))))))
-
 
 (defun mevedel--stashed-buffer-instructions (buffer)
   "Return stashed instruction data for all instructions in BUFFER.
@@ -611,76 +547,6 @@ A directive is empty if it does not have a body or secondary directives."
                     (not (string-empty-p request)))
                   requests))))
 
-(defun mevedel--create-instruction (type &optional span)
-  "Create or scale an instruction of the given TYPE within the region.
-
-If a region is selected but partially covers an existing instruction,
-then the function will resize it.  See `mevedel-create-directive' for
-details on how the resizing works.
-SPAN, when non-nil, explicitly selects `line' or `char' geometry."
-  (unless (eq type 'directive)
-    (error "Unsupported instruction creation type: %s" type))
-  ;; A directive's durable record is anchored to a file: without one it
-  ;; can never be reattached after a load, and archiving or detaching it
-  ;; would write a record that no longer loads at all.
-  (when (and (eq type 'directive) (not (buffer-file-name)))
-    (user-error "Cannot create a directive in a buffer visiting no file"))
-  (if (use-region-p)
-      (let ((intersecting-instructions
-             (cl-remove-if (lambda (instr)
-                             (xor (= (overlay-start instr) (region-beginning))
-                                  (= (overlay-end instr) (region-end))))
-                           (mevedel--partially-contained-instructions (current-buffer)
-                                                                      (region-beginning)
-                                                                      (region-end)))))
-        (if-let* ((instructions
-                   (cl-remove-if-not (lambda (instr)
-                                       (eq (mevedel--instruction-type instr) type))
-                                     intersecting-instructions)))
-            (progn
-              (dolist (instruction instructions)
-                (if (< (overlay-start instruction) (point) (overlay-end instruction))
-                    (if (< (mark) (point))
-                        (setf (overlay-start instruction) (point))
-                      (setf (overlay-end instruction) (point)))
-                  (if (> (mark) (point))
-                      (setf (overlay-start instruction) (point))
-                    (setf (overlay-end instruction) (point))))
-                (when span (overlay-put instruction 'mevedel-span span))
-                (mevedel--update-instruction-overlay instruction))
-              (when instructions
-                (deactivate-mark)))
-          ;; Else - there are no partially contained instructions of the same
-          ;; type within the region...
-          (when (or intersecting-instructions
-                    (or (cl-some (lambda (instr)
-                                   (and (= (overlay-start instr) (region-beginning))
-                                        (= (overlay-end instr) (region-end))))
-                                 (mevedel--instructions-in (region-beginning) (region-end)))))
-            ;; ...but there are intersecting instructions of another type, or
-            ;; another instruction existing precisely at the start of another.
-            (user-error "Instruction intersects with existing instruction"))
-          (let* ((buffer (current-buffer))
-                 (instruction (mevedel-view-call-preserving-window-configuration
-                               (lambda ()
-                                 ;; Minibuffer input can yield to chat redraws.
-                                 ;; Restore their anchors, not stale raw points.
-                                 (let ((pos (region-beginning)))
-                                   (unless (<= (window-start) pos (window-end))
-                                     (set-window-start (selected-window)
-                                                       (max (point-min)
-                                                            (- (region-beginning)
-                                                               (- (window-end) (window-start))))))
-                                   (mevedel--create-directive-in buffer
-                                                                 (region-beginning)
-                                                                 (region-end)
-                                                                 nil nil span))))))
-            (with-current-buffer buffer
-              (deactivate-mark))
-            instruction)))
-    (when (eq type 'directive)
-      (prog1 (mevedel--create-directive-in (current-buffer) (point) (point) t)
-        (deactivate-mark)))))
 
 ;;;###autoload
 (defun mevedel--directivep (instruction)

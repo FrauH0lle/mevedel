@@ -19,8 +19,6 @@
   "Refuse ARGS' existing-note operations for read-only SESSION owners."
   (when (and (or (mevedel-plan-read-only-p session)
                  (mevedel-plan-directive-p session)
-                 mevedel--directive-read-only-request-p
-                 (eq (mevedel-session-preset-name session) 'mevedel-discuss)
                  (and mevedel--agent-invocation
                       (mevedel-agent-invocation-agent mevedel--agent-invocation)
                       (not (mevedel-agent--specs-contain-tool-p

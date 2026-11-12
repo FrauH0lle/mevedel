@@ -107,32 +107,7 @@
                    (should (equal text initial))
                    initial)))
         (call-interactively #'mevedel-note-edit))
-      (should-not (overlay-buffer note))))
-  :doc "notes replace reference commands and remain out of directive prompt previews"
-  (mevedel-notes-test--with-source
-    (mevedel-note-create "Not prompt context")
-    (let ((directive (mevedel--create-directive-in source 13 16 nil "Explain")))
-      (should (eq 'directive (mevedel--instruction-type directive)))
-      (should (string-match-p "DIRECTIVE" (overlay-get directive 'before-string)))
-      (goto-char 14)
-      (unwind-protect
-          (save-window-excursion
-            (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "implement")))
-              (call-interactively #'mevedel-preview-directive-prompt))
-            (with-current-buffer "*mevedel-directive-preview*"
-              (should (string-match-p "Explain" (buffer-string)))
-              (should-not (string-match-p "Not prompt context\\|[Rr]eference" (buffer-string)))))
-        (when-let* ((preview (get-buffer "*mevedel-directive-preview*")))
-          (kill-buffer preview)))
-      (dolist (command '(mevedel-create-reference mevedel-convert-instructions
-                         mevedel-delete-all-references mevedel-modify-reference-commentary
-                         mevedel-next-reference mevedel-previous-reference
-                         mevedel-modify-directive-tag-query))
-        (should-not (fboundp command)))
-      (should (= 1 (length (mevedel-notes-test--labels))))
-      (mevedel--clear-instruction-state workspace)
-      (mevedel-instruction-store-observe workspace)
-      (should (= 1 (length (mevedel-notes-test--labels)))))))
+      (should-not (overlay-buffer note)))))
 
 (mevedel-deftest mevedel-note-persistence
   (:quiet t)
@@ -661,12 +636,13 @@
   (:quiet t)
   ,test
   (test)
-  :doc "legacy bulk deletion closes notes but keeps ordinary directive deletion"
+  :doc "legacy bulk deletion closes notes and retains their history"
   (mevedel-notes-test--with-source
     (mevedel-note-create "Keep my history")
-    (let ((directive (mevedel--create-directive-in source 1 7 nil "Old directive")))
+    (goto-char (point-min))
+    (let ((note (mevedel-note-create "Another note")))
       (should (= 2 (mevedel-delete-all-instructions)))
-      (should-not (overlay-buffer directive)))
+      (should-not (overlay-buffer note)))
     (should-not (mevedel-notes-test--labels))
     (mevedel-instruction-store-flush t)
     (mevedel--clear-instruction-state workspace)

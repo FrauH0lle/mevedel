@@ -7,21 +7,15 @@
 
 ;;; Commentary:
 
-;; Displays a directive's bound execution-session view in a floating child
-;; frame anchored at the directive's source position.  The frame shows the
+;; Displays a note conversation in a floating child
+;; frame anchored at the note's source position.  The frame shows the
 ;; real view buffer, so permissions, Ask, patch review, streaming, and the
 ;; composer work in it unmodified and no second renderer exists.
 ;;
-;; The transcript may be filtered to one directive's turns.  Filtering uses
-;; `invisible' text properties and the buffer's invisibility spec, which is
-;; buffer-local rather than window-local, so it applies only while the frame
-;; is the sole window showing that view.
-;;
-;; At most one directive frame exists at a time.  Reuse keeps the exact
-;; directive identity or retargets every source/filter field before display.
+;; At most one frame exists at a time.  Reuse keeps the exact
+;; note identity or retargets every source field before display.
 ;; The frame is dismissed explicitly; teardown runs from
-;; `delete-frame-functions' so every deletion path leaves the directive
-;; composer scope and restores point.
+;; `delete-frame-functions' so every deletion path restores point.
 
 ;;; Code:
 
@@ -65,12 +59,7 @@
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--input-marker-position "mevedel-view-composer" ())
-(declare-function mevedel-view-back-to-chat "mevedel-view-composer" ())
-(declare-function mevedel-view-composer-scope-label
-                  "mevedel-view-composer" (&optional scope))
-(autoload 'mevedel-view-back-to-chat "mevedel-view-composer" nil t)
-(autoload 'mevedel-view-composer-scope-label "mevedel-view-composer")
-(defvar mevedel-view--composer-scope)
+
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--rendered-turn-starts "mevedel-view-render" ())
@@ -115,13 +104,6 @@ background makes the border invisible against the frame."
   "Border of the directive frame while another frame has focus."
   :group 'mevedel)
 
-(defcustom mevedel-directive-frame-filter t
-  "Whether a directive frame filters the transcript to its own directive.
-Filtering is skipped whenever the view buffer is displayed elsewhere,
-because the invisibility spec that implements it is buffer-local."
-  :type 'boolean
-  :group 'mevedel)
-
 
 ;;
 ;;; State
@@ -155,12 +137,6 @@ A plist of :frame, :window, and :origin handed from
 (defvar mevedel-directive-frame--origin-window nil
   "Window that was selected when the live frame was opened.")
 
-(defvar mevedel-directive-frame--filtered-p nil
-  "Whether the live frame currently filters the transcript.")
-
-(defconst mevedel-directive-frame--invisible-symbol
-  'mevedel-view-other-directive
-  "Invisibility symbol applied to turns outside the framed directive.")
 
 (defconst mevedel--child-frame-parameters
   '((min-width . t)
@@ -198,115 +174,19 @@ still does: it has no terminal at all and `make-frame' signals there."
 
 
 ;;
-;;; Transcript filtering
+;;; Frame refresh
 
-(defun mevedel-directive-frame--turn-spans ()
-  "Return rendered turn spans in the current view buffer.
-Each element is (START END . DIRECTIVE-ID), where DIRECTIVE-ID is nil for
-ordinary chat turns.  Content before the first turn, such as the header,
-is not covered by any span."
-  (let ((limit (mevedel-view--input-marker-position)))
-    (cl-loop for (start next) on (mevedel-view--rendered-turn-starts)
-             collect
-             (cons start
-                   (cons (or next limit)
-                         (plist-get (get-text-property start 'mevedel-view-directive)
-                                    :directive-id))))))
 
-(defun mevedel-directive-frame--filter-elsewhere-p (view-buffer)
-  "Return non-nil when VIEW-BUFFER is shown outside the directive frame.
-Filtering is buffer-local, so it must not run while another window would
-inherit the hidden turns."
-  (cl-loop for window in (get-buffer-window-list view-buffer nil t)
-           unless (and (frame-live-p mevedel-directive-frame--frame)
-                       (eq (window-frame window)
-                           mevedel-directive-frame--frame))
-           return t))
-
-(defun mevedel-directive-frame--clear-filter (&optional view-buffer)
-  "Remove directive filtering from VIEW-BUFFER."
-  (let ((buffer (or view-buffer mevedel-directive-frame--view-buffer)))
-    (when (buffer-live-p buffer)
-      (with-current-buffer buffer
-        (with-silent-modifications
-          (let ((inhibit-read-only t)
-                match)
-            (save-excursion
-              (goto-char (point-min))
-              (while (setq match
-                           (text-property-search-forward
-                            'invisible
-                            mevedel-directive-frame--invisible-symbol t))
-                (remove-text-properties
-                 (prop-match-beginning match) (prop-match-end match)
-                 '(invisible nil))))))))
-    (setq mevedel-directive-frame--filtered-p nil)))
-
-(defun mevedel-directive-frame--apply-filter ()
-  "Hide every rendered turn outside the framed directive.
-Does nothing when filtering is disabled, no directive is framed, or the
-view buffer is displayed outside the directive frame."
-  (let ((buffer mevedel-directive-frame--view-buffer))
-    (when (and mevedel-directive-frame-filter
-               mevedel-directive-frame--directive-id
-               (not (and (overlayp mevedel-directive-frame--directive)
-                         (eq (overlay-get mevedel-directive-frame--directive
-                                          'mevedel-instruction-type) 'note)))
-               (buffer-live-p buffer)
-               (not (mevedel-directive-frame--filter-elsewhere-p buffer)))
-      (with-current-buffer buffer
-        (with-silent-modifications
-          (let ((inhibit-read-only t))
-            (mevedel-directive-frame--clear-filter buffer)
-            (save-excursion
-              (pcase-dolist (`(,start ,end . ,id)
-                             (mevedel-directive-frame--turn-spans))
-                (unless (equal id mevedel-directive-frame--directive-id)
-                  (save-restriction
-                    (narrow-to-region start end)
-                    (goto-char (point-min))
-                    (let (match)
-                      (while (setq match
-                                   (text-property-search-forward
-                                    'invisible nil t))
-                        (put-text-property
-                         (prop-match-beginning match) (prop-match-end match)
-                         'invisible
-                         mevedel-directive-frame--invisible-symbol))))))))))
-      (setq mevedel-directive-frame--filtered-p t))))
-
-(defun mevedel-directive-frame-refresh-filter ()
-  "Re-apply directive filtering and refit the frame after a re-render.
+(defun mevedel-directive-frame-refresh ()
+  "Refit the note frame after a re-render.
 Safe to call from any buffer and when no directive frame is live.  Runs
 on the view's throttled render cadence, not per streamed token, so the
 frame grows with the answer instead of resizing on every chunk."
   (when (frame-live-p mevedel-directive-frame--frame)
-    (when mevedel-directive-frame--filtered-p
-      (mevedel-directive-frame--apply-filter))
     (mevedel-directive-frame--fit-height)
     ;; A frame flipped above its directive grows upward, so refitting moves
     ;; where its top belongs.
     (mevedel-directive-frame--follow)))
-
-(defun mevedel-directive-frame-toggle-filter ()
-  "Toggle whether the directive frame filters the transcript."
-  (interactive)
-  (unless (frame-live-p mevedel-directive-frame--frame)
-    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No directive frame is open"))
-  (when (and (overlayp mevedel-directive-frame--directive)
-             (eq (overlay-get mevedel-directive-frame--directive 'mevedel-instruction-type) 'note))
-    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer))
-                                   "Note conversations show their whole transcript"))
-  (if mevedel-directive-frame--filtered-p
-      (progn
-        (mevedel-directive-frame--clear-filter)
-        (message "mevedel: showing the whole transcript"))
-    (let ((mevedel-directive-frame-filter t))
-      (mevedel-directive-frame--apply-filter))
-    (if mevedel-directive-frame--filtered-p
-        (message "mevedel: showing this directive only")
-      (mevedel-diagnostic-message (mevedel-diagnostic-scope (current-buffer))
-       "Cannot filter while the view is displayed elsewhere"))))
 
 
 ;;
@@ -322,7 +202,6 @@ already shows -- session name, workspace root, execution target, preset
              (buffer-live-p mevedel--data-buffer))
     (let* ((data-buffer mevedel--data-buffer)
            (id mevedel-directive-frame--directive-id)
-           (scope (mevedel-view-composer-scope-label))
            (state (mevedel-request-state-label data-buffer))
            (model (mevedel-model-current-label data-buffer))
            (tools (mevedel-tools-active-count data-buffer)))
@@ -332,12 +211,6 @@ already shows -- session name, workspace root, execution target, preset
                        (substring id 0 8)
                      (or id "directive"))
                    'face 'mevedel-view-directive-scope)
-       (when scope
-         (concat (propertize " · " 'face 'shadow)
-                 (propertize scope 'face 'shadow)))
-       (when mevedel-directive-frame--filtered-p
-         (concat (propertize " · " 'face 'shadow)
-                 (propertize "filtered" 'face 'warning)))
        (propertize " · " 'face 'shadow)
        (propertize (or state "idle") 'face 'shadow)
        (propertize " · " 'face 'shadow)
@@ -606,35 +479,22 @@ the frame and a long one does not cover the buffer behind it."
 With FOCUS non-nil the frame is selected, which is what an explicit user
 action wants; a request dispatch leaves focus where it is.  Falls back to
 an ordinary window when child frames are unavailable."
-  (let* ((note-p (and (overlayp directive)
-                      (eq (overlay-get directive 'mevedel-instruction-type) 'note)))
-         (directive-id
-         (if note-p
-             (format "Note %s" (overlay-get directive 'mevedel-id))
-           (when (overlayp directive)
-           (mevedel-directive-id
-            (mevedel--directive-record
-             (or (mevedel--topmost-instruction directive 'directive)
-                 directive)))))))
+  (unless (and (overlayp directive)
+               (eq (overlay-get directive 'mevedel-instruction-type) 'note))
+    (user-error "Select a note to open its conversation"))
+  (let ((directive-id (format "Note %s" (overlay-get directive 'mevedel-id))))
     (unless (eq mevedel-directive-frame--view-buffer view-buffer)
-      (mevedel-directive-frame--clear-filter mevedel-directive-frame--view-buffer)
       (when (buffer-live-p mevedel-directive-frame--view-buffer)
         (with-current-buffer mevedel-directive-frame--view-buffer
           (mevedel-directive-frame-mode -1))))
     (cond
      ((or (not (mevedel-directive-frame--available-p))
-          (and note-p (not (display-graphic-p))))
+          (not (display-graphic-p)))
       (display-buffer view-buffer
-                      (if note-p
-                          '(display-buffer-in-side-window
-                            (side . right) (window-width . 0.5))
-                        '(display-buffer-below-selected
-                          (window-height . 0.4))))
+                      '(display-buffer-in-side-window
+                        (side . right) (window-width . 0.5)))
       (when focus (select-window (get-buffer-window view-buffer t))))
-     ;; A frame already showing this exact directive stays where it is.  The
-     ;; discuss action displays twice -- once entering composer scope and once
-     ;; dispatching the request -- and repositioning on the second call would
-     ;; move the frame out from under whoever is reading it.
+     ;; Reopening the same conversation must not move the frame under its reader.
      ((and (frame-live-p mevedel-directive-frame--frame)
            (eq mevedel-directive-frame--view-buffer view-buffer)
            (equal mevedel-directive-frame--directive-id directive-id))
@@ -674,7 +534,6 @@ an ordinary window when child frames are unavailable."
         (make-frame-visible frame)
         (with-current-buffer view-buffer (mevedel-directive-frame-mode 1))
         (mevedel-directive-frame--follow-setup directive)
-        (unless note-p (mevedel-directive-frame--apply-filter))
         (when focus (select-frame-set-input-focus frame))
         frame)))))
 
@@ -692,8 +551,7 @@ an ordinary window when child frames are unavailable."
 (defun mevedel-directive-frame--on-delete (frame)
   "Release directive frame state when FRAME is deleted.
 Runs from `delete-frame-functions' so that every deletion path -- the
-dismiss command, \\[delete-frame], or Emacs exit -- leaves the directive
-composer scope and restores point."
+dismiss command, \\[delete-frame], or Emacs exit -- restores point."
   (when (eq frame mevedel-directive-frame--frame)
     (let* ((view-buffer mevedel-directive-frame--view-buffer)
            (origin mevedel-directive-frame--origin)
@@ -707,12 +565,9 @@ composer scope and restores point."
       (when (and (frame-live-p parent) (not (eq parent frame)))
         (select-frame-set-input-focus parent))
       (mevedel-directive-frame--unfollow)
-      (mevedel-directive-frame--clear-filter view-buffer)
       (when (buffer-live-p view-buffer)
         (with-current-buffer view-buffer
-          (mevedel-directive-frame-mode -1)
-          (when mevedel-view--composer-scope
-            (mevedel-view-back-to-chat))))
+          (mevedel-directive-frame-mode -1)))
       (setq mevedel-directive-frame--frame nil
             mevedel-directive-frame--view-buffer nil
             mevedel-directive-frame--directive-id nil
@@ -761,7 +616,6 @@ again after deletion and forcing one redisplay settles it immediately."
 Bindings are prefixed because the view buffer holds an editable composer,
 where a single-letter binding would prevent typing.  `C-g' is left alone;
 in a view buffer it aborts the request."
-  "C-c C-f" #'mevedel-directive-frame-toggle-filter
   "C-c C-z" #'mevedel-directive-frame-close)
 
 (defun mevedel-directive-frame--display-in-parent (buffer alist)

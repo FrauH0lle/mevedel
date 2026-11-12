@@ -214,8 +214,7 @@
 (declare-function mevedel-view--clear-input "mevedel-view-composer" ())
 (declare-function mevedel-view--composer-snapshot
                   "mevedel-view-composer" (session))
-(declare-function mevedel-view--dispatch-directive-input
-                  "mevedel-view-composer" (scope input))
+
 (declare-function mevedel-view--dispatch-prepared-outcome
                   "mevedel-view-composer" (submission data-buffer &rest keys))
 (declare-function mevedel-view--ensure-interactive-chat-view
@@ -224,8 +223,7 @@
 (declare-function mevedel-view--input-text "mevedel-view-composer" ())
 (declare-function mevedel-view--occupied-root-workflow
                   "mevedel-view-composer" (session))
-(declare-function mevedel-view--queued-scope
-                  "mevedel-view-composer" (&optional scope))
+
 (declare-function mevedel-view--reserved-goal-handoff-id
                   "mevedel-view-composer" (&optional session))
 (declare-function mevedel-view--restore-composer-snapshot
@@ -235,18 +233,16 @@
                   "mevedel-view-composer"
                   (input &optional before-send on-block dispatch after-insert
                          inert-skills selected-skills))
-(declare-function mevedel-view--switch-composer-scope
-                  "mevedel-view-composer" (scope))
+
 (declare-function mevedel-view--visible-draft "mevedel-view-composer" ())
-(declare-function mevedel-view-composer-scope-label
-                  "mevedel-view-composer" (&optional scope))
+
 (declare-function mevedel-view-refresh-input-prompt
                   "mevedel-view-composer" ())
 (declare-function mevedel-view-run-invocation
                   "mevedel-view-composer" (name args &rest keys))
 (declare-function mevedel-view-send "mevedel-view-composer" ())
-(defvar mevedel-view--composer-drafts)
-(defvar mevedel-view--composer-scope)
+
+
 (defvar mevedel-view--input-marker)
 (defvar mevedel-view--pending-skill-submission)
 (defvar mevedel-view--prompt-hook-pending)
@@ -344,20 +340,8 @@ Persist and notify guests once, and only when a queue changed."
      (changed (mevedel-recovery-save session)))))
 
 (defun mevedel-view--next-follow-up (session)
-  "Return SESSION's first follow-up eligible for its owning workflow.
-Directive planning admits only Plan input for its directive; otherwise
-follow-ups retain their queue order.  Delivery holds are checked separately."
-  (let ((queue (mevedel-session-pending-follow-ups session))
-        (workflow (mevedel-session-directive-planning session)))
-    (if workflow
-        (cl-find-if
-         (lambda (entry)
-           (let ((scope (plist-get entry :scope)))
-             (and (eq (plist-get scope :action) 'plan)
-                  (equal (plist-get scope :directive-id)
-                         (plist-get workflow :directive-id)))))
-         queue)
-      (car queue))))
+  "Return SESSION's first queued follow-up."
+  (car (mevedel-session-pending-follow-ups session)))
 
 
 (defun mevedel-view--follow-up-auto-drain-blocked-p
@@ -374,8 +358,6 @@ With IGNORE-FAILURE-LATCH, the failure-recovery latch alone does not hold."
             (mevedel-session-pending-input-paused sess)
           (mevedel-session-pending-input-delivery-paused-p sess))
         (mevedel-session-pending-plan-approval sess)
-        (and (mevedel-session-directive-planning sess)
-             (not (mevedel-view--next-follow-up sess)))
         (plist-get (mevedel-session-plan-metadata sess)
                    :implementation-retry)
         (mevedel-view--reserved-goal-handoff-id sess)
@@ -516,9 +498,6 @@ because the detail body already shows it."
              (text (concat
                     (format "%d. %s" index
                             (cond (expanded "[-]") (partial "[+]") (t "   ")))
-                    (when-let* ((scope (plist-get entry :scope)))
-                      (format " [◆ %s]"
-                              (mevedel-view-composer-scope-label scope)))
                     (unless expanded (concat " " preview)))))
         (when (and session id)
           (add-text-properties
@@ -585,7 +564,7 @@ because the detail body already shows it."
                :keymap mevedel-view--pending-inputs-map))))))
 
 (cl-defun mevedel-view-enqueue-external-follow-up
-    (data-buffer text &key guest-name guest-id paths directive-id invoke
+    (data-buffer text &key guest-name guest-id paths invoke
                  guest-role shared-question skills)
   "Queue TEXT as a follow-up that originated outside this Emacs.
 
@@ -594,8 +573,7 @@ collaboration guest; GUEST-ID is that guest's stable identity, which
 the retract seam checks so only the sender can take the entry back.
 PATHS are files to mention as @file tokens with read grants, like an
 Emacs-side drop; the entry remembers them so a retraction can delete
-them.  DIRECTIVE-ID, when given, scopes the entry to that directive's
-discussion; the caller has already checked that the directive exists.
+them.
 
 Skill tokens in TEXT stay literal at submission: external free text
 carries prompting authority only, never skill invocation.  The one
@@ -633,19 +611,6 @@ explicitly selected skills applied together, with the same admission recheck."
                             ;; An invocation is dispatched by name at
                             ;; delivery; its arguments stay inert text.
                             :inert-skills t
-                            ;; External input can only discuss.  The
-                            ;; sender knows a directive id and nothing
-                            ;; else, and discussion is the one directive
-                            ;; action that mutates nothing.  Delivery
-                            ;; takes the scope branch, which does not
-                            ;; consult `:inert-skills'; discussion stays
-                            ;; skill-inert because directive dispatch
-                            ;; never plans skills and already refuses
-                            ;; slash lines.  A scoped action that did
-                            ;; would have to honour the flag there.
-                            :scope (when directive-id
-                                     (list :directive-id directive-id
-                                           :action 'discuss))
                             :dropped-file-grants
                             (mevedel-view--pop-dropped-file-grants-for-input
                              input session)
@@ -672,7 +637,6 @@ explicitly selected skills applied together, with the same admission recheck."
             (mevedel-session-enqueue-pending-input
              session 'follow-up
              (list :input input
-                   :scope (mevedel-view--queued-scope)
                    :dropped-file-grants dropped-file-grants
                    :queued-at-time (float-time)
                    :queued-at-goal-id
@@ -841,22 +805,13 @@ Call VALIDATE, when non-nil, immediately before removal, after yielding checks."
     (mevedel-pending-inputs--remove session entry)
     (mevedel-view--interaction-rebuild)))
 
-(defun mevedel-pending-inputs--assert-retract-composer (scope)
-  "Refuse withdrawal into a busy composer or a saved draft for SCOPE."
+(defun mevedel-pending-inputs--assert-retract-composer ()
+  "Refuse withdrawal into a busy composer or a nonempty draft."
   (when (or mevedel-view--pending-input-edit
             mevedel-view--prompt-hook-pending mevedel-view--pending-skill-submission)
     (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Finish the current composer submission or edit first"))
   (unless (string-empty-p (or (mevedel-view--visible-draft) ""))
-    (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Composer holds a draft; clear or send it before retracting"))
-  (unless (equal scope mevedel-view--composer-scope)
-    (when-let* ((saved (gethash (if scope
-                                  (list (plist-get scope :directive-id)
-                                        (plist-get scope :action)
-                                        (plist-get scope :attempt-index))
-                                'chat)
-                              mevedel-view--composer-drafts))
-                ((not (string-empty-p (plist-get saved :text)))))
-      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "The input's composer scope holds a draft; clear or send it first"))))
+    (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Composer holds a draft; clear or send it before retracting")))
 
 ;;;###autoload
 (defun mevedel-view-retract-pending ()
@@ -876,19 +831,12 @@ Delivery is not paused; an entry already being dispatched cannot be withdrawn."
                            (append (mevedel-session-pending-steering session)
                                    (mevedel-session-pending-follow-ups session))
                            :initial-value nil))
-         (scope (plist-get entry :scope))
-         (composer-scope mevedel-view--composer-scope)
          (text (and entry (mevedel-mention-bindings-copy-text (plist-get entry :input)))))
     (unless entry (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "No pending input to retract"))
-    (mevedel-pending-inputs--assert-retract-composer scope)
+    (mevedel-pending-inputs--assert-retract-composer)
     (mevedel-pending-inputs--remove
      session entry
-     (lambda ()
-       (mevedel-pending-inputs--assert-retract-composer scope)
-       (unless (equal composer-scope mevedel-view--composer-scope)
-         (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Composer scope changed; pending input was not retracted"))))
-    (unless (equal scope mevedel-view--composer-scope)
-      (mevedel-view--switch-composer-scope scope))
+     #'mevedel-pending-inputs--assert-retract-composer)
     (mevedel-view--restore-composer-snapshot
      (list :text text :point-offset (length text)
            :dropped-file-grants
@@ -1078,9 +1026,7 @@ An unaccepted dispatch retains the combined entry for retry or retraction."
        (when (buffer-local-value 'mevedel-session--read-only-mode
                                  mevedel--data-buffer)
          (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Session is open read-only (another host holds the lock)"))
-       (let ((input (if mevedel-view--composer-scope
-                        (mevedel-view--input-text)
-                      (mevedel-view--bind-input-mentions session))))
+       (let ((input (mevedel-view--bind-input-mentions session)))
          (when (string-empty-p input)
            (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Nothing to send"))
          (when (mevedel-skills-parse-slash-line input)
@@ -1126,52 +1072,18 @@ remaining queue."
 (defun mevedel-view--pending-follow-up-kind (entry)
   "Return the delivery kind derived from pending follow-up ENTRY."
   (cond
-   ((plist-get entry :scope) 'directive)
    ((plist-get entry :guest-invoke) 'invocation)
    ((plist-get entry :guest-skills) 'skills)
    ((plist-get entry :submission) 'prepared)
    (t 'prompt)))
 
-(defun mevedel-view--dispatch-directive-follow-up
-    (entry input session before-send after-insert release)
-  "Dispatch directive follow-up ENTRY with INPUT in SESSION.
-Call BEFORE-SEND before dispatch and AFTER-INSERT after acceptance.
-Call RELEASE on failure, dropping a permanently stale directive entry."
-  (let ((scope (plist-get entry :scope)))
-    (condition-case scope-err
-        (progn
-          (funcall before-send)
-          (mevedel-view--dispatch-directive-input scope input)
-          (funcall after-insert))
-      (error
-       (funcall release)
-       ;; A directive that no longer exists can never deliver, and the drain
-       ;; always picks the head: keeping the entry would wedge every follow-up
-       ;; queued behind it.  Transient failures keep it for a later drain.
-       (when-let* ((directive-id (plist-get scope :directive-id))
-                   (workspace (mevedel-session-workspace session))
-                   ((not (cl-find directive-id
-                                  (mevedel-workspace-directives workspace)
-                                  :key #'mevedel-directive-id
-                                  :test #'equal))))
-         (mevedel-pending-inputs--set-queues
-          session 'follow-up
-          (delq entry (mevedel-view--pending-follow-ups session)))
-         (mevedel-view--interaction-rebuild)
-         (mevedel-pending-inputs-schedule-held-input-delivery))
-       (mevedel-diagnostic-message (mevedel-diagnostic-scope session)
-                "%s (queued directive follow-up failed)"
-                (error-message-string scope-err))))))
 
 (defun mevedel-view--dispatch-follow-up-entry
-    (kind entry input session data-buffer before-send after-insert release)
-  "Dispatch follow-up ENTRY of KIND with INPUT for SESSION.
+    (kind entry input data-buffer before-send after-insert release)
+  "Dispatch follow-up ENTRY of KIND with INPUT.
 DATA-BUFFER owns the root transcript.  BEFORE-SEND, AFTER-INSERT, and RELEASE
 implement the drain's shared delivery transaction."
   (pcase kind
-    ('directive
-     (mevedel-view--dispatch-directive-follow-up
-      entry input session before-send after-insert release))
     ('invocation
      ;; A guest invocation is a command or skill name, not a prompt: it has
      ;; to reach the same dispatch typing the line in the composer would.
@@ -1213,6 +1125,16 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                   (not (buffer-local-value 'mevedel-compact-run-in-flight
                                            data-buffer)))
          (with-current-buffer view-buffer
+           ;; Retired scoped input must never acquire ordinary chat authority.
+           (when-let* ((entry (cl-find-if
+                              (lambda (item) (plist-get item :scope))
+                              (mevedel-session-pending-follow-ups session))))
+             (unless (and (eq (plist-get entry :state) 'failed-turn)
+                          (mevedel-session-pending-input-failure-paused session))
+               (plist-put entry :state 'failed-turn)
+               (mevedel-session-set-pending-input-failure-paused session t)
+               (mevedel-recovery-save session)
+               (mevedel-view--interaction-rebuild)))
            (when (and (not mevedel-view--agent-transcript-p)
                       (not mevedel-view--prompt-hook-pending)
                       (not mevedel-view--pending-skill-submission)
@@ -1319,7 +1241,7 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                               (or inhibit-interaction
                                   (and (plist-get entry :guest-id) t))))
                          (mevedel-view--dispatch-follow-up-entry
-                          kind entry input session data-buffer
+                          kind entry input data-buffer
                           before-send after-insert release))
                      (inhibited-interaction
                       (funcall release)
@@ -1663,8 +1585,8 @@ a real draft."
         ('failed-turn "Needs review")
         (state (capitalize (symbol-name state))))
       (concat
-       (when-let* ((scope (plist-get entry :scope)))
-         (format "[◆ %s] " (mevedel-view-composer-scope-label scope)))
+       (when (plist-get entry :scope)
+         "[Retired directive: retract or discard] ")
        (when-let* ((guest (plist-get entry :guest-name)))
          (format "[⇄ %s] " guest))
        (mevedel-view--pending-input-preview
@@ -2052,8 +1974,8 @@ a real draft."
     (mevedel-session-artifacts-assert-new-mutation-authority session)
     (unless (eq (plist-get item :category) 'follow-up)
       (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Pending input is already steering"))
-    (when (plist-get entry :scope)
-      (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Directive follow-ups cannot be converted to steering"))
+     (when (plist-get entry :scope)
+       (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Directive inputs are retired; retract or discard this input"))
     ;; The follow-up drain owns both the delivery-time allowlist recheck
     ;; and the command dispatch a guest invocation needs; steering
     ;; delivery has neither.

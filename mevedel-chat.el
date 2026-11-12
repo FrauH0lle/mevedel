@@ -101,7 +101,7 @@
 (defvar mevedel-compact-run-cancel)
 
 ;; `mevedel-directive-plan'
-(autoload 'mevedel-directive-plan-restore-pending "mevedel-directive-plan")
+
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-acknowledge-unknown
@@ -323,20 +323,6 @@ query completes."
 
 (defvar mevedel--diff-preview-buffer-name "*mevedel-diff-preview*"
   "Name of the `diff' preview buffer.")
-
-(defcustom mevedel-show-chat-buffer 'frame
-  "How a directive request displays its execution-session view.
-
-`frame' opens a directive frame anchored at the directive, without
-taking focus.  `window' displays the view in an ordinary window using
-`gptel-display-buffer-action'.  nil displays nothing.
-
-A directive frame falls back to a window wherever child frames are
-unavailable, so `frame' is safe on a terminal."
-  :type '(choice (const :tag "Directive frame" frame)
-                 (const :tag "Ordinary window" window)
-                 (const :tag "Do not display" nil))
-  :group 'mevedel)
 
 ;;
 ;;; Buffer management
@@ -713,7 +699,7 @@ M-x mevedel-retry-plan-implementation resumes it")))
     (require 'mevedel-goal)
     ;; Install the mevedel-augmented FSM handler chain as the buffer-local
     ;; `gptel-send--handlers' so every request from this buffer -- whether
-    ;; driven by `gptel-send', `mevedel--process-directive', or
+    ;; driven by `gptel-send' or
     ;; `mevedel--implement-plan' -- picks up the deferred-tool WAIT handler
     ;; and the terminal-state handlers (patch generation, callbacks,
     ;; cleanup, turn-count increment).  Building once at setup time keeps
@@ -775,8 +761,6 @@ M-x mevedel-retry-plan-implementation resumes it")))
     (mevedel-view--ensure buf)
     (when (mevedel-session-plan-mode mevedel--session)
       (mevedel-plan-mode-restore-pending-approval mevedel--session buf))
-    (when (mevedel-workspace-directives workspace)
-      (mevedel-directive-plan-restore-pending mevedel--session buf))
     (unless inspection-p
       (mevedel--run-session-start-hooks source))))
 

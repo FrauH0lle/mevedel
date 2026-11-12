@@ -202,7 +202,7 @@
 	   (should (mevedel-session-artifacts-save session buffer))
 	   (mevedel-session-enqueue-pending-input session 'follow-up '(:input "commit once"))
 	   (cl-letf (((symbol-function 'mevedel-view--dispatch-follow-up-entry)
-		      (lambda (_kind _entry input _session data _before after _release)
+		      (lambda (_kind _entry input data _before after _release)
 			(with-current-buffer data (insert input))
 			(funcall after))))
 	     (mevedel-view--drain-follow-up buffer))
@@ -216,6 +216,46 @@
 	     (should (eq 'dispatching (plist-get (car (plist-get saved :pending-follow-ups)) :state)))
 	     (should (eq 'failed-turn (plist-get (car (mevedel-session-pending-follow-ups restored)) :state)))
 	     (should (mevedel-session-pending-input-failure-paused restored))))
+       (when (buffer-live-p view) (kill-buffer view))))))
+
+(mevedel-deftest mevedel-view-resume-pending/retired-directive (:quiet t)
+  (mevedel-engine-test--with-session
+   (mevedel-request-end)
+   (let ((view (generate-new-buffer " *retired-input-view*")))
+     (unwind-protect
+         (progn
+           (setq-local mevedel--view-buffer view)
+           (mevedel-view--setup view buffer)
+           (mevedel-session-enqueue-pending-input
+            session 'follow-up
+            '(:input "Explain without editing"
+              :scope (:directive-id "old-directive" :action discuss)))
+           (should (mevedel-session-artifacts-save session buffer))
+           (let* ((saved (car (read-from-string
+                              (mevedel-session-artifacts-read-artifact
+                               session "session.meta.el"))))
+                  (restored (plist-get
+                             (mevedel-session-codec-deserialize saved workspace)
+                             :session)))
+             (setf (mevedel-session-pending-follow-ups session)
+                   (mevedel-session-pending-follow-ups restored)))
+           (let ((transcript (buffer-string)))
+             (with-current-buffer view
+               ;; A provider call is forbidden even if a regression reaches it.
+               (cl-letf (((symbol-function 'gptel-request)
+                          (lambda (&rest _) (ert-fail "Retired input reached provider"))))
+                 (call-interactively #'mevedel-view-resume-pending)
+                 (should (eq 'failed-turn
+                             (plist-get (car (mevedel-session-pending-follow-ups session))
+                                        :state)))
+                 (should (mevedel-session-pending-input-failure-paused session))
+                 ;; Resume must not turn a held directive into ordinary chat.
+                 (call-interactively #'mevedel-view-resume-pending)
+                 (should (mevedel-session-pending-input-failure-paused session))
+                 (call-interactively #'mevedel-view-retract-pending)
+                 (should (equal "Explain without editing" (mevedel-view--input-text)))
+                 (should-not (mevedel-session-pending-follow-ups session))))
+             (should (equal transcript (buffer-string)))))
        (when (buffer-live-p view) (kill-buffer view))))))
 
 (provide 'test-mevedel-recovery)

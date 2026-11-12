@@ -82,7 +82,7 @@
           (when (buffer-live-p view) (kill-buffer view)))))))
 
 (mevedel-deftest mevedel-view-send/claude-unavailable-policy (:quiet t)
-  (dolist (route '(session preset workload directive))
+  (dolist (route '(session preset workload))
     (mevedel-engine-test--with-session
       :file-workspace (not (eq route 'session))
       (mevedel-request-end)
@@ -91,7 +91,6 @@
              (gptel--known-presets (copy-tree gptel--known-presets))
              (mevedel-preset--registry (copy-tree mevedel-preset--registry))
              (mevedel-model-workloads nil)
-             (mevedel-show-chat-buffer nil)
              (inhibit-interaction t)
              (mevedel-claude-code-directory (file-name-concat root "claude-state"))
              (mevedel-claude-code-executable (file-name-concat root "claude"))
@@ -100,7 +99,7 @@
              (launch (symbol-function 'mevedel-claude-code-launch))
              (backend (mevedel-claude-code-register))
              (missing (mevedel-model-resolve-provider "Claude Code:claude-unavailable-fixture"))
-             view source owner selected prompt-delivered directive-error)
+             view owner selected prompt-delivered)
         (unwind-protect
             (progn
               (copy-file (file-name-concat
@@ -148,26 +147,10 @@
                                                (options . [((value . "sonnet") (name . "Sonnet"))]))])))
                                           (responseText . "FORBIDDEN MODEL PROMPT")))
                              config))))
-                (if (eq route 'directive)
-                    (progn
-                      (mevedel-tools-register)
-                      (mevedel--define-presets)
-                      (setq source (find-file-noselect (file-name-concat root "subject.txt")))
-                      (with-current-buffer source
-                        (setq-local mevedel--workspace workspace)
-                        (insert "subject\n") (save-buffer)
-                        (let* ((directive (mevedel--create-directive-in
-                                           source (point-min) (1- (point-max)) nil "Inspect subject"))
-                               (record (mevedel--directive-record directive)))
-                          (setf (mevedel-directive-session-id record) (mevedel-session-session-id session))
-                          (overlay-put directive 'mevedel-directive-model-provider
-                                       "Claude Code:claude-unavailable-fixture")
-                          (mevedel--start-directive-discussion
-                           directive (lambda (error _owner) (setq directive-error error))))))
-                  (with-current-buffer view
-                    (goto-char (mevedel-view--input-start))
-                    (insert "This must never be sampled")
-                    (mevedel-view-send)))
+                (with-current-buffer view
+                  (goto-char (mevedel-view--input-start))
+                  (insert "This must never be sampled")
+                  (mevedel-view-send))
                 (mevedel-test--await 5 "Unavailable-model request did not settle"
                   (not (mevedel-turn-busy-p buffer))))
               (ert-info ((format "Unavailable route: %s" route))
@@ -176,15 +159,13 @@
                 (should-not (string-search "FORBIDDEN MODEL PROMPT" (buffer-string)))
                 (let ((error (plist-get (mevedel-engine-info owner) :error)))
                   (should (string-search "unavailable" error))
-					(should (string-search "select an available provider before continuing" error))
-                  (when (eq route 'directive) (should (equal error directive-error))))
+					(should (string-search "select an available provider before continuing" error)))
                 (should-not mevedel--current-request)
                 ;; Selection-time lookups accept the ID without adding it to
                 ;; the discovered catalog; each dispatch rejects it as above.
                 (should-not (cl-find "claude-unavailable-fixture" (gptel-backend-models backend)
                                      :key #'gptel--model-name :test #'equal))))
-          (when (buffer-live-p view) (kill-buffer view))
-          (when (buffer-live-p source) (kill-buffer source)))))))
+          (when (buffer-live-p view) (kill-buffer view)))))))
 
 (provide 'test-mevedel-claude-code-policy)
 ;;; test-mevedel-claude-code-policy.el ends here

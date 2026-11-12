@@ -141,10 +141,10 @@
       (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))))
   :doc "read-only owners may create findings but cannot edit, send or close existing notes"
   (mevedel-tool-note-test--workspace
-    (dolist (mode '(plan request invocation discussion preset explorer))
+    (dolist (mode '(plan request invocation explorer))
       (with-current-buffer data-buf
         (setf (mevedel-session-plan-mode session) (eq mode 'plan)
-              (mevedel-session-preset-name session) (if (eq mode 'preset) 'mevedel-discuss 'mevedel-implement))
+              (mevedel-session-preset-name session) 'mevedel-implement)
         (setq-local mevedel--current-request
                     (and (eq mode 'request) (mevedel-request--create :plan-read-only t))
                     mevedel--agent-invocation
@@ -152,8 +152,7 @@
                                                  :plan-read-only t :path "/root/review" :parent-session session))
                           ((eq mode 'explorer) (mevedel-agent-invocation--create
                                                :path "/root/review" :parent-session session
-                                               :agent (mevedel-agent-get 'explorer))))
-                    mevedel--directive-read-only-request-p (eq mode 'discussion)))
+                                               :agent (mevedel-agent-get 'explorer))))))
       (let* ((id (mevedel-tool-note-test--create data-buf file))
              (address (concat "notes://" id ".md")))
         (dolist (action '("edit" "done" "delete" "close" "send"))

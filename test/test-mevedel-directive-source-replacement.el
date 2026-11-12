@@ -10,7 +10,6 @@
 (require 'rect)
 (require 'mevedel-directive-source)
 (require 'mevedel-directive)
-(require 'mevedel-directive-request)
 (require 'mevedel-instruction-undo)
 (require 'mevedel-overlays)
 (require 'mevedel-notes)
@@ -675,57 +674,6 @@
             (should (= (overlay-start note) (overlay-end note)))
             (should (equal (list detail) (mevedel-directive-subdirectives record)))))
       (mevedel-instruction-test--discard-source fixture))))
-
-(mevedel-deftest mevedel--refresh-directive-anchor
-  (:vars ((mevedel--instruction-states (make-hash-table :test #'equal))
-          (mevedel--instruction-current-state-key :global)
-          (mevedel--instruction-command-active nil)
-          (mevedel--instruction-replacement-buffers nil)
-          (last-command nil))
-   :quiet t)
-  ,test
-  (test)
-  :doc "terminal settlement during a pending replacement retains identity and last attached evidence"
-  (dolist (implementation '(nil t))
-    (dolist (replace '(nil t))
-      (let* ((fixture (mevedel-instruction-test--source-fixture))
-             (workspace (nth 1 fixture))
-             (overlay (nth 4 fixture))
-             (record (nth 5 fixture))
-             (anchor (copy-tree (mevedel-directive-anchor record))))
-        (unwind-protect
-            (with-current-buffer (nth 3 fixture)
-              (buffer-enable-undo)
-              (setq buffer-undo-list nil)
-              (mevedel-instruction-replacement-hold)
-              (delete-region 8 14)
-              (setf (mevedel-directive-state record) 'implemented
-                    (mevedel-directive-attempts record)
-                    (list (mevedel-instruction-test--attempt)))
-              (mevedel--settle-directive-presentation
-               overlay record workspace implementation nil nil)
-              (should (eq (current-buffer) (overlay-buffer overlay)))
-              (should (overlay-get overlay 'mevedel-replacement-pending))
-              (should (equal anchor (mevedel-directive-anchor record)))
-              (when replace
-                (goto-char 8)
-                (insert "NEW"))
-              (mevedel-instruction-replacement-end)
-              (should (eq (if replace 'attached 'detached)
-                          (plist-get (mevedel-directive-anchor record) :state)))
-              (unless replace
-                (should (equal (plist-get anchor :evidence)
-                               (plist-get (mevedel-directive-anchor record) :evidence))))
-              (undo-boundary)
-              (undo-only 1)
-              (should (= 14 (overlay-end overlay)))
-              (should (= 1 (length (mevedel-directive-attempts record))))
-              (undo-boundary)
-              (undo-redo 1)
-              (should (eq (if replace 'attached 'detached)
-                          (plist-get (mevedel-directive-anchor record) :state)))
-              (should (= 1 (length (mevedel-directive-attempts record)))))
-          (mevedel-instruction-test--discard-source fixture))))))
 
 (mevedel-deftest mevedel--instruction-adjust-edit
   (:vars ((mevedel--instruction-states (make-hash-table :test #'equal))

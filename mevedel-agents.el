@@ -769,8 +769,7 @@ BUFFER defaults to the current buffer."
 
 If PRESET-NAME is non-nil and declares an `:agents' entry in
 `mevedel-preset--registry', only those agents are registered -- an
-explicit empty declaration registers none, which is what a preset like
-`mevedel-discuss' means by `:agents ()'.  A preset with no `:agents'
+explicit empty declaration registers none.  A preset with no `:agents'
 key at all registers the whole registry.
 
 Populates the request-local role roster and installs its Agent schema.  Must

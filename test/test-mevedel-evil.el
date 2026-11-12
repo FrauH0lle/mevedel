@@ -65,8 +65,7 @@
                  (evil-state-property t :modes))
          (mapcar (lambda (command)
                    (cons command (copy-tree (symbol-plist command))))
-                 '(mevedel-create-directive
-                   mevedel-delete-instructions))
+                 '(mevedel-delete-instructions))
          mevedel--instruction-command-active
          (copy-sequence emulation-mode-map-alists)))
   (mevedel-evil-setup))
@@ -86,7 +85,6 @@
   (advice-remove 'mevedel-cockpit-setup-tabulated-surface #'mevedel-evil--cockpit)
   (advice-remove 'mevedel-cockpit-surface-key-help-text #'mevedel-evil--key-help)
   (advice-remove 'mevedel-view--display-fragment-keymap #'mevedel-evil--fragment-maps)
-  (advice-remove 'mevedel--create-instruction #'mevedel-evil--selection)
   (advice-remove 'mevedel-delete-instructions #'mevedel-evil--selection)
   (dolist (command '(evil-change evil-enter-replace-state))
     (advice-remove command #'mevedel-evil--replacement))
@@ -605,18 +603,16 @@ independently of the product's primitive change hooks."
                  (lambda (&rest _) (interactive) (push 'quit calls))))
         (mevedel-evil-test--keys "g r q")
         (should (equal (nreverse calls) '(refresh quit))))))
-  :doc "directive frame prefixed controls work in normal and insert state"
+  :doc "note frame prefixed close works in normal and insert state"
   (mevedel-evil-test--buffer
     (mevedel-directive-frame-mode 1)
     (dolist (state '(normal insert))
       (evil-change-state state)
       (let (calls)
-        (cl-letf (((symbol-function 'mevedel-directive-frame-toggle-filter)
-                   (lambda () (interactive) (push 'filter calls)))
-                  ((symbol-function 'mevedel-directive-frame-close)
+        (cl-letf (((symbol-function 'mevedel-directive-frame-close)
                    (lambda () (interactive) (push 'close calls))))
-          (mevedel-evil-test--keys "C-c C-f C-c C-z")
-          (should (equal (nreverse calls) '(filter close)))))))
+          (mevedel-evil-test--keys "C-c C-z")
+          (should (equal (nreverse calls) '(close)))))))
   :doc "collaboration share local map actions beat normal operators"
   (mevedel-evil-test--buffer
     (use-local-map mevedel-collaboration--share-map)
@@ -653,29 +649,7 @@ independently of the product's primitive change hooks."
                   ((symbol-function 'mevedel-report-quit)
                    (lambda () (interactive) (push 'quit calls))))
           (mevedel-evil-test--keys "g r RET q")
-          (should (equal (nreverse calls) '(refresh activate quit)))))))
-  :doc "directive visual creation edits its real minibuffer prompt and exits cleanly"
-  (dolist (spec '(("v l" char 2 4) ("V" line 1 5)))
-    (let ((file (make-temp-file "mevedel-evil-" nil ".txt" "abc\ndef\n")))
-      (unwind-protect
-          (mevedel-evil-test--buffer
-            (insert "abc\ndef\n")
-            (setq-local buffer-file-name file
-                        mevedel--workspace
-                        (mevedel-workspace--create
-                         :id file :root (file-name-directory file) :type 'file))
-            (goto-char 2)
-            (local-set-key (kbd "C-c d") #'mevedel-create-directive)
-            (mevedel-evil-test--keys (concat (car spec) " C-c d D o n e RET"))
-            (let ((overlay (car (mevedel--instructions-in 1 (point-max)))))
-              (should (eq (overlay-get overlay 'mevedel-span) (nth 1 spec)))
-              (should (= (overlay-start overlay) (nth 2 spec)))
-              (should (= (overlay-end overlay) (nth 3 spec)))
-              (should (equal (mevedel--directive-text overlay) "Done")))
-            (should (eq evil-state 'normal))
-            (should-not (region-active-p)))
-        (unlock-file file)
-        (delete-file file)))))
+          (should (equal (nreverse calls) '(refresh activate quit))))))))
 
 (mevedel-deftest mevedel-evil--replacement
   (:before-each (mevedel-evil-test--setup)

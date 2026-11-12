@@ -1,7 +1,7 @@
 # mevedel
 
 *mevedel* is an Emacs LLM workflow package, originally inspired by `evedel`,
-now focused on directive-driven coding sessions, tool use, agents, and
+now focused on chat sessions, notes, tool use, agents, and
 persistent project context. It is built on
 [gptel](https://github.com/karthink/gptel), is versatile enough so that it can
 be utilized in various types of buffers, and isn't limited to just programming
@@ -206,25 +206,15 @@ before using Fork, Rewind or Save As with this provider.
 
 ## Usage
 
-mevedel’s function revolves around the creation and manipulation of notes
-and directives within your Emacs buffers. Directives are prompts you send to the
-model, while notes mark code with optional text that you send or mention when
-you want the model to see it.
+mevedel’s function revolves around chat sessions and notes within your Emacs
+buffers. Notes mark code with optional text that you send or mention when you
+want the model to see it.
 
 The video at the [beginning](#what-does-this-package-do) of this README should
 give you a good impression on the usage.
 
 You can send your requests to the LLM either via the chat buffer (accessible by
-using `mevedel`) or by creating and submitting a directive.
-
-**Please note:** Requests sent from a directive **DO NOT** use the context of
-the chat buffer, only the current directive request and marked code.
-The first accepted directive request binds the directive to an execution
-session. Each directive exchange renders there as a complete chronological turn
-using the ordinary view, tools, permissions, and interactions, but remains
-excluded from ordinary-chat model context. Exact attempts and read-only
-discussion also remain on the durable directive record for follow-ups and
-inspection.
+using `mevedel`) or by sending a note into its own conversation.
 
 ### Quick start
 
@@ -245,8 +235,8 @@ The rest of this README is intentionally manual-style. The main moving parts are
 
 - Workspaces define the project root, allowed directories, session storage, and
   project-local context.
-- Notes and directives provide the overlay-based workflow for attaching
-  comments and prompts to ordinary buffers.
+- Notes provide the overlay-based workflow for attaching comments to ordinary
+  buffers.
 - The chat view provides the interactive gptel-backed workbench for ongoing
   conversations, tool calls, permissions, previews, agents, and slash commands.
 - Tools, permissions, inline previews, hooks, skills, agents, sessions,
@@ -399,19 +389,6 @@ Conversion never overwrites a different existing backup: resolve that conflict
 before retrying the workspace operation. A matching backup allows an interrupted
 conversion to resume safely.
 
-### Notes and directives
-
-Directives are prompts that can be processed with one of mevedel's presets. A
-directive uses its own request; the selected action decides whether the model
-may edit files, only discuss, request focused changes to existing work, or retry
-a failure. Notes are not gathered into directive prompts automatically.
-
-This means there are two complementary workflows:
-
-- Use the chat view for conversational work with accumulated transcript context.
-- Use directives when the prompt should be anchored to an explicit buffer
-  overlay, independent of the chat transcript.
-
 ### Overlays
 
 All instructions, notes or directives, are highlighted in the buffer via an
@@ -513,8 +490,7 @@ applies there (`g` actions use `gr`, and `h`/`j`/`k`/`l` actions use uppercase).
 
 Other table action keys intentionally override normal-state editing commands
 only in those read-only tables. In source buffers, invoke the ordinary
-`mevedel-create-directive` and
-`mevedel-delete-instructions` commands from visual state using your own bindings
+`mevedel-delete-instructions` command from visual state using your own bindings
 or `M-x`: `V` creates an explicit line span, `v` an explicit character span.
 Block selections are rejected rather than silently flattened. Commands leave
 visual state cleanly; vanilla Emacs region commands keep their existing behavior.
@@ -561,7 +537,6 @@ memory roots, the configured plans directory, and manually configured roots.
 |-----------------------------------|-----------------------------------------------------------------------|
 | `mevedel-note-create`             | Create a note on the region or current line; text is optional.        |
 | `mevedel-notes-list`              | List the workspace's notes, grouped by attention state.               |
-| `mevedel-create-directive`        | Create or resize a directive instruction at point or within a region. |
 | `mevedel-delete-instructions`     | Remove instructions either at point or within the selected region.    |
 | `mevedel-delete-all-instructions` | Confirm deletion of notes and visible directives in the current workspace. |
 | `mevedel-delete-all-directives`   | Confirm deletion of visible directives and their subdirectives.       |
@@ -569,7 +544,6 @@ memory roots, the configured plans directory, and manually configured roots.
 | `mevedel-in-directory`            | Start or switch to a chat session rooted in a workspace subdirectory. |
 | `mevedel-init`                    | Bootstrap or refresh project instruction files.                       |
 | `mevedel-inspect-effective-prompt` | Inspect the live prompt components, exact prompt, and effective tools. |
-| `mevedel-process-directives`      | Batch initial implementations in source order (region, point, or buffer). |
 | `mevedel-abort`                   | Abort any active request in the current buffer.                       |
 | `mevedel-version`                 | Show (or insert with prefix arg) the current mevedel version.         |
 
@@ -586,12 +560,6 @@ records; records without a source presentation do not add to the buffer count.
 |-------------------------------|------------------------------------------------------------------|
 | `mevedel-default-chat-preset` | Default preset when `mevedel` is invoked without prefix arg.     |
 | `mevedel-user-dir`            | Global user-state directory for skills, memory, plugins, config, and permissions. Set before mevedel loads. |
-
-- If the region mark started from outside the directive overlay and a
-  part of it is within the selected region, the instruction will be "shrunk" to
-  fit the new region boundaries.
-- If the region mark started from inside the directive overlay, the
-  instruction will grow to include the entire new selection.
 
 ### Sessions
 
@@ -821,12 +789,6 @@ match open notes only. An empty or malformed query matches nothing.
 
 | Command                            | Command Description                                                          |
 |------------------------------------|------------------------------------------------------------------------------|
-| `mevedel-implement-directive`      | Implement directive with full editing capabilities.                          |
-| `mevedel-discuss-directive`        | Start an isolated read-only directive turn in the shared session view.       |
-| `mevedel-implement-discussion-directive` | Implement using the complete local discussion as additional context.  |
-| `mevedel-request-directive-changes` | Open multiline feedback after a successful implementation.                  |
-| `mevedel-retry-directive`          | Retry a failed or aborted implementation with optional guidance.             |
-| `mevedel-preview-directive-prompt` | Preview directive prompt at the current point.                               |
 | `mevedel-open-directive-activity`  | Open the current directive's read-only durable inspector.                    |
 | `mevedel-list-directives`          | Choose a workspace directive for inspection or further action.               |
 | `mevedel-diff-apply-buffer`        | Apply the diff in the patch buffer with overlay preservation.                |
@@ -834,39 +796,8 @@ match open notes only. An empty or malformed query matches nothing.
 
 | Custom Variable                     | Variable Description                                       |
 |-------------------------------------|------------------------------------------------------------|
-| `mevedel-include-full-instructions` | Controls if instructions are fully included in the prompt  |
 | `mevedel-show-patch-buffer`         | Controls if patch buffer should be displayed automatically |
-| `mevedel-show-chat-buffer`          | Controls if chat buffer should be displayed automatically  |
 | `mevedel-action-preset-alist`       | Alist mapping actions to presets.                          |
-
-You can use the `mevedel-preview-directive-prompt` command to do a dry-run and
-see how the AI prompt will look like. Here's an example of previewing a
-directive prompt:
-
-[directive-preview.webm](https://github.com/user-attachments/assets/72c77cfa-5a6d-45a1-9fc4-ee6b1ad66034)
-
-The `mevedel-implement-directive` command processes the directive directly.
-`mevedel-discuss-directive` starts a complete read-only directive turn in the
-bound session's shared view. Continue discussion and other follow-ups switch the
-shared composer into an explicit directive scope with a separate draft and
-Back to chat action. Discussion persists on the directive record and can be
-promoted with `Implement this` without entering ordinary-chat context.
-After implementation, the directive turn and read-only inspector offer Request
-changes after success or Retry after failure/abort. Both use current repository
-state, and only the immediately preceding attempt as model
-context.
-Captured patches belong to immutable attempts and are display/context artifacts,
-not undo data. Rewind before an implementation is the sole implementation undo:
-it restores the attempt's pre-turn file checkpoint and discards that session's
-complete later turn suffix while retaining authored directive records.
-
-`mevedel-process-directives` performs only initial work in stable source order.
-Ready parents use Implement, Discussed parents without an implementation use
-Implement this with their full local discussion, and any parent with a prior
-implementation attempt is skipped. The batch validates each current source
-context when its turn arrives, never infers Request changes or Retry, and stops
-after the first failure or abort. Nested directives are submitted only as part
-of their parent.
 
 Commands are also available via overlay actions. For example, you can preview
 the patch before applying it.
@@ -897,16 +828,14 @@ the patch before applying it.
 
 ### Command index
 
-- `mevedel-note-create` / `mevedel-notes-list` / `mevedel-create-directive`
+- `mevedel-note-create` / `mevedel-notes-list`
 - `mevedel-save-instructions` / `mevedel-load-instructions`
-- `mevedel-implement-directive` / `mevedel-discuss-directive` /
-  `mevedel-request-directive-changes` / `mevedel-retry-directive`
 - `mevedel`
 - `mevedel-rewind` / `mevedel-redo` / `mevedel-save-session` /
   `mevedel-rename-session` / `mevedel-retry-session-naming`
 - `mevedel-take-control` / `mevedel-release-control` /
   `mevedel-toggle-follow` / `mevedel-refresh-session`
-- `mevedel-process-directives`, `mevedel-next/previous-instruction`
+- `mevedel-next/previous-instruction`
 - `mevedel-diff-apply-buffer`
 - `mevedel-compact`
 - `mevedel-review` / `mevedel-verify`

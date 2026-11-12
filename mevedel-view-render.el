@@ -49,12 +49,11 @@
 (autoload 'mevedel-open-directive-activity "mevedel-directive-activity" nil t)
 
 ;; `mevedel-directive-frame'
-(declare-function mevedel-directive-frame-refresh-filter
+(declare-function mevedel-directive-frame-refresh
                   "mevedel-directive-frame" ())
 
 ;; `mevedel-directive-request'
-(declare-function mevedel--implement-discussion
-                  "mevedel-directive-request" (directive &optional callback))
+
 
 ;; `mevedel-execution-telemetry'
 (declare-function mevedel-execution-telemetry-sandbox-summary-class
@@ -304,9 +303,7 @@
                   "mevedel-view-composer" ())
 (declare-function mevedel-view--render-anchor-position
                   "mevedel-view-composer" (anchor &optional strict))
-(declare-function mevedel-view-enter-directive-scope
-                  "mevedel-view-composer"
-                  (directive action &optional attempt-index workspace))
+
 (declare-function mevedel-view-refresh-input-prompt
                   "mevedel-view-composer" ())
 (defvar mevedel-view--input-marker)
@@ -4644,8 +4641,8 @@ the render so user toggles survive streaming ticks."
           (unless mevedel-view--agent-transcript-p
             (mevedel-view--render-agent-status)
             (mevedel-view--interaction-rebuild)
-            (when (fboundp 'mevedel-directive-frame-refresh-filter)
-              (mevedel-directive-frame-refresh-filter)))))))))
+            (when (fboundp 'mevedel-directive-frame-refresh)
+              (mevedel-directive-frame-refresh)))))))))
 
 (defvar-local mevedel-view-render--owner nil
   "Non-nil while this view has an active projection writer.")
@@ -6175,22 +6172,11 @@ is stored as a leading code-formatted action (\"`implement` Text\")."
 (defun mevedel-view-directive-actions (directive)
   "Choose a state-correct action for the rendered DIRECTIVE turn."
   (interactive (list (get-text-property (point) 'mevedel-view-directive)))
-  (pcase-let* ((`(,record ,workspace ,attempt ,attempt-index)
+  (pcase-let* ((`(,record ,workspace ,attempt ,_attempt-index)
                 (or (mevedel-view--directive-metadata-context directive)
                     (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Directive record is unavailable")))
-               (actions (mevedel-directive-actions record))
-               (discussion-p
-                (eq (plist-get directive :activity-kind) 'discussion))
                (choices
                 (append
-                 (when attempt '((?d "discuss result")))
-                 (when discussion-p '((?d "continue discussion")))
-                 (when (memq 'implement-this actions)
-                   '((?i "implement this")))
-                 (when (memq 'request-changes actions)
-                   '((?c "request changes")))
-                 (when (memq 'retry actions)
-                   '((?r "retry")))
                  (when (and attempt
                             (not (string-empty-p
                                   (or (mevedel-directive-attempt-patch attempt)
@@ -6202,14 +6188,6 @@ is stored as a leading code-formatted action (\"`implement` Text\")."
                  '((?o "inspect"))))
                (choice (car (read-multiple-choice "Directive action: " choices))))
     (pcase choice
-      (?d (mevedel-view-enter-directive-scope
-           record 'discuss attempt-index workspace))
-      (?i (mevedel--implement-discussion
-           (plist-get (mevedel--directive-action-context record workspace)
-                      :directive)))
-      (?c (mevedel-view-enter-directive-scope
-           record 'request-changes nil workspace))
-      (?r (mevedel-view-enter-directive-scope record 'retry nil workspace))
       (?p (mevedel--replace-patch-buffer
            (mevedel-directive-attempt-patch attempt)))
       (?w (let ((checkpoint (mevedel-directive-attempt-checkpoint attempt)))
@@ -9421,8 +9399,8 @@ with the next boundary render of the live turn."
       (mevedel-view--interaction-rebuild
        t (plist-get rendering :interaction-visits))
       (mevedel-view--ensure-request-progress live-data-buf)
-      (when (fboundp 'mevedel-directive-frame-refresh-filter)
-        (mevedel-directive-frame-refresh-filter)))
+      (when (fboundp 'mevedel-directive-frame-refresh)
+        (mevedel-directive-frame-refresh)))
     (mevedel-view--debug-log
      'full-rerender-after-render
      :last-assistant-turn-start

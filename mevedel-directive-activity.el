@@ -8,7 +8,7 @@
 ;;; Commentary:
 
 ;; Projects one workspace-owned directive record into a read-only inspector.
-;; All model-bound actions return to the directive's shared session view.
+;; Historical activity never starts a new model request.
 
 ;;; Code:
 
@@ -27,12 +27,6 @@
 (declare-function mevedel-directive-actions "mevedel-directive" (directive))
 (declare-function mevedel-directive-request-changed-p
                   "mevedel-directive" (directive))
-
-;; `mevedel-directive-request'
-(declare-function mevedel--implement-discussion
-                  "mevedel-directive-request" (directive &optional callback))
-(declare-function mevedel--start-directive-discussion
-                  "mevedel-directive-request" (directive &optional callback))
 
 ;; `mevedel-directive-source'
 (declare-function mevedel--directive-record
@@ -53,8 +47,6 @@
 
 ;; `mevedel-overlay-ui'
 (declare-function mevedel--ov-actions-getov "mevedel-overlay-ui" ())
-(declare-function mevedel--ov-actions-settings
-                  "mevedel-overlay-ui" (&optional instruction))
 
 ;; `mevedel-overlays'
 (declare-function mevedel--directive-action-context
@@ -147,9 +139,6 @@
 (defvar mevedel-view--display-map)
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view-enter-directive-scope
-                  "mevedel-view-composer"
-                  (directive action &optional attempt-index workspace))
 (defvar mevedel-view--input-marker)
 (defvar mevedel-view--interaction-marker)
 (defvar mevedel-view--status-marker)
@@ -204,12 +193,7 @@
   "r" #'mevedel-directive-activity-reattach
   "R" #'mevedel-directive-activity-rewind
   "a" #'mevedel-directive-activity-archive
-  "d" #'mevedel-directive-activity-discuss
-  "c" #'mevedel-directive-activity-request-changes
-  "x" #'mevedel-directive-activity-retry
-  "i" #'mevedel-directive-activity-implement-this
   "v" #'mevedel-directive-activity-view-patch
-  "s" #'mevedel-directive-activity-settings
   "n" #'mevedel-view-zone-next
   "p" #'mevedel-view-zone-previous
   "RET" #'mevedel-view-activate-at-point)
@@ -475,11 +459,8 @@
 			    (mevedel-directive-activity--frozen
 			     "Read-only pre-migration history")
 			    ((mevedel-directive-planning-enabled directive)
-			     "On · s: settings")
-			    (t "Off · s: settings"))
-		    ,@(unless mevedel-directive-activity--frozen
-			'(:activate mevedel-directive-activity-settings
-			  :help-echo "RET: edit directive settings"))
+				     "On")
+				    (t "Off"))
 		    :navigatable t)
         (:namespace directive-inspector :id anchor
 		    :label-left ,(propertize "** Anchor" 'face 'outline-2)
@@ -534,54 +515,6 @@
          (mevedel-directive-attempts
           mevedel-directive-activity--directive)
          :test #'eq))))
-
-(defun mevedel-directive-activity-discuss ()
-  "Enter shared composer discussion scope for this directive."
-  (interactive)
-  (mevedel-directive-activity--require-writable)
-  (if (memq 'discuss
-            (mevedel-directive-actions
-             mevedel-directive-activity--directive))
-      (let ((directive (mevedel-directive-activity--source-directive)))
-        (mevedel-view-enter-directive-scope
-         mevedel-directive-activity--directive 'discuss nil
-         mevedel-directive-activity--workspace)
-        (mevedel--start-directive-discussion directive))
-    (mevedel-view-enter-directive-scope
-     mevedel-directive-activity--directive 'discuss
-     (mevedel-directive-activity--attempt-index-at-point)
-     mevedel-directive-activity--workspace)))
-
-(defun mevedel-directive-activity-request-changes ()
-  "Enter shared composer Request changes scope."
-  (interactive)
-  (mevedel-directive-activity--require-writable)
-  (mevedel-view-enter-directive-scope
-   mevedel-directive-activity--directive 'request-changes nil
-   mevedel-directive-activity--workspace))
-
-(defun mevedel-directive-activity-retry ()
-  "Enter shared composer Retry scope."
-  (interactive)
-  (mevedel-directive-activity--require-writable)
-  (mevedel-view-enter-directive-scope
-   mevedel-directive-activity--directive 'retry nil
-   mevedel-directive-activity--workspace))
-
-(defun mevedel-directive-activity-implement-this ()
-  "Implement the inspected directive using its local discussion."
-  (interactive)
-  (mevedel-directive-activity--require-writable)
-  (mevedel--implement-discussion
-   (mevedel-directive-activity--source-directive)))
-
-(defun mevedel-directive-activity-settings ()
-  "Edit settings for the inspected directive."
-  (interactive)
-  (mevedel-directive-activity--require-writable)
-  (mevedel--ov-actions-settings
-   (mevedel-directive-activity--source-directive))
-  (mevedel-directive-activity-refresh))
 
 (defun mevedel-directive-activity-view-patch ()
   "Open the implementation attempt at point in the patch viewer."

@@ -1475,15 +1475,6 @@
                          (setf (mevedel-session-permission-mode session) 'edits)))
               (changes "Plan/edits"
                        (lambda () (setf (mevedel-session-plan-mode session) t)))
-              (changes "directive 01234567/discuss"
-                       (lambda ()
-                         (setq mevedel-view--composer-scope
-                               (list :directive-id "0123456789"
-                                     :action 'discuss))))
-              (changes "directive 01234567/retry"
-                       (lambda ()
-                         (plist-put mevedel-view--composer-scope
-                                    :action 'retry)))
               (changes "· running ·"
                        (lambda ()
                          (with-current-buffer data-buf

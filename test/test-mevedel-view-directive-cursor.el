@@ -1,7 +1,7 @@
-;;; test-mevedel-view-directive-cursor.el --- Directive input cursor tests -*- lexical-binding: t -*-
+;;; test-mevedel-view-directive-cursor.el --- Note input cursor tests -*- lexical-binding: t -*-
 
 ;;; Commentary:
-;; Exercise region directive creation through its real minibuffer while a
+;; Exercise region note creation through its real minibuffer while a
 ;; neighboring chat redraws, including normal acceptance and unwinding.
 
 ;;; Code:
@@ -11,14 +11,14 @@
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-overlays)
-(require 'mevedel-overlay-ui)
+(require 'mevedel-notes)
 (require 'mevedel-agent-control)
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
 (require 'mevedel-view-render)
 (require 'mevedel-view-stream)
 
-(mevedel-deftest mevedel-view-directive-cursor
+(mevedel-deftest mevedel-view-note-cursor
   (:vars ((mevedel--instruction-states (make-hash-table :test #'equal))
           (mevedel--instruction-current-state-key :global)))
   (dolist (label '("[Manage]" "/root/background-reader"))
@@ -30,6 +30,7 @@
              source)
         (unwind-protect
             (save-window-excursion
+              (make-directory (file-name-concat directory ".mevedel"))
               (with-temp-file file
                 (dotimes (_ 80) (insert "Selected source text\n")))
               (setq source (find-file-noselect file))
@@ -66,7 +67,7 @@
                        (hits 0)
                        (restored 0)
                        scroll-start
-                       directive result)
+                       note result)
                   (should anchor)
                   (select-window source-window)
                   (switch-to-buffer source)
@@ -79,9 +80,8 @@
                            (lambda ()
                              (should (minibufferp))
                              (should (= 1 (minibuffer-depth)))
-                             (should (equal "Directive: " (minibuffer-prompt)))
-                             (should (= (window-start source-window) 1))
-                             (should (> scroll-start (window-start source-window)))
+                             (should (equal "Note (optional): " (minibuffer-prompt)))
+                             (should (= scroll-start (window-start source-window)))
                              (cl-incf hits)
                              (insert "Preserve this source")
                              (with-current-buffer view-buf
@@ -91,25 +91,17 @@
                                           (mevedel-view-zone-anchor-position anchor)))
                                (cl-incf restored))
                              (when (eq outcome 'error)
-                               (error "Expected directive input failure")))
+                               (error "Expected note input failure")))
                            minibuffer-setup-hook)))
                     (define-key input-map (kbd "C-c d")
                                 (lambda ()
                                   (interactive)
-                                  ;; Enter with the selected region above the
-                                  ;; source viewport, exercising its temporary
-                                  ;; scroll without a command-loop redisplay.
-                                  (setq scroll-start
-                                        (save-excursion
-                                          (goto-char (point-min))
-                                          (forward-line 40)
-                                          (point)))
-                                  (set-window-start source-window scroll-start t)
+                                  (setq scroll-start (window-start source-window))
                                   (setq result
                                         (condition-case err
                                             (progn
-                                              (setq directive
-                                                    (mevedel--create-instruction 'directive))
+                                              (setq note
+                                                    (call-interactively #'mevedel-note-create))
                                               'accepted)
                                           (quit 'cancelled)
                                           (error err)))))
@@ -122,22 +114,21 @@
                             ('error "C-c d")
                             (_ "C-c d RET")))))
                   (should (= hits 1))
-                  (ert-info ((format "Directive result: %S" result))
+                  (ert-info ((format "Note result: %S" result))
                     (should (= restored 1)))
                   (should (= (minibuffer-depth) 0))
                   (should-not (active-minibuffer-window))
                   (pcase outcome
                     ('quit
                      (should (eq result 'cancelled))
-                     (should-not (mevedel--instructions-in (point-min) (point-max)))
-                     (should-not (mevedel-workspace-directives workspace)))
+                     (should-not (mevedel--instructions-in (point-min) (point-max))))
                     ('error
-                     (should (equal result '(error "Expected directive input failure"))))
+                     (should (equal result '(error "Expected note input failure"))))
                     (_
                      (should (eq result 'accepted))
-                     (should (overlay-buffer directive))
+                     (should (overlay-buffer note))
                      (should (equal "Preserve this source"
-                                    (mevedel--directive-text directive)))))
+                                    (overlay-get note 'mevedel-note-text)))))
                   (should (eq (current-buffer) source))
                   (should (eq (selected-window) source-window))
                   (should (equal (window-list nil nil view-window) windows))
@@ -158,9 +149,9 @@
             (kill-buffer source))
           (delete-directory directory t)))))
   (outcome)
-  :doc "accepting directive input preserves a neighboring background reader"
+  :doc "accepting note input preserves a neighboring background reader"
   'accept
-  :doc "quitting directive input cleans up and preserves the background reader"
+  :doc "quitting note input cleans up and preserves the background reader"
   'quit
   :doc "input errors unwind windows without losing the background reader"
   'error)

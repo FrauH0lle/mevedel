@@ -1852,19 +1852,15 @@ async function main() {
   nodes.filter.children[0].dispatch('click'); // Main chat
   assert.equal(findByRecordId(nodes.transcript, 'assistant').hidden, false);
   assert.equal(findByRecordId(nodes.transcript, 'directive-user').hidden, true);
-  // A prompt sent under a directive filter carries that directive, so
-  // the reply lands in the thread the guest is reading; main chat and
-  // All carry none. The composer says where the prompt will go.
+  // Directive history is read-only; the composer explicitly sends to main chat.
   nodes.filter.children[1].dispatch('click');
-  assert.match(nodes['composer-input'].placeholder, /Refactor the parser/);
-  // The composer scope pill names the directive the prompt will land in
-  // and disappears for unscoped filters.
+  assert.match(nodes['composer-input'].placeholder, /session/);
   assert.equal(nodes['composer-scope'].hidden, false);
-  assert.match(textOf(nodes['composer-scope']), /Refactor the parser/);
+  assert.match(textOf(nodes['composer-scope']), /Main chat.*read-only/);
   nodes['composer-input'].value = 'and this one?';
   nodes.composer.dispatch('submit');
-  await waitFor(() => first.sent.length === 7, 'directive-scoped prompt');
-  assert.equal((await unseal(key, first.sent[6])).directive, 'dir-1');
+  await waitFor(() => first.sent.length === 7, 'ordinary prompt from history');
+  assert.equal((await unseal(key, first.sent[6])).directive, undefined);
   nodes.filter.children[0].dispatch('click'); // Main chat
   assert.equal(nodes['composer-scope'].hidden, true);
   nodes['composer-input'].value = 'main chat';
@@ -2017,7 +2013,7 @@ async function main() {
   const queuedPhoto = await unseal(key, first.sent[queuedSendBefore + 1]);
   assert.equal(queuedPhoto.images.length, 1);
   assert.equal(queuedPhoto.images[0].mime, 'image/jpeg');
-  assert.equal(queuedPhoto.directive, 'dir-1');
+  assert.equal(queuedPhoto.directive, undefined);
   assert.equal(queuedPhoto.name, 'before-wait');
   assert.equal(nodes['composer-input'].value, '');
   assert.equal(nodes.attachments.children.length, 0);

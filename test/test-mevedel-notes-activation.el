@@ -123,15 +123,14 @@
     (mevedel-notes-activation-test--cold
      `(progn
         (require 'mevedel)
+        (require 'mevedel-directive-source)
         (let ((source (find-file-noselect ,file)))
           (with-current-buffer source
-            (let ((transient-mark-mode t))
-              (goto-char (point-min))
-              (set-mark (line-end-position))
-              (activate-mark)
-              (cl-letf (((symbol-function 'read-from-minibuffer)
-                         (lambda (&rest _) "Returning directive")))
-                (mevedel-create-directive)))
+            ;; No command creates directives any more; seed the legacy record
+            ;; through the internal source path the command used.
+            (goto-char (point-min))
+            (mevedel--create-directive-in
+             source (point-min) (line-end-position) nil "Returning directive")
             (delete-file ,file)
             (run-hooks 'post-command-hook)
             (run-hooks 'post-command-hook))

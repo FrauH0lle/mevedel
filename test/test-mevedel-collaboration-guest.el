@@ -22,6 +22,10 @@
                load-file-name
                byte-compile-current-file))
           "mevedel-collaboration-relay-test-support"))
+(require 'mevedel-engine-test-support
+         (file-name-concat
+          (file-name-directory (or load-file-name buffer-file-name))
+          "mevedel-engine-test-support"))
 (require 'cl-lib)
 (require 'gptel)
 (require 'mevedel-agent-control)
@@ -812,40 +816,28 @@
       (kill-buffer view-buffer)
       (kill-buffer data-buffer))))
 
-(mevedel-deftest mevedel-collaboration--guest-directive-id
-  (:doc "accepts a directive of the room's own session and drops anything else")
-  (let* ((workspace (mevedel-workspace-get-or-create
-                     'project "/tmp/collab-dir/" "/tmp/collab-dir/" "collab"))
-         (session (mevedel-session-create "main" workspace))
-         (room (list :session session)))
-    (unwind-protect
-        (progn
-          (setf (mevedel-workspace-directives workspace)
-                (list (mevedel-directive--create
-                       :id "dir-1" :session-id (mevedel-session-session-id session))
-                      (mevedel-directive--create :id "dir-other" :session-id "other-session")
-                      (mevedel-directive--create :id "dir-unbound")))
-          (should (equal "dir-1"
-                         (mevedel-collaboration--guest-directive-id
-                          room (list :directive "dir-1"))))
-          ;; A directive of another session, or none yet, would run its
-          ;; turn outside the room's session.
-          (should-not (mevedel-collaboration--guest-directive-id
-                       room (list :directive "dir-other")))
-          (should-not (mevedel-collaboration--guest-directive-id
-                       room (list :directive "dir-unbound")))
-          ;; A stale filter, a non-string, and no filter at all all send
-          ;; to main chat rather than failing the prompt.
-          (should-not (mevedel-collaboration--guest-directive-id
-                       room (list :directive "dir-gone")))
-          (should-not (mevedel-collaboration--guest-directive-id
-                       room (list :directive 42)))
-          (should-not (mevedel-collaboration--guest-directive-id
-                       room (list :text "no filter")))
-          ;; A room with no session cannot resolve anything.
-          (should-not (mevedel-collaboration--guest-directive-id
-                       (list :session nil) (list :directive "dir-1"))))
-      (mevedel-workspace-clear-registry))))
+(mevedel-deftest mevedel-collaboration-retired-directive-input (:quiet t)
+  (mevedel-engine-test--with-session
+   (let* ((view (generate-new-buffer " *retired-guest-view*"))
+          (guests (make-hash-table :test #'eql))
+          (room (list :data-buffer buffer :session session :guests guests
+                      :transport 'transport))
+          reply)
+     (unwind-protect
+         (progn
+           (setq-local mevedel--view-buffer view)
+           (mevedel-view--setup view buffer)
+           (puthash 1 '(:name "Phone" :writable t :ready t :guest-id "phone") guests)
+           (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                      (lambda (_transport peer frame)
+                        (should (= peer 1))
+                        (setq reply frame))))
+             (mevedel-collaboration--handle-prompt
+              room 1 '(:t "prompt" :directive "old-directive" :text "Explain this")))
+           (should-not (mevedel-session-pending-follow-ups session))
+           (should (equal "notice" (plist-get reply :t)))
+           (should (string-match-p "read-only" (plist-get reply :message))))
+       (when (buffer-live-p view) (kill-buffer view))))))
 
 (mevedel-deftest mevedel-collaboration--handle-retract
   (:doc "removes only the sender's own pending entry with its attachments")

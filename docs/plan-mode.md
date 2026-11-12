@@ -6,9 +6,7 @@ Plan mode is a sticky planning workflow independent of the session's stored
 the composer continues to cycle only
 `ask` -> `edits` -> `full-auto` -> `ask`,
 including while Plan is active. The composer displays both dimensions as
-`[Plan · MODE]`. Directive scope pauses Plan dispatch while preserving Plan for
-the return to chat; its composer chrome shows MODE and `Plan paused`. A session
-with an unfinished Goal cannot enter Plan; a
+`[Plan · MODE]`. A session with an unfinished Goal cannot enter Plan; a
 completed Goal is historical and does not block it.
 
 `/plan PROMPT` enters Plan and sends `PROMPT` through the ordinary
@@ -19,72 +17,6 @@ Plan or accepts a proposal.
 To implement a plan yourself, run `/buddy`: it feeds the current plan to
 [Buddy](buddy.md#feeding-a-session-to-buddy) and leaves Plan mode and the
 pending proposal untouched.
-
-## Directive Plan before implementation
-
-A top-level directive can independently enable **Plan before implementation**
-from its overlay or inspector Settings menu. Nested directive presentations use
-their owner's setting. The setting is off by default and does not enter sticky
-session Plan mode. Implement, Implement this, Request changes, and Retry first
-send the exact eventual implementation request through a read-only planning
-turn. Discuss is unchanged. Batch processing remains sequential: an
-enabled directive reaches approval and implementation before the next item
-starts.
-
-Directive planning uses the directive's model and effort override when set;
-otherwise it resolves the preset's `planning` workload. Its proposal
-uses the ordinary `<proposed_plan>` parser and shared approval interaction. The
-directive card offers only implementation Mode, Model, Skills, Instructions,
-Accept, Feedback, and Cancel: execution is always Direct in the directive's
-bound session and current context. The selected mode and model are request-local
-implementation settings; they do not replace the session policy or the
-directive's planning model. Selection survives proposal feedback, while a fresh
-directive action starts with fresh defaults seeded with the directive's own
-skill selection (deduplicated by skill source); the card's selection at accept
-time is the single authority for that attempt. Browser feedback from a full or
-owner link continues that directive's planning conversation directly, with the
-current proposal as reference; it neither submits ordinary chat nor enters the
-host's composer. View links cannot answer the approval. Feedback captured from
-a replaced, cancelled, or invalidated attempt cannot restart its planning.
-If planning policy resolution or synchronous request startup fails, the
-proposal, selection, and approval attempt remain available for another feedback
-submission. Startup recovery does not roll back an attempt that has already
-settled or been replaced.
-
-## Directive skills
-
-A directive's Settings menu also toggles **skills** on the workspace record,
-selected from the user-invocable roster of the directive's live bound
-execution session, else the workspace's active chat session (with no open
-session, selection is refused). The selection persists with the record, shows
-as a `SKILLS:` label line, and attaches to direct implementation-type prompts
-(Implement, Implement this, Request changes, Retry) with the accepted-plan
-handoff semantics: argument-free instruction mentions stored by canonical
-`SKILL.md` source that ignore skill model/effort, agent, hooks, and permission
-policy. Discuss never sees the attachments. Skill sources are
-revalidated at every dispatch; a missing, disabled, malformed, or no longer
-user-invocable selection starts no request and leaves the directive retryable,
-and batch processing skips that directive and continues.
-
-The durable presentation progresses through Planning, Plan Ready, Plan
-Accepted, Implementing, and the ordinary terminal lifecycle. Planning turns,
-the current proposal, selection, and the exact accepted implementation prompt
-belong to the workspace directive record. Resume restores a pending proposal;
-cancel keeps the planning history as a draft; Continue Plan re-enters the
-directive composer scope. Editing the owner request or a nested detail
-invalidates an unstarted proposal; a late planning result cannot restore its
-approval. Each in-flight attempt has a transient identity shared by its record,
-session owner, and approval callbacks, so an old callback cannot publish,
-accept, or release a replacement attempt. Failed, aborted, malformed, and
-ownerless planning terminals remain cancelled drafts and release the session
-workflow before queued input resumes; resume does not recreate ownership for
-them. Rewind removes planning turns at and after the checkpoint and restores an
-accepted pre-attempt plan when it removes that plan's implementation attempt.
-
-Only one root workflow owns a session at a time. Ordinary Plan cannot start
-while directive planning is active, and a directive cannot begin planning while
-ordinary Plan is active. Ordinary chat input uses the existing pending-input
-queue while directive approval owns the session.
 
 ## Planning model policy
 
@@ -108,9 +40,8 @@ Retained agents keep their own workload policies. Plan Summary preparation
 uses the shared `summarization` workload.
 
 The `plan-implementation` workload initializes the model and effort shown in
-approval for both ordinary Plan and directive Plan before implementation. It
-resolves from the owning chat buffer's preset, independently of the temporary
-planning model or a directive's planning override. Its default entry is empty,
+approval. It resolves from the owning chat buffer's preset, independently of
+the temporary planning model. Its default entry is empty,
 so unconfigured fields inherit the session policy. Invalid model policy prevents
 creating the initial approval selection; it never silently falls back.
 This workload does not select models for ordinary coding turns or delegated
@@ -128,8 +59,8 @@ shell startup and Git helpers; unsafe helper-dependent worktree inspection
 refuses rather than silently executing helpers. Explicit denials and ordinary
 resource permissions still apply. Unknown commands, output-file options,
 mutating compounds and unsupported shell constructs remain blocked.
-This rule is shared by standalone/sticky Plan, directive planning, and retained
-agents in a planning session. See [Bash specifics](permissions.md#bash-specifics).
+This rule is shared by standalone/sticky Plan and retained agents in a planning
+session. See [Bash specifics](permissions.md#bash-specifics).
 
 Plan requests expose `ApplyPatch` for session-only `work://` descendants,
 including retained agents, so durable plans and notes can be updated through
@@ -166,13 +97,6 @@ also refuses agents started before Plan was entered. Interrupting, listing and
 waiting are unaffected. Mail and results remain advisory text: a recipient
 that reads them later acts under its own authority at that time.
 
-Directive Plan before implementation runs on the implementation preset's tool
-surface, bounded by the same Plan stamp, so it can delegate and use read-only
-Bash. Its boundary is stricter in one respect: its planning requests do not
-expose or allow `ApplyPatch`, including session-only proposals. `Eval` is
-unavailable as in every Plan request. Directive Discuss is unchanged; it keeps
-its own read-only capability ceiling, which denies delegation.
-
 ## Proposal interaction
 
 Only a completed root-assistant prose span can create a proposal. The last
@@ -184,9 +108,9 @@ selected axes.
 The first delivered reminder in a Plan episode includes the full preferred
 proposal shape. Later turns carry a one-line reference to the earlier contract
 and this manual, including after compaction. A cancelled dispatch does not mark
-the template delivered. Leaving and re-entering sticky Plan, or starting a new
-directive planning conversation, rearms the full template; feedback continues
-the existing episode. Reopening a session or starting a fresh child reestablishes
+the template delivered. Leaving and re-entering sticky Plan rearms the full
+template; feedback continues the existing episode. Reopening a session or
+starting a fresh child reestablishes
 its guidance independently. This is model guidance, not a parser-enforced
 schema: the proposal parser accepts any nonblank Markdown inside the tags.
 
@@ -209,8 +133,8 @@ Recover the complete Plan contract here when its earlier reminder is unavailable
 
 - Inspect and discuss, not implement. Bash is limited to read-only-classified
   commands; Eval is unavailable. Standalone/sticky Plan permits ApplyPatch only
-  for session-owned `work://` descendants. Directive Planning permits no file
-  writes. Children inherit these limits; delegate independent investigation or
+  for session-owned `work://` descendants. Children inherit these limits;
+  delegate independent investigation or
   critique of a draft supplied in the task when useful.
 - Treat implementation requests as requests to produce or revise the plan.
   Explore available evidence first; ask only about genuine user preferences the
@@ -344,10 +268,8 @@ captured policy through settlement even if the Goal stops meanwhile.
 
 Neither Here nor Worktree promotes these settings to session defaults. A
 Worktree fork copies the planning session's ordinary defaults and preset; the
-accepted selection is not installed as that baseline. Summary, control, directive, and unrelated child
-requests do not inherit an ambient Goal implementation policy. Directive
-implementation retains its own request-local selection on the common
-permission path.
+accepted selection is not installed as that baseline. Summary, control, and unrelated child
+requests do not inherit an ambient Goal implementation policy.
 
 Children started from an implementation turn inherit its permission-mode
 override for that child turn, including nested delegation, but retain their
@@ -507,5 +429,4 @@ automatically.
 
 A failed approval renderer dismisses the interaction without touching that
 metadata, so the proposal stays restorable: only a user cancellation discards
-the selection. A directive-owned approval still settles its caller, because a
-waiting batch must not hang on a rendering bug.
+the selection.

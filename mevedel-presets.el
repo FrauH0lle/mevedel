@@ -2,9 +2,7 @@
 
 ;;; Commentary:
 
-;; Defines the three gptel presets that drive a mevedel session:
-;; `mevedel-discuss' (read-only exploration) and `mevedel-implement'
-;; (full edit access, inherits discuss).
+;; Defines the implementation and note-conversation gptel presets.
 ;;
 ;; Each preset assembles tool lists and registers sub-agents buffer-locally at
 ;; request time.  This module builds the request FSM handler chain around the
@@ -175,8 +173,7 @@
 ;;; Presets
 
 (defcustom mevedel-action-preset-alist
-  '((implement . mevedel-implement)
-    (discuss . mevedel-discuss))
+  '((implement . mevedel-implement))
   "Alist mapping actions to presets."
   :group 'mevedel
   :type '(alist :key-type symbol))
@@ -222,11 +219,6 @@ Each value contains the raw parent, agent, tool, and variable settings.")
     (apply apply-preset preset args)))
 
 (advice-add 'gptel--apply-preset :around #'mevedel-preset--guard-note-identity)
-
-(defvar-local mevedel--directive-read-only-request-p nil
-  "Non-nil while the current turn is a read-only directive discussion.
-Directive planning is bounded by its request's Plan read-only stamp instead,
-which lets it delegate to agents that inherit that stamp.")
 
 (defconst mevedel-preset--structural-keys
   '(:description :parents :pre :post :backend :model :system :tools :agents
@@ -514,28 +506,9 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
 ;;;###autoload
 (defun mevedel--define-presets ()
   "Define gptel presets for mevedel actions."
-  ;; Read-only preset for discussion/analysis
-  (mevedel-define-preset mevedel-discuss
-    :description "Read-only tools for code analysis and discussion"
-    :tools ((:tool "Read") (:tool "Glob") (:tool "Grep")
-            (:discoverable read) (:tool "ToolCall") (:tool "ToolSearch")
-            (:discoverable code) (:discoverable web)
-            (:discoverable notes)
-            (:discoverable (:tool "CreateGoal"))
-            (:discoverable (:tool "GetGoal"))
-            (:discoverable (:tool "UpdateGoal")))
-    :agents ()
-    :system (lambda ()
-              (mevedel-system-build-prompt
-               'main
-               :retained t
-               :session mevedel--session
-               :refresh-buffer (current-buffer))))
-
   ;; Full editing preset for implementation
   (mevedel-define-preset mevedel-implement
     :description "Full editing capabilities with patch review workflow"
-    :parents (mevedel-discuss)
     :tools ((:tool "Read") (:tool "Glob") (:tool "Grep")
             (:discoverable read)
             (:tool "ApplyPatch") (:discoverable edit) (:tool "Bash")
@@ -564,20 +537,6 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
                'note :retained t :session mevedel--session
                :refresh-buffer (current-buffer)))))
 
-(defun mevedel-preset--read-only-rules ()
-  "Return request rules denying mutation and mutation-capable delegation."
-  (mapcar
-   (lambda (name) (list name :action 'deny))
-   (delete-dups
-    (append
-     '("Agent" "SendMessage")
-     (mapcar
-      #'mevedel-tool-name
-      (cl-remove-if (lambda (tool)
-                      (or (mevedel-tool-read-only-p tool)
-                          (equal "NoteWrite" (mevedel-tool-name tool))))
-                    (mevedel-tool-all)))))))
-
 (defun mevedel-preset-prepare-request (request)
   "Capture effective model, pending skills and authority on admitted REQUEST."
   (let ((info (mevedel-engine-info (mevedel-engine-owner request))))
@@ -585,11 +544,7 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
       (setf (mevedel-request-model-policy request)
             (list :backend (plist-get info :backend) :model (plist-get info :model)
                   :effort (plist-get info :reasoning-effort)))))
-  (mevedel-skills--drain-pending-context request)
-  (when mevedel--directive-read-only-request-p
-    (setf (mevedel-request-skill-permission-rules request)
-          (append (mevedel-request-skill-permission-rules request)
-                  (mevedel-preset--read-only-rules)))))
+  (mevedel-skills--drain-pending-context request))
 
 
 ;;

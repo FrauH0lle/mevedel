@@ -186,13 +186,12 @@
 (declare-function mevedel-view--input-marker-position
                   "mevedel-view-composer" ())
 (declare-function mevedel-view--input-prompt-string
-                  "mevedel-view-composer" (&optional mode))
-(declare-function mevedel-view-composer-scope-label
-                  "mevedel-view-composer" (&optional scope))
+                  "mevedel-view-composer" ())
+
 (declare-function mevedel-view--permission-mode-display
                   "mevedel-view-composer" (mode))
 (declare-function mevedel-view--plan-mode-p "mevedel-view-composer" ())
-(declare-function mevedel-view--refit-input-prompt "mevedel-view-composer" ())
+
 (declare-function mevedel-view--position-in-input-region-p
                   "mevedel-view-composer" (position))
 (declare-function mevedel-view--sanitize-undo "mevedel-view-composer" ())
@@ -200,7 +199,7 @@
 (declare-function mevedel-view-composer-initialize
                   "mevedel-view-composer" ())
 (defvar mevedel-view--composer-display-overlay)
-(defvar mevedel-view--composer-scope)
+
 (defvar mevedel-view--input-marker)
 
 ;; `mevedel-view-control-transfer'
@@ -1536,8 +1535,6 @@ when one of them changes."
             (vector data-buffer session-name directory
                     (and target (mevedel-execution-target-identity target))
                     pending-publication lease-state permission-mode plan-mode
-                    (plist-get mevedel-view--composer-scope :directive-id)
-                    (plist-get mevedel-view--composer-scope :action)
                     state model (and goal t) goal-status goal-turns
                     preset-name compaction tool-count width
                     (display-graphic-p) (selected-window))))
@@ -1551,7 +1548,6 @@ when one of them changes."
                (mode (if plan-mode
                          (format "Plan/%s" permission-label)
                        permission-label))
-               (scope (mevedel-view-composer-scope-label))
                (model (if model (gptel--model-name model) "model none"))
                (tools (format "%d tool%s"
                               tool-count
@@ -1583,9 +1579,6 @@ when one of them changes."
                                'help-echo "Toggle automatic compaction for this open session"))))
                         (mevedel-view--status-strip-button
                          mode 'mode "Open mode cockpit")
-                        (and scope
-                             (propertize scope
-                                         'face 'mevedel-view-directive-scope))
                         (propertize
                          state 'face (if (string= state "running")
                                          'success
@@ -1816,7 +1809,6 @@ then move the cursor within the draft, or out of it."
 Size changes run before windows are redisplayed, so their text can
 change here with the usual composer point preservation."
   (when (eq (window-buffer window) (current-buffer))
-    (mevedel-view--refit-input-prompt)
     (mevedel-view--render-request-progress))
   (mevedel-view--resume-on-window-scroll window))
 
@@ -1838,7 +1830,6 @@ still release animation and power observers when it becomes invisible."
       (mevedel-view--resume-render-if-attended (current-buffer))
     (when (fboundp 'mevedel-view--start-spinner-timer)
       (mevedel-view--start-spinner-timer t)))
-  (mevedel-view--refit-input-prompt)
   (mevedel-view--render-request-progress))
 
 (defun mevedel-view--schedule-render (kind data-buffer delay)
