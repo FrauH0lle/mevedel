@@ -75,7 +75,7 @@
             (progn
               (require 'mevedel-overlay-ui)
               (condition-case nil
-                  (mevedel--ov-actions-activity)
+                  (mevedel--ov-actions-dispatch)
                 (error nil))
               (unless (featurep 'mevedel-notes)
                 (error "UI action did not load its target owner")))))))

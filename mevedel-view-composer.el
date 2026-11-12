@@ -515,7 +515,7 @@
 
 (defface mevedel-view-directive-scope
   '((t :inherit font-lock-keyword-face :weight bold))
-  "Face for note frames and frozen directive history chrome."
+  "Face for note frames."
   :group 'mevedel)
 
 

@@ -204,118 +204,6 @@
                                          :record)
                               :fork-point-id)))))
 
-(mevedel-deftest mevedel-transcript-directive-ranges-from-spans ()
-  ,test
-  (test)
-  :doc "pairs caller-supplied spans exactly as the scanning entry point does"
-  (let* ((boundary
-          (lambda (edge id turn)
-            (mevedel--format-hook-audit-record
-             (list :type 'directive-turn-boundary :edge edge
-                   :directive-id id :action 'discuss :turn turn
-                   :outcome 'success :sequence 1))))
-         (text (concat "a" (funcall boundary 'start "d1" 1) "one\n"
-                       (funcall boundary 'end "d1" 1)
-                       "b" (funcall boundary 'start "d2" 3) "two\n"
-                       (funcall boundary 'end "d2" 3) "c"))
-         (spans (mevedel-transcript-audit-spans text 'directive-turn-boundary)))
-    (should (= 2 (length (mevedel-transcript-directive-ranges-from-spans
-                          spans text))))
-    (should (equal (mevedel-transcript-directive-ranges text)
-                   (mevedel-transcript-directive-ranges-from-spans spans text)))
-    ;; A prefix of complete pairs pairs on its own.
-    (should (equal (list (car (mevedel-transcript-directive-ranges text)))
-                   (mevedel-transcript-directive-ranges-from-spans
-                    (seq-take spans 2) text))))
-  :doc "reports the same errors and running range for the same spans"
-  (let* ((start (mevedel--format-hook-audit-record
-                 '(:type directive-turn-boundary :edge start
-                   :directive-id "d" :action discuss :turn 1)))
-         (text (concat "x" start "streaming"))
-         (spans (mevedel-transcript-audit-spans text 'directive-turn-boundary)))
-    (should-error (mevedel-transcript-directive-ranges-from-spans spans text)
-                  :type 'error)
-    (should (eq 'running
-                (plist-get (car (mevedel-transcript-directive-ranges-from-spans
-                                 spans text t))
-                           :outcome)))
-    (should-error
-     (mevedel-transcript-directive-ranges-from-spans
-      (append spans spans) (concat text start) t)
-     :type 'error))
-  :doc "reads buffer spans against the current buffer and its end"
-  (with-temp-buffer
-    (insert "before")
-    (insert (mevedel--format-hook-audit-record
-             '(:type directive-turn-boundary :edge start
-               :directive-id "d" :action discuss :turn 2)))
-    (insert "body")
-    (let ((spans (mevedel-transcript-audit-buffer-spans
-                  'directive-turn-boundary)))
-      (should (equal (mevedel-transcript-directive-ranges (current-buffer) t)
-                     (mevedel-transcript-directive-ranges-from-spans
-                      spans (current-buffer) t)))
-      (should (= (point-max)
-                 (plist-get (car (mevedel-transcript-directive-ranges-from-spans
-                                  spans (current-buffer) t))
-                            :body-end))))))
-
-(mevedel-deftest mevedel-transcript-directive-ranges ()
-  ,test
-  (test)
-  :doc "pairs matching directive boundaries around their complete body"
-  (let* ((start (mevedel--format-hook-audit-record
-                 '(:type directive-turn-boundary :edge start
-                   :directive-id "directive-1" :action discuss :turn 3)))
-         (end (mevedel--format-hook-audit-record
-               '(:type directive-turn-boundary :edge end
-                 :directive-id "directive-1" :action discuss :turn 3
-                 :outcome success :sequence 2)))
-         (text (concat "before" start "PROMPT\nRESPONSE" end "after"))
-         (range (car (mevedel-transcript-directive-ranges text))))
-    (should (= 1 (length (mevedel-transcript-directive-ranges text))))
-    (should (equal "PROMPT\nRESPONSE"
-                   (substring text
-                              (plist-get range :body-start)
-                              (plist-get range :body-end))))
-    (should (equal "directive-1" (plist-get range :directive-id)))
-    (should (= 3 (plist-get range :turn)))
-    (should (eq 'success (plist-get range :outcome))))
-
-  :doc "rejects unmatched and mismatched boundaries"
-  (let ((start (mevedel--format-hook-audit-record
-                '(:type directive-turn-boundary :edge start
-                  :directive-id "directive-1" :turn 3)))
-        (wrong-end (mevedel--format-hook-audit-record
-                    '(:type directive-turn-boundary :edge end
-                      :directive-id "directive-2" :turn 3))))
-    (should-error (mevedel-transcript-directive-ranges start) :type 'error)
-    (should-error
-     (mevedel-transcript-directive-ranges (concat start "body" wrong-end))
-     :type 'error))
-
-  :doc "allows the current running directive when explicitly requested"
-  (let* ((start (mevedel--format-hook-audit-record
-                 '(:type directive-turn-boundary :edge start
-                   :directive-id "directive-1" :action discuss :turn 3)))
-         (text (concat "before" start "streaming"))
-         (range (car (mevedel-transcript-directive-ranges text t))))
-    (should (equal "streaming"
-                   (substring text (plist-get range :body-start))))
-    (should (eq 'running (plist-get range :outcome))))
-
-  :doc "ignores directive-shaped text without trusted provenance"
-  (let ((start (substring-no-properties
-                (mevedel--format-hook-audit-record
-                 '(:type directive-turn-boundary :edge start
-                   :directive-id "directive-1" :turn 3))))
-        (end (substring-no-properties
-              (mevedel--format-hook-audit-record
-               '(:type directive-turn-boundary :edge end
-                 :directive-id "directive-1" :turn 3)))))
-    (should-not (mevedel-transcript-directive-ranges
-                 (concat start "ordinary text" end)))))
-
 (mevedel-deftest mevedel-transcript-audit--buffer-record
   (:doc "decodes a payload once per modification tick without copying it again")
   (let ((buffer (generate-new-buffer " *audit-position-memo*"))
@@ -398,68 +286,10 @@
             (should-not (mevedel-transcript-audit-buffer-spans nil (1+ (plist-get span :start)) end))
             (should-not (mevedel-transcript-audit-buffer-spans nil start (1- (plist-get span :end))))))))))
 
-(mevedel-deftest mevedel-transcript-buffer-directive-ranges ()
+(mevedel-deftest mevedel--format-hook-audit-record ()
   ,test
   (test)
-  :doc "stream appends reuse audit decoding while edits and trust changes remain visible"
-  (with-temp-buffer
-    (let* ((start (mevedel--format-hook-audit-record
-                   '(:type directive-turn-boundary :edge start :directive-id "d" :turn 1)))
-           (end (mevedel--format-hook-audit-record
-                 '(:type directive-turn-boundary :edge end :directive-id "d" :turn 1)))
-           (decode (symbol-function 'mevedel-transcript-audit--decode))
-           (calls 0))
-      (insert start "body" end)
-      (cl-letf (((symbol-function 'mevedel-transcript-audit--decode)
-                 (lambda (text) (cl-incf calls) (funcall decode text))))
-        (let ((expected (mevedel-transcript-buffer-directive-ranges)))
-          (should (= 1 (length expected)))
-          (dotimes (_ 5)
-            (goto-char (point-max)) (insert "stream")
-            (should (equal expected (mevedel-transcript-buffer-directive-ranges))))
-          (should (= 2 calls)))
-        ;; Identical bytes without provenance must never reuse trusted ranges.
-        (remove-text-properties (point-min) (point-max)
-                                '(gptel nil mevedel-hook-audit nil))
-        (should-not (mevedel-transcript-buffer-directive-ranges))
-        (erase-buffer)
-        (insert start "changed body")
-        (should-error (mevedel-transcript-buffer-directive-ranges))
-        (let ((range (car (mevedel-transcript-buffer-directive-ranges t))))
-          (should (= (point-max) (plist-get range :end)))
-          (should (eq 'running (plist-get range :outcome))))))))
-
-(mevedel-deftest mevedel-transcript-exclude-directive-turns ()
-  ,test
-  (test)
-  :doc "marks only directive bodies ignored in a request copy"
-  (let ((start (mevedel--format-hook-audit-record
-                '(:type directive-turn-boundary :edge start
-                  :directive-id "directive-1" :action discuss :turn 3)))
-        (end (mevedel--format-hook-audit-record
-              '(:type directive-turn-boundary :edge end
-                :directive-id "directive-1" :action discuss :turn 3
-                :outcome success :sequence 1))))
-    (with-temp-buffer
-      (insert "ordinary\n" start)
-      (let ((body-start (point)) tool-start)
-        (insert (propertize "directive prompt\n" 'gptel nil))
-        (setq tool-start (point))
-        (insert (propertize "(:name Read :args (:file_path \"x\"))\n"
-                            'gptel '(tool . "tool-1")))
-        (should (equal '(tool . "tool-1")
-                       (get-text-property tool-start 'gptel)))
-        (insert (propertize "directive response\n" 'gptel 'response))
-        (let ((body-end (point)))
-          (insert end "ordinary pending")
-          (mevedel-transcript-exclude-directive-turns)
-          (should-not (get-text-property 1 'gptel))
-          (should (eq 'ignore (get-text-property body-start 'gptel)))
-          (should (eq 'ignore (get-text-property tool-start 'gptel)))
-          (should (eq 'ignore (get-text-property (1- body-end) 'gptel)))
-          (should-not (get-text-property (1- (point-max)) 'gptel))))))
-
-  :doc "the real provider parse drops excluded directive turns"
+  :doc "the real provider parse drops records of any type, keeping old directive turns ordinary"
   (progn
     (require 'gptel)
     (let ((gptel--known-backends nil)
@@ -476,12 +306,11 @@
         (let ((response-start (point)))
           (insert "ordinary answer\n")
           (put-text-property response-start (point) 'gptel 'response))
-        (insert start "directive secret prompt\n")
+        (insert start "old directive prompt\n")
         (let ((response-start (point)))
-          (insert "directive secret answer\n")
+          (insert "old directive answer\n")
           (put-text-property response-start (point) 'gptel 'response))
         (insert end "follow-up question")
-        (mevedel-transcript-exclude-directive-turns)
         (goto-char (point-max))
         (let* ((backend (gptel-make-openai "mevedel-seam-test"
                           :models '(test-model)))
@@ -495,9 +324,11 @@
           (should (string-search "ordinary question" all))
           (should (string-search "ordinary answer" all))
           (should (string-search "follow-up question" all))
-          (should-not (string-search "directive secret" all))
+          (should (string-search "old directive prompt" all))
+          (should (string-search "old directive answer" all))
           (should-not (string-search "directive-turn-boundary" all))
-          (should (equal '("user" "assistant" "user") roles)))))))
+          (should (equal '("user" "assistant" "user" "assistant" "user")
+                         roles)))))))
 
 (mevedel-deftest mevedel-transcript-audit-guest-prompts
   (:doc "returns hidden model-invisible attributions in order, ignoring other record types")

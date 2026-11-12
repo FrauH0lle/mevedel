@@ -9,6 +9,7 @@
 (require 'mevedel)
 (require 'mevedel-notes)
 (require 'mevedel-notes-list)
+(require 'mevedel-buddy)
 (require 'mevedel-note-conversation)
 (require 'mevedel-note-write)
 (require 'mevedel-tool-patch)
@@ -154,6 +155,30 @@
        data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n-after\n+AFTER\n*** End Patch")
       (should (eq 'ready (mevedel-notes-attention-state note)))
       (should (eq 'ready (mevedel-notes-attention-state sibling))))))
+
+(mevedel-deftest mevedel-note-take/prepared-restore
+  (:quiet t :doc "restored takes keep their prepared change and show paused in source and list")
+  (mevedel-note-change-test--with-note
+    (let ((mevedel-notes--taken-watches (make-hash-table :test #'equal))
+          (mevedel-buddy--levels (make-hash-table :test #'equal)))
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+      (with-current-buffer source
+        (mevedel-note-take note)
+        (mevedel-instruction-store-flush t)
+        (mevedel-buddy-mode -1)
+        (mevedel--clear-instruction-state workspace)
+        (clrhash mevedel-notes--taken-watches)
+        (mevedel-instruction-store-observe workspace)
+        (setq note (mevedel-notes--at-point))
+        (should (eq 'ready (mevedel-notes-attention-state note)))
+        (should-not mevedel-buddy-mode)
+        (should (string-search "paused"
+                               (overlay-get (overlay-get note 'mevedel-label-overlay)
+                                            'after-string))))
+      (with-current-buffer (mevedel-notes-list workspace)
+        (should (string-search "ready" (buffer-string)))
+        (should (string-search "paused" (buffer-string)))))))
 
 (mevedel-deftest mevedel-note-apply-change
   (:quiet t)

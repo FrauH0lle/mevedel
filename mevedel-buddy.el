@@ -74,6 +74,9 @@
 
 ;; `mevedel-notes'
 (declare-function mevedel-notes--ensure-workspace "mevedel-notes" (workspace))
+(declare-function mevedel-notes-resume-taken "mevedel-notes" (workspace))
+(declare-function mevedel-note-watching-p "mevedel-notes" (note &optional workspace))
+(autoload 'mevedel-note-watching-p "mevedel-notes")
 
 ;; `mevedel-session-control-fs'
 (declare-function mevedel-session-control-fs-read-file "mevedel-session-control-fs"
@@ -237,6 +240,8 @@ level.  The setting is saved in the workspace, not in any conversation."
      (symbol-name level))
     (puthash (file-name-as-directory (mevedel-workspace-root workspace))
              (cons level workspace) mevedel-buddy--levels)
+    (require 'mevedel-notes)
+    (mevedel-notes-resume-taken workspace)
     (add-hook 'find-file-hook #'mevedel-buddy--enable-workspace-buffer t)
     (dolist (buffer (buffer-list))
       (with-current-buffer buffer (mevedel-buddy--enable-workspace-buffer)))
@@ -1001,7 +1006,7 @@ TAKEN-NAMES includes watched buffers even when they have no recorded edits."
                    (save-restriction
                      (widen)
                      (seq-some (lambda (note)
-                                 (eq 'taken (overlay-get note 'mevedel-note-state)))
+                                 (mevedel-note-watching-p note))
                                (overlays-in (point-min) (point-max)))))
           (push (buffer-name) names))))
     names))
@@ -1146,7 +1151,7 @@ edits and request state live only in memory."
         (when (save-restriction
                 (widen)
                 (seq-some (lambda (note)
-                            (eq 'taken (overlay-get note 'mevedel-note-state)))
+                            (mevedel-note-watching-p note))
                           (overlays-in (point-min) (point-max))))
           (mevedel-buddy--schedule)))
     (mevedel-buddy--cancel-timer)

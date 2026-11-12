@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Contract tests for instruction action labels and redraw.
+;; Contract tests for instruction overlay redraw.
 
 ;;; Code:
 
@@ -29,17 +29,6 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-instruction-test-support"))
-
-(mevedel-deftest mevedel-overlay-ui-directive-action-label ()
-  ,test
-  (test)
-  :doc "labels known actions and normalizes an unknown action"
-  (should (equal "Request changes"
-                 (mevedel-overlay-ui-directive-action-label
-                  'request-changes)))
-  (should (equal "Custom Action"
-                 (mevedel-overlay-ui-directive-action-label
-                  "custom_action"))))
 
 (mevedel-deftest mevedel--update-instruction-overlay-tree ()
   ,test

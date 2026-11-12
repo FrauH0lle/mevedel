@@ -5391,9 +5391,9 @@ turn's later text, live and after reconstruction."
       ;; save path, so the directory goes only after them.
       (delete-directory tmp t)))
 
-  :doc "renders ignored directive PROMPT drawer as collapsed user section"
+  :doc "renders an ignored PROMPT drawer as a collapsed user section"
   (mevedel-view-stream-test--with-buffers
-    (mevedel-view-stream-test--insert-data data-buf "Change alpha :implement:\n" nil)
+    (mevedel-view-stream-test--insert-data data-buf "Change alpha\n" nil)
     (mevedel-view-stream-test--insert-data
      data-buf
      ":PROMPT:\n## TASK\nFull hidden prompt.\n:END:\n"
@@ -5403,16 +5403,10 @@ turn's later text, live and after reconstruction."
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "Implement: Change alpha" text))
-        (should-not (string-match-p "Change alpha :implement:" text))
+        (should (string-match-p "Change alpha" text))
         (should (string-match-p "Prompt" text))
         (should-not (string-match-p "Full hidden prompt" text))
         (should (string-match-p "Done" text)))
-      (goto-char (point-min))
-      (search-forward "Implement:")
-      (should (eq 'mevedel-view-directive-action
-                  (get-text-property (match-beginning 0)
-                                     'font-lock-face)))
       (goto-char (point-min))
       (search-forward "Prompt")
       (mevedel-view-toggle-section)

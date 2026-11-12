@@ -238,14 +238,6 @@ A tool part runs tool NAME and settles with STATUS."
                           "execution_id=\"%s\" description=\"own\" "
                           "outcome=\"success\" exit_code=\"0\">\nout\n</agent-message>\n")
                   (or name label)))
-    ((or 'dstart 'dend)
-     (mevedel--format-hook-audit-record
-      (append (list :type 'directive-turn-boundary
-                    :edge (if (eq kind 'dstart) 'start 'end)
-                    :directive-id "scope" :action 'discuss :turn 1)
-              (and (eq kind 'dend)
-                   '(:outcome success :activity-kind discussion :sequence 1)))))
-    ('directive-prompt "Question :discuss:\n:PROMPT:\nFull directive request\n:END:\n")
     ('crumb (mevedel--format-hook-audit-record
              (list :type 'execution-breadcrumb :owner "/root" :execution-id label
                    :command "make" :facts '(:kind bash :outcome success))))
@@ -402,8 +394,6 @@ calls that follow PARTS in a turn without a final response."
     (notice (t1 tool) (t2 tool) (n1 notice) (t3 tool) (t4 tool) (t5 tool))
     (own-completion (t1 tool) (o1 own) (t2 tool) (t3 tool))
     (own-completion-with-breadcrumb (t1 tool) (c1 crumb) (o1 own "c1") (t2 tool) (t3 tool))
-    (scope (t1 tool) (t2 tool) (t3 tool) (d1 dstart) (q1 directive-prompt)
-           (t4 tool) (t5 tool) (t6 tool) (x1 text) (d2 dend))
     (breadcrumb (t1 tool) (c1 crumb) (t2 tool) (t3 tool))
     (poll (t1 tool) (t2 tool) (h1 poll) (t3 tool) (t4 tool))
     (reasoning (t1 tool) (t2 tool) (t3 tool) (r1 reasoning) (t4 tool) (t5 tool) (t6 tool))

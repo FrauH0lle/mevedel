@@ -52,7 +52,6 @@
 (defconst mevedel-evil--map-features
   '((mevedel-report mevedel-report-mode-map)
     (mevedel-journal-jobs mevedel-journal-jobs-mode-map)
-    (mevedel-directive-activity mevedel-directive-activity-mode-map)
     (mevedel-directive-frame mevedel-directive-frame-mode-map)
     (mevedel-subscription-usage mevedel-subscription-usage-mode-map)
     (mevedel-collaboration-share mevedel-collaboration--share-map)
@@ -286,7 +285,6 @@ is harmless.  No evil-collection dependency is needed."
     (evil-set-initial-state 'mevedel-surface-mode 'insert)
     (dolist (mode (append mevedel-evil--cockpit-modes
                           '(mevedel-view-mode mevedel-report-mode
-                            mevedel-directive-activity-mode
                             mevedel-worktree-setup-mode)))
       (evil-set-initial-state mode 'normal))
     (dolist (entry mevedel-evil--map-features)

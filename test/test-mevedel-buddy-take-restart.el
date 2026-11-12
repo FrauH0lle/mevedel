@@ -94,14 +94,19 @@
                 (with-current-buffer (find-file-noselect ,file)
                   (goto-char (point-max)) (insert ";; user edit\n") (goto-char 3)
                   (let ((deadline (+ (float-time) 20)))
-                    (while (and (not (bound-and-true-p mevedel-buddy-mode))
+                    (while (and (not (seq-some
+                                      (lambda (overlay)
+                                        (string-search "paused"
+                                                       (or (overlay-get overlay 'after-string) "")))
+                                      (overlays-in (point-min) (point-max))))
                                 (< (float-time) deadline))
                       (accept-process-output nil 0.02)))
-                  (unless (bound-and-true-p mevedel-buddy-mode)
-                    (error "Restored taken note was not watched"))
+                  (when (or (bound-and-true-p mevedel-buddy-mode)
+                            (featurep 'mevedel-buddy))
+                    (error "Restored take started Buddy"))
                   (unless (seq-some
                            (lambda (overlay)
-                             (string-search "Buddy watches"
+                             (string-search "paused"
                                             (or (overlay-get overlay 'after-string) "")))
                            (overlays-in (point-min) (point-max)))
                     (error "Taken label did not restore"))
@@ -109,6 +114,9 @@
                                (= 3 (point)) (buffer-modified-p))
                     (error "Restore disturbed the user's source or point"))
                   (unless (zerop reads) (error "Restore read the dial %s times" reads))
+                  (mevedel-note-take)
+                  (unless (bound-and-true-p mevedel-buddy-mode)
+                    (error "Taking again did not resume Buddy"))
                   (set-buffer-modified-p nil)
                   (kill-buffer))))))
       (when owned
@@ -119,9 +127,9 @@
       (when remote (tramp-cleanup-all-connections))
       (when (file-directory-p directory) (delete-directory directory t))))
   (remote)
-  :doc "a cold local visit resumes a taken watch without dial I/O or lost edits"
+  :doc "a cold local visit pauses a taken watch without dial I/O or lost edits"
   nil
-  :doc "a cold SSH callback resumes a taken watch without dial I/O or lost edits"
+  :doc "a cold SSH callback pauses a taken watch without dial I/O or lost edits"
   t)
 
 (provide 'test-mevedel-buddy-take-restart)

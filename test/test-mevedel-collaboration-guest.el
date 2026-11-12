@@ -816,29 +816,6 @@
       (kill-buffer view-buffer)
       (kill-buffer data-buffer))))
 
-(mevedel-deftest mevedel-collaboration-retired-directive-input (:quiet t)
-  (mevedel-engine-test--with-session
-   (let* ((view (generate-new-buffer " *retired-guest-view*"))
-          (guests (make-hash-table :test #'eql))
-          (room (list :data-buffer buffer :session session :guests guests
-                      :transport 'transport))
-          reply)
-     (unwind-protect
-         (progn
-           (setq-local mevedel--view-buffer view)
-           (mevedel-view--setup view buffer)
-           (puthash 1 '(:name "Phone" :writable t :ready t :guest-id "phone") guests)
-           (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
-                      (lambda (_transport peer frame)
-                        (should (= peer 1))
-                        (setq reply frame))))
-             (mevedel-collaboration--handle-prompt
-              room 1 '(:t "prompt" :directive "old-directive" :text "Explain this")))
-           (should-not (mevedel-session-pending-follow-ups session))
-           (should (equal "notice" (plist-get reply :t)))
-           (should (string-match-p "read-only" (plist-get reply :message))))
-       (when (buffer-live-p view) (kill-buffer view))))))
-
 (mevedel-deftest mevedel-collaboration--handle-retract
   (:doc "removes only the sender's own pending entry with its attachments")
   (let* ((workspace (mevedel-workspace-get-or-create
@@ -1143,8 +1120,7 @@
         (should (= 1 (length queued)))
         (should (equal "$unselected stays literal" (caar queued)))
         (should (equal '("alpha" "beta") (plist-get (cdar queued) :skills)))
-        (should (eq 'full (plist-get (cdar queued) :guest-role)))
-        (should-not (plist-get (cdar queued) :directive-id))))))
+        (should (eq 'full (plist-get (cdar queued) :guest-role)))))))
 
 (mevedel-deftest mevedel-collaboration--guest-roster
   (:doc "describes each admitted name with its namespace and hint")

@@ -1863,14 +1863,13 @@
               (make-directory (file-name-directory path) t)
               (write-region "(:files ((\"source.el\" . #<marker>)))"
                             nil path nil 'silent)
-              ;; Only a workspace without an instruction store restores the
-              ;; session snapshot: remove the store the save created and
-              ;; restart, so the session's own snapshot is the source again.
-              (delete-file (mevedel-instruction-store-path workspace))
+              (when (file-exists-p (mevedel-instruction-store-path workspace))
+                (delete-file (mevedel-instruction-store-path workspace)))
               (test-mevedel-session-persistence--reset-instructions)
-              (should-not
-               (mevedel-session-artifacts-load-instructions
-                session data-buf))))
+              (should (equal '(:store nil)
+                             (mevedel-session-artifacts-load-instructions
+                              session data-buf)))
+              (should-not (file-exists-p (mevedel-instruction-store-path workspace)))))
         (when (and data-buf (buffer-live-p data-buf))
           (test-mevedel-session-persistence--release-and-kill data-buf session))
         (delete-directory tempdir t)
@@ -1940,7 +1939,7 @@
                             t)))
                       (should
                        (mevedel-session-artifacts-load-instructions
-                        session data-buffer)))
+                        session data-buffer nil t)))
                     (should-not (file-remote-p observed-source))
                     (should-not (equal observed-source instruction-path))
                     (should (equal published observed-content))
@@ -4293,26 +4292,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
         (should (= prompt-start (plist-get (car prompts) :pos)))
         (should (equal "#+begin_src emacs-lisp"
                        (plist-get (car prompts) :preview))))))
-  :doc "indexes a directive prompt at its paired boundary"
-  (with-temp-buffer
-    (insert "ordinary\n" (propertize "answer\n" 'gptel 'response))
-    (let ((boundary-start (point)))
-      (insert (mevedel--format-hook-audit-record
-               '(:type directive-turn-boundary :edge start
-                 :directive-id "directive-123" :action discuss :turn 2)))
-      (insert "directive prompt\n")
-      (insert (propertize "directive answer\n" 'gptel 'response))
-      (insert (mevedel--format-hook-audit-record
-               '(:type directive-turn-boundary :edge end
-                 :directive-id "directive-123" :action discuss :turn 2
-                 :outcome success :sequence 1)))
-      (let ((prompt (nth 1 (mevedel-session-artifacts-collect-prompts
-                            (current-buffer)))))
-        (should (= boundary-start (plist-get prompt :pos)))
-        (should (eq 'directive (plist-get prompt :kind)))
-        (should (equal "directive-123" (plist-get prompt :directive-id)))
-        (should (= 2 (plist-get prompt :reserved-turn))))))
-  :doc "keeps mixed chat and directive follow-ups in one chronology"
+  :doc "indexes old directive turns as ordinary prompts in one chronology"
   (with-temp-buffer
     (insert "ordinary one\n" (propertize "answer one\n" 'gptel 'response))
     (insert (mevedel--format-hook-audit-record
@@ -4339,19 +4319,17 @@ rotation never saves through a rebound temporary visited filename or prompts"
       (should (equal '(1 2 3 4) (mapcar (lambda (entry)
                                          (plist-get entry :turn))
                                        prompts)))
-      (should (equal '(nil directive nil directive)
-                     (mapcar (lambda (entry) (plist-get entry :kind))
+      (should (equal '("ordinary one" "directive one"
+                       "ordinary two" "directive follow-up")
+                     (mapcar (lambda (entry) (plist-get entry :preview))
                              prompts)))
-      (should (equal '(2 4)
-                     (delq nil
-                           (mapcar (lambda (entry)
-                                     (plist-get entry :reserved-turn))
-                                   prompts)))))))
+      (should-not (cl-some (lambda (entry) (plist-get entry :kind))
+                           prompts)))))
 
 
 (defun test-mevedel-prompt-cache--turn (n &optional directive)
   "Insert turn N: prompt, tool block, response and fork point.
-With DIRECTIVE, wrap the turn in directive boundary records."
+With DIRECTIVE, wrap the turn in old directive boundary records."
   (when directive
     (insert (mevedel--format-hook-audit-record
              (list :type 'directive-turn-boundary :edge 'start
@@ -4469,7 +4447,7 @@ With DIRECTIVE, wrap the turn in directive boundary records."
       (funcall edit)
       (should (equal (test-mevedel-prompt-cache--oracle)
                      (mevedel-session-artifacts--prompt-derive (current-buffer))))))
-  :doc "directive boundaries and an unpaired audit opener that later closes"
+  :doc "old directive boundaries and an unpaired audit opener that later closes"
   (with-temp-buffer
     (test-mevedel-prompt-cache--turn 1)
     (test-mevedel-prompt-cache--turn 2 t)
@@ -4622,16 +4600,7 @@ With DIRECTIVE, wrap the turn in directive boundary records."
   (test)
   :doc "builds an ordinary prompt entry"
   (should (equal '(:turn 2 :pos 10 :preview "hello")
-                 (mevedel-session-artifacts--prompt-record 2 10 "hello" nil)))
-  :doc "places a directive prompt at its boundary and carries its identity"
-  (let ((record (mevedel-session-artifacts--prompt-record
-                 3 50 "run"
-                 '(:start 40 :directive-id "d" :action discuss
-                   :outcome success :sequence 1 :turn 3))))
-    (should (= 40 (plist-get record :pos)))
-    (should (eq 'directive (plist-get record :kind)))
-    (should (equal "d" (plist-get record :directive-id)))
-    (should (= 3 (plist-get record :reserved-turn)))))
+                 (mevedel-session-artifacts--prompt-record 2 10 "hello"))))
 
 (mevedel-deftest mevedel-session-artifacts--prompt-cache-eligible-p ()
   ,test
@@ -4831,21 +4800,18 @@ With DIRECTIVE, wrap the turn in directive boundary records."
 (mevedel-deftest mevedel-session-artifacts--prompts-from-units ()
   ,test
   (test)
-  :doc "numbers only units with prompts and links the enclosing directive"
+  :doc "numbers only units with prompts"
   (let* ((units (list (vector 0 5 0 0 0 nil nil)
                       (vector 5 20 5 0 0 8 "first")
                       (vector 20 40 20 0 0 30 "second")
                       (vector 40 60 40 0 0 50 "third")))
-         (prompts (mevedel-session-artifacts--prompts-from-units
-                   units 100
-                   (list (list :start 125 :body-start 128 :body-end 135
-                               :directive-id "d" :action 'discuss :turn 2)))))
+         (prompts (mevedel-session-artifacts--prompts-from-units units 100)))
     (should (equal '(1 2 3) (mapcar (lambda (prompt) (plist-get prompt :turn))
                                     prompts)))
-    (should (equal '(108 125 150) (mapcar (lambda (prompt) (plist-get prompt :pos))
+    (should (equal '(108 130 150) (mapcar (lambda (prompt) (plist-get prompt :pos))
                                           prompts)))
-    (should (equal '(nil directive nil)
-                   (mapcar (lambda (prompt) (plist-get prompt :kind))
+    (should (equal '("first" "second" "third")
+                   (mapcar (lambda (prompt) (plist-get prompt :preview))
                            prompts)))))
 
 
@@ -4909,27 +4875,7 @@ With DIRECTIVE, wrap the turn in directive boundary records."
             (mevedel-session-artifacts-update-prompt-index
              fresh (current-buffer)))
           (should (equal (mevedel-session-prompt-index fresh)
-                         (mevedel-session-prompt-index incremental)))))))
-  :doc "uses the directive boundary as the canonical cumulative turn"
-  (let ((session (mevedel-session--create :current-segment 1)))
-    (with-temp-buffer
-      (insert "ordinary\n" (propertize "answer\n" 'gptel 'response))
-      (insert (mevedel--format-hook-audit-record
-               '(:type directive-turn-boundary :edge start
-                 :directive-id "directive-123" :action discuss :turn 2)))
-      (insert "directive prompt\n")
-      (insert (propertize "directive answer\n" 'gptel 'response))
-      (insert (mevedel--format-hook-audit-record
-               '(:type directive-turn-boundary :edge end
-                 :directive-id "directive-123" :action discuss :turn 2
-                 :outcome success :sequence 1)))
-      (mevedel-session-artifacts-update-prompt-index
-       session (current-buffer))
-      (let ((prompt (nth 1 (cdr (assoc 1
-                                       (mevedel-session-prompt-index
-                                        session))))))
-        (should (= 2 (plist-get prompt :cum-turn)))
-        (should (= 2 (plist-get prompt :reserved-turn)))))))
+                         (mevedel-session-prompt-index incremental))))))))
 
 
 (mevedel-deftest mevedel-session-artifacts--ensure-latest-fork-point ()

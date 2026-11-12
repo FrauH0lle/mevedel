@@ -21,7 +21,6 @@
 (require 'mevedel-side-conversation)
 (require 'mevedel-report)
 (require 'mevedel-journal-jobs)
-(require 'mevedel-directive-activity)
 (require 'mevedel-directive-frame)
 (require 'mevedel-collaboration-share)
 (require 'mevedel-subscription-usage)
@@ -564,17 +563,6 @@ independently of the product's primitive change hooks."
         (evil-local-mode -1)
         (mevedel-evil-test--keys "g k")
         (should (equal (nreverse calls) '(grant keep))))))
-  :doc "frozen-history inspector keeps inherited q and its own actions"
-  (mevedel-evil-test--buffer
-    (mevedel-directive-activity-mode)
-    (evil-normal-state)
-    (let (calls)
-      (cl-letf (((symbol-function 'mevedel-directive-activity-refresh)
-                 (lambda () (interactive) (push 'refresh calls)))
-                ((symbol-function 'quit-window)
-                 (lambda (&rest _) (interactive) (push 'quit calls))))
-        (mevedel-evil-test--keys "g r q")
-        (should (equal (nreverse calls) '(refresh quit))))))
   :doc "note frame prefixed close works in normal and insert state"
   (mevedel-evil-test--buffer
     (mevedel-directive-frame-mode 1)

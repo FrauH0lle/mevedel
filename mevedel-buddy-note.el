@@ -99,7 +99,7 @@ within six lines of the edited region; other notes remain out of the prompt."
                      (nearby (and (eq level 'active)
                                   (seq-some (lambda (line) (<= (- first 6) line (+ last 6)))
                                             (cdr (assoc (car entry) shown))))))
-                (when (or (eq 'taken (overlay-get note 'mevedel-note-state))
+                (when (or (mevedel-note-watching-p note)
                           nearby)
                   (push (list :overlay note :text (overlay-get note 'mevedel-note-text)
                               :taken (not nearby))
@@ -109,7 +109,7 @@ within six lines of the edited region; other notes remain out of the prompt."
                                   (overlay-get note 'mevedel-id) (car entry) first last
                                   (replace-regexp-in-string
                                    "[ \t\r\n]+" " " (overlay-get note 'mevedel-note-text))) sections)))))
-            (when (eq 'taken (overlay-get note 'mevedel-note-state))
+            (when (mevedel-note-watching-p note)
               (push (list :overlay note
                           :text (overlay-get note 'mevedel-note-text)
                           :code (buffer-substring-no-properties
@@ -136,7 +136,7 @@ The authored goal must still match.  TAKEN requires the note still be taken."
      (let ((note (plist-get record :overlay)))
        (and (eq buffer (overlay-buffer note))
             (or (not (or taken (plist-get record :taken)))
-                (eq 'taken (overlay-get note 'mevedel-note-state)))
+                (mevedel-note-watching-p note))
             (equal (plist-get record :text) (overlay-get note 'mevedel-note-text))
             (with-current-buffer buffer
               (save-restriction
@@ -172,7 +172,7 @@ This is feedback only: the user must explicitly close the note."
             (note (plist-get record :overlay))
             (buffer (overlay-buffer note))
             ((eq buffer (mevedel-buddy-note--scope-buffer (buffer-name buffer))))
-            ((eq 'taken (overlay-get note 'mevedel-note-state)))
+            ((mevedel-note-watching-p note))
             ((equal (plist-get record :text) (overlay-get note 'mevedel-note-text)))
             ((not (string-blank-p (or (plist-get record :text) ""))))
             ((with-current-buffer buffer

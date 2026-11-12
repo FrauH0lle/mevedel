@@ -144,22 +144,6 @@
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 (autoload 'mevedel-workspace "mevedel-workspace")
 
-(defconst mevedel--directive-action-labels
-  '((implement . "Implement")
-    (request-changes . "Request changes")
-    (retry . "Retry")
-    (plan . "Plan")
-    (discuss . "Discuss"))
-  "Plain display labels for frozen directive history actions.")
-
-(defun mevedel-overlay-ui-directive-action-label (action)
-  "Return the frozen-history display label for directive ACTION."
-  (or (alist-get (if (symbolp action) action (intern-soft action))
-                 mevedel--directive-action-labels)
-      (capitalize (replace-regexp-in-string
-                   "[-_]+" " " (format "%s" action)))))
-
-
 (defun mevedel--ov-actions-dispatch (&optional instruction _ci)
   "Open the note menu for INSTRUCTION."
   (interactive (list (mevedel--ov-actions-getov) t))
@@ -254,8 +238,7 @@ directly.  Return nil if no overlays exist at point."
 ;; Declare overlay action functions
 (eval-and-compile
   (dolist (spec '((link mevedel-link-instructions mevedel-instruction-registry)
-                  (unlink mevedel-unlink-instructions mevedel-instruction-registry)
-                  (activity mevedel-note-history mevedel-notes)))
+                  (unlink mevedel-unlink-instructions mevedel-instruction-registry)))
     (let ((name (nth 0 spec))
           (target (nth 1 spec))
           (owner (nth 2 spec)))

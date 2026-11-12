@@ -73,7 +73,7 @@
 (declare-function mevedel--setup-buffer-hooks
                   "mevedel-persistence" (buffer))
 (declare-function mevedel-instruction-store-sync
-                  "mevedel-persistence" (workspace &optional own-save-path))
+                  "mevedel-persistence" (workspace))
 (declare-function mevedel-instruction-store-touch
                   "mevedel-persistence" (&optional workspace))
 (declare-function mevedel-persistence-resolve-instruction-anchor
@@ -236,7 +236,6 @@ shape and links.  Calls are idempotent."
     mevedel-note-session-id
     mevedel-note-prepared-change
     mevedel-note-attention-state
-    mevedel-note-legacy-history
     mevedel-note-buddy-severity
     mevedel-note-buddy-code
     mevedel-note-kept-from-buddy

@@ -33,7 +33,6 @@ const controller = window.mevedelAgentView.create({
   href,
   send(frame) { sent.push(frame); return Promise.resolve(connected); },
   el: (tag, className, text) => element(document, tag, className, text),
-  directiveLabel: () => '',
   openArtifact: record => artifacts.push(record),
   flash: message => notices.push(message),
 });

@@ -864,13 +864,11 @@
     window.mevedelTranscriptRenderer.markContinuations(transcript);
   }
 
-  /* -- Directive filter ---------------------------------------------- */
-  // Records inside a directive turn carry its id; the menu is derived
-  // client-side, so filtering is per-guest and costs no round-trips.
-
-  // Directives and shared items (whiteboards, documents, artifacts) are
-  // discussions: records carry their scope, the strip lists each one, and
-  // the composer replies into the one selected.
+  /* -- Discussion filter --------------------------------------------- */
+  // Shared items (whiteboards, documents, artifacts) are discussions:
+  // records carry their scope, the strip lists each one, and the composer
+  // replies into the one selected. The menu is derived client-side, so
+  // filtering is per-guest and costs no round-trips.
   const scopeKey = record => window.mevedelTranscriptRenderer.scopeKey(record);
   const itemScope = key => typeof key === 'string' && key.startsWith('item:');
 
@@ -896,30 +894,20 @@
     return id.startsWith('artifact:') ? id.slice('artifact:'.length) : 'Shared item';
   }
 
-  // The chip and tab label for a discussion scope, with its kind's mark.
-  function directiveLabel(id) {
-    if (itemScope(id)) return `◇ ${itemTitle(id)}`;
-    for (const record of state.records.values()) {
-      if (record.directive === id && record.kind === 'user' && record.text) {
-        const line = record.text.split('\n', 1)[0];
-        return `◆ ${line.length > 32 ? `${line.slice(0, 29)}…` : line}`;
-      }
-    }
-    return `◆ ${id.slice(0, 8)}`;
-  }
+  // The chip and tab label for a discussion scope.
+  const scopeLabel = id => `◇ ${itemTitle(id)}`;
 
   // A deleted item's turns stay in the room, under All, but it has no
   // discussion left to show or send into: no tab, and a chip that says so.
   let deletedScopes = new Set();
   function scopeChip(scope) {
-    return {label: directiveLabel(scope), gone: deletedScopes.has(scope)};
+    return {label: scopeLabel(scope), gone: deletedScopes.has(scope)};
   }
 
   // Whether SCOPE's discussion still has its item: false once the host has
   // deleted it, null while the host has not yet listed its shared items.
   // CARDS returns the latest artifact card per store artifact.
   function scopePresent(scope, cards) {
-    if (!itemScope(scope)) return true;
     const id = scope.slice('item:'.length);
     if (!id.startsWith('artifact:')) return editing.present(id);
     const artifact = id.slice('artifact:'.length);
@@ -936,7 +924,7 @@
       } else {
         await editing.ask(id, text, images);
       }
-      flashNotice(`Sent to ${directiveLabel(`item:${id}`)}.`);
+      flashNotice(`Sent to ${scopeLabel(`item:${id}`)}.`);
       return true;
     } catch (error) {
       flashNotice(error && error.message ? error.message : 'The message could not be sent.');
@@ -1009,7 +997,7 @@
       // All earns its tab only when it shows more than Main chat.
       const all = counts.all > counts.main;
       // The strip is part of the surface once connected, even with no
-      // directive yet: an always-present control needs no discovering.
+      // discussion yet: an always-present control needs no discovering.
       filterNav.hidden = !state.connected;
       // Main chat is the room's home: a lost tab falls back to it.
       if (state.filter === 'all' ? !all
@@ -1029,8 +1017,7 @@
           'title',
           value === 'all' ? 'Show every turn'
             : value === 'main' ? 'Show only the main conversation'
-              : itemScope(value) ? `Show and reply in ${directiveLabel(value)}`
-                : `Show read-only history for ${directiveLabel(value)}`);
+              : `Show and reply in ${scopeLabel(value)}`);
         if (counts[value]) {
           button.append(el('span', 'cnt', String(counts[value])));
         }
@@ -1038,7 +1025,7 @@
         filterNav.append(button);
       };
       add('main', 'Main chat');
-      listed.forEach(id => add(id, directiveLabel(id), true));
+      listed.forEach(id => add(id, scopeLabel(id), true));
       if (all) add('all', 'All');
     }
     state.records.forEach(record => {
@@ -1059,7 +1046,7 @@
 
   function placeholderForFilter() {
     return itemScope(state.filter)
-      ? `Message ${directiveLabel(state.filter)}…`
+      ? `Message ${scopeLabel(state.filter)}…`
       : 'Queue a follow-up for the session…';
   }
 
@@ -1090,9 +1077,7 @@
     composerScope.className = 'composer-scope';
     composerScope.hidden = !scoped;
     if (scoped) {
-      composerScope.append(itemScope(state.filter)
-        ? `Sends to ${directiveLabel(state.filter)} · its own conversation`
-        : 'Sends to Main chat · viewing read-only history');
+      composerScope.append(`Sends to ${scopeLabel(state.filter)} · its own conversation`);
     }
   }
 

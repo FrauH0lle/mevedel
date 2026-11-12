@@ -187,12 +187,6 @@
                   "mevedel-transcript" (start end))
 (autoload 'mevedel-transcript-segments "mevedel-transcript")
 
-;; `mevedel-transcript-audit'
-(declare-function mevedel-transcript-exclude-directive-turns
-                  "mevedel-transcript-audit" (&optional fsm))
-(autoload 'mevedel-transcript-exclude-directive-turns
-  "mevedel-transcript-audit")
-
 ;; `mevedel-turn'
 (declare-function mevedel-request-begin
                   "mevedel-turn" (session &optional options))
@@ -823,7 +817,6 @@ FROZEN-CONTEXT is the materialized gptel context plist."
                  (copy-tree (default-value 'gptel-send--transitions)))
                 gptel-prompt-transform-functions
                 '(mevedel--transform-expand-mentions
-                  mevedel-transcript-exclude-directive-turns
                   mevedel-side-conversation--transform-frozen-effort
                   mevedel-side-conversation--transform-frozen-context))
     (let ((guardrail

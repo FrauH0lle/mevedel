@@ -73,10 +73,15 @@ and q to return to the invoking window."
            (format "%s" (plist-get props 'mevedel-note-author))
            (replace-regexp-in-string "[\n\r\t]+" " "
                                      (or (plist-get props 'mevedel-note-text) ""))
-           (format "%s%s" (or (plist-get note :closed-reason)
+           (format "%s%s%s" (or (plist-get note :closed-reason)
                                (if (eq 'taken (mevedel-notes-attention-state props))
-                                   "taken; Buddy watches"
+                                   (if (mevedel-note-watching-p props mevedel-notes-list--workspace)
+                                       "taken; Buddy watches"
+                                     "taken")
                                  (mevedel-notes-attention-state props)))
+                   (if (and (eq 'taken (plist-get props 'mevedel-note-state))
+                            (not (mevedel-note-watching-p props mevedel-notes-list--workspace)))
+                       "; paused" "")
                    (if (plist-get note :source-missing) "; source missing" ""))
            (mapconcat #'symbol-name (plist-get props 'mevedel-note-tags) ", ")))))
 
@@ -186,7 +191,7 @@ and q to return to the invoking window."
   "Take the selected note, or drop it if it is already taken."
   (interactive)
   (let ((note (mevedel-notes-list--selected-note)))
-    (if (eq 'taken (overlay-get note 'mevedel-note-state))
+    (if (mevedel-note-watching-p note)
         (mevedel-note-drop note)
       (mevedel-note-take note)))
   (mevedel-notes-list-refresh))

@@ -1000,13 +1000,6 @@ with literal text, mutually exclusive with `:invoke'."
          (invoke (plist-get frame :invoke))
          (skills (plist-get frame :skills))
          (text (plist-get frame :text)))
-    (when (plist-get frame :directive)
-      (when (plist-get guest :writable)
-        (mevedel-collaboration--transport-send
-         (plist-get room :transport) peer
-         (list :t "notice" :message
-               "Directive history is read-only; reload the viewer to send to Main chat.")))
-      (cl-return-from mevedel-collaboration--handle-prompt))
     (when (and invoke
                (not (mevedel-collaboration--guest-invocable-p invoke role)))
       (cl-return-from mevedel-collaboration--handle-prompt))

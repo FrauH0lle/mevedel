@@ -85,8 +85,6 @@
                   "mevedel-transcript-audit" (&optional type start end))
 (declare-function mevedel-transcript-audit-turn-attributions
                   "mevedel-transcript-audit" ())
-(declare-function mevedel-transcript-buffer-directive-ranges
-                  "mevedel-transcript-audit" (&optional allow-open))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--trim-tool-result "mevedel-utilities" (text))
@@ -303,7 +301,7 @@ An artifact record's `:artifact-path' stays host-side: guests address
 an artifact only by its record id, never by a filesystem path."
   (let (out)
     (dolist (key '(:id :kind :revision :text :name :status :summary :result
-                       :truncated :guest :directive :item :detail :details :diff
+                       :truncated :guest :item :detail :details :diff
                        :artifact :title :store :size :artifactRevision :missing
                        :presentation :shared
                        :verb
@@ -821,24 +819,14 @@ RENDER-END includes a following, separately classified hidden metadata block."
       (setq cards (nreverse cards))
       (if pure cards (delq nil (cons base cards))))))
 
-(defun mevedel-collaboration--directive-at (ranges position)
-  "Return the directive id owning POSITION per directive RANGES, or nil."
-  (cl-loop for range in ranges
+(defun mevedel-collaboration--scope-at (items position)
+  "Return the discussion fields for a record starting at POSITION.
+ITEMS are shared-item turn ranges.  The result is (:item ID), or nil for
+the main conversation, so a viewer can filter and reply per discussion."
+  (cl-loop for range in items
            when (and (<= (plist-get range :start) position)
                      (< position (plist-get range :end)))
-           return (plist-get range :directive-id)))
-
-(defun mevedel-collaboration--scope-at (ranges items position)
-  "Return the discussion fields for a record starting at POSITION.
-RANGES are directive turn ranges and ITEMS shared-item turn ranges.  The
-result is (:directive ID), (:item ID), or nil for the main conversation,
-so a viewer can filter and reply per discussion."
-  (if-let* ((directive (mevedel-collaboration--directive-at ranges position)))
-      (list :directive directive)
-    (cl-loop for range in items
-             when (and (<= (plist-get range :start) position)
-                       (< position (plist-get range :end)))
-             return (list :item (plist-get (plist-get range :shared) :itemId)))))
+           return (list :item (plist-get (plist-get range :shared) :itemId))))
 
 (defun mevedel-collaboration--scoped (record fields)
   "Return RECORD carrying discussion FIELDS from `mevedel-collaboration--scope-at'."
@@ -846,12 +834,6 @@ so a viewer can filter and reply per discussion."
     (setq record (plist-put record (car fields) (cadr fields))
           fields (cddr fields)))
   record)
-
-(defun mevedel-collaboration--directive-ranges ()
-  "Return the current buffer's directive turn ranges, or nil.
-A malformed audit grammar degrades to untagged records instead of
-failing the whole projection."
-  (ignore-errors (mevedel-transcript-buffer-directive-ranges t)))
 
 (defun mevedel-collaboration--attribute-guest-prompts (user-starts)
   "Attach guest names and return background user records to omit.
@@ -1216,9 +1198,8 @@ which is already unique, so it stays stable with it."
 (defun mevedel-collaboration--canonical-records
     (data-buffer &optional completion-buffer completions cache own-path)
   "Return allowlisted records reconstructed from DATA-BUFFER.
-Records inside a directive turn carry that directive's id, and records
-inside a shared-item turn that item's id, so a viewer can filter the
-transcript to one discussion client-side; user records
+Records inside a shared-item turn carry that item's id, so a viewer can
+filter the transcript to one discussion client-side; user records
 attributed to a collaboration guest carry that guest's name.
 COMPLETION-BUFFER and COMPLETIONS supply later terminal evidence for archived
 segments.  CACHE, a `mevedel-collaboration--projection-cache' for a live
@@ -1246,9 +1227,8 @@ owner; omitted means the root transcript."
                           (mevedel-collaboration--projection-cache-bounds cache))))
              (entries (and cache (make-hash-table :test #'equal)))
              (mevedel-transcript--tool-block-index (make-hash-table :test #'eq))
-             (ranges (mevedel-collaboration--directive-ranges))
-             ;; Item turns are ranges too; a malformed attribution leaves
-             ;; records in the main conversation instead of failing.
+             ;; A malformed attribution leaves records in the main
+             ;; conversation instead of failing.
              (items (ignore-errors (mevedel-shared-conversation-ranges)))
              (segments (if unchanged
                            (mevedel-collaboration--projection-cache-segments cache)
@@ -1378,7 +1358,7 @@ owner; omitted means the root transcript."
                   "compaction" :revision 0
                   :text (mevedel-collaboration--truncate-bytes
                          text mevedel-collaboration--max-record-text-bytes))
-                 (mevedel-collaboration--scope-at ranges items (car source)))
+                 (mevedel-collaboration--scope-at items (car source)))
                 records))
         (dolist (segment segments)
           (while (and breadcrumbs (< (plist-get (car breadcrumbs) :start)
@@ -1387,9 +1367,9 @@ owner; omitted means the root transcript."
                    (record (plist-get span :record)))
               (add-execution record
                              (mevedel-collaboration--scope-at
-                              ranges items (plist-get span :start)))))
+                              items (plist-get span :start)))))
           (let* ((scope (mevedel-collaboration--scope-at
-                         ranges items (cadr segment)))
+                         items (cadr segment)))
                  (start (cadr segment))
                  (end (caddr segment))
                  (in-reasoning (mevedel-collaboration--reasoning-context-p
@@ -1558,7 +1538,7 @@ owner; omitted means the root transcript."
         (dolist (span breadcrumbs)
           (add-execution (plist-get span :record)
                          (mevedel-collaboration--scope-at
-                          ranges items (plist-get span :start))))
+                          items (plist-get span :start))))
         (let ((background
                (mevedel-collaboration--attribute-guest-prompts (nreverse user-starts))))
           (setq records (cl-delete-if (lambda (record) (memq record background)) records)))
@@ -1577,13 +1557,12 @@ owner; omitted means the root transcript."
 
 (defun mevedel-collaboration--activity-separator-p (start end)
   "Return non-nil when START..END holds only audits and one is displayed.
-Execution breadcrumbs are activity members, and directive boundaries end
-their turn's scope, so neither separates activity."
+Execution breadcrumbs are activity members, so they do not separate
+activity."
   (and (mevedel-transcript-audit-buffer-only-p start end)
        (cl-some (lambda (span)
                   (let ((record (plist-get span :record)))
-                    (and (not (memq (plist-get record :type)
-                                    '(execution-breadcrumb directive-turn-boundary)))
+                    (and (not (eq (plist-get record :type) 'execution-breadcrumb))
                          (mevedel-view-audit-displayed-p record))))
                 (mevedel-transcript-audit-buffer-spans nil start end))))
 
@@ -1625,8 +1604,7 @@ transparent rows."
                  (list :role 'boundary))))
             (_ (list :role (or role 'boundary))))))
     (cons (nconc entry (list :id (plist-get record :id) :record record
-                             :scope (list (plist-get record :directive)
-                                          (plist-get record :item))))
+                             :scope (plist-get record :item)))
           (and (plist-get record :activity-break-after)
                (list (list :role 'boundary))))))
 

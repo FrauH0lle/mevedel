@@ -369,11 +369,6 @@ durable publication for state that cannot have changed in between.")
   "Face for user message headers in the view buffer."
   :group 'mevedel)
 
-(defface mevedel-view-directive-action
-  '((t :inherit font-lock-keyword-face :weight bold))
-  "Face for directive action labels in the view buffer."
-  :group 'mevedel)
-
 (defface mevedel-view-guest-header
   '((t :inherit (bold font-lock-constant-face) :overline t :extend t))
   "Face for collaboration guest message headers in the view buffer.
@@ -1316,8 +1311,7 @@ while scrolling changes properties only, so it must not invalidate them."
 
 (defun mevedel-view--window-top (window)
   "Return the first visible position at or after WINDOW's start.
-A start inside hidden text, such as another directive's turn in a
-filtered directive frame, displays the next visible text at the top."
+A start inside hidden text displays the next visible text at the top."
   (let ((top (window-start window))
         (limit (or (and (markerp mevedel-view--input-marker)
                         (marker-position mevedel-view--input-marker))
@@ -1329,8 +1323,7 @@ filtered directive frame, displays the next visible text at the top."
 (defun mevedel-view--pinned-prompt (window)
   "Return (POSITION . PREVIEW) for the prompt above WINDOW's top edge.
 Metadata lives on rendered prompt headers, not in the model transcript.
-Hidden headers, such as other directives' in a filtered directive frame,
-are never selected."
+Hidden headers are never selected."
   (when-let* (((window-live-p window))
               ((eq (window-buffer window) (current-buffer)))
               (top (mevedel-view--window-top window))

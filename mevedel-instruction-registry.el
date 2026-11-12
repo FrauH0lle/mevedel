@@ -55,7 +55,7 @@
 
 Each value is a plist with keys `:instructions', `:id-counter',
 `:id-usage-map', and `:retired-ids', plus the instruction store's
-`:store-observation' and `:store-pending' once the store is used.")
+`:store-observation' once the store is used.")
 
 (defvar-local mevedel--instruction-current-state-key nil
   "Workspace key selected for this buffer's instruction operations.")

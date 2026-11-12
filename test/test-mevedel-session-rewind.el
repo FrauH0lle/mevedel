@@ -160,15 +160,16 @@
       (should (= 1 (plist-get plist :turn)))
       (should (= 3 (plist-get plist :file-turn))))
     (mevedel-workspace-clear-registry))
-  :doc "labels directive turns by identity and action"
+  :doc "old directive index records appear as ordinary prompt previews"
   (let ((session (mevedel-session--create
                   :prompt-index
                   '((1 . ((:turn 2 :file-turn 2 :cum-turn 2
                            :kind directive :directive-id "abcdef123456"
                            :action request-changes
+                           :preview "Old request"
                            :fork-point-id "directive")))))))
     (should (string-match-p
-             "◆ abcdef12 · Request changes"
+             "S1 T2  Old request"
              (caar (mevedel-session-rewind--prompt-candidates
                     session))))))
 
@@ -308,7 +309,7 @@
         (let ((text (buffer-string)))
           (should (string-match-p "Discarded session events" text))
           (should (< (string-match "Ordinary chat" text)
-                     (string-match "◆ directiv · Discuss" text))))))))
+                     (string-match "Directive two" text))))))))
 
 
 (mevedel-deftest mevedel-session-rewind-rewind-checkpoint

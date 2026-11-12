@@ -33,7 +33,7 @@
   "Return trusted shared-item turn ranges in the current transcript.
 Each range carries :start, :end and the host-authored :shared attribution.
 :last-user identifies attribution to the final canonical user prompt.
-A turn ends before the next canonical user prompt or directive boundary."
+A turn ends before the next canonical user prompt."
   ;; Most requests have no item attribution. Avoid classifying their transcript.
   (when-let* ((attributions
                (cl-remove-if-not
@@ -45,19 +45,15 @@ A turn ends before the next canonical user prompt or directive boundary."
     (let ((users (cl-remove-if-not
                   (lambda (segment) (eq (car segment) 'user))
                   (mevedel-transcript-segments (point-min) (point-max))))
-          (directives (mevedel-transcript-buffer-directive-ranges t))
           owner ranges)
-      ;; All three lists are ordered. Advance each cursor once instead of
+      ;; Both lists are ordered. Advance each cursor once instead of
       ;; searching the complete transcript again for every attribution.
       (dolist (attribution attributions)
         (while (and users (<= (cadr (car users)) (car attribution)))
           (setq owner (cadr (pop users))))
         (when owner
-          (while (and directives (<= (plist-get (car directives) :start) owner))
-            (pop directives))
           (push (list :start owner
-                      :end (min (or (cadr (car users)) (point-max))
-                                (or (plist-get (car directives) :start) (point-max)))
+                      :end (or (cadr (car users)) (point-max))
                       :last-user (null users)
                       :shared (plist-get (cdr attribution) :shared))
                 ranges)))

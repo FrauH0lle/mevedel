@@ -96,7 +96,7 @@
 (declare-function mevedel--serialize-instructions "mevedel-persistence" (&optional base-directory include-original-content))
 (declare-function mevedel--write-instructions-file "mevedel-persistence" (path &optional base-directory write-empty quiet include-original-content))
 (declare-function mevedel-instruction-store-restore "mevedel-persistence" (session))
-(declare-function mevedel-instruction-store-sync "mevedel-persistence" (workspace &optional own-save-path))
+(declare-function mevedel-instruction-store-sync "mevedel-persistence" (workspace))
 (declare-function mevedel-instruction-store-touch "mevedel-persistence" (&optional workspace))
 (autoload 'mevedel--load-instructions-file "mevedel-persistence")
 (autoload 'mevedel--serialize-instructions "mevedel-persistence")
@@ -284,15 +284,9 @@
 (declare-function mevedel--format-hook-audit-record "mevedel-transcript-audit" (record))
 (declare-function mevedel-transcript-audit-buffer-spans
                   "mevedel-transcript-audit" (&optional type start end))
-(declare-function mevedel-transcript-buffer-directive-ranges "mevedel-transcript-audit" (&optional allow-open))
-(declare-function mevedel-transcript-directive-ranges-from-spans "mevedel-transcript-audit" (spans text &optional allow-open))
 (defvar mevedel--hook-audit-open)
 (autoload 'mevedel--format-hook-audit-record "mevedel-transcript-audit")
 (autoload 'mevedel-transcript-audit-buffer-spans "mevedel-transcript-audit")
-(autoload 'mevedel-transcript-buffer-directive-ranges
-  "mevedel-transcript-audit")
-(autoload 'mevedel-transcript-directive-ranges-from-spans
-  "mevedel-transcript-audit")
 
 ;; `mevedel-transcript-restore'
 (declare-function mevedel-transcript-restore-properties "mevedel-transcript-restore" (&optional only-if-missing))
@@ -997,8 +991,6 @@ PREVIEW-LENGTH defaults to 80 display characters."
           (widen)
           (let* ((content-start
                   (mevedel-session-artifacts-content-start buffer))
-                (directive-ranges
-                 (mevedel-transcript-buffer-directive-ranges))
                 (turn 0)
                 ;; Ditto: one forward pass over the block-depth prefix.
                 (scan-state (mevedel-transcript-prompt-scan-state))
@@ -1015,48 +1007,26 @@ PREVIEW-LENGTH defaults to 80 display characters."
                     ;; Only the first nonblank line is kept, so find it in
                     ;; the buffer: copying each prompt whole cost megabytes
                     ;; per save on a long segment.
-                    (let* ((preview
-                            (save-excursion
-                              (goto-char prompt-start)
-                              (when (re-search-forward "[^[:space:]]" seg-end t)
-                                (buffer-substring-no-properties
-                                 (match-beginning 0)
-                                 (min seg-end (line-end-position))))))
-                           (directive
-                            (cl-find-if
-                             (lambda (range)
-                               (and (>= prompt-start
-                                        (plist-get range :body-start))
-                                    (< prompt-start
-                                       (plist-get range :body-end))))
-                             directive-ranges)))
+                    (let ((preview
+                           (save-excursion
+                             (goto-char prompt-start)
+                             (when (re-search-forward "[^[:space:]]" seg-end t)
+                               (buffer-substring-no-properties
+                                (match-beginning 0)
+                                (min seg-end (line-end-position)))))))
                       (when preview
                         (cl-incf turn)
                         (push (mevedel-session-artifacts--prompt-record
                                turn prompt-start
                                (mevedel--truncate-display
-                                preview (or preview-length 80) "...")
-                               directive)
+                                preview (or preview-length 80) "..."))
                               results)))))))
             (nreverse results)))))))
 
-(defun mevedel-session-artifacts--prompt-record
-    (turn prompt-start preview directive)
+(defun mevedel-session-artifacts--prompt-record (turn prompt-start preview)
   "Return the index plist of prompt TURN starting at PROMPT-START.
-PREVIEW is its display line and DIRECTIVE the enclosing directive range, or
-nil for an ordinary prompt."
-  (append
-   (list :turn turn
-         :pos (if directive (plist-get directive :start) prompt-start)
-         :preview preview)
-   (and directive
-        (list :kind 'directive
-              :directive-id (plist-get directive :directive-id)
-              :action (plist-get directive :action)
-              :outcome (plist-get directive :outcome)
-              :activity-kind (plist-get directive :activity-kind)
-              :sequence (plist-get directive :sequence)
-              :reserved-turn (plist-get directive :turn)))))
+PREVIEW is its display line."
+  (list :turn turn :pos prompt-start :preview preview))
 
 ;;;; Incremental prompt index
 
@@ -1303,23 +1273,15 @@ does not line up with the fresh segments, so the caller derives everything."
                     position)
                    (list (- position origin) (car depths) (cdr depths))))))))
 
-(defun mevedel-session-artifacts--prompts-from-units (units origin directives)
-  "Return the prompt index plists for UNITS at ORIGIN, as a whole scan builds.
-DIRECTIVES are the buffer's directive ranges, ascending and disjoint."
+(defun mevedel-session-artifacts--prompts-from-units (units origin)
+  "Return the prompt index plists for UNITS at ORIGIN, as a whole scan builds."
   (let ((turn 0) results)
     (dolist (unit units)
       (when-let* ((relative (aref unit 5)))
-        (let ((prompt-start (+ origin relative)))
-          (while (and directives
-                      (<= (plist-get (car directives) :body-end) prompt-start))
-            (pop directives))
-          (cl-incf turn)
-          (push (mevedel-session-artifacts--prompt-record
-                 turn prompt-start (aref unit 6)
-                 (and directives
-                      (>= prompt-start (plist-get (car directives) :body-start))
-                      (car directives)))
-                results))))
+        (cl-incf turn)
+        (push (mevedel-session-artifacts--prompt-record
+               turn (+ origin relative) (aref unit 6))
+              results)))
     (nreverse results)))
 
 (defun mevedel-session-artifacts--prompt-derive (buffer)
@@ -1344,15 +1306,6 @@ buffer is scanned in full, since its fork points are restriction-relative."
           (setq d 0))
         (let* ((audit (mevedel-session-artifacts--audit-spans-cached
                        cache origin d full))
-               (directives
-                (mevedel-transcript-directive-ranges-from-spans
-                 (cl-loop for span in (car audit)
-                          when (eq (plist-get (nth 2 span) :type)
-                                   'directive-turn-boundary)
-                          collect (list :record (nth 2 span)
-                                        :start (+ origin (nth 0 span))
-                                        :end (+ origin (nth 1 span))))
-                 (current-buffer)))
                ;; The parser's neighbor repair reads the same fork-point
                ;; spans: hand it the cached ones instead of a whole scan.
                (prepared
@@ -1381,7 +1334,7 @@ buffer is scanned in full, since its fork points are restriction-relative."
                 (cdr derived-units))
           (mevedel-transcript-source-accept source)
           (cons (mevedel-session-artifacts--prompts-from-units
-                 units origin directives)
+                 units origin)
                 (cl-loop for span in (car audit)
                          when (eq (plist-get (nth 2 span) :type) 'fork-point)
                          collect (append
@@ -1571,15 +1524,6 @@ that prompt's model turn."
                                  (plist-put copy :file-turn
                                             (+ skip-count turn))
                                  (plist-put copy :cum-turn (+ offset turn))
-                                 (when (and (eq (plist-get copy :kind)
-                                                'directive)
-                                            (/= (plist-get copy
-                                                           :reserved-turn)
-                                                (plist-get copy :cum-turn)))
-                                   (error
-                                    "Directive turn %d disagrees with prompt index turn %d"
-                                    (plist-get copy :reserved-turn)
-                                    (plist-get copy :cum-turn)))
                                  (when-let* ((fork-point
                                               (mevedel-session-artifacts--prompt-fork-point
                                                p next-position fork-vector)))
@@ -2283,18 +2227,14 @@ Then writes the workspace instruction store, which owns the current set."
           (mevedel--write-instructions-file
            (mevedel-session-artifacts-instructions-turn-path save-path turn)
            workspace-root t t nil)))
-      (mevedel-session-artifacts--sync-instruction-store session save-path))))
+      (mevedel-session-artifacts--sync-instruction-store session))))
 
-(defun mevedel-session-artifacts--sync-instruction-store (session own-save-path)
+(defun mevedel-session-artifacts--sync-instruction-store (session)
   "Write SESSION's workspace instructions to the workspace store.
-OWN-SAVE-PATH names SESSION, which does not by itself make the workspace
-wait for migration: while waiting, its instructions were restored from
-its own snapshot, so as the only session it holds the whole set.  A
-failure is reported; the session save itself already succeeded."
+A failure is reported; the session save itself already succeeded."
   (unless (eq (bound-and-true-p mevedel-instruction-store--inhibit) t)
     (condition-case err
-        (mevedel-instruction-store-sync
-         (mevedel-session-workspace session) own-save-path)
+        (mevedel-instruction-store-sync (mevedel-session-workspace session))
       (mevedel-instruction-store-unreadable
        ;; Reported once; re-reading it at every save would not repair it.
        (mevedel-diagnostic-message (mevedel-diagnostic-scope session) "%s" (error-message-string err)))
@@ -2312,14 +2252,12 @@ When TURN is non-nil, restore the turn-specific snapshot; otherwise restore
 clears workspace instructions when the snapshot is missing, as Rewind requires.
 
 Without TURN or SNAPSHOT-ONLY, this is resume: a workspace with an
-instruction store loads the store instead, and only a workspace still
-waiting for its store restores the session snapshot."
+instruction store loads the store; old session snapshots are ignored."
   (when-let* ((save-path (mevedel-session-save-path session))
               (store (if (or turn snapshot-only)
-                         'pending
+                         'snapshot
                        (condition-case err
-                           (or (mevedel-instruction-store-restore session)
-                               'pending)
+                           (mevedel-instruction-store-restore session)
                          (error
                           (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                            'mevedel
@@ -2327,7 +2265,7 @@ waiting for its store restores the session snapshot."
                                    (error-message-string err))
                            :warning)
                           nil)))))
-   (if (not (eq store 'pending))
+   (if (not (eq store 'snapshot))
        store
     (let* ((path (if turn
                      (mevedel-session-artifacts-instructions-turn-path
@@ -2933,8 +2871,7 @@ Edits made after capture remain modified.  Nothing is published here."
          ;; Input history is diagnostic UI state, not critical publication.
          (mevedel-session-persistence-notify-session-event session 'save-history)
          (when (buffer-live-p buffer)
-           (mevedel-session-artifacts--sync-instruction-store
-            session (mevedel-session-save-path session)))
+           (mevedel-session-artifacts--sync-instruction-store session))
          (mevedel-session-save-path session))))))
 
 (defun mevedel-session-artifacts--remote-save

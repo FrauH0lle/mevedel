@@ -47,10 +47,6 @@
 (autoload 'mevedel-execution-target-create "mevedel-execution-target")
 (autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
 
-;; `mevedel-notes'
-(declare-function mevedel-notes-legacy-histories "mevedel-notes" (workspace))
-(autoload 'mevedel-notes-legacy-histories "mevedel-notes")
-
 ;; `mevedel-persistence'
 (declare-function mevedel-instruction-store-rewind-begin "mevedel-persistence" (session surviving-turn prune-from))
 (declare-function mevedel-instruction-store-rewind-end "mevedel-persistence" (session committed))
@@ -436,29 +432,6 @@ RESOLUTIONS supplies checked intermediate states from the merge editor."
                            collect (list :path path :turn turn
                                          :reason (plist-get checkpoint :gap)))))
 
-(defun mevedel-session-rewind--directive-capture-gaps
-    (session target-turn)
-  "Return untracked directive effects discarded from TARGET-TURN in SESSION."
-  (when-let* ((workspace (mevedel-session-workspace session)))
-    (let ((session-id (mevedel-session-session-id session)))
-      (cl-loop
-       for directive in
-       (mevedel-notes-legacy-histories workspace)
-       append
-       (cl-loop
-        for attempt in (plist-get directive :attempts)
-        for checkpoint = (plist-get attempt :checkpoint)
-        when (and (equal session-id (plist-get checkpoint :session-id))
-                  (>= (or (plist-get checkpoint :turn) 0) target-turn))
-        append
-        (mapcar
-         (lambda (effect)
-           (list :path
-                 (format "Directive %s via %s"
-                         (plist-get directive :id) (car effect))
-                 :reason (cdr effect)))
-         (plist-get attempt :untracked-effects)))))))
-
 (defvar-local mevedel-session-rewind--plan-buffer-session nil
   "Buffer-local session for the `*mevedel-rewind-impact*' buffer.
 Consumed by `mevedel-session-rewind--plan-row-diff' so `d' on a
@@ -662,15 +635,7 @@ RESULT is the plist returned by `mevedel-session-rewind-execute-restore'."
 
 (defun mevedel-session-rewind--prompt-label (prompt)
   "Return PROMPT's concise picker and impact label."
-  (if (eq (plist-get prompt :kind) 'directive)
-      (let ((id (or (plist-get prompt :directive-id) "directive")))
-        (format "◆ %s · %s"
-                (substring id 0 (min 8 (length id)))
-                (capitalize
-                 (replace-regexp-in-string
-                  "-" " "
-                  (symbol-name (or (plist-get prompt :action) 'directive))))))
-    (or (plist-get prompt :preview) "(empty prompt)")))
+  (or (plist-get prompt :preview) "(empty prompt)"))
 
 (defun mevedel-session-rewind--prompt-candidates (session)
   "Return alist entries of DISPLAY to PLIST for SESSION prompt history.
@@ -983,10 +948,7 @@ default -- when it is discarded with everything later."
       (lambda (a b)
         (< (plist-get a :cum-turn) (plist-get b :cum-turn))))
      :checkpoint-gaps
-     (append
-      (mevedel-session-rewind--checkpoint-gaps session first-discarded)
-      (mevedel-session-rewind--directive-capture-gaps
-       session first-discarded))
+     (mevedel-session-rewind--checkpoint-gaps session first-discarded)
      :external-overwrites
      (cl-count 'overwrite file-plan
                :key (lambda (entry) (plist-get entry :action)))

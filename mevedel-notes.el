@@ -26,11 +26,6 @@
 (autoload 'mevedel-note-revert-change "mevedel-note-change" nil t)
 (autoload 'mevedel-note-merge-change "mevedel-note-merge" nil t)
 
-;; `mevedel-directive-activity'
-(declare-function mevedel-open-directive-activity "mevedel-directive-activity"
-                  (history workspace))
-(autoload 'mevedel-open-directive-activity "mevedel-directive-activity")
-
 ;; `mevedel-persistence'
 (defvar mevedel-instructions-restored-hook)
 (declare-function mevedel-instruction-store-observe "mevedel-persistence"
@@ -60,6 +55,21 @@
 
 (defvar mevedel-notes--unsaved-noticed nil
   "Nonproject roots whose in-memory-only note status was announced.")
+
+(defvar mevedel-notes--taken-watches (make-hash-table :test #'equal)
+  "Note UUIDs and workspace keys explicitly resumed in this Emacs session.")
+
+(defun mevedel-note-watching-p (note &optional workspace)
+  "Return non-nil if taken NOTE is resumed in this Emacs session.
+NOTE is an overlay or properties plist.  WORKSPACE defaults to its cached owner."
+  (let ((properties (if (overlayp note) (overlay-properties note) note))
+        (workspace (or workspace
+                       (and (overlayp note) (overlay-buffer note)
+                            (buffer-local-value 'mevedel--workspace (overlay-buffer note))))))
+    (and (eq 'taken (plist-get properties 'mevedel-note-state))
+         (or (gethash (plist-get properties 'mevedel-uuid) mevedel-notes--taken-watches)
+             (gethash (mevedel--instruction-workspace-key workspace)
+                      mevedel-notes--taken-watches)))))
 
 (defun mevedel-notes--state-ignored-p (root)
   "Return non-nil when ROOT's Git ignore policy covers `.mevedel/'."
@@ -209,7 +219,7 @@ Restore only the selected note's file, not every stashed source file."
                                            mevedel-note-actions-map t)))
               (key-description key)
             "M-x mevedel-note-menu")
-          (if (and note (eq 'taken (overlay-get note 'mevedel-note-state))) "drop" "take")
+          (if (and note (mevedel-note-watching-p note)) "drop" "take")
           (pcase (and note (overlay-get note 'mevedel-note-author))
             ('buddy "dismiss, keep") ('agent "dismiss") (_ "delete"))))
 
@@ -239,7 +249,7 @@ Restore only the selected note's file, not every stashed source file."
                           (overlay-put overlay 'mevedel-note-owner note)
                           (overlay-put note 'mevedel-label-overlay overlay)
                           overlay)))
-             (text (format "\n  Note %s · %s · %s · %s · %s"
+             (text (format "\n  Note %s · %s · %s · %s%s · %s"
                            (overlay-get note 'mevedel-id)
                            (pcase (overlay-get note 'mevedel-note-author)
                              ('buddy "Buddy") ('agent "AI") (_ "you"))
@@ -247,10 +257,15 @@ Restore only the selected note's file, not every stashed source file."
                            (pcase (mevedel-notes-attention-state note)
                              ('ready "change ready") ('stale "change stale")
                              (_ (if (eq 'taken (overlay-get note 'mevedel-note-state))
-                                    (if (overlay-get note 'mevedel-note-buddy-looks-done)
-                                        "looks done · done? · Buddy watches"
-                                      "you're on it · Buddy watches")
+                                    (if (not (mevedel-note-watching-p note))
+                                        "you're on it"
+                                      (if (overlay-get note 'mevedel-note-buddy-looks-done)
+                                          "looks done · done? · Buddy watches"
+                                        "you're on it · Buddy watches"))
                                   (if (overlay-get note 'mevedel-note-session-id) "sent" "not sent"))))
+                           (if (and (eq 'taken (overlay-get note 'mevedel-note-state))
+                                    (not (mevedel-note-watching-p note)))
+                               " · paused" "")
                            (mevedel-notes--actions-hint note))))
         (overlay-put note 'keymap mevedel-note-actions-map)
         (move-overlay label (overlay-start note) end)
@@ -328,6 +343,7 @@ Default to the note at point.  Taking Buddy's remark first keeps it as yours."
         (mevedel-buddy-keep-note note))
       (overlay-put note 'mevedel-note-state 'taken)
       (overlay-put note 'mevedel-note-buddy-looks-done nil)
+      (puthash (overlay-get note 'mevedel-uuid) t mevedel-notes--taken-watches)
       (with-current-buffer (overlay-buffer note) (mevedel-buddy-mode 1))
       (mevedel-notes--render note)
       (mevedel-instruction-store-touch workspace)))
@@ -348,18 +364,26 @@ Default to the note at point.  Taking Buddy's remark first keeps it as yours."
       (mevedel-instruction-store-touch workspace)))
   note)
 
-(defun mevedel-notes--activate-taken (buffer)
-  "Resume watching taken notes restored in BUFFER, without loading its dial."
+(defun mevedel-notes--restore-taken (buffer)
+  "Label restored takes in BUFFER; watch only explicitly resumed notes."
   (with-current-buffer buffer
     (save-restriction
       (widen)
-      (when (seq-some (lambda (note)
-                        (and (eq 'note (overlay-get note 'mevedel-instruction-type))
-                             (eq 'taken (overlay-get note 'mevedel-note-state))))
-                      (overlays-in (point-min) (point-max)))
-        (mevedel-buddy-mode 1)))))
+      (dolist (note (cdr (assq buffer (mevedel--instruction-alist))))
+        (when (eq 'taken (overlay-get note 'mevedel-note-state))
+          (mevedel-notes--render note)
+          (when (mevedel-note-watching-p note)
+            (unless (bound-and-true-p mevedel-buddy-mode) (mevedel-buddy-mode 1))))))))
 
-(add-hook 'mevedel-instructions-restored-hook #'mevedel-notes--activate-taken)
+(add-hook 'mevedel-instructions-restored-hook #'mevedel-notes--restore-taken)
+
+(defun mevedel-notes-resume-taken (workspace)
+  "Resume WORKSPACE's taken notes for the rest of this Emacs session."
+  (puthash (mevedel--instruction-workspace-key workspace) t mevedel-notes--taken-watches)
+  (dolist (entry (plist-get (mevedel--instruction-state
+                           (mevedel--instruction-workspace-key workspace)) :instructions))
+    (when (buffer-live-p (car entry))
+      (mevedel-notes--restore-taken (car entry)))))
 
 ;;;###autoload
 (defun mevedel-note-delete (&optional note)
@@ -549,41 +573,6 @@ Return its live source overlay, retaining its text, tags and attachments."
         (cons start (max start (min (point-max) (plist-get instruction :overlay-end)))))))
 
 ;;;###autoload
-(defun mevedel-notes-legacy-histories (workspace)
-  "Return WORKSPACE's frozen histories without visiting source files.
-The plists belong to the instruction state; callers must not mutate them."
-  (let* ((state (mevedel--instruction-state
-                 (mevedel--instruction-workspace-key workspace)))
-         histories)
-    (dolist (entry (plist-get state :instructions))
-      (dolist (note (if (bufferp (car entry)) (cdr entry)
-                     (plist-get (cdr entry) :instructions)))
-        (when-let* ((history
-                     (if (overlayp note)
-                         (overlay-get note 'mevedel-note-legacy-history)
-                       (plist-get (plist-get note :properties)
-                                  'mevedel-note-legacy-history))))
-          (push history histories))))
-    (dolist (entry (plist-get state :closed-notes))
-      (when-let* ((history
-                   (plist-get (plist-get (plist-get entry :instruction) :properties)
-                              'mevedel-note-legacy-history)))
-        (push history histories)))
-    (nreverse histories)))
-
-;;;###autoload
-(defun mevedel-note-history (&optional note)
-  "Open NOTE's frozen pre-migration history in the directive inspector."
-  (interactive)
-  (setq note (or note (mevedel-notes--at-point)))
-  (let ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note))))
-    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
-      (unless (overlay-get note 'mevedel-note-legacy-history)
-        (user-error "Note has no pre-migration history"))
-      (mevedel-open-directive-activity
-       (overlay-get note 'mevedel-note-legacy-history) workspace))))
-
-;;;###autoload
 (defun mevedel-note-menu (&optional note)
   "Show the actions menu for NOTE, defaulting to the note at point."
   (interactive)
@@ -596,7 +585,7 @@ The plists belong to the instruction state; callers must not mutate them."
                    (append '((?s "send" "Send or reopen the note conversation")
                              (?e "edit" "Edit note text")
                              (?x "done" "Mark note done"))
-                           (if (eq 'taken (overlay-get note 'mevedel-note-state))
+                           (if (mevedel-note-watching-p note)
                                '((?t "drop" "Stop watching this note"))
                              '((?t "take" "Implement yourself with Buddy watching")))
                            (if (eq 'buddy (overlay-get note 'mevedel-note-author))
@@ -605,8 +594,6 @@ The plists belong to the instruction state; callers must not mutate them."
                              (if (eq 'agent (overlay-get note 'mevedel-note-author))
                                  '((?d "dismiss" "Dismiss this agent finding"))
                                '((?d "delete" "Delete note without changing code"))))
-                           (when (overlay-get note 'mevedel-note-legacy-history)
-                             '((?h "history" "Inspect read-only pre-migration history")))
                            (when (overlay-get note 'mevedel-note-session-id)
                              '((?u "revert" "Revert an applied change, preserving later edits")))
                            (when (overlay-get note 'mevedel-note-prepared-change)
@@ -618,7 +605,7 @@ The plists belong to the instruction state; callers must not mutate them."
         (?u (mevedel-note-revert-change note))
         (?r (mevedel-note-reask note))
         (?m (mevedel-note-merge-change note))
-        (?t (if (eq 'taken (overlay-get note 'mevedel-note-state))
+        (?t (if (mevedel-note-watching-p note)
                 (mevedel-note-drop note)
               (mevedel-note-take note)))
         (?e (mevedel-note-edit
@@ -628,8 +615,7 @@ The plists belong to the instruction state; callers must not mutate them."
               ('buddy (mevedel-buddy-dismiss-note note))
               ('agent (mevedel-note-dismiss note))
               (_ (mevedel-note-delete note))))
-        (?k (mevedel-buddy-keep-note note))
-        (?h (mevedel-note-history note))))))
+        (?k (mevedel-buddy-keep-note note))))))
 
 (defun mevedel-notes--ensure-workspace (workspace)
   "Prepare the current file's WORKSPACE for note storage, without syncing.

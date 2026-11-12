@@ -127,8 +127,7 @@ Indexed remote roots are read once in the background, never in this hook."
                                 (file-name-concat root ".mevedel/instructions.el"))
                                (read (current-buffer)))
                            (error nil)))
-                        ((or (plist-get data :files)
-                             (plist-get data :directives))))
+                        ((plist-get data :files)))
               (mevedel-instruction-store-visit file nil root)))))))))
 
 ;;;###autoload

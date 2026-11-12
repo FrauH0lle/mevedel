@@ -259,10 +259,9 @@
     return 'ai';
   }
 
-  // The discussion a record belongs to: a directive id, `item:ID` for a
-  // shared item or artifact conversation, or null for the main chat.
+  // The discussion a record belongs to: `item:ID` for a shared item or
+  // artifact conversation, or null for the main chat.
   function scopeKey(record) {
-    if (record.directive) return record.directive;
     return typeof record.item === 'string' && record.item ? `item:${record.item}` : null;
   }
 
@@ -280,8 +279,8 @@
     } else {
       who.append(el('span', 'name', 'Tool'));
     }
-    // Chips open directive history or an item conversation. A deleted
-    // item's turns keep their name but have no conversation to switch to.
+    // Chips open an item conversation. A deleted item's turns keep their
+    // name but have no conversation to switch to.
     const scope = scopeKey(record);
     const chip = scope && scopeChip(scope);
     if (chip) {
@@ -290,8 +289,7 @@
       button.dataset.scope = scope;
       button.disabled = chip.gone === true;
       button.setAttribute('title', chip.gone ? `${chip.label} was deleted`
-        : record.directive ? `Show read-only history for ${chip.label}`
-          : `Show and reply in ${chip.label}`);
+        : `Show and reply in ${chip.label}`);
       who.append(button);
     }
     return who;

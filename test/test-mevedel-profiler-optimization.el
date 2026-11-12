@@ -104,8 +104,7 @@
       (should (= 120 (cl-count 'tool types)))
       (should (= 40 (cl-count 'response types)))
       (should (= 40 (cl-count 'assistant
-                              (mevedel-view--group-transcript-turns
-                               segments (current-buffer))
+                              (mevedel-view--group-into-turns segments (current-buffer))
                               :key (lambda (turn) (plist-get turn :role))))))
     (goto-char (point-min))
     (should (search-forward "* Prompt 0\n" nil t))

@@ -584,7 +584,7 @@
           (should (eq request mevedel--current-request))
           (should-not (mevedel-session-external-conversations session)))))))
 
-(mevedel-deftest mevedel--send-request/independent-directive-history (:quiet t)
+(mevedel-deftest mevedel--send-request/old-directive-history (:quiet t)
   (mevedel-engine-test--with-session
     (let* ((gptel--known-backends nil)
            (api (gptel-make-openai "fixture-api" :key "fixture" :models '(gpt-4o)))
@@ -607,10 +607,8 @@
                    (apply real-request prompt (append options '(:dry-run t))))))
         (mevedel--send-request))
       (should called)
-      ;; Completed directive turns are not evidence of root model history.
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
-      (should (mevedel-claude-code-backend-p gptel-backend))
+      ;; Old directive index records are ordinary root history now.
+      (should (mevedel-engine-root-history-p session))
       (setf (mevedel-session-turn-count session) 2
             (mevedel-session-prompt-index session)
             '((1 (:kind directive :cum-turn 1) (:cum-turn 2))))

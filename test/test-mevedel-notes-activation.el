@@ -49,17 +49,6 @@
         (should (equal 0 (process-exit-status process)))
         (should (equal "" (buffer-string)))))))
 
-(mevedel-deftest mevedel-note-history/autoload ()
-  ,test
-  (test)
-  :doc "package-generated autoloads expose history as a cold M-x command"
-  (mevedel-notes-activation-test--cold
-   '(progn
-      (when (featurep 'mevedel-notes) (error "Notes loaded before first use"))
-      (unless (and (commandp 'mevedel-note-history)
-                   (autoloadp (symbol-function 'mevedel-note-history)))
-        (error "History missing from package autoloads")))))
-
 (mevedel-deftest mevedel-notes-file-visit
   ()
   (let* ((root (make-temp-file
@@ -244,6 +233,46 @@
           (error "First note was not saved"))
         (when (or (featurep 'mevedel-chat) (featurep 'mevedel-buddy))
           (error "Creating a note started AI")))))
+  :doc "an old session's instruction snapshot is ignored: the first note creates the store"
+  (let ((old (file-name-concat root ".mevedel" "sessions" "20261107T000000-aaaaaaaaaaaa")))
+    (should (zerop (call-process "git" nil nil nil "init" "-q" root)))
+    (write-region ".mevedel/\n" nil (file-name-concat root ".gitignore") nil 'silent)
+    (make-directory (file-name-concat old "instructions") t)
+    (with-temp-file (file-name-concat old "session.meta.el")
+      (prin1 '(:version "v0.5.6" :session-id "20261107T000000-aaaaaaaaaaaa")
+             (current-buffer)))
+    ;; The pre-store snapshot shape: directives plus overlay presentations.
+    (with-temp-file (file-name-concat old "instructions" "current.el")
+      (prin1 '(:version "0.0.0"
+               :ids (:id-counter 1 :used-ids (1) :retired-ids nil)
+               :directives ((:id "D1" :request "Old directive"
+                             :anchor (:state attached :file "source.el" :start 1 :end 6
+                                      :evidence nil)
+                             :subdirectives nil :attempts nil :discussion nil))
+               :files (("source.el"
+                        :anchor-schema 1
+                        :instructions
+                        ((:overlay-start 1 :overlay-end 6
+                          :anchor (:schema 1 :uuid "D1" :parent-uuid nil :bodyless nil
+                                   :text-hash nil :text "sourc" :prefix "" :suffix "e code")
+                          :properties (mevedel-instruction t mevedel-id 1 mevedel-uuid "D1"
+                                       mevedel-instruction-type directive))))))
+             (current-buffer)))
+    (mevedel-notes-activation-test--cold
+     `(progn
+        (require 'mevedel)
+        (let (warnings)
+          (advice-add 'display-warning :before
+                      (lambda (&rest args) (push args warnings)))
+          (with-current-buffer (find-file-noselect ,file)
+            (mevedel-note-create "Fresh note"))
+          (when warnings (error "Unexpected warnings: %S" warnings)))
+        (let ((store ,(file-name-concat root ".mevedel/instructions.el")))
+          (unless (file-exists-p store) (error "First note was not saved"))
+          (let ((text (with-temp-buffer (insert-file-contents store) (buffer-string))))
+            (unless (string-search "Fresh note" text) (error "Store lacks the new note"))
+            (when (string-search "Old directive" text)
+              (error "Old snapshot leaked into the store")))))))
   :doc "outside a project notes stay in memory and announce unsaved status once"
   (mevedel-notes-activation-test--cold
    `(progn

@@ -31,6 +31,7 @@
           (mevedel-buddy--changes (make-hash-table :test #'equal))
           (mevedel-buddy--last-review (make-hash-table :test #'equal))
           (mevedel-buddy--levels (make-hash-table :test #'equal))
+          (mevedel-notes--taken-watches (make-hash-table :test #'equal))
           (find-file-hook (copy-sequence find-file-hook))
           (post-command-hook (copy-sequence post-command-hook))
           (mevedel-buddy--running nil)
@@ -302,7 +303,7 @@ AUTOMATIC exercises the idle review policy without waiting for idle time."
   (:quiet t)
   ,test
   (test)
-  :doc "restored taken notes reactivate without dial reads until the first review"
+  :doc "restored takes pause until taking again, without dial reads on restore"
   (mevedel-take-test--with-source
     (mevedel-buddy-set-level 'quiet workspace)
     (mevedel-note-take (mevedel-note-create "Keep watching after reload"))
@@ -310,6 +311,7 @@ AUTOMATIC exercises the idle review policy without waiting for idle time."
     (mevedel-buddy-mode -1)
     (mevedel--clear-instruction-state workspace)
     (clrhash mevedel-buddy--levels)
+    (clrhash mevedel-notes--taken-watches)
     (let* ((reads 0)
            (counter (lambda (file &rest _)
                       (when (string-suffix-p "/buddy-level" file) (cl-incf reads)))))
@@ -317,14 +319,43 @@ AUTOMATIC exercises the idle review policy without waiting for idle time."
           (progn
             (advice-add 'mevedel-session-control-fs-read-file :before counter)
             (mevedel-instruction-store-observe workspace)
-            (should mevedel-buddy-mode)
+            (should-not mevedel-buddy-mode)
             (should (zerop reads))
+            (should (string-search "paused" (mevedel-take-test--labels)))
+            (should-not (string-search "Buddy watches" (mevedel-take-test--labels)))
+            (should (eq 'taken (mevedel-notes-attention-state (mevedel-notes--at-point))))
+            (mevedel-note-take)
+            (should mevedel-buddy-mode)
+            (should-not (string-search "paused" (mevedel-take-test--labels)))
             (should (string-search "Buddy watches" (mevedel-take-test--labels)))
             (should (mevedel-take-test--review
                      (lambda (prompt _tools)
                        (should (string-search "Workspace dial: quiet" prompt))) t))
             (should (= 1 reads)))
-        (advice-remove 'mevedel-session-control-fs-read-file counter)))))
+        (advice-remove 'mevedel-session-control-fs-read-file counter))))
+  :doc "the dial resumes paused takes, including later file visits in this session"
+  (mevedel-take-test--with-source
+    (let ((other-file (file-name-concat root "other.el")))
+      (write-region "other code\n" nil other-file nil 'silent)
+      (mevedel-note-take (mevedel-note-create "Current file goal"))
+      (with-current-buffer (find-file-noselect other-file)
+        (setq-local mevedel--workspace workspace)
+        (mevedel-note-take (mevedel-note-create "Unvisited file goal"))
+        (kill-buffer))
+      (mevedel-instruction-store-flush t)
+      (mevedel-buddy-mode -1)
+      (mevedel--clear-instruction-state workspace)
+      (clrhash mevedel-notes--taken-watches)
+      (mevedel-instruction-store-observe workspace)
+      (should (string-search "paused" (mevedel-take-test--labels)))
+      (mevedel-buddy-set-level 'quiet workspace)
+      (should mevedel-buddy-mode)
+      (should (string-search "Buddy watches" (mevedel-take-test--labels)))
+      (should-not (string-search "paused" (mevedel-take-test--labels)))
+      (with-current-buffer (find-file-noselect other-file)
+        (should mevedel-buddy-mode)
+        (should (string-search "Buddy watches" (mevedel-take-test--labels)))
+        (should-not (string-search "paused" (mevedel-take-test--labels)))))))
 
 (mevedel-deftest mevedel-buddy-review/invalid-dial
   (:quiet t)

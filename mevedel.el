@@ -106,7 +106,6 @@
 (autoload 'mevedel-note-dismiss-agent-notes "mevedel-notes" nil t)
 (autoload 'mevedel-note-done "mevedel-notes" nil t)
 (autoload 'mevedel-note-edit "mevedel-notes" nil t)
-(autoload 'mevedel-note-history "mevedel-notes" nil t)
 (autoload 'mevedel-note-menu "mevedel-notes" nil t)
 (autoload 'mevedel-note-merge-change "mevedel-note-merge" nil t)
 (autoload 'mevedel-note-reask "mevedel-note-conversation" nil t)
@@ -118,7 +117,6 @@
 (autoload 'mevedel-notes-list "mevedel-notes-list" nil t)
 (autoload 'mevedel-menu "mevedel-menu" nil t)
 (autoload 'mevedel-menu-open "mevedel-menu" nil t)
-(autoload 'mevedel-open-directive-activity "mevedel-directive-activity")
 (autoload 'mevedel-pending-inputs-clear "mevedel-pending-inputs" nil t)
 (autoload 'mevedel-pending-inputs-drop-at-point "mevedel-pending-inputs" nil t)
 (autoload 'mevedel-pending-inputs-edit "mevedel-pending-inputs" nil t)
@@ -228,7 +226,6 @@
 (autoload 'mevedel-tool-repair-install-shape-adapter "mevedel-tool-repair-gptel")
 (autoload 'mevedel-tool-repair-uninstall-shape-adapter "mevedel-tool-repair-gptel")
 (autoload 'mevedel-tools-register "mevedel-tools")
-(autoload 'mevedel-transcript-exclude-directive-turns "mevedel-transcript-audit")
 (autoload 'mevedel-transport-install "mevedel-transport")
 (autoload 'mevedel-transport-uninstall "mevedel-transport")
 (autoload 'mevedel-view--refresh-animation-on-face "mevedel-view-stream")
@@ -531,11 +528,6 @@ always prompt for the session name."
   ;; Inject system reminders after mention expansion but before the request fires
   (add-hook 'gptel-prompt-transform-functions #'mevedel-reminders--transform -80)
 
-  ;; Keep directive turns visible in the stored transcript while excluding
-  ;; them from ordinary request copies before provider parsing.
-  (add-hook 'gptel-prompt-transform-functions
-            #'mevedel-transcript-exclude-directive-turns -79)
-
   ;; Auto-compact after mevedel's synchronous prompt transforms so an
   ;; auto-compact send preserves the transformed pending prompt when it
   ;; rebuilds the temporary request buffer.
@@ -633,9 +625,6 @@ always prompt for the session name."
   ;; Remove reminder injection
   (remove-hook 'gptel-prompt-transform-functions #'mevedel-reminders--transform)
 
-  ;; Remove directive context projection
-  (remove-hook 'gptel-prompt-transform-functions
-               #'mevedel-transcript-exclude-directive-turns)
   (remove-hook 'gptel-prompt-transform-functions
                #'mevedel-shared-conversation-transform)
 

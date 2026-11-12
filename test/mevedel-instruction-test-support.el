@@ -64,16 +64,12 @@ Give unnamed geometry fixtures a real source file until BUFFER is killed."
         (delete-file file)))))
 
 (defun mevedel-instruction-test--store-state (workspace)
-  "Return WORKSPACE's store state: `active', `pending', `new' or nil.
+  "Return WORKSPACE's store state: `active', `new' or nil.
 Nil means WORKSPACE keeps no store."
   (when (mevedel-instruction-store--applicable-p workspace)
-    (if (not (eq 'absent (plist-get (mevedel-instruction-store--read workspace)
-                                    :status)))
-        'active
-      (if (mevedel-instruction-store--pending-p
-           workspace (mevedel-instruction-store--observation workspace) nil)
-          'pending
-        'new))))
+    (if (eq 'absent (plist-get (mevedel-instruction-store--read workspace) :status))
+        'new
+      'active)))
 
 (provide 'mevedel-instruction-test-support)
 ;;; mevedel-instruction-test-support.el ends here
