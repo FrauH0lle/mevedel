@@ -16,9 +16,19 @@
 (defvar-local mevedel-notes-list--workspace nil
   "Workspace whose notes this list displays.")
 
+(defvar-local mevedel-notes-list--open-entries nil
+  "Cached open rows, collected at the last explicit refresh.")
+
+(defvar-local mevedel-notes-list--closed-rows nil
+  "Cached closed rows, collected at the last explicit refresh.")
+
+(defvar-local mevedel-notes-list--closed-expanded nil
+  "Whether the recently closed group is expanded.")
+
 (defvar mevedel-notes-list-extra-entries-functions nil
   "Functions appending additional groups to the notes list.
-Each receives the workspace and returns tabulated-list entries.")
+Each receives the workspace and returns tabulated-list entries.
+Called when folding as well as refreshing: use only cached state, never I/O.")
 
 (defvar mevedel-notes-list-mode-map
   (let ((map (make-sparse-keymap)))
@@ -26,6 +36,9 @@ Each receives the workspace and returns tabulated-list entries.")
     (define-key map (kbd "v") #'mevedel-notes-list-visit)
     (define-key map (kbd "RET") #'mevedel-notes-list-visit)
     (define-key map (kbd "d") #'mevedel-notes-list-delete)
+    (define-key map (kbd "x") #'mevedel-notes-list-done)
+    (define-key map (kbd "r") #'mevedel-notes-list-restore)
+    (define-key map (kbd "TAB") #'mevedel-notes-list-toggle-closed)
     (define-key map (kbd "t") #'mevedel-notes-list-tags)
     (define-key map (kbd "e") #'mevedel-notes-list-edit)
     (define-key map (kbd "g") #'mevedel-notes-list-refresh)
@@ -36,10 +49,11 @@ Each receives the workspace and returns tabulated-list entries.")
 (define-derived-mode mevedel-notes-list-mode tabulated-list-mode "Notes"
   "Workspace notes grouped by the attention they need.
 Use v or RET to visit, e to edit text, t to edit tags, d to delete,
-g to refresh and q to return to the invoking window."
+x for done, r to restore, TAB to fold recently closed, g to refresh
+and q to return to the invoking window."
   (setq tabulated-list-format
         [("#" 5 nil) ("Where" 26 nil) ("By" 14 nil)
-         ("Text" 40 nil) ("State" 12 nil) ("Tags" 0 nil)])
+         ("Text" 40 nil) ("State" 24 nil) ("Tags" 0 nil)])
   (setq-local revert-buffer-function (lambda (&rest _) (mevedel-notes-list-refresh)))
   (tabulated-list-init-header))
 
@@ -56,8 +70,37 @@ g to refresh and q to return to the invoking window."
            (format "%s" (plist-get props 'mevedel-note-author))
            (replace-regexp-in-string "[\n\r\t]+" " "
                                      (or (plist-get props 'mevedel-note-text) ""))
-           (symbol-name (mevedel-notes-attention-state props))
+           (format "%s%s" (or (plist-get note :closed-reason)
+                               (mevedel-notes-attention-state props))
+                   (if (plist-get note :source-missing) "; source missing" ""))
            (mapconcat #'symbol-name (plist-get props 'mevedel-note-tags) ", ")))))
+
+(defun mevedel-notes-list--closed-entries (_workspace)
+  "Return the cached recently closed group for _WORKSPACE."
+  (when mevedel-notes-list--closed-rows
+    (append (list (list nil (vector "" (format "%s Recently closed (%d)"
+                                             (if mevedel-notes-list--closed-expanded "[-]" "[+]")
+                                             (length mevedel-notes-list--closed-rows))
+                                   "" "" "" "")))
+            (and mevedel-notes-list--closed-expanded mevedel-notes-list--closed-rows))))
+
+(add-hook 'mevedel-notes-list-extra-entries-functions #'mevedel-notes-list--closed-entries)
+
+(defun mevedel-notes-list--print ()
+  "Print cached rows without observing the store or visiting source files."
+  (setq tabulated-list-entries
+        (append mevedel-notes-list--open-entries
+                (apply #'append
+                       (mapcar (lambda (function)
+                                 (funcall function mevedel-notes-list--workspace))
+                               mevedel-notes-list-extra-entries-functions))))
+  (tabulated-list-print t))
+
+(defun mevedel-notes-list-toggle-closed ()
+  "Expand or fold cached recently closed rows without store observation."
+  (interactive)
+  (setq mevedel-notes-list--closed-expanded (not mevedel-notes-list--closed-expanded))
+  (mevedel-notes-list--print))
 
 (defun mevedel-notes-list-refresh ()
   "Observe the workspace store and refresh this notes list."
@@ -78,10 +121,18 @@ g to refresh and q to return to the invoking window."
                         (list (list nil (vector "" (capitalize (symbol-name group))
                                                 "" "" "" "")))
                         (mapcar #'mevedel-notes-list--entry members)))))
-      (dolist (function mevedel-notes-list-extra-entries-functions)
-        (setq entries (append entries (funcall function mevedel-notes-list--workspace))))
-      (setq tabulated-list-entries entries)
-      (tabulated-list-print t))))
+      (setq mevedel-notes-list--open-entries entries
+            mevedel-notes-list--closed-rows
+            (mapcar (lambda (entry)
+                      (let ((instruction (plist-get entry :instruction)))
+                        (mevedel-notes-list--entry
+                         (list :file (plist-get entry :file)
+                               :line (car (plist-get instruction :closed-position))
+                               :uuid (plist-get (plist-get instruction :properties) 'mevedel-uuid)
+                               :properties (plist-get instruction :properties)
+                               :closed-reason (plist-get instruction :closed-reason)))))
+                    (mevedel-notes-closed mevedel-notes-list--workspace t)))
+      (mevedel-notes-list--print))))
 
 (defun mevedel-notes-list--selected-note ()
   "Resolve the selected row's exact live note, or refuse."
@@ -104,6 +155,18 @@ g to refresh and q to return to the invoking window."
   "Delete the selected note without changing its code."
   (interactive)
   (mevedel-note-delete (mevedel-notes-list--selected-note))
+  (mevedel-notes-list-refresh))
+
+(defun mevedel-notes-list-done ()
+  "Mark the selected open note done without changing its code."
+  (interactive)
+  (mevedel-note-done (mevedel-notes-list--selected-note))
+  (mevedel-notes-list-refresh))
+
+(defun mevedel-notes-list-restore ()
+  "Restore the selected closed note by its exact UUID."
+  (interactive)
+  (mevedel-note-restore (tabulated-list-get-id) mevedel-notes-list--workspace)
   (mevedel-notes-list-refresh))
 
 (defun mevedel-notes-list-tags ()

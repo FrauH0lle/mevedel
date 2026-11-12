@@ -19,6 +19,14 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+(defun mevedel-notes-list-test--no-source-probes (operation &rest args)
+  "Reject source observations through OPERATION; allow pure path work on ARGS."
+  (when (memq operation '(file-exists-p file-readable-p file-attributes
+                         insert-file-contents insert-file-contents-literally))
+    (error "Unexpected source probe: %s" operation))
+  (let ((file-name-handler-alist nil))
+    (apply operation args)))
+
 (defmacro mevedel-notes-list-test--workspace (&rest body)
   "Run BODY with two source files in a private workspace."
   (declare (indent 0))
@@ -103,7 +111,79 @@
       (mevedel-notes-list-refresh)
       (should-not (string-match-p "Edited in list" (buffer-string))))
     (with-current-buffer (find-buffer-visiting second)
-      (should (equal "before\nsecond code\n" (buffer-string))))))
+      (should (equal "before\nsecond code\n" (buffer-string)))))
+  :doc "closed notes fold, show reasons, and restore by list key after reload"
+  (mevedel-notes-list-test--workspace
+    (setq list-buffer (mevedel-notes-list workspace))
+    (with-current-buffer list-buffer
+      (goto-char (point-min))
+      (search-forward "First thought")
+      (call-interactively (key-binding "x"))
+      (goto-char (point-min))
+      (search-forward "Second thought")
+      (call-interactively (key-binding "d")))
+    (mevedel-instruction-store-flush t)
+    (kill-buffer (find-buffer-visiting second))
+    (mevedel--clear-instruction-state workspace)
+    (with-current-buffer list-buffer
+      (mevedel-notes-list-refresh)
+      (should (string-match-p "Recently closed (2)" (buffer-string)))
+      (should-not (string-match-p "First thought\\|Second thought" (buffer-string)))
+      ;; Folding is display-only, including for a remote workspace store.
+      (let ((file-name-handler-alist
+             '(("." . (lambda (&rest _) (error "Unexpected file I/O"))))))
+        (call-interactively (key-binding (kbd "TAB")))
+        (should (string-match-p "First thought.*done" (buffer-string)))
+        (should (string-match-p "Second thought.*deleted" (buffer-string)))
+        (call-interactively (key-binding (kbd "TAB")))
+        (should-not (string-match-p "Second thought" (buffer-string)))
+        (call-interactively (key-binding (kbd "TAB"))))
+      (should-not (find-buffer-visiting second))
+      (goto-char (point-min))
+      (search-forward "Second thought")
+      (call-interactively (key-binding "r"))
+      (should (string-match-p "second.el:2.*Second thought.*unsent" (buffer-string)))
+      (should (eq (current-buffer) (window-buffer (selected-window)))))
+    (mevedel-instruction-store-flush t)
+    (mevedel--clear-instruction-state workspace)
+    (with-current-buffer list-buffer
+      (mevedel-notes-list-refresh)
+      (should (string-match-p "second.el:2.*Second thought.*unsent" (buffer-string))))
+    (with-current-buffer (find-buffer-visiting second)
+      (should (equal "before\nsecond code\n" (buffer-string)))))
+  :doc "missing source uses cached live and stashed flags without row probes"
+  (mevedel-notes-list-test--workspace
+    (setq list-buffer (mevedel-notes-list workspace))
+    (delete-file second)
+    ;; No source observation yet: list refresh must not invent a new one.
+    (with-current-buffer list-buffer
+      (let ((file-name-handler-alist
+             '(("second\\.el" . mevedel-notes-list-test--no-source-probes))))
+        (mevedel-notes-list-refresh))
+      (should-not (string-match-p "source missing" (buffer-string))))
+    (with-current-buffer (find-buffer-visiting second)
+      (run-hooks 'post-command-hook))
+    (mevedel-instruction-store-flush t)
+    (with-current-buffer list-buffer
+      (mevedel-notes-list-refresh)
+      (should (string-match-p "Second thought.*unsent; source missing" (buffer-string))))
+    (kill-buffer (find-buffer-visiting second))
+    (mevedel--clear-instruction-state workspace)
+    ;; The unvisited stash retains its last observation even if the file returns.
+    (write-region "before\nsecond code\n" nil second nil 'silent)
+    ;; Cold store installation has its own source-restoration boundary.
+    (mevedel-instruction-store-observe workspace)
+    (with-current-buffer list-buffer
+      (let ((file-name-handler-alist
+             '(("second\\.el" . mevedel-notes-list-test--no-source-probes))))
+        (mevedel-notes-list-refresh))
+      (should (string-match-p "Second thought.*unsent; source missing" (buffer-string)))
+      (goto-char (point-min))
+      (search-forward "Second thought")
+      (call-interactively (key-binding "v")))
+    (with-current-buffer list-buffer
+      (mevedel-notes-list-refresh)
+      (should-not (string-match-p "source missing" (buffer-string))))))
 
 (mevedel-deftest mevedel-note-set-tags
   (:quiet t)

@@ -268,9 +268,11 @@ its source code. Creating or editing a note does not send anything to a model.
 
 `M-x mevedel-notes-list` lists the whole workspace, including unopened files,
 grouped by attention state. Use `v` or `RET` to visit, `e` to edit, `t` to edit
-tags, `d` to delete, `g` to refresh and `q` to close. Listing does not open the
-source files. `M-x mevedel-note-set-tags` also edits the tags at point; an empty
-answer removes every tag.
+tags, `d` to delete, `x` to mark done, `g` to refresh and `q` to close. Recently
+closed notes form a folded group: `TAB` toggles it, the State column shows the
+close reason, and `r` restores the selected note. Listing does not open source
+files. Missing sources show their last observed state without probing each file.
+`M-x mevedel-note-set-tags` also edits tags at point; an empty answer removes all.
 
 Mention `@note:3` in a chat to attach that note's current code and text, or
 `@note:{parser and not tests}` to attach notes matching a tag query. Numbers bind
