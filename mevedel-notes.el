@@ -76,7 +76,7 @@
             (buffer-string))))))
 
 (defvar mevedel-notes-attention-state-functions nil
-  "Functions deriving attention state from a note's properties plist.
+  "Functions deriving attention state from a live overlay or properties plist.
 The first non-nil result wins.  Called from redisplay: use only in-memory
 state, never load features, perform I/O, or mutate the supplied properties.")
 
@@ -89,7 +89,7 @@ Transient workflow attention takes precedence over persisted lifecycle."
       (and mevedel-notes-attention-state-functions
            (run-hook-with-args-until-success
             'mevedel-notes-attention-state-functions
-            (if (overlayp properties) (overlay-properties properties) properties)))
+            properties))
       (if (overlayp properties)
           (overlay-get properties 'mevedel-note-state)
         (plist-get properties 'mevedel-note-state))

@@ -55,8 +55,10 @@
   :lighter "" :interactive nil)
 
 (defun mevedel-note-conversation-attention-state (properties)
-  "Project live conversation work for note PROPERTIES using only cached state."
-  (when-let* ((id (plist-get properties 'mevedel-note-session-id))
+  "Project cached conversation work for PROPERTIES, a plist or live overlay."
+  (when-let* ((id (if (overlayp properties)
+                     (overlay-get properties 'mevedel-note-session-id)
+                   (plist-get properties 'mevedel-note-session-id)))
               (data (mevedel-session-control-transfer-root-buffer-for-id id)))
     (and (mevedel-turn-busy-p data) 'working)))
 

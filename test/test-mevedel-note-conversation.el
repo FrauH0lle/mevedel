@@ -110,6 +110,31 @@
     (mevedel-test--await 5 "Note answer did not settle"
       (not (mevedel-turn-busy-p (plist-get info :buffer))))))
 
+(mevedel-deftest mevedel-note-conversation-attention-state
+  (:quiet t)
+  ,test
+  (test)
+  :doc "redisplay projects overlay and plist conversation attention without copying overlays"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Explain this code"))
+           (view (mevedel-note-send note))
+           (properties (overlay-properties note)))
+      (with-current-buffer source
+        (cl-letf (((symbol-function 'overlay-properties)
+                   (lambda (_) (error "Redisplay copied an overlay plist"))))
+          (should (equal " Notes: 1 working" (mevedel-notes-mode-line)))
+          (should (eq 'working (mevedel-notes-attention-state note)))
+          (should (eq 'working (mevedel-notes-attention-state properties)))
+          (overlay-put note 'mevedel-note-attention-state 'ready)
+          (should (equal " Notes: 1 ready" (mevedel-notes-mode-line)))
+          (overlay-put note 'mevedel-note-attention-state nil)))
+      (mevedel-note-conversation-test--answer (car sent) "The answer.")
+      (with-current-buffer source
+        (should-not (mevedel-notes-mode-line))
+        (should (eq 'sent (mevedel-notes-attention-state note)))
+        (should (eq 'sent (mevedel-notes-attention-state properties))))
+      (should (buffer-live-p view)))))
+
 (mevedel-deftest mevedel-note-send
   (:quiet t)
   ,test

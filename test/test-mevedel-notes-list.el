@@ -405,7 +405,10 @@
     (kill-buffer (find-buffer-visiting second))
     (let ((mevedel-notes-attention-state-functions
            (list (lambda (properties)
-                   (when (= (plist-get properties 'mevedel-id) 2) 'working)))))
+                   (when (= (if (overlayp properties)
+                                (overlay-get properties 'mevedel-id)
+                              (plist-get properties 'mevedel-id)) 2)
+                     'working)))))
       (with-current-buffer (find-buffer-visiting first)
         (should (equal " Notes: 1 working" (mevedel-notes-mode-line))))
       (setq list-buffer (mevedel-notes-list workspace))
