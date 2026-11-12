@@ -648,4 +648,8 @@ temporary one."
           (with-current-buffer buffer (set-buffer-modified-p nil))
           (kill-buffer buffer)))
       (mevedel-uninstall)
+      ;; The exit hook normally stops maintenance children, but this fixture
+      ;; removes their workspace before exiting.  Stop writers before removal.
+      (when (featurep 'mevedel-journal-worker)
+        (mevedel-journal-worker-stop-all))
       (unless state (delete-directory root t)))))
