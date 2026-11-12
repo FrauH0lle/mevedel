@@ -36,7 +36,7 @@
   :doc "Note conversation actions; ordinary characters remain composer input."
   "C-c C-c" #'mevedel-view-send
   "C-c C-a" #'mevedel-note-apply-change
-  "C-c C-u" #'mevedel-note-revert-change
+  "C-c C-b" #'mevedel-note-revert-change
   "C-c C-n" #'mevedel-note-reask
   "C-c C-g" #'mevedel-note-merge-change
   "C-c C-v" #'mevedel-note-show-sent

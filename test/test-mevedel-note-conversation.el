@@ -171,7 +171,39 @@
                (lambda (_prompt choices &rest _) (assq ?s choices))))
       (call-interactively #'mevedel-note-menu))
     (should (= 1 (length sent)))
-    (mevedel-note-conversation-test--answer (car sent) "Sent through the menu.")))
+    (mevedel-note-conversation-test--answer (car sent) "Sent through the menu."))
+  :doc "a change prepared during the first real note request can be applied and reverted"
+  (mevedel-note-conversation-test--with-source
+    (let* ((source-key (key-binding (kbd "C-c C-b")))
+           (note (mevedel-note-create "Improve this code"))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view)))
+      (should (= 1 (length sent)))
+      (with-current-buffer data
+        (should mevedel--current-request)
+        (mevedel-tool-patch-handler
+         #'ignore
+         '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-selected code\n+improved code\n*** End Patch")))
+      (should (equal "outside-before\nselected code\noutside-after\n"
+                     (mevedel-test--read-file file)))
+      (mevedel-note-conversation-test--answer (car sent) "A prepared improvement.")
+      (with-current-buffer view
+        (call-interactively (key-binding (kbd "C-c C-a"))))
+      (should (equal "outside-before\nimproved code\noutside-after\n"
+                     (mevedel-test--read-file file)))
+      (with-current-buffer source
+        (goto-char (point-min))
+        (should (eq source-key (key-binding (kbd "C-c C-b"))))
+        (goto-char (overlay-start note))
+        (should (eq #'mevedel-note-revert-change (key-binding (kbd "C-c C-b")))))
+      (with-current-buffer view
+        (should (eq #'mevedel-note-revert-change (key-binding (kbd "C-c C-b"))))
+        (call-interactively (key-binding (kbd "C-c C-b"))))
+      (ert-info ("source after reverting")
+        (should (equal "outside-before\nselected code\noutside-after\n"
+                       (mevedel-test--read-file file))))
+      (with-current-buffer view
+        (should (string-search "A prepared improvement." (buffer-string)))))))
 
 (mevedel-deftest mevedel-note-reask
   (:quiet t)

@@ -290,7 +290,7 @@ uses local `git merge-file` on temporary copies, also outside Git repositories.
 Missing local Git gives a clear refusal. Resource-address patches keep their
 ordinary ApplyPatch behavior rather than becoming prepared source changes.
 
-Use **revert** in the note menu, or `C-c C-u` at the note or in its conversation,
+Use **revert** in the note menu, or `C-c C-b` at the note or in its conversation,
 to reverse one applied turn without Rewind. Choose a turn if several changed
 files. Revert preserves disjoint later edits and refuses with file/line ranges
 if the changed lines were edited again; save or undo unsaved source edits first.

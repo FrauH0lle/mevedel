@@ -516,7 +516,7 @@
     (mevedel-session-artifacts-snapshot-modified session 1 (make-hash-table :test #'equal))
     (with-current-buffer source
       (goto-char (overlay-start note))
-      (call-interactively (lookup-key mevedel-note-actions-map (kbd "C-c C-u"))))
+      (call-interactively (lookup-key mevedel-note-actions-map (kbd "C-c C-b"))))
     (should (equal "before\nold\nafter\n" (mevedel-test--read-file file))))
   :doc "overlap reports shifted current lines and refuses every file in the change"
   (mevedel-note-change-test--with-note
