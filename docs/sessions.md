@@ -30,10 +30,14 @@ native provider's system text and submitted content. This is captured at
 dispatch, not regenerated from later source edits.
 
 Original note conversations are excluded from ordinary live and saved chat
-selection. Automatic session cleanup preserves them and does not count them
-against the newest ordinary-session retention floor, including when their notes
-are recently closed or the instruction store is unreadable. This is conservative:
-automatic cleanup also keeps the conversation after the note record expires.
+selection. Cleanup and saved-session deletion preserve them while any live,
+stashed or recently closed note references them. After the last note leaves the
+store, its conversation becomes eligible for normal age-based cleanup, without
+the newest ordinary-session retention floor. Note conversations never consume
+that floor. Reference checks preserve dirty state and combine loaded records
+with one local store read per sweep, bounded to 16 MiB. An unloaded workspace,
+remote root, absent, oversized, unsupported or unreadable store retains its note
+conversations rather than risking history loss; chooser filtering adds no store I/O.
 Explicit Conversation and Worktree forks remain ordinary discoverable sessions,
 may change preset, and follow ordinary cleanup rules.
 Reusing an existing directive child frame clears its old filter; note answers

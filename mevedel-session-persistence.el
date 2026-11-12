@@ -2713,9 +2713,9 @@ at `size unavailable' rather than hiding the chooser."
        (not (plist-get sidecar :forked-from-session-id))))
 
 (defun mevedel-session-persistence--dedicated-p (workspace sidecar)
-  "Return non-nil when SIDECAR, or its summary, is an artifact's conversation.
-The session records its artifact and the artifact names it back; one
-whose artifact is gone is an ordinary session again."
+  "Return non-nil when SIDECAR is a note or artifact conversation in WORKSPACE.
+Original note sessions are always hidden from ordinary chat selection.
+An artifact session becomes ordinary when its artifact no longer names it."
   (or (mevedel-session-persistence--note-p sidecar)
       (when-let* ((id (plist-get sidecar :dedicated-artifact)))
         (mevedel-artifact-store-dedicated-p
@@ -3136,14 +3136,30 @@ active because we cannot probe the remote process."
       ;; Cross-host: cannot verify liveness, treat as active.
       t)))
 
-(defun mevedel-session-persistence--delete-saved
-    (save-path portable max-age-seconds)
+(cl-defun mevedel-session-persistence--delete-saved
+    (workspace save-path portable max-age-seconds
+               &optional (note-session-ids 'unread))
   "Delete saved session SAVE-PATH unless something may still hold it.
 Journal pins always keep it.  PORTABLE storage is deleted only through
 `mevedel-session-durability-delete-abandoned' with MAX-AGE-SECONDS; other
-storage is kept while its PID lock is active.  Return non-nil only when
-the directory was deleted."
+storage is kept while its PID lock is active.  Original note conversations
+require proof that WORKSPACE no longer references them.  NOTE-SESSION-IDS
+is the sweep's reference snapshot, or `unread' to obtain it here.
+Return non-nil only when the directory was deleted."
   (and (not (mevedel-journal-pins-present-p save-path))
+       (let ((sidecar (condition-case nil
+                          (mevedel-session-codec-read
+                           (mevedel-session-artifacts-sidecar-path save-path))
+                        (error nil))))
+         (not
+          (when (mevedel-session-persistence--note-p sidecar)
+            (when (eq note-session-ids 'unread)
+              (require 'mevedel-persistence)
+              (setq note-session-ids
+                    (mevedel-instruction-store-note-session-ids workspace)))
+            (or (eq note-session-ids t)
+                (null (plist-get sidecar :session-id))
+                (member (plist-get sidecar :session-id) note-session-ids)))))
        (if portable
            (mevedel-session-durability-delete-abandoned
             save-path max-age-seconds)
@@ -3155,9 +3171,10 @@ the directory was deleted."
   "Delete WORKSPACE's saved session at SAVE-PATH now.
 The safety rules of `mevedel-session-persistence-cleanup-expired' apply
 without its age cap: a session a client may still hold, or whose journal
-captures are pending, is kept.  Return non-nil only when it was deleted."
+captures are pending, is kept.  Referenced note conversations and uncertain
+note stores are kept too.  Return non-nil only when it was deleted."
   (mevedel-session-persistence--delete-saved
-   save-path
+   workspace save-path
    (eq 'portable (mevedel-session-authority-mode-for-workspace workspace))
    0))
 
@@ -3169,7 +3186,9 @@ Scans session directories independently of resume compatibility.  Uses
 time.
 
 The `mevedel-session-keep-recent-count' most-recently-updated sessions are
-never deleted regardless of age.  Pending journal capture pins prevent
+never deleted regardless of age.  Original note conversations do not count
+toward that floor, and are eligible only after their notes leave the store;
+an uncertain reference check retains them.  Pending journal capture pins prevent
 deletion.  PID-lock sessions with an active lock are skipped; cross-host
 locks are active, and same-host locks are stale when their PID is dead or
 when the live process identity proves PID reuse.  Portable sessions open
@@ -3250,7 +3269,7 @@ workspace was swept too recently."
                        ;; the sweep.
                        (condition-case nil
                            (mevedel-session-persistence--delete-saved
-                            save-path portable threshold-secs)
+                            workspace save-path portable threshold-secs note-session-ids)
                          (error nil)))
               (cl-incf deleted)))
           (when (> deleted 0)

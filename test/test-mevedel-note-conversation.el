@@ -285,6 +285,37 @@
         (should (= 1 (mevedel-session-persistence-cleanup-expired workspace t))))
       (should-not (file-directory-p path)))))
 
+(mevedel-deftest mevedel-session-persistence-delete/note-live-and-stashed
+  (:quiet t)
+  ,test
+  (test)
+  :doc "deletion and cleanup retain dirty live and killed-buffer references absent from the disk store"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Still in use"))
+           (store (file-name-concat root ".mevedel" "instructions.el"))
+           (unsent (with-temp-buffer (insert-file-contents store) (buffer-string)))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view))
+           (session (buffer-local-value 'mevedel--session data))
+           (path (mevedel-session-save-path session))
+           (mevedel-session-max-age-days 0)
+           (mevedel-session-keep-recent-count 0))
+      (mevedel-note-conversation-test--answer (car sent) "A retained answer")
+      (with-current-buffer data (mevedel-session-persistence-release-on-kill))
+      (mevedel-chat-discard-buffers data t)
+      ;; Another store version lacks the local unsaved session reference.
+      (write-region unsent nil store nil 'silent)
+      (mevedel-instruction-store-touch workspace)
+      (let ((dirty (copy-sequence mevedel-instruction-store--dirty)))
+        (should-not (mevedel-session-persistence-delete workspace path))
+        (should (= 0 (mevedel-session-persistence-cleanup-expired workspace t)))
+        (should (equal dirty mevedel-instruction-store--dirty)))
+      (kill-buffer source)
+      (write-region unsent nil store nil 'silent)
+      (should-not (mevedel-session-persistence-delete workspace path))
+      (should (= 0 (mevedel-session-persistence-cleanup-expired workspace t)))
+      (should (file-directory-p path)))))
+
 (mevedel-deftest mevedel-note-send/frame-reuse
   (:quiet t)
   ,test
