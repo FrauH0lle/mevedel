@@ -411,5 +411,20 @@
     (mevedel-note-apply-change note)
     (should (equal "before\nsecond proposal\nafter\n" (mevedel-test--read-file file)))))
 
+(mevedel-deftest mevedel-note-merge-literal-separator
+  (:quiet t)
+  ,test
+  (test)
+  :doc "literal heading separators in source are not mistaken for unresolved merge markers"
+  (mevedel-note-change-test--with-note
+    (with-current-buffer source
+      (goto-char (point-max))
+      (insert "Heading\n=======\n")
+      (save-buffer))
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (with-current-buffer (mevedel-note-merge-change note) (mevedel-note-merge-confirm))
+    (should (equal "before\nnew\nafter\nHeading\n=======\n" (mevedel-test--read-file file)))))
+
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here

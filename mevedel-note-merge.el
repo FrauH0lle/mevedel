@@ -48,6 +48,13 @@
                                "-L" "yours now" "-L" "what the AI saw" "-L" "AI" "--" files)))
             (unless (and (integerp status) (<= 0 status) (<= status 127))
               (error "Three-way merge failed: %s" status)))
+          (save-excursion
+            (goto-char start)
+            (while (re-search-forward "^<<<<<<< yours now\n" nil t)
+              (put-text-property (match-beginning 0) (match-end 0) 'mevedel-note-merge-marker t)
+              (dolist (marker '("^||||||| what the AI saw\n" "^=======\n" "^>>>>>>> AI\n"))
+                (unless (re-search-forward marker nil t) (error "Incomplete three-way merge markers"))
+                (put-text-property (match-beginning 0) (match-end 0) 'mevedel-note-merge-marker t))))
           ;; Git adds separators at EOF inside a conflict, not to resolved text.
           (when (and (>= (- (point) start) (length ">>>>>>> AI\n"))
                      (equal (buffer-substring-no-properties (- (point) (length ">>>>>>> AI\n")) (point))
@@ -142,10 +149,8 @@
                    (equal (plist-get record :id)
                           (plist-get (overlay-get note 'mevedel-note-prepared-change) :id)))
         (user-error "The note or waiting change changed; reopen the merge"))
-      (save-excursion
-        (goto-char (point-min))
-        (when (re-search-forward "^\\(?:<<<<<<<\\|[|]\\{7\\}\\|=======\\|>>>>>>>\\)" nil t)
-          (user-error "Resolve all conflict markers before confirming")))
+      (when (text-property-any (point-min) (point-max) 'mevedel-note-merge-marker t)
+        (user-error "Resolve all conflict markers before confirming"))
       (dolist (section sections)
         (let* ((path (plist-get section :path))
                (coding (plist-get section :coding))
