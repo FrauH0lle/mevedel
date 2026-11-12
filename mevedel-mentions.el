@@ -287,9 +287,10 @@ an absolute pathname even when the path is currently unavailable."
     (mevedel-mentions--bind-user-input-matches
      result "@ref:\\([0-9]+\\)" 'ref
      (lambda (captures)
-       (when-let* ((ref (mevedel--resolve-ref-by-id
-                         (string-to-number (car captures)) workspace))
-                   (uuid (overlay-get ref 'mevedel-uuid)))
+       (when-let* ((id (string-to-number (car captures)))
+                   (uuid (if-let* ((ref (mevedel--resolve-ref-by-id id workspace)))
+                             (overlay-get ref 'mevedel-uuid)
+                           (plist-get (mevedel-note-mentions-resolve id workspace) :uuid))))
          (list :reference-uuid uuid))))
     (mevedel-mentions--bind-user-input-matches
      result mevedel-mention-bindings-file-regexp 'file
@@ -407,8 +408,17 @@ group 2 is the tag-query variant.  Exactly one is non-nil per match."
          (query (nth 2 captures))
          (binding (plist-get info :binding))
          (session (plist-get info :session))
-         (workspace (and session (mevedel-session-workspace session))))
+         (workspace (and session (mevedel-session-workspace session)))
+         (note (and id-str
+                    (mevedel-note-mentions-resolve
+                     (or (plist-get binding :reference-uuid)
+                         (string-to-number id-str)) workspace))))
     (cond
+     (note
+      ;; Old chat locators keep their UUID binding across the note conversion.
+      (mevedel-note-mentions-handle
+       (plist-put (copy-sequence info) :binding
+                  (list :kind 'note :note-uuid (plist-get note :uuid)))))
      (id-str
       (let* ((id (string-to-number id-str))
              (uuid (and (eq 'ref (plist-get binding :kind))

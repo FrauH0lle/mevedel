@@ -24,7 +24,7 @@
 (declare-function mevedel--directive-source-record
                   "mevedel-directive-source" (directive))
 (declare-function mevedel--instruction-persisted-properties
-                  "mevedel-directive-source" (instruction))
+                  "mevedel-directive-source" (instruction &optional source-only))
 (declare-function mevedel--instruction-replacement-forget
                   "mevedel-directive-source" (overlay))
 (declare-function mevedel--instruction-replacement-restore
@@ -47,14 +47,8 @@
     (list :overlay identity
           :start (overlay-start overlay) :end (overlay-end overlay)
           :properties
-          (let ((properties (mevedel--instruction-persisted-properties overlay)))
-            ;; Source geometry undo must not rewind a note's authored text or
-            ;; lifecycle.  Those fields stay on its existing identity object.
-            (if (eq (overlay-get overlay 'mevedel-instruction-type) 'note)
-                (cl-loop for (prop value) on properties by #'cddr
-                         unless (string-prefix-p "mevedel-note-" (symbol-name prop))
-                         append (list prop value))
-              properties))
+          (mevedel--instruction-persisted-properties
+           overlay (eq (overlay-get overlay 'mevedel-instruction-type) 'note))
           :replacement (overlay-get overlay 'mevedel-replacement-pending)
           :replacement-growing (overlay-get overlay 'mevedel-replacement-growing)
           :record record :owner (car owner)

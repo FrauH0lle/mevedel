@@ -107,6 +107,7 @@
 (autoload 'mevedel-note-delete "mevedel-notes" nil t)
 (autoload 'mevedel-note-done "mevedel-notes" nil t)
 (autoload 'mevedel-note-edit "mevedel-notes" nil t)
+(autoload 'mevedel-note-history "mevedel-notes" nil t)
 (autoload 'mevedel-note-menu "mevedel-notes" nil t)
 (autoload 'mevedel-note-restore "mevedel-notes" nil t)
 (autoload 'mevedel-note-set-tags "mevedel-notes" nil t)

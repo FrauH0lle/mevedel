@@ -307,7 +307,21 @@ an existing workspace state directory still saves notes. Otherwise notes stay
 in memory, and a one-time message says they are not saved there.
 The store and exports now use instruction format 2; a format-1 installation
 refuses them without clearing its live instructions or overwriting the file.
-Format-1 stores are not loaded by this version.
+On first opening an existing format-1 workspace store, this version copies its
+original bytes to `.mevedel/instructions.el.format-1.bak`, then converts its
+references and directives to notes. Commentary, requests, tags and identities
+are kept; subdirective requests are appended to the parent's text. Display
+numbers are retained where possible, and numeric `@ref:N` mentions also resolve
+to notes. Session files and old exports are not rewritten or automatically
+imported. Unsupported formats remain refused.
+
+Notes with past directive activity offer **history** in their modified-key menu
+or `M-x mevedel-note-history`. This opens the existing inspector with mutations
+disabled; the old history is not a live conversation. Archived directives enter
+recently closed with reason `archived`, exempt from both retention limits.
+Conversion never overwrites a different existing backup: resolve that conflict
+before retrying the workspace operation. A matching backup allows an interrupted
+conversion to resume safely.
 
 References and directives remain available alongside notes.
 
