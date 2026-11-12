@@ -246,6 +246,51 @@
       (with-current-buffer view
         (should (string-search "A prepared improvement." (buffer-string)))))))
 
+(mevedel-deftest mevedel-note-show-sent
+  (:quiet t :doc "inputs are separate immutable files shown in dispatch order after reopening")
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Explain this code"))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view))
+           (session (buffer-local-value 'mevedel--session data))
+           (directory (file-name-concat (mevedel-session-save-path session) "note-input"))
+           (payload (gptel--json-encode (plist-get (gptel-fsm-info (car sent)) :data))))
+      (mevedel-note-conversation-test--answer (car sent) "An answer.")
+      (should (file-directory-p directory))
+      (let* ((first (car (directory-files directory t "\\.json\\'")))
+             (bytes (mevedel-test--read-file first))
+             (mtime (file-attribute-modification-time (file-attributes first))))
+        (dotimes (index 10)
+          (mevedel-note-conversation-record-input session (list :round (1+ index))))
+        (should (equal bytes (mevedel-test--read-file first)))
+        (should (equal mtime (file-attribute-modification-time (file-attributes first))))
+        (should (= 11 (length (directory-files directory t "\\.json\\'"))))
+        (should (= #o600 (logand #o777 (file-modes first)))))
+      (with-current-buffer view
+        (with-current-buffer (mevedel-note-show-sent)
+          (should (equal (concat payload "\n\n"
+                                 (mapconcat (lambda (index)
+                                              (gptel--json-encode (list :round (1+ index))))
+                                            (number-sequence 0 9) "\n\n"))
+                         (buffer-string))))))))
+
+(mevedel-deftest mevedel-note-send/failed-first-send
+  (:quiet t :doc "a failed or interrupted preset discards unlinked data and view buffers")
+  (mevedel-note-conversation-test--with-source
+    (dolist (condition '(error quit))
+      (let ((note (mevedel-note-create "Explain this code"))
+            (existing (buffer-list)))
+        (setf (plist-get (alist-get 'mevedel-note gptel--known-presets) :pre)
+              (lambda () (signal condition '("Preset refused first send"))))
+        (condition-case err
+            (progn (mevedel-note-send note) (ert-fail "First send did not fail"))
+          ((error quit) (should (eq condition (car err)))))
+        (should-not (overlay-get note 'mevedel-note-session-id))
+        (should-not sent)
+        (dolist (buffer (cl-set-difference (buffer-list) existing))
+          (should-not (buffer-local-value 'mevedel--session buffer))
+          (should-not (buffer-local-value 'mevedel--data-buffer buffer)))))))
+
 (mevedel-deftest mevedel-note-reask
   (:quiet t)
   ,test
@@ -290,6 +335,48 @@
         (call-interactively (key-binding (kbd "C-c C-a"))))
       (with-current-buffer source
         (should (equal "outside-before\nfresh proposal\noutside-after\n" (buffer-string)))))))
+(mevedel-deftest mevedel-note-reask/unavailable-source
+  (:quiet t :doc "re-ask identifies a deleted batch source without submitting another request")
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "First question"))
+           (other-file (file-name-concat root "other.txt"))
+           (other (progn (write-region "other code\n" nil other-file nil 'silent)
+                         (find-file-noselect other-file)))
+           (second (with-current-buffer other
+                     (setq-local mevedel--workspace workspace)
+                     (mevedel-note-create "Second question")))
+           (number (overlay-get second 'mevedel-id))
+           (view (mevedel-note-send-batch (list note second))))
+      (mevedel-note-conversation-test--answer (car sent) "One answer.")
+      (kill-buffer other)
+      (delete-file other-file)
+      (with-current-buffer view
+        (let ((err (should-error (mevedel-note-reask note) :type 'user-error)))
+          (should (string-search (format "Source unavailable for note %s" number)
+                                 (error-message-string err)))))
+      (should (= 1 (length sent))))))
+
+(mevedel-deftest mevedel-note-reask/admission
+  (:quiet t :doc "re-ask refuses busy, settling and read-only sessions without changing the transcript")
+  (dolist (state '(working settling read-only))
+    (mevedel-note-conversation-test--with-source
+      (let* ((note (mevedel-note-create "Improve this code"))
+             (view (mevedel-note-send note))
+             (data (buffer-local-value 'mevedel--data-buffer view)))
+        (unless (eq state 'working)
+          (mevedel-note-conversation-test--answer (car sent) "An answer."))
+        (with-current-buffer source
+          (goto-char (overlay-start note))
+          (insert "current "))
+        (with-current-buffer data
+          (let ((before (buffer-string))
+                (mevedel--turn-settlements-pending (and (eq state 'settling) '(pending)))
+                (mevedel-session--read-only-mode (eq state 'read-only)))
+            (when (eq state 'read-only) (setq buffer-read-only t))
+            (should-error (mevedel-note-reask note) :type 'user-error)
+            (should (equal before (buffer-string)))))
+        (should (= 1 (length sent)))))))
+
 (mevedel-deftest mevedel-rewind/note-session
   (:quiet t)
   ,test
@@ -1049,6 +1136,21 @@
           (should (eq view (mevedel-note-send second)))
           (should (eq view (mevedel-note-send-batch (list first second)))))
         (should (= 1 (length sent))))))
+  :doc "interactive batch choices keep comma prose in annotations, not candidate IDs"
+  (mevedel-note-conversation-test--with-source
+    (let ((note (mevedel-note-create "Rename foo, then update callers")))
+      (cl-letf (((symbol-function 'completing-read-multiple)
+                 (lambda (_prompt collection &rest _)
+                   (let ((id (number-to-string (overlay-get note 'mevedel-id))))
+                     (should (equal (list id) (all-completions "" collection)))
+                     (should (string-search
+                              "Rename foo, then update callers"
+                              (funcall (plist-get completion-extra-properties :annotation-function) id)))
+                     (list id)))))
+        (let ((view (call-interactively #'mevedel-note-send-batch)))
+          (should (buffer-live-p view))
+          (should (= 1 (length sent)))
+          (mevedel-note-conversation-test--answer (car sent) "Renaming advice.")))))
   :doc "batch refuses mixing existing conversations without losing either thread"
   (mevedel-note-conversation-test--with-source
     (let* ((first (mevedel-note-create "First"))
