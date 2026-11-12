@@ -24,17 +24,29 @@
           (file (file-name-concat root "source.el"))
           (mevedel-workspace--registry (make-hash-table :test #'equal))
           (mevedel--instruction-states (make-hash-table :test #'equal))
+          (mevedel--instruction-current-state-key :global)
           (mevedel-instruction-store--dirty nil)
           (mevedel-instruction-store--failed nil)
+          (mevedel-instruction-store--warned nil)
           (mevedel-buddy--changes (make-hash-table :test #'equal))
           (mevedel-buddy--last-review (make-hash-table :test #'equal))
           (mevedel-buddy--levels (make-hash-table :test #'equal))
           (find-file-hook (copy-sequence find-file-hook))
+          (post-command-hook (copy-sequence post-command-hook))
+          (mevedel-buddy--running nil)
+          (mevedel-buddy--running-automatic nil)
+          (mevedel-buddy--generation 0)
+          (mevedel-buddy--prepare-timer nil)
+          (mevedel-buddy--timeout-timer nil)
+          (mevedel-buddy--request-buffer nil)
           (mevedel-buddy-note--notes nil)
           (mevedel-buddy-note--changed-workspaces nil)
           (mevedel-buddy-note--prepared-buffers nil)
           (mevedel-buddy-note--scope-buffers nil)
           (mevedel-buddy-note--markers nil)
+          (mevedel-buddy-note--taken nil)
+          (mevedel-buddy-note--goals nil)
+          (mevedel-buddy-note--level nil)
           (gptel--known-backends nil)
           (mevedel-model-workloads '((buddy :provider "TakeTest:test")))
           (before (buffer-list))
@@ -372,6 +384,47 @@ AUTOMATIC exercises the idle review policy without waiting for idle time."
          (mevedel-take-test--tool tools "note_looks_done" (overlay-get note 'mevedel-id))) t)
       (mevedel-note-edit "A different goal" note)
       (should-not (string-search "looks done" (mevedel-take-test--labels)))
+      (should (eq 'taken (mevedel-notes-attention-state note))))))
+
+(mevedel-deftest mevedel-buddy-review/unnoted-source
+  (:quiet t)
+  ,test
+  (test)
+  :doc "Quiet applies to workspace source files which have never had notes"
+  (mevedel-take-test--with-source
+    (mevedel-buddy-set-level 'quiet workspace)
+    (let ((other-file (file-name-concat root "unnoted.el")))
+      (write-region "unnoted code\n" nil other-file nil 'silent)
+      (with-current-buffer (find-file-noselect other-file)
+        (should mevedel-buddy-mode)
+        (insert "edited ")
+        (should-not (mevedel-take-test--review
+                     (lambda (&rest _) (ert-fail "Quiet spoke in an unnoted source")) t))))))
+
+(mevedel-deftest mevedel-note-take/buddy-ownership
+  (:quiet t)
+  ,test
+  (test)
+  :doc "taking a Buddy remark protects it from its review and retains ownership on reload"
+  (mevedel-take-test--with-source
+    (mevedel-buddy-set-level 'watching workspace)
+    (insert "edited ")
+    (let ((name (buffer-name)))
+      (should
+       (mevedel-take-test--review
+        (lambda (_prompt tools)
+          (let ((id (mevedel-take-test--tool
+                     tools "add_note" name 2 "Implement this fix" "significant" "mistake")))
+            (should (integerp id))
+            (with-current-buffer source
+              (mevedel-note-take (mevedel-notes--at-point)))
+            (should (stringp (mevedel-take-test--tool tools "remove_note" id))))) t)))
+    (mevedel-instruction-store-flush t)
+    (mevedel--clear-instruction-state workspace)
+    (mevedel-instruction-store-observe workspace)
+    (let ((note (mevedel-notes--at-point)))
+      (should (eq 'user (overlay-get note 'mevedel-note-author)))
+      (should (overlay-get note 'mevedel-note-kept-from-buddy))
       (should (eq 'taken (mevedel-notes-attention-state note))))))
 
 (provide 'test-mevedel-buddy-take)
