@@ -16,6 +16,7 @@
 (require 'mevedel-permission-mode)
 (require 'mevedel-session-persistence)
 (require 'mevedel-session-codec)
+(require 'mevedel-session-control-fs)
 (require 'mevedel-session-fork)
 (require 'mevedel-transport)
 (require 'mevedel-journal-process)
@@ -281,8 +282,18 @@
       (mevedel--clear-instruction-state workspace)
       (mevedel-instruction-store-observe workspace)
       (let ((mevedel-session-max-age-days 0)
-            (mevedel-session-keep-recent-count 10))
-        (should (= 1 (mevedel-session-persistence-cleanup-expired workspace t))))
+            (mevedel-session-keep-recent-count 10)
+            (read-file (symbol-function 'mevedel-session-control-fs-read-file))
+            (store (file-name-concat root ".mevedel" "instructions.el"))
+            (reads 0))
+        (cl-letf (((symbol-function 'mevedel-session-control-fs-read-file)
+                   (lambda (file &optional coding max-bytes)
+                     (when (equal file store)
+                       (cl-incf reads)
+                       (should (<= max-bytes (1+ (* 16 1024 1024)))))
+                     (funcall read-file file coding max-bytes))))
+          (should (= 1 (mevedel-session-persistence-cleanup-expired workspace t))))
+        (should (= 1 reads)))
       (should-not (file-directory-p path)))))
 
 (mevedel-deftest mevedel-session-persistence-delete/note-live-and-stashed
@@ -315,6 +326,127 @@
       (should-not (mevedel-session-persistence-delete workspace path))
       (should (= 0 (mevedel-session-persistence-cleanup-expired workspace t)))
       (should (file-directory-p path)))))
+
+(mevedel-deftest mevedel-note-restore/collected-session
+  (:quiet t)
+  ,test
+  (test)
+  :doc "a closed note survives cleanup after reload and reopens its saved conversation"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Restore with conversation"))
+           (uuid (overlay-get note 'mevedel-uuid))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view))
+           (session (buffer-local-value 'mevedel--session data))
+           (path (mevedel-session-save-path session)))
+      (mevedel-note-conversation-test--answer (car sent) "An answer after restoration")
+      (with-current-buffer source (mevedel-note-done note))
+      (mevedel-instruction-store-flush t)
+      (with-current-buffer data (mevedel-session-persistence-release-on-kill))
+      (mevedel-chat-discard-buffers data t)
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (let ((mevedel-session-max-age-days 0)
+            (mevedel-session-keep-recent-count 0))
+        (should (= 0 (mevedel-session-persistence-cleanup-expired workspace t))))
+      (should-not (mevedel-session-persistence-delete workspace path))
+      (with-current-buffer source
+        (setq view (mevedel-note-send (mevedel-note-restore uuid workspace))))
+      (should (= 1 (length sent)))
+      (mevedel-test--await 5 "Restored note answer did not render"
+        (with-current-buffer view
+          (string-search "An answer after restoration" (buffer-string)))))))
+
+(mevedel-deftest mevedel-session-persistence-cleanup-expired/note-uncertainty
+  (:quiet t)
+  ,test
+  (test)
+  :doc "an otherwise collectable conversation survives corrupt, unsupported, absent and unloaded stores"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Fail safe"))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view))
+           (session (buffer-local-value 'mevedel--session data))
+           (path (mevedel-session-save-path session))
+           (store (file-name-concat root ".mevedel" "instructions.el"))
+           (mevedel-session-max-age-days 0)
+           (mevedel-session-keep-recent-count 0))
+      (mevedel-note-conversation-test--answer (car sent) "Keep when uncertain")
+      (with-current-buffer source (mevedel-note-done note))
+      (let ((mevedel-notes-closed-max-count 0))
+        (should-not (mevedel-notes-closed workspace)))
+      (mevedel-instruction-store-flush t)
+      (with-current-buffer data (mevedel-session-persistence-release-on-kill))
+      (mevedel-chat-discard-buffers data t)
+      (let ((valid (with-temp-buffer (insert-file-contents store) (buffer-string))))
+        (dolist (contents '("broken store" "(:format 999)" "(:format 1)" nil))
+          (if contents
+              (write-region contents nil store nil 'silent)
+            (delete-file store))
+          (should (= 0 (mevedel-session-persistence-cleanup-expired workspace t)))
+          (should-not (mevedel-session-persistence-delete workspace path))
+          (should (file-directory-p path)))
+        (write-region valid nil store nil 'silent)
+        (mevedel--clear-instruction-state workspace)
+        (should (= 0 (mevedel-session-persistence-cleanup-expired workspace t)))
+        (should-not (mevedel-session-persistence-delete workspace path))
+        (mevedel-instruction-store-observe workspace)
+        (should (mevedel-session-persistence-delete workspace path))
+        (should-not (file-directory-p path))))))
+
+(mevedel-deftest mevedel-session-persistence-cleanup-expired/note-remote
+  (:quiet t)
+  ,test
+  (test)
+  :doc "a remote reference check retains the conversation without probing its store"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Remote reference safety"))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view))
+           (session (buffer-local-value 'mevedel--session data))
+           (path (mevedel-session-save-path session))
+           (remote (copy-mevedel-workspace workspace))
+           (probes 0))
+      (mevedel-note-conversation-test--answer (car sent) "No remote store I/O")
+      (with-current-buffer data (mevedel-session-persistence-release-on-kill))
+      (mevedel-chat-discard-buffers data t)
+      (setf (mevedel-workspace-root remote) "/notes-remote:/project/")
+      (let* ((handler (lambda (operation &rest _)
+                        (if (eq operation 'file-remote-p)
+                            "/notes-remote:"
+                          (cl-incf probes)
+                          (error "Unexpected remote probe"))))
+             (file-name-handler-alist
+              (cons (cons "\\`/notes-remote:" handler) file-name-handler-alist))
+             (mevedel-session-max-age-days 0)
+             (mevedel-session-keep-recent-count 0))
+        (should (= 0 (mevedel-session-persistence-cleanup-expired remote t)))
+        (should-not (mevedel-session-persistence-delete remote path)))
+      (should (= 0 probes))
+      (should (file-directory-p path)))))
+
+(mevedel-deftest mevedel-session-persistence-cleanup-expired/note-fork
+  (:quiet t)
+  ,test
+  (test)
+  :doc "an explicit note-session fork follows ordinary cleanup while its original stays referenced"
+  (mevedel-note-conversation-test--with-source
+    (let* ((view (mevedel-note-send (mevedel-note-create "Fork and collect")))
+           (data (buffer-local-value 'mevedel--data-buffer view))
+           (session (buffer-local-value 'mevedel--session data)))
+      (mevedel-note-conversation-test--answer (car sent) "Forked answer")
+      (let* ((target (cadr (assq 1 (mevedel-session-prompt-index session))))
+             (child (mevedel-session-fork-create data target 'conversation))
+             (child-session (buffer-local-value 'mevedel--session child))
+             (child-path (mevedel-session-save-path child-session)))
+        (dolist (buffer (list data child))
+          (with-current-buffer buffer (mevedel-session-persistence-release-on-kill))
+          (mevedel-chat-discard-buffers buffer t))
+        (let ((mevedel-session-max-age-days 0)
+              (mevedel-session-keep-recent-count 0))
+          (should (= 1 (mevedel-session-persistence-cleanup-expired workspace t))))
+        (should-not (file-directory-p child-path))
+        (should (file-directory-p (mevedel-session-save-path session)))))))
 
 (mevedel-deftest mevedel-note-send/frame-reuse
   (:quiet t)
