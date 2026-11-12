@@ -301,6 +301,7 @@ Default to the note at point.  An empty list removes every tag."
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
       (setq note (or note (mevedel-notes--at-point)))
       (overlay-put note 'mevedel-note-text text)
+      (overlay-put note 'mevedel-note-buddy-looks-done nil)
       (mevedel-notes--render note)
       (mevedel-instruction-store-touch workspace))))
 
@@ -315,6 +316,7 @@ Default to the note at point.  Taking Buddy's remark first keeps it as yours."
       (when (eq 'buddy (overlay-get note 'mevedel-note-author))
         (mevedel-buddy-keep-note note))
       (overlay-put note 'mevedel-note-state 'taken)
+      (overlay-put note 'mevedel-note-buddy-looks-done nil)
       (with-current-buffer (overlay-buffer note) (mevedel-buddy-mode 1))
       (mevedel-notes--render note)
       (mevedel-instruction-store-touch workspace)))

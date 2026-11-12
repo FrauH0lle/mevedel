@@ -353,5 +353,26 @@ AUTOMATIC exercises the idle review policy without waiting for idle time."
                  (should-not (string-search "Private child goal" prompt))
                  (should-not (string-search "private child code" prompt))) t)))))
 
+(mevedel-deftest mevedel-note-edit/completion-feedback
+  (:quiet t)
+  ,test
+  (test)
+  :doc "re-taking or changing a goal retires earlier looks-done feedback"
+  (mevedel-take-test--with-source
+    (let ((note (mevedel-note-create "Implement this goal")))
+      (mevedel-note-take note)
+      (mevedel-take-test--review
+       (lambda (_prompt tools)
+         (mevedel-take-test--tool tools "note_looks_done" (overlay-get note 'mevedel-id))) t)
+      (should (string-search "looks done" (mevedel-take-test--labels)))
+      (mevedel-note-take note)
+      (should-not (string-search "looks done" (mevedel-take-test--labels)))
+      (mevedel-take-test--review
+       (lambda (_prompt tools)
+         (mevedel-take-test--tool tools "note_looks_done" (overlay-get note 'mevedel-id))) t)
+      (mevedel-note-edit "A different goal" note)
+      (should-not (string-search "looks done" (mevedel-take-test--labels)))
+      (should (eq 'taken (mevedel-notes-attention-state note))))))
+
 (provide 'test-mevedel-buddy-take)
 ;;; test-mevedel-buddy-take.el ends here
