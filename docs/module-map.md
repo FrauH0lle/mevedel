@@ -291,7 +291,7 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-usage.el       SubscriptionUsage: plain quota readings across subscription backends
   mevedel-buddy.el            edit recording, diff assembly, briefs, review requests
   mevedel-buddy-feed.el       /buddy: feed a session's plan, Goal, or exchange to Buddy
-  mevedel-buddy-note.el       ephemeral note overlays and their model tools
+  mevedel-buddy-note.el       Buddy-authored workspace notes and review-local tools
   mevedel-tools.el            complete tool registration + stable discovery catalog
   mevedel-tools-list.el       native tools cockpit list
 

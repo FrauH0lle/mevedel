@@ -2,8 +2,9 @@
 
 Buddy reviews recent edits and adds short advisory notes beside source code.
 Enable it per buffer or globally, request an immediate review, or use the
-guidance command for suggestions about a region. Notes can be ignored or
-dismissed; they do not become instructions or edit your code.
+guidance command for suggestions about a region. Remarks are workspace notes
+with Buddy as author, using the same labels and modified-key actions as your
+notes. They survive restarts and never edit your code.
 
 ```
 M-x mevedel-buddy-mode        watch this buffer
@@ -12,6 +13,7 @@ M-x mevedel-buddy-review      review now, without waiting for the idle timer
 M-x mevedel-buddy-guide       ask what to build here, rather than what went wrong
 M-x mevedel-buddy-dismiss-note   dismiss the note at point
 M-x mevedel-buddy-dismiss-notes  dismiss every note in this buffer
+M-x mevedel-buddy-keep-note      keep the remark as your own note
 M-x mevedel-buddy-clear-changes  forget the edits recorded so far
 M-x mevedel-buddy-abort          abandon a review that has wedged
 /buddy [BRIEF|off]               from a session: implement it yourself, with Buddy
@@ -107,29 +109,45 @@ buffer's old edit records and resets its pending review timer before deriving
 the new scope. A buffer cannot carry one project's edits or prompt context into
 another project merely by changing what it visits.
 
-## Everything is ephemeral
+## Durable remarks, transient reviews
 
-Notes, dismissals, recorded edits, note ids, briefs, and the last-reviewed time
-live in memory and die with the Emacs process. Buddy does not persist that state, write curated memory, or insert notes into a
-session transcript. It can record diagnostic lifecycle events through an
-available session's telemetry writer. Later reviews derive notes from the source
-they are shown.
+Remarks persist in the workspace instruction store with their note identity,
+source anchor, author, text and severity. A new review restores existing remarks
+before building its bounded note context, so a restart does not erase earlier
+advice. An exact repeated remark on the same line reuses the existing identity.
+Remarks in buffers without a visited file stay in memory only; guidance still
+works there, but there is no durable file anchor to save or restore.
+Buddy can update or retract a remark when a later review finds its concern
+changed or fixed. Retraction removes the remark outright, not source code; it
+does not add a recently closed entry. Buddy may raise the concern again if it
+returns later.
+
+Dismissal moves a remark to the ordinary recently closed list with reason
+`dismissed`. Single dismissal and dismiss-all affect only Buddy-authored notes;
+your own notes stay. Dismissed advice remains in bounded review context while
+the closed record survives the ordinary count/age retention limits. It is not
+a permanent mute rule. Keep changes the author to you, retaining the note's
+identity, text and kept-from-Buddy metadata. Buddy cannot subsequently update
+or retract a kept note, including from a review already in flight.
+
+All remark mutations in one review are synced together once at settlement,
+including successful tool calls before an abandoned review. The normal checked
+store writer handles locking, merging and retryable failures. There is no
+per-remark write or new debounce timer. Explicit user actions use the ordinary
+note dirty-store flush.
+
+Recorded edits, request markers, briefs and the last-reviewed time remain
+transient. Buddy does not write curated memory or insert remarks into a session
+transcript. It can record diagnostic lifecycle events through an available
+session's telemetry writer.
 
 To make durable guidance, edit the applicable `AGENTS.md` or explicitly request
 a memory update through the ordinary workflow. Buddy's passive request has no
 memory-saving policy.
 
-Dismissed notes remain eligible for the bounded in-process note context, labelled
-as rejected advice. That evidence helps the model avoid repeats; it does not
-guarantee suppression, and disappears with the Emacs process.
-
-## Notes are not instructions
-
-Instruction enumeration selects on the `mevedel-instruction` overlay property.
-Buddy notes never set it, so they are structurally invisible to instruction
-navigation, tinting, persistence, deletion, and subdirective resolution. No
-third instruction type exists and no instruction code path knows about notes.
-See [ADR 0108](adr/0108-buddy-notes-are-not-instructions.md).
+Buddy uses the ordinary note record and presentation rather than a separate
+annotation system. See [ADR 0108](adr/0108-buddy-notes-are-not-instructions.md)
+for the change from ephemeral annotations to workspace notes.
 
 ## What a review looks at
 
@@ -203,36 +221,12 @@ must not read as "every buffer in Emacs".
 
 ## How a note is laid out
 
-A note's text is worth more at the end than the beginning — the observation
-comes first, the reason it matters comes last — so truncating one loses the half
-that justified interrupting you. But laying every note out in full turns a busy
-buffer into a wall of blocks.
-
-Buddy picks the style per line. By default, notes on the current line show in
-full and notes on other lines use a compact end-of-line preview.
-
-| | default | shows |
-| --- | --- | --- |
-| `mevedel-buddy-note-current-line-style` | `below` | the whole note, wrapped, indented under the code |
-| `mevedel-buddy-note-other-lines-style` | `eol` | one line after the code, shortened to fit |
-
-Either may also be `nil` to hide notes on those lines. Setting
-`mevedel-buddy-note-other-lines-style` to `nil` annotates only the line at
-point, the way Neovim and Helix show diagnostics.
-
-Layout uses `mevedel-buddy-note-width` — a **fixed** column budget, not the
-window width. An overlay's `after-string` is shared by every window showing its
-buffer, so a layout fitted to one window would be wrong in another and wrong
-again after a split. Truncation is acceptable in `eol` precisely because the
-full text is one cursor move away.
-
-Notes are laid out again from `post-command-hook`, which does nothing unless
-point actually changed line, and the hook is removed from a buffer once it holds
-no notes.
-
-`sideline` (flush right, `lsp-ui-sideline` style) is deliberately not
-implemented: it is the one style that needs window geometry, and `below` plus
-`eol` already solve the problem.
+The common note label sits below the complete source line and shows its number,
+Buddy authorship, bounded text and available actions. The full authored text is
+retained for editing. The modified-key menu offers edit, dismiss and keep;
+plain letters still insert source text. Moving point never switches between
+two Buddy-specific render styles, and no Buddy relayout hook scans remarks on
+each line move.
 
 ## Line numbers resolve through markers
 
@@ -308,9 +302,6 @@ and permission workflow. The port's rationale is recorded in
 | `mevedel-buddy-timeout` | `120` | Seconds before a review that never settles is abandoned |
 | `mevedel-buddy-note-serialize-limit` | `40` | Notes described to the model per request |
 | `mevedel-buddy-note-read-limit` | `200` | Lines one `read_buffer` call returns |
-| `mevedel-buddy-note-width` | `72` | Column budget for laying a note out |
-| `mevedel-buddy-note-current-line-style` | `below` | Style for the line at point |
-| `mevedel-buddy-note-other-lines-style` | `eol` | Style for every other line |
 
 mevedel's own surfaces — view, chat, cockpit, inspector — are excluded from
 tracking regardless of their major mode.

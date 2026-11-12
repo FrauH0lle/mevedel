@@ -1,26 +1,18 @@
-;;; mevedel-buddy-note.el -- Ephemeral model annotations on source lines -*- lexical-binding: t -*-
+;;; mevedel-buddy-note.el -- Buddy-authored workspace notes -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
-;; Buddy notes are short, model-authored remarks attached to a source
-;; line.  They exist only in memory: nothing here writes a file, touches
-;; persistent memory, or enters a session transcript.  Closing Emacs
-;; discards every note, and the next review re-derives whatever is still
-;; true from the buffers themselves.
-;;
-;; A note is NOT an instruction.  Instruction enumeration selects on the
-;; `mevedel-instruction' overlay property, so a note that never sets it
-;; is invisible to instruction navigation, tinting, persistence, and
-;; deletion.  Nothing in this file may set that property.
-;;
-;; The model addresses notes by id, so it revises and retracts its own
-;; earlier remarks instead of restating them.  Dismissed notes stay in
-;; the serialized set, labelled, so the same rejected advice is not
-;; raised twice.  That is the whole mute list, and it needs no file.
+;; Buddy remarks are ordinary workspace notes with Buddy as author.  The
+;; workspace instruction store owns their durable identity and source anchor;
+;; the common note renderer owns their labels.  This module maintains a
+;; transient review index, validates captured-buffer tools, and syncs changes
+;; once at the review boundary.  Buddy never edits source or curated memory.
 
 ;;; Code:
 
 (require 'mevedel-utilities)
+(require 'mevedel-notes)
+(require 'mevedel-persistence)
 
 (eval-when-compile
   (require 'cl-lib))
@@ -29,51 +21,18 @@
 ;; `gptel'
 (declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
 
-;; `mevedel-utilities'
-(declare-function mevedel--truncate-display
-                  "mevedel-utilities" (text width &optional ellipsis))
-(autoload 'mevedel--truncate-display "mevedel-utilities")
-
+;; `mevedel-notes'
+(declare-function mevedel-note-close "mevedel-notes" (note reason))
+(declare-function mevedel-notes-closed "mevedel-notes" (&optional workspace loaded-only))
 
 ;;
 ;;; Customization
 
-(defcustom mevedel-buddy-note-width 72
-  "Column budget for laying out a note.
-
-Deliberately a fixed budget rather than the window width.  An overlay's
-`after-string' is shared by every window showing its buffer, so a layout
-fitted to one window would be wrong in another and wrong again after a
-split."
-  :type 'natnum
-  :group 'mevedel-buddy)
-
-(defcustom mevedel-buddy-note-current-line-style 'below
-  "How to show a note on the line point is on.
-
-`below' lays the whole note out on its own lines under the code, `eol'
-appends it after the code and shortens it to fit, and nil hides it."
-  :type '(choice (const :tag "Full text below the code" below)
-                 (const :tag "Shortened after the code" eol)
-                 (const :tag "Hidden" nil))
-  :group 'mevedel-buddy)
-
-(defcustom mevedel-buddy-note-other-lines-style 'eol
-  "How to show a note on any line point is not on.
-
-Defaults to `eol' so that at most one note is ever laid out in full: the
-one being read.  Set it to nil to annotate only the line at point."
-  :type '(choice (const :tag "Shortened after the code" eol)
-                 (const :tag "Full text below the code" below)
-                 (const :tag "Hidden" nil))
-  :group 'mevedel-buddy)
-
 (defcustom mevedel-buddy-note-serialize-limit 40
   "How many notes at most are described to the model in one request.
 
-Every request carries the note set and dismissed notes are never
-purged, so an unbounded set would make a background feature's
-per-request cost grow all session.  The newest notes are kept."
+An unbounded set would make background prompt cost grow with the entire
+workspace.  This bounds model context, not the number of open remarks."
   :type 'natnum
   :group 'mevedel-buddy)
 
@@ -89,48 +48,97 @@ have its per-request cost scale with file size rather than edit size."
           ((lambda (value) (and (integerp value) (> value 0)))))
   :group 'mevedel-buddy)
 
-(defface mevedel-buddy-note-face
-  '((t :slant italic))
-  "Base face for Buddy note overlays."
-  :group 'mevedel-buddy)
-
-(defface mevedel-buddy-note-trivial-face
-  '((t :inherit (mevedel-buddy-note-face shadow)))
-  "Face for trivial Buddy notes."
-  :group 'mevedel-buddy)
-
-(defface mevedel-buddy-note-significant-face
-  '((t :inherit (mevedel-buddy-note-face warning)))
-  "Face for significant Buddy notes."
-  :group 'mevedel-buddy)
-
-(defface mevedel-buddy-note-critical-face
-  '((t :inherit (mevedel-buddy-note-face error) :weight bold))
-  "Face for critical Buddy notes."
-  :group 'mevedel-buddy)
-
-
-;;
-;;; State
-
 (defvar mevedel-buddy-note--notes nil
-  "Every Buddy note this Emacs session, most recent first.
+  "Transient review index rebuilt from the workspace's canonical notes.
 
 Each note is a plist with `:id', `:buffer', `:line', `:note',
-`:severity', `:status', `:review-needed', and `:overlay'.")
+`:severity', `:status', and `:overlay'.")
 
-(defvar mevedel-buddy-note--next-id 1
-  "Id to assign to the next Buddy note.")
-
-(defvar-local mevedel-buddy-note--laid-out-line nil
-  "Start position of the line this buffer's notes were last laid out for.")
+(defvar mevedel-buddy-note--changed-workspaces nil
+  "Workspaces changed by the current review, synced once at settlement.")
 
 (defvar mevedel-buddy-note--scope-buffers nil
-  "Alist of buffer names and exact buffers the running review may touch.
+  "Alist of names and exact buffers the running review may touch.
+Nil denies every tool call, including calls after abandonment.")
 
-Nil means no review is running, and denies everything.  A tool call can
-still arrive after a review is abandoned or times out, and no scope
-must not then mean every buffer in Emacs.")
+(defun mevedel-buddy-note-finish-review ()
+  "Persist the current review's whole change set through the checked store."
+  (dolist (record mevedel-buddy-note--notes)
+    (unless (plist-get record :overlay)
+      (plist-put record :line (mevedel-buddy-note--line record))))
+  (let ((workspaces mevedel-buddy-note--changed-workspaces))
+    (setq mevedel-buddy-note--changed-workspaces nil)
+    (dolist (workspace workspaces)
+      (mevedel-instruction-store-touch workspace))
+    (when workspaces
+      (mevedel-instruction-store-flush))))
+
+(defun mevedel-buddy-note--changed (overlay)
+  "Record OVERLAY's workspace for the review's single final store sync."
+  (when-let* ((buffer (overlay-buffer overlay))
+              ((buffer-local-value 'buffer-file-name buffer))
+              (workspace (mevedel--instruction-buffer-workspace buffer)))
+    (cl-pushnew workspace mevedel-buddy-note--changed-workspaces)))
+
+(defun mevedel-buddy-note-restore ()
+  "Rebuild the review index from canonical notes in its captured buffers."
+  (let (workspaces)
+    (dolist (entry mevedel-buddy-note--scope-buffers)
+      (when-let* ((workspace (mevedel--instruction-buffer-workspace (cdr entry))))
+        (cl-pushnew workspace workspaces)))
+    (setq mevedel-buddy-note--notes
+          (seq-filter
+           (lambda (record)
+             (when-let* ((buffer (mevedel-buddy-note--scope-buffer
+                                 (plist-get record :buffer))))
+               (and (eq 'dismissed (plist-get record :status))
+                    (not (buffer-local-value 'buffer-file-name buffer)))))
+           mevedel-buddy-note--notes))
+    (dolist (workspace workspaces)
+      ;; Workspace activation already hydrated the store.  Indexing must not
+      ;; hash a remote store or merge pending changes on each idle review.
+      (dolist (entry (mevedel-notes-closed workspace t))
+        (let* ((instruction (plist-get entry :instruction))
+               (props (plist-get instruction :properties))
+               (file (plist-get entry :file))
+               (buffer
+                (and (eq 'buddy (plist-get props 'mevedel-note-author))
+                     (eq 'dismissed (plist-get instruction :closed-reason))
+                     (or (cdr (seq-find
+                               (lambda (scope)
+				 (let ((source (cdr scope)))
+				   (or (equal file (buffer-local-value 'buffer-file-name source))
+                                       (equal file (buffer-local-value 'buffer-file-truename source)))))
+                               mevedel-buddy-note--scope-buffers))
+			 ;; Local aliases may need filesystem identity, but a review
+			 ;; must not resolve a remote truename or stat its source.
+			 (and (not (file-remote-p file))
+                              (find-buffer-visiting
+                               file (lambda (source)
+                                      (rassq source mevedel-buddy-note--scope-buffers))))))))
+          (when buffer
+            (push (list :id (plist-get props 'mevedel-id)
+                        :buffer (buffer-name buffer)
+                        :line (car (plist-get instruction :closed-position))
+                        :note (plist-get props 'mevedel-note-text)
+                        :severity (plist-get props 'mevedel-note-buddy-severity)
+                        :status 'dismissed :overlay nil)
+                  mevedel-buddy-note--notes))))))
+  (dolist (entry mevedel-buddy-note--scope-buffers)
+    (with-current-buffer (cdr entry)
+      (add-hook 'kill-buffer-hook #'mevedel-buddy-note--on-kill-buffer nil t)
+      (dolist (overlay (overlays-in (point-min) (point-max)))
+        (when (or (eq 'buddy (overlay-get overlay 'mevedel-note-author))
+                  (overlay-get overlay 'mevedel-note-kept-from-buddy))
+          (push (list :id (overlay-get overlay 'mevedel-id)
+                      :buffer (buffer-name)
+                      :line (line-number-at-pos (overlay-start overlay))
+                      :note (overlay-get overlay 'mevedel-note-text)
+                      :severity (overlay-get overlay 'mevedel-note-buddy-severity)
+                      :status (if (eq 'buddy (overlay-get overlay 'mevedel-note-author))
+                                  'active 'kept)
+                      :overlay overlay)
+                mevedel-buddy-note--notes))))))
 
 (defvar mevedel-buddy-note--markers nil
   "Alist of captured line boundaries for the running review.
@@ -163,13 +171,6 @@ that refusing the string would refuse real notes."
               (string-match-p "\\`-?[0-9]+\\'" (string-trim value)))
          (string-to-number (string-trim value)))))
 
-(defun mevedel-buddy-note--face (severity)
-  "Return the overlay face for SEVERITY."
-  (pcase severity
-    ("trivial" 'mevedel-buddy-note-trivial-face)
-    ("critical" 'mevedel-buddy-note-critical-face)
-    (_ 'mevedel-buddy-note-significant-face)))
-
 (defun mevedel-buddy-note--find (id)
   "Return the note with ID, or nil."
   (let ((id (if (stringp id) (string-to-number id) id)))
@@ -181,8 +182,16 @@ that refusing the string would refuse real notes."
   (let ((overlay (plist-get note :overlay)))
     (if (and (overlayp overlay) (overlay-buffer overlay))
         (with-current-buffer (overlay-buffer overlay)
-          (line-number-at-pos (overlay-start overlay)))
-      (plist-get note :line))))
+          (save-restriction
+            (widen)
+            (line-number-at-pos (overlay-start overlay))))
+      (or (when-let* ((buffer (mevedel-buddy-note--scope-buffer
+                              (plist-get note :buffer)))
+                      (position (mevedel-buddy-note--position
+                                 buffer (plist-get note :line))))
+            (with-current-buffer buffer
+              (save-restriction (widen) (line-number-at-pos position))))
+          (plist-get note :line)))))
 
 
 ;;
@@ -313,114 +322,12 @@ LINE.  Raw line counting is not annotation authority."
 ;;
 ;;; Overlays
 
-(defun mevedel-buddy-note--modification-hook (overlay after &rest _args)
-  "Mark OVERLAY's note for review once its line has changed.
-
-AFTER distinguishes the notification made after the change from the one
-made before it."
-  (when after
-    (when-let* ((note (seq-find (lambda (candidate)
-                                  (eq (plist-get candidate :overlay) overlay))
-                                mevedel-buddy-note--notes)))
-      (plist-put note :review-needed t))))
-
-;; Notes are laid out to a fixed column budget, never to the window width.
-;; Truncating a note is only acceptable while its full text is one cursor
-;; move away, which is why the line at point and every other line get
-;; different styles: exactly one note is ever laid out in full.
-
-(defun mevedel-buddy-note--wrap (text width)
-  "Return TEXT filled to WIDTH columns as a list of lines."
-  (with-temp-buffer
-    (let ((fill-column (max 20 width))
-          (adaptive-fill-mode nil)
-          (fill-prefix nil))
-      (insert text)
-      (fill-region (point-min) (point-max)))
-    (split-string (buffer-string) "\n")))
-
-(defun mevedel-buddy-note--eol-string (note severity column)
-  "Return NOTE for display after code ending at COLUMN, styled by SEVERITY.
-
-Shortened to what is left of the budget, because the full text is
-available by moving point onto the line."
-  (let* ((room (max 20 (- mevedel-buddy-note-width column)))
-         (text (mevedel--truncate-display (replace-regexp-in-string "[ \t\n]+" " " note)
-                room t)))
-    (propertize (concat "  " text)
-                'face (mevedel-buddy-note--face severity))))
-
-(defun mevedel-buddy-note--below-string (note severity indent)
-  "Return NOTE laid out under the code, indented to INDENT and faced by SEVERITY."
-  (let* ((prefix (make-string indent ?\s))
-         (lines (mevedel-buddy-note--wrap
-                 note (- mevedel-buddy-note-width indent))))
-    (propertize
-     (concat "\n"
-             (mapconcat (lambda (line) (concat prefix line)) lines "\n"))
-     'face (mevedel-buddy-note--face severity))))
-
-(defun mevedel-buddy-note--style-for (overlay)
-  "Return the display style to use for OVERLAY right now.
-
-Whether point shares the note's line is answered by comparing positions
-rather than line numbers.  `line-number-at-pos' counts newlines from
-`point-min' on every call, and this runs once per note on every command
-that moves point to another line."
-  (if (and (overlay-buffer overlay)
-           (eq (overlay-buffer overlay) (current-buffer))
-           (<= (line-beginning-position)
-               (overlay-start overlay)
-               (line-end-position)))
-      mevedel-buddy-note-current-line-style
-    mevedel-buddy-note-other-lines-style))
-
-(defun mevedel-buddy-note--render (overlay note severity)
-  "Show NOTE on OVERLAY, styled for SEVERITY in the style its line calls for.
-
-Measuring happens in the overlay's own buffer.  `update_note' runs as a
-tool call, so the buffer current at the time is the one the review was
-started from, which under a workspace-wide scope is often not the buffer
-holding the note."
-  (when-let* ((buffer (overlay-buffer overlay)))
-    (with-current-buffer buffer
-      ;; The style depends on where the user's point is, so it must be
-      ;; decided before `save-excursion' moves point to the note.
-      (let ((style (mevedel-buddy-note--style-for overlay)))
-        (overlay-put
-         overlay 'after-string
-         (save-excursion
-           (goto-char (overlay-start overlay))
-           (pcase style
-             ('eol
-              (mevedel-buddy-note--eol-string
-               note severity
-               ;; The display column, not the character count: a tab is
-               ;; one character and eight columns, and counting it as one
-               ;; over-estimates the room left and overflows the budget
-               ;; the fixed width exists to hold.
-               (progn (goto-char (line-end-position)) (current-column))))
-             ('below
-              (mevedel-buddy-note--below-string
-               note severity
-               (progn (back-to-indentation) (current-column))))
-             (_ nil))))))))
-
-(defun mevedel-buddy-note--relayout ()
-  "Lay out this buffer's notes again after point changed line.
-
-Runs from `post-command-hook', so it does nothing at all unless the line
-number actually changed."
-  (let ((line (line-beginning-position)))
-    (unless (eql line mevedel-buddy-note--laid-out-line)
-      (setq mevedel-buddy-note--laid-out-line line)
-      (dolist (record mevedel-buddy-note--notes)
-        (let ((overlay (plist-get record :overlay)))
-          (when (and (overlayp overlay)
-                     (eq (overlay-buffer overlay) (current-buffer)))
-            (mevedel-buddy-note--render overlay
-                                        (plist-get record :note)
-                                        (plist-get record :severity))))))))
+(defun mevedel-buddy-note--code (overlay)
+  "Return the current source text marked by OVERLAY, without properties."
+  (with-current-buffer (overlay-buffer overlay)
+    (save-restriction
+      (widen)
+      (buffer-substring-no-properties (overlay-start overlay) (overlay-end overlay)))))
 
 (defun mevedel-buddy-note--make-overlay (buffer line note severity)
   "Return a note overlay on LINE of BUFFER showing NOTE at SEVERITY."
@@ -428,27 +335,22 @@ number actually changed."
     (let* ((position (mevedel-buddy-note--position buffer line))
            (overlay (save-excursion
                       (goto-char position)
-                      (make-overlay (line-beginning-position)
-                                    (line-end-position)
-                                    buffer nil nil))))
-      ;; Deliberately no `mevedel-instruction' property: a note must stay
-      ;; invisible to instruction enumeration.
-      (overlay-put overlay 'mevedel-buddy-note t)
+                      (mevedel--create-instruction-overlay-in
+                       buffer (line-beginning-position) (line-end-position) 'line))))
+      (overlay-put overlay 'mevedel-instruction-type 'note)
+      (overlay-put overlay 'mevedel-note-author 'buddy)
+      (overlay-put overlay 'mevedel-note-state 'unsent)
+      (overlay-put overlay 'mevedel-note-text note)
+      (overlay-put overlay 'mevedel-note-buddy-severity severity)
+      (overlay-put overlay 'mevedel-note-buddy-code (mevedel-buddy-note--code overlay))
       (overlay-put overlay 'evaporate nil)
-      (overlay-put overlay 'modification-hooks
-                   (list #'mevedel-buddy-note--modification-hook))
-      (overlay-put overlay 'insert-behind-hooks
-                   (list #'mevedel-buddy-note--modification-hook))
-      (mevedel-buddy-note--render overlay note severity)
+      (mevedel--update-instruction-overlay overlay t)
+      (mevedel-buddy-note--changed overlay)
       (add-hook 'kill-buffer-hook #'mevedel-buddy-note--on-kill-buffer nil t)
-      (add-hook 'post-command-hook #'mevedel-buddy-note--relayout nil t)
       overlay)))
 
 (defun mevedel-buddy-note--on-kill-buffer ()
-  "Drop the current buffer's notes as it is killed.
-
-Notes are ephemeral and anchored to live text, so a dead buffer must
-not leave records behind that name it."
+  "Drop the current buffer's transient review entries as it is killed."
   (mevedel-buddy-note-forget-buffer (buffer-name)))
 
 
@@ -467,7 +369,7 @@ not leave records behind that name it."
 (defun mevedel-buddy-note-add (buffer-name line note severity)
   "Attach NOTE to LINE of BUFFER-NAME at SEVERITY.
 
-Return the new note id, or an explanatory string the model can act on."
+Return the note id, reusing an exact repeat, or an explanatory string."
   (let ((buffer (get-buffer buffer-name))
         (number (mevedel-buddy-note--integer line)))
     (cond
@@ -480,101 +382,115 @@ Return the new note id, or an explanatory string the model can act on."
      ((not (member severity (mevedel-buddy-note--severities)))
       (format "Unknown severity: %s" severity))
      (t
-      (let* ((id mevedel-buddy-note--next-id)
-             (overlay (mevedel-buddy-note--make-overlay
-                       buffer number note severity)))
-        (setq mevedel-buddy-note--next-id (1+ id))
-        (push (list :id id
-                    :buffer buffer-name
-                    :line number
-                    :note note
-                    :severity severity
-                    :status 'active
-                    :review-needed nil
-                    :overlay overlay)
-              mevedel-buddy-note--notes)
+      (let* ((actual-line
+              (with-current-buffer buffer
+                (save-restriction
+                  (widen)
+                  (line-number-at-pos (mevedel-buddy-note--position buffer number)))))
+             (existing
+              (seq-find (lambda (record)
+                          (and (equal buffer-name (plist-get record :buffer))
+                               (= actual-line (mevedel-buddy-note--line record))
+                               (equal note (plist-get record :note))))
+                        mevedel-buddy-note--notes))
+             (overlay (unless existing
+                        (mevedel-buddy-note--make-overlay
+                         buffer number note severity)))
+             (id (if existing (plist-get existing :id)
+                   (overlay-get overlay 'mevedel-id))))
+        (unless existing
+          (push (list :id id
+                      :buffer buffer-name
+                      :line number
+                      :note note
+                      :severity severity
+                      :status 'active
+                      :overlay overlay)
+                mevedel-buddy-note--notes))
         id)))))
 
 (defun mevedel-buddy-note-update (id note)
   "Replace the text of note ID with NOTE, leaving it where it is."
   (if-let* ((record (mevedel-buddy-note--find id)))
-      (if (not (mevedel-buddy-note--in-scope-p (plist-get record :buffer)))
-          (format "Note %s is not in the review scope" (plist-get record :id))
+      (cond
+       ((not (mevedel-buddy-note--in-scope-p (plist-get record :buffer)))
+        (format "Note %s is not in the review scope" (plist-get record :id)))
+       ((not (mevedel-buddy-note--owned-p record))
+        (format "Note %s is no longer owned by this review" id))
+       (t
         (let ((overlay (plist-get record :overlay)))
           (plist-put record :note note)
-          (plist-put record :review-needed nil)
           (when (and (overlayp overlay) (overlay-buffer overlay))
-            (mevedel-buddy-note--render
-             overlay note (plist-get record :severity)))
-          (format "Updated note %s" (plist-get record :id))))
+            (overlay-put overlay 'mevedel-note-text note)
+            (overlay-put overlay 'mevedel-note-buddy-code
+                         (mevedel-buddy-note--code overlay))
+            (mevedel--update-instruction-overlay overlay t)
+            (mevedel-buddy-note--changed overlay))
+          (format "Updated note %s" (plist-get record :id)))))
     (format "Unknown note: %s" id)))
 
 (defun mevedel-buddy-note-remove (id)
   "Retract note ID."
   (if-let* ((record (mevedel-buddy-note--find id)))
-      (if (not (mevedel-buddy-note--in-scope-p (plist-get record :buffer)))
-          (format "Note %s is not in the review scope" (plist-get record :id))
+      (cond
+       ((not (mevedel-buddy-note--in-scope-p (plist-get record :buffer)))
+        (format "Note %s is not in the review scope" (plist-get record :id)))
+       ((not (mevedel-buddy-note--owned-p record))
+        (format "Note %s is no longer owned by this review" id))
+       (t
         (mevedel-buddy-note--delete record)
-        (format "Removed note %s" (plist-get record :id)))
+        (format "Removed note %s" (plist-get record :id))))
     (format "Unknown note: %s" id)))
+
+(defun mevedel-buddy-note--owned-p (record)
+  "Return non-nil if RECORD still describes an unchanged Buddy-owned note."
+  (when-let* ((overlay (plist-get record :overlay))
+              ((overlay-buffer overlay)))
+    (and (eq 'buddy (overlay-get overlay 'mevedel-note-author))
+         (equal (plist-get record :note)
+                (overlay-get overlay 'mevedel-note-text)))))
 
 (defun mevedel-buddy-note--delete (record)
   "Delete RECORD's overlay and drop it from the note set."
-  (let* ((overlay (plist-get record :overlay))
-         (buffer (and (overlayp overlay) (overlay-buffer overlay))))
-    (when (overlayp overlay) (delete-overlay overlay))
-    (setq mevedel-buddy-note--notes (delq record mevedel-buddy-note--notes))
-    (mevedel-buddy-note--sync-relayout-hook buffer)))
-
-(defun mevedel-buddy-note--sync-relayout-hook (buffer)
-  "Remove BUFFER's relayout hook once it holds no note overlays."
-  (when (buffer-live-p buffer)
-    (unless (seq-some
-             (lambda (record)
-               (let ((overlay (plist-get record :overlay)))
-                 (and (overlayp overlay)
-                      (eq (overlay-buffer overlay) buffer))))
-             mevedel-buddy-note--notes)
-      (with-current-buffer buffer
-        (remove-hook 'post-command-hook #'mevedel-buddy-note--relayout t)))))
+  (let ((overlay (plist-get record :overlay)))
+    (when (and (overlayp overlay) (overlay-buffer overlay))
+      (mevedel-buddy-note--changed overlay)
+      (let ((mevedel-instruction-store--inhibit t))
+        (mevedel--delete-instruction overlay nil t)))
+    (setq mevedel-buddy-note--notes (delq record mevedel-buddy-note--notes))))
 
 (defun mevedel-buddy-note-dismiss (id &optional reason)
   "Dismiss note ID for REASON, keeping the record so it is not repeated."
   (when-let* ((record (mevedel-buddy-note--find id)))
-    (let* ((overlay (plist-get record :overlay))
-           ;; Capture the buffer first: `overlay-buffer' is nil once the
-           ;; overlay is deleted.
-           (buffer (and (overlayp overlay) (overlay-buffer overlay))))
-      (plist-put record :line (mevedel-buddy-note--line record))
-      (when (overlayp overlay) (delete-overlay overlay))
-      (plist-put record :overlay nil)
-      (plist-put record :status 'dismissed)
-      (plist-put record :dismissed-reason (or reason "removed"))
-      (mevedel-buddy-note--sync-relayout-hook buffer))
+    (when-let* ((overlay (plist-get record :overlay))
+                ((overlay-buffer overlay)))
+      (mevedel-buddy-note--dismiss-overlay overlay reason))
     record))
 
-(defun mevedel-buddy-note-clear-all ()
-  "Discard every note and its overlay."
-  (let (buffers)
-    (dolist (record (copy-sequence mevedel-buddy-note--notes))
-      (let ((overlay (plist-get record :overlay)))
-        (when (overlayp overlay)
-          (when-let* ((buffer (overlay-buffer overlay)))
-            (cl-pushnew buffer buffers))
-          (delete-overlay overlay))))
-    (setq mevedel-buddy-note--notes nil
-          mevedel-buddy-note--next-id 1)
-    ;; Every buffer that held a note now holds none, so none of them still
-    ;; needs the hook that lays notes out.
-    (dolist (buffer buffers)
-      (mevedel-buddy-note--sync-relayout-hook buffer)))
-  (mevedel-buddy-note-release-markers))
+(defun mevedel-buddy-note--dismiss-overlay (note &optional reason)
+  "Close Buddy NOTE as dismissed, retaining REASON in the transient index."
+  (unless (eq 'buddy (overlay-get note 'mevedel-note-author))
+    (user-error "Not a Buddy remark"))
+  (when-let* ((record (seq-find (lambda (record)
+                                (eq note (plist-get record :overlay)))
+                              mevedel-buddy-note--notes)))
+    ;; Keep :line in review coordinates; its captured marker follows edits.
+    (plist-put record :overlay nil)
+    (plist-put record :status 'dismissed)
+    (plist-put record :dismissed-reason (or reason "user")))
+  (if (buffer-local-value 'buffer-file-name (overlay-buffer note))
+      (mevedel-note-close note 'dismissed)
+    ;; An unsaved buffer has no file anchor for recently-closed persistence.
+    ;; Its rejected advice remains only in the existing transient index.
+    (let ((mevedel-instruction-store--inhibit t))
+      (mevedel--delete-instruction note nil t))))
 
 (defun mevedel-buddy-note-forget-buffer (buffer-name)
-  "Drop every note belonging to BUFFER-NAME."
-  (dolist (record (copy-sequence mevedel-buddy-note--notes))
-    (when (equal (plist-get record :buffer) buffer-name)
-      (mevedel-buddy-note--delete record))))
+  "Drop transient review entries belonging to BUFFER-NAME, not stored notes."
+  (setq mevedel-buddy-note--notes
+        (seq-remove (lambda (record)
+                      (equal (plist-get record :buffer) buffer-name))
+                    mevedel-buddy-note--notes)))
 
 
 ;;
@@ -600,9 +516,10 @@ raising it again."
     (if (null notes)
         ""
       (concat
-       "\n\nNotes you have already left, newest first.  Active notes are "
+       "\n\nNotes you have already left.  Active notes are "
        "visible to the user; dismissed notes are not, but you should still "
-       "avoid repeating them.\n"
+       "avoid repeating them. Kept notes now belong to the user; do not "
+       "update or retract them.\n"
        (mapconcat
         (lambda (record)
           (format "- note_id %s [%s] %s:%s: %s%s"
@@ -616,7 +533,10 @@ raising it again."
                     (format " (dismissed: %s)"
                             (or (plist-get record :dismissed-reason)
                                 "unknown")))
-                   ((plist-get record :review-needed)
+                   ((when-let* ((overlay (plist-get record :overlay))
+                                ((overlay-buffer overlay)))
+                      (not (equal (overlay-get overlay 'mevedel-note-buddy-code)
+                                  (mevedel-buddy-note--code overlay))))
                     (concat " (the annotated line changed since this note was"
                             " written; decide whether to update or remove it)"))
                    (t ""))))
@@ -731,9 +651,9 @@ would otherwise pass the scope check and land in that review -- with
 CURRENTP is called with no arguments and reports whether the review that
 owns these tools is still the one in flight.
 
-These are plain gptel tools rather than registry tools: they need
-argument validation but no permission check, no snapshot, and no
-persistence, and nothing outside a Buddy review may call them."
+These are plain gptel tools rather than registry tools: they change only
+advisory notes, never source.  Store synchronization happens once after
+the review, not once per tool call."
   (require 'gptel)
   (list
    (gptel-make-tool
@@ -794,39 +714,52 @@ persistence, and nothing outside a Buddy review may call them."
 ;;
 ;;; Commands
 
+;;;###autoload
+(defun mevedel-buddy-keep-note (&optional note)
+  "Keep Buddy's NOTE as a user note; default to the remark at point."
+  (interactive)
+  (let ((workspace (mevedel--instruction-buffer-workspace
+                    (if note (overlay-buffer note) (current-buffer)))))
+    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+      (setq note (or note (mevedel-buddy-note--at-point)
+                     (user-error "No Buddy remark at point")))
+      (unless (eq 'buddy (overlay-get note 'mevedel-note-author))
+        (user-error "Not a Buddy remark"))
+      (overlay-put note 'mevedel-note-author 'user)
+      (overlay-put note 'mevedel-note-kept-from-buddy t)
+      (mevedel--update-instruction-overlay note t)
+      (when (buffer-local-value 'buffer-file-name (overlay-buffer note))
+        (mevedel-instruction-store-touch workspace))
+      note)))
+
 (defun mevedel-buddy-note--at-point ()
-  "Return the note whose overlay covers point, or nil."
-  (seq-find
-   (lambda (record)
-     (let ((overlay (plist-get record :overlay)))
-       (and (overlayp overlay)
-            (eq (overlay-buffer overlay) (current-buffer))
-            (<= (overlay-start overlay) (point) (overlay-end overlay)))))
-   mevedel-buddy-note--notes))
+  "Return a canonical Buddy note at point, independent of the review index."
+  (seq-find (lambda (note) (eq 'buddy (overlay-get note 'mevedel-note-author)))
+            (mevedel--instructions-at (point) 'note)))
 
 ;;;###autoload
-(defun mevedel-buddy-dismiss-note ()
-  "Dismiss the Buddy note at point.
+(defun mevedel-buddy-dismiss-note (&optional note)
+  "Dismiss Buddy NOTE, defaulting to the remark at point.
 
 The note stops being shown, but the model is still told it was
 dismissed so it does not raise the same point again."
   (interactive)
-  (if-let* ((record (mevedel-buddy-note--at-point)))
-      (progn
-        (mevedel-buddy-note-dismiss (plist-get record :id) "user")
-        (message "mevedel: note dismissed"))
-    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No buddy note at point")))
+  (let ((workspace (mevedel--instruction-buffer-workspace
+                    (if note (overlay-buffer note) (current-buffer)))))
+    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+      (mevedel-buddy-note--dismiss-overlay
+       (or note (mevedel-buddy-note--at-point)
+           (user-error "No Buddy remark at point")))
+      (message "mevedel: note dismissed"))))
 
 ;;;###autoload
 (defun mevedel-buddy-dismiss-notes ()
   "Dismiss every Buddy note visible in the current buffer."
   (interactive)
-  (let ((dismissed 0)
-        (buffer-name (buffer-name)))
-    (dolist (record (copy-sequence mevedel-buddy-note--notes))
-      (when (and (eq (plist-get record :status) 'active)
-                 (equal (plist-get record :buffer) buffer-name))
-        (mevedel-buddy-note-dismiss (plist-get record :id) "user")
+  (let ((dismissed 0))
+    (dolist (note (overlays-in (point-min) (point-max)))
+      (when (eq 'buddy (overlay-get note 'mevedel-note-author))
+        (mevedel-buddy-note--dismiss-overlay note)
         (setq dismissed (1+ dismissed))))
     (message "mevedel: %d note%s dismissed"
              dismissed (if (= dismissed 1) "" "s"))))

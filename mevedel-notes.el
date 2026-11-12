@@ -29,6 +29,10 @@
 (autoload 'mevedel-instruction-store-prune-closed "mevedel-persistence")
 (autoload 'mevedel-instruction-store-touch "mevedel-persistence")
 
+;; `mevedel-buddy-note'
+(autoload 'mevedel-buddy-dismiss-note "mevedel-buddy-note" nil t)
+(autoload 'mevedel-buddy-keep-note "mevedel-buddy-note" nil t)
+
 (defvar-local mevedel-notes--last-hinted nil
   "Note most recently announced by the local entry hint.")
 
@@ -56,12 +60,15 @@
                              (or (overlay-get note 'mevedel-note-text) ""))
    80 nil nil "…"))
 
-(defun mevedel-notes--actions-hint ()
-  "Return the current modified-key menu hint."
-  (if-let* ((key (where-is-internal #'mevedel--ov-actions-dispatch
-                                   mevedel-note-actions-map t)))
-      (format "%s: edit, done, delete" (key-description key))
-    "M-x mevedel-note-menu: edit, done, delete"))
+(defun mevedel-notes--actions-hint (&optional note)
+  "Return the current modified-key menu hint for NOTE."
+  (format "%s: edit, done, %s"
+          (if-let* ((key (where-is-internal #'mevedel--ov-actions-dispatch
+                                           mevedel-note-actions-map t)))
+              (key-description key)
+            "M-x mevedel-note-menu")
+          (if (and note (eq 'buddy (overlay-get note 'mevedel-note-author)))
+              "dismiss, keep" "delete")))
 
 (defun mevedel-notes--entry-hint ()
   "Announce the note and its next actions when point enters it."
@@ -73,7 +80,7 @@
         (message "Note %s · %s · %s"
                  (overlay-get note 'mevedel-id)
                  (mevedel-notes--display-text note)
-                 (mevedel-notes--actions-hint))))))
+                 (mevedel-notes--actions-hint note))))))
 
 (defun mevedel-notes--render (note)
   "Render NOTE's label below its code."
@@ -89,10 +96,12 @@
                           (overlay-put overlay 'mevedel-note-owner note)
                           (overlay-put note 'mevedel-label-overlay overlay)
                           overlay)))
-             (text (format "\n  Note %s · you · %s · not sent · %s"
+             (text (format "\n  Note %s · %s · %s · not sent · %s"
                            (overlay-get note 'mevedel-id)
+                           (pcase (overlay-get note 'mevedel-note-author)
+                             ('buddy "Buddy") ('agent "AI") (_ "you"))
                            (mevedel-notes--display-text note)
-                           (mevedel-notes--actions-hint))))
+                           (mevedel-notes--actions-hint note))))
         (overlay-put note 'keymap mevedel-note-actions-map)
         (move-overlay label (overlay-start note) end)
         (unless (equal text (overlay-get label 'after-string))
@@ -291,13 +300,19 @@ Return its live source overlay, retaining its text, tags and attachments."
       (setq note (or note (mevedel-notes--at-point)))
       (pcase (car (read-multiple-choice
                    (format "Note %s: " (overlay-get note 'mevedel-id))
-                   '((?e "edit" "Edit note text")
-                     (?x "done" "Mark note done")
-                     (?d "delete" "Delete note without changing code"))))
+                   (append '((?e "edit" "Edit note text")
+                             (?x "done" "Mark note done"))
+                           (if (eq 'buddy (overlay-get note 'mevedel-note-author))
+                               '((?d "dismiss" "Dismiss this remark")
+                                 (?k "keep" "Keep as your own note"))
+                             '((?d "delete" "Delete note without changing code"))))))
         (?e (mevedel-note-edit
              (read-string "Note: " (overlay-get note 'mevedel-note-text)) note))
         (?x (mevedel-note-done note))
-        (?d (mevedel-note-delete note))))))
+        (?d (if (eq 'buddy (overlay-get note 'mevedel-note-author))
+                (mevedel-buddy-dismiss-note note)
+              (mevedel-note-delete note)))
+        (?k (mevedel-buddy-keep-note note))))))
 
 ;;;###autoload
 (defun mevedel-note-create (&optional text)
