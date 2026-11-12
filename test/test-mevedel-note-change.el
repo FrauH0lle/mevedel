@@ -426,5 +426,30 @@
     (with-current-buffer (mevedel-note-merge-change note) (mevedel-note-merge-confirm))
     (should (equal "before\nnew\nafter\nHeading\n=======\n" (mevedel-test--read-file file)))))
 
+(mevedel-deftest mevedel-note-merge-no-final-newline
+  (:quiet t)
+  ,test
+  (test)
+  :doc "keeping the unterminated source side never saves an artificial marker separator newline"
+  (mevedel-note-change-test--with-note
+    (with-current-buffer source
+      (setq-local require-final-newline nil)
+      (goto-char (point-min))
+      (forward-line 2)
+      (delete-region (1- (point)) (point-max))
+      (save-buffer))
+    (should (equal "before\nold" (mevedel-test--read-file file)))
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (with-current-buffer source
+      (goto-char (overlay-start note))
+      (insert "my "))
+    (with-current-buffer (mevedel-note-merge-change note)
+      (goto-char (point-min))
+      (search-forward "<<<<<<<")
+      (smerge-keep-upper)
+      (mevedel-note-merge-confirm))
+    (should (equal "before\nmy old" (mevedel-test--read-file file)))))
+
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here
