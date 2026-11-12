@@ -152,7 +152,11 @@
       (mevedel-instruction-store-observe workspace)
       (with-current-buffer source
         (goto-char (point-min))
-        (let ((history (mevedel-note-history)))
+        (let ((history
+               (cl-letf (((symbol-function 'read-multiple-choice)
+                          (lambda (_prompt choices &rest _)
+                            (should (assq ?h choices)) '(?h "history"))))
+                 (mevedel-note-menu))))
           (unwind-protect
               (with-current-buffer history
                 (should (derived-mode-p 'mevedel-directive-activity-mode))

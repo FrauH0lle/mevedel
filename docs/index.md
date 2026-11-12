@@ -95,7 +95,7 @@ Read the relevant contracts before planning or changing an unfamiliar area.
 - [`telemetry.md`](telemetry.md) — append-only lifecycle telemetry,
   data policy, profiler artifacts, prompt guard, Goal reproduction procedure
 - [`buddy.md`](buddy.md) — unasked review of recent edits and
-  the guidance command, note lifecycle, ephemerality, model selection
+  the guidance command, durable remark lifecycle, review state, model selection
 - [`commits.md`](commits.md) — commit message format and
   guidelines
 - [`backlog.md`](backlog.md) — canonical
