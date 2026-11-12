@@ -10,18 +10,16 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+(require 'mevedel-change)
 (require 'mevedel-memory-apply)
 (require 'mevedel-memory-store)
 
 ;; `mevedel-tool-patch'
 (declare-function mevedel-tool-patch--assert-buffers-unmodified
                   "mevedel-tool-patch" (changes))
-(declare-function mevedel-tool-patch--same-snapshot-p
-                  "mevedel-tool-patch" (left right))
 (declare-function mevedel-tool-patch-commit
                   "mevedel-tool-patch" (changes &optional currentp mutate))
 (autoload 'mevedel-tool-patch--assert-buffers-unmodified "mevedel-tool-patch")
-(autoload 'mevedel-tool-patch--same-snapshot-p "mevedel-tool-patch")
 (autoload 'mevedel-tool-patch-commit "mevedel-tool-patch")
 
 ;; `mevedel-memory-notes'
@@ -123,7 +121,7 @@ A change carrying an exact :after snapshot supplies it directly."
   "Return non-nil when LEFT and RIGHT match for INTENT's kind of target."
   (if (mevedel-memory-write--notes-root intent)
       (mevedel-memory-notes-same-p left right)
-    (mevedel-tool-patch--same-snapshot-p left right)))
+    (mevedel-change-same-p left right)))
 
 (defun mevedel-memory-write--commit (workspace target intent changes currentp &optional before-write)
   "Commit CHANGES for INTENT in WORKSPACE under TARGET, rechecking CURRENTP.
@@ -140,7 +138,7 @@ checked rollback retains CURRENTP's ownership without a cancelled forward gate."
         ;; Patch rollback supplies the original before-state as AFTER.  Do not
         ;; block that checked restoration with a forward-admission gate.
         (and before-write
-             (not (mevedel-tool-patch--same-snapshot-p
+             (not (mevedel-change-same-p
                    after (cdr (seq-find (lambda (row) (equal (plist-get after :path) (plist-get (cdr row) :path)))
                                         (plist-get intent :before)))))
              before-write))))))
@@ -325,7 +323,7 @@ Only durable memory and instruction writes can be reversed."
     (dolist (row before (nreverse changes))
       (let* ((old (cdr row)) (new (cdr (assoc (car row) after))) (path (plist-get old :path)))
         (unless (and new (equal path (plist-get new :path))) (error "Memory snapshot targets differ"))
-        (unless (and (mevedel-tool-patch--same-snapshot-p old new)
+        (unless (and (mevedel-change-same-p old new)
                      (equal (plist-get old :hash) (plist-get new :hash))
                      (equal (plist-get old :directory) (plist-get new :directory)))
           (push (append (list :path path :before old :action (if (plist-get new :exists) 'write 'delete)

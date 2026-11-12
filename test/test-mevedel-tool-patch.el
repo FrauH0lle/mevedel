@@ -736,6 +736,26 @@
                   (test-mevedel-tool-patch--read-bytes path))))
       (when (file-directory-p root) (delete-directory root t))))
 
+  :doc "Restores a deleted file's literal bytes and mode after a later failure"
+  (let* ((root (make-temp-file "mevedel-patch-deleted-rollback-" t))
+         (path (file-name-concat root "binary.dat"))
+         (blocker (file-name-concat root "blocker"))
+         (failure (file-name-concat blocker "failure.txt"))
+         (bytes (unibyte-string 0 255 13 10 128)))
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write 'no-conversion))
+            (write-region bytes nil path nil 'silent))
+          (set-file-modes path #o751)
+          (with-temp-file blocker (insert "not a directory"))
+          (should-error
+           (mevedel-tool-patch-commit
+            (list (list :action 'delete :path path)
+                  (list :action 'write :path failure :content "fail\n"))))
+          (should (equal bytes (test-mevedel-tool-patch--read-bytes path)))
+          (should (= #o751 (file-modes path))))
+      (delete-directory root t)))
+
   :doc "Synchronizes a buffer visiting the same file through another name"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-patch-sync-" t)))

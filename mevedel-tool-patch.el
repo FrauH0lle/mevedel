@@ -22,6 +22,7 @@
   (require 'mevedel-tool-registry)
   (require 'subr-x))
 
+(require 'mevedel-change)
 (require 'mevedel-edit-diagnostics)
 (require 'mevedel-execution-target)
 (require 'mevedel-file-state)
@@ -1242,39 +1243,25 @@ When LITERAL-P is non-nil, write CONTENT as literal bytes."
   (mevedel-pin-write-file-atomically
    path content (and literal-p 'no-conversion) mode))
 
-(defun mevedel-tool-patch--same-snapshot-p (left right)
-  "Return non-nil when LEFT and RIGHT name the same bytes, absence, and mode."
-  (and left right
-       (cl-every (lambda (key) (equal (plist-get left key) (plist-get right key)))
-                 '(:path :exists :bytes :mode))))
-
 (defun mevedel-tool-patch--assert-current (currentp)
   "Signal unless CURRENTP, when non-nil, still confirms the caller's authority."
   (when (and currentp (not (funcall currentp)))
     (error "Patch ownership is unavailable")))
 
 (defun mevedel-tool-patch--restore-snapshots (snapshots expected &optional currentp mutate)
-  "Restore SNAPSHOTS only from their transaction-owned EXPECTED after-state.
-Return failed path/error pairs. Skip unattempted paths and already restored
-files. CURRENTP, when supplied, must still authorize each rollback mutation.
-MUTATE, when supplied, performs each before/after snapshot replacement."
-  (let (failures)
-    (dolist (snapshot snapshots (nreverse failures))
-      (let* ((path (plist-get snapshot :path))
-             (after (seq-find (lambda (item) (equal path (plist-get item :path))) expected)))
-        (when after
-          (condition-case err
-              (unless (mevedel-tool-patch--same-snapshot-p snapshot (mevedel-tool-patch--snapshot path))
-                (mevedel-tool-patch--assert-current currentp)
-                (unless (mevedel-tool-patch--same-snapshot-p after (mevedel-tool-patch--snapshot path))
-                  (error "File changed after the transaction write: %s" path))
-                (if mutate
-                    (funcall mutate after snapshot)
-                  (if (plist-get snapshot :exists)
-                    (mevedel-tool-patch--write-file
-                     path (plist-get snapshot :bytes) (plist-get snapshot :mode) t)
-                    (mevedel-pin-delete-file path))))
-            (error (push (cons path err) failures))))))))
+  "Restore SNAPSHOTS from EXPECTED using checked transaction rollback.
+CURRENTP guards authority.  MUTATE may supply a target-fenced writer instead
+of the default pinned filesystem writer.  Return failed path/error pairs."
+  (mevedel-change-rollback
+   snapshots expected #'mevedel-tool-patch--snapshot
+   (or mutate
+       (lambda (_before after)
+         (let ((path (plist-get after :path)))
+           (if (plist-get after :exists)
+               (mevedel-tool-patch--write-file
+                path (plist-get after :bytes) (plist-get after :mode) t)
+             (mevedel-pin-delete-file path)))))
+   (lambda () (mevedel-tool-patch--assert-current currentp))))
 
 (defun mevedel-tool-patch-missing-parent-directories (path)
   "Return missing parent directories for PATH, outermost first."
@@ -1424,7 +1411,7 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
                    changes))))
       (cl-loop for change in changes for snapshot in snapshots do
                (when (and (plist-member change :before)
-                          (not (mevedel-tool-patch--same-snapshot-p (plist-get change :before) snapshot)))
+                          (not (mevedel-change-same-p (plist-get change :before) snapshot)))
                  (error "File changed before the transaction: %s" (plist-get change :path))))
       (dolist (snapshot buffer-snapshots)
         (when-let* ((group (plist-get snapshot :group)))
@@ -1434,7 +1421,7 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
           (progn
             (cl-loop for change in changes for snapshot in snapshots do
               (mevedel-tool-patch--assert-current currentp)
-              (unless (mevedel-tool-patch--same-snapshot-p snapshot (mevedel-tool-patch--snapshot (plist-get change :path)))
+              (unless (mevedel-change-same-p snapshot (mevedel-tool-patch--snapshot (plist-get change :path)))
                 (error "File changed before its transaction write: %s" (plist-get change :path)))
               (push (list :path (plist-get change :path) :exists (eq (plist-get change :action) 'write)
                           :bytes (when (eq (plist-get change :action) 'write)
@@ -1486,7 +1473,7 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
                           (kill-buffer source))))))))
             (mevedel-tool-patch--assert-current currentp)
             (dolist (after expected)
-              (unless (mevedel-tool-patch--same-snapshot-p after (mevedel-tool-patch--snapshot (plist-get after :path)))
+              (unless (mevedel-change-same-p after (mevedel-tool-patch--snapshot (plist-get after :path)))
                 (error "File changed during the transaction: %s" (plist-get after :path))))
             (dolist (snapshot buffer-snapshots)
               (when-let* ((group (plist-get snapshot :group)))
@@ -1495,7 +1482,7 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
         ((error quit)
          (let* ((inhibit-quit t)
                 (rollback-failures
-                (mevedel-tool-patch--restore-snapshots snapshots expected currentp mutate)))
+                 (mevedel-tool-patch--restore-snapshots snapshots expected currentp mutate)))
            (dolist (snapshot buffer-snapshots)
              (when-let* ((buffer (plist-get snapshot :buffer)) ((buffer-live-p buffer)))
                (let ((path (plist-get snapshot :path))
