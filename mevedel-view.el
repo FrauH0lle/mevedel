@@ -919,7 +919,7 @@ existing `mevedel--view-buffer' binding untouched.  A
     (unless mevedel-view--side-conversation-p
       (add-hook 'kill-buffer-hook #'mevedel-view-history-save nil t))
     ;; A transcript has no line numbers worth counting, and they cost four
-    ;; columns of a directive frame that is already narrow.
+    ;; columns of a note frame that is already narrow.
     (setq-local display-line-numbers nil)
     ;; Agent transcript views supply their own status strip but share the
     ;; pinned prompt row.

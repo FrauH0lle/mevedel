@@ -1,4 +1,4 @@
-;;; mevedel-directive-source.el -- Durable note source presentations -*- lexical-binding: t -*-
+;;; mevedel-note-source.el -- Durable note source presentations -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
@@ -336,7 +336,7 @@ source geometry undo must leave these authored fields on the live note."
                 (assq-delete-all buffer (mevedel--instruction-alist)))))))
   buffer)
 
-(defun mevedel--reconcile-directive-sources (workspace)
+(defun mevedel--reconcile-note-sources (workspace)
   "Mark live note buffers in WORKSPACE Source missing when files vanish."
   (when workspace
     (mevedel--instruction-activate-workspace workspace)
@@ -664,5 +664,5 @@ exception is for automatic retraction, not explicit user deletion."
                             (mevedel--instruction-alist))))))
   instruction)
 
-(provide 'mevedel-directive-source)
-;;; mevedel-directive-source.el ends here
+(provide 'mevedel-note-source)
+;;; mevedel-note-source.el ends here

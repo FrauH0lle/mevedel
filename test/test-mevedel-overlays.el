@@ -8,7 +8,7 @@
 
 (require 'mevedel-overlays)
 (require 'mevedel-instruction-registry)
-(require 'mevedel-directive-source)
+(require 'mevedel-note-source)
 (require 'mevedel-overlay-ui)
 (require 'mevedel-persistence)
 (require 'mevedel-structs)

@@ -1,4 +1,4 @@
-;;; mevedel-directive-frame.el -- Directive frame surface -*- lexical-binding: t -*-
+;;; mevedel-note-frame.el -- Note frame surface -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2024-2025 daedsidog
 ;; Copyright (C) 2025- FrauH0lle
@@ -25,7 +25,7 @@
 
 ;; `mevedel-chat'
 
-;; `mevedel-directive-source'
+;; `mevedel-note-source'
 ;; `mevedel-instruction-registry'
 
 ;; `mevedel-models'
@@ -62,73 +62,73 @@
 ;;
 ;;; Customization
 
-(defcustom mevedel-directive-frame-width 0.6
-  "Width of the directive frame as a fraction of its parent frame."
+(defcustom mevedel-note-frame-width 0.6
+  "Width of the note frame as a fraction of its parent frame."
   :type 'float
   :group 'mevedel)
 
-(defcustom mevedel-directive-frame-height 20
-  "Height of the directive frame in lines."
+(defcustom mevedel-note-frame-height 20
+  "Height of the note frame in lines."
   :type 'integer
   :group 'mevedel)
 
-(defcustom mevedel-directive-frame-border-width 2
-  "Border width of the directive frame in pixels."
+(defcustom mevedel-note-frame-border-width 2
+  "Border width of the note frame in pixels."
   :type 'integer
   :group 'mevedel)
 
-(defcustom mevedel-directive-frame-min-height 8
-  "Smallest height of the directive frame in lines.
+(defcustom mevedel-note-frame-min-height 8
+  "Smallest height of the note frame in lines.
 The frame fits itself to its content between this and
-`mevedel-directive-frame-height'."
+`mevedel-note-frame-height'."
   :type 'integer
   :group 'mevedel)
 
-(defface mevedel-directive-frame-border
+(defface mevedel-note-frame-border
   '((((background dark)) :background "#5c7a80")
     (((background light)) :background "#7d979d"))
-  "Border of the directive frame while it has focus.
+  "Border of the note frame while it has focus.
 The background attribute is what paints; a face that inherits an unset
 background makes the border invisible against the frame."
   :group 'mevedel)
 
-(defface mevedel-directive-frame-border-inactive
+(defface mevedel-note-frame-border-inactive
   '((((background dark)) :background "#2d383b")
     (((background light)) :background "#c6d2d5"))
-  "Border of the directive frame while another frame has focus."
+  "Border of the note frame while another frame has focus."
   :group 'mevedel)
 
 
 ;;
 ;;; State
 
-(defvar mevedel-directive-frame--frame nil
-  "The single live directive frame, or nil.")
+(defvar mevedel-note-frame--frame nil
+  "The single live note frame, or nil.")
 
-(defvar mevedel-directive-frame--directive-id nil
-  "Directive id whose turns the live frame displays.")
+(defvar mevedel-note-frame--note-id nil
+  "Note id whose turns the live frame displays.")
 
-(defvar mevedel-directive-frame--view-buffer nil
+(defvar mevedel-note-frame--view-buffer nil
   "View buffer displayed by the live frame.")
 
-(defvar mevedel-directive-frame--origin nil
+(defvar mevedel-note-frame--origin nil
   "Marker for the source position the live frame was opened from.")
 
-(defvar mevedel-directive-frame--directive nil
-  "Directive overlay the live frame is anchored to.")
+(defvar mevedel-note-frame--note nil
+  "Note overlay the live frame is anchored to.")
 
-(defvar mevedel-directive-frame--source-buffer nil
+(defvar mevedel-note-frame--source-buffer nil
   "Source buffer carrying the live frame's follow hooks.")
 
-(defvar mevedel-directive-frame--following nil
+(defvar mevedel-note-frame--following nil
   "Non-nil while repositioning, so redisplay hooks cannot recurse.")
 
-(defvar mevedel-directive-frame--pending-restore nil
+(defvar mevedel-note-frame--pending-restore nil
   "Focus and point to restore once the deleted frame is actually gone.
 A plist of :frame, :window, and :origin handed from
 `delete-frame-functions' to `after-delete-frame-functions'.")
 
-(defvar mevedel-directive-frame--origin-window nil
+(defvar mevedel-note-frame--origin-window nil
   "Window that was selected when the live frame was opened.")
 
 
@@ -159,7 +159,7 @@ frame accepts focus and shows a cursor, so `no-accept-focus',
 ;;
 ;;; Availability
 
-(defun mevedel-directive-frame--available-p ()
+(defun mevedel-note-frame--available-p ()
   "Return non-nil when a child frame can be created in this session.
 Emacs 31 supports child frames on terminal displays as well as graphical
 ones, so the Emacs version no longer decides this.  A batch session
@@ -171,40 +171,40 @@ still does: it has no terminal at all and `make-frame' signals there."
 ;;; Frame refresh
 
 
-(defun mevedel-directive-frame-refresh ()
+(defun mevedel-note-frame-refresh ()
   "Refit the note frame after a re-render.
-Safe to call from any buffer and when no directive frame is live.  Runs
+Safe to call from any buffer and when no note frame is live.  Runs
 on the view's throttled render cadence, not per streamed token, so the
 frame grows with the answer instead of resizing on every chunk."
-  (when (frame-live-p mevedel-directive-frame--frame)
-    (mevedel-directive-frame--fit-height)
-    ;; A frame flipped above its directive grows upward, so refitting moves
+  (when (frame-live-p mevedel-note-frame--frame)
+    (mevedel-note-frame--fit-height)
+    ;; A frame flipped above its note grows upward, so refitting moves
     ;; where its top belongs.
-    (mevedel-directive-frame--follow)))
+    (mevedel-note-frame--follow)))
 
 
 ;;
 ;;; Header line
 
-(defun mevedel-directive-frame--header ()
-  "Return the condensed header line for the directive frame.
-Leads with directive identity, then the state that changes while the
+(defun mevedel-note-frame--header ()
+  "Return the condensed header line for the note frame.
+Leads with note identity, then the state that changes while the
 conversation runs.  Session facts the parent frame's status strip
 already shows -- session name, workspace root, execution target, preset
 -- are deliberately absent: this header has a fraction of the width."
   (when (and (boundp 'mevedel--data-buffer)
              (buffer-live-p mevedel--data-buffer))
     (let* ((data-buffer mevedel--data-buffer)
-           (id mevedel-directive-frame--directive-id)
+           (id mevedel-note-frame--note-id)
            (state (mevedel-request-state-label data-buffer))
            (model (mevedel-model-current-label data-buffer))
            (tools (mevedel-tools-active-count data-buffer)))
       (concat
-       (propertize "◆ " 'face 'mevedel-view-directive-scope)
+       (propertize "◆ " 'face 'mevedel-view-note-scope)
        (propertize (if (and (stringp id) (> (length id) 8))
                        (substring id 0 8)
-                     (or id "directive"))
-                   'face 'mevedel-view-directive-scope)
+                     (or id "note"))
+                   'face 'mevedel-view-note-scope)
        (propertize " · " 'face 'shadow)
        (propertize (or state "idle") 'face 'shadow)
        (propertize " · " 'face 'shadow)
@@ -216,40 +216,40 @@ already shows -- session name, workspace root, execution target, preset
 ;;
 ;;; Frame geometry
 
-(defun mevedel-directive-frame--source-window (directive)
-  "Return the window showing DIRECTIVE's source buffer, or nil.
-Never returns a window inside the directive frame: once that frame has
+(defun mevedel-note-frame--source-window (note)
+  "Return the window showing NOTE's source buffer, or nil.
+Never returns a window inside the note frame: once that frame has
 focus it would otherwise become its own parent, and re-displaying would
 reparent the frame to the frame being replaced."
-  (when (and (overlayp directive)
-             (buffer-live-p (overlay-buffer directive)))
-    (let* ((buffer (overlay-buffer directive))
+  (when (and (overlayp note)
+             (buffer-live-p (overlay-buffer note)))
+    (let* ((buffer (overlay-buffer note))
            (candidates
             (cl-loop for window in (get-buffer-window-list buffer nil t)
-                     unless (and (frame-live-p mevedel-directive-frame--frame)
+                     unless (and (frame-live-p mevedel-note-frame--frame)
                                  (eq (window-frame window)
-                                     mevedel-directive-frame--frame))
+                                     mevedel-note-frame--frame))
                      collect window)))
       ;; The same buffer can be on screen more than once.  Prefer the window
       ;; the user is actually in, then any window on the selected frame, and
       ;; only then whatever is left -- otherwise the frame anchors itself to
-      ;; a copy of the directive in a window nobody is looking at.
+      ;; a copy of the note in a window nobody is looking at.
       (or (car (memq (selected-window) candidates))
           (cl-find-if (lambda (window)
                         (eq (window-frame window) (selected-frame)))
                       candidates)
           (car candidates)))))
 
-(defun mevedel-directive-frame--place
+(defun mevedel-note-frame--place
     (anchor-x start-y end-y line-height width height parent-width parent-height)
-  "Return the position (X . Y) for a WIDTH by HEIGHT directive frame.
-ANCHOR-X is the directive's end column, START-Y the top of its first line,
+  "Return the position (X . Y) for a WIDTH by HEIGHT note frame.
+ANCHOR-X is the note's end column, START-Y the top of its first line,
 and END-Y the top of its last line, all in pixels relative to a parent
 of PARENT-WIDTH by PARENT-HEIGHT; LINE-HEIGHT is one line's height.
 
-The frame goes below the directive, else flush above its first line, so
-the directive stays readable.  Only when neither side has room does it
-take the larger side and overlap the directive."
+The frame goes below the note, else flush above its first line, so
+the note stays readable.  Only when neither side has room does it
+take the larger side and overlap the note."
   (let ((x (max 0 (min anchor-x (- parent-width width))))
         (below (+ end-y line-height))
         (above (- start-y height)))
@@ -261,17 +261,17 @@ take the larger side and overlap the directive."
             (max 0 (- parent-height height)))
            (t 0)))))
 
-(defun mevedel-directive-frame--anchor (directive window &optional height)
-  "Return the pixel position (X . Y) to place DIRECTIVE's frame in WINDOW.
-Returns nil when DIRECTIVE has no visible source position, in which case
+(defun mevedel-note-frame--anchor (note window &optional height)
+  "Return the pixel position (X . Y) to place NOTE's frame in WINDOW.
+Returns nil when NOTE has no visible source position, in which case
 the caller centers the frame on its parent.  HEIGHT defaults to the live
 frame's actual height, so a frame fitted shorter than the maximum still
-sits flush against its directive."
+sits flush against its note."
   (when (and (window-live-p window)
-             (overlayp directive)
-             (buffer-live-p (overlay-buffer directive)))
+             (overlayp note)
+             (buffer-live-p (overlay-buffer note)))
     (when-let* ((position (window-absolute-pixel-position
-                           (overlay-end directive) window)))
+                           (overlay-end note) window)))
       (let* ((frame (window-frame window))
              ;; `window-absolute-pixel-position' answers in display
              ;; coordinates while a child frame's `left' and `top' are
@@ -283,45 +283,45 @@ sits flush against its directive."
              ;; subtraction is inert there.
              (native (frame-edges frame 'native-edges))
              (start (window-absolute-pixel-position
-                     (overlay-start directive) window))
+                     (overlay-start note) window))
              (parent-width (frame-pixel-width frame))
-             (child mevedel-directive-frame--frame))
-        (mevedel-directive-frame--place
+             (child mevedel-note-frame--frame))
+        (mevedel-note-frame--place
          (- (car position) (nth 0 native))
          ;; A first line scrolled above the window leaves the window's top
-         ;; as the directive's highest visible edge; body edges are already
+         ;; as the note's highest visible edge; body edges are already
          ;; relative to the native frame.
          (if start
              (- (cdr start) (nth 1 native))
            (nth 1 (window-body-pixel-edges window)))
          (- (cdr position) (nth 1 native))
          (frame-char-height frame)
-         (round (* mevedel-directive-frame-width parent-width))
+         (round (* mevedel-note-frame-width parent-width))
          (cond (height)
                ((frame-live-p child) (frame-pixel-height child))
-               (t (* mevedel-directive-frame-height
+               (t (* mevedel-note-frame-height
                      (frame-char-height frame))))
          parent-width
          (frame-pixel-height frame))))))
 
-(defun mevedel-directive-frame--size (parent)
+(defun mevedel-note-frame--size (parent)
   "Return the pixel size (WIDTH . HEIGHT) of a frame parented to PARENT."
-  (cons (round (* mevedel-directive-frame-width (frame-pixel-width parent)))
-        (* mevedel-directive-frame-height (frame-char-height parent))))
+  (cons (round (* mevedel-note-frame-width (frame-pixel-width parent)))
+        (* mevedel-note-frame-height (frame-char-height parent))))
 
-(defun mevedel-directive-frame--make (buffer parent)
+(defun mevedel-note-frame--make (buffer parent)
   "Return a child frame of PARENT displaying BUFFER.
-Reuses the live directive frame when it still matches PARENT and the
+Reuses the live note frame when it still matches PARENT and the
 display type, and recreates it otherwise."
   (let* ((graphic (display-graphic-p parent))
-         (frame mevedel-directive-frame--frame)
+         (frame mevedel-note-frame--frame)
          (params
           `((parent-frame . ,parent)
             (minibuffer . ,(minibuffer-window parent))
             (font . ,(frame-parameter parent 'font))
-            (internal-border-width . ,mevedel-directive-frame-border-width)
+            (internal-border-width . ,mevedel-note-frame-border-width)
             (child-frame-border-width
-             . ,mevedel-directive-frame-border-width)
+             . ,mevedel-note-frame-border-width)
             ,@mevedel--child-frame-parameters)))
     (unless (and (frame-live-p frame)
                  (eq (frame-parent frame) parent)
@@ -330,7 +330,7 @@ display type, and recreates it otherwise."
       (when (frame-live-p frame) (delete-frame frame))
       (setq frame
             (make-frame
-             `((name . "mevedel-directive")
+             `((name . "mevedel-note")
                (width . 0) (height . 0) (visibility . nil)
                ,@params))))
     (let ((window (frame-root-window frame)))
@@ -344,71 +344,71 @@ display type, and recreates it otherwise."
       ;; line; the buffer's pinned prompt row stays below it, as in the view.
       (set-window-parameter window 'mode-line-format 'none)
       (set-window-parameter window 'tab-line-format
-                            '(:eval (mevedel-directive-frame--header)))
+                            '(:eval (mevedel-note-frame--header)))
       (set-window-parameter window 'header-line-format nil)
       (set-window-fringes window 0 0))
-    (mevedel-directive-frame--paint-border frame)
+    (mevedel-note-frame--paint-border frame)
     frame))
 
-(defun mevedel-directive-frame--paint-border (&optional frame)
+(defun mevedel-note-frame--paint-border (&optional frame)
   "Paint FRAME's border to show whether it holds focus.
 The border width alone draws nothing: without an explicit background on
 `internal-border' and `child-frame-border' the border takes the default
 background and is invisible against the frame."
-  (let ((frame (or frame mevedel-directive-frame--frame)))
+  (let ((frame (or frame mevedel-note-frame--frame)))
     (when (frame-live-p frame)
       (let ((color (face-attribute
                     (if (frame-focus-state frame)
-                        'mevedel-directive-frame-border
-                      'mevedel-directive-frame-border-inactive)
+                        'mevedel-note-frame-border
+                      'mevedel-note-frame-border-inactive)
                     :background nil 'default)))
         (set-face-background 'internal-border color frame)
         (set-face-background 'child-frame-border color frame)))))
 
 (add-function :after after-focus-change-function
-              #'mevedel-directive-frame--paint-border)
+              #'mevedel-note-frame--paint-border)
 
-(defun mevedel-directive-frame--follow (&optional window _start)
-  "Keep the directive frame aligned with its directive as the source scrolls.
+(defun mevedel-note-frame--follow (&optional window _start)
+  "Keep the note frame aligned with its note as the source scrolls.
 Runs from `window-scroll-functions' and `window-configuration-change-hook'
-in the directive's source buffer.  The frame hides once the directive
-leaves the window and returns when it scrolls back, so the directive and
+in the note's source buffer.  The frame hides once the note
+leaves the window and returns when it scrolls back, so the note and
 its frame scroll as one thing.
 
 WINDOW is supplied by `window-scroll-functions'."
-  (unless mevedel-directive-frame--following
-    (let ((mevedel-directive-frame--following t)
-          (frame mevedel-directive-frame--frame)
-          (directive mevedel-directive-frame--directive))
+  (unless mevedel-note-frame--following
+    (let ((mevedel-note-frame--following t)
+          (frame mevedel-note-frame--frame)
+          (note mevedel-note-frame--note))
       (cond
        ((not (frame-live-p frame))
-        (mevedel-directive-frame--unfollow))
-       ((not (and (overlayp directive)
-                  (buffer-live-p (overlay-buffer directive))))
+        (mevedel-note-frame--unfollow))
+       ((not (and (overlayp note)
+                  (buffer-live-p (overlay-buffer note))))
         (when (frame-visible-p frame) (make-frame-invisible frame)))
        (t
-        ;; Stay with the window the frame anchored to.  When the directive's
+        ;; Stay with the window the frame anchored to.  When the note's
         ;; buffer is on screen twice, scrolling the other copy must not drag
         ;; the frame across to it.
         (let ((source
-               (if (and (window-live-p mevedel-directive-frame--origin-window)
+               (if (and (window-live-p mevedel-note-frame--origin-window)
                         (eq (window-buffer
-                             mevedel-directive-frame--origin-window)
-                            (overlay-buffer directive)))
-                   mevedel-directive-frame--origin-window
-                 (setq mevedel-directive-frame--origin-window
-                       (mevedel-directive-frame--source-window directive)))))
+                             mevedel-note-frame--origin-window)
+                            (overlay-buffer note)))
+                   mevedel-note-frame--origin-window
+                 (setq mevedel-note-frame--origin-window
+                       (mevedel-note-frame--source-window note)))))
           (if (not (and (window-live-p source)
                         ;; nil WINDOW is the configuration-change hook, which
                         ;; is about the layout rather than one window.
                         (or (null window) (eq window source))
                         (pos-visible-in-window-p
-                         (overlay-end directive) source)))
+                         (overlay-end note) source)))
               (when (and (frame-visible-p frame)
                          (or (null window) (eq window source)))
                 (make-frame-invisible frame))
-            (when-let* ((anchor (mevedel-directive-frame--anchor
-                                 directive source)))
+            (when-let* ((anchor (mevedel-note-frame--anchor
+                                 note source)))
               ;; Only move on a real change: setting the position from a
               ;; redisplay hook triggers redisplay again.  Compare against
               ;; the frame's own parameters, which `set-frame-position'
@@ -425,42 +425,42 @@ WINDOW is supplied by `window-scroll-functions'."
             (unless (frame-visible-p frame)
               (make-frame-visible frame)))))))))
 
-(defun mevedel-directive-frame--follow-setup (directive)
-  "Track DIRECTIVE's source buffer so the frame scrolls with it."
-  (when (and (overlayp directive)
-             (buffer-live-p (overlay-buffer directive)))
-    (mevedel-directive-frame--unfollow)
-    (setq mevedel-directive-frame--directive directive
-          mevedel-directive-frame--source-buffer (overlay-buffer directive))
-    (with-current-buffer (overlay-buffer directive)
+(defun mevedel-note-frame--follow-setup (note)
+  "Track NOTE's source buffer so the frame scrolls with it."
+  (when (and (overlayp note)
+             (buffer-live-p (overlay-buffer note)))
+    (mevedel-note-frame--unfollow)
+    (setq mevedel-note-frame--note note
+          mevedel-note-frame--source-buffer (overlay-buffer note))
+    (with-current-buffer (overlay-buffer note)
       (add-hook 'window-scroll-functions
-                #'mevedel-directive-frame--follow nil t)
+                #'mevedel-note-frame--follow nil t)
       (add-hook 'window-configuration-change-hook
-                #'mevedel-directive-frame--follow nil t))))
+                #'mevedel-note-frame--follow nil t))))
 
-(defun mevedel-directive-frame--unfollow ()
-  "Stop tracking the source buffer and forget the anchored directive."
-  (when (buffer-live-p mevedel-directive-frame--source-buffer)
-    (with-current-buffer mevedel-directive-frame--source-buffer
+(defun mevedel-note-frame--unfollow ()
+  "Stop tracking the source buffer and forget the anchored note."
+  (when (buffer-live-p mevedel-note-frame--source-buffer)
+    (with-current-buffer mevedel-note-frame--source-buffer
       (remove-hook 'window-scroll-functions
-                   #'mevedel-directive-frame--follow t)
+                   #'mevedel-note-frame--follow t)
       (remove-hook 'window-configuration-change-hook
-                   #'mevedel-directive-frame--follow t)))
-  (setq mevedel-directive-frame--source-buffer nil
-        mevedel-directive-frame--directive nil))
+                   #'mevedel-note-frame--follow t)))
+  (setq mevedel-note-frame--source-buffer nil
+        mevedel-note-frame--note nil))
 
-(defun mevedel-directive-frame--fit-height ()
-  "Fit the directive frame's height to its content.
-Bounded by `mevedel-directive-frame-min-height' and
-`mevedel-directive-frame-height' so a one-line answer does not collapse
+(defun mevedel-note-frame--fit-height ()
+  "Fit the note frame's height to its content.
+Bounded by `mevedel-note-frame-min-height' and
+`mevedel-note-frame-height' so a one-line answer does not collapse
 the frame and a long one does not cover the buffer behind it."
-  (when (frame-live-p mevedel-directive-frame--frame)
+  (when (frame-live-p mevedel-note-frame--frame)
     ;; `vertically' matters: fitting both dimensions widens the frame to the
     ;; longest unwrapped line in the transcript, which readily exceeds the
     ;; parent frame.  Width stays as computed from the parent at open.
-    (fit-frame-to-buffer mevedel-directive-frame--frame
-                         mevedel-directive-frame-height
-                         mevedel-directive-frame-min-height
+    (fit-frame-to-buffer mevedel-note-frame--frame
+                         mevedel-note-frame-height
+                         mevedel-note-frame-min-height
                          nil nil 'vertically)))
 
 
@@ -468,53 +468,53 @@ the frame and a long one does not cover the buffer behind it."
 ;;; Display
 
 ;;;###autoload
-(defun mevedel-directive-frame-display (directive view-buffer &optional focus)
-  "Display VIEW-BUFFER in a directive frame anchored at DIRECTIVE.
+(defun mevedel-note-frame-display (note view-buffer &optional focus)
+  "Display VIEW-BUFFER in a note frame anchored at NOTE.
 With FOCUS non-nil the frame is selected, which is what an explicit user
 action wants; a request dispatch leaves focus where it is.  Falls back to
 an ordinary window when child frames are unavailable."
-  (unless (and (overlayp directive)
-               (eq (overlay-get directive 'mevedel-instruction-type) 'note))
+  (unless (and (overlayp note)
+               (eq (overlay-get note 'mevedel-instruction-type) 'note))
     (user-error "Select a note to open its conversation"))
-  (let ((directive-id (format "Note %s" (overlay-get directive 'mevedel-id))))
-    (unless (eq mevedel-directive-frame--view-buffer view-buffer)
-      (when (buffer-live-p mevedel-directive-frame--view-buffer)
-        (with-current-buffer mevedel-directive-frame--view-buffer
-          (mevedel-directive-frame-mode -1))))
+  (let ((note-id (format "Note %s" (overlay-get note 'mevedel-id))))
+    (unless (eq mevedel-note-frame--view-buffer view-buffer)
+      (when (buffer-live-p mevedel-note-frame--view-buffer)
+        (with-current-buffer mevedel-note-frame--view-buffer
+          (mevedel-note-frame-mode -1))))
     (cond
-     ((or (not (mevedel-directive-frame--available-p))
+     ((or (not (mevedel-note-frame--available-p))
           (not (display-graphic-p)))
       (display-buffer view-buffer
                       '(display-buffer-in-side-window
                         (side . right) (window-width . 0.5)))
       (when focus (select-window (get-buffer-window view-buffer t))))
      ;; Reopening the same conversation must not move the frame under its reader.
-     ((and (frame-live-p mevedel-directive-frame--frame)
-           (eq mevedel-directive-frame--view-buffer view-buffer)
-           (equal mevedel-directive-frame--directive-id directive-id))
-      (make-frame-visible mevedel-directive-frame--frame)
+     ((and (frame-live-p mevedel-note-frame--frame)
+           (eq mevedel-note-frame--view-buffer view-buffer)
+           (equal mevedel-note-frame--note-id note-id))
+      (make-frame-visible mevedel-note-frame--frame)
       (when focus
-        (select-frame-set-input-focus mevedel-directive-frame--frame))
-      mevedel-directive-frame--frame)
+        (select-frame-set-input-focus mevedel-note-frame--frame))
+      mevedel-note-frame--frame)
      (t
-      (let* ((source (mevedel-directive-frame--source-window directive))
+      (let* ((source (mevedel-note-frame--source-window note))
              (parent (if (window-live-p source)
                          (window-frame source)
                        (window-frame (selected-window))))
-             (size (mevedel-directive-frame--size parent))
-             (anchor (mevedel-directive-frame--anchor
-                      directive source (cdr size)))
-             (frame (mevedel-directive-frame--make view-buffer parent)))
-        (unless (eq frame mevedel-directive-frame--frame)
-          (setq mevedel-directive-frame--frame frame))
-        (setq mevedel-directive-frame--view-buffer view-buffer
-              mevedel-directive-frame--directive-id directive-id
-              mevedel-directive-frame--origin-window
+             (size (mevedel-note-frame--size parent))
+             (anchor (mevedel-note-frame--anchor
+                      note source (cdr size)))
+             (frame (mevedel-note-frame--make view-buffer parent)))
+        (unless (eq frame mevedel-note-frame--frame)
+          (setq mevedel-note-frame--frame frame))
+        (setq mevedel-note-frame--view-buffer view-buffer
+              mevedel-note-frame--note-id note-id
+              mevedel-note-frame--origin-window
               (if (window-live-p source) source (selected-window)))
-        (when (and (overlayp directive)
-                   (buffer-live-p (overlay-buffer directive)))
-          (setq mevedel-directive-frame--origin
-                (copy-marker (overlay-start directive))))
+        (when (and (overlayp note)
+                   (buffer-live-p (overlay-buffer note)))
+          (setq mevedel-note-frame--origin
+                (copy-marker (overlay-start note))))
         (set-frame-size frame (car size) (cdr size) t)
         (set-frame-position frame
                             (or (car anchor)
@@ -526,30 +526,30 @@ an ordinary window when child frames are unavailable."
                                       (cdr size))
                                    2)))
         (make-frame-visible frame)
-        (with-current-buffer view-buffer (mevedel-directive-frame-mode 1))
-        (mevedel-directive-frame--follow-setup directive)
+        (with-current-buffer view-buffer (mevedel-note-frame-mode 1))
+        (mevedel-note-frame--follow-setup note)
         (when focus (select-frame-set-input-focus frame))
         frame)))))
 
-(defun mevedel-directive-frame-close ()
-  "Dismiss the directive frame."
+(defun mevedel-note-frame-close ()
+  "Dismiss the note frame."
   (interactive)
-  (unless (frame-live-p mevedel-directive-frame--frame)
-    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No directive frame is open"))
-  (delete-frame mevedel-directive-frame--frame))
+  (unless (frame-live-p mevedel-note-frame--frame)
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No note frame is open"))
+  (delete-frame mevedel-note-frame--frame))
 
 
 ;;
 ;;; Teardown
 
-(defun mevedel-directive-frame--on-delete (frame)
-  "Release directive frame state when FRAME is deleted.
+(defun mevedel-note-frame--on-delete (frame)
+  "Release note frame state when FRAME is deleted.
 Runs from `delete-frame-functions' so that every deletion path -- the
 dismiss command, \\[delete-frame], or Emacs exit -- restores point."
-  (when (eq frame mevedel-directive-frame--frame)
-    (let* ((view-buffer mevedel-directive-frame--view-buffer)
-           (origin mevedel-directive-frame--origin)
-           (window mevedel-directive-frame--origin-window)
+  (when (eq frame mevedel-note-frame--frame)
+    (let* ((view-buffer mevedel-note-frame--view-buffer)
+           (origin mevedel-note-frame--origin)
+           (window mevedel-note-frame--origin-window)
            (parent (or (frame-parent frame)
                        (and (window-live-p window) (window-frame window)))))
       ;; Hand input focus back before the frame dies.  This hook runs while
@@ -558,30 +558,30 @@ dismiss command, \\[delete-frame], or Emacs exit -- restores point."
       ;; stops responding to the keyboard.
       (when (and (frame-live-p parent) (not (eq parent frame)))
         (select-frame-set-input-focus parent))
-      (mevedel-directive-frame--unfollow)
+      (mevedel-note-frame--unfollow)
       (when (buffer-live-p view-buffer)
         (with-current-buffer view-buffer
-          (mevedel-directive-frame-mode -1)))
-      (setq mevedel-directive-frame--frame nil
-            mevedel-directive-frame--view-buffer nil
-            mevedel-directive-frame--directive-id nil
-            mevedel-directive-frame--origin nil
-            mevedel-directive-frame--origin-window nil)
+          (mevedel-note-frame-mode -1)))
+      (setq mevedel-note-frame--frame nil
+            mevedel-note-frame--view-buffer nil
+            mevedel-note-frame--note-id nil
+            mevedel-note-frame--origin nil
+            mevedel-note-frame--origin-window nil)
       ;; Point and the cursor are settled after the frame is actually gone.
       ;; This hook runs before deletion, so anything done here about focus is
       ;; provisional.
-      (setq mevedel-directive-frame--pending-restore
+      (setq mevedel-note-frame--pending-restore
             (list :frame parent :window window :origin origin)))))
 
-(defun mevedel-directive-frame--after-delete (&optional _frame)
-  "Restore point and the cursor once the directive frame is gone.
+(defun mevedel-note-frame--after-delete (&optional _frame)
+  "Restore point and the cursor once the note frame is gone.
 Runs from `after-delete-frame-functions'.  Re-asserting focus before
 deletion is not enough: the window system reports focus back to the
 parent asynchronously, so until Emacs processes that event the parent
 draws no cursor -- it reappears only when the next key arrives.  Focusing
 again after deletion and forcing one redisplay settles it immediately."
-  (when-let* ((pending mevedel-directive-frame--pending-restore))
-    (setq mevedel-directive-frame--pending-restore nil)
+  (when-let* ((pending mevedel-note-frame--pending-restore))
+    (setq mevedel-note-frame--pending-restore nil)
     (let ((parent (plist-get pending :frame))
           (window (plist-get pending :window))
           (origin (plist-get pending :origin)))
@@ -597,29 +597,29 @@ again after deletion and forcing one redisplay settles it immediately."
         (redisplay t)))))
 
 (add-hook 'after-delete-frame-functions
-          #'mevedel-directive-frame--after-delete)
+          #'mevedel-note-frame--after-delete)
 
-(add-hook 'delete-frame-functions #'mevedel-directive-frame--on-delete)
+(add-hook 'delete-frame-functions #'mevedel-note-frame--on-delete)
 
 
 ;;
 ;;; Keys
 
-(defvar-keymap mevedel-directive-frame-mode-map
-  :doc "Keymap active in a buffer displayed by the directive frame.
+(defvar-keymap mevedel-note-frame-mode-map
+  :doc "Keymap active in a buffer displayed by the note frame.
 Bindings are prefixed because the view buffer holds an editable composer,
 where a single-letter binding would prevent typing.  `C-g' is left alone;
 in a view buffer it aborts the request."
-  "C-c C-z" #'mevedel-directive-frame-close)
+  "C-c C-z" #'mevedel-note-frame-close)
 
-(defun mevedel-directive-frame--display-in-parent (buffer alist)
-  "Display BUFFER in the directive frame's parent frame honoring ALIST.
+(defun mevedel-note-frame--display-in-parent (buffer alist)
+  "Display BUFFER in the note frame's parent frame honoring ALIST.
 The frame's root window is dedicated and unsplittable and the frame is a
 few lines tall, so anything popped from it -- the transient menu, a
 cockpit surface, the patch buffer -- is unusable inside it.  Redirecting
 at the display layer covers every such surface, including ones that do
 not exist yet."
-  (when-let* ((frame mevedel-directive-frame--frame)
+  (when-let* ((frame mevedel-note-frame--frame)
               ((frame-live-p frame))
               (parent (frame-parent frame))
               ((frame-live-p parent)))
@@ -636,21 +636,21 @@ not exist yet."
         ;; Hand input focus over with the buffer.  Callers like
         ;; `pop-to-buffer' select the window this returns; without moving
         ;; focus too, the selected window and the focused frame disagree and
-        ;; typing still goes to the directive frame.
+        ;; typing still goes to the note frame.
         (select-frame-set-input-focus parent)
         (select-window window))
       window)))
 
-(define-minor-mode mevedel-directive-frame-mode
-  "Minor mode for the view buffer while a directive frame displays it."
+(define-minor-mode mevedel-note-frame-mode
+  "Minor mode for the view buffer while a note frame displays it."
   :lighter ""
-  :keymap mevedel-directive-frame-mode-map
+  :keymap mevedel-note-frame-mode-map
   :interactive nil
-  (if mevedel-directive-frame-mode
+  (if mevedel-note-frame-mode
       (setq-local display-buffer-overriding-action
-                  '(mevedel-directive-frame--display-in-parent . nil))
+                  '(mevedel-note-frame--display-in-parent . nil))
     (kill-local-variable 'display-buffer-overriding-action)))
 
-(provide 'mevedel-directive-frame)
+(provide 'mevedel-note-frame)
 
-;;; mevedel-directive-frame.el ends here
+;;; mevedel-note-frame.el ends here

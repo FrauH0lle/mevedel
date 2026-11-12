@@ -125,7 +125,7 @@ schema, send-time binding, and dispatch branches.
   per note without blocking readable matches. Creating, tagging or listing
   notes never adds them to prompts.
 - **@ref:N** / **@ref:{tag query}** — `@ref:N` binds the note UUID like
-  `@note:N`; a legacy reference UUID binding names the migrated note.
+  `@note:N`; it does not migrate old reference data.
   `@ref:{query}` is an explicit tag query over open notes, shown as
   `[note:{query} -- no matches]` when nothing matches. Empty or malformed
   queries match nothing; there is no implicit all-notes or untagged match.

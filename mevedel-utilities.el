@@ -30,8 +30,8 @@
 (declare-function mevedel-acp-turn--close-reasoning "mevedel-acp-turn" (request))
 (autoload 'mevedel-acp-turn--close-reasoning "mevedel-acp-turn")
 
-;; `mevedel-directive-source'
-(autoload 'mevedel--instruction-initialize-overlay "mevedel-directive-source")
+;; `mevedel-note-source'
+(autoload 'mevedel--instruction-initialize-overlay "mevedel-note-source")
 
 ;; `mevedel-engine'
 (declare-function mevedel-engine-info "mevedel-engine" (owner))

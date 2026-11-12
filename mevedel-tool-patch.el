@@ -47,9 +47,9 @@
                   "mevedel-artifact-store" (session changes &optional request))
 (autoload 'mevedel-artifact-store-note-writes "mevedel-artifact-store")
 
-;; `mevedel-directive-source'
+;; `mevedel-note-source'
 (declare-function mevedel--mark-buffer-source-missing
-                  "mevedel-directive-source" (buffer))
+                  "mevedel-note-source" (buffer))
 
 ;; `mevedel-edit-diagnostics'
 (declare-function mevedel-edit-diagnostics-after-edit

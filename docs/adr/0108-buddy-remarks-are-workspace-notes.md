@@ -46,7 +46,7 @@ merge and failure-retry behavior; it does not introduce another writer.
 ## Consequences
 
 - Buddy remarks carry `mevedel-instruction-type note` and persist through the
-  ordinary instruction record codec, not the legacy directive activity codec.
+  ordinary note record codec; no directive activity codec or migration is used.
 - The shared label renderer replaces Buddy's separate current-line/eol layout
   and its per-line relayout hook. No new rendering timer is introduced.
 - Closing a source buffer drops only Buddy's transient review entries. The

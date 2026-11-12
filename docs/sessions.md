@@ -85,19 +85,17 @@ reopens its selected note, and its working state uses cached live session state.
 
 ## Historical directive turns
 
-Sessions saved before the notes migration may contain directive turns. They
-remain complete turns in their segment, saved through the normal
-transcript/GPTEL_BOUNDS path, so resume and MevView use the ordinary renderer.
-Paired hidden directive-boundary audit records retain the directive id, action,
-and canonical turn identity; ordinary-chat request assembly finds those
-boundaries in gptel's temporary prompt copy and marks the enclosed body
-`gptel 'ignore`, including tool spans. No request creates new directive turns.
+Old saved sessions may contain former directive turns. Resume shows them as
+ordinary turns through the normal transcript/GPTEL_BOUNDS path, and ordinary
+request assembly includes them in model context. There is no special directive
+card, exclusion, frozen-history inspector, or capture-gap reader. Existing hidden
+audit records use ordinary audit rendering, not decoded directive cards.
 
-The former workspace attempt and discussion records survive only as the frozen
-history copied onto migrated notes. Their recorded capture gaps still appear in
-a Rewind impact for a discarded historical turn. Every accepted request reserves
-its turn identity before tools run, and that same identity keys pre-turn
-snapshots, transcript metadata, and the prompt/Rewind index.
+Every accepted request reserves its turn identity before tools run, and that
+same identity keys pre-turn snapshots, transcript metadata, and the prompt/Rewind
+index. Old reference/directive data is not converted into notes, either on
+resume or by the standalone session migration script. Old instruction snapshots
+are ignored on resume, not imported or deleted.
 
 Sessions materialize lazily and save at turn settlement, including errors and
 aborts. Compaction rotates segments rather than rewriting in place.
@@ -707,7 +705,7 @@ transcript, terminal accounting and uncertain history marker before admission is
 released for another request.
 
 Root history guards consult root references and completed ordinary prompt
-entries; historical directive turns do not establish root history.
+entries, including former directive turns in old sessions.
 An installation/machine mismatch or missing native history prevents
 continuation while leaving the transcript readable.
 
@@ -745,7 +743,7 @@ not flattened back into the request.
 
 Sending through Claude after local history starts a new native conversation
 with a labelled excerpt continuation. The excerpt uses current-segment evidence,
-excludes historical directive turns and shared-item turns, and marks shortened tool
+excludes shared-item turns, and marks shortened tool
 output. Historical calls are evidence, not a replay queue. Subsequent Claude
 turns resume the new native ID. This also applies when a request-only workload
 policy changes engines while the saved selection remains different.
@@ -2388,10 +2386,12 @@ to continue. Rewind preserves session preset settings but clears Goal state.
 Resume restores the workspace's instructions from its instruction store. It
 first settles any Rewind intent the session left there (see [Rewind](#rewind)),
 then merges the store into the workspace, so instructions created by other
-sessions or Emacs instances stay. Only a workspace still waiting for its store
-restores the session's `current.el`. That is a workspace with sessions but no
-store, or one whose migration staged candidates. While waiting, it never
-creates a store automatically and warns once. An unreadable store is reported;
+sessions or Emacs instances stay. Old per-session instruction snapshots are not
+restored on resume, even when no workspace store exists. New notes may create a
+fresh current store; there is no old-data migration. Restored taken notes remain
+taken but paused until the user takes them again or sets the workspace dial for
+this Emacs session; restoration does not start Buddy or read the saved dial.
+An unreadable store is reported;
 resume continues without clearing the instructions already loaded. The session
 then counts as owing a Rewind resolution, so request admission keeps trying to
 settle and refuses while the store stays unreadable.
@@ -2547,45 +2547,11 @@ imports remove their incomplete new item.
 
 #### Workspace instructions
 
-A project run also builds the workspace's
-[instruction store](adr/0130-keep-instructions-in-a-workspace-store.md) from
-every session's instruction snapshots, after the sessions themselves. It never
-changes a session. A workspace that already has a store reports `current` and
-is not read.
-
-This is the compatibility path for pre-store snapshots: legacy references,
-directives and activity are reconciled below, then converted to format-2 notes
-and frozen history before writing the store or export candidates. Existing
-format-1 workspace stores instead receive the automatic backed-up conversion
-described in [README usage](https://github.com/FrauH0lle/mevedel/blob/master/README.md#notes).
-
-Snapshots are merged by instruction UUID; display ids are only numbers:
-
-- Identical copies collapse.
-- A display id two instructions share is renumbered above every used and
-  retired id, and that session's links follow it.
-- An instruction missing from some sessions is kept and reported, since
-  dropping it could not be undone.
-- An activity entry is kept only when its checkpoint session's own turn
-  snapshot holds the same entry. Rewind deletes discarded turn snapshots, so a
-  reused turn number is not evidence.
-
-Portable sessions are read from their published head, never from fixed caches.
-
-These stage the workspace instead of writing a store:
-
-- the same UUID with differing authored fields, since a later session save can
-  carry stale data;
-- one activity sequence with different contents;
-- activity without turn evidence, including any from a deleted session;
-- a missing parent, a cycle, or a subdirective owned twice.
-
-Staging writes `.mevedel/instruction-migration/report.el` and one complete
-`candidate-SESSION.el` per session in the export format, each preferring that
-session's version on conflicts. It reports `staged` with a nonzero exit status.
-Until resolved, the workspace waits for its store as described in the
-[resume contract](#resume-contract). Install a candidate with
-`M-x mevedel-load-instructions`, which creates the store.
+The session migration script does not import old instruction snapshots or
+convert format-1 workspace stores. Notes use the current format-2
+[workspace store](adr/0130-keep-instructions-in-a-workspace-store.md).
+Unsupported stores and exports are refused; old per-session snapshots remain
+untouched and are ignored by ordinary resume.
 
 ### Incompatible session inspection
 
@@ -2695,8 +2661,7 @@ also available as `R` in the session cockpit, names the assistant response at
 point: that turn is the last one **kept**. `mevedel-rewind` picks one of the
 user's own prompts across all segments and returns to just **before** it, so
 the prompt and its answer are discarded and it can be asked again -- which is
-the reason to select a prompt at all. A historical directive turn's **Rewind
-before this implementation** action is a `before` boundary for the same reason.
+the reason to select a prompt at all.
 
 Coverage is complementary rather than duplicated: the point route reaches every
 boundary that follows a response but cannot empty a session, since no response
@@ -2739,9 +2704,8 @@ File-workspace sessions stage and swap a session directory with a rollback
 tree.  Portable project sessions leave the directory and control state in
 place and commit one complete replacement manifest through the owned lease
 head.
-The impact lists the discarded prompt suffix in order, including ordinary chat
-and complete historical directive turns, alongside affected files and every
-known gap.
+The impact lists the discarded prompt suffix in order, alongside affected files
+and every known gap. Former directive turns in old sessions are ordinary turns.
 Only the force path overwrites external working-tree changes. Git HEAD and
 the index are not changed, so the impact identifies staged files whose index
 content will diverge from the restored working tree. Failure before the commit
@@ -2764,8 +2728,7 @@ Workspace-owned notes are not historical session state. Rewind keeps every
 note's text, anchor and session link. It clears waiting prepared changes made by
 discarded turns of that session, and a Rewind to before the first turn makes
 that conversation's sent notes unsent (see
-[note conversations](#note-conversations)). Frozen directive history on
-migrated notes is never pruned. In a workspace with an instruction store, the
+[note conversations](#note-conversations)). In a workspace with an instruction store, the
 store changes only after the commit point:
 
 - Before its first irreversible step, Rewind records an intent in the store:
@@ -2786,12 +2749,8 @@ store changes only after the commit point:
 Another client re-reading the store in between still sees the discarded
 note state. Actions that run in the session need its lease, whose acquisition
 settles the intent first. Rewind does not roll back notes created by other
-sessions. A workspace still waiting for its store restores historical snapshot
-presentations as before. A source file restored by Rewind uses the normal safe
-anchor reattachment path. A historical directive turn's Rewind action resolves
-an effectful attempt's exact session and pre-turn checkpoint, then uses this
-same Rewind transaction and impact confirmation; the history inspector refuses
-Rewind.
+sessions. A source file restored by Rewind uses the normal safe anchor
+reattachment path.
 
 Only a committed Rewind emits `SessionStart(rewind)`; it does not emit
 `SessionEnd`. Any context produced by that event belongs to the next accepted

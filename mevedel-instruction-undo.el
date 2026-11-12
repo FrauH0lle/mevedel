@@ -12,17 +12,17 @@
 (require 'mevedel-instruction-registry)
 (require 'mevedel-structs)
 
-;; `mevedel-directive-source'
+;; `mevedel-note-source'
 (declare-function mevedel--delete-instruction
-                  "mevedel-directive-source" (instruction &optional buffer))
+                  "mevedel-note-source" (instruction &optional buffer))
 (declare-function mevedel--instruction-persisted-properties
-                  "mevedel-directive-source" (instruction &optional source-only))
+                  "mevedel-note-source" (instruction &optional source-only))
 (declare-function mevedel--instruction-replacement-forget
-                  "mevedel-directive-source" (overlay))
+                  "mevedel-note-source" (overlay))
 (declare-function mevedel--instruction-replacement-restore
-                  "mevedel-directive-source" (overlay entry))
+                  "mevedel-note-source" (overlay entry))
 (declare-function mevedel--instruction-replacement-settle-undo
-                  "mevedel-directive-source" ())
+                  "mevedel-note-source" ())
 ;; `mevedel-overlay-ui'
 (declare-function mevedel--update-instruction-overlay
                   "mevedel-overlay-ui" (instruction &optional update-children))

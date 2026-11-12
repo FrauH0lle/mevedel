@@ -14,7 +14,7 @@
 (require 'cl-lib)
 (require 'json)
 (require 'mevedel)
-(require 'mevedel-directive-source)
+(require 'mevedel-note-source)
 (require 'mevedel-notes)
 
 (defconst mevedel-instruction-bench--keys 2000

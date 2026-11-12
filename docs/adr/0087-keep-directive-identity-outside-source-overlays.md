@@ -8,7 +8,14 @@ Notes replace live directives. Workspace identity and survival of source loss
 remain, while isolated note sessions and bounded recently closed replace
 directive activity and archive. ADR 0132 owns the current decision.
 
-## Historical decision
+## Decision history
+
+The following was the directive design. ADR 0132 replaces its permanent activity
+and archive with ordinary note sessions and bounded recently closed, avoiding
+duplicated conversation ownership and unbounded store growth. No legacy history
+inspector or directive-specific transcript reader remains.
+
+### Original directive identity decision
 
 Directives and their activity are durable workspace records. An overlay presents
 an attached source anchor; losing it does not destroy the directive. References,
@@ -22,7 +29,7 @@ rows remain ordered and unfolded. Source-file deletion marks the source missing.
 When it returns, only an exact unambiguous match reattaches automatically;
 otherwise reattachment is explicit. Source presentation contains a short
 lifecycle/outcome label; the shared view and read-only inspector expose answers,
-patches, and history. See [legacy directive history](../view.md#directive-turns-and-inspector).
+patches, and history.
 
 Nested directives belong to their topmost parent rather than owning independent
 activity. Prompt construction uses those durable records even if source deletion
@@ -35,7 +42,7 @@ checkpoint links. There is no permanent activity-deletion command. Implementatio
 attempts name their execution session and turn without transferring directive
 ownership into that session.
 
-## Rationale and consequences
+### Historical rationale and consequences
 
 An implementation can delete its own source and must remain inspectable and
 rewindable afterward. Overlay-owned identity would lose precisely that recovery
@@ -43,17 +50,18 @@ entry point. Permanent activity deletion would also need rules for broken
 session links and Rewind resurrection.
 
 The instruction registry owns workspace buckets, IDs, lookup, and links;
-`mevedel-directive-source.el` coordinates durable records and presentations;
+the source coordinator (now `mevedel-note-source.el`) coordinated durable records
+and presentations;
 overlay UI owns actions/redraw; overlay core owns geometry and prompt context.
 This localizes record/presentation consistency instead of distributing it across
 callers.
 
-## Decision history
+### Earlier amendments
 
 ADR 0087 established workspace ownership and originally placed substantive
 activity on a dedicated activity surface. ADR 0091 replaced that placement with
 first-class shared-session turns plus a read-only record inspector; ownership,
-source-loss recovery, and archival decisions remain in force.
+source-loss recovery, and archival decisions remained in force at that time.
 
 Source-deletion and nested-detail failures motivated separating registry,
 source coordination, UI, and overlay geometry. A fileless directive could also

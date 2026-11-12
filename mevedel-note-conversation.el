@@ -10,7 +10,7 @@
 
 (require 'cl-lib)
 (require 'mevedel-chat)
-(require 'mevedel-directive-frame)
+(require 'mevedel-note-frame)
 (require 'mevedel-file-state)
 (require 'mevedel-mentions)
 (require 'mevedel-notes)
@@ -76,9 +76,9 @@
   "Close this note's frame or window, keeping its conversation and draft."
   (interactive)
   (let ((origin mevedel-note-conversation--origin))
-    (if (and (frame-live-p mevedel-directive-frame--frame)
-             (eq (current-buffer) mevedel-directive-frame--view-buffer))
-        (mevedel-directive-frame-close)
+    (if (and (frame-live-p mevedel-note-frame--frame)
+             (eq (current-buffer) mevedel-note-frame--view-buffer))
+        (mevedel-note-frame-close)
       (quit-window nil))
     (when (window-live-p (car origin))
       (select-window (car origin))
@@ -236,7 +236,7 @@ sync to the caller's batch."
               (when mevedel-note-conversation--origin
                 (set-marker (cdr mevedel-note-conversation--origin) nil))
               (setq-local mevedel-note-conversation--origin origin))
-            (mevedel-directive-frame-display note view t)
+            (mevedel-note-frame-display note view t)
             (with-current-buffer view (goto-char (point-max))))
           view)))))
 

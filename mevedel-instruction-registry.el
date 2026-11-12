@@ -14,11 +14,11 @@
 ;; `eval-when-compile' degrades to `progn' in interpreted code.
 (require 'cl-lib)
 
-;; `mevedel-directive-source'
+;; `mevedel-note-source'
 (declare-function mevedel--delete-instruction
-                  "mevedel-directive-source"
+                  "mevedel-note-source"
                   (instruction &optional buffer))
-(autoload 'mevedel--delete-instruction "mevedel-directive-source")
+(autoload 'mevedel--delete-instruction "mevedel-note-source")
 
 ;; `mevedel-instruction-registry'
 (declare-function mevedel--instruction-with-id

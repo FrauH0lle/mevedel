@@ -66,8 +66,8 @@ when the user applies them later. Rewinding before the first turn returns the
 notes to unsent without deleting their text, anchors or session links. The
 workspace store's existing Rewind intent settles that lifecycle change and
 clears proposals from discarded turns, including after a crash. Sending an
-unsent zero-turn note starts again in the same session. Directive rendering is
-unchanged.
+unsent zero-turn note starts again in the same session. ADR 0132 later removes
+directive-specific rendering; old saved directive turns are ordinary turns.
 
 ## Decision history
 

@@ -24,9 +24,9 @@
 (defvar evil-normal-state-map)
 (defvar evil-state)
 
-;; `mevedel-directive-source'
-(declare-function mevedel-instruction-replacement-end "mevedel-directive-source" (&optional buffer))
-(declare-function mevedel-instruction-replacement-hold "mevedel-directive-source" (&optional buffer))
+;; `mevedel-note-source'
+(declare-function mevedel-instruction-replacement-end "mevedel-note-source" (&optional buffer))
+(declare-function mevedel-instruction-replacement-hold "mevedel-note-source" (&optional buffer))
 
 ;; `mevedel-overlays'
 
@@ -52,7 +52,7 @@
 (defconst mevedel-evil--map-features
   '((mevedel-report mevedel-report-mode-map)
     (mevedel-journal-jobs mevedel-journal-jobs-mode-map)
-    (mevedel-directive-frame mevedel-directive-frame-mode-map)
+    (mevedel-note-frame mevedel-note-frame-mode-map)
     (mevedel-subscription-usage mevedel-subscription-usage-mode-map)
     (mevedel-collaboration-share mevedel-collaboration--share-map)
     (mevedel-view mevedel-view-mode-map mevedel-view--display-map)
@@ -179,7 +179,7 @@ conflicting native actions, preserving vanilla behavior in other states."
               (eq symbol 'mevedel-collaboration--share-map))
           (mevedel-evil--adapt-map
            (symbol-value symbol)
-           (memq symbol '(mevedel-view-mode-map mevedel-directive-frame-mode-map)))
+           (memq symbol '(mevedel-view-mode-map mevedel-note-frame-mode-map)))
         (mevedel-evil--overlay-map (symbol-value symbol))))))
 
 (defun mevedel-evil--fragment-maps (&rest maps)

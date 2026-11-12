@@ -46,7 +46,7 @@ authoritative transcript.
 ## Buffer Roles
 
 - **Data buffer**: org-mode gptel buffer. Holds `mevedel--session`,
-  `mevedel--workspace`, the canonical transcript (including any pre-migration
+  `mevedel--workspace`, the canonical transcript (including any old
   directive turns), tool results, hidden render-data blocks, and persisted
   gptel metadata.
 - **View buffer**: `mevedel-view-mode`. Holds `mevedel--data-buffer`,
@@ -56,10 +56,6 @@ authoritative transcript.
   transcript. Resident retained agents use their live conversation buffer
   whether running or idle; cold and historical agents use the saved transcript
   file.
-- **Directive history inspector**: explicit read-only projection of the frozen
-  pre-migration directive history kept on a migrated note. It replaces the
-  currently displayed view and never owns a composer, streaming target, or
-  interaction registry.
 
 Root data buffers keep visible names (`*mevedel:SESSION@WORKSPACE*`, view
 `*mevedel:SESSION@WORKSPACE:view*`): `t` (`mevedel-view-toggle-transcript`)
@@ -212,7 +208,7 @@ breadcrumb. Model-facing mailbox payloads and agent settlement are unchanged.
 Targeted tool-progress refreshes replace only the tool row and its nested
 calls, leaving separate completion and hook-audit rows untouched.
 
-Pre-migration directive turns in saved sessions render in the ordinary session
+Former directive turns in old saved sessions render in the ordinary session
 view as historical turns. Their header carries id, action, turn, and an
 exclusion badge; the submitted prompt is folded, while responses and tool blocks
 use the existing renderer. Such turns older than the newest chronological turn
@@ -372,9 +368,7 @@ renders every turn a displaying window shows, the turns needed to restore
 point, selection, and window anchors, and all chat prompt turns immediately (so
 moving onto pending responses still has an accurate prompt and click target).
 Offscreen turn placeholders are then replaced one per timer callback; a reader
-never sees a placeholder replaced in front of them. Pending-history placeholders
-do not count as later rendered turns when deciding whether to collapse the
-newest historical directive turn. Each callback
+never sees a placeholder replaced in front of them. Each callback
 captures the current draft and reader state, so typing between callbacks is
 preserved. Source text or property changes retire the old plan. Callbacks pause
 while the view is unattended or its transport is busy, and view teardown cancels
@@ -835,8 +829,8 @@ expanding rows never adds or moves a rule. The rule is decided when non-empty
 prose arrives: the activity above it is already rendered, so it needs no
 lookahead, and it belongs to the prose's live render unit, so retained
 activity is never rewritten. The search stops at turn-closing chrome, so a
-historical directive response without its own heading never takes a rule from the user
-turn before it. Activity that ends a turn is closed by the turn's rule.
+response never takes a rule from the user turn before it. Activity that ends a
+turn is closed by the turn's rule.
 
 `mevedel-activity-group.el` alone decides which activity folds, for this view
 and the browser projection alike. Runs of more than
@@ -925,7 +919,7 @@ therefore does not move down when the heading would otherwise appear. The
 interim turn also ends with the settled turn's blank line and rule, so the
 progress row below does not move either. The labelled closing rule that
 replaces the plain rule when the request ends is one row taller.
-Historical directive turns keep their own heading instead. An expanded running group lists its
+An expanded running group lists its
 running calls after its settled children; they are not expandable, have no
 transcript source, and key no disclosure state. A fold or expansion of a
 running group survives its growth like any group's. Folding or unfolding a
@@ -1239,21 +1233,16 @@ composer.
 
 <a id="directive-turns-and-inspector"></a>
 
-## Legacy directive turns and inspector
+## Old saved turns
 
-Directives no longer exist as live records. A note migrated from a directive
-with activity keeps a frozen copy of that history, and `mevedel-note-history`
-opens it in the read-only directive history inspector. The inspector renders the
-historical request, implementation attempts, and discussion turns. Opening it
-replaces the current displayed view rather than splitting beside MevView. It
-owns no composer, streaming, or interaction callbacks. View patch opens an
-attempt's captured patch; Rewind, Reattach, and Archive refuse, because the
-history is read-only. Sending the note starts a new conversation instead.
+Directives no longer exist as live records. Old saved sessions resume with their
+former directive turns shown as ordinary turns and included in ordinary model
+context. There is no special card, history inspector, or old-data conversion.
 
 ## Note frame
 
 The retained frame surface displays a note's conversation, anchored at the note's
-source position; `mevedel-directive-frame.el` keeps its former directive name.
+source position through `mevedel-note-frame.el`.
 It shows
 the real view buffer, so permissions, Ask, patch review, streaming, and the
 composer work in it unmodified and no second renderer exists. See
@@ -1309,12 +1298,12 @@ scrolling without displacing the operational state or shifting the transcript.
 The border is painted by setting a background on `internal-border` and
 `child-frame-border` for that frame. A border width alone draws nothing: without
 an explicit background the border takes the default background and is invisible.
-`mevedel-directive-frame-border` and `mevedel-directive-frame-border-inactive`
+`mevedel-note-frame-border` and `mevedel-note-frame-border-inactive`
 distinguish whether the frame holds focus, which is how a dispatch-opened frame
 that deliberately did not take focus reads as unfocused.
 
-Frame height fits its content between `mevedel-directive-frame-min-height` and
-`mevedel-directive-frame-height`, refitted on the view's throttled render
+Frame height fits its content between `mevedel-note-frame-min-height` and
+`mevedel-note-frame-height`, refitted on the view's throttled render
 cadence rather than per streamed token. Only height is fitted; width stays as
 computed from the parent frame at open, because fitting both dimensions sizes
 the frame to the longest unwrapped line in the transcript and readily exceeds
@@ -3137,7 +3126,7 @@ rerendered transcript exposes it through the same disclosure; it does not run
 the prompt hook again.
 
 The renderer builds hook audit surfaces from visible hook audit records.
-Historical directive-turn discovery and fork-point classification scan trusted audit
+Fork-point classification scans trusted audit
 blocks directly, without copying the whole transcript. Range-limited scans omit
 partial records at either boundary and preserve the caller's narrowing. All audit
 readers share bounded pure decoding within the current buffer across projections,

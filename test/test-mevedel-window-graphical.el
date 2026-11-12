@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Real directive-frame display redirection must restore the parent's layout
+;; Real note-frame display redirection must restore the parent's layout
 ;; without replacing or losing the invoking child-frame composer.  Batch runs
 ;; skip these cases; frame-parent stubs cannot exercise cross-frame selection.
 
@@ -13,7 +13,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
-(require 'mevedel-directive-frame)
+(require 'mevedel-note-frame)
 (require 'mevedel-menu)
 (require 'mevedel-recovery)
 (require 'mevedel-report)
@@ -45,7 +45,7 @@ Bind parent, child, origin, parent-before and child-before for assertions."
                           :name "window-graphical" :root default-directory))
               (session (mevedel-session-create "window-graphical" workspace))
               (other (generate-new-buffer " *window-graphical-other*"))
-              (mevedel-directive-frame--frame nil)
+              (mevedel-note-frame--frame nil)
               child)
          (unwind-protect
              (progn
@@ -69,13 +69,13 @@ Bind parent, child, origin, parent-before and child-before for assertions."
                                 (left . 20) (top . 20) (minibuffer . nil))
                               mevedel--child-frame-parameters)))
                (should (eq parent (frame-parent child)))
-               (setq mevedel-directive-frame--frame child)
+               (setq mevedel-note-frame--frame child)
                (let ((origin (frame-root-window child)))
                  (set-window-buffer origin view-buf)
                  (set-window-dedicated-p origin t)
                  (with-current-buffer view-buf
-                   (mevedel-directive-frame-mode 1)
-                   (should (eq 'mevedel-directive-frame--display-in-parent
+                   (mevedel-note-frame-mode 1)
+                   (should (eq 'mevedel-note-frame--display-in-parent
                                (car display-buffer-overriding-action))))
                  (select-frame-set-input-focus child)
                  (select-window origin)
@@ -102,10 +102,10 @@ Bind parent, child, origin, parent-before and child-before for assertions."
                               (- (point) (mevedel-view--input-start)))))))
            (transient--emergency-exit)
            (when (buffer-live-p view-buf)
-             (with-current-buffer view-buf (mevedel-directive-frame-mode -1)))
+             (with-current-buffer view-buf (mevedel-note-frame-mode -1)))
            ;; This fixture owns its frame directly, not the note overlay
            ;; lifecycle.  Do not invoke that lifecycle's source restoration.
-           (setq mevedel-directive-frame--frame nil)
+           (setq mevedel-note-frame--frame nil)
            (when (frame-live-p child) (delete-frame child t))
            (when (frame-live-p parent) (select-frame-set-input-focus parent))
            (when (buffer-live-p other) (kill-buffer other)))))))
@@ -183,18 +183,18 @@ Bind parent, frame and window for BODY, which runs in the view buffer."
          (mevedel-view--full-rerender)
          (mevedel-view-test--insert-composer-draft "> frame draft\nsecond line"))
        (let* ((parent (selected-frame))
-              (mevedel-directive-frame--frame nil)
-              (mevedel-directive-frame--view-buffer view-buf)
-              (mevedel-directive-frame--directive-id "Note 1")
-              (frame (mevedel-directive-frame--make view-buf parent))
+              (mevedel-note-frame--frame nil)
+              (mevedel-note-frame--view-buffer view-buf)
+              (mevedel-note-frame--note-id "Note 1")
+              (frame (mevedel-note-frame--make view-buf parent))
               (window (frame-root-window frame)))
-         (setq mevedel-directive-frame--frame frame)
+         (setq mevedel-note-frame--frame frame)
          (unwind-protect
              (progn
                (set-frame-position frame 40 40)
                (make-frame-visible frame)
                (with-current-buffer view-buf ,@body))
-           (setq mevedel-directive-frame--frame nil)
+           (setq mevedel-note-frame--frame nil)
            (when (frame-live-p frame) (delete-frame frame t))
            (select-frame-set-input-focus parent))))))
 
@@ -237,7 +237,7 @@ body height and composer draft."
       (set-window-point window (point))
       (line-beginning-position))))
 
-(mevedel-deftest mevedel-directive-frame-pinned-prompt-graphical ()
+(mevedel-deftest mevedel-note-frame-pinned-prompt-graphical ()
   ,test
   (test)
   :doc "narrow and short frames keep the condensed header above the pinned prompt"

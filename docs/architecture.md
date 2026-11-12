@@ -127,15 +127,14 @@ Notes are not structs; see the instruction store below.
   most one waiting prepared change. Note context reaches a prompt only when the
   note is sent or explicitly mentioned. Done, deleted, and dismissed notes move
   to recently closed, bounded by `mevedel-notes-closed-max-count` and
-  `mevedel-notes-closed-max-age-days`; a migrated note may also carry a frozen
-  copy of its former directive history. See
+  `mevedel-notes-closed-max-age-days`. See
   [note conversations](sessions.md#note-conversations).
 
 Instruction ownership is split at the durable-record/presentation boundary:
 
 - `mevedel-instruction-registry.el` owns workspace buckets, IDs, traversal,
   lookup, and links.
-- `mevedel-directive-source.el` (named for its former directive role) owns note
+- `mevedel-note-source.el` owns note
   anchors, source presentations, and command-scoped replacement.
 - `mevedel-notes.el` owns note commands and rendering, including create, edit,
   take, close, and restore.
@@ -252,10 +251,9 @@ prepared change instead of writes; resource-address patches keep ordinary
 ApplyPatch behavior. See
 [note conversations](sessions.md#note-conversations).
 
-Saved sessions may still contain directive turns from before the migration.
-Their paired boundary audit records remain in the transcript, and a
-synchronous prompt-copy transform marks those turns `gptel 'ignore` before
-gptel parses an ordinary request. No request path creates new directive turns.
+Old saved sessions may still contain former directive turns. They resume as
+ordinary turns in the view and model context; no directive-specific filter or
+history inspector remains. Old note data is not migrated.
 
 ## Workspace context chain
 
@@ -564,16 +562,11 @@ request-only application is dynamically scoped for variables. Its agent roster
 and tool catalog are read by tool calls after dispatch, so they last until the
 request ends, when teardown reinstalls the session preset's. The built-ins are
 `mevedel-implement` and `mevedel-note`, which inherits it for note
-conversations; a saved retired `mevedel-discuss` selection resumes as
-`mevedel-implement`. Presets can also merge named model tiers and workload maps.
+conversations. There is no retired-preset substitution on resume.
+Presets can also merge named model tiers and workload maps.
 Dispatch resolves session values, tier values, workload values, then explicit
 Agent policy or request-owning skill policy. Skill preset entries use
 `$skill-name` workload symbols and are consumed before request realization.
-Ordinary-chat prompt assembly also runs the historical directive-boundary
-transform in gptel's temporary request copy. It applies `gptel 'ignore` to
-complete pre-migration directive turns there, including tool spans, while
-leaving the canonical response and `(tool . id)` properties intact for
-persistence and rendering.
 System prompts are assembled dynamically from ordered profiles in
 `mevedel-system.el`. `mevedel-define-prompt-component` registers reusable
 Markdown, literal text, or dynamic producers.
@@ -674,7 +667,7 @@ unavailability annotates only the temporary request and continues the turn;
 malformed live data blocks submission. Input-history persistence rejects and
 quarantines incompatible binding data rather than migrating it. The supported
 kinds are a closed explicit dispatch over skill source path, note UUID (with
-legacy reference UUID bindings naming migrated notes), absolute file pathname,
+reference spellings resolving to note UUIDs), absolute file pathname,
 and MCP server/URI; there is no resolver registry or
 sidecar identity store. See [`mentions.md`](mentions.md#atomic-binding-lifecycle).
 

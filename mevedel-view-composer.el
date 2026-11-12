@@ -513,7 +513,7 @@
 (defconst mevedel-view--input-prompt "> "
   "Read-only prefix rendered at the start of the input zone.")
 
-(defface mevedel-view-directive-scope
+(defface mevedel-view-note-scope
   '((t :inherit font-lock-keyword-face :weight bold))
   "Face for note frames."
   :group 'mevedel)

@@ -4,8 +4,9 @@ Status: accepted. Supersedes the directive decisions of
 [ADR 0087](0087-keep-directive-identity-outside-source-overlays.md),
 ADR 0088 (recorded in
 [ADR 0091's history](0091-render-directive-turns-in-the-shared-session-view.md#decision-history))
-and [ADR 0090](0090-enforce-discussion-as-a-read-only-capability.md).
-Complements [ADR 0108](0108-buddy-notes-are-not-instructions.md)'s Buddy
+and [ADR 0090](0090-enforce-discussion-as-a-read-only-capability.md), plus the
+directive-specific revision and rendering of ADRs 0089 and 0091.
+Complements [ADR 0108](0108-buddy-remarks-are-workspace-notes.md)'s Buddy
 authorship and persistence decision and narrows
 [ADR 0130](0130-keep-instructions-in-a-workspace-store.md)'s record scope to notes.
 
@@ -67,9 +68,15 @@ Applied changes can be reverted individually with the shared checked reversal
 engine of [ADR 0131](0131-rewind-reverts-recorded-changes.md).
 
 **Take hands implementation to the user.** Buddy watches the taken note's code
-using its text as brief at every dial level, including Quiet. Drop ends the
-watch without changing code or losing a conversation. Buddy may say the work
-looks done, but closing is explicit. Sending or taking a Buddy remark first
+using its text as brief at every dial level, including Quiet. After an Emacs
+restart a restored take stays taken but is labelled paused: visiting its source
+neither starts Buddy nor reads the saved dial and asks no question. Taking it
+again resumes that note; explicitly setting the workspace dial resumes its
+takes for this Emacs session, including files visited later. At Active, nearby
+authored notes, including unsent notes, also supply goals for ideas; elsewhere
+Buddy behaves like Watching. Drop ends the watch without changing code or
+losing a conversation. Buddy may say the work looks done, but closing is explicit.
+Sending or taking a Buddy remark first
 keeps it as the user's note, so an older review cannot retract it.
 
 **Closing replaces archive.** Done, deleted and dismissed notes share one
@@ -80,25 +87,18 @@ sessions in their original form stay out of the ordinary chat chooser. Cleanup r
 notes still reference them; after expiry, safe local reference checks allow
 ordinary age-based collection. Uncertain or remote state retains conversations.
 
-**Old directive history stays readable, not executable.** A format-1 workspace
-store is converted once after a hash-verified original-byte backup. References
-become notes with commentary and tags; directives become unsent notes with
-their request and subdirective requests as text. UUIDs and valid unique display
-numbers are kept, and at migration retired numbers are reserved against reuse. A directive
-with activity keeps frozen history on its note. Archived directives become
-closed notes with reason `archived`, exempt from expiry.
+**There is no old-data migration.** Neither the runtime loader nor the standalone
+session migration script converts old instruction data. Ordinary resume ignores
+old per-session instruction snapshots, without importing or deleting them, and
+they do not block creation of a fresh current note store. Format-1 stores are
+unsupported and refused rather than converted. No preset swap, frozen directive
+history inspector, legacy capture-gap reader or browser directive scope remains.
 
-`mevedel-note-history` opens that frozen request, planning, discussion and
-attempt material in a read-only inspector, with patch viewing and source
-navigation. There is no discussion, retry, implementation or settings action;
-reattachment, Rewind and archive are refused there. Sending a migrated note
-starts a new conversation. Persisted directive-turn markers still exclude old
-turns from ordinary-chat model context and show collapsed inspectable cards.
-Session Rewind preserves frozen note history and reads its recorded capture
-gaps. Legacy queued directive input is marked retired for retraction or discard,
-not silently executed as ordinary chat; a saved discuss preset resumes with a diagnostic
-fallback to the implementation preset. These are compatibility readers and
-refusals, not a second live workflow.
+Old saved sessions still resume without directive-specific handling. Their old
+directive headlines and replies are ordinary turns in chat and model context,
+not excluded spans or collapsed directive cards. Generic Org drawers and unknown
+audit records retain their ordinary presentation; removing directive decoding
+does not turn hidden audit payloads into ordinary response text.
 
 ## Rationale
 
@@ -109,8 +109,8 @@ context is a mention, a request is a send, and a remark is a Buddy-authored note
 Directive activity and archives grew without bound inside whole-set store
 writes. Keeping new conversations in sessions and bounding recently closed
 removes that source of growth. A waiting prepared change still holds file bytes,
-and frozen migrated histories remain; this is not a constant-size store. Buddy
-and model mutations batch writes through the existing checked sync. ADR 0108
+so this is not a constant-size store. Buddy and model mutations batch writes
+through the existing checked sync. ADR 0108
 records the real SSH/TRAMP measurement motivating batching.
 
 The removed directive workflow duplicated capabilities the rest of the system
@@ -135,10 +135,10 @@ clobbering another conversation's later edits.
 - Note conversations use normal session persistence, resume and Rewind.
   Rewinding to before their first turn returns sent notes to unsent without
   deleting them or their session link; discarded turns' prepared changes are
-  cleared. User text, anchors and frozen legacy history remain.
-- Old numeric `@ref` mentions can resolve migrated notes without changing the
-  historical chat. Old directive activity can be inspected but not continued
-  in place. No unbounded directive archive is created for new work.
+  cleared. User text, anchors and session links remain.
+- `@ref` remains an authored mention spelling for current notes, not an import
+  path for old reference data. No unbounded directive archive or legacy inspector
+  is retained.
 
 ## Decision history
 
@@ -151,7 +151,7 @@ and per-session conversations replace permanent live activity and archive.
 to an execution session; ADR 0091 later rendered full turns in that session's
 shared view. Note conversations keep context isolation but replace shared
 execution binding with independent sessions, enabled by ADR 0131's checked
-Rewind reversal. Old turns keep their marker-based context exclusion.
+Rewind reversal. Old turns no longer have marker-based context exclusion.
 
 **ADR 0090 enforced discussion as a read-only capability preset.** Its preset
 and ceiling disappear with the Discuss/Implement split. Note conversations use
@@ -167,3 +167,16 @@ notes, recently closed and display-number state. Its whole-set record, lock,
 hash-based stale merge, format versioning and durable Rewind intent remain;
 directive activity append and pruning are replaced by note lifecycle
 reconciliation.
+
+**Old-data compatibility was initially retained, then removed.** The first notes
+implementation backed up and converted format-1 stores, kept activity as frozen
+history, exempted migrated archives from expiry, folded and excluded old
+directive turns, and substituted the implementation preset for saved Discuss.
+No old-format stores existed in the user's installation. The user chose the
+clean current design without these readers or migration steps; old conversations
+remain resumable with their directive turns treated as ordinary turns instead.
+
+**Restoration originally restarted taken-note watching automatically.** The user
+required a fresh invitation after restart instead of unasked background work on
+file visit. Watch activation is now session-local while the taken state persists;
+retaking or setting the dial resumes it without an interrupting visit prompt.

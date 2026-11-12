@@ -21,7 +21,7 @@
 (require 'mevedel-side-conversation)
 (require 'mevedel-report)
 (require 'mevedel-journal-jobs)
-(require 'mevedel-directive-frame)
+(require 'mevedel-note-frame)
 (require 'mevedel-collaboration-share)
 (require 'mevedel-subscription-usage)
 (require 'mevedel-artifacts-list)
@@ -565,11 +565,11 @@ independently of the product's primitive change hooks."
         (should (equal (nreverse calls) '(grant keep))))))
   :doc "note frame prefixed close works in normal and insert state"
   (mevedel-evil-test--buffer
-    (mevedel-directive-frame-mode 1)
+    (mevedel-note-frame-mode 1)
     (dolist (state '(normal insert))
       (evil-change-state state)
       (let (calls)
-        (cl-letf (((symbol-function 'mevedel-directive-frame-close)
+        (cl-letf (((symbol-function 'mevedel-note-frame-close)
                    (lambda () (interactive) (push 'close calls))))
           (mevedel-evil-test--keys "C-c C-z")
           (should (equal (nreverse calls) '(close)))))))

@@ -316,7 +316,8 @@ keeps it as your own note, so later reviews cannot retract it.
 when asked, **Watching** flags likely mistakes around recent edits at your
 pause, and **Active** also offers ideas near a known goal (a taken note or a
 nearby authored note). Active is the default. Taken notes are watched at every
-level, including after their source notes are restored on a later visit.
+level while their watch is active. After a restart, restored taken notes stay
+taken but show **paused** until you take them again or set the workspace dial.
 Explicit review and guidance requests are not limited by the automatic dial.
 
 `M-x mevedel-notes-list` lists the whole workspace, including unopened files,
@@ -354,7 +355,7 @@ notes marked exempt from expiry do not count against these limits.
 
 Notes use the workspace instruction store, not a session's private state, and
 appear when their source file is opened, without starting a session. Restored
-taken notes resume Buddy tracking; other restored notes do not start Buddy.
+taken notes remain paused; restoring notes does not start Buddy.
 The file-visit hook discovers local stores and restores remembered notes without
 remote I/O. A small local index (`$XDG_STATE_HOME/mevedel/remote-notes.el`, or
 `~/.local/state/mevedel/remote-notes.el`) remembers only remote workspace roots
@@ -371,23 +372,16 @@ and saves the note. If the project's `.gitignore` does not cover `.mevedel/`,
 the command tells you; it never changes your ignore policy. Outside a project,
 an existing workspace state directory still saves notes. Otherwise notes stay
 in memory, and a one-time message says they are not saved there.
-The store and exports now use instruction format 2; a format-1 installation
-refuses them without clearing its live instructions or overwriting the file.
-On first opening an existing format-1 workspace store, this version copies its
-original bytes to `.mevedel/instructions.el.format-1.bak`, then converts its
-references and directives to notes. Commentary, requests, tags and identities
-are kept; subdirective requests are appended to the parent's text. Display
-numbers are retained where possible, and numeric `@ref:N` mentions also resolve
-to notes. Session files and old exports are not rewritten or automatically
-imported. Unsupported formats remain refused.
+The store and exports use instruction format 2. There is no conversion of old
+reference/directive data: unsupported stores and exports are refused, and old
+per-session instruction snapshots are ignored on resume, not imported or deleted.
+Old saved sessions still resume; their former directive turns appear as ordinary
+turns and participate in ordinary conversation context.
 
-Notes with past directive activity offer **history** in their modified-key menu
-or `M-x mevedel-note-history`. This opens the existing inspector with mutations
-disabled; the old history is not a live conversation. Archived directives enter
-recently closed with reason `archived`, exempt from both retention limits.
-Conversion never overwrites a different existing backup: resolve that conflict
-before retrying the workspace operation. A matching backup allows an interrupted
-conversion to resume safely.
+The note conversation frame uses `mevedel-note-frame-width`,
+`mevedel-note-frame-height`, `mevedel-note-frame-min-height` and
+`mevedel-note-frame-border-width`. The former directive-named modules, symbols
+and options have no aliases; update any personal configuration to the note names.
 
 ### Overlays
 
@@ -777,7 +771,6 @@ match open notes only. An empty or malformed query matches nothing.
 | Command                            | Command Description                                                          |
 |------------------------------------|------------------------------------------------------------------------------|
 | `mevedel-note-send`               | Send or reopen a note's isolated conversation.                               |
-| `mevedel-note-history`            | Inspect frozen directive history on a migrated note, read-only.              |
 | `mevedel-diff-apply-buffer`        | Apply the diff in the patch buffer with overlay preservation.                |
 | `mevedel-clear-patch-buffer`       | Clear the contents of the patch buffer for the current workspace.            |
 

@@ -6,7 +6,7 @@
 ;;
 ;; This core owns containment and tree queries, tag/context semantics,
 ;; navigation, and prompt assembly.  `mevedel-instruction-registry' owns
-;; workspace buckets, IDs, and links; `mevedel-directive-source' owns durable
+;; workspace buckets, IDs, and links; `mevedel-note-source' owns durable
 ;; record/presentation mutation; `mevedel-overlay-ui' owns actions and
 ;; rendering.
 
@@ -15,7 +15,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 
-(require 'mevedel-directive-source)
+(require 'mevedel-note-source)
 (require 'mevedel-instruction-registry)
 (require 'mevedel-utilities)
 
@@ -34,14 +34,14 @@
 (autoload 'mevedel--replace-patch-buffer "mevedel-chat")
 (defvar mevedel--view-buffer)
 
-;; `mevedel-directive-source'
+;; `mevedel-note-source'
 (declare-function mevedel--delete-instruction
-                  "mevedel-directive-source"
+                  "mevedel-note-source"
                   (instruction &optional buffer))
 (declare-function mevedel--instruction-anchor-for-instruction
-                  "mevedel-directive-source" (instruction))
+                  "mevedel-note-source" (instruction))
 (declare-function mevedel--instruction-persisted-properties
-                  "mevedel-directive-source" (instruction))
+                  "mevedel-note-source" (instruction))
 ;; `mevedel-instruction-registry'
 (declare-function mevedel--instruction-activate-buffer
                   "mevedel-instruction-registry" (&optional buffer))

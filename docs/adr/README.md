@@ -135,9 +135,9 @@ to the decision bearing that ID.
 | 0103 | Spawn remote Bash on a private channel | [ADR 0103](0103-spawn-remote-bash-on-a-private-channel.md) |
 | 0104 | Keep resource addresses closed and capability-neutral | [ADR 0104](0104-keep-resource-addresses-closed-and-capability-neutral.md) |
 | 0105 | Cockpit Surfaces Follow Three Archetypes | [ADR 0105](0105-cockpit-surfaces-follow-three-archetypes.md) |
-| 0106 | The Directive Frame Is A Child Frame, Not An Overlay | [ADR 0106](0106-directive-frame-is-a-child-frame.md) |
+| 0106 | The Note Frame Is A Child Frame, Not An Overlay | [ADR 0106](0106-directive-frame-is-a-child-frame.md) |
 | 0107 | Non-Owner Buffers Follow Published State | [ADR 0107](0107-non-owner-buffers-follow-published-state.md) |
-| 0108 | Buddy remarks are workspace notes | [ADR 0108](0108-buddy-notes-are-not-instructions.md) |
+| 0108 | Buddy remarks are workspace notes | [ADR 0108](0108-buddy-remarks-are-workspace-notes.md) |
 | 0109 | Edit patch changes side by side | [ADR 0109](0109-edit-patch-changes-side-by-side.md) |
 | 0110 | Request config lives in the sidecar, not Org properties | [ADR 0110](0110-request-config-lives-in-the-sidecar-not-org-properties.md) |
 | 0111 | Run programmatic tool calls in a closed machine | [ADR 0111](0111-run-programmatic-tool-calls-in-a-closed-machine.md) |
@@ -197,6 +197,6 @@ to the decision bearing that ID.
   ADR 0091's objection to independent conversation sessions.
 
 - [ADR 0132: Notes replace references, directives and Buddy notes](0132-notes-replace-references-directives-and-buddy-notes.md)
-  supersedes ADRs 0087, 0088 and 0090's live directive workflow, complements
+  supersedes ADRs 0087–0091's live directive workflow, complements
   ADR 0108's Buddy ownership and narrows ADR 0130's record scope. Original
   records and the ADR 0088 history destination remain available above.

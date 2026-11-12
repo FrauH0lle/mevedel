@@ -1,4 +1,4 @@
-;;; test-mevedel-directive-source-replacement.el --- Command replacement tests -*- lexical-binding: t; -*-
+;;; test-mevedel-note-source-replacement.el --- Command replacement tests -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 
@@ -8,7 +8,7 @@
 
 (require 'delsel)
 (require 'rect)
-(require 'mevedel-directive-source)
+(require 'mevedel-note-source)
 (require 'mevedel-instruction-undo)
 (require 'mevedel-overlays)
 (require 'mevedel-notes)
@@ -808,5 +808,5 @@
       (should (equal "2456" (buffer-substring-no-properties
                               (overlay-start overlay) (overlay-end overlay)))))))
 
-(provide 'test-mevedel-directive-source-replacement)
-;;; test-mevedel-directive-source-replacement.el ends here
+(provide 'test-mevedel-note-source-replacement)
+;;; test-mevedel-note-source-replacement.el ends here

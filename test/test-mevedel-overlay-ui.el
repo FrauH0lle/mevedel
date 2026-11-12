@@ -7,7 +7,7 @@
 ;;; Code:
 
 (require 'mevedel-overlay-ui)
-(require 'mevedel-directive-source)
+(require 'mevedel-note-source)
 (require 'mevedel-overlays)
 (require 'mevedel-notes)
 (require 'mevedel-instruction-registry)

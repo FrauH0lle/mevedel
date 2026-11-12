@@ -146,7 +146,7 @@
       (should (eq view (window-buffer (selected-window))))
       (if (display-graphic-p)
           (progn
-            (should (eq (selected-frame) mevedel-directive-frame--frame))
+            (should (eq (selected-frame) mevedel-note-frame--frame))
             (should (eq (frame-parent (selected-frame))
                         (window-frame (get-buffer-window source t)))))
         (should (eq 'right (window-parameter (selected-window) 'window-side))))
@@ -849,18 +849,18 @@
             (mevedel-view-test--insert-data old-data "Prior question\n\n" nil)
             (mevedel-view-test--insert-data old-data "Prior answer\n" 'response)
             (with-current-buffer old-view (mevedel-view--full-rerender))
-            (mevedel-directive-frame-display prior old-view)
-            (let* ((frame mevedel-directive-frame--frame)
+            (mevedel-note-frame-display prior old-view)
+            (let* ((frame mevedel-note-frame--frame)
                    (view (mevedel-note-send (mevedel-note-create "New note question"))))
               (should (frame-live-p frame))
-              (should (eq frame mevedel-directive-frame--frame))
+              (should (eq frame mevedel-note-frame--frame))
               (mevedel-note-conversation-test--answer (car sent) "Visible note answer")
               (with-current-buffer view
                 (goto-char (point-min))
                 (should (search-forward "Visible note answer" nil t))
                 (should-not (invisible-p (1- (point)))))))
-        (when (frame-live-p mevedel-directive-frame--frame)
-          (mevedel-directive-frame-close)))))))
+        (when (frame-live-p mevedel-note-frame--frame)
+          (mevedel-note-frame-close)))))))
 
 (mevedel-deftest mevedel-preset-apply/note-identity
   (:quiet t)

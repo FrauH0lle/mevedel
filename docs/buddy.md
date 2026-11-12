@@ -46,8 +46,11 @@ retires earlier completion feedback.
 **Drop** (`mevedel-note-drop`, or `T` again in the list) returns the note to
 unsent, retaining its conversation and source code. Sending a taken note makes
 it sent. Dropping, sending or closing ends that note's invitation; ordinary
-dial-based reviews may still run. Restoring taken source notes after a restart
-resumes their tracking without reading the dial. Unknown remote files remain
+dial-based reviews may still run. After a restart, restored taken notes remain
+taken but show **paused**. Restoration neither starts Buddy nor reads the saved
+dial. Taking the note again resumes its watch; setting the workspace dial resumes
+its takes, including files visited later, for this Emacs session. There is no
+prompt on visit. Unknown remote files remain
 unclaimed on visit; explicit Buddy activation uses normal workspace detection.
 
 ## Feeding a session to Buddy
@@ -183,7 +186,7 @@ a memory update through the ordinary workflow. Buddy's passive request has no
 memory-saving policy.
 
 Buddy uses the ordinary note record and presentation rather than a separate
-annotation system. See [ADR 0108](adr/0108-buddy-notes-are-not-instructions.md)
+annotation system. See [ADR 0108](adr/0108-buddy-remarks-are-workspace-notes.md)
 for the change from ephemeral annotations to workspace notes.
 
 ## What a review looks at
@@ -329,7 +332,7 @@ are not registered as general tools and do not use the ordinary mutation pipelin
 A response without another tool call ends the review; there is no end tool or
 forced tool choice. Buddy has no auto-fix tool: code edits use the normal patch
 and permission workflow. The port's rationale is recorded in
-[ADR 0108](adr/0108-buddy-notes-are-not-instructions.md#decision-history).
+[ADR 0108](adr/0108-buddy-remarks-are-workspace-notes.md#decision-history).
 
 ## Configuration
 

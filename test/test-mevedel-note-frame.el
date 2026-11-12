@@ -1,4 +1,4 @@
-;;; test-mevedel-directive-frame.el --- Note frame tests -*- lexical-binding: t -*-
+;;; test-mevedel-note-frame.el --- Note frame tests -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
@@ -16,7 +16,7 @@
 (require 'mevedel-agent-conversation)
 (require 'mevedel-agents)
 (require 'mevedel-chat)
-(require 'mevedel-directive-frame)
+(require 'mevedel-note-frame)
 (require 'mevedel-file-state)
 (require 'mevedel-goal)
 (require 'mevedel-hooks)
@@ -48,24 +48,24 @@
 ;; Bound by the session layer at runtime; the view fixture renders without it.
 (defvar mevedel-session--read-only-mode nil)
 
-(defun mevedel-directive-frame-test--reset ()
+(defun mevedel-note-frame-test--reset ()
   "Clear module state so no test leaks a frame."
   ;; Only ever delete a real child frame.  A test may point the variable at
   ;; the initial frame to exercise a branch, and deleting that fails.
-  (when (and (frame-live-p mevedel-directive-frame--frame)
-             (frame-parent mevedel-directive-frame--frame))
-    (delete-frame mevedel-directive-frame--frame))
-  (when (markerp mevedel-directive-frame--origin)
-    (set-marker mevedel-directive-frame--origin nil))
-  (mevedel-directive-frame--unfollow)
-  (setq mevedel-directive-frame--pending-restore nil
-        mevedel-directive-frame--frame nil
-        mevedel-directive-frame--view-buffer nil
-        mevedel-directive-frame--directive-id nil
-        mevedel-directive-frame--origin nil
-        mevedel-directive-frame--origin-window nil))
+  (when (and (frame-live-p mevedel-note-frame--frame)
+             (frame-parent mevedel-note-frame--frame))
+    (delete-frame mevedel-note-frame--frame))
+  (when (markerp mevedel-note-frame--origin)
+    (set-marker mevedel-note-frame--origin nil))
+  (mevedel-note-frame--unfollow)
+  (setq mevedel-note-frame--pending-restore nil
+        mevedel-note-frame--frame nil
+        mevedel-note-frame--view-buffer nil
+        mevedel-note-frame--note-id nil
+        mevedel-note-frame--origin nil
+        mevedel-note-frame--origin-window nil))
 
-(defun mevedel-directive-frame-test--note (start end &optional id)
+(defun mevedel-note-frame-test--note (start end &optional id)
   "Return a note overlay from START to END in the current buffer.
 ID is the note number, 1 by default."
   (let ((overlay (make-overlay start end)))
@@ -74,13 +74,13 @@ ID is the note number, 1 by default."
     (overlay-put overlay 'mevedel-id (or id 1))
     overlay))
 
-(defmacro mevedel-directive-frame-test--with-view (&rest body)
+(defmacro mevedel-note-frame-test--with-view (&rest body)
   "Run BODY with `view-buf' holding two rendered turns.
 BODY runs inside the view buffer."
   (declare (indent 0) (debug t))
   `(mevedel-view-test--with-buffers
      (let* ((root (file-name-as-directory
-                   (make-temp-file "mevedel-directive-frame-" t)))
+                   (make-temp-file "mevedel-note-frame-" t)))
             (workspace (mevedel-workspace--create
                         :type 'file :id root :root root :name "frame"
                         :file-cache (mevedel-test-file-cache-create)))
@@ -100,52 +100,52 @@ BODY runs inside the view buffer."
                (mevedel-view--full-rerender)
               (should (> (length (mevedel-view--rendered-turn-starts)) 1))
                ,@body))
-         (mevedel-directive-frame-test--reset)
+         (mevedel-note-frame-test--reset)
          (delete-directory root t)))))
 
-(mevedel-deftest mevedel-directive-frame--available-p
-  (:doc "`mevedel-directive-frame--available-p' gates on a usable display")
+(mevedel-deftest mevedel-note-frame--available-p
+  (:doc "`mevedel-note-frame--available-p' gates on a usable display")
   ,test
   (test)
   :doc "reports unavailable in batch, where `make-frame' has no terminal"
   (let ((noninteractive t))
-    (should-not (mevedel-directive-frame--available-p)))
+    (should-not (mevedel-note-frame--available-p)))
 
   :doc "reports available in an interactive session, graphical or not"
   (let ((noninteractive nil))
-    (should (mevedel-directive-frame--available-p))))
+    (should (mevedel-note-frame--available-p))))
 
-(mevedel-deftest mevedel-directive-frame-display
-  (:doc "`mevedel-directive-frame-display' creates and reuses note frames")
+(mevedel-deftest mevedel-note-frame-display
+  (:doc "`mevedel-note-frame-display' creates and reuses note frames")
   ,test
   (test)
   :doc "reuses a live frame already showing the view instead of rebuilding it"
-  (mevedel-directive-frame-test--with-view
+  (mevedel-note-frame-test--with-view
     (let ((view (current-buffer))
           (frames (length (frame-list)))
           (source (generate-new-buffer " *test-source*")))
       (unwind-protect
           (let ((note (with-current-buffer source
                         (insert "note body\n")
-                        (mevedel-directive-frame-test--note
+                        (mevedel-note-frame-test--note
                          (point-min) (point-max) 3))))
-            (setq mevedel-directive-frame--frame (selected-frame)
-                  mevedel-directive-frame--view-buffer view
-                  mevedel-directive-frame--directive-id "Note 3")
-            (cl-letf (((symbol-function 'mevedel-directive-frame--available-p)
+            (setq mevedel-note-frame--frame (selected-frame)
+                  mevedel-note-frame--view-buffer view
+                  mevedel-note-frame--note-id "Note 3")
+            (cl-letf (((symbol-function 'mevedel-note-frame--available-p)
                        (lambda () t))
                       ;; Terminal note frames fall back to a side window.
                       ((symbol-function 'display-graphic-p) (lambda (&rest _) t))
-                      ((symbol-function 'mevedel-directive-frame--make)
+                      ((symbol-function 'mevedel-note-frame--make)
                        (lambda (&rest _)
                          (error "Rebuilt a frame that was already showing the view"))))
               (should (eq (selected-frame)
-                          (mevedel-directive-frame-display note view))))
+                          (mevedel-note-frame-display note view))))
             (should (= frames (length (frame-list)))))
         (kill-buffer source))))
 
   :doc "same-view reuse retargets identity, origin and teardown handoff"
-  (mevedel-directive-frame-test--with-view
+  (mevedel-note-frame-test--with-view
     (let* ((view (current-buffer))
            (file (file-name-concat root "source.el"))
            (source nil)
@@ -156,46 +156,46 @@ BODY runs inside the view buffer."
             (write-region "alpha\nbeta\n" nil file nil 'silent)
             (setq source (find-file-noselect file))
             (with-current-buffer source
-              (setq note-a (mevedel-directive-frame-test--note 1 6 1)
-                    note-b (mevedel-directive-frame-test--note 7 11 2)))
+              (setq note-a (mevedel-note-frame-test--note 1 6 1)
+                    note-b (mevedel-note-frame-test--note 7 11 2)))
             (save-window-excursion
               (set-window-buffer (selected-window) source)
               (cl-letf (((symbol-function
-                          'mevedel-directive-frame--available-p)
+                          'mevedel-note-frame--available-p)
                          (lambda () t))
                         ((symbol-function 'display-graphic-p)
                          (lambda (&rest _) t))
-                        ((symbol-function 'mevedel-directive-frame--anchor)
+                        ((symbol-function 'mevedel-note-frame--anchor)
                          (lambda (&rest _) '(10 . 20)))
-                        ((symbol-function 'mevedel-directive-frame--make)
+                        ((symbol-function 'mevedel-note-frame--make)
                          (lambda (&rest _)
                            (cl-incf makes)
                            (selected-frame)))
-                        ((symbol-function 'mevedel-directive-frame--size)
+                        ((symbol-function 'mevedel-note-frame--size)
                          (lambda (&rest _) '(100 . 50)))
                         ((symbol-function 'make-frame-visible) #'ignore)
                         ((symbol-function 'select-frame-set-input-focus)
                          #'ignore)
                         ((symbol-function 'set-frame-position) #'ignore)
                         ((symbol-function 'set-frame-size) #'ignore))
-                (mevedel-directive-frame-display note-a view)
-                (mevedel-directive-frame-display note-b view)
+                (mevedel-note-frame-display note-a view)
+                (mevedel-note-frame-display note-b view)
                 (should (= 2 makes))
-                (should (equal "Note 2" mevedel-directive-frame--directive-id))
+                (should (equal "Note 2" mevedel-note-frame--note-id))
                 (should (eq note-b
-                            mevedel-directive-frame--directive))
+                            mevedel-note-frame--note))
                 (should (= (overlay-start note-b)
                            (marker-position
-                            mevedel-directive-frame--origin)))
+                            mevedel-note-frame--origin)))
                 (mevedel-test--with-captured-messages nil
-                  (mevedel-directive-frame--on-delete (selected-frame)))
+                  (mevedel-note-frame--on-delete (selected-frame)))
                 (should
                  (= (marker-position
-                     (plist-get mevedel-directive-frame--pending-restore
+                     (plist-get mevedel-note-frame--pending-restore
                                 :origin))
                     (overlay-start note-b)))
                 (with-current-buffer source
-                  (mevedel-directive-frame--after-delete)))))
+                  (mevedel-note-frame--after-delete)))))
         (when (buffer-live-p source)
           (with-current-buffer source
             (setq-local kill-buffer-hook nil)
@@ -203,27 +203,27 @@ BODY runs inside the view buffer."
           (kill-buffer source))
         (when (file-exists-p file) (delete-file file))))))
 
-(mevedel-deftest mevedel-directive-frame--source-window
-  (:doc "`mevedel-directive-frame--source-window' never returns the frame itself")
+(mevedel-deftest mevedel-note-frame--source-window
+  (:doc "`mevedel-note-frame--source-window' never returns the frame itself")
   ,test
   (test)
   :doc "returns the window showing the note's source buffer"
   (let* ((buffer (generate-new-buffer " *test-source*"))
          (note (with-current-buffer buffer
                  (insert "note body\n")
-                 (mevedel-directive-frame-test--note (point-min) (point-max)))))
+                 (mevedel-note-frame-test--note (point-min) (point-max)))))
     (unwind-protect
         (save-window-excursion
           (set-window-buffer (selected-window) buffer)
           (should (eq (selected-window)
-                      (mevedel-directive-frame--source-window note))))
+                      (mevedel-note-frame--source-window note))))
       (kill-buffer buffer)))
 
   :doc "prefers the selected window when the buffer is on screen twice"
   (let* ((buffer (generate-new-buffer " *test-source*"))
          (note (with-current-buffer buffer
                  (insert "note body\n")
-                 (mevedel-directive-frame-test--note (point-min) (point-max)))))
+                 (mevedel-note-frame-test--note (point-min) (point-max)))))
     (unwind-protect
         (save-window-excursion
           (delete-other-windows)
@@ -233,55 +233,55 @@ BODY runs inside the view buffer."
             (set-window-buffer other buffer)
             (select-window other)
             (should (eq other
-                        (mevedel-directive-frame--source-window note)))
+                        (mevedel-note-frame--source-window note)))
             (select-window first)
             (should (eq first
-                        (mevedel-directive-frame--source-window note)))))
+                        (mevedel-note-frame--source-window note)))))
       (kill-buffer buffer)
-      (mevedel-directive-frame-test--reset)))
+      (mevedel-note-frame-test--reset)))
 
   :doc "excludes windows inside the note frame, which would make it \
 its own parent"
   (let* ((buffer (generate-new-buffer " *test-source*"))
          (note (with-current-buffer buffer
                  (insert "note body\n")
-                 (mevedel-directive-frame-test--note (point-min) (point-max)))))
+                 (mevedel-note-frame-test--note (point-min) (point-max)))))
     (unwind-protect
         (save-window-excursion
           (set-window-buffer (selected-window) buffer)
-          (let ((mevedel-directive-frame--frame (selected-frame)))
+          (let ((mevedel-note-frame--frame (selected-frame)))
             (should-not
-             (mevedel-directive-frame--source-window note))))
+             (mevedel-note-frame--source-window note))))
       (kill-buffer buffer)
-      (mevedel-directive-frame-test--reset))))
+      (mevedel-note-frame-test--reset))))
 
-(mevedel-deftest mevedel-directive-frame--place
-  (:doc "`mevedel-directive-frame--place' keeps the directive readable")
+(mevedel-deftest mevedel-note-frame--place
+  (:doc "`mevedel-note-frame--place' keeps the note readable")
   ,test
   (test)
-  :doc "opens below the directive's last line when it fits"
+  :doc "opens below the note's last line when it fits"
   (should (equal '(300 . 298)
-                 (mevedel-directive-frame--place
+                 (mevedel-note-frame--place
                   300 100 280 18 1200 360 2000 1060)))
   :doc "clamps x so the frame stays inside the parent's right edge"
-  (should (= 800 (car (mevedel-directive-frame--place
+  (should (= 800 (car (mevedel-note-frame--place
                        1500 100 280 18 1200 360 2000 1060))))
-  :doc "flips above the first line, not the last, so the directive stays visible"
-  (let ((y (cdr (mevedel-directive-frame--place
+  :doc "flips above the first line, not the last, so the note stays visible"
+  (let ((y (cdr (mevedel-note-frame--place
                  300 520 880 18 1200 360 2000 1060))))
     (should (= 160 y))
     (should (<= (+ y 360) 520)))
-  :doc "sits flush above a directive when fitted shorter than the maximum"
-  (should (= 376 (cdr (mevedel-directive-frame--place
+  :doc "sits flush above a note when fitted shorter than the maximum"
+  (should (= 376 (cdr (mevedel-note-frame--place
                        300 520 940 18 1200 144 2000 1060))))
   :doc "takes the larger side, clamped, only when neither side has room"
-  (should (= 660 (cdr (mevedel-directive-frame--place
+  (should (= 660 (cdr (mevedel-note-frame--place
                        300 200 700 18 1200 400 2000 1060))))
-  (should (= 0 (cdr (mevedel-directive-frame--place
+  (should (= 0 (cdr (mevedel-note-frame--place
                      300 500 900 18 1200 600 2000 1060)))))
 
-(mevedel-deftest mevedel-directive-frame--fit-height
-  (:doc "`mevedel-directive-frame--fit-height' never resizes width")
+(mevedel-deftest mevedel-note-frame--fit-height
+  (:doc "`mevedel-note-frame--fit-height' never resizes width")
   ,test
   (test)
   :doc "fits vertically only, so a long line cannot outgrow the parent frame"
@@ -289,9 +289,9 @@ its own parent"
     (unwind-protect
         (cl-letf (((symbol-function 'fit-frame-to-buffer)
                    (lambda (&rest args) (setq captured args))))
-          (let ((mevedel-directive-frame--frame (selected-frame)))
-            (mevedel-directive-frame--fit-height)))
-      (mevedel-directive-frame-test--reset))
+          (let ((mevedel-note-frame--frame (selected-frame)))
+            (mevedel-note-frame--fit-height)))
+      (mevedel-note-frame-test--reset))
     (should captured)
     (should (eq 'vertically (nth 5 captured))))
 
@@ -299,65 +299,65 @@ its own parent"
   (let (called)
     (cl-letf (((symbol-function 'fit-frame-to-buffer)
                (lambda (&rest _) (setq called t))))
-      (let ((mevedel-directive-frame--frame nil))
-        (mevedel-directive-frame--fit-height)))
+      (let ((mevedel-note-frame--frame nil))
+        (mevedel-note-frame--fit-height)))
     (should-not called)))
 
-(mevedel-deftest mevedel-directive-frame--follow-setup
-  (:doc "`mevedel-directive-frame--follow-setup' tracks the source buffer")
+(mevedel-deftest mevedel-note-frame--follow-setup
+  (:doc "`mevedel-note-frame--follow-setup' tracks the source buffer")
   ,test
   (test)
   :doc "installs local follow hooks and removes them on teardown"
   (let* ((buffer (generate-new-buffer " *test-source*"))
          (note (with-current-buffer buffer
                  (insert "note body\n")
-                 (mevedel-directive-frame-test--note (point-min) (point-max)))))
+                 (mevedel-note-frame-test--note (point-min) (point-max)))))
     (unwind-protect
         (progn
-          (mevedel-directive-frame--follow-setup note)
+          (mevedel-note-frame--follow-setup note)
           (with-current-buffer buffer
-            (should (memq #'mevedel-directive-frame--follow
+            (should (memq #'mevedel-note-frame--follow
                           window-scroll-functions))
-            (should (memq #'mevedel-directive-frame--follow
+            (should (memq #'mevedel-note-frame--follow
                           window-configuration-change-hook)))
-          (should (eq note mevedel-directive-frame--directive))
-          (mevedel-directive-frame--unfollow)
+          (should (eq note mevedel-note-frame--note))
+          (mevedel-note-frame--unfollow)
           (with-current-buffer buffer
-            (should-not (memq #'mevedel-directive-frame--follow
+            (should-not (memq #'mevedel-note-frame--follow
                               window-scroll-functions))
-            (should-not (memq #'mevedel-directive-frame--follow
+            (should-not (memq #'mevedel-note-frame--follow
                               window-configuration-change-hook)))
-          (should-not mevedel-directive-frame--directive)
-          (should-not mevedel-directive-frame--source-buffer))
+          (should-not mevedel-note-frame--note)
+          (should-not mevedel-note-frame--source-buffer))
       (kill-buffer buffer)
-      (mevedel-directive-frame-test--reset))))
+      (mevedel-note-frame-test--reset))))
 
-(mevedel-deftest mevedel-directive-frame--header
-  (:doc "`mevedel-directive-frame--header' leads with directive identity")
+(mevedel-deftest mevedel-note-frame--header
+  (:doc "`mevedel-note-frame--header' leads with note identity")
   ,test
   (test)
-  :doc "shortens the directive id and keeps live request state"
-  (mevedel-directive-frame-test--with-view
-    (setq mevedel-directive-frame--directive-id "f041faf5-1234-5678")
+  :doc "shortens the note id and keeps live request state"
+  (mevedel-note-frame-test--with-view
+    (setq mevedel-note-frame--note-id "f041faf5-1234-5678")
     (let ((header (substring-no-properties
-                   (mevedel-directive-frame--header))))
+                   (mevedel-note-frame--header))))
       (should (string-search "f041faf5" header))
       (should-not (string-search "f041faf5-1234" header))
       (should (string-search "tool" header)))))
 
-(mevedel-deftest mevedel-directive-frame--display-in-parent
-  (:doc "`mevedel-directive-frame--display-in-parent' keeps pop-ups out of the frame")
+(mevedel-deftest mevedel-note-frame--display-in-parent
+  (:doc "`mevedel-note-frame--display-in-parent' keeps pop-ups out of the frame")
   ,test
   (test)
-  :doc "declines when no directive frame is live, so display falls through"
-  (let ((mevedel-directive-frame--frame nil))
+  :doc "declines when no note frame is live, so display falls through"
+  (let ((mevedel-note-frame--frame nil))
     (should-not
-     (mevedel-directive-frame--display-in-parent (current-buffer) nil)))
+     (mevedel-note-frame--display-in-parent (current-buffer) nil)))
 
   :doc "declines for a frame with no parent rather than displaying into it"
-  (let ((mevedel-directive-frame--frame (selected-frame)))
+  (let ((mevedel-note-frame--frame (selected-frame)))
     (should-not
-     (mevedel-directive-frame--display-in-parent (current-buffer) nil)))
+     (mevedel-note-frame--display-in-parent (current-buffer) nil)))
 
   :doc "re-wraps the alist as an action, which a bare alist would break"
   (let ((buffer (generate-new-buffer " *test-popped*")))
@@ -365,66 +365,66 @@ its own parent"
         (save-window-excursion
           (cl-letf (((symbol-function 'frame-parent)
                      (lambda (&rest _) (selected-frame))))
-            (let ((mevedel-directive-frame--frame (selected-frame)))
+            (let ((mevedel-note-frame--frame (selected-frame)))
               ;; The alist `pop-to-buffer' passes: as a bare second argument
               ;; display-buffer reads (inhibit-same-window . t) as an action
               ;; function and signals wrong-type-argument.
               (should (window-live-p
-                       (mevedel-directive-frame--display-in-parent
+                       (mevedel-note-frame--display-in-parent
                         buffer '((inhibit-same-window . t))))))))
       (kill-buffer buffer)
-      (mevedel-directive-frame-test--reset))))
+      (mevedel-note-frame-test--reset))))
 
-(mevedel-deftest mevedel-directive-frame-mode
-  (:doc "`mevedel-directive-frame-mode' redirects buffer display while on")
+(mevedel-deftest mevedel-note-frame-mode
+  (:doc "`mevedel-note-frame-mode' redirects buffer display while on")
   ,test
   (test)
   :doc "installs and removes the buffer-local display override"
-  (mevedel-directive-frame-test--with-view
-    (mevedel-directive-frame-mode 1)
+  (mevedel-note-frame-test--with-view
+    (mevedel-note-frame-mode 1)
     (should (local-variable-p 'display-buffer-overriding-action))
-    (should (eq 'mevedel-directive-frame--display-in-parent
+    (should (eq 'mevedel-note-frame--display-in-parent
                 (car display-buffer-overriding-action)))
-    (mevedel-directive-frame-mode -1)
+    (mevedel-note-frame-mode -1)
     (should-not (local-variable-p 'display-buffer-overriding-action))))
 
-(mevedel-deftest mevedel-directive-frame--on-delete
-  (:doc "`mevedel-directive-frame--on-delete' releases every frame resource")
+(mevedel-deftest mevedel-note-frame--on-delete
+  (:doc "`mevedel-note-frame--on-delete' releases every frame resource")
   ,test
   (test)
   :doc "clears module state for the deleted frame"
-  (mevedel-directive-frame-test--with-view
-    (setq mevedel-directive-frame--view-buffer (current-buffer)
-          mevedel-directive-frame--directive-id "Note 1"
-          mevedel-directive-frame--frame (selected-frame))
-    (mevedel-directive-frame-mode 1)
-    (mevedel-directive-frame--on-delete (selected-frame))
-    (should-not mevedel-directive-frame-mode)
-    (should-not mevedel-directive-frame--frame)
-    (should-not mevedel-directive-frame--view-buffer)
-    (should-not mevedel-directive-frame--directive-id))
+  (mevedel-note-frame-test--with-view
+    (setq mevedel-note-frame--view-buffer (current-buffer)
+          mevedel-note-frame--note-id "Note 1"
+          mevedel-note-frame--frame (selected-frame))
+    (mevedel-note-frame-mode 1)
+    (mevedel-note-frame--on-delete (selected-frame))
+    (should-not mevedel-note-frame-mode)
+    (should-not mevedel-note-frame--frame)
+    (should-not mevedel-note-frame--view-buffer)
+    (should-not mevedel-note-frame--note-id))
 
   :doc "ignores a frame that is not the note frame"
-  (mevedel-directive-frame-test--with-view
-    (setq mevedel-directive-frame--view-buffer (current-buffer)
-          mevedel-directive-frame--directive-id "Note 1"
-          mevedel-directive-frame--frame nil)
-    (mevedel-directive-frame--on-delete (selected-frame))
-    (should (equal "Note 1" mevedel-directive-frame--directive-id)))
+  (mevedel-note-frame-test--with-view
+    (setq mevedel-note-frame--view-buffer (current-buffer)
+          mevedel-note-frame--note-id "Note 1"
+          mevedel-note-frame--frame nil)
+    (mevedel-note-frame--on-delete (selected-frame))
+    (should (equal "Note 1" mevedel-note-frame--note-id)))
 
   :doc "hands focus and point to the post-deletion phase instead of restoring \
 them while the frame is still alive"
-  (mevedel-directive-frame-test--with-view
-    (setq mevedel-directive-frame--view-buffer (current-buffer)
-          mevedel-directive-frame--frame (selected-frame)
-          mevedel-directive-frame--origin-window (selected-window))
-    (mevedel-directive-frame--on-delete (selected-frame))
-    (should mevedel-directive-frame--pending-restore)
+  (mevedel-note-frame-test--with-view
+    (setq mevedel-note-frame--view-buffer (current-buffer)
+          mevedel-note-frame--frame (selected-frame)
+          mevedel-note-frame--origin-window (selected-window))
+    (mevedel-note-frame--on-delete (selected-frame))
+    (should mevedel-note-frame--pending-restore)
     (should (eq (selected-window)
-                (plist-get mevedel-directive-frame--pending-restore :window)))))
+                (plist-get mevedel-note-frame--pending-restore :window)))))
 
-(mevedel-deftest mevedel-directive-frame--after-delete
-  (:doc "`mevedel-directive-frame--after-delete' settles focus once the frame is gone")
+(mevedel-deftest mevedel-note-frame--after-delete
+  (:doc "`mevedel-note-frame--after-delete' settles focus once the frame is gone")
   ,test
   (test)
   :doc "returns point to the note and consumes the handoff"
@@ -436,22 +436,22 @@ them while the frame is still alive"
             (insert "one\ntwo\nthree\n")
             (goto-char (point-max)))
           (let ((origin (with-current-buffer buffer (copy-marker 5))))
-            (setq mevedel-directive-frame--pending-restore
+            (setq mevedel-note-frame--pending-restore
                   (list :frame (selected-frame)
                         :window (selected-window)
                         :origin origin))
-            (mevedel-directive-frame--after-delete)
-            (should-not mevedel-directive-frame--pending-restore)
+            (mevedel-note-frame--after-delete)
+            (should-not mevedel-note-frame--pending-restore)
             (should (= 5 (with-current-buffer buffer (point))))
             (should-not (marker-position origin))))
       (kill-buffer buffer)
-      (mevedel-directive-frame-test--reset)))
+      (mevedel-note-frame-test--reset)))
 
   :doc "does nothing when no deletion handed anything over"
-  (let ((mevedel-directive-frame--pending-restore nil))
-    (mevedel-directive-frame--after-delete)
-    (should-not mevedel-directive-frame--pending-restore)))
+  (let ((mevedel-note-frame--pending-restore nil))
+    (mevedel-note-frame--after-delete)
+    (should-not mevedel-note-frame--pending-restore)))
 
-(provide 'test-mevedel-directive-frame)
+(provide 'test-mevedel-note-frame)
 
-;;; test-mevedel-directive-frame.el ends here
+;;; test-mevedel-note-frame.el ends here

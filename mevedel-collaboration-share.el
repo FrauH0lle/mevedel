@@ -8,18 +8,18 @@
 
 ;;; Code:
 
-;; `mevedel-directive-frame'
+;; `mevedel-note-frame'
 (defvar mevedel--child-frame-parameters)
-(defvar mevedel-directive-frame-border-width)
+(defvar mevedel-note-frame-border-width)
 
 ;; `qrencode'
 (declare-function qrencode "ext:qrencode"
                   (s &optional mode errcorr return-raw))
 
 (defface mevedel-collaboration-share-border
-  '((t :inherit mevedel-directive-frame-border))
+  '((t :inherit mevedel-note-frame-border))
   "Border colour of the share child frame.
-The share panel borrows the directive frame\='s border so both float
+The share panel borrows the note frame\='s border so both float
 above the session with the same weight."
   :group 'mevedel)
 
@@ -182,9 +182,9 @@ occupies."
   "Present ROOM\='s bearer links and QR code on a dedicated surface.
 A centred child frame on a graphical display, an ordinary window
 otherwise."
-  ;; Cold entry point: the border face inherits the directive frame's,
+  ;; Cold entry point: the border face inherits the note frame's,
   ;; and an unrealized parent face would leave the border invisible.
-  (require 'mevedel-directive-frame)
+  (require 'mevedel-note-frame)
   (when (or mevedel-collaboration--share-frame
             (get-buffer "*mevedel share*"))
     (mevedel-collaboration-share-quit))
@@ -208,9 +208,9 @@ otherwise."
                       (minibuffer . ,(minibuffer-window parent))
                       (font . ,(frame-parameter parent 'font))
                       (internal-border-width
-                       . ,mevedel-directive-frame-border-width)
+                       . ,mevedel-note-frame-border-width)
                       (child-frame-border-width
-                       . ,mevedel-directive-frame-border-width)
+                       . ,mevedel-note-frame-border-width)
                       (width . 0) (height . 0) (visibility . nil)
                       ,@mevedel--child-frame-parameters))))
               (let ((window (frame-root-window frame)))

@@ -21,7 +21,7 @@ workspace roots remain isolated. Explicit memory-root descendants are writable
 through the native patch transaction, while `memory://journal/` exposes only
 validated, temporary, read-only evidence. Saved conversation search uses
 `history://saved`. Concrete live `history://root[/PATH]` supports Read and Grep
-over the same projected text, including unsaved turns. Scoped item and directive
+over the same projected text, including unsaved turns. Scoped item and note
 conversations use it for deliberate retrieval of parent decisions; no new scheme
 or automatic context import is needed. Bare `history://` remains Read-only
 discovery. Curated memory and journal retention are independent of it.
@@ -40,7 +40,7 @@ Standalone and sticky Plan permit ApplyPatch only when every source and
 destination is a non-bare session-owned `work://` descendant outside
 `work://shared/`. This permits durable plans and private notes while preserving
 the tree-wide workspace mutation boundary. Shared and memory writes cannot
-borrow that exception. Directive Planning remains fully read-only.
+borrow that exception. Note conversations use this same session Plan boundary.
 
 Explicit skill-origin aliases resolve to the current exact full-hash locator
 while preserving the authored alias in model-visible output. There is no
@@ -124,6 +124,11 @@ substitute for checking a settled operation's result.
 ## Decision history
 
 All revisions below refine ADR 0104's closed resolver decision.
+
+- **Ordinary note sessions (2026-11-12).** ADR 0132 replaces directive Planning
+  and its blanket patch refusal with ordinary session Plan mode. The resource
+  resolver needs no directive-specific capability branch; the session-owned
+  working-file exception remains bounded by resource ownership.
 
 - **Workspace note reads (2026-11-12).** The notes redesign lets the model
   inspect what the user marked without automatic prompt inclusion. Neither

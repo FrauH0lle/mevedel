@@ -12,7 +12,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'project)
-(require 'mevedel-directive-source)
+(require 'mevedel-note-source)
 (require 'mevedel-instruction-registry)
 (require 'mevedel-overlay-ui)
 (require 'mevedel-overlays)

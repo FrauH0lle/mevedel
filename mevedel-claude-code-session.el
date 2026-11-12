@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 ;; Connects normal session selection to the request-owned ACP runner.  Root
-;; native history is resumed; each note or shared-item turn starts an
-;; isolated native conversation from its selected prompt.  The local
+;; native history is resumed, including in note sessions; each shared-item turn
+;; starts an isolated native conversation from its selected prompt.  The local
 ;; installed agent owns those histories; session metadata stores references,
 ;; never credentials or a replay queue for tool effects.
 

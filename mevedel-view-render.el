@@ -36,9 +36,9 @@
 (declare-function mevedel-agent-invocation-transcript-status
 		  "mevedel-agents" (cl-x) t)
 
-;; `mevedel-directive-frame'
-(declare-function mevedel-directive-frame-refresh
-                  "mevedel-directive-frame" ())
+;; `mevedel-note-frame'
+(declare-function mevedel-note-frame-refresh
+                  "mevedel-note-frame" ())
 
 ;; `mevedel-execution-telemetry'
 (declare-function mevedel-execution-telemetry-sandbox-summary-class
@@ -4519,8 +4519,8 @@ the render so user toggles survive streaming ticks."
           (unless mevedel-view--agent-transcript-p
             (mevedel-view--render-agent-status)
             (mevedel-view--interaction-rebuild)
-            (when (fboundp 'mevedel-directive-frame-refresh)
-              (mevedel-directive-frame-refresh)))))))))
+            (when (fboundp 'mevedel-note-frame-refresh)
+              (mevedel-note-frame-refresh)))))))))
 
 (defvar-local mevedel-view-render--owner nil
   "Non-nil while this view has an active projection writer.")
@@ -8970,8 +8970,8 @@ with the next boundary render of the live turn."
       (mevedel-view--interaction-rebuild
        t (plist-get rendering :interaction-visits))
       (mevedel-view--ensure-request-progress live-data-buf)
-      (when (fboundp 'mevedel-directive-frame-refresh)
-        (mevedel-directive-frame-refresh)))
+      (when (fboundp 'mevedel-note-frame-refresh)
+        (mevedel-note-frame-refresh)))
     (mevedel-view--debug-log
      'full-rerender-after-render
      :last-assistant-turn-start

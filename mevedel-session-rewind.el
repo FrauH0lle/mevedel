@@ -1818,7 +1818,7 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
             (error
              (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
               'mevedel
-              (format "Rewind committed, but directives could not refresh: %s"
+              (format "Rewind committed, but notes could not refresh: %s"
                       (error-message-string err)))))
           t)
       (unless committed
@@ -2380,8 +2380,8 @@ because coverage is limited to what mevedel captured."
 This is the conversation-scope inverse of Rewind: every published head
 stays immutable, so the state a Rewind moved away from can be
 republished.  Captured working-tree files return with that state;
-uncaptured filesystem effects and workspace directive records a Rewind
-pruned do not come back."
+uncaptured filesystem effects do not come back.  Workspace notes remain
+current, rather than returning to their historical state."
   (interactive)
   (let* ((buffer (mevedel-session-rewind--command-buffer))
          (session (buffer-local-value 'mevedel--session buffer))

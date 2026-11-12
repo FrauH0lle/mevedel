@@ -21,18 +21,18 @@
 (require 'cl-lib)
 (require 'subr-x)
 
-(require 'mevedel-directive-source)
+(require 'mevedel-note-source)
 (require 'mevedel-instruction-registry)
 (require 'mevedel-overlays)
 (require 'mevedel-utilities)
 (require 'mevedel-notes-activation)
 (require 'mevedel-workspace)
 
-;; `mevedel-directive-source'
+;; `mevedel-note-source'
 (declare-function mevedel--mark-buffer-source-missing
-                  "mevedel-directive-source" (buffer))
-(declare-function mevedel--reconcile-directive-sources
-                  "mevedel-directive-source" (workspace))
+                  "mevedel-note-source" (buffer))
+(declare-function mevedel--reconcile-note-sources
+                  "mevedel-note-source" (workspace))
 ;; `mevedel-instruction-edit'
 (autoload 'mevedel-instruction-replace-buffer-contents "mevedel-instruction-edit")
 
@@ -197,7 +197,7 @@ file names are serialized relative to it; otherwise absolute names are
 used.  When INCLUDE-ORIGINAL-CONTENT is non-nil, include full buffer
 contents for position patching if the file changes before restore."
   (mevedel--instruction-activate-buffer)
-  (mevedel--reconcile-directive-sources
+  (mevedel--reconcile-note-sources
    (mevedel--instruction-buffer-workspace (current-buffer)))
   (mevedel-instruction-store-prune-closed
    (mevedel--instruction-buffer-workspace (current-buffer)))
@@ -1386,7 +1386,7 @@ installs are not recorded."
 (defun mevedel-instruction-store-flush (&optional force)
   "Write every workspace with unwritten instruction changes to its store.
 Runs after each command while changes are pending, and at exit.  While a
-minibuffer is active it waits: editing a directive request in the
+minibuffer is active it waits: editing a note in the
 minibuffer changes it on every keystroke, and the command that read it
 writes once when it returns.  FORCE writes even then, as at exit.  A
 failure is reported and the workspace

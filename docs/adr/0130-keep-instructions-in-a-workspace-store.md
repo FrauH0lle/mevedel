@@ -14,10 +14,10 @@ anchors, authorship, lifecycle, conversation links, waiting prepared changes,
 recently-closed records and display-id state live in
 `<workspace>/.mevedel/instructions.el` on the
 execution target. Sessions keep their `instructions/turn-NNNNNN.el` snapshots
-as history, plus `current.el` until the store has proven itself. Resume loads
+and `current.el` as history. Ordinary resume loads
 the store; it no longer loads or clears the workspace set from a session.
-Conversations live in their sessions, not the store. Migrated notes may retain
-frozen legacy history; there is no live directive record kind.
+Conversations live in their sessions, not the store. There is no directive record
+kind, frozen-history reader or old-data conversion.
 
 **One whole-set record, refused when stale.** The store is read and written
 through the pinned control-file programs. Writes hold a lock on
@@ -76,8 +76,8 @@ writing. An absent store is told apart from a corrupt one. An unreadable store
 is reported once and read again only at the next observation point, not after
 every command. A failed write is likewise not retried after every command: a
 workspace waits `mevedel-session-checkpoint-interval` seconds, while exit and
-session saves still try. Exports and session snapshots carry the same `:format`, so a
-candidate staged on the other machine's installation imports here. A file
+session saves still try. Exports and session snapshots carry the same `:format`, so an
+export from another installation imports here. A file
 written before they carried it imports only on the version that wrote it.
 
 **Where writes come from.** A creation is written immediately; other changes
@@ -95,15 +95,12 @@ confirmation. It is refused unless this client last observed exactly the
 store's current record, so it cannot discard instructions it never saw. An
 absent store, or an unreadable one being repaired, has nothing to lose.
 
-**Waiting for migration.** A workspace without a store whose sessions exist,
-or whose migration staged candidates, is pending. It keeps the behaviour from
-before the store: resume restores the session snapshot, sessions keep writing
-snapshots, and automatic store creation is refused with one warning.
-`mevedel-load-instructions` on a candidate creates the store. Pending never
-starts empty. If it did, the next session save would overwrite that session's
-snapshot, the migration's only input for it, with an empty one. When another
-client creates the store while this one is pending, this client exports its
-instructions to `.mevedel/instruction-migration/` and then loads the store.
+**No old-data migration.** Resume ignores old per-session instruction snapshots.
+Their presence does not block creation of a fresh current store. Old snapshots
+are neither imported nor deleted; format-1 workspace stores are unsupported,
+not converted or backed up by the loader. The standalone session migration
+script has no instruction-store conversion step. Current-format explicit
+imports retain their ordinary validation and replacement confirmation.
 
 **Rewind.** Rewind records an intent in the store before its first
 irreversible step: session, turn count before, surviving turn count, and first
@@ -121,7 +118,7 @@ cannot be settled: otherwise a new turn would reuse a discarded turn number.
 An unreadable store is such a failure, never "no intent". After commit,
 rewinding a note conversation to zero surviving turns returns sent notes to
 unsent and clears prepared changes from discarded turns. Text, anchors,
-conversation links and frozen directive history remain. Source presentations
+conversation links remain. Source presentations
 come from the store rather than the historical snapshot. Until
 then Rewind holds back writes to its own workspace's store only. Changes in
 that workspace are still recorded and written afterwards; other workspaces
@@ -162,11 +159,8 @@ The intent distinguishes committed Rewind from interruption before commit.
 - Rewind does not roll back notes created by other sessions.
 - A Rewind whose session is deleted before its intent settles leaves that
   intent unresolved in the store.
-- Existing instructions move once, through the standalone
-  [session migration](../sessions.md#workspace-instructions), keyed by UUID.
-  Legacy ambiguity stages the workspace rather than choosing silently. The
-  sessions are never changed. An existing format-1 store is converted once,
-  after an original-byte backup, as described in ADR 0132.
+- Old saved sessions remain resumable as conversations, not as sources of
+  workspace notes. No compatibility path reconstructs their former directives.
 
 ## Decision history
 
@@ -181,8 +175,18 @@ this motivated the durable intent and post-commit settlement.
 
 ADR 0132 removes live directives and their append rule. Note conversations live
 in sessions; the store retains only their links, current note state and waiting
-changes, plus frozen migrated history. The whole-set record, lock, hash-based
+changes. The whole-set record, lock, hash-based
 merge, observation points and Rewind intent remain the storage protocol.
+
+### 2026-11-12: Remove old-data migration
+
+The initial store rollout waited for explicit session migration, preserving
+per-session snapshots as its input rather than risking an empty replacement.
+The first notes implementation also backed up and converted format-1 stores,
+retaining frozen directive history. No old-format store existed in the user's
+installation, and the user chose to remove old-data compatibility rather than
+keep those loaders and inspectors. Resume now ignores old snapshots, a fresh
+store may be created normally, and unsupported formats still refuse visibly.
 
 ### 2026-11-12: Restore known remote notes after restart
 

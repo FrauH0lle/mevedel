@@ -11,18 +11,17 @@ modes; a session with an unfinished Goal cannot enter it.
 Standalone Plan permits ApplyPatch only for session-owned `work://` descendants,
 excluding workspace-shared files and ordinary filesystem paths. Other edit
 tools and Eval are unavailable, and Bash is limited to recognized read-only
-commands. Directive planning also withholds ApplyPatch. These workflow limits
-cannot be widened by ordinary allow rules; they are not an OS sandbox.
+commands. These workflow limits cannot be widened by ordinary allow rules;
+they are not an OS sandbox.
 
 Planning may delegate to agents. The boundary for delegated work is an
 immutable per-turn Plan read-only stamp, not the session's current phase:
-every agent turn started under Plan, in sticky Plan or directive planning,
-keeps Plan limits until it ends, and skill preparation inherits the caller's
+every agent turn started under Plan keeps Plan limits until it ends, and skill
+preparation inherits the caller's
 stamp. A Plan caller cannot steer an agent turn that lacks the stamp.
-Directive planning uses the implementation preset's tools under that stamp,
-so both kinds of planning share one tool surface apart from ApplyPatch.
-Directive Discuss keeps its separate read-only ceiling
-([ADR 0090](0090-enforce-discussion-as-a-read-only-capability.md)).
+Note conversations use the same session Plan mode and permissions, not separate
+directive Planning or Discuss capabilities
+([ADR 0132](0132-notes-replace-references-directives-and-buddy-notes.md)).
 
 Completed proposals accept an opening tag glued to preceding prose and indented
 delimiters. The opening tag still ends its line, and the closing tag occupies
@@ -64,9 +63,8 @@ without migration, while transcripts remain readable.
 Implementation children inherit the owning request's permission-mode override,
 including nested delegation, while model workloads remain independent. Live
 hard denies, shared rules, grants, and workflow ceilings remain in force through
-the common permission path. Unrelated child, control, summary, and directive
-requests do not inherit an ambient Goal policy. Directive implementation keeps
-its own request-local settings on that same path. Views, logs, and reminders
+the common permission path. Unrelated child, control, summary and note-session
+requests do not inherit an ambient Goal policy. Views, logs, and reminders
 show effective settings without promoting them to defaults. There is no
 session-policy snapshot/restore scheme.
 
@@ -92,6 +90,11 @@ implement. Mail and results that reach an agent after Plan ends remain advisory
 text acted on under that agent's own authority.
 
 ## Decision history
+
+Directive Planning once shared the immutable Plan stamp but withheld ApplyPatch;
+Discuss had a separate read-only ceiling. ADR 0132 removes both directive actions
+because ordinary note sessions already supply permissions and Plan mode. The
+delegated-turn stamp remains necessary to prevent authority growing mid-turn.
 
 Accepted-plan handoff previously installed its selected model, effort, and
 permission mode as ordinary settings in the executing session, and installed

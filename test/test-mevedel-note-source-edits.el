@@ -1,4 +1,4 @@
-;;; test-mevedel-directive-source-edits.el --- Instruction edit geometry -*- lexical-binding: t; -*-
+;;; test-mevedel-note-source-edits.el --- Instruction edit geometry -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 
@@ -8,7 +8,7 @@
 
 (require 'mevedel-notes)
 
-(require 'mevedel-directive-source)
+(require 'mevedel-note-source)
 (require 'mevedel-overlays)
 (require 'mevedel-persistence)
 (require 'helpers
@@ -101,5 +101,5 @@
           (insert "# ")
           (should (= (if (eq span 'char) 10 8) (overlay-start restored))))))))
 
-(provide 'test-mevedel-directive-source-edits)
-;;; test-mevedel-directive-source-edits.el ends here
+(provide 'test-mevedel-note-source-edits)
+;;; test-mevedel-note-source-edits.el ends here

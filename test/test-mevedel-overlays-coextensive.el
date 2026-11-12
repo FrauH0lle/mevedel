@@ -10,7 +10,7 @@
 (require 'mevedel-overlays)
 (require 'mevedel-notes)
 (require 'mevedel-overlay-ui)
-(require 'mevedel-directive-source)
+(require 'mevedel-note-source)
 (require 'helpers
          (file-name-concat
           (file-name-directory

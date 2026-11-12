@@ -1104,18 +1104,17 @@ trash is their safety net.
 
 ## Scoped prompts and attachments
 
-Shared items are the room's discussions. Historical records inside a
-directive turn carry its id and records inside a shared-item turn carry the
-item's id, so the filter strip lists **Main chat**, each directive (◆) and
-each whiteboard, document or artifact with turns (◇), with **All** at its far
+Shared items are the room's discussions. Records inside a shared-item turn carry
+the item's id, so the filter strip lists **Main chat** and each whiteboard,
+document or artifact with turns (◇), with **All** at its far
 end. **Main chat** is the default and hides every discussion; a tab whose
 discussion disappears falls back to it. **All** appears only when it shows
 more than **Main chat**. A turn's discussion chip selects that discussion too.
 A deleted item has no tab: its turns stay under **All** with a disabled chip
 marked **deleted** (see [deleting](shared-editing.md#deleting)).
 
-Directive tabs show read-only history. The composer sends to **Main chat**
-while viewing that history; it cannot continue a directive discussion.
+Former directive turns in old sessions are ordinary main-chat turns, without
+separate tabs or composer scopes.
 
 Selecting a shared item sends the composer's text to the assistant in that
 item's general [discussion](#discussions), the same way the item's own

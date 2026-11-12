@@ -24,7 +24,7 @@
         (compiled-root (make-temp-file "mevedel-instruction-owners-" t))
         (emacs (expand-file-name invocation-name invocation-directory))
         (owners '("mevedel-instruction-registry.el"
-                  "mevedel-directive-source.el"
+                  "mevedel-note-source.el"
                   "mevedel-overlays.el"
                   "mevedel-overlay-ui.el"))
         (cases
@@ -35,7 +35,7 @@
                 (error "Registry did not construct instruction state"))))
            (source
             (progn
-              (require 'mevedel-directive-source)
+              (require 'mevedel-note-source)
               (with-temp-buffer
                 (insert "source")
                 (let ((overlay (mevedel--create-instruction-overlay-in

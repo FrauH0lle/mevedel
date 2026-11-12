@@ -37,11 +37,11 @@
 (autoload 'mevedel--patch-buffer "mevedel-chat")
 (autoload 'mevedel--replace-patch-buffer "mevedel-chat")
 
-;; `mevedel-directive-source'
+;; `mevedel-note-source'
 (declare-function mevedel--delete-instruction
-                  "mevedel-directive-source"
+                  "mevedel-note-source"
                   (instruction &optional buffer))
-(autoload 'mevedel--delete-instruction "mevedel-directive-source")
+(autoload 'mevedel--delete-instruction "mevedel-note-source")
 ;; `mevedel-instruction-registry'
 (declare-function mevedel--instruction-buffer-workspace
                   "mevedel-instruction-registry" (buffer))

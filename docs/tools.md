@@ -465,9 +465,8 @@ resource address is prepared with the `read` operation and reaches the handler
 as the same authorized attempt Read receives. The key is not part of the
 provider schema. `SharedEdit`'s `source` is the one such argument.
 
-Rewind also reads frozen migrated directive attempts' untracked-effect markers
-as capture gaps. This compatibility reader does not infer changed paths or
-create new directive activity.
+Rewind reports capture gaps from current turn evidence. It has no reader for
+former directive attempts or their untracked-effect markers.
 
 ### Tool input validation and repair
 

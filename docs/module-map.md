@@ -115,8 +115,7 @@ Chat / view
   mevedel-chat.el             session lifecycle
   mevedel-session-rewind-merge.el staged smerge resolutions for atomic Rewind
   mevedel-side-conversation.el  ephemeral /btw conversation lifecycle
-  mevedel-directive-activity.el  read-only frozen directive-history inspector for migrated notes
-  mevedel-directive-frame.el  note-anchored conversation child frame and side-window fallback
+  mevedel-note-frame.el  note-anchored conversation child frame and side-window fallback
   mevedel-transcript.el       transcript span classification for view/persistence/compaction
   mevedel-transcript-source.el per-consumer hook-proven transcript change frontiers
   mevedel-transcript-audit.el hidden audit record encoding and structural parsing
@@ -193,14 +192,13 @@ Chat / view
   mevedel-worktree.el         Git worktrees, status/list surfaces, fork plumbing
   mevedel-instruction-registry.el workspace instruction buckets, IDs, links
   mevedel-overlays.el         instruction geometry, tags, context, prompts
-  mevedel-directive-source.el note anchor/presentation lifecycle and command-scoped replacement
+  mevedel-note-source.el note anchor/presentation lifecycle and command-scoped replacement
   mevedel-overlay-ui.el       instruction overlay actions and rendering
-  mevedel-notes.el            source note actions, frozen history, labels and entry hints
+  mevedel-notes.el            source note actions, labels and entry hints
   mevedel-notes-activation.el autoloaded file-visit restoration and roots-only remote note discovery
   mevedel-note-conversation.el isolated durable note send/batch/reopen, composer controls and sent-input inspection
   mevedel-note-change.el      nonblocking prepared source changes, checked apply, detailed review and actual per-turn application history
   mevedel-note-merge.el       separate localized three-way smerge editor with checked explicit confirmation
-  mevedel-notes-migration.el  one-time backed-up workspace reference/directive conversion
   mevedel-notes-list.el       workspace notes grouped by attention, visit/edit/tag/send/close/restore actions
   mevedel-note-mentions.el    explicit note number/tag attachments, current code and UUID lookup
   mevedel-note-resource.el    read-only workspace note documents for Read, Glob and Grep
