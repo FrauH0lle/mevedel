@@ -260,6 +260,31 @@
       (should (file-directory-p (mevedel-session-save-path session)))
       (should (file-directory-p (mevedel-session-save-path ordinary-session))))))
 
+(mevedel-deftest mevedel-session-persistence-cleanup-expired/note-expiry
+  (:quiet t)
+  ,test
+  (test)
+  :doc "an expired closed note releases its conversation after reload without using the ordinary retention floor"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Collect after expiry"))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view))
+           (session (buffer-local-value 'mevedel--session data))
+           (path (mevedel-session-save-path session)))
+      (mevedel-note-conversation-test--answer (car sent) "An expiring answer")
+      (with-current-buffer source (mevedel-note-done note))
+      (let ((mevedel-notes-closed-max-count 0))
+        (should-not (mevedel-notes-closed workspace)))
+      (mevedel-instruction-store-flush t)
+      (with-current-buffer data (mevedel-session-persistence-release-on-kill))
+      (mevedel-chat-discard-buffers data t)
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (let ((mevedel-session-max-age-days 0)
+            (mevedel-session-keep-recent-count 10))
+        (should (= 1 (mevedel-session-persistence-cleanup-expired workspace t))))
+      (should-not (file-directory-p path)))))
+
 (mevedel-deftest mevedel-note-send/frame-reuse
   (:quiet t)
   ,test

@@ -1064,6 +1064,47 @@ bytes read, the precondition a later write names."
                    workspace bytes (plist-get decoded :data)))
               (append (list :hash (secure-hash 'sha256 bytes)) decoded))))))))
 
+(defun mevedel-instruction-store-note-session-ids (workspace)
+  "Return WORKSPACE's retained note session IDs, or t when uncertain.
+Inspect live, stashed and closed records without changing dirty state.
+An unloaded workspace, pending store or remote root retains everything.
+For a loaded local workspace, one bounded read checks the current store
+as well, without installing it or triggering migration."
+  (condition-case nil
+      (let* ((state (gethash (mevedel--instruction-workspace-key workspace)
+                             mevedel--instruction-states))
+             (observed (plist-get state :store-observation)))
+        (if (or (file-remote-p (mevedel-workspace-root workspace))
+                (null (plist-get observed :data))
+                (plist-get state :store-pending))
+            t
+          (let* ((limit (* 16 1024 1024))
+                 (bytes (mevedel-session-control-fs-read-file
+                         (mevedel-instruction-store-path workspace)
+                         'no-conversion (1+ limit)))
+                 (decoded (and (<= (length bytes) limit)
+                               (mevedel-instruction-store--decode bytes workspace)))
+                 ids)
+            (if (not (eq (plist-get decoded :status) 'ok))
+                t
+              (cl-labels
+                  ((retain (properties)
+                     (when-let* ((id (plist-get properties 'mevedel-note-session-id)))
+                       (cl-pushnew id ids :test #'equal))))
+                (dolist (entry (plist-get state :instructions))
+                  (if (bufferp (car entry))
+                      (dolist (note (cdr entry))
+                        (retain (overlay-properties note)))
+                    (dolist (note (plist-get (cdr entry) :instructions))
+                      (retain (plist-get note :properties)))))
+                (dolist (closed (plist-get state :closed-notes))
+                  (retain (plist-get (plist-get closed :instruction) :properties)))
+                (dolist (entry (plist-get (plist-get decoded :data) :files))
+                  (dolist (note (plist-get (cdr entry) :instructions))
+                    (retain (plist-get note :properties)))))
+              ids))))
+    (error t)))
+
 (defun mevedel-instruction-store--write (workspace expected data)
   "Replace WORKSPACE's store with DATA while it still has hash EXPECTED.
 EXPECTED nil requires the store to be absent.  Return the new hash, or

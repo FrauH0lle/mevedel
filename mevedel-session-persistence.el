@@ -102,6 +102,9 @@
 ;; `mevedel-permission-log'
 (declare-function mevedel-permission-log-flush "mevedel-permission-log" (session))
 
+;; `mevedel-persistence'
+(declare-function mevedel-instruction-store-note-session-ids "mevedel-persistence" (workspace))
+
 ;; `mevedel-ptc-checkpoint'
 (declare-function mevedel-ptc-checkpoint-reconcile
                   "mevedel-ptc-checkpoint" (session))
@@ -2704,12 +2707,16 @@ at `size unavailable' rather than hiding the chooser."
           (mevedel-session-persistence--incompatible-reason entry)
           (plist-get entry :save-path)))
 
+(defun mevedel-session-persistence--note-p (sidecar)
+  "Return non-nil when SIDECAR describes an original note conversation."
+  (and (eq (plist-get sidecar :preset-name) 'mevedel-note)
+       (not (plist-get sidecar :forked-from-session-id))))
+
 (defun mevedel-session-persistence--dedicated-p (workspace sidecar)
   "Return non-nil when SIDECAR, or its summary, is an artifact's conversation.
 The session records its artifact and the artifact names it back; one
 whose artifact is gone is an ordinary session again."
-  (or (and (eq (plist-get sidecar :preset-name) 'mevedel-note)
-           (not (plist-get sidecar :forked-from-session-id)))
+  (or (mevedel-session-persistence--note-p sidecar)
       (when-let* ((id (plist-get sidecar :dedicated-artifact)))
         (mevedel-artifact-store-dedicated-p
          workspace (plist-get sidecar :session-id) id))))
@@ -3186,7 +3193,9 @@ workspace was swept too recently."
         (let ((threshold-secs (* mevedel-session-max-age-days 24 60 60))
               (now            (float-time))
               (deleted        0)
-              (candidates     nil))
+              (candidates     nil)
+              (note-candidates nil)
+              (note-session-ids 'unread))
           (dolist (save-path
                    (and (file-directory-p sessions-dir)
                         (directory-files sessions-dir t "\\`[^.]")))
@@ -3201,12 +3210,21 @@ workspace was swept too recently."
                       (mevedel-session-persistence--observed-update-time
                        (plist-get sidecar :updated-at)
                        sidecar-path save-path)))
-                ;; An artifact's conversation lives as long as the artifact.
-                (unless (mevedel-session-persistence--dedicated-p workspace sidecar)
-                  (push (list save-path
-                              (and parsed-time (float-time parsed-time))
-                              (plist-get sidecar :session-id))
-                        candidates)))))
+                (let ((candidate (list save-path
+                                       (and parsed-time (float-time parsed-time))
+                                       (plist-get sidecar :session-id))))
+                  (cond
+                   ((mevedel-session-persistence--note-p sidecar)
+                    (when (eq note-session-ids 'unread)
+                      (require 'mevedel-persistence)
+                      (setq note-session-ids
+                            (mevedel-instruction-store-note-session-ids workspace)))
+                    (unless (or (eq note-session-ids t)
+                                (null (plist-get sidecar :session-id))
+                                (member (plist-get sidecar :session-id) note-session-ids))
+                      (push candidate note-candidates)))
+                   ((not (mevedel-session-persistence--dedicated-p workspace sidecar))
+                    (push candidate candidates)))))))
           ;; The newest sessions are exempt regardless of age: the chooser
           ;; sweeps before any lock is taken, so without this floor a
           ;; 30-day absence would delete the session the user came back to
@@ -3218,7 +3236,9 @@ workspace was swept too recently."
           (when mevedel-session-keep-recent-count
             (setq candidates
                   (nthcdr mevedel-session-keep-recent-count candidates)))
-          (pcase-dolist (`(,save-path ,updated-secs ,session-id) candidates)
+          ;; Note conversations never consume the ordinary retention floor.
+          (pcase-dolist (`(,save-path ,updated-secs ,session-id)
+                        (append note-candidates candidates))
             (when (and updated-secs
                        (> (- now updated-secs) threshold-secs)
                        ;; A session open here may outlive its lease after
