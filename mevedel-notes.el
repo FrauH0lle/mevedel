@@ -32,6 +32,7 @@
                   (serialized base-directory))
 
 ;; `mevedel-persistence'
+(defvar mevedel-instructions-restored-hook)
 (declare-function mevedel-instruction-store-observe "mevedel-persistence"
                   (workspace))
 (declare-function mevedel-instruction-store-prune-closed "mevedel-persistence"
@@ -333,6 +334,19 @@ Default to the note at point.  Taking Buddy's remark first keeps it as yours."
       (mevedel-notes--render note)
       (mevedel-instruction-store-touch workspace)))
   note)
+
+(defun mevedel-notes--activate-taken (buffer)
+  "Resume watching taken notes restored in BUFFER, without loading its dial."
+  (with-current-buffer buffer
+    (save-restriction
+      (widen)
+      (when (seq-some (lambda (note)
+                        (and (eq 'note (overlay-get note 'mevedel-instruction-type))
+                             (eq 'taken (overlay-get note 'mevedel-note-state))))
+                      (overlays-in (point-min) (point-max)))
+        (mevedel-buddy-mode 1)))))
+
+(add-hook 'mevedel-instructions-restored-hook #'mevedel-notes--activate-taken)
 
 ;;;###autoload
 (defun mevedel-note-delete (&optional note)

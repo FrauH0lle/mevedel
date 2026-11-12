@@ -154,6 +154,7 @@ AUTOMATIC exercises the idle review policy without waiting for idle time."
       (clrhash mevedel-buddy--levels)
       (mevedel-buddy-mode -1)
       (mevedel-buddy-mode 1)
+      (mevedel-take-test--review (lambda (&rest _) (ert-fail "Quiet spoke")) t)
       (should (eq 'quiet (mevedel-buddy-level workspace)))
       (should-error (mevedel-buddy-set-level 'unknown workspace) :type 'user-error)
       (should (eq 'quiet (mevedel-buddy-level workspace))))))
@@ -284,6 +285,34 @@ AUTOMATIC exercises the idle review policy without waiting for idle time."
         (should (equal (file-name-as-directory child)
                        (file-name-as-directory
                         (mevedel-workspace-root (mevedel-workspace)))))))))
+
+(mevedel-deftest mevedel-note-take/restore
+  (:quiet t)
+  ,test
+  (test)
+  :doc "restored taken notes reactivate without dial reads until the first review"
+  (mevedel-take-test--with-source
+    (mevedel-buddy-set-level 'quiet workspace)
+    (mevedel-note-take (mevedel-note-create "Keep watching after reload"))
+    (mevedel-instruction-store-flush t)
+    (mevedel-buddy-mode -1)
+    (mevedel--clear-instruction-state workspace)
+    (clrhash mevedel-buddy--levels)
+    (let* ((reads 0)
+           (counter (lambda (file &rest _)
+                      (when (string-suffix-p "/buddy-level" file) (cl-incf reads)))))
+      (unwind-protect
+          (progn
+            (advice-add 'mevedel-session-control-fs-read-file :before counter)
+            (mevedel-instruction-store-observe workspace)
+            (should mevedel-buddy-mode)
+            (should (zerop reads))
+            (should (string-search "Buddy watches" (mevedel-take-test--labels)))
+            (should (mevedel-take-test--review
+                     (lambda (prompt _tools)
+                       (should (string-search "Workspace dial: quiet" prompt))) t))
+            (should (= 1 reads)))
+        (advice-remove 'mevedel-session-control-fs-read-file counter)))))
 
 (provide 'test-mevedel-buddy-take)
 ;;; test-mevedel-buddy-take.el ends here

@@ -214,7 +214,8 @@ LEVEL is `quiet', `watching' or `active'.  Taken notes are watched at every
 level.  The setting is saved in the workspace, not in any conversation."
   (interactive (list (intern (completing-read
                              "Buddy: " '("Quiet" "Watching" "Active") nil t nil nil
-                             (capitalize (symbol-name (mevedel-buddy-level)))))))
+                             (capitalize (symbol-name
+                                          (mevedel-buddy-level (mevedel-buddy--workspace))))))))
   (setq level (if (symbolp level) (intern (downcase (symbol-name level))) level)
         workspace (or workspace (mevedel-buddy--workspace)))
   (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
@@ -774,18 +775,19 @@ the first."
     (mevedel-buddy--abandon 'preempted)))
 
 (defun mevedel-buddy--request (scope-key profile payload buffer-names
-                                         reviewed-through automatic)
+                                         reviewed-through level)
   "Send PAYLOAD for SCOPE-KEY using PROFILE and settle the result.
 
 BUFFER-NAMES bounds which buffers the review may touch.  REVIEWED-THROUGH
-is recorded when the review settles on its own.  AUTOMATIC marks a run
-started by the idle timer, which an explicit request may preempt."
+is recorded when the review settles on its own.  LEVEL is the captured
+automatic dial level, or nil for an explicitly requested review."
   (require 'gptel)
   (require 'mevedel-buddy-note)
   (require 'mevedel-engine)
   (require 'mevedel-models)
   (require 'mevedel-system)
   (let ((policy (mevedel-model-resolve-workload 'buddy))
+        (automatic (and level t))
         (rounds 0)
         (settled nil)
         (generation (cl-incf mevedel-buddy--generation))
@@ -808,7 +810,7 @@ started by the idle timer, which an explicit request may preempt."
         (progn
           (mevedel-buddy-note-restore)
           (setq payload (mevedel-buddy-note-prepare-context
-                         payload (and automatic (mevedel-buddy-level))))
+                         payload level))
           (mevedel-buddy-note-capture-markers
            (mevedel-buddy--payload-lines payload)))
       (error
@@ -908,13 +910,15 @@ started by the idle timer, which an explicit request may preempt."
   (format "\n\nReport nothing below %s severity.\n"
           mevedel-buddy-severity-floor))
 
-(defun mevedel-buddy--prepare (scope-key changes automatic &optional taken-names)
+(defun mevedel-buddy--prepare (scope-key changes level &optional taken-names)
   "Prepare CHANGES for SCOPE-KEY one buffer per callback.
-AUTOMATIC retains ordinary review preemption.  A changed source abandons the
+LEVEL captures the automatic dial, or nil for an explicit review.
+A changed source abandons the
 snapshot without retiring edits or sending stale line numbers to a model.
 TAKEN-NAMES includes watched buffers even when they have no recorded edits."
   (let* ((source (current-buffer))
-         (quiet (and automatic (eq 'quiet (mevedel-buddy-level))))
+         (quiet (eq 'quiet level))
+         (automatic (and level t))
          (generation (cl-incf mevedel-buddy--generation))
          (through (current-time))
          (names (delete-dups (append taken-names
@@ -971,7 +975,7 @@ TAKEN-NAMES includes watched buffers even when they have no recorded edits."
                            (mevedel-buddy--request
                             scope-key 'buddy
                             (concat payload (mevedel-buddy--severity-instruction))
-                            names through automatic)))))
+                            names through level)))))
                  (error
                   (when (or dispatching (mevedel-buddy--current-generation-p generation))
                     (mevedel-buddy--abandon 'preparation-failed)))))))))
@@ -999,18 +1003,21 @@ AUTOMATIC marks a run started by the idle timer rather than by the
 user.  Returns non-nil when preparation was scheduled."
   (interactive)
   (require 'mevedel-transport)
-  (let* ((scope-key (mevedel-buddy--scope-key))
+  (let* ((workspace (mevedel-buddy--workspace))
+         (_ (mevedel-buddy--load-level workspace))
+         (level (and automatic (mevedel-buddy-level workspace)))
+         (scope-key (mevedel-buddy--scope-key))
          (taken (mevedel-buddy--taken-buffers scope-key))
          (changes (seq-filter #'mevedel-buddy--live-change-p
                               (mevedel-buddy--changes-for-scope scope-key))))
     (cond
-     ((and automatic (eq 'quiet (mevedel-buddy-level)) (null taken))
+     ((and (eq 'quiet level) (null taken))
       (mevedel-buddy--retire-changes scope-key (current-time))
       nil)
      ((and (null changes) (null taken)) nil)
      (mevedel-buddy--running nil)
      (t
-      (mevedel-buddy--prepare scope-key changes automatic taken)
+      (mevedel-buddy--prepare scope-key changes level taken)
       t))))
 
 
@@ -1123,11 +1130,14 @@ edits and request state live only in memory."
   :group 'mevedel-buddy
   (if mevedel-buddy-mode
       (progn
-        (mevedel-buddy--load-level (mevedel-buddy--workspace))
         (mevedel-buddy--track-buffer)
         (add-hook 'after-change-functions
                   #'mevedel-buddy--after-change-schedule nil t)
-        (when (member (buffer-name) (mevedel-buddy--taken-buffers (mevedel-buddy--scope-key)))
+        (when (save-restriction
+                (widen)
+                (seq-some (lambda (note)
+                            (eq 'taken (overlay-get note 'mevedel-note-state)))
+                          (overlays-in (point-min) (point-max))))
           (mevedel-buddy--schedule)))
     (mevedel-buddy--cancel-timer)
     (mevedel-buddy--untrack-buffer)
