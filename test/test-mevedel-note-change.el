@@ -473,7 +473,41 @@
       (should (equal "later user edit\nbefore\nold\nafter\nbefore application\n"
                      (buffer-string))))
     (should (equal "later user edit\nbefore\nold\nafter\nbefore application\n"
-                   (mevedel-test--read-file file)))))
+                   (mevedel-test--read-file file))))
+  :doc "a done note reopens only after a successful reversal, including after store reload"
+  (mevedel-note-change-test--with-note
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (mevedel-note-apply-change note)
+    (let ((uuid (overlay-get note 'mevedel-uuid)))
+      (mevedel-note-done note)
+      (mevedel-instruction-store-flush t)
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (with-current-buffer source
+        (goto-char (point-min))
+        (forward-line 1)
+        (delete-region (line-beginning-position) (line-end-position))
+        (insert "later replacement")
+        (save-buffer))
+      (should-error (mevedel-note-revert-change uuid 0 workspace) :type 'user-error)
+      (should (= 1 (length (mevedel-notes-closed workspace))))
+      (with-current-buffer source
+        (goto-char (point-min))
+        (forward-line 1)
+        (delete-region (line-beginning-position) (line-end-position))
+        (insert "new")
+        (save-buffer))
+      (mevedel-note-revert-change uuid 0 workspace)
+      (should-not (mevedel-notes-closed workspace))
+      (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))
+      (let ((restored (mevedel-notes--resolve uuid workspace)))
+        (should restored)
+        (should (eq 'sent (overlay-get restored 'mevedel-note-state))))
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (should-not (mevedel-notes-closed workspace))
+      (should (mevedel-notes--resolve uuid workspace)))))
 
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here

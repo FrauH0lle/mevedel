@@ -278,15 +278,58 @@ Confirming a partial selection drops the rest of this waiting change."
                                        (plist-get conflict :end-line))) conflicts ", ")))
     (nreverse changes)))
 
+(defun mevedel-note-change--revert-target (note workspace)
+  "Resolve live or closed NOTE in WORKSPACE, prompting without a context note."
+  (mevedel-notes--load-closed workspace)
+  (let* ((entries (append (mevedel-notes--entries workspace)
+                          (mapcar (lambda (entry)
+                                    (let* ((instruction (plist-get entry :instruction))
+                                           (props (plist-get instruction :properties)))
+                                      (list :properties props
+                                            :uuid (plist-get props 'mevedel-uuid)
+                                            :closed-reason (plist-get instruction :closed-reason))))
+                                  (mevedel-notes-closed workspace t))))
+         (at-point (mevedel--highest-priority-instruction
+                    (mevedel--instructions-at (point) 'note)))
+         (data (if (buffer-live-p mevedel--data-buffer) mevedel--data-buffer (current-buffer)))
+         (session (buffer-local-value 'mevedel--session data))
+         (id (or (if (overlayp note) (overlay-get note 'mevedel-uuid) note)
+                 (and at-point (overlay-get at-point 'mevedel-uuid))
+                 (when session
+                   (plist-get
+                    (cl-find (mevedel-session-session-id session) entries
+                             :key (lambda (entry)
+                                    (plist-get (plist-get entry :properties) 'mevedel-note-session-id))
+                             :test #'equal) :uuid))
+                 (let ((choices (mapcar
+                                 (lambda (entry)
+                                   (let ((props (plist-get entry :properties)))
+                                     (cons (format "%s: %s%s" (plist-get props 'mevedel-id)
+                                                   (plist-get props 'mevedel-note-text)
+                                                   (if (plist-get entry :closed-reason)
+                                                       " (closed)" ""))
+                                           (plist-get entry :uuid)))) entries)))
+                   (unless choices (user-error "No notes here"))
+                   (cdr (assoc (completing-read "Revert change of note: " choices nil t) choices))))))
+    (or (cl-find id entries :test #'equal
+                 :key (lambda (entry)
+                        (if (numberp id) (plist-get (plist-get entry :properties) 'mevedel-id)
+                          (plist-get entry :uuid))))
+        (user-error "No note %s" id))))
+
 ;;;###autoload
-(defun mevedel-note-revert-change (&optional note turn)
+(defun mevedel-note-revert-change (&optional note turn workspace)
   "Revert one applied TURN of NOTE without rewinding its conversation.
-NOTE defaults to the source or conversation note.  When TURN is omitted,
-select from the recorded applied turns.  Refuse if affected lines changed."
+NOTE is a live overlay, display number or UUID in WORKSPACE; default to the
+source or conversation note, or prompt.  When TURN is omitted, select from
+the recorded applied turns.  Refuse if affected lines changed.  Reopen a done
+note only after success; do not change the conversation or its history."
   (interactive)
-  (setq note (mevedel-note-change--note note))
-  (let* ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note)))
-         (id (overlay-get note 'mevedel-note-session-id)))
+  (setq workspace (or workspace (mevedel--instruction-buffer-workspace
+                                 (if (and (overlayp note) (overlay-buffer note))
+                                     (overlay-buffer note) (current-buffer)))))
+  (let* ((target (mevedel-note-change--revert-target note workspace))
+         (id (plist-get (plist-get target :properties) 'mevedel-note-session-id)))
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
       (unless id (user-error "Note has no applied changes"))
       (let* ((data (or (mevedel-session-control-transfer-root-buffer-for-id id)
@@ -301,6 +344,9 @@ select from the recorded applied turns.  Refuse if affected lines changed."
                                                (mapcar #'number-to-string turns) nil t)))))
         (mevedel-session-artifacts-assert-new-mutation-authority session)
         (mevedel-tool-patch-commit (mevedel-note-change--revert-plan session turn))
+        (when (eq 'done (plist-get target :closed-reason))
+          (mevedel-note-restore (plist-get target :uuid) workspace)
+          (mevedel-instruction-store-flush t))
         (message "mevedel: note change reverted")))))
 
 (provide 'mevedel-note-change)

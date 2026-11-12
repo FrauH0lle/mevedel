@@ -637,6 +637,7 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
 (defvar-keymap mevedel-note-actions-map
   :doc "Modified-key menu for notes; plain letters always edit source."
   "C-c C-a" #'mevedel-note-apply-change
+  "C-c C-u" #'mevedel-note-revert-change
   "M-m" #'mevedel--ov-actions-dispatch)
 
 (defvar-keymap mevedel-directive-actions-map
