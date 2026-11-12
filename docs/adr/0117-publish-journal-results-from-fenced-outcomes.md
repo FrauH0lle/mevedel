@@ -131,6 +131,21 @@ the original token, never renew or replace its authority. Scheduled publication
 recovery uses the same proof before child deletion and live-write scheduling.
 Generic maintenance-process teardown may still force-stop children without
 storage settlement; that separate boundary leaves durable evidence for recovery.
+It freezes the local batch worker before enumerating and killing its direct
+subprocess groups: synchronous `process-file` shells lead separate groups and
+survived deletion of just the worker, allowing a staged admission claim to appear
+after cancellation and refuse immediate retry. Cancellation waits, bounded to
+two seconds per worker, for all group members to exit or become zombies before
+discarding the exchange. A timeout is not successful cancellation: the launcher
+retires its registration and exchange once the worker is dead, then single-owner
+cancellation warns with the frozen workspace scope and returns nil so owner
+settlement is not skipped. Failure to delete a still-live batch worker retains
+its handle and exchange and signals for retry, rather than pretending it retired.
+Bulk teardown attempts all workers and active digest cancellations before
+re-signalling the first error.
+This prevents subsequent filesystem publication without settling or removing
+claims that were already published. Process-specific waits dispatch no timers
+or unrelated process callbacks.
 All maintenance children, including the read-only cockpit display scan, use one
 launcher with a closed operation table. Each operation names its owner feature,
 public child entry and reply bound; requests carry frozen data, never a callable
