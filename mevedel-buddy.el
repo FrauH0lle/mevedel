@@ -51,6 +51,7 @@
 ;; `mevedel-buddy-note'
 (declare-function mevedel-buddy-note-capture-markers "mevedel-buddy-note" (buffer-names))
 (declare-function mevedel-buddy-note-finish-review "mevedel-buddy-note" ())
+(declare-function mevedel-buddy-note-prepare-context "mevedel-buddy-note" (payload &optional level))
 (declare-function mevedel-buddy-note-release-markers "mevedel-buddy-note" ())
 (declare-function mevedel-buddy-note-restore "mevedel-buddy-note" ())
 (declare-function mevedel-buddy-note-serialize "mevedel-buddy-note" ())
@@ -70,6 +71,15 @@
 ;; `mevedel-models'
 (declare-function mevedel-model-resolve-workload "mevedel-models"
                   (workload &optional explicit-selector explicit-effort))
+
+;; `mevedel-notes'
+(declare-function mevedel-notes--ensure-workspace "mevedel-notes" (workspace))
+
+;; `mevedel-session-control-fs'
+(declare-function mevedel-session-control-fs-read-file "mevedel-session-control-fs"
+                  (path &optional coding-system max-bytes))
+(declare-function mevedel-session-control-fs-write-file "mevedel-session-control-fs"
+                  (path content &optional coding-system))
 
 ;; `mevedel-system'
 (declare-function mevedel-system-build-prompt "mevedel-system"
@@ -156,6 +166,85 @@ record's region, starts a record of its own."
 
 
 ;;
+;;; Workspace dial
+
+(defvar mevedel-buddy--levels (make-hash-table :test #'equal)
+  "Workspace roots mapped to (LEVEL . WORKSPACE) on Buddy activation.")
+
+(defun mevedel-buddy-level (&optional workspace)
+  "Return WORKSPACE's cached dial level, defaulting to `active'.
+Never read a file or discover a workspace; safe during change recording."
+  (let ((workspace (or workspace (bound-and-true-p mevedel--workspace))))
+    (if workspace
+        (or (car (gethash (file-name-as-directory (mevedel-workspace-root workspace))
+                         mevedel-buddy--levels)) 'active)
+      'active)))
+
+(defun mevedel-buddy--load-level (workspace)
+  "Load WORKSPACE's dial once at its first review, defaulting to Active."
+  (when workspace
+    (let ((root (file-name-as-directory (mevedel-workspace-root workspace))))
+      (unless (gethash root mevedel-buddy--levels)
+        (require 'mevedel-session-control-fs)
+        (let ((level
+               (condition-case err
+                   (let* ((text (string-trim
+                                 (mevedel-session-control-fs-read-file
+                                  (file-name-concat root ".mevedel" "buddy-level") nil 16)))
+                          (level (cdr (assoc text '(("quiet" . quiet) ("watching" . watching)
+                                                   ("active" . active))))))
+                     (or level (error "Invalid Buddy dial in %s" root)))
+                 (mevedel-session-control-fs-absent 'active)
+                 (error
+                  (mevedel-diagnostic-warning
+                   (mevedel-diagnostic-scope workspace) 'mevedel
+                   (format "Could not read Buddy dial; using Active: %s"
+                           (error-message-string err)) :warning)
+                  'active))))
+          (puthash root (cons level workspace) mevedel-buddy--levels))))))
+
+(defun mevedel-buddy--enable-workspace-buffer ()
+  "Enable tracking only inside a workspace whose Buddy dial is loaded.
+Use exact workspace ownership; never probe unknown remote files."
+  (when (and buffer-file-name (mevedel-buddy--tracked-buffer-p))
+    (when-let* ((workspace (or (bound-and-true-p mevedel--workspace)
+                              (unless (file-remote-p buffer-file-name nil 'never)
+                                (mevedel-buddy--workspace))))
+                ((gethash (file-name-as-directory (mevedel-workspace-root workspace))
+                          mevedel-buddy--levels)))
+      (unless mevedel-buddy-mode (mevedel-buddy-mode 1)))))
+
+;;;###autoload
+(defun mevedel-buddy-set-level (level &optional workspace)
+  "Set WORKSPACE's Buddy dial to LEVEL and enable its source buffers.
+LEVEL is `quiet', `watching' or `active'.  Taken notes are watched at every
+level.  The setting is saved in the workspace, not in any conversation."
+  (interactive (list (intern (completing-read
+                             "Buddy: " '("Quiet" "Watching" "Active") nil t nil nil
+                             (capitalize (symbol-name
+                                          (mevedel-buddy-level (mevedel-buddy--workspace))))))))
+  (setq level (if (symbolp level) (intern (downcase (symbol-name level))) level)
+        workspace (or workspace (mevedel-buddy--workspace)))
+  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+    (unless (memq level '(quiet watching active)) (user-error "Unknown Buddy level: %s" level))
+    (unless workspace (user-error "No workspace for Buddy"))
+    (require 'mevedel-session-control-fs)
+    (when buffer-file-name
+      (require 'mevedel-notes)
+      (setq workspace (mevedel-notes--ensure-workspace workspace)))
+    (mevedel-session-control-fs-write-file
+     (file-name-concat (mevedel-workspace-state-dir workspace) "buddy-level")
+     (symbol-name level))
+    (puthash (file-name-as-directory (mevedel-workspace-root workspace))
+             (cons level workspace) mevedel-buddy--levels)
+    (add-hook 'find-file-hook #'mevedel-buddy--enable-workspace-buffer t)
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer (mevedel-buddy--enable-workspace-buffer)))
+    (message "mevedel: Buddy %s" (capitalize (symbol-name level))))
+  level)
+
+
+;;
 ;;; Recorded changes
 
 (defvar mevedel-buddy--changes (make-hash-table :test #'equal)
@@ -178,7 +267,7 @@ lines.")
 `project-current' caches its answer only when it finds a project, so a
 buffer outside one would re-walk the directory tree to the filesystem
 root on every keystroke.  IDENTITY contains the buffer name, visited
-file, and `default-directory' used to derive the key.")
+file, `default-directory' and pinned workspace root used to derive the key.")
 
 (put 'mevedel-buddy--scope-cache 'permanent-local t)
 
@@ -186,15 +275,18 @@ file, and `default-directory' used to derive the key.")
   "Return the project scope key for DIRECTORY, or nil outside a project.
 Source buffers and sessions in one project derive the same key here."
   (let ((default-directory (file-name-as-directory directory)))
-    (cdr (ignore-errors (mevedel-workspace--project-workspace)))))
+    (when-let* ((root (cdr (ignore-errors (mevedel-workspace--project-workspace)))))
+      (file-name-as-directory (expand-file-name root)))))
 
 (defun mevedel-buddy--scope-key ()
   "Return the current buffer's scope key.
 
 Buffers in a project share that project's key so edits made across
 several of its files are reviewed together.  A buffer outside any
-project is its own scope."
-  (let ((identity (list (buffer-name) buffer-file-name default-directory)))
+project is its own scope.  An already pinned workspace takes precedence."
+  (let* ((root (when (bound-and-true-p mevedel--workspace)
+                 (file-name-as-directory (mevedel-workspace-root mevedel--workspace))))
+         (identity (list (buffer-name) buffer-file-name default-directory root)))
     (if (equal identity (car-safe mevedel-buddy--scope-cache))
         (cdr mevedel-buddy--scope-cache)
       (when mevedel-buddy--scope-cache
@@ -208,7 +300,7 @@ project is its own scope."
           (when reschedule
             (mevedel-buddy--schedule))))
       (let ((scope-key
-             (or (mevedel-buddy-directory-scope-key default-directory)
+             (or root (mevedel-buddy-directory-scope-key default-directory)
                  (concat "buffer:" (buffer-name)))))
         (setq mevedel-buddy--scope-cache (cons identity scope-key))
         scope-key))))
@@ -473,7 +565,7 @@ insertion, which the user feels as lag while the request is in flight."
        ((and buffer-name (string-match "^ *\\([0-9]+\\) " line))
         (let ((entry (assoc buffer-name result)))
           (push (string-to-number (match-string 1 line)) (cdr entry))))))
-    (mapcar (lambda (entry) (cons (car entry) (nreverse (cdr entry))))
+    (mapcar (lambda (entry) (cons (car entry) (delete-dups (nreverse (cdr entry)))))
             (nreverse result))))
 
 (defun mevedel-buddy--format-changes (changes)
@@ -693,18 +785,19 @@ the first."
     (mevedel-buddy--abandon 'preempted)))
 
 (defun mevedel-buddy--request (scope-key profile payload buffer-names
-                                         reviewed-through automatic)
+                                         reviewed-through level)
   "Send PAYLOAD for SCOPE-KEY using PROFILE and settle the result.
 
 BUFFER-NAMES bounds which buffers the review may touch.  REVIEWED-THROUGH
-is recorded when the review settles on its own.  AUTOMATIC marks a run
-started by the idle timer, which an explicit request may preempt."
+is recorded when the review settles on its own.  LEVEL is the captured
+automatic dial level, or nil for an explicitly requested review."
   (require 'gptel)
   (require 'mevedel-buddy-note)
   (require 'mevedel-engine)
   (require 'mevedel-models)
   (require 'mevedel-system)
   (let ((policy (mevedel-model-resolve-workload 'buddy))
+        (automatic (and level t))
         (rounds 0)
         (settled nil)
         (generation (cl-incf mevedel-buddy--generation))
@@ -726,6 +819,8 @@ started by the idle timer, which an explicit request may preempt."
     (condition-case err
         (progn
           (mevedel-buddy-note-restore)
+          (setq payload (mevedel-buddy-note-prepare-context
+                         payload level))
           (mevedel-buddy-note-capture-markers
            (mevedel-buddy--payload-lines payload)))
       (error
@@ -825,24 +920,29 @@ started by the idle timer, which an explicit request may preempt."
   (format "\n\nReport nothing below %s severity.\n"
           mevedel-buddy-severity-floor))
 
-(defun mevedel-buddy--prepare (scope-key changes automatic)
+(defun mevedel-buddy--prepare (scope-key changes level &optional taken-names)
   "Prepare CHANGES for SCOPE-KEY one buffer per callback.
-AUTOMATIC retains ordinary review preemption.  A changed source abandons the
-snapshot without retiring edits or sending stale line numbers to a model."
+LEVEL captures the automatic dial, or nil for an explicit review.
+A changed source abandons the
+snapshot without retiring edits or sending stale line numbers to a model.
+TAKEN-NAMES includes watched buffers even when they have no recorded edits."
   (let* ((source (current-buffer))
+         (quiet (eq 'quiet level))
+         (automatic (and level t))
          (generation (cl-incf mevedel-buddy--generation))
          (through (current-time))
-         (names (mevedel-buddy--changed-buffers changes))
+         (names (delete-dups (append taken-names
+                                    (unless quiet (mevedel-buddy--changed-buffers changes)))))
          (stamps (mapcar
                   (lambda (name)
                     (with-current-buffer name
                       (list (current-buffer) (buffer-chars-modified-tick)
                             (buffer-name) buffer-file-name default-directory)))
                   names))
-         (groups (mapcar
+         (groups (unless quiet (mapcar
                   (lambda (group) (reverse (cdr group)))
                   (seq-group-by (lambda (change) (plist-get change :buffer))
-                                (reverse changes))))
+                                (reverse changes)))))
          sections dispatching)
     (setq mevedel-buddy--running scope-key
           mevedel-buddy--running-automatic automatic)
@@ -879,17 +979,32 @@ snapshot without retiring edits or sending stale line numbers to a model."
                            (schedule .001))
                        (let ((payload (string-join
                                        (seq-remove #'string-empty-p (nreverse sections)) "\n")))
-                         (if (string-empty-p payload)
+                         (if (and (string-empty-p payload) (null taken-names))
                              (mevedel-buddy--settle scope-key through)
                            (setq dispatching t)
                            (mevedel-buddy--request
                             scope-key 'buddy
                             (concat payload (mevedel-buddy--severity-instruction))
-                            names through automatic)))))
+                            names through level)))))
                  (error
                   (when (or dispatching (mevedel-buddy--current-generation-p generation))
                     (mevedel-buddy--abandon 'preparation-failed)))))))))
       (schedule .001))))
+
+(defun mevedel-buddy--taken-buffers (scope-key)
+  "Return tracked buffers with taken notes in SCOPE-KEY."
+  (let (names)
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer
+        (when (and (bound-and-true-p mevedel-buddy-mode)
+                   (equal scope-key (mevedel-buddy--scope-key))
+                   (save-restriction
+                     (widen)
+                     (seq-some (lambda (note)
+                                 (eq 'taken (overlay-get note 'mevedel-note-state)))
+                               (overlays-in (point-min) (point-max)))))
+          (push (buffer-name) names))))
+    names))
 
 (defun mevedel-buddy-review (&optional automatic)
   "Review the edits recorded for the current buffer's scope.
@@ -898,14 +1013,21 @@ AUTOMATIC marks a run started by the idle timer rather than by the
 user.  Returns non-nil when preparation was scheduled."
   (interactive)
   (require 'mevedel-transport)
-  (let* ((scope-key (mevedel-buddy--scope-key))
+  (let* ((workspace (mevedel-buddy--workspace))
+         (_ (mevedel-buddy--load-level workspace))
+         (level (and automatic (mevedel-buddy-level workspace)))
+         (scope-key (mevedel-buddy--scope-key))
+         (taken (mevedel-buddy--taken-buffers scope-key))
          (changes (seq-filter #'mevedel-buddy--live-change-p
                               (mevedel-buddy--changes-for-scope scope-key))))
     (cond
-     ((null changes) nil)
+     ((and (eq 'quiet level) (null taken))
+      (mevedel-buddy--retire-changes scope-key (current-time))
+      nil)
+     ((and (null changes) (null taken)) nil)
      (mevedel-buddy--running nil)
      (t
-      (mevedel-buddy--prepare scope-key changes automatic)
+      (mevedel-buddy--prepare scope-key changes level taken)
       t))))
 
 
@@ -1020,7 +1142,13 @@ edits and request state live only in memory."
       (progn
         (mevedel-buddy--track-buffer)
         (add-hook 'after-change-functions
-                  #'mevedel-buddy--after-change-schedule nil t))
+                  #'mevedel-buddy--after-change-schedule nil t)
+        (when (save-restriction
+                (widen)
+                (seq-some (lambda (note)
+                            (eq 'taken (overlay-get note 'mevedel-note-state)))
+                          (overlays-in (point-min) (point-max))))
+          (mevedel-buddy--schedule)))
     (mevedel-buddy--cancel-timer)
     (mevedel-buddy--untrack-buffer)
     (remove-hook 'after-change-functions

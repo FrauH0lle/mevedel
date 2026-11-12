@@ -190,7 +190,7 @@
     ;; These stubs supply user input at the minibuffer boundary only.
     (cl-letf (((symbol-function 'read-multiple-choice)
                (lambda (_prompt choices &rest _)
-                  (should (equal '(?s ?e ?x ?d) (mapcar #'car choices)))
+                  (should (equal '(?s ?e ?x ?t ?d) (mapcar #'car choices)))
                  (assq ?e choices)))
               ((symbol-function 'read-string)
                (lambda (&rest _) "After")))

@@ -35,6 +35,7 @@
                   (serialized base-directory))
 
 ;; `mevedel-persistence'
+(defvar mevedel-instructions-restored-hook)
 (declare-function mevedel-instruction-store-observe "mevedel-persistence"
                   (workspace))
 (declare-function mevedel-instruction-store-prune-closed "mevedel-persistence"
@@ -48,6 +49,9 @@
 ;; `mevedel-buddy-note'
 (autoload 'mevedel-buddy-dismiss-note "mevedel-buddy-note" nil t)
 (autoload 'mevedel-buddy-keep-note "mevedel-buddy-note" nil t)
+
+;; `mevedel-buddy'
+(autoload 'mevedel-buddy-mode "mevedel-buddy" nil t)
 
 (defvar-local mevedel-notes--last-hinted nil
   "Note most recently announced by the local entry hint.")
@@ -198,11 +202,12 @@ Restore only the selected note's file, not every stashed source file."
 
 (defun mevedel-notes--actions-hint (&optional note)
   "Return the current modified-key menu hint for NOTE."
-  (format "%s: send, edit, done, %s"
+  (format "%s: send, %s, edit, done, %s"
           (if-let* ((key (where-is-internal #'mevedel--ov-actions-dispatch
                                            mevedel-note-actions-map t)))
               (key-description key)
             "M-x mevedel-note-menu")
+          (if (and note (eq 'taken (overlay-get note 'mevedel-note-state))) "drop" "take")
           (if (and note (eq 'buddy (overlay-get note 'mevedel-note-author)))
               "dismiss, keep" "delete")))
 
@@ -239,7 +244,11 @@ Restore only the selected note's file, not every stashed source file."
                            (mevedel-notes--display-text note)
                            (pcase (mevedel-notes-attention-state note)
                              ('ready "change ready") ('stale "change stale")
-                             (_ (if (overlay-get note 'mevedel-note-session-id) "sent" "not sent")))
+                             (_ (if (eq 'taken (overlay-get note 'mevedel-note-state))
+                                    (if (overlay-get note 'mevedel-note-buddy-looks-done)
+                                        "looks done · done? · Buddy watches"
+                                      "you're on it · Buddy watches")
+                                  (if (overlay-get note 'mevedel-note-session-id) "sent" "not sent"))))
                            (mevedel-notes--actions-hint note))))
         (overlay-put note 'keymap mevedel-note-actions-map)
         (move-overlay label (overlay-start note) end)
@@ -259,6 +268,7 @@ Restore only the selected note's file, not every stashed source file."
                        (<= beg (overlay-end note))
                        (>= end (overlay-start note)))
               (overlay-put note 'mevedel-note-attention-state 'stale))
+            (overlay-put note 'mevedel-note-buddy-looks-done nil)
             (mevedel-notes--render note))
         (delete-overlay overlay)))))
 
@@ -300,8 +310,54 @@ Default to the note at point.  An empty list removes every tag."
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
       (setq note (or note (mevedel-notes--at-point)))
       (overlay-put note 'mevedel-note-text text)
+      (overlay-put note 'mevedel-note-buddy-looks-done nil)
       (mevedel-notes--render note)
       (mevedel-instruction-store-touch workspace))))
+
+;;;###autoload
+(defun mevedel-note-take (&optional note)
+  "Take NOTE to implement it yourself, with Buddy watching its code.
+Default to the note at point.  Taking Buddy's remark first keeps it as yours."
+  (interactive)
+  (setq note (or note (mevedel-notes--at-point)))
+  (let ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note))))
+    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+      (when (eq 'buddy (overlay-get note 'mevedel-note-author))
+        (mevedel-buddy-keep-note note))
+      (overlay-put note 'mevedel-note-state 'taken)
+      (overlay-put note 'mevedel-note-buddy-looks-done nil)
+      (with-current-buffer (overlay-buffer note) (mevedel-buddy-mode 1))
+      (mevedel-notes--render note)
+      (mevedel-instruction-store-touch workspace)))
+  note)
+
+;;;###autoload
+(defun mevedel-note-drop (&optional note)
+  "Stop watching taken NOTE and return it to unsent, keeping its conversation."
+  (interactive)
+  (setq note (or note (mevedel-notes--at-point)))
+  (let ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note))))
+    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+      (unless (eq 'taken (overlay-get note 'mevedel-note-state))
+        (user-error "Note is not taken"))
+      (overlay-put note 'mevedel-note-state 'unsent)
+      (overlay-put note 'mevedel-note-buddy-looks-done nil)
+      (mevedel-notes--render note)
+      (mevedel-instruction-store-touch workspace)))
+  note)
+
+(defun mevedel-notes--activate-taken (buffer)
+  "Resume watching taken notes restored in BUFFER, without loading its dial."
+  (with-current-buffer buffer
+    (save-restriction
+      (widen)
+      (when (seq-some (lambda (note)
+                        (and (eq 'note (overlay-get note 'mevedel-instruction-type))
+                             (eq 'taken (overlay-get note 'mevedel-note-state))))
+                      (overlays-in (point-min) (point-max)))
+        (mevedel-buddy-mode 1)))))
+
+(add-hook 'mevedel-instructions-restored-hook #'mevedel-notes--activate-taken)
 
 ;;;###autoload
 (defun mevedel-note-delete (&optional note)
@@ -484,6 +540,9 @@ Return its live source overlay, retaining its text, tags and attachments."
                    (append '((?s "send" "Send or reopen the note conversation")
                              (?e "edit" "Edit note text")
                              (?x "done" "Mark note done"))
+                           (if (eq 'taken (overlay-get note 'mevedel-note-state))
+                               '((?t "drop" "Stop watching this note"))
+                             '((?t "take" "Implement yourself with Buddy watching")))
                            (if (eq 'buddy (overlay-get note 'mevedel-note-author))
                                '((?d "dismiss" "Dismiss this remark")
                                  (?k "keep" "Keep as your own note"))
@@ -498,6 +557,9 @@ Return its live source overlay, retaining its text, tags and attachments."
         (?a (mevedel-note-apply-change note))
         (?r (mevedel-note-reask note))
         (?m (mevedel-note-merge-change note))
+        (?t (if (eq 'taken (overlay-get note 'mevedel-note-state))
+                (mevedel-note-drop note)
+              (mevedel-note-take note)))
         (?e (mevedel-note-edit
              (read-string "Note: " (overlay-get note 'mevedel-note-text)) note))
         (?x (mevedel-note-done note))

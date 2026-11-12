@@ -16,6 +16,9 @@ deletion, and may be raised again if it returns. Keeping a remark changes its
 author to `user`, preserving its identity,
 text and kept-from-Buddy metadata. Buddy no longer owns it. A user edit or keep
 while a review runs also invalidates the review's older mutation authority.
+Sending or taking a Buddy remark first performs the same keep operation. The
+conversation or taken goal therefore belongs to the user, even if a previously
+started review later tries to retract the original remark.
 Dismissal uses the shared closed-note lifecycle with reason `dismissed`, not
 separate Buddy persistence. Recently closed count/age limits bound how long
 that rejected advice remains available to the model.

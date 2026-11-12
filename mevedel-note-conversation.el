@@ -192,6 +192,9 @@ ordinary request-time transform, where media has an active request owner."
                                            (with-current-buffer (overlay-buffer note)
                                              (file-name-directory buffer-file-name)))))
              (session (buffer-local-value 'mevedel--session data)))
+        (dolist (item notes)
+          (when (eq 'buddy (overlay-get item 'mevedel-note-author))
+            (mevedel-buddy-keep-note item)))
         (with-current-buffer data
           (if id
               (mevedel-note-conversation-setup)
@@ -200,9 +203,12 @@ ordinary request-time transform, where media has an active request owner."
             (mevedel--submit-generated-turn
              (mapconcat (lambda (item) (mevedel-note-conversation--prompt item session))
                         notes "\n\n"))))
-        (unless id
+        (unless (and id (cl-every (lambda (item)
+                                   (eq 'sent (overlay-get item 'mevedel-note-state)))
+                                 notes))
           (dolist (item notes)
-            (overlay-put item 'mevedel-note-session-id (mevedel-session-session-id session))
+            (unless id
+              (overlay-put item 'mevedel-note-session-id (mevedel-session-session-id session)))
             (overlay-put item 'mevedel-note-state 'sent)
             (mevedel-notes--render item))
           (mevedel-instruction-store-touch workspace)

@@ -303,10 +303,25 @@ active Goal. Explicitly mentioned notes and the selected code are frozen at send
 time. Note conversations stay out of the ordinary chat chooser and automatic
 session cleanup; reopen them from their notes instead.
 
+Choose **take** in the source menu, or use `M-x mevedel-note-take`, to implement
+the note yourself. Its label says **Buddy watches**: Buddy uses the note's text
+as its brief and may say **looks done**, but only you mark it done. **Drop**
+(`M-x mevedel-note-drop`) returns it to unsent and stops that watch without
+changing code or discarding its conversation. Sending a taken note instead
+changes it to sent and stops watching. Sending or taking a Buddy remark first
+keeps it as your own note, so later reviews cannot retract it.
+
+`M-x mevedel-buddy-set-level` saves a dial per workspace: **Quiet** speaks only
+when asked, **Watching** flags likely mistakes around recent edits at your
+pause, and **Active** also offers ideas near a known goal (a taken note or a
+nearby authored note). Active is the default. Taken notes are watched at every
+level, including after their source notes are restored on a later visit.
+Explicit review and guidance requests are not limited by the automatic dial.
+
 `M-x mevedel-notes-list` lists the whole workspace, including unopened files,
 grouped by attention state. Use `v` or `RET` to visit, `e` to edit, `t` to edit
-tags, `s` to send or reopen, `d` to delete, `x` to mark done, `g` to refresh and
-`q` to close. Recently
+tags, `T` to take or drop, `s` to send or reopen, `d` to delete, `x` to mark done,
+`g` to refresh and `q` to close. Recently
 closed notes form a folded group: `TAB` toggles it, the State column shows the
 close reason, and `r` restores the selected note. Listing does not open source
 files. Missing sources show their last observed state without probing each file.
@@ -333,7 +348,8 @@ by a background timer. Expiry never reverts file changes. Imported archived
 notes marked exempt from expiry do not count against these limits.
 
 Notes use the workspace instruction store, not a session's private state, and
-appear when their source file is opened, without starting a session or Buddy.
+appear when their source file is opened, without starting a session. Restored
+taken notes resume Buddy tracking; other restored notes do not start Buddy.
 The file-visit hook discovers local stores and restores remembered notes without
 remote I/O. A small local index (`$XDG_STATE_HOME/mevedel/remote-notes.el`, or
 `~/.local/state/mevedel/remote-notes.el`) remembers only remote workspace roots
@@ -1574,6 +1590,7 @@ from gptel's API-reported token usage when available.
 | `mevedel-compact` | Summarize old conversation and reduce effective token use. |
 | `mevedel-buddy-mode` | Let a model comment on the edits you make in this buffer. |
 | `mevedel-buddy-global-mode` | Enable Buddy in every buffer whose mode is tracked. |
+| `mevedel-buddy-set-level` | Set the workspace dial: Quiet, Watching or Active (default). |
 | `mevedel-buddy-review` | Review recent edits now, without waiting for the idle timer. |
 | `mevedel-buddy-guide` | Ask what to build in this region, rather than what went wrong. |
 | `/buddy` | Implement it yourself: feed this session's plan, Goal, or latest exchange to Buddy and turn Buddy on. `/buddy BRIEF` states the brief; `/buddy off` stops. |

@@ -210,6 +210,51 @@
         (call-interactively (key-binding (kbd "C-c C-a"))))
       (with-current-buffer source
         (should (equal "outside-before\nfresh proposal\noutside-after\n" (buffer-string)))))))
+(mevedel-deftest mevedel-note-send/taken
+  (:quiet t)
+  ,test
+  (test)
+  :doc "sending a taken note ends watching, including with an existing conversation"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Implement this myself"))
+           (view (mevedel-note-send (mevedel-note-take note))))
+      (should (eq 'sent (overlay-get note 'mevedel-note-state)))
+      (mevedel-note-conversation-test--answer (car sent) "A retained answer.")
+      (with-current-buffer view (mevedel-note-conversation-close))
+      (with-current-buffer source
+        (mevedel-note-take note)
+        (should (eq view (mevedel-note-send note)))
+        (should (eq 'sent (overlay-get note 'mevedel-note-state)))
+        (should (= 1 (length sent)))
+        (with-current-buffer view (mevedel-note-conversation-close))
+        (mevedel--clear-instruction-state workspace)
+        (mevedel-instruction-store-observe workspace)
+        (with-current-buffer source
+          (goto-char (point-min)) (forward-line 1)
+          (should (eq 'sent (overlay-get (mevedel-notes--at-point)
+                                        'mevedel-note-state))))))))
+
+(mevedel-deftest mevedel-note-send/buddy-ownership
+  (:quiet t)
+  ,test
+  (test)
+  :doc "send transfers a Buddy remark before creating its durable conversation"
+  (mevedel-note-conversation-test--with-source
+    (require 'mevedel-buddy-note)
+    (let ((note (mevedel-note-create "Fix what Buddy found")))
+      (overlay-put note 'mevedel-note-author 'buddy)
+      (let ((view (mevedel-note-send note)))
+        (should (eq 'user (overlay-get note 'mevedel-note-author)))
+        (should (overlay-get note 'mevedel-note-kept-from-buddy))
+        (mevedel-note-conversation-test--answer (car sent) "Fixed in this conversation.")
+        (with-current-buffer view
+          (should (string-search "Fixed in this conversation." (buffer-string)))))
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (let ((restored (with-current-buffer source (mevedel-notes--at-point))))
+        (should (eq 'user (overlay-get restored 'mevedel-note-author)))
+        (should (overlay-get restored 'mevedel-note-kept-from-buddy))
+        (should (overlay-get restored 'mevedel-note-session-id))))))
 
 (mevedel-deftest mevedel-note-send/chat-selection-isolation
   (:quiet t)

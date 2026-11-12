@@ -818,6 +818,9 @@ Return the restored overlay, or nil when unresolved."
               (puthash uuid bounds parent-ranges))
             ov))))))
 
+(defvar mevedel-instructions-restored-hook nil
+  "Functions called with the source buffer after its instructions are restored.")
+
 (cl-defun mevedel--restore-file-instructions (file &optional message workspace visited)
   "Restore FILE and its INSTRUCTIONS.
 
@@ -911,6 +914,7 @@ from it without checking or reading FILE on disk."
                        kia (if (= kia 1) "" "s") file)
                :warning))))
         (setf (car (assoc file (mevedel--instruction-alist))) buffer)
+        (run-hook-with-args 'mevedel-instructions-restored-hook buffer)
         (cl-values buffer restored kia)))))
 
 
