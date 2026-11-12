@@ -341,6 +341,26 @@
   (:quiet t)
   ,test
   (test)
+  :doc "a closed blank-line note reanchors after an external source change"
+  (mevedel-notes-test--with-source
+    (setq workspace (mevedel-workspace-get-or-create
+                     'file directory directory "notes"))
+    (setq-local mevedel--workspace workspace)
+    (delete-region (line-beginning-position) (line-end-position))
+    (save-buffer)
+    (let ((note (mevedel-note-create "Keep the blank line")))
+      (should (= (overlay-start note) (overlay-end note)))
+      (mevedel-note-done note))
+    (mevedel-instruction-store-flush t)
+    (should-not (mevedel-notes-test--labels))
+    (with-temp-file file (insert "prepended\nbefore\n\nafter\n"))
+    (revert-buffer t t)
+    (let ((note (mevedel-note-restore 1 workspace)))
+      (should (= 3 (line-number-at-pos (overlay-start note))))
+      (should (= (overlay-start note) (overlay-end note))))
+    (should (= 1 (length (mevedel-notes-test--labels))))
+    (should (string-match-p "Keep the blank line"
+                            (car (mevedel-notes-test--labels)))))
   :doc "changed code falls back to the old line, not an obsolete character offset"
   (mevedel-notes-test--with-source
     (mevedel-note-create "Keep my place")

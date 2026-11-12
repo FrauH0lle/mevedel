@@ -1,4 +1,4 @@
-;;; test-mevedel-view-directive-cursor.el --- Note input cursor tests -*- lexical-binding: t -*-
+;;; test-mevedel-view-note-cursor.el --- Note input cursor tests -*- lexical-binding: t -*-
 
 ;;; Commentary:
 ;; Exercise region note creation through its real minibuffer while a
@@ -23,7 +23,7 @@
           (mevedel--instruction-current-state-key :global)))
   (dolist (label '("[Manage]" "/root/background-reader"))
     (mevedel-view-test--with-buffers
-      (let* ((directory (make-temp-file "mevedel-directive-cursor-" t))
+      (let* ((directory (make-temp-file "mevedel-note-cursor-" t))
              (file (file-name-concat directory "source.txt"))
              (workspace (mevedel-workspace--create
                          :type 'file :id directory :root directory :name "cursor"))
@@ -36,7 +36,7 @@
               (setq source (find-file-noselect file))
               (with-current-buffer source (setq-local mevedel--workspace workspace))
               (let* ((session (mevedel-session--create
-                               :name "directive-cursor" :root-buffer data-buf))
+                               :name "note-cursor" :root-buffer data-buf))
                      (record (mevedel-agent-record--create
                               :id "background-reader" :path "/root/background-reader"
                               :parent-path "/root" :activity 'running))
@@ -156,5 +156,5 @@
   :doc "input errors unwind windows without losing the background reader"
   'error)
 
-(provide 'test-mevedel-view-directive-cursor)
-;;; test-mevedel-view-directive-cursor.el ends here
+(provide 'test-mevedel-view-note-cursor)
+;;; test-mevedel-view-note-cursor.el ends here

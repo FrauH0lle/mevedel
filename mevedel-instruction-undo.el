@@ -4,7 +4,7 @@
 
 ;; Text undo does not restore overlays.  Fence edge edits and extra movements
 ;; with paired entries that install geometry after primitive text undo.
-;; Only anchors and presentations are restored, never directive activity.
+;; Only anchors and presentations are restored, never conversation activity.
 
 ;;; Code:
 
@@ -12,7 +12,6 @@
 (require 'mevedel-instruction-registry)
 (require 'mevedel-structs)
 
-;; `mevedel-directive'
 ;; `mevedel-directive-source'
 (declare-function mevedel--delete-instruction
                   "mevedel-directive-source" (instruction &optional buffer))

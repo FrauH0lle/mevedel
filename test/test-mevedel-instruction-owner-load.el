@@ -75,9 +75,9 @@
             (progn
               (require 'mevedel-overlay-ui)
               (condition-case nil
-                  (mevedel--ov-actions-abort)
+                  (mevedel--ov-actions-activity)
                 (error nil))
-              (unless (featurep 'mevedel-chat)
+              (unless (featurep 'mevedel-notes)
                 (error "UI action did not load its target owner")))))))
     (unwind-protect
         (progn

@@ -595,7 +595,7 @@
                      (point)))))))
   (inspector)
   :doc "agent transcript EOF is not an editable composer anchor" nil
-  :doc "directive inspector EOF is not an editable composer anchor" t)
+  :doc "frozen-history inspector EOF is not an editable composer anchor" t)
 
 (mevedel-deftest mevedel-view-zone--anchor-start
   (:doc "returns the start of the anchor run, bounded by the fragment start")

@@ -284,10 +284,6 @@
 (declare-function mevedel--compact-transform-auto
                   "mevedel-compact" (continue fsm))
 
-;; `mevedel-directive'
-;; `mevedel-directive-request'
-
-
 ;; `mevedel-gptel-bridge'
 (declare-function mevedel-gptel-bridge-install "mevedel-gptel-bridge" ())
 (declare-function mevedel-gptel-bridge-uninstall "mevedel-gptel-bridge" ())

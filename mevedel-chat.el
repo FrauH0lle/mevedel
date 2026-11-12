@@ -100,7 +100,6 @@
 ;; `mevedel-compact-run'
 (defvar mevedel-compact-run-cancel)
 
-;; `mevedel-directive-plan'
 
 
 ;; `mevedel-execution'
@@ -1051,26 +1050,6 @@ One of those settles the turn and clears `mevedel--current-request\'."
                 ;; Abort stops producers, not the final review of their effects.
                 nil t)))))
       (next))))
-
-(defun mevedel--directive-capture (request)
-  "Return file coverage metadata captured by REQUEST."
-  (let (covered gaps untracked-effects)
-    (when request
-      (setq untracked-effects
-            (copy-tree (mevedel-request-untracked-effects request)))
-      (maphash
-       (lambda (path original)
-         (if (and (listp original) (plist-get original :gap))
-             (push (cons path (plist-get original :gap)) gaps)
-           (push path covered)))
-       (mevedel-request-file-snapshots request)))
-    (list :capture (if (or gaps untracked-effects) 'incomplete 'complete)
-          :covered-files (sort covered #'string<)
-          :gaps (sort gaps (lambda (left right)
-                             (string< (car left) (car right))))
-          :untracked-effects
-          (sort untracked-effects
-                (lambda (left right) (string< (car left) (car right)))))))
 
 (defun mevedel--replace-patch-buffer (patch-content)
   "Replace patch buffer contents with PATCH-CONTENT.

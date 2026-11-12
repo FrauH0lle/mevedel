@@ -37,16 +37,6 @@
 (autoload 'mevedel--patch-buffer "mevedel-chat")
 (autoload 'mevedel--replace-patch-buffer "mevedel-chat")
 
-;; `mevedel-directive'
-;; `mevedel-directive-frame'
-(declare-function mevedel-directive-frame-display
-                  "mevedel-directive-frame"
-                  (directive view-buffer &optional focus))
-(autoload 'mevedel-directive-frame-display "mevedel-directive-frame")
-
-;; `mevedel-directive-request'
-
-
 ;; `mevedel-directive-source'
 (declare-function mevedel--delete-instruction
                   "mevedel-directive-source"
@@ -85,13 +75,7 @@
 (autoload 'mevedel-note-menu "mevedel-notes" nil t)
 (autoload 'mevedel-notes--render "mevedel-notes")
 
-;; `mevedel-overlay-ui'
-(declare-function mevedel--ov-actions-abort
-                  "mevedel-overlay-ui" (&optional instructions))
-
 ;; `mevedel-overlays'
-(declare-function mevedel--bodyless-instruction-p
-                  "mevedel-overlays" (instruction))
 (declare-function mevedel--child-instructions
                   "mevedel-overlays" (instruction))
 (declare-function mevedel--highest-priority-instruction
@@ -108,7 +92,6 @@
 (declare-function mevedel--topmost-instruction
                   "mevedel-overlays" (instruction &optional of-type pred))
 (declare-function mevedel-delete-instructions "mevedel-overlays" ())
-(autoload 'mevedel--bodyless-instruction-p "mevedel-overlays")
 (autoload 'mevedel--child-instructions "mevedel-overlays")
 (autoload 'mevedel--highest-priority-instruction "mevedel-overlays")
 (autoload 'mevedel--instruction-bufferlevel-p "mevedel-overlays")
@@ -167,47 +150,14 @@
     (retry . "Retry")
     (plan . "Plan")
     (discuss . "Discuss"))
-  "Plain display labels for directive actions.")
+  "Plain display labels for frozen directive history actions.")
 
 (defun mevedel-overlay-ui-directive-action-label (action)
-  "Return the display label for directive ACTION."
+  "Return the frozen-history display label for directive ACTION."
   (or (alist-get (if (symbolp action) action (intern-soft action))
                  mevedel--directive-action-labels)
       (capitalize (replace-regexp-in-string
                    "[-_]+" " " (format "%s" action)))))
-
-
-(defun mevedel--ov-actions-read-choice
-    (instruction label prompt choices &optional hint-str)
-  "Read one of CHOICES for INSTRUCTION, rendering them on its overlay.
-LABEL heads the rendered overlay row and PROMPT is the minibuffer
-prompt.  HINT-STR is an optional right-aligned annotation ending in a
-newline.  The overlay row is restored afterwards; without a displayed
-overlay the choices appear only in the minibuffer."
-  (let ((before-string (and (overlay-buffer instruction)
-                            (overlay-get instruction 'before-string))))
-    (unwind-protect
-        (progn
-          (when (overlay-buffer instruction)
-            (overlay-put
-             instruction 'before-string
-             (concat
-              before-string
-              (propertize label 'face 'success)
-              (when (fboundp #'rmc--add-key-description)
-                (mapconcat (lambda (e) (cdr e))
-                           (mapcar #'rmc--add-key-description choices)
-                           ", "))
-              (if hint-str
-                  (concat
-                   (propertize
-                    " " 'display
-                    `(space :align-to (- right ,(1+ (length hint-str)))))
-                   (propertize hint-str 'face 'success))
-                "\n"))))
-          (read-multiple-choice prompt choices))
-      (when (overlay-buffer instruction)
-        (overlay-put instruction 'before-string before-string)))))
 
 
 (defun mevedel--ov-actions-dispatch (&optional instruction _ci)
@@ -305,7 +255,6 @@ directly.  Return nil if no overlays exist at point."
 (eval-and-compile
   (dolist (spec '((link mevedel-link-instructions mevedel-instruction-registry)
                   (unlink mevedel-unlink-instructions mevedel-instruction-registry)
-                  (abort mevedel-abort mevedel-chat)
                   (activity mevedel-note-history mevedel-notes)))
     (let ((name (nth 0 spec))
           (target (nth 1 spec))

@@ -169,8 +169,8 @@ Keep them request-local across temporary removal of all callable tools."
 
 (defun mevedel-tools-visibility (&optional owner)
   "Return a predicate of tool names visible to OWNER's next model sample.
-OWNER is a native gptel FSM or an external turn owner.  Plan and directive
-planning hide editing tools; Goal tools follow their current availability.
+OWNER is a native gptel FSM or an external turn owner.  Plan sessions and
+read-only Plan requests hide editing tools; Goal tools follow availability.
 Monitor is visible only to the root, never to an agent invocation.
 Without OWNER, use the current conversation, including before admission."
   (let* ((info (and owner (mevedel-engine-info owner)))

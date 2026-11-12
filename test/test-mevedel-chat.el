@@ -1716,16 +1716,6 @@
 				      (mevedel-session-working-directory mevedel--session)))))))
 
 
-;;
-;;; Directive processing
-
-(mevedel-deftest mevedel-revision-api-removed
-  (:doc "removes the superseded revision command and prompt path")
-  ,test
-  (test)
-  (should-not (fboundp 'mevedel-revise-directive))
-  (should-not (fboundp 'mevedel--revise-directive-prompt)))
-
 (mevedel-deftest mevedel-abort
 		 (:doc "aborts active chat request state")
 		 ,test
@@ -2064,38 +2054,6 @@
             (should (< a-pos z-pos))
             (should (string-match-p "new file mode 100644" patch))))
       (delete-directory root t))))
-
-(mevedel-deftest mevedel--directive-capture ()
-  ,test
-  (test)
-  :doc "reports deterministic complete and incomplete request coverage"
-  (let ((snapshots (make-hash-table :test #'equal)))
-    (puthash "/tmp/z" "old" snapshots)
-    (puthash "/tmp/a" nil snapshots)
-    (should
-     (equal '(:capture complete
-              :covered-files ("/tmp/a" "/tmp/z")
-              :gaps nil
-              :untracked-effects nil)
-            (mevedel--directive-capture
-             (mevedel-request--create :file-snapshots snapshots))))
-    (puthash "/tmp/missing" '(:gap not-observed) snapshots)
-    (should
-     (equal '(:capture incomplete
-              :covered-files ("/tmp/a" "/tmp/z")
-              :gaps (("/tmp/missing" . not-observed))
-              :untracked-effects nil)
-            (mevedel--directive-capture
-             (mevedel-request--create :file-snapshots snapshots))))
-    (should
-     (equal '(:capture incomplete
-              :covered-files ("/tmp/a" "/tmp/z")
-              :gaps (("/tmp/missing" . not-observed))
-              :untracked-effects (("Bash" . "untracked")))
-            (mevedel--directive-capture
-             (mevedel-request--create
-              :file-snapshots snapshots
-              :untracked-effects '(("Bash" . "untracked"))))))))
 
 
 (provide 'test-mevedel-chat)

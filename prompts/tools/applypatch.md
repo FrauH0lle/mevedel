@@ -18,7 +18,7 @@ user's feedback asks for a revision.
   materialization. Outside Plan mode, resource and ordinary paths may share one
   atomic proposal, subject to permission/review. `work://shared/...` belongs to
   the workspace and follows normal edit permissions and review.
-- Directive Planning remains read-only even for session working files.
+- Read-only Plan requests permit no writes, even to session working files.
 - Understand the relevant contents before changing them. Unsaved buffer edits
   are rejected; existing user changes must be preserved.
 - The basic grammar is:

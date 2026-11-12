@@ -1051,14 +1051,14 @@
   ,test
   (test)
   :doc "describes the shared selection and marks inherited values"
-  (let ((scope '(:title "Directive model"
+  (let ((scope '(:title "Note model"
                  :model-provider "Fast:fast-model"
                  :reasoning-effort high
                  :inherited t)))
     (cl-letf (((symbol-function 'transient-scope)
                (lambda (&rest _) scope)))
       (should
-       (equal "Directive model  Fast:fast-model · effort high · session"
+       (equal "Note model  Fast:fast-model · effort high · session"
               (substring-no-properties
                (mevedel-menu--model-selection-description)))))))
 
@@ -1086,14 +1086,14 @@
                  (setq prefix value
                        scope (plist-get args :scope)))))
       (mevedel-menu-open-model-selection
-       :title "Directive model"
+       :title "Note model"
        :provider "Fast:fast-model"
        :effort 'high
        :update #'ignore
        :reset #'identity
        :inherited t))
     (should (eq 'mevedel-menu--model-selection prefix))
-    (should (equal "Directive model" (plist-get scope :title)))
+    (should (equal "Note model" (plist-get scope :title)))
     (should (equal "Fast:fast-model" (plist-get scope :model-provider)))
     (should (eq 'high (plist-get scope :reasoning-effort)))
     (should (eq #'ignore (plist-get scope :update)))
@@ -1104,7 +1104,7 @@
   (unwind-protect
       (progn
         (mevedel-menu-open-model-selection
-         :title "Directive model"
+         :title "Note model"
          :provider "Fast:fast-model"
          :effort nil
          :update #'ignore

@@ -103,7 +103,7 @@ Bind parent, child, origin, parent-before and child-before for assertions."
            (transient--emergency-exit)
            (when (buffer-live-p view-buf)
              (with-current-buffer view-buf (mevedel-directive-frame-mode -1)))
-           ;; This fixture owns its frame directly, not the directive overlay
+           ;; This fixture owns its frame directly, not the note overlay
            ;; lifecycle.  Do not invoke that lifecycle's source restoration.
            (setq mevedel-directive-frame--frame nil)
            (when (frame-live-p child) (delete-frame child t))

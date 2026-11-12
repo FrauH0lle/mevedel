@@ -77,7 +77,7 @@ already left its own request issue."
           (when session (mevedel-readiness--resume session "authentication")))
       (mevedel-diagnostic-message
        (mevedel-diagnostic-scope session) "Claude is not ready: %s" failure)
-      ;; Informational: blocking would also wedge Goal, plan and directive
+      ;; Informational: blocking would also wedge Goal, plan and note
       ;; sends, which never pass the composer's readiness check.
       (when (and session checked
                  (mevedel-recovery-report

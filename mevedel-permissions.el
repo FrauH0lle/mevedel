@@ -587,7 +587,7 @@ The decision chain:
        any bucket yields `deny' -> deny;
        standalone/sticky Plan allows only prepared ApplyPatch proposals
        confined to session-owned work descendants;
-       directive Planning denies all native edits, including that ApplyPatch,
+       read-only Plan requests deny all native edits, including that ApplyPatch,
        and Eval -> deny
   3. Call the tool checker, when present, to decide command authority
   4. Resolve allow/ask rules innermost-first:

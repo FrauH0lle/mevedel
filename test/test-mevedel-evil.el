@@ -564,7 +564,7 @@ independently of the product's primitive change hooks."
         (evil-local-mode -1)
         (mevedel-evil-test--keys "g k")
         (should (equal (nreverse calls) '(grant keep))))))
-  :doc "directive inspector keeps inherited q and its own actions"
+  :doc "frozen-history inspector keeps inherited q and its own actions"
   (mevedel-evil-test--buffer
     (mevedel-directive-activity-mode)
     (evil-normal-state)

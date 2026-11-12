@@ -2,8 +2,7 @@
 
 ;;; Commentary:
 
-;; Core overlay system for mevedel instructions.  Instructions come in
-;; two flavours: notes (explicit context) and directives (LLM requests).
+;; Core overlay system for mevedel notes with explicit source context.
 ;;
 ;; This core owns containment and tree queries, tag/context semantics,
 ;; navigation, and prompt assembly.  `mevedel-instruction-registry' owns
@@ -35,16 +34,6 @@
 (autoload 'mevedel--replace-patch-buffer "mevedel-chat")
 (defvar mevedel--view-buffer)
 
-;; `mevedel-directive-frame'
-(autoload 'mevedel-directive-frame-display "mevedel-directive-frame")
-
-;; `mevedel-directive-plan'
-
-
-;; `mevedel-directive-request'
-
-
-;; `mevedel-directive'
 ;; `mevedel-directive-source'
 (declare-function mevedel--delete-instruction
                   "mevedel-directive-source"
@@ -246,7 +235,7 @@ Return the deleted count."
           (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (or workspace 'global))
                                        "Aborted")))
       (dolist (instruction instructions)
-        ;; Deleting a parent already deletes its nested directives.
+        ;; Deleting a parent already deletes its nested notes.
         (unless (overlay-get instruction 'mevedel-marked-for-deletion)
           (mevedel--delete-instruction instruction)))
       (when (memq mevedel--highlighted-instruction instructions)
@@ -317,7 +306,6 @@ FILE-CONTENTS."
 (defun mevedel--print-instruction-not-found (direction type)
   "Print a not found message for the given DIRECTION and TYPE."
   (let ((type-string (pcase type
-                       ('directive "directive")
                        ('note "note")
                        (_ "instruction")))
         (scope (mevedel-diagnostic-scope
@@ -438,10 +426,6 @@ If OF-TYPE is non-nil, returns the parent with the given type."
                                     (< end (overlay-end instr)))))
                          (mevedel--instructions-in beg end))))))
 
-(defun mevedel--bodyless-instruction-p (instr)
-  "Return non-nil if the INSTR instruction has a body."
-  (= (overlay-start instr) (overlay-end instr)))
-
 (defun mevedel--subinstruction-of-p (sub parent)
   "Return t is instruction SUB is contained entirely within instruction PARENT.
 
@@ -453,11 +437,8 @@ itself."
        (and (/= (overlay-start parent) (overlay-start sub))
             (/= (overlay-end parent) (overlay-end sub)))))
 
-(cl-defun mevedel--child-instructions (instruction)
+(defun mevedel--child-instructions (instruction)
   "Return the direct child instructions of the given INSTRUCTION overlay."
-  ;; Bodyless instructions cannot have any children.
-  (when (mevedel--bodyless-instruction-p instruction)
-    (cl-return-from mevedel--child-instructions nil))
   (let ((children (cl-remove-if (lambda (instr)
                                   (or (eq instr instruction)
                                       (and (= (overlay-start instr) (overlay-start instruction))
@@ -556,20 +537,6 @@ PRED must be a function which accepts an instruction."
           best-instruction
         nil))))
 
-
-(defcustom mevedel-instructions-truncated-max 100
-  "Maximum display length for truncated directive text.
-Used by `mevedel-truncate-directive' to limit the length of directive
-text shown in UI elements such as the minibuffer prompt."
-  :type 'integer
-  :group 'mevedel)
-
-(defun mevedel-truncate-directive (text)
-  "Truncate TEXT to `mevedel-instructions-truncated-max' characters.
-
-Returns TEXT truncated if longer than the maximum, otherwise returns
-TEXT unchanged.  Truncation uses ellipsis to indicate omitted content."
-  (mevedel--truncate-display text mevedel-instructions-truncated-max t))
 
 (provide 'mevedel-overlays)
 ;;; mevedel-overlays.el ends here

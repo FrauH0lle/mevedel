@@ -581,21 +581,19 @@ Unlike the compact native card this discloses all implementation instructions."
          (worktree (eq (plist-get selection :location) 'worktree)))
     (concat
      (plist-get entry :body)
-     (if (plist-get entry :directive)
-         "\n\n## Directive implementation\n\n"
-       (format
-        (concat "\n\n## Implementation\n\n"
-                "- **Location:** %s\n- **Context:** %s — %s\n"
-                "- **Execution:** %s — %s\n- **Budget:** %s\n")
-        (capitalize (symbol-name (plist-get selection :location)))
-        (capitalize (symbol-name (plist-get selection :context)))
-        (mevedel-plan-mode--context-description (plist-get selection :context))
-        (capitalize (symbol-name execution))
-        (mevedel-plan-mode--execution-description execution)
-        (if (eq execution 'goal)
-            (if-let* ((budget (plist-get selection :goal-token-budget)))
-                (format "%d tokens" budget) "Unlimited")
-          "Goal execution only")))
+     (format
+      (concat "\n\n## Implementation\n\n"
+              "- **Location:** %s\n- **Context:** %s — %s\n"
+              "- **Execution:** %s — %s\n- **Budget:** %s\n")
+      (capitalize (symbol-name (plist-get selection :location)))
+      (capitalize (symbol-name (plist-get selection :context)))
+      (mevedel-plan-mode--context-description (plist-get selection :context))
+      (capitalize (symbol-name execution))
+      (mevedel-plan-mode--execution-description execution)
+      (if (eq execution 'goal)
+          (if-let* ((budget (plist-get selection :goal-token-budget)))
+              (format "%d tokens" budget) "Unlimited")
+        "Goal execution only"))
      (format "- **Mode:** %s\n- **Model:** %s · effort %s\n- **Skills:** %s\n"
              (capitalize (symbol-name (plist-get selection :mode)))
              (plist-get selection :model-provider)
@@ -612,7 +610,6 @@ Unlike the compact native card this discloses all implementation instructions."
   "Render standalone Plan approval ENTRY in the interaction zone."
   (let ((chat-buffer (plist-get entry :chat-buffer))
         (selection (plist-get entry :selection))
-        (directive-p (plist-get entry :directive))
         overlay)
     (cl-labels
         ((deliver (outcome)
@@ -722,53 +719,51 @@ Unlike the compact native card this discloses all implementation instructions."
         (mevedel-queue--entry-metadata-put entry :view-buffer target)
         (with-current-buffer target
           (let* ((keymap (make-sparse-keymap))
-                 (warning (and (not directive-p)
-                               (mevedel-plan-mode--worktree-warning entry)))
+                 (warning (mevedel-plan-mode--worktree-warning entry))
                  (execution (plist-get selection :execution))
                  (budget (plist-get selection :goal-token-budget))
                  ;; Native rows keep a stable one-screen-row geometry.
                  ;; The remote body discloses settings without keyboard hints.
                  (rows
                   (append
-                   (unless directive-p
-                     (list
-                      (concat
-                       (mevedel--prompt-key "l")
-                       "  Location    "
-                       (propertize
-                        (capitalize
-                         (symbol-name (plist-get selection :location)))
-                        'font-lock-face 'bold))
-                      (concat
-                       (mevedel--prompt-key "c")
-                       "  Context     "
-                       (propertize
-                        (capitalize
-                         (symbol-name (plist-get selection :context)))
-                        'font-lock-face 'bold)
-                       " — "
-                       (mevedel-plan-mode--context-description
-                        (plist-get selection :context)))
-                      (concat
-                       (mevedel--prompt-key "e")
-                       "  Execution   "
-                       (propertize
-                        (capitalize (symbol-name execution))
-                        'font-lock-face 'bold)
-                       " — "
-                       (mevedel-plan-mode--execution-description execution))
-                      ;; The row stays when Execution is not Goal.
-                      (if (eq execution 'goal)
-                          (concat
-                           (mevedel--prompt-key "b")
-                           "  Budget      "
-                           (propertize
-                            (if budget
-                                (format "%d tokens" budget)
-                              "Unlimited")
-                            'font-lock-face 'bold))
-                        (propertize "   Budget      Goal execution only"
-                                    'font-lock-face 'shadow))))
+                   (list
+                    (concat
+                     (mevedel--prompt-key "l")
+                     "  Location    "
+                     (propertize
+                      (capitalize
+                       (symbol-name (plist-get selection :location)))
+                      'font-lock-face 'bold))
+                    (concat
+                     (mevedel--prompt-key "c")
+                     "  Context     "
+                     (propertize
+                      (capitalize
+                       (symbol-name (plist-get selection :context)))
+                      'font-lock-face 'bold)
+                     " — "
+                     (mevedel-plan-mode--context-description
+                      (plist-get selection :context)))
+                    (concat
+                     (mevedel--prompt-key "e")
+                     "  Execution   "
+                     (propertize
+                      (capitalize (symbol-name execution))
+                      'font-lock-face 'bold)
+                     " — "
+                     (mevedel-plan-mode--execution-description execution))
+                    ;; The row stays when Execution is not Goal.
+                    (if (eq execution 'goal)
+                        (concat
+                         (mevedel--prompt-key "b")
+                         "  Budget      "
+                         (propertize
+                          (if budget
+                              (format "%d tokens" budget)
+                            "Unlimited")
+                          'font-lock-face 'bold))
+                      (propertize "   Budget      Goal execution only"
+                                  'font-lock-face 'shadow)))
                    (list
                     (concat
                      (mevedel--prompt-key "m")
@@ -816,9 +811,7 @@ Unlike the compact native card this discloses all implementation instructions."
                      (concat
                       plan-text
                       "\n\n"
-                      (propertize (if directive-p
-                                      "Directive implementation"
-                                    "Implementation")
+                      (propertize "Implementation"
                                   'font-lock-face 'mevedel-view-plan-mode)
                       "\n\n"
                       ;; Every setting and the notice slot keep one screen
@@ -830,8 +823,7 @@ Unlike the compact native card this discloses all implementation instructions."
                       " implement    "
                       (mevedel--prompt-key "f")
                       " feedback    "
-                      (unless directive-p
-                        (concat (mevedel--prompt-key "q") " hide    "))
+                      (mevedel--prompt-key "q") " hide    "
                       (mevedel--prompt-key "C-g")
                       " cancel\n")
                      'mevedel-view-plan-mode)))
@@ -850,15 +842,13 @@ Unlike the compact native card this discloses all implementation instructions."
             (define-key keymap (kbd "M") #'open-model)
             (define-key keymap (kbd "s") #'toggle-skill)
             (define-key keymap (kbd "i") #'edit-instructions)
-            (unless directive-p
-              (define-key keymap (kbd "e") #'cycle-execution)
-              (define-key keymap (kbd "l") #'cycle-location)
-              (define-key keymap (kbd "c") #'cycle-context)
-              (when (eq execution 'goal)
-                (define-key keymap (kbd "b") #'edit-budget)))
+            (define-key keymap (kbd "e") #'cycle-execution)
+            (define-key keymap (kbd "l") #'cycle-location)
+            (define-key keymap (kbd "c") #'cycle-context)
+            (when (eq execution 'goal)
+              (define-key keymap (kbd "b") #'edit-budget))
             (define-key keymap (kbd "f") #'feedback)
-            (unless directive-p
-              (define-key keymap (kbd "q") #'hide))
+            (define-key keymap (kbd "q") #'hide)
             (define-key keymap (kbd "C-g") #'cancel)
             (setq overlay
                   (mevedel-view--interaction-register
@@ -1042,14 +1032,6 @@ When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
                (plist-get outcome :accept)
                (mevedel-session-pending-steering session))
       (user-error "Resolve pending steering before implementing the plan"))
-    (when (and (plist-get entry :directive)
-               (proper-list-p outcome)
-               (plist-get outcome :accept)
-               (cl-some
-                (lambda (queued)
-                  (eq (plist-get (plist-get queued :scope) :action) 'plan))
-                (mevedel-session-pending-follow-ups session)))
-      (user-error "Resolve pending planning follow-ups before implementing"))
     (if (not (eq entry pending))
         (mevedel--warn-once (mevedel-diagnostic-scope session) 'plan-approval-stale
                             "Plan approval: stale settlement ignored")

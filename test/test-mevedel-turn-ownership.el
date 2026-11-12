@@ -328,7 +328,7 @@
 (mevedel-deftest mevedel-preset--apply-final-patch-ownership (:quiet t)
   ,test
   (test)
-  :doc "late final patch retains its captured patch without replacing current presentation"
+  :doc "late final patch uses its captured request without replacing current presentation"
   (mevedel-turn-ownership-test--with-session
     (let ((remote (mevedel-workspace--create
                    :type 'project :id "/mevedelmock:host:/srv/p/"
@@ -350,7 +350,6 @@
         (funcall resume)
         (funcall resume)
         (should (eq request generated))
-        (should (equal "old diff\n" (plist-get (gptel-fsm-info fsm) :mevedel-directive-patch)))
         (should-not displayed)
         (should (= 1 continued))
         (should (eq replacement mevedel--current-request)))))

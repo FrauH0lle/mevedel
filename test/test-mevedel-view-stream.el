@@ -33,6 +33,7 @@
 (require 'mevedel-tool-render-data)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-repair-diagnostics)
+(require 'mevedel-transport)
 (require 'mevedel-transcript-audit)
 (require 'mevedel-view-zone)
 (eval-when-compile (require 'tramp))
@@ -5546,34 +5547,6 @@ turn's later text, live and after reconstruction."
         (should (string-match-p "Visible model prompt" expanded))
         (should-not (string-match-p ":PROPERTIES:" expanded))
         (should-not (string-match-p "GPTEL_BOUNDS" expanded)))))
-
-  :doc "expanded external Prompt survives in-flight incremental render"
-  (mevedel-view-stream-test--with-buffers
-    (let (data-turn-start)
-      (mevedel-view-stream-test--insert-data data-buf "Change alpha :implement:\n" nil)
-      (mevedel-view-stream-test--insert-data
-       data-buf
-       ":PROMPT:\n## TASK\nFull hidden prompt.\n:END:\n"
-       'ignore)
-      (with-current-buffer data-buf
-        (setq data-turn-start (copy-marker (point) nil)))
-      (with-current-buffer view-buf
-        (mevedel-view--begin-external-turn
-         "Implement: Change alpha" data-turn-start 'directive)
-        (goto-char (point-min))
-        (search-forward "Prompt")
-        (mevedel-view-toggle-section)
-        (should (string-match-p
-                 "Full hidden prompt"
-                 (buffer-substring-no-properties
-                  (point-min) mevedel-view--input-marker))))
-      (mevedel-view-stream-test--insert-data data-buf "Assistant answer.\n" 'response)
-      (with-current-buffer view-buf
-        (mevedel-view-render-live-update data-buf)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "Full hidden prompt" text))
-          (should (string-match-p "Assistant answer" text))))))
 
   :doc "target-native response link opens only through its session target"
   (let* ((host "view-link-target")

@@ -14,7 +14,6 @@
 ;; `eval-when-compile' degrades to `progn' in interpreted code.
 (require 'cl-lib)
 
-;; `mevedel-directive'
 ;; `mevedel-directive-source'
 (declare-function mevedel--delete-instruction
                   "mevedel-directive-source"

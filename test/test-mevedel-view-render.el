@@ -1367,18 +1367,18 @@
       (should-error (mevedel-view-fork-point-at-point)
                     :type 'user-error)))
 
-  :doc "opens the activity inspector from a rendered directive turn"
+  :doc "opens the frozen-history inspector from a rendered historical turn"
   ;; A real format-1 store migrates on observation; the rendered turn's
   ;; directive then lives only as its note's frozen history.
   (let* ((directory (file-name-as-directory
-                     (make-temp-file "directive-actions-" t)))
+                     (make-temp-file "frozen-history-actions-" t)))
          (store (file-name-concat directory ".mevedel/instructions.el"))
          (mevedel--instruction-states (make-hash-table :test #'equal))
          (mevedel-workspace--registry (make-hash-table :test #'equal))
          (mevedel-instruction-store--dirty nil)
          (mevedel-instruction-store--failed nil)
          (workspace (mevedel-workspace-get-or-create
-                     'file directory directory "directive-actions"))
+                     'file directory directory "frozen-history-actions"))
          (session (mevedel-session-create "main" workspace))
          history dispatched)
     (unwind-protect
@@ -7219,8 +7219,8 @@
   :doc "rewind resumes the real checkpoint session from a synthetic transcript"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'file :id "directive-rewind" :root "/tmp"
-           :name "directive-rewind"))
+           :type 'file :id "frozen-history" :root "/tmp"
+           :name "frozen-history"))
          (attempt
           '(:sequence 1 :action implement
             :checkpoint (:session-id "real" :turn 2)))

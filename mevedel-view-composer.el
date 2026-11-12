@@ -63,20 +63,6 @@
 ;; `mevedel-compact-run'
 (defvar mevedel-compact-run-in-flight nil)
 
-;; `mevedel-directive'
-;; `mevedel-directive-frame'
-(declare-function mevedel-directive-frame-display
-                  "mevedel-directive-frame"
-                  (directive view-buffer &optional focus))
-(autoload 'mevedel-directive-frame-display "mevedel-directive-frame")
-
-;; `mevedel-directive-plan'
-
-
-;; `mevedel-directive-request'
-
-
-;; `mevedel-directive-source'
 ;; `mevedel-goal'
 (declare-function mevedel-goal-start "mevedel-goal"
 		  (objective &optional prompt-submission))
@@ -144,10 +130,6 @@
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" nil)
-
-;; `mevedel-overlay-ui'
-(declare-function mevedel-overlay-ui-directive-action-label
-                  "mevedel-overlay-ui" (action))
 
 ;; `mevedel-overlays'
 (declare-function mevedel--topmost-instruction
@@ -533,7 +515,7 @@
 
 (defface mevedel-view-directive-scope
   '((t :inherit font-lock-keyword-face :weight bold))
-  "Face for directive-scoped composer chrome."
+  "Face for note frames and frozen directive history chrome."
   :group 'mevedel)
 
 
@@ -2077,7 +2059,7 @@ and other input properties remain untouched."
 
 DISPLAY-TEXT is shown as the user-side turn in the view.
 DATA-TURN-START is the data-buffer marker where the assistant
-response for this turn begins.  KIND may be `directive'.  HOOK-CONTEXT
+response for this turn begins.  KIND identifies the user turn.  HOOK-CONTEXT
 is model-visible hook context to summarize in the view.  When
 NO-SPINNER is non-nil, render only the local user turn.  USER-SOURCE bounds
 the stored prompt, including its trusted skill presentation metadata.
@@ -2086,49 +2068,8 @@ ATTRIBUTION names who the turn speaks for when that is not the user."
   (let ((turn-start (mevedel-view--insert-user-message
                      display-text kind hook-context nil nil nil attribution
                      user-source)))
-    (when (eq kind 'directive)
-      (when-let* ((drawer (mevedel-view--external-prompt-drawer
-                           data-turn-start)))
-        (save-excursion
-          (goto-char (mevedel-view--history-insertion-marker))
-          (mevedel-view--with-render-boundaries-advancing
-            (let ((inhibit-read-only t)
-                  (start (point)))
-              (mevedel-view--insert-rendered-tool
-               (list :header "Prompt"
-                     :body (plist-get drawer :body)
-                     :body-mode 'markdown-mode
-                     :vtype 'prompt-summary
-                     :initially-collapsed-p t)
-               (cons (plist-get drawer :start)
-                     (plist-get drawer :end)))
-              (add-text-properties
-               start (point)
-               `(read-only t
-                 keymap ,mevedel-view--display-map
-                 front-sticky (read-only keymap)
-                 rear-nonsticky (read-only keymap)))
-              (setq turn-start (copy-marker (point) nil)))))))
     (mevedel-view-stream-begin-turn
      turn-start data-turn-start no-spinner)))
-
-(defun mevedel-view--external-prompt-drawer (data-turn-start)
-  "Return the prompt drawer ending before DATA-TURN-START, if any."
-  (when-let* (((markerp data-turn-start))
-              (data-buf (marker-buffer data-turn-start))
-              ((buffer-live-p data-buf)))
-    (with-current-buffer data-buf
-      (save-excursion
-        (goto-char data-turn-start)
-        (when (re-search-backward "^:PROMPT:\n" nil t)
-          (let ((drawer-start (match-beginning 0))
-                (body-start (match-end 0)))
-            (when (re-search-forward "^:END:[ \t]*\n?"
-                                     data-turn-start t)
-              (list :start drawer-start
-                    :end (match-end 0)
-                    :body (buffer-substring-no-properties
-                           body-start (match-beginning 0))))))))))
 
 (defun mevedel-view--prompt-start-position ()
   "Return the start of the read-only input prompt, or nil."
@@ -2405,7 +2346,7 @@ When FORCE is non-nil, replace the current draft unconditionally."
 (defun mevedel-view--occupied-root-workflow (session)
   "Return a symbol naming SESSION's occupying workflow, or nil.
 Non-nil means later input is a follow-up.  The symbol is one of
-`plan-approval', `directive-planning', `implementation-retry',
+`plan-approval', `implementation-retry',
 `goal-budget', or `goal'."
   (cond
    ((mevedel-session-pending-plan-approval session) 'plan-approval)

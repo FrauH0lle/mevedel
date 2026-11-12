@@ -48,12 +48,10 @@
                   "mevedel-agents" (&optional preset-name))
 
 ;; `mevedel-chat'
-(declare-function mevedel--directive-capture "mevedel-chat" (request))
 (declare-function mevedel--generate-final-patch
                   "mevedel-chat" (workspace request callback))
 (declare-function mevedel--replace-patch-buffer
                   "mevedel-chat" (patch-content))
-(autoload 'mevedel--directive-capture "mevedel-chat")
 (autoload 'mevedel--generate-final-patch "mevedel-chat")
 
 ;; `mevedel-compact'
@@ -75,10 +73,6 @@
 (autoload 'mevedel-implementation-policy-assert-preparation
   "mevedel-implementation-policy")
 (defvar mevedel-implementation-policy--admission-preparation)
-
-;; `mevedel-instruction-registry'
-(declare-function mevedel--find-directive-by-uuid
-                  "mevedel-instruction-registry" (uuid))
 
 ;; `mevedel-models'
 (declare-function mevedel-model-merge-tiers
@@ -655,24 +649,9 @@ steering still take precedence, so queued steering is delivered first."
                   ((buffer-live-p chat-buffer))
                   (workspace (with-current-buffer chat-buffer
                                (mevedel-workspace))))
-            (let* ((request (or (plist-get info :mevedel-request)
-                                (with-current-buffer chat-buffer
-                                  mevedel--current-request)))
-                   (capture (with-current-buffer chat-buffer
-                              (mevedel--directive-capture request))))
-              (setq info
-                    (plist-put info :mevedel-directive-capture
-                               (plist-get capture :capture)))
-              (setq info
-                    (plist-put info :mevedel-directive-covered-files
-                               (plist-get capture :covered-files)))
-              (setq info
-                    (plist-put info :mevedel-directive-gaps
-                               (plist-get capture :gaps)))
-              (setq info
-                    (plist-put info :mevedel-directive-untracked-effects
-                               (plist-get capture :untracked-effects)))
-              (setf (mevedel-engine-info fsm) info)
+            (let ((request (or (plist-get info :mevedel-request)
+                               (with-current-buffer chat-buffer
+                                 mevedel--current-request))))
               (mevedel-preset--apply-final-patch
                fsm chat-buffer workspace request finish))
           (funcall finish fsm))
@@ -697,7 +676,7 @@ connection that is mid-conversation, and the two cross replies.
 
 `mevedel-transport-run-when-idle' runs the work inline when the transport
 is free.  When it defers, callback invocation and terminal settlement wait
-in CONTINUATION so they cannot persist the directive before the patch exists.
+in CONTINUATION so the turn cannot settle before the patch exists.
 
 REQUEST is captured here, while the turn is still live, and handed to the
 generator.  Deferring moved that work past the point where settlement
@@ -715,11 +694,7 @@ the buffer-local would find nil and signal."
                      (mevedel--safe-fsm-handler
                       (lambda (_machine)
                         (when error (signal (car error) (cdr error)))
-                        ;; Captured evidence belongs to the old request;
-                        ;; presentation belongs only to the current one.
-                        (setf (mevedel-engine-info fsm)
-                              (plist-put (mevedel-engine-info fsm)
-                                         :mevedel-directive-patch patch))
+                        ;; Presentation belongs only to the current request.
                         (when (and (buffer-live-p chat-buffer)
                                    (mevedel--turn-current-p fsm)
                                    patch (> (length patch) 0))

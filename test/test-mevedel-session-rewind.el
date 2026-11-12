@@ -1033,12 +1033,12 @@
               (goto-char (point-min))
               (mevedel-note-create "Early"))
             (setq session (mevedel-session-create "main" workspace)
-                  buffer (generate-new-buffer "*test-directive-rewind*"))
+                  buffer (generate-new-buffer "*test-note-rewind*"))
             (with-current-buffer buffer
               (org-mode)
               (setq-local mevedel--workspace workspace)
               (setq-local mevedel--session session)
-              (insert "First directive\n")
+              (insert "First note turn\n")
               (insert (propertize "First reply.\n" 'gptel 'response))
               (setf (mevedel-session-turn-count session) 1)
               (mevedel-session-artifacts-save session buffer t))
@@ -1052,7 +1052,7 @@
                           mevedel--current-request))
                 (delete-file source-file)
                 (goto-char (point-max))
-                (insert "Second directive\n")
+                (insert "Second note turn\n")
                 (insert (propertize "Second reply.\n" 'gptel 'response))
                 (setf (mevedel-session-turn-count session) 2)
                 (mevedel-session-artifacts-save session buffer t)
@@ -1134,7 +1134,7 @@
               (should (= 1 (mevedel-session-turn-count session)))
               (with-current-buffer buffer
                 (should (string-match-p "First reply" (buffer-string)))
-                (should-not (string-match-p "Second directive"
+                (should-not (string-match-p "Second note turn"
                                             (buffer-string)))
                 (should-not (string-match-p "Ordinary later chat"
                                             (buffer-string))))

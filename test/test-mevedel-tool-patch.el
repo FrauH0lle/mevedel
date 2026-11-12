@@ -974,7 +974,7 @@
       (dolist (text '("Standalone or sticky Plan mode"
                       "permits only session-owned `work://` descendants"
                       "Shared, memory, ordinary, malformed, and root-only endpoints are denied before materialization"
-                      "Directive Planning remains read-only"
+                      "Read-only Plan requests permit no writes"
                       "Outside Plan mode, resource and ordinary paths may share one atomic proposal"))
         (should (string-match-p
                  (mapconcat #'regexp-quote (split-string text " " t)

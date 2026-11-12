@@ -177,16 +177,13 @@
                        (list
                         :buffer buffer
                         :mevedel-request-callback
-                        (lambda (_status machine)
-                          (push (if (plist-get (gptel-fsm-info machine)
-                                               :mevedel-directive-patch)
+                        (lambda (_status _machine)
+                          (push (if (memq 'patch-ready events)
                                     'callback-after-patch
                                   'callback-before-patch)
                                 events))))))
             (cl-letf (((symbol-function 'mevedel-workspace)
                        (lambda (&optional _) workspace))
-                      ((symbol-function 'mevedel--directive-capture)
-                       (lambda (_) nil))
                       ((symbol-function 'mevedel-transport-busy-p)
                        (lambda (&optional _) t))
                       ((symbol-function 'mevedel-transport-run-when-idle)
@@ -196,14 +193,15 @@
                       ((symbol-function 'mevedel--generate-final-patch)
                        (lambda (_workspace _request callback)
                          (funcall callback "diff\n" nil)))
-                      ((symbol-function 'mevedel--replace-patch-buffer) #'ignore)
+                      ((symbol-function 'mevedel--replace-patch-buffer)
+                       (lambda (_) (push 'patch-ready events)))
                       ((symbol-function 'mevedel--complete-turn)
                        (lambda (_) (push 'settled events))))
               (funcall terminal fsm)
               (should-not events)
               (should (functionp deferred-thunk))
               (funcall deferred-thunk)
-              (should (equal '(callback-after-patch settled)
+              (should (equal '(patch-ready callback-after-patch settled)
                              (nreverse events))))))
       (kill-buffer buffer)))
 
@@ -284,26 +282,20 @@
           (should (= 0 generated)))
       (kill-buffer chat-buf)))
 
-  :doc "captures patch coverage on the FSM and displays a non-empty patch"
+  :doc "generates the originating request's patch and displays it"
   (let* ((ws (mevedel-workspace-get-or-create
               'project "/tmp/p/" "/tmp/p/" "p"))
          (chat-buf (generate-new-buffer " *mevedel-workspace*"))
-         generated capture-request
+         generated generated-request
          replaced)
     (unwind-protect
         (progn
           (cl-letf (((symbol-function 'mevedel-workspace)
                      (lambda (&optional _buffer) ws))
                     ((symbol-function 'mevedel--generate-final-patch)
-                     (lambda (workspace _request callback)
-                       (setq generated workspace)
+                     (lambda (workspace request callback)
+                       (setq generated workspace generated-request request)
                        (funcall callback "diff --git a/file b/file\n" nil)))
-                    ((symbol-function 'mevedel--directive-capture)
-                     (lambda (request)
-                       (setq capture-request request)
-                       '(:capture complete
-                         :covered-files ("/tmp/p/file")
-                         :gaps nil)))
                     ((symbol-function 'mevedel--replace-patch-buffer)
                      (lambda (patch)
                        (setq replaced patch))))
@@ -312,16 +304,7 @@
                          :info (list :buffer chat-buf
                                      :mevedel-request request))))
               (mevedel-preset--final-patch-handler fsm)
-              (should (equal "diff --git a/file b/file\n"
-                             (plist-get (gptel-fsm-info fsm)
-                                        :mevedel-directive-patch)))
-              (should (eq 'complete
-                          (plist-get (gptel-fsm-info fsm)
-                                     :mevedel-directive-capture)))
-              (should (equal '("/tmp/p/file")
-                             (plist-get (gptel-fsm-info fsm)
-                                        :mevedel-directive-covered-files)))
-              (should (eq request capture-request))))
+              (should (eq request generated-request))))
           (should (eq ws generated))
           (should (equal "diff --git a/file b/file\n" replaced)))
       (kill-buffer chat-buf)))
@@ -337,8 +320,6 @@
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-workspace)
                    (lambda (&optional _) workspace))
-                  ((symbol-function 'mevedel--directive-capture)
-                   (lambda (_) nil))
                   ((symbol-function 'mevedel-transport-busy-p)
                    (lambda (&optional _) t))
                   ((symbol-function 'mevedel-transport-run-when-idle)
@@ -1351,26 +1332,24 @@
   ,test
   (test)
 
-  :doc "an idle transport generates inline, so the patch is there to read"
-  ;; The directive attempt is recorded straight after this handler and
-  ;; reads `:mevedel-directive-patch' from the info plist.
+  :doc "an idle transport displays the patch inline"
   (let ((fsm (gptel-make-fsm))
         (request (mevedel-request--create))
         (workspace (mevedel-workspace--create
                     :type 'project :id "/mevedelmock:host:/srv/p/"
-                    :root "/mevedelmock:host:/srv/p/" :name "p")))
+                    :root "/mevedelmock:host:/srv/p/" :name "p"))
+        shown)
     (with-temp-buffer
       (cl-letf (((symbol-function 'mevedel-transport-busy-p)
                  (lambda (&optional _) nil))
                 ((symbol-function 'mevedel--generate-final-patch)
                  (lambda (_workspace _request callback)
                    (funcall callback "diff --git a/x b/x\n" nil)))
-                ((symbol-function 'mevedel--replace-patch-buffer) #'ignore))
+                ((symbol-function 'mevedel--replace-patch-buffer)
+                 (lambda (patch) (setq shown patch))))
         (mevedel-preset--apply-final-patch
          fsm (current-buffer) workspace request)
-        (should (equal "diff --git a/x b/x\n"
-                       (plist-get (gptel-fsm-info fsm)
-                                  :mevedel-directive-patch))))))
+        (should (equal "diff --git a/x b/x\n" shown)))))
 
   :doc "the turn waits for the patch without blocking the handler"
   ;; The diffs run as helper processes.  Waiting for them inside this
@@ -1380,12 +1359,13 @@
         (request (mevedel-request--create))
         (workspace (mevedel-workspace--create
                     :type 'project :id "/tmp/p/" :root "/tmp/p/" :name "p"))
-        pending continued)
+        pending continued shown)
     (with-temp-buffer
       (cl-letf (((symbol-function 'mevedel--generate-final-patch)
                  (lambda (_workspace _request callback)
                    (setq pending callback)))
-                ((symbol-function 'mevedel--replace-patch-buffer) #'ignore))
+                ((symbol-function 'mevedel--replace-patch-buffer)
+                 (lambda (patch) (setq shown patch))))
         (mevedel-preset--apply-final-patch
          fsm (current-buffer) workspace request
          (lambda (_) (setq continued t)))
@@ -1393,8 +1373,7 @@
         (should-not continued)
         (funcall pending "diff --git a/x b/x\n" nil)
         (should continued)
-        (should (equal "diff --git a/x b/x\n"
-                       (plist-get (gptel-fsm-info fsm) :mevedel-directive-patch))))))
+        (should (equal "diff --git a/x b/x\n" shown)))))
 
   :doc "aborted terminal diffs retain policy and request ownership during real discovery"
   (progn
@@ -1467,9 +1446,7 @@
                         (should (equal (list (format "mevedel [%s]: Execution authority changed during preparation; submit the operation again (FSM handler #<function> failed)" root))
                                        warnings)))
                     (should-not warnings)
-                    (should (string-search "-before\n+after\n" shown))
-                    (should (equal shown (plist-get (gptel-fsm-info fsm)
-                                                   :mevedel-directive-patch)))))))
+                    (should (string-search "-before\n+after\n" shown))))))
           (mevedel-execution-teardown-all)
           (delete-directory root t)))))
 
@@ -1491,8 +1468,7 @@
          fsm (current-buffer) workspace request
          (lambda (_) (setq continued t)))
         (should warned)
-        (should continued)
-        (should-not (plist-get (gptel-fsm-info fsm) :mevedel-directive-patch)))))
+        (should continued))))
 
   :doc "a busy transport defers instead of nesting inside the sentinel"
   ;; Until this deferral the same call signalled `Forbidden reentrant call
@@ -1502,7 +1478,7 @@
         (workspace (mevedel-workspace--create
                     :type 'project :id "/mevedelmock:host:/srv/p/"
                     :root "/mevedelmock:host:/srv/p/" :name "p"))
-        deferred-thunk generated)
+        deferred-thunk generated shown)
     (with-temp-buffer
       (cl-letf (((symbol-function 'mevedel-transport-busy-p)
                  (lambda (&optional _) t))
@@ -1517,7 +1493,8 @@
                    ;; must reach the generator.
                    (setq generated req)
                    (funcall callback "diff\n" nil)))
-                ((symbol-function 'mevedel--replace-patch-buffer) #'ignore))
+                ((symbol-function 'mevedel--replace-patch-buffer)
+                 (lambda (patch) (setq shown patch))))
         (mevedel-preset--apply-final-patch
          fsm (current-buffer) workspace request)
         (should-not generated)
@@ -1525,9 +1502,7 @@
         (setq mevedel--current-request nil)
         (funcall deferred-thunk)
         (should (eq request generated))
-        (should (equal "diff\n"
-                       (plist-get (gptel-fsm-info fsm)
-                                  :mevedel-directive-patch))))))
+        (should (equal "diff\n" shown)))))
 
   :doc "a local workspace never defers, busy transport or not"
   (let ((fsm (gptel-make-fsm))

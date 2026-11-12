@@ -893,40 +893,6 @@
           (should (= (point)
                      (+ (mevedel-view--input-start) point-offset)))))))
 
-  :doc "directive approval shows only request-local controls and preserves the draft"
-  (mevedel-view-test--with-buffers
-    (let* ((session (mevedel-session--create
-                     :authority-mode 'pid-lock
-                     :name "test" :permission-mode 'edits))
-           (selection (mevedel-plan-mode--default-selection session))
-           (entry (mevedel-plan-mode--approval-entry
-                   "# Directive plan" data-buf session selection))
-           (draft "> first line\nsecond line"))
-      (plist-put entry :directive t)
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session))
-      (with-current-buffer view-buf
-        (setq-local mevedel--session session)
-        (mevedel-view-test--insert-composer-draft draft 4))
-      (setf (mevedel-session-pending-plan-approval session) entry)
-      (with-current-buffer data-buf
-        (mevedel-plan-approval-render session))
-      (with-current-buffer view-buf
-        (let* ((descriptor
-                (gethash (plist-get entry :interaction-id)
-                         mevedel-view--interaction-descriptors))
-               (body (plist-get descriptor :body))
-               (keymap (plist-get descriptor :keymap)))
-          (dolist (text '("Directive implementation" "Mode" "Model"
-                          "Skills" "Instructions" "implement" "feedback"
-                          "cancel"))
-            (should (string-search text body)))
-          (dolist (text '("Location" "Context" "Execution" "Budget" "hide"))
-            (should-not (string-search text body)))
-          (should-not (lookup-key keymap (kbd "q")))
-          (call-interactively (lookup-key keymap (kbd "m")))
-          (should (string= draft (mevedel-view--input-text)))))))
-
   :doc "hides, rebuilds, reopens, and cancels a pending approval"
   (mevedel-view-test--with-buffers
     (let* ((selection '(:location here :context current
