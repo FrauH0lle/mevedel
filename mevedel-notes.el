@@ -571,6 +571,7 @@ The plists belong to the instruction state; callers must not mutate them."
         (push history histories)))
     (nreverse histories)))
 
+;;;###autoload
 (defun mevedel-note-history (&optional note)
   "Open NOTE's frozen pre-migration history in the directive inspector."
   (interactive)

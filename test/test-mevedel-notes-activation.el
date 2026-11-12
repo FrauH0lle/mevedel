@@ -49,6 +49,17 @@
         (should (equal 0 (process-exit-status process)))
         (should (equal "" (buffer-string)))))))
 
+(mevedel-deftest mevedel-note-history/autoload ()
+  ,test
+  (test)
+  :doc "package-generated autoloads expose history as a cold M-x command"
+  (mevedel-notes-activation-test--cold
+   '(progn
+      (when (featurep 'mevedel-notes) (error "Notes loaded before first use"))
+      (unless (and (commandp 'mevedel-note-history)
+                   (autoloadp (symbol-function 'mevedel-note-history)))
+        (error "History missing from package autoloads")))))
+
 (mevedel-deftest mevedel-notes-file-visit
   ()
   (let* ((root (make-temp-file
