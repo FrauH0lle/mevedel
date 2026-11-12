@@ -595,9 +595,10 @@ Create `.mevedel/' only in a recognized project.  Return the actual workspace."
   workspace)
 
 ;;;###autoload
-(defun mevedel-note-create (&optional text)
+(cl-defun mevedel-note-create (&optional text &key defer-write)
   "Create a note with optional TEXT on the region or current line.
-An empty string creates a code-only note.  Return the note overlay."
+An empty string creates a code-only note.  Return the note overlay.
+DEFER-WRITE leaves durability to the caller's batch store sync."
   (interactive (list (read-string "Note (optional): ")))
   (let ((workspace (mevedel--instruction-buffer-workspace (current-buffer))))
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
@@ -615,7 +616,9 @@ An empty string creates a code-only note.  Return the note overlay."
         (overlay-put note 'mevedel-note-author 'user)
         (overlay-put note 'mevedel-note-state 'unsent)
         (mevedel--update-instruction-overlay note t)
-        (mevedel--instruction-store-write (current-buffer))
+        (if defer-write
+            (mevedel-instruction-store-touch workspace)
+          (mevedel--instruction-store-write (current-buffer)))
         (deactivate-mark)
         note))))
 
