@@ -531,10 +531,12 @@ defaults to GENERATION."
 
 (defun mevedel-session-durability--validate-generation-names (names)
   "Refuse unknown entries among observed lease directory NAMES."
-  (dolist (name names)
-    (unless (or (member name '("requests" "fences"))
-                (string-match-p mevedel-session-durability--generation-name-regexp name))
-      (error "Unknown portable lease entry: %s" name))))
+  (let ((case-fold-search nil))
+    (dolist (name names)
+      (unless (or (member name '("requests" "fences"))
+                  (string-match-p mevedel-session-control-fs-scratch-name-regexp name)
+                  (string-match-p mevedel-session-durability--generation-name-regexp name))
+        (error "Unknown portable lease entry: %s" name)))))
 
 (defun mevedel-session-durability--generation-paths (directory &optional names)
   "Return DIRECTORY's generation record paths in descending order.

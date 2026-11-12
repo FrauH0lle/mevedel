@@ -57,6 +57,10 @@ into it. The program names that file relative to the pinned parent, with one
 `../` per missing level, so it resolves through the opened directory's real
 ancestors: a parent pathname swapped after the proof cannot redirect it.
 Staged files a stopped program did not consume are removed afterwards.
+A hard kill can leave local `.mevedel-control-fs-staged-` payloads or inline
+`.mevedel-control-fs-` scratch files, each with its six-alphanumeric suffix.
+Lease validation recognizes only those reserved families as non-authority,
+without hiding them from listing proofs or removing them during election.
 Remote targets keep the base64 carriers. Diagnostic bytes are encoded through a separate pipe and returned
 in a distinct trailing record. A killed process without that record reports
 its raw captured failure output.

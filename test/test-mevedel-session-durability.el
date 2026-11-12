@@ -5123,6 +5123,43 @@
     (should-not (plist-get assessment :head))
     (should-not (plist-get assessment :reasons))
     (should-not (file-exists-p lease-dir)))
+  :doc "carrier crash scratch is not authority and does not prevent automatic cleanup"
+  (dolist (kind '(clean staged shell))
+    (make-directory lease-dir t)
+    (let* ((staged (list nil))
+           (shell (file-name-concat lease-dir ".mevedel-control-fs-Ab09Zx")))
+      (pcase kind
+        ('staged
+         (mevedel-session-control-fs--stage-payloads
+          (list (list :op 'write
+                      :path (mevedel-session-durability--generation-path lease-dir 1)
+                      :content "crash payload")) staged)
+         (should (car staged)))
+        ('shell (write-region "crash payload" nil shell nil 'silent)))
+      (let ((assessment (mevedel-session-durability-cleanup-assessment directory)))
+        (should (eq 'available (plist-get assessment :state)))
+        (should-not (plist-get assessment :head))
+        (should-not (plist-get assessment :reasons)))
+      (dolist (path (append (car staged) (when (eq kind 'shell) (list shell))))
+        (should (equal "crash payload"
+                       (with-temp-buffer (insert-file-contents path) (buffer-string)))))
+      (should (mevedel-session-durability-delete-abandoned directory 0))
+      (should-not (file-directory-p directory))))
+  :doc "scratch-like unknown names remain invalid authority"
+  (let ((case-fold-search t))
+    (make-directory lease-dir)
+    (dolist (name '(".mevedel-control-fs-Ab09Zx.extra"
+                    ".mevedel-control-fs-staged-too-long"
+                    ".mevedel-unrelated-Ab09Zx"
+                    ".MEVEDEL-CONTROL-FS-Ab09Zx"
+                    ".mevedel-control-fs-STAGED-Ab09Zx"))
+      (let ((path (file-name-concat lease-dir name)))
+        (write-region "unknown evidence" nil path nil 'silent)
+        (should (eq 'unknown
+                    (plist-get (mevedel-session-durability-cleanup-assessment directory) :state)))
+        (should-not (mevedel-session-durability-delete-abandoned directory 0))
+        (should (file-exists-p path))
+        (delete-file path))))
   :doc "corrupt generations are unknown, never missing or recoverable authority"
   (progn
     (make-directory lease-dir)
@@ -5355,6 +5392,40 @@
                  (funcall run operations lock-directory))))
       (should-error (mevedel-session-durability-discard-session session #'ignore)))
     (should (file-directory-p directory))))
+
+(mevedel-deftest mevedel-session-durability-lease-acquire/scratch
+  (:doc "synchronous takeover preserves carrier scratch payloads without treating them as authority")
+  (dolist (scratch '(nil t))
+    (let* ((root (make-temp-file "mevedel-takeover-scratch-" t))
+           (directory (file-name-concat root ".lease"))
+           (session (test-mevedel-session-durability--local-session root))
+           (staged (list nil))
+           paths)
+      (setf (mevedel-session-save-path session) root)
+      (make-directory directory)
+      (unwind-protect
+          (progn
+            (let ((mevedel-session-durability--client-id (make-string 64 ?f)))
+              (mevedel-session-durability--write-generation
+               directory (mevedel-session-durability--lease-record "old" 1 'active nil nil 0)))
+            (when scratch
+              (mevedel-session-control-fs--stage-payloads
+               (list (list :op 'write
+                           :path (mevedel-session-durability--generation-path directory 2)
+                           :content "crash payload")) staged)
+              (should (car staged))
+              (setq paths (cons (file-name-concat directory ".mevedel-control-fs-Ab09Zx")
+                                (car staged)))
+              (write-region "crash payload" nil (car paths) nil 'silent))
+            (cl-letf (((symbol-function 'y-or-n-p) #'always))
+              (should (mevedel-session-durability-lease-acquire root "takeover" session)))
+            (should (mevedel-session-durability-lease-owned-p session))
+            (should (> (plist-get (mevedel-session-lease session) :generation) 1))
+            (dolist (path paths)
+              (should (equal "crash payload"
+                             (with-temp-buffer (insert-file-contents path) (buffer-string))))))
+        (mevedel-session-durability--cancel-renewal session)
+        (delete-directory root t)))))
 
 (provide 'test-mevedel-session-durability)
 ;;; test-mevedel-session-durability.el ends here

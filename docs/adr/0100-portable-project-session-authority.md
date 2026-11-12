@@ -40,7 +40,10 @@ floor. A portable session is deleted only through its own lease protocol: an
 abandoned head (absent, released without a transfer reservation, or an expired
 active or claiming record without unsettled mutation) must also have its last
 renewal older than the cap. Unreadable or unsupported generation records are
-unknown authority and keep the session. Cleanup claims the next generation and
+unknown authority and keep the session. Known carrier scratch payloads are not
+generation records; observation and election preserve them, and deletion still
+proves the unfiltered name set. Their names do not prove producer termination.
+Cleanup claims the next generation and
 uses the same final deletion boundary as explicitly confirmed discard: exact
 owned bytes, newest generation, target-clock deadline, and no retained recovery
 or journal pins. Election and deletion programs share the stable sessions-parent

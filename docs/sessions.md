@@ -3129,7 +3129,11 @@ session open in this Emacs and otherwise deletes through
 released without a control-transfer reservation, or an expired active or
 claiming record without unsettled mutation, and its last renewal must also be
 older than the cap. Unreadable or unsupported lease generations remain protected:
-a failed record read is not proof of absent authority. Unchanged saves keep the sidecar's `:updated-at`, so the
+a failed record read is not proof of absent authority. The control carrier's two
+reserved scratch-name families are not lease records. Assessment and election
+leave their bytes untouched and final deletion still proves the raw directory
+listing; a scratch name is not proof that its producer stopped.
+Unchanged saves keep the sidecar's `:updated-at`, so the
 renewal is the later proof of use. Cleanup claims the next lease generation
 without prompting. Both automatic cleanup and explicit discard serialize their
 final deletion with all synchronous and asynchronous lease-election programs on

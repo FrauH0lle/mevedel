@@ -1177,6 +1177,11 @@ is extracted to disk. A rejected archive requires fresh ordinary reads."
         (error "Unexpected control read archive member"))
       (nreverse results))))
 
+(defconst mevedel-session-control-fs-scratch-name-regexp
+  "\\`\\.mevedel-control-fs-\\(?:staged-\\)?[A-Za-z0-9]\\{6\\}\\'"
+  "Reserved scratch leaves from `make-temp-file' and the shell's mktemp.
+Interrupted carriers can leave these non-authoritative payloads behind.")
+
 (defconst mevedel-session-control-fs--stage-min-bytes 0
   "Smallest local payload written as a staged file instead of base64.
 Every local write is staged: the script's base64 path spends three

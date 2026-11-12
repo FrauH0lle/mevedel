@@ -1136,6 +1136,38 @@ signals a `user-error', so a gated operation must stop before any I/O."
                      (with-temp-buffer (insert-file-contents path) (buffer-string))))
       (should (equal head (mevedel-session-durability--lease-head directory))))))
 
+(mevedel-deftest mevedel-session-durability-heartbeat/reclaim-scratch
+  (:doc "async own-expiry reclaim preserves both carrier scratch families")
+  (dolist (scratch '(nil t))
+    (test-mevedel-durability-async--with-lease (root session)
+      (let* ((directory (file-name-concat root ".lease"))
+             (head (mevedel-session-durability--lease-head directory))
+             (staged (list nil))
+             paths warnings)
+        (plist-put head :renewed-at 0)
+        (plist-put head :expires-at 1)
+        (mevedel-session-durability--write-generation directory head)
+        (when scratch
+          (mevedel-session-control-fs--stage-payloads
+           (list (list :op 'write
+                       :path (mevedel-session-durability--generation-path directory 2)
+                       :content "crash payload")) staged)
+          (should (car staged))
+          (setq paths (cons (file-name-concat directory ".mevedel-control-fs-Ab09Zx")
+                            (car staged)))
+          (write-region "crash payload" nil (car paths) nil 'silent))
+        (mevedel-test--with-captured-diagnostics warnings
+          (mevedel-session-durability-heartbeat session)
+          (with-timeout (10 (ert-fail "Reclaim did not settle"))
+            (while (mevedel-session-lease-renewal-job session)
+              (accept-process-output nil 0.01))))
+        (ert-info ((format "Heartbeat diagnostics: %S" warnings))
+          (should (eq 'owned (plist-get (mevedel-session-lease session) :state))))
+        (should (> (plist-get (mevedel-session-lease session) :generation) 1))
+        (dolist (path paths)
+          (should (equal "crash payload"
+                         (with-temp-buffer (insert-file-contents path) (buffer-string)))))))))
+
 (provide 'test-mevedel-session-durability-async)
 
 ;;; test-mevedel-session-durability-async.el ends here

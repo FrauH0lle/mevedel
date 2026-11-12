@@ -1482,16 +1482,18 @@ and its segment path."
                     (plan (mevedel-session-publication-collection-plan session summaries))
                     (program (symbol-function 'mevedel-session-control-fs-run-program)))
                (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
-                          (lambda (operations)
+                          (lambda (operations &optional lock-directory)
                             (when (seq-some
                                    (lambda (op)
                                      (and (memq (plist-get op :op) '(delete-file delete-directory))
                                           (not (equal (file-name-nondirectory (plist-get op :path))
                                                       "manifest.el")))) operations)
                               (error "Injected interrupted payload sweep"))
-                            (funcall program operations))))
-                 (should-error
-                  (while (mevedel-session-publication-collect-step session plan))))
+                            (funcall program operations lock-directory))))
+                 (should
+                  (equal '(error "Injected interrupted payload sweep")
+                         (should-error
+                          (while (mevedel-session-publication-collect-step session plan))))))
                ;; Every remaining discoverable head is still readable.  The
                ;; interrupted pass retired obsolete heads before any payload.
                (should-not (file-exists-p (file-name-concat directory old)))
@@ -1530,10 +1532,10 @@ and its segment path."
             session (list (list :path (file-name-concat directory (format "stable-%d" index))
                                 :content "retained") marker)))
          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
-                    (lambda (operations)
+                    (lambda (operations &optional lock-directory)
                       (setq largest (max largest (cl-count 'list-directory operations
                                                           :key (lambda (op) (plist-get op :op)))))
-                      (funcall program operations))))
+                      (funcall program operations lock-directory))))
            (test-mevedel-publication--collect session))
          (should (= 8 largest))
          (dotimes (index 10)
