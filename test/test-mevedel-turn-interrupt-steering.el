@@ -146,7 +146,7 @@
   ,test
   (test)
   :doc "only the actual root send rebinds normal input and releases an interruption hold"
-  (dolist (scenario '(root queued-only agent directive foreign-root foreign-session
+  (dolist (scenario '(root queued-only agent foreign-root foreign-session
                           owning-cockpit other-cockpit))
     (with-temp-buffer
       (let* ((first '(:id 1 :input "first" :state pending))
@@ -159,9 +159,7 @@
                        :pending-follow-ups '((:id 5 :input "later"))
                        :pending-steering (unless (eq scenario 'queued-only)
                                            (list first failed second live))))
-             (request (mevedel-request--create
-                       :id "new" :session session
-                       :directive-uuid (and (eq scenario 'directive) "directive")))
+             (request (mevedel-request--create :id "new" :session session))
              (allowed (memq scenario '(root queued-only other-cockpit)))
              (cockpit (and (memq scenario '(owning-cockpit other-cockpit))
                            (generate-new-buffer mevedel-pending-inputs-buffer-name))))

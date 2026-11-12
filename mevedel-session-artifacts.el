@@ -92,18 +92,13 @@
 (autoload 'mevedel-permission-invalidate-target-grants "mevedel-permissions")
 
 ;; `mevedel-persistence'
-(declare-function mevedel--load-instructions-file "mevedel-persistence" (path &optional base-directory confirm quiet workspace directive-records preserve-directives-p))
-(declare-function mevedel--reset-instructions-preserving-directives "mevedel-persistence" (workspace directives))
-(declare-function mevedel--restore-preserved-directives "mevedel-persistence" (workspace))
+(declare-function mevedel--load-instructions-file "mevedel-persistence" (path &optional base-directory confirm quiet workspace))
 (declare-function mevedel--serialize-instructions "mevedel-persistence" (&optional base-directory include-original-content))
 (declare-function mevedel--write-instructions-file "mevedel-persistence" (path &optional base-directory write-empty quiet include-original-content))
 (declare-function mevedel-instruction-store-restore "mevedel-persistence" (session))
 (declare-function mevedel-instruction-store-sync "mevedel-persistence" (workspace &optional own-save-path))
 (declare-function mevedel-instruction-store-touch "mevedel-persistence" (&optional workspace))
 (autoload 'mevedel--load-instructions-file "mevedel-persistence")
-(autoload 'mevedel--reset-instructions-preserving-directives
-  "mevedel-persistence")
-(autoload 'mevedel--restore-preserved-directives "mevedel-persistence")
 (autoload 'mevedel--serialize-instructions "mevedel-persistence")
 (autoload 'mevedel--write-instructions-file "mevedel-persistence")
 (autoload 'mevedel-instruction-store-restore "mevedel-persistence")
@@ -2309,20 +2304,18 @@ failure is reported; the session save itself already succeeded."
                 (error-message-string err))))))
 
 (defun mevedel-session-artifacts-load-instructions
-    (session buffer &optional turn directive-records preserve-directives-p)
+    (session buffer &optional turn snapshot-only)
   "Restore SESSION instruction snapshot into BUFFER's workspace.
 
 When TURN is non-nil, restore the turn-specific snapshot; otherwise restore
-`instructions/current.el'.  DIRECTIVE-RECORDS preserves current authored
-directive identity and activity while replacing historical presentations.
-PRESERVE-DIRECTIVES-P applies that behavior even when the record list is empty.
-Missing snapshots clear presentations only in preservation mode.
+`instructions/current.el'.  SNAPSHOT-ONLY bypasses the workspace store and
+clears workspace instructions when the snapshot is missing, as Rewind requires.
 
-Without TURN or preservation, this is resume: a workspace with an
+Without TURN or SNAPSHOT-ONLY, this is resume: a workspace with an
 instruction store loads the store instead, and only a workspace still
 waiting for its store restores the session snapshot."
   (when-let* ((save-path (mevedel-session-save-path session))
-              (store (if (or turn directive-records preserve-directives-p)
+              (store (if (or turn snapshot-only)
                          'pending
                        (condition-case err
                            (or (mevedel-instruction-store-restore session)
@@ -2375,8 +2368,7 @@ waiting for its store restores the session snapshot."
                        (mevedel-workspace-root
                         (mevedel-session-workspace session))
                        nil t
-                       (mevedel-session-workspace session)
-                       directive-records preserve-directives-p)))
+                       (mevedel-session-workspace session))))
                 (when (buffer-live-p inspection)
                   (kill-buffer inspection))
                 (when (and temporary (file-exists-p temporary))
@@ -2388,11 +2380,8 @@ waiting for its store restores the session snapshot."
                     path (error-message-string err))
             :warning)
            nil))
-        (when (or preserve-directives-p directive-records)
-          (mevedel--reset-instructions-preserving-directives
-           (mevedel-session-workspace session) directive-records)
-          (mevedel--restore-preserved-directives
-           (mevedel-session-workspace session))
+        (when snapshot-only
+          (mevedel--clear-instruction-state (mevedel-session-workspace session))
           (list :restored 0 :lost 0 :total 0)))))))
 
 

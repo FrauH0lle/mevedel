@@ -64,8 +64,6 @@
 (defvar mevedel-compact-run-in-flight nil)
 
 ;; `mevedel-directive'
-(declare-function mevedel-directive-actions "mevedel-directive" (directive))
-
 ;; `mevedel-directive-frame'
 (declare-function mevedel-directive-frame-display
                   "mevedel-directive-frame"
@@ -79,9 +77,6 @@
 
 
 ;; `mevedel-directive-source'
-(declare-function mevedel--directive-record
-                  "mevedel-directive-source" (directive))
-
 ;; `mevedel-goal'
 (declare-function mevedel-goal-start "mevedel-goal"
 		  (objective &optional prompt-submission))
@@ -155,8 +150,6 @@
                   "mevedel-overlay-ui" (action))
 
 ;; `mevedel-overlays'
-(declare-function mevedel--directive-action-context
-                  "mevedel-overlays" (record workspace))
 (declare-function mevedel--topmost-instruction
                   "mevedel-overlays" (instruction &optional of-type pred))
 (autoload 'mevedel--topmost-instruction "mevedel-overlays")
@@ -341,11 +334,6 @@
 (defvar mevedel-slash-commands)
 
 ;; `mevedel-structs'
-(declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-p "mevedel-structs" (cl-x))
-(declare-function mevedel-directive-plan "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-fsm "mevedel-structs" (cl-x) t)
@@ -354,8 +342,6 @@
                   "mevedel-structs" (session paths))
 (declare-function mevedel-session-clear-dropped-file-grants
 		  "mevedel-structs" (session))
-(declare-function mevedel-session-directive-planning
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-dropped-file-grants
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-forked-from-fork-point-id
@@ -374,9 +360,7 @@
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x)
 		  t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (defvar mevedel--agent-invocation)
-(defvar mevedel--current-directive-uuid)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
@@ -404,7 +388,7 @@
 (declare-function mevedel-request-assert-target-ready
                   "mevedel-turn" (session))
 (declare-function mevedel-request-begin "mevedel-turn"
-                  (session &optional directive-uuid options))
+                  (session &optional options))
 (declare-function mevedel-request-call-owned
                   "mevedel-turn" (request buffer function &rest args))
 (declare-function mevedel-request-end
@@ -2542,8 +2526,7 @@ starts the fork after insertion."
       (when mevedel--session
         (setq request
               (mevedel-request-begin
-               mevedel--session
-               mevedel--current-directive-uuid)))
+               mevedel--session)))
       (goto-char (point-max))
       (mevedel--insert-user-turn input)
       (let ((data-turn-start (copy-marker (point) nil)))

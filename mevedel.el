@@ -84,7 +84,6 @@
 (autoload 'mevedel-collaboration-stop-all "mevedel-collaboration" nil t)
 (autoload 'mevedel-collaboration-view "mevedel-collaboration" nil t)
 (autoload 'mevedel-compact "mevedel-compact" nil t)
-(autoload 'mevedel-delete-all-directives "mevedel-overlays" nil t)
 (autoload 'mevedel-delete-all-instructions "mevedel-overlays" nil t)
 (autoload 'mevedel-diff-apply-buffer "mevedel-diff-apply" nil t)
 (autoload 'mevedel-evil-setup "mevedel-evil" nil t)
@@ -286,8 +285,6 @@
                   "mevedel-compact" (continue fsm))
 
 ;; `mevedel-directive'
-(declare-function mevedel-directive-actions "mevedel-directive" (directive))
-
 ;; `mevedel-directive-request'
 
 
@@ -334,13 +331,6 @@
 (declare-function mevedel-sleep-stop "mevedel-sleep" ())
 
 ;; `mevedel-structs'
-(declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-skills "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-tool-render-data'

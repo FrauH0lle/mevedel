@@ -26,10 +26,6 @@
 ;; `mevedel-chat'
 
 ;; `mevedel-directive-source'
-(declare-function mevedel--directive-record
-                  "mevedel-directive-source" (directive))
-(autoload 'mevedel--directive-record "mevedel-directive-source")
-
 ;; `mevedel-instruction-registry'
 
 ;; `mevedel-models'
@@ -43,8 +39,6 @@
 (autoload 'mevedel--topmost-instruction "mevedel-overlays")
 
 ;; `mevedel-structs'
-(declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
-
 ;; `mevedel-tools'
 (declare-function mevedel-tools-active-count "mevedel-tools" (&optional buffer))
 (autoload 'mevedel-tools-active-count "mevedel-tools")

@@ -132,7 +132,6 @@
                   "mevedel-skills-ui" (text))
 
 ;; `mevedel-structs'
-(declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-fsm "mevedel-structs" (cl-x) t)
@@ -145,8 +144,6 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-add-dropped-file-grant
                   "mevedel-structs" (session path))
-(declare-function mevedel-session-directive-planning
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-dropped-file-grants
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-enqueue-pending-input
@@ -177,7 +174,6 @@
                   "mevedel-structs" (session category entries))
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)

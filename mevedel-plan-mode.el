@@ -111,8 +111,6 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-directive-planning
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-follow-ups
                   "mevedel-structs" (cl-x) t)
@@ -203,9 +201,6 @@
       (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session)
                                     "No mevedel session for Plan mode"))
     (mevedel-session-artifacts-assert-new-mutation-authority session)
-    (when (mevedel-session-directive-planning session)
-      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session)
-                                    "Finish or cancel directive planning before entering Plan"))
     (when-let* ((goal (mevedel-session-goal session)))
       (unless (eq (mevedel-goal-status goal) 'complete)
         (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session)

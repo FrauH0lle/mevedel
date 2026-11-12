@@ -248,7 +248,7 @@ and NAME arguments)."
                                       :table (make-hash-table :test #'equal)
                                       :order nil
                                       :total-bytes 0)
-                         :directives nil)
+                         )
                         mevedel-workspace--registry)))
           ;; The workspace owns its instructions: make them available as
           ;; soon as it is activated, not only when a session resumes.

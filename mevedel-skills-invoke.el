@@ -137,7 +137,6 @@
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
-(defvar mevedel--current-directive-uuid)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
@@ -161,7 +160,7 @@
 ;; `mevedel-turn'
 (declare-function mevedel-current-origin "mevedel-turn" ())
 (declare-function mevedel-request-begin "mevedel-turn"
-                  (session &optional directive-uuid options))
+                  (session &optional options))
 
 ;;
 ;;; Request-scoped skill context

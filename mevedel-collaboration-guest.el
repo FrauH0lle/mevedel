@@ -208,7 +208,6 @@
 (autoload 'mevedel-sleep-update "mevedel-sleep")
 
 ;; `mevedel-structs'
-(declare-function mevedel-directive-id "mevedel-structs" (record))
 (declare-function mevedel-session-pending-follow-ups
                   "mevedel-structs" (session))
 (declare-function mevedel-session-set-pending-inputs
@@ -216,7 +215,6 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (session))
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (session))
-(declare-function mevedel-workspace-directives "mevedel-structs" (workspace))
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x))
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x))

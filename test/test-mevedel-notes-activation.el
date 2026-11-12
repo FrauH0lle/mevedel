@@ -117,20 +117,18 @@
                        (string-match-p "Cached note" (or (overlay-get ov 'after-string) "")))
                      (overlays-in (point-min) (point-max)))
               (error "Cached note did not restore")))))))
-  :doc "a returning source file restores source-missing legacy directives on visit"
+  :doc "a returning source file restores source-missing notes on visit"
   (progn
     (make-directory (file-name-concat root ".mevedel"))
     (mevedel-notes-activation-test--cold
      `(progn
         (require 'mevedel)
-        (require 'mevedel-directive-source)
         (let ((source (find-file-noselect ,file)))
           (with-current-buffer source
-            ;; No command creates directives any more; seed the legacy record
-            ;; through the internal source path the command used.
             (goto-char (point-min))
-            (mevedel--create-directive-in
-             source (point-min) (line-end-position) nil "Returning directive")
+            (mevedel-note-create "Returning note")
+            ;; Leave the note so its point help stays out of the batch output.
+            (goto-char (point-max))
             (delete-file ,file)
             (run-hooks 'post-command-hook)
             (run-hooks 'post-command-hook))
@@ -149,9 +147,9 @@
         (with-current-buffer (find-file-noselect ,file)
           (unless (seq-some
                    (lambda (ov)
-                     (string-match-p "DIRECTIVE" (or (overlay-get ov 'before-string) "")))
+                     (string-match-p "Returning note" (or (overlay-get ov 'after-string) "")))
                    (overlays-in (point-min) (point-max)))
-            (error "Source-missing directive did not return"))))))
+            (error "Source-missing note did not return"))))))
   :doc "an unnoted file in a remembered workspace does not reread its store"
   (progn
     (make-directory (file-name-concat root ".mevedel"))
@@ -194,7 +192,7 @@
   :doc "an empty workspace store does not load presentation"
   (progn
     (make-directory (file-name-concat root ".mevedel"))
-    (write-region "(:format 2 :files nil :directives nil :ids nil)\n" nil
+    (write-region "(:format 2 :files nil :ids nil)\n" nil
                   (file-name-concat root ".mevedel/instructions.el") nil 'silent)
     (mevedel-notes-activation-test--cold
      `(progn

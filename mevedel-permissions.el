@@ -22,8 +22,6 @@
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-skill-permission-rules
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-plan-directive-p "mevedel-agents"
-                  (&optional session request))
 (declare-function mevedel-plan-read-only-p "mevedel-agents"
                   (&optional session))
 (defvar mevedel--agent-invocation)
@@ -524,9 +522,7 @@ session-owned work descendants; workspace-owned shared files are excluded."
                'deny 'deny-rule :bucket deny-bucket))
              ((and (mevedel-plan-read-only-p session)
                    (or (and (equal tool-name "ApplyPatch")
-                            (or (not patch-session-only-p)
-                                (mevedel-plan-directive-p
-                                 session request)))
+                            (not patch-session-only-p))
                        (and (not (equal tool-name "ApplyPatch"))
                             (or native-edit-p (equal tool-name "Eval")))))
               (mevedel-permission--decision 'deny 'plan-mode)))))

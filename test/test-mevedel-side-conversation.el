@@ -25,6 +25,8 @@
 (require 'mevedel)
 (require 'mevedel-permission-rules)
 (require 'mevedel-side-conversation)
+(require 'mevedel-structs)
+(require 'mevedel-utilities)
 (require 'mevedel-view)
 
 (declare-function gptel-make-openai "ext:gptel-openai" (name &rest args))
@@ -133,44 +135,6 @@
         (insert "/btw")
         (should-error (mevedel-view-send) :type 'user-error)
         (should (equal "/btw" (mevedel-view--input-text))))))
-  :doc "rejects /btw during a directive-owned active request"
-  (let* ((workspace
-          (mevedel-workspace--create
-           :type 'file :id "btw-directive" :root (mevedel-test--placeholder-root)
-           :name "btw-directive"))
-         (session (mevedel-session-create "main" workspace)))
-    (mevedel-view-test--with-buffers
-      (with-current-buffer data-buf
-        (setq-local mevedel--workspace workspace
-                    mevedel--session session)
-        (insert "*** Parent prompt\n"
-                (propertize "Parent answer\n" 'gptel 'response))
-        (insert "\n*** Active directive question\n")
-        (let ((response-start (copy-marker (point) nil)))
-          (setq-local
-           mevedel--current-request
-           (mevedel-request--create
-            :id "btw-directive"
-            :session session
-            :directive-uuid "directive-1"
-            :fsm (gptel-make-fsm
-                  :state 'TYPE
-                  :info (list :buffer data-buf
-                              :position response-start))))))
-      (with-current-buffer view-buf
-        (setq-local mevedel--session session)
-        (goto-char (mevedel-view--input-start))
-        (insert "/btw Explain without changing the directive")
-        (let ((point-before (point))
-              (error (should-error (mevedel-view-send)
-                                   :type 'user-error)))
-          (should (string-match-p "directive"
-                                  (error-message-string error)))
-          (should (= point-before (point)))
-          (should (equal "/btw Explain without changing the directive"
-                         (mevedel-view--input-text)))))
-      (with-current-buffer data-buf
-        (should-not mevedel-side-conversation--side-buffer))))
   :doc "waits for asynchronous inherited gptel context formatting"
   (let* ((temporary-file-directory
           (file-name-as-directory (expand-file-name "~")))

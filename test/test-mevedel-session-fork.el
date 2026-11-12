@@ -37,7 +37,7 @@
 
   :doc "covers every session slot and isolates both clone policies"
   (progn
-    (should (= 103
+    (should (= 102
                (length
                 (cdr (cl-struct-slot-info 'mevedel-session)))))
     (should (mevedel-session-fork--assert-clone-slot-completeness))
@@ -166,8 +166,7 @@
       (should (= 0 (hash-table-count
                     (mevedel-session-mentions-shown candidate))))
       (dolist (value
-               (list (mevedel-session-directive-planning candidate)
-                     (mevedel-session-pending-reminders candidate)
+               (list (mevedel-session-pending-reminders candidate)
                      (mevedel-session-agent-reservations candidate)
                      (mevedel-session-agent-root-waiter candidate)
                      (mevedel-session-pending-steering candidate)

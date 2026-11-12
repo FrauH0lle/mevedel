@@ -4,7 +4,7 @@
 
 ;; Owns tool context, standard steps, sequencing, and ordering.  Each tool
 ;; invocation first runs the canonical pipeline: validate -> pre-tool-hooks ->
-;; normalize-paths -> prepare-resources -> permission -> capture-coverage ->
+;; normalize-paths -> prepare-resources -> permission ->
 ;; snapshot -> handler -> render-transform -> post-tool-hooks.  Provider-facing
 ;; calls then append hook context, repair feedback,
 ;; oversized-result persistence, Goal budget guidance, render data, and media.
@@ -114,7 +114,6 @@
   "mevedel-session-persistence")
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-directive-uuid "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-ephemeral-p "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-file-snapshots "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-id "mevedel-structs" (cl-x))
@@ -1232,29 +1231,6 @@ Missing files are stored as nil; unreadable paths retain a diagnostic gap."
                     (list :gap (error-message-string err))
                     snapshots)))))))
 
-(defun mevedel-pipeline--untracked-filesystem-effects-p (tool)
-  "Return non-nil when TOOL can mutate files outside exact snapshots."
-  (or (and (not (mevedel-tool-read-only-p tool))
-           (or (memq 'eval (mevedel-tool-groups tool))
-               (and (memq 'edit (mevedel-tool-groups tool))
-                    (not (mevedel-tool-snapshot-p tool)))))
-      (member (mevedel-tool-name tool) '("Agent" "SendMessage"))))
-
-(defun mevedel-pipeline--step-capture-coverage (context next _fail)
-  "Record untracked directive filesystem effects from CONTEXT, then call NEXT."
-  (let ((tool (plist-get context :tool))
-        (request (plist-get context :request)))
-    (when (and request
-               (mevedel-request-directive-uuid request)
-               (mevedel-pipeline--untracked-filesystem-effects-p tool))
-      (mevedel-request-note-untracked-effect
-       request
-       (mevedel-tool-name tool)
-       (if (member (mevedel-tool-name tool) '("Agent" "SendMessage"))
-           "Delegated work can modify files outside parent snapshots"
-         "Tool execution can modify files outside exact path snapshots")))
-    (funcall next context)))
-
 (defun mevedel-pipeline--handler-return-p (value)
   "Return non-nil when VALUE is a proper handler return plist.
 
@@ -1793,11 +1769,10 @@ Returns a list of step functions based on TOOL's behavioral flags:
   3. normalize-paths     -- canonicalizes `path'-typed args for authorization
   4. prepare-resources   -- parses addressed operands before permission
   5. permission          -- always included
-  6. capture-coverage    -- records mutation paths without exact snapshots
-  7. snapshot            -- included when snapshot-p
-  8. handler             -- always included
-  9. render-transform    -- always included; no-op when tool has none
-  10. post-tool-hooks    -- always included
+  6. snapshot            -- included when snapshot-p
+  7. handler             -- always included
+  8. render-transform    -- always included; no-op when tool has none
+  9. post-tool-hooks     -- always included
 
 Provider projection then appends hook context and repair feedback,
 persists oversized output when declared, adds a Goal warning, and
@@ -1809,8 +1784,7 @@ common boundary.  ToolCall checkpoints settle after the selected projection."
                 #'mevedel-pipeline--step-pre-tool-hooks
                 #'mevedel-pipeline--step-normalize-paths
                 #'mevedel-pipeline--step-prepare-resources
-                #'mevedel-tool-permission-step
-                #'mevedel-pipeline--step-capture-coverage)
+                #'mevedel-tool-permission-step)
           (when (mevedel-tool-snapshot-p tool)
             (list #'mevedel-pipeline--step-snapshot))
           (list #'mevedel-pipeline--step-handler

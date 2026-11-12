@@ -69,13 +69,9 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-agent-path-p "mevedel-structs" (path))
-(declare-function mevedel-request-directive-uuid
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-p "mevedel-structs" (cl-x))
 (declare-function mevedel-request-plan-read-only "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-permission-mode-override
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-directive-planning
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (cl-x) t)
@@ -561,15 +557,6 @@ the ambient agent invocation's root session."
            (and mevedel--agent-invocation
                 (mevedel-agent-invocation-parent-session
                  mevedel--agent-invocation))))))
-
-(defun mevedel-plan-directive-p (&optional session request)
-  "Return non-nil when Plan authority belongs to directive planning."
-  (or (and session (mevedel-session-directive-planning session))
-      (let ((request (or request
-                         (and (boundp 'mevedel--current-request)
-                              mevedel--current-request))))
-        (and (mevedel-request-p request)
-             (mevedel-request-directive-uuid request)))))
 
 (defun mevedel-agent-invocation-require-path (invocation)
   "Return INVOCATION's canonical path, or signal an error."

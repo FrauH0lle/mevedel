@@ -35,20 +35,14 @@
                 (error "Registry did not construct instruction state"))))
            (source
             (progn
-              (require 'mevedel-structs)
               (require 'mevedel-directive-source)
-              (let* ((record
-                      (mevedel-directive--create
-                       :id "cold" :request "request"
-                       :anchor '(:state source-missing :file "missing")
-                       :attempts '(attempt)))
-                     (workspace
-                      (mevedel-workspace--create
-                       :type 'file :id "cold" :root default-directory
-                       :name "cold" :directives (list record))))
-                (unless (eq record
-                            (mevedel-archive-directive record workspace))
-                  (error "Source owner did not archive its record")))))
+              (with-temp-buffer
+                (insert "source")
+                (let ((overlay (mevedel--create-instruction-overlay-in
+                                (current-buffer) 1 7 'char)))
+                  (unless (and (eq (current-buffer) (overlay-buffer overlay))
+                               (integerp (overlay-get overlay 'mevedel-id)))
+                    (error "Source owner did not register its instruction"))))))
            (core
             (progn
               (require 'mevedel-overlays)

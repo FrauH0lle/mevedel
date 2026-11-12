@@ -15,10 +15,6 @@
 (require 'cl-lib)
 
 ;; `mevedel-directive'
-(declare-function mevedel-workspace-set-directives
-                  "mevedel-directive" (workspace directives))
-(autoload 'mevedel-workspace-set-directives "mevedel-directive")
-
 ;; `mevedel-directive-source'
 (declare-function mevedel--delete-instruction
                   "mevedel-directive-source"
@@ -37,8 +33,6 @@
 (autoload 'mevedel--update-instruction-overlay "mevedel-overlay-ui")
 
 ;; `mevedel-overlays'
-(declare-function mevedel--directivep "mevedel-overlays" (instruction))
-(autoload 'mevedel--directivep "mevedel-overlays")
 (defvar mevedel--highlighted-instruction)
 
 ;; `mevedel-persistence'
@@ -48,10 +42,8 @@
 (autoload 'mevedel--restore-file-instructions "mevedel-persistence")
 
 ;; `mevedel-structs'
-(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
-(autoload 'mevedel-workspace-directives "mevedel-structs")
 (autoload 'mevedel-workspace-id "mevedel-structs")
 (autoload 'mevedel-workspace-type "mevedel-structs")
 
@@ -179,7 +171,6 @@ Each value is a plist with keys `:instructions', `:id-counter',
          (state (copy-tree (mevedel--instruction-state key)))
          (current-key mevedel--instruction-current-state-key)
          (highlighted mevedel--highlighted-instruction)
-         (directives (copy-sequence (mevedel-workspace-directives workspace)))
          overlays)
     (dolist (entry (plist-get state :instructions))
       (when (bufferp (car entry))
@@ -195,7 +186,6 @@ Each value is a plist with keys `:instructions', `:id-counter',
       (puthash key state mevedel--instruction-states)
       (setq mevedel--instruction-current-state-key current-key
             mevedel--highlighted-instruction highlighted)
-      (mevedel-workspace-set-directives workspace directives)
       (dolist (snapshot overlays)
         (when (buffer-live-p (nth 1 snapshot))
           (move-overlay (nth 0 snapshot)
@@ -232,9 +222,7 @@ Each value is a plist with keys `:instructions', `:id-counter',
     (setf (plist-get (mevedel--instruction-state
                       (mevedel--instruction-operation-state-key))
                      :store-observation)
-          nil)
-    (when workspace
-      (mevedel-workspace-set-directives workspace nil))))
+          nil)))
 
 (defmacro mevedel--foreach-instruction (binding &rest body)
   "Iterate over `(mevedel--instruction-alist)' with BINDING as the binding.
@@ -472,15 +460,6 @@ that have no workspace context."
 (defun mevedel--instruction-id (instruction)
   "Return unique identifier for INSTRUCTION overlay."
   (overlay-get instruction 'mevedel-id))
-
-(defun mevedel--find-directive-by-uuid (uuid)
-  "Find directive overlay with UUID.
-Returns the overlay, or nil if not found."
-  (when uuid
-    (mevedel--foreach-instruction instr
-      when (and (mevedel--directivep instr)
-                (equal (overlay-get instr 'mevedel-uuid) uuid))
-      return instr)))
 
 (defun mevedel--create-id ()
   "Create a unique identifier for an instruction.

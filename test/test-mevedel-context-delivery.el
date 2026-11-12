@@ -461,7 +461,7 @@
               (should-not (string-search "TaskWrite" tools)))))
       (delete-directory root t)))
 
-  :doc "unacknowledged root path instructions reach the root, never a directive"
+  :doc "unacknowledged root path instructions reach the root request"
   (let* ((root (make-temp-file "mevedel-root-instructions-" t))
          (workspace (mevedel-workspace--create :root (file-name-as-directory root)
                                                :id root :type 'project :name "scope"))
@@ -474,16 +474,12 @@
           (setf (mevedel-session-workspace-instruction-hashes session)
                 (list (cons (list "/root" file) nil)))
           (setq-local mevedel--session session)
-          (dolist (directive '("directive-uuid" nil))
-            (setq-local mevedel--current-directive-uuid directive)
-            (let ((fsm (gptel-make-fsm :info (list :buffer (current-buffer)))))
-              (mevedel-context-delivery-stage fsm)
-              (should (eq (null directive)
-                          (and (seq-find (lambda (entry)
-                                           (equal (cons 'workspace-instructions file)
-                                                  (plist-get entry :type)))
-                                         (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))
-                               t))))))
+          (let ((fsm (gptel-make-fsm :info (list :buffer (current-buffer)))))
+            (mevedel-context-delivery-stage fsm)
+            (should (seq-find (lambda (entry)
+                                (equal (cons 'workspace-instructions file)
+                                       (plist-get entry :type)))
+                              (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries)))))
       (delete-directory root t))))
 
 (provide 'test-mevedel-context-delivery)

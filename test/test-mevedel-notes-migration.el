@@ -107,7 +107,8 @@
       (mevedel-notes-migration-test--directive-store)
     (with-current-buffer list-buffer
       (should (string-match-p "Improve this function.*unsent" (buffer-string))))
-    (should-not (mevedel-workspace-directives workspace))
+    (should (equal old-bytes
+                   (with-temp-buffer (insert-file-contents backup) (buffer-string))))
     (should-not (file-exists-p (file-name-concat directory ".mevedel/sessions"))))
   :doc "subdirectives append to their parent text, without separate notes"
   (let* ((data (mevedel-notes-migration-test--directive-store))
@@ -176,7 +177,8 @@
                 (should-error (mevedel-directive-activity-reattach file 1 11)
                               :type 'user-error))
             (kill-buffer history))))
-      (should-not (mevedel-workspace-directives workspace))))
+      (should (equal old-bytes
+                     (with-temp-buffer (insert-file-contents backup) (buffer-string))))))
   :doc "archived directives without presentations stay closed beyond every expiry limit"
   (let* ((data (mevedel-notes-migration-test--directive-store))
          (record (car (plist-get data :directives)))
@@ -360,6 +362,21 @@
         (setq old-bytes "(:format 99 :ids nil :files nil :directives nil)\n")
         (write-region old-bytes nil store nil 'silent))
     (should-error (mevedel-instruction-store-observe workspace))
+    (should-not (file-exists-p backup))
+    (should (equal old-bytes
+                   (with-temp-buffer (insert-file-contents store) (buffer-string))))))
+
+(mevedel-deftest mevedel-notes-list-rejects-malformed-legacy-store
+  (:quiet t)
+  ,test
+  (test)
+  :doc "invalid directive data cannot replace the old store or create a backup"
+  (mevedel-notes-migration-test--backup
+      (let ((data (mevedel-notes-migration-test--directive-store)))
+        (setf (plist-get (car (plist-get data :directives)) :session-id) 42)
+        (setq old-bytes (concat (prin1-to-string data) "\n"))
+        (write-region old-bytes nil store nil 'silent))
+    (should-error (mevedel-notes-list workspace))
     (should-not (file-exists-p backup))
     (should (equal old-bytes
                    (with-temp-buffer (insert-file-contents store) (buffer-string))))))

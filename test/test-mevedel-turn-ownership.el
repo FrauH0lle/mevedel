@@ -85,49 +85,41 @@
     (setf (mevedel-session-permission-mode session) 'full-auto)
     (setq mevedel--pending-permission-mode 'ask)
     (org-mode)
-    (let ((admitted (mevedel-request-begin session "directive")))
+    (let ((admitted (mevedel-request-begin session)))
       (should (eq 'ask (mevedel-request-permission-mode-override admitted)))
       (should-not (mevedel-request-implementation-policy admitted))
       (should-not mevedel--pending-permission-mode)
       (mevedel-request-end)
       (should (eq 'full-auto (mevedel-session-permission-mode session)))))
 
-  :doc "explicit directive authority leaves pending root authority and records its own mode"
+  :doc "explicit authority leaves pending root mode and records its own mode"
   (mevedel-turn-ownership-test--with-session
     (mevedel-request-end)
-    (let ((policy (list :model-provider "Provider:model" :reasoning-effort nil
-                        :permission-mode 'ask))
-          events)
-      (setq mevedel--pending-permission-mode 'edits
-            mevedel--pending-implementation-policy policy)
+    (let (events)
+      (setq mevedel--pending-permission-mode 'edits)
       (cl-letf (((symbol-function 'mevedel-telemetry-record)
                  (lambda (_session event &rest fields)
                    (push (cons event fields) events))))
         (let ((admitted (mevedel-request-begin
-                         session "directive"
-                         '(:permission-mode full-auto :plan-read-only t))))
+                         session '(:permission-mode full-auto :plan-read-only t))))
           (should (eq 'full-auto (mevedel-request-permission-mode-override admitted)))
           (should (mevedel-request-plan-read-only admitted))
-          (should-not (mevedel-request-implementation-policy admitted))
           (should (eq 'edits mevedel--pending-permission-mode))
-          (should (eq policy mevedel--pending-implementation-policy))
           (dolist (event '(request-queued request-start))
             (should (eq 'full-auto
                         (plist-get (alist-get event events) :permission-mode))))))))
 
-  :doc "explicit nil directive authority does not inherit shared preparation state"
+  :doc "explicit nil authority does not inherit shared preparation state"
   (mevedel-turn-ownership-test--with-session
     (mevedel-request-end)
     (setq mevedel--pending-permission-mode 'full-auto)
-    (setf (mevedel-session-directive-planning session) '(:phase planning))
     (let ((admitted (mevedel-request-begin
-                     session "directive"
-                     '(:permission-mode nil :plan-read-only nil))))
+                     session '(:permission-mode nil :plan-read-only nil))))
       (should-not (mevedel-request-permission-mode-override admitted))
       (should-not (mevedel-request-plan-read-only admitted))
       (should (eq 'full-auto mevedel--pending-permission-mode))))
 
-  :doc "nested readiness admission cannot consume an outer directive's explicit authority"
+  :doc "nested readiness admission cannot consume an outer request's explicit authority"
   (mevedel-turn-ownership-test--with-session
     (mevedel-request-end)
     (let ((original (symbol-function 'mevedel-request-assert-target-ready))
@@ -140,14 +132,14 @@
                      (unless entered
                        (setq entered t
                              replacement (mevedel-request-begin session)))))))
-        (should-error (mevedel-request-begin session "directive" options)
+        (should-error (mevedel-request-begin session options)
                       :type 'user-error))
       (should (eq replacement mevedel--current-request))
       (should-not (mevedel-request-cancelled-p replacement))
       (should (eq 'edits (mevedel-request-permission-mode-override replacement)))
       (should-not (mevedel-request-plan-read-only replacement))
       (mevedel-request-end)
-      (let ((retry (mevedel-request-begin session "directive" options)))
+      (let ((retry (mevedel-request-begin session options)))
         (should (eq 'full-auto (mevedel-request-permission-mode-override retry)))
         (should (mevedel-request-plan-read-only retry)))))
 

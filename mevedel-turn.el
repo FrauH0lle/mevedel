@@ -440,7 +440,6 @@ from another session, a failed turn, or an open Pending Inputs cockpit."
                (eq session mevedel--session)
                (eq (current-buffer) (mevedel-session-root-buffer session))
                (not mevedel--agent-invocation)
-               (not (mevedel-request-directive-uuid request))
                (not (and (mevedel-session-pending-input-paused session)
                          (mevedel-pending-inputs-cockpit-holds-p session))))
       (mevedel-session-set-pending-inputs
@@ -454,16 +453,15 @@ from another session, a failed turn, or an open Pending Inputs cockpit."
                (mevedel-session-pending-steering session)))
       (mevedel-session-set-pending-input-paused session nil))))
 
-(defun mevedel-request-begin (session &optional directive-uuid options)
+(defun mevedel-request-begin (session &optional options)
   "Create a new request for SESSION, guarding against stale requests.
 
 If `mevedel--current-request' is already set, log a warning and replace
 it.  Signal instead if yielding checks or cancellation callbacks transfer
-ownership or start deferred settlement.  Optional DIRECTIVE-UUID sets the
-directive being processed.  Return the new request struct.
+ownership or start deferred settlement.  Return the new request struct.
 OPTIONS may explicitly supply `:permission-mode' and `:plan-read-only',
 including nil, instead of shared pending/session defaults.  Explicit mode
-does not consume pending mode, and directives do not consume root policy.
+does not consume pending mode.
 OPTIONS `:admitted' is called with the new request as soon as it owns the
 buffer, so a caller can still recognize its own admission when a later
 admission step signals.
@@ -515,9 +513,8 @@ recovery state alone."
     (mevedel-implementation-policy-assert-preparation
      mevedel-implementation-policy--admission-preparation))
   (let* ((implementation-policy
-          (unless directive-uuid
-            (copy-tree (mevedel-implementation-policy-validate
-                        (mevedel-implementation-policy-current session)))))
+          (copy-tree (mevedel-implementation-policy-validate
+                      (mevedel-implementation-policy-current session))))
          (permission-mode-override
           (when-let* ((mode
                        (if (plist-member options :permission-mode)
@@ -544,17 +541,12 @@ recovery state alone."
                    :turn (1+ (or (mevedel-session-turn-count session) 0))
                    :file-snapshots (make-hash-table :test #'equal)
                    :untracked-effects nil
-                   :directive-uuid directive-uuid
                    :plan-read-only
                    (if (plist-member options :plan-read-only)
                        (plist-get options :plan-read-only)
-                     (or (eq (plist-get
-                              (mevedel-session-directive-planning session)
-                              :phase)
-                             'planning)
-                         (and mevedel--agent-invocation
-                              (mevedel-agent-invocation-plan-read-only
-                               mevedel--agent-invocation))))
+                     (and mevedel--agent-invocation
+                          (mevedel-agent-invocation-plan-read-only
+                           mevedel--agent-invocation)))
                    :started-at (current-time)
                    :origin origin)))
     (setf (mevedel-request-context request)
@@ -564,8 +556,7 @@ recovery state alone."
     (when-let* ((admitted (plist-get options :admitted)))
       (funcall admitted request))
     (mevedel--turn-resume-pending-input request)
-    (unless directive-uuid
-      (setq mevedel--pending-implementation-policy nil))
+    (setq mevedel--pending-implementation-policy nil)
     (unless (plist-member options :permission-mode)
       (setq mevedel--pending-permission-mode nil))
     ;; Emacs auto-saves only after input; an unattended turn needs its own
@@ -779,12 +770,11 @@ Run `mevedel-turn-settled-functions' with OUTCOME in the chat buffer."
              (concat (mevedel-recovery-message category) "; see the transcript")
              nil)
             ;; Recover only the ordinary root selection that is still current.
-            ;; Directive/accepted implementation choices are request-local, and
+            ;; Accepted implementation choices are request-local, and
             ;; an old failure must not overwrite a newer user selection.
             (when-let* (((eq category 'model))
                          ((not (and request
-                                    (or (mevedel-request-directive-uuid request)
-                                        (mevedel-request-implementation-policy request)))))
+                                    (mevedel-request-implementation-policy request))))
                          ((eq chat-buffer (mevedel-session-root-buffer mevedel--session)))
                          ((eq backend gptel-backend))
                          ((eq (or (plist-get info :model) gptel-model) gptel-model))

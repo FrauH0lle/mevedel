@@ -116,8 +116,6 @@
       (setf (mevedel-goal-status goal) 'active)
       (let ((mevedel--agent-invocation t))
         (should-not (mevedel-implementation-policy-current)))
-      (let ((mevedel--current-directive-uuid "directive"))
-        (should-not (mevedel-implementation-policy-current)))
       (setf (mevedel-session-plan-mode session) t)
       (should-not (mevedel-implementation-policy-current))
       (setf (mevedel-session-plan-mode session) nil)

@@ -67,8 +67,8 @@
           (setq restored (mevedel-session-persistence-resume-id
                           workspace (mevedel-session-session-id session)))
           (should (buffer-live-p restored))
-          ;; The exclusion must come from the transcript markers alone.
-          (should-not (mevedel-workspace-directives workspace))
+          ;; The exclusion comes from the transcript markers alone: no
+          ;; directive record type remains to consult.
           (setq view (buffer-local-value 'mevedel--view-buffer restored))
           (should (buffer-live-p view))
           (with-current-buffer view

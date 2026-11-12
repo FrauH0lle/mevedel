@@ -39,16 +39,11 @@
              (mevedel-view--setup (get-buffer-create "*composer*") data))
            (switch-to-buffer "*composer*")
            (setq-local mevedel--session (mevedel-session--create :name "test"))
-           (dolist (mode '(ask edits full-auto directive ask))
+           (dolist (mode '(ask edits full-auto ask))
              (mevedel-view--clear-input)
              (goto-char (point-max))
              (insert "> first\n" (make-string 200 ?a) "\nlast\n")
-             (setq-local mevedel-permission-mode
-                         (if (eq mode 'directive) 'ask mode))
-             (setq mevedel-view--composer-scope
-                   (and (eq mode 'directive)
-                        (list :directive-id "test" :action 'retry
-                              :record (mevedel-directive--create :request "Fix it"))))
+             (setq-local mevedel-permission-mode mode)
              (mevedel-view-refresh-input-prompt)
              (goto-char (mevedel-view--input-start))
              (redisplay t)

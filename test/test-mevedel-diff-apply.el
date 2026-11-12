@@ -95,19 +95,15 @@ Resolve labels relative to WORKSPACE-ROOT when non-nil."
       (read-only-mode +1))
     result))
 
-(defun mevedel-test--overlay-on-text (buffer text type)
-  "Register a TYPE instruction overlay on TEXT in BUFFER.
-TYPE is `note' or `directive'."
+(defun mevedel-test--overlay-on-text (buffer text)
+  "Create a note on TEXT in BUFFER."
   (with-current-buffer buffer
     (save-excursion
       (goto-char (point-min))
       (unless (re-search-forward (regexp-quote text) nil t)
         (error "Fixture text not found in %s" (buffer-name)))
-      (if (eq type 'note)
-          (mevedel-instruction-test--create-note-in
-           buffer (match-beginning 0) (match-end 0))
-        (mevedel--create-directive-in
-         buffer (match-beginning 0) (match-end 0) nil "rename outputs")))))
+      (mevedel-instruction-test--create-note-in
+       buffer (match-beginning 0) (match-end 0)))))
 
 (defun mevedel-test--overlay-text (overlay)
   "Return the text OVERLAY currently covers."
@@ -191,7 +187,7 @@ Use WORKSPACE-ROOT as its root when non-nil."
                                "before\nProvision old\nafter\n"))
          (buffer (find-file-noselect file))
          (reference (mevedel-test--overlay-on-text
-                     buffer "Provision old\n" 'note))
+                     buffer "Provision old\n"))
          (diff (mevedel-test--create-diff-buffer
                 "above\nbefore\n# Provision new\nafter\nbelow\n" buffer)))
     (unwind-protect
@@ -215,11 +211,11 @@ Use WORKSPACE-ROOT as its root when non-nil."
 
   ;; MUST-WORK USER CASE.  This fixture is a real change a user made in an
   ;; R/Shiny module: three renamed `renderUI' outputs across separate hunks,
-  ;; with one registered directive spanning the layout block and one reference
+  ;; with one note spanning the layout block and one note
   ;; on each renamed definition line.  Do not delete this case when the diff
   ;; application implementation changes -- port it.  Change what it expects
   ;; only when the product requirement itself changes.
-  :doc "keeps a directive and its references on their text across a real-world multi-hunk rename"
+  :doc "keeps a block note and line notes on their text across a real-world multi-hunk rename"
   (let* ((buffer-text "
       # plots is to high too display on one page and thus, it makes sense to
       # have a division between multiple pages.
@@ -270,7 +266,7 @@ Lorem ipsum dolor sit amet, consetetur
 
 
 ")
-         (directive-text "      shiny$div(\n        # Dynamic layout - columns adjust based on which cards are visible\n        shiny$uiOutput(ns(\"dynamic_layout_ui\"))\n      ),\n      shiny$div(\n        style = \"margin-top: 3px;\",\n        shiny$uiOutput(ns(\"dynamic_layout_ui_pt2\"))\n      ),\n      shiny$div(\n        style = \"margin-top: 3px;\",\n        shiny$uiOutput(ns(\"dynamic_layout_ui_pt3\"))\n      )\n")
+         (block-text "      shiny$div(\n        # Dynamic layout - columns adjust based on which cards are visible\n        shiny$uiOutput(ns(\"dynamic_layout_ui\"))\n      ),\n      shiny$div(\n        style = \"margin-top: 3px;\",\n        shiny$uiOutput(ns(\"dynamic_layout_ui_pt2\"))\n      ),\n      shiny$div(\n        style = \"margin-top: 3px;\",\n        shiny$uiOutput(ns(\"dynamic_layout_ui_pt3\"))\n      )\n")
          (reference-1-text "    output$dynamic_layout_ui <- shiny$renderUI({\n")
          (reference-2-text "    output$dynamic_layout_ui_pt2 <- shiny$renderUI({\n")
          (reference-3-text "    output$dynamic_layout_ui_pt3 <- shiny$renderUI({\n")
@@ -324,13 +320,13 @@ Lorem ipsum dolor sit amet, consetetur
 
 
 ")
-         (expected-directive "      shiny$div(\n        # Main plots and maps layout\n        shiny$uiOutput(ns(\"main_plots_maps_ui\"))\n      ),\n      shiny$div(\n        style = \"margin-top: 3px;\",\n        shiny$uiOutput(ns(\"costs_analysis_ui\"))\n      ),\n      shiny$div(\n        style = \"margin-top: 3px;\",\n        shiny$uiOutput(ns(\"impact_maps_ui\"))\n      )\n")
+         (expected-block "      shiny$div(\n        # Main plots and maps layout\n        shiny$uiOutput(ns(\"main_plots_maps_ui\"))\n      ),\n      shiny$div(\n        style = \"margin-top: 3px;\",\n        shiny$uiOutput(ns(\"costs_analysis_ui\"))\n      ),\n      shiny$div(\n        style = \"margin-top: 3px;\",\n        shiny$uiOutput(ns(\"impact_maps_ui\"))\n      )\n")
          (expected-ref1 "    output$main_plots_maps_ui <- shiny$renderUI({\n")
          (expected-ref2 "    output$costs_analysis_ui <- shiny$renderUI({\n")
          (expected-ref3 "    output$impact_maps_ui <- shiny$renderUI({\n")
          (file (make-temp-file "mevedel-test-real-world-" nil ".R" buffer-text))
          (file-buffer (find-file-noselect file))
-         directive reference-1 reference-2 reference-3 diff-buffer)
+         block reference-1 reference-2 reference-3 diff-buffer)
     (unwind-protect
         (progn
           (cl-letf (((symbol-function #'mevedel-workspace)
@@ -338,14 +334,14 @@ Lorem ipsum dolor sit amet, consetetur
                        (mevedel-workspace-get-or-create
                         'file file (file-name-directory file)
                         (file-name-nondirectory file)))))
-            (setq directive (mevedel-test--overlay-on-text
-                             file-buffer directive-text 'directive)
+            (setq block (mevedel-test--overlay-on-text
+                         file-buffer block-text)
                   reference-1 (mevedel-test--overlay-on-text
-                               file-buffer reference-1-text 'note)
+                               file-buffer reference-1-text)
                   reference-2 (mevedel-test--overlay-on-text
-                               file-buffer reference-2-text 'note)
+                               file-buffer reference-2-text)
                   reference-3 (mevedel-test--overlay-on-text
-                               file-buffer reference-3-text 'note)
+                               file-buffer reference-3-text)
                   diff-buffer (mevedel-test--create-diff-buffer
                                new-text file-buffer))
             (with-current-buffer diff-buffer
@@ -357,8 +353,8 @@ Lorem ipsum dolor sit amet, consetetur
                 (mevedel-diff-apply-buffer))))
           (with-current-buffer file-buffer
             (should (equal new-text (buffer-string)))
-            (should (equal expected-directive
-                           (mevedel-test--overlay-text directive)))
+            (should (equal expected-block
+                           (mevedel-test--overlay-text block)))
             (should (equal expected-ref1
                            (mevedel-test--overlay-text reference-1)))
             (should (equal expected-ref2
@@ -453,12 +449,11 @@ Lorem ipsum dolor sit amet, consetetur
       (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
       (kill-buffer file-buffer)
       (delete-file file)))
-  :doc "whole-range deletion detaches the registered directive"
+  :doc "whole-range deletion keeps an empty note at the deleted code"
   (let* ((original "before\nremove me\nafter\n")
-         (file (make-temp-file "mevedel-test-directive-" nil ".txt" original))
+         (file (make-temp-file "mevedel-test-note-" nil ".txt" original))
          (file-buffer (find-file-noselect file))
-         directive
-         record
+         note
          diff-buffer)
     (unwind-protect
         (progn
@@ -467,19 +462,15 @@ Lorem ipsum dolor sit amet, consetetur
                        (mevedel-workspace-get-or-create
                         'file file (file-name-directory file)
                         (file-name-nondirectory file)))))
-            (with-current-buffer file-buffer
-              (setq directive
-                    (mevedel--create-directive-in file-buffer 8 18 nil "remove"))
-              (setq record (mevedel--directive-record directive)))
+            (setq note (mevedel-instruction-test--create-note-in file-buffer 8 18))
             (setq diff-buffer
                   (mevedel-test--create-diff-buffer "before\nafter\n" file-buffer))
             (with-current-buffer diff-buffer
               (let ((default-directory temporary-file-directory)
                     (inhibit-message t))
                 (mevedel-diff-apply-buffer))))
-          (should record)
-          (should (eq 'detached
-                      (plist-get (mevedel-directive-anchor record) :state))))
+          (should (eq file-buffer (overlay-buffer note)))
+          (should (= 8 (overlay-start note) (overlay-end note))))
       (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
       (kill-buffer file-buffer)
       (delete-file file)))
@@ -526,11 +517,11 @@ Lorem ipsum dolor sit amet, consetetur
       (kill-buffer diff-buffer)
       (kill-buffer file-buffer)
       (when (file-exists-p file) (delete-file file))))
-  :doc "deleting a file marks its registered directive source missing"
+  :doc "deleting a file keeps its note live in the open buffer"
   (let* ((file (make-temp-file "mevedel-test-deleted-" nil ".txt" "old\n"))
          (file-buffer (find-file-noselect file))
          (diff-buffer (mevedel-test--create-diff-buffer "" file-buffer))
-         directive record)
+         note)
     (unwind-protect
         (progn
           (cl-letf (((symbol-function #'mevedel-workspace)
@@ -538,19 +529,14 @@ Lorem ipsum dolor sit amet, consetetur
                        (mevedel-workspace-get-or-create
                         'file file (file-name-directory file)
                         (file-name-nondirectory file)))))
-            (with-current-buffer file-buffer
-              (setq directive
-                    (mevedel--create-directive-in file-buffer 1 4 nil "delete"))
-              (setq record (mevedel--directive-record directive)))
+            (setq note (mevedel-instruction-test--create-note-in file-buffer 1 4))
             (with-current-buffer diff-buffer
               (let ((default-directory temporary-file-directory)
                     (inhibit-message t))
                 (mevedel-diff-apply-buffer))))
           (should-not (file-exists-p file))
           (should (buffer-live-p file-buffer))
-          (should-not (overlay-buffer directive))
-          (should (eq 'source-missing
-                      (plist-get (mevedel-directive-anchor record) :state))))
+          (should (eq file-buffer (overlay-buffer note))))
       (kill-buffer diff-buffer)
       (kill-buffer file-buffer)
       (when (file-exists-p file) (delete-file file))))
@@ -638,11 +624,11 @@ Lorem ipsum dolor sit amet, consetetur
       (when (buffer-live-p first-buffer) (kill-buffer first-buffer))
       (when (buffer-live-p second-buffer) (kill-buffer second-buffer))
       (when (file-directory-p root) (delete-directory root t))))
-  :doc "rolls back files and directive state when a later buffer hook fails"
+  :doc "rolls back files and note geometry when a later buffer hook fails"
   (let* ((root (make-temp-file "mevedel-test-sync-rollback-" t))
          (first (file-name-concat root "one.txt"))
          (second (file-name-concat root "two.txt"))
-         first-buffer second-buffer diff-buffer directive record)
+         first-buffer second-buffer diff-buffer note)
     (unwind-protect
         (progn
           (write-region "one\n" nil first nil 'silent)
@@ -656,10 +642,7 @@ Lorem ipsum dolor sit amet, consetetur
                      (lambda (&rest _)
                        (mevedel-workspace-get-or-create
                         'file first root (file-name-nondirectory first)))))
-            (with-current-buffer first-buffer
-              (setq directive
-                    (mevedel--create-directive-in first-buffer 1 4 nil "keep"))
-              (setq record (mevedel--directive-record directive)))
+            (setq note (mevedel-instruction-test--create-note-in first-buffer 1 4))
             (with-current-buffer second-buffer
               (add-hook 'before-change-functions
                         (lambda (&rest _) (error "Sync failure")) nil t))
@@ -669,7 +652,7 @@ Lorem ipsum dolor sit amet, consetetur
                 (should-error (mevedel-diff-apply-buffer))))
             (with-current-buffer first-buffer
               (should
-               (memq directive
+               (memq note
                      (alist-get first-buffer
                                 (mevedel--instruction-alist-value))))))
           (should (equal "one\n"
@@ -678,11 +661,9 @@ Lorem ipsum dolor sit amet, consetetur
                          (mevedel-test--read-file second)))
           (with-current-buffer first-buffer
             (should (equal "one\n" (buffer-string)))
-            (should (eq first-buffer (overlay-buffer directive)))
-            (should (= 1 (overlay-start directive)))
-            (should (= 4 (overlay-end directive))))
-          (should (eq 'attached
-                      (plist-get (mevedel-directive-anchor record) :state)))
+            (should (eq first-buffer (overlay-buffer note)))
+            (should (= 1 (overlay-start note)))
+            (should (= 4 (overlay-end note))))
           (with-current-buffer second-buffer
             (should (equal "two\n" (buffer-string)))))
       (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))

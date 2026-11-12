@@ -47,10 +47,11 @@
                        #'ignore))
                     ((symbol-function 'mevedel-hooks-run-event)
                      (lambda (_event _payload callback &rest _) (funcall callback nil)))
-                    ((symbol-function 'mevedel-pipeline--step-capture-coverage)
-                     (lambda (context next _fail)
-                       (if (eq failure 'early) (error "Early failure")
-                         (funcall next context)))))
+                    ((symbol-function 'mevedel-pipeline--step-handler)
+                     (let ((handler (symbol-function 'mevedel-pipeline--step-handler)))
+                       (lambda (context next fail)
+                         (if (eq failure 'early) (error "Early failure")
+                           (funcall handler context next fail))))))
             (mevedel-pipeline-run-tool-outcome
              tool (lambda (value) (setq delivered value)) nil
              (list :tool-use-id "approval/1" :source 'native :projection projection)))

@@ -71,7 +71,7 @@ without adding it to another conversation's persistent gptel context."
   (let* ((child (mevedel-agent-invocation-p owner))
          (session (mevedel-claude-code-context--session owner))
          (model (plist-get (mevedel-engine-info owner) :model))
-         (fresh (or child (mevedel-request-directive-uuid owner)
+         (fresh (or child
                     (plist-get (mevedel-engine-info owner) :mevedel-native-isolated)))
          (expansion (mevedel-mentions-expand-user-input text session fresh model))
          (images (mevedel-claude-code-context--images
@@ -170,8 +170,7 @@ With CHANGED, omit files whose current contents match their acknowledged hash:
 retained native history already holds that delivery."
   (let* ((child (mevedel-agent-invocation-p owner))
          (scope (cond (child (mevedel-agent-invocation-parent-session owner))
-                      ((or (mevedel-request-directive-uuid owner)
-                           (plist-get (mevedel-engine-info owner) :mevedel-native-isolated)) owner)
+                      ((plist-get (mevedel-engine-info owner) :mevedel-native-isolated) owner)
                       (t (mevedel-request-session owner))))
          (path (if child (mevedel-agent-invocation-path owner) "/root"))
          (all (mevedel-tool-fs-read-workspace-context scope path)))
@@ -233,8 +232,7 @@ every current observation is delivered again."
                              (plist-get selected :text)))
          (observations (mevedel-claude-code-context--observations owner))
          (roster (unless (and (mevedel-request-p owner)
-                              (or (mevedel-request-directive-uuid owner)
-                                  (plist-get info :mevedel-native-isolated)))
+                              (plist-get info :mevedel-native-isolated))
                    (mevedel-tools-agent-roster owner t)))
          (instructions (mevedel-claude-code-context--workspace-context owner))
          (limit (when (mevedel-agent-invocation-p owner)
@@ -293,8 +291,7 @@ each entry."
     (mevedel-tools-steering-claim (mevedel-request-session owner) entries)
     (let* ((info (mevedel-engine-info owner))
            (session (mevedel-request-session owner))
-           (fresh (or (mevedel-request-directive-uuid owner)
-                      (plist-get info :mevedel-native-isolated)))
+           (fresh (plist-get info :mevedel-native-isolated))
            texts images transcript reminders commits)
       (dolist (entry entries)
         (let ((expansion (with-current-buffer (plist-get info :buffer)
@@ -346,8 +343,7 @@ EXTRA is an optional plist of further typed `:entries' and their `:commits'."
          (pending (plist-get info :mevedel-claude-context-pending)))
     (unless (eq 'hook (plist-get pending :route))
       (let* ((context (if (mevedel-agent-invocation-p owner) owner
-                        (unless (or (mevedel-request-directive-uuid owner)
-                                    (plist-get info :mevedel-native-isolated))
+                        (unless (plist-get info :mevedel-native-isolated)
                           (mevedel-request-session owner))))
              (observations (unless (eq prompt-p t)
                              (mevedel-claude-code-context--observations owner)))

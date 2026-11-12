@@ -149,6 +149,18 @@ Its fixed `instructions/current.el' cache holds STALE, which is no authority."
       (should (eq 'ok (plist-get decoded :status)))
       (plist-get decoded :data))))
 
+(defun mevedel-migrate-instructions-test--notes (record)
+  "Return the converted note properties of store or export RECORD."
+  (cl-loop for (_ . entry) in (plist-get record :files)
+           append (mapcar (lambda (instruction) (plist-get instruction :properties))
+                          (plist-get entry :instructions))))
+
+(defun mevedel-migrate-instructions-test--texts (record)
+  "Return the sorted note texts of store or export RECORD."
+  (sort (mapcar (lambda (properties) (plist-get properties 'mevedel-note-text))
+                (mevedel-migrate-instructions-test--notes record))
+        #'string<))
+
 (mevedel-deftest mevedel-migrate-instructions ()
   ,test
   (test)
@@ -173,10 +185,8 @@ Its fixed `instructions/current.el' cache holds STALE, which is no authority."
       (let* ((record (mevedel-migrate-instructions-test--store workspace))
              (ids (mapcar (lambda (instr) (plist-get (plist-get instr :properties) 'mevedel-id))
                           (plist-get (cdar (plist-get record :files)) :instructions))))
-        (should (equal '("one" "two")
-                       (sort (mapcar (lambda (d) (plist-get d :request))
-                                     (plist-get record :directives))
-                             #'string<)))
+        (should-not (plist-member record :directives))
+        (should (equal '("one" "two") (mevedel-migrate-instructions-test--texts record)))
         (should (equal '(1 2) (sort ids #'<))))))
   :doc "control: an identical instruction in two sessions collapses to one"
   (mevedel-migrate-instructions-test--with-root (root workspace)
@@ -189,8 +199,8 @@ Its fixed `instructions/current.el' cache holds STALE, which is no authority."
       (should (eq 'written (plist-get result :status)))
       (should-not (plist-get result :ambiguous))
       (should-not (plist-get result :renumbered))
-      (should (= 1 (length (plist-get (mevedel-migrate-instructions-test--store workspace)
-                                      :directives))))))
+      (should (equal '("one") (mevedel-migrate-instructions-test--texts
+                               (mevedel-migrate-instructions-test--store workspace))))))
   :doc "the same UUID at differing revisions stages the workspace, originals intact"
   (mevedel-migrate-instructions-test--with-root (root workspace)
     (let* ((a (mevedel-migrate-instructions-test--session
@@ -212,12 +222,10 @@ Its fixed `instructions/current.el' cache holds STALE, which is no authority."
                        (mevedel-migrate-instructions-test--facts
                         (plist-get report :unresolved))))
         ;; One complete candidate per session, each preferring its session.
-        (should (equal '("older" "newer")
+        (should (equal '(("older") ("newer"))
                        (mapcar (lambda (candidate)
-                                 (plist-get (car (plist-get (mevedel-migrate-session--read
-                                                             candidate)
-                                                            :directives))
-                                            :request))
+                                 (mevedel-migrate-instructions-test--texts
+                                  (mevedel-migrate-session--read candidate)))
                                (plist-get report :candidates)))))
       ;; The runtime then sees a pending workspace, not an empty one.
       (let ((runtime (mevedel-workspace--create :type 'project :id "w-runtime"
@@ -232,10 +240,8 @@ Its fixed `instructions/current.el' cache holds STALE, which is no authority."
                                :candidates)))
               (should (eq 'active (mevedel-instruction-test--store-state runtime)))
               (should (equal '("older")
-                             (mapcar (lambda (d) (plist-get d :request))
-                                     (plist-get (mevedel-migrate-instructions-test--store
-                                                 runtime)
-                                                :directives)))))
+                             (mevedel-migrate-instructions-test--texts
+                              (mevedel-migrate-instructions-test--store runtime)))))
           (mevedel--clear-instruction-state runtime)
           (test-mevedel-session-persistence--reset-instructions)))))
   :doc "inconsistent and cyclic trees stage the workspace"
@@ -306,9 +312,10 @@ Its fixed `instructions/current.el' cache holds STALE, which is no authority."
                     (list (mevedel-migrate-instructions-test--session
                            root "a" snapshot (list (cons 1 snapshot)))))))
       (should (eq 'written (plist-get result :status)))
-      (should (= 1 (length (plist-get (car (plist-get (mevedel-migrate-instructions-test--store
-                                                       workspace)
-                                                      :directives))
+      (should (= 1 (length (plist-get (plist-get (car (mevedel-migrate-instructions-test--notes
+                                                       (mevedel-migrate-instructions-test--store
+                                                        workspace)))
+                                                 'mevedel-note-legacy-history)
                                       :attempts))))))
   :doc "an instruction missing from a later session is kept and reported"
   (mevedel-migrate-instructions-test--with-root (root workspace)
@@ -325,10 +332,8 @@ Its fixed `instructions/current.el' cache holds STALE, which is no authority."
       (should (equal '(("D1" :absent-from))
                      (mevedel-migrate-instructions-test--facts
                       (plist-get result :ambiguous))))
-      (should (equal '("one") (mapcar (lambda (d) (plist-get d :request))
-                                      (plist-get (mevedel-migrate-instructions-test--store
-                                                  workspace)
-                                                 :directives))))))
+      (should (equal '("one") (mevedel-migrate-instructions-test--texts
+                               (mevedel-migrate-instructions-test--store workspace))))))
   :doc "an existing store is current and the sessions are not read"
   (mevedel-migrate-instructions-test--with-root (root workspace)
     (let ((a (mevedel-migrate-instructions-test--session
@@ -356,9 +361,8 @@ Its fixed `instructions/current.el' cache holds STALE, which is no authority."
                     nil))))))
       (should (eq 'written (plist-get result :status)))
       (should (equal '("published")
-                     (mapcar (lambda (d) (plist-get d :request))
-                             (plist-get (mevedel-migrate-instructions-test--store workspace)
-                                        :directives)))))))
+                     (mevedel-migrate-instructions-test--texts
+                      (mevedel-migrate-instructions-test--store workspace)))))))
 
 (mevedel-deftest mevedel-migrate-session-main/instructions ()
   ,test

@@ -21,8 +21,7 @@
 (require 'mevedel-session-artifacts)
 (require 'mevedel-shared-editing)
 (require 'mevedel-persistence)
-(require 'mevedel-directive)
-(require 'mevedel-directive-persistence)
+(require 'mevedel-notes-migration)
 
 (defvar mevedel-migrate-session--changed nil
   "Non-nil when a staged conversion changes a sidecar or retained manifest.")
@@ -816,6 +815,8 @@ The plist holds :name, :session-id, :current (the current snapshot) and
     (when data
       (dolist (entry (mevedel-migrate-instructions--snapshot-files directory lease))
         (let ((snapshot (mevedel-migrate-session--read (cdr entry))))
+          (mevedel-notes-migration--read-directives
+           (plist-get snapshot :directives) directory)
           (if (equal (car entry) "instructions/current.el")
               (setq current snapshot)
             (puthash (string-to-number
@@ -826,6 +827,32 @@ The plist holds :name, :session-id, :current (the current snapshot) and
             :current current
             :turns turns))))
 
+(defun mevedel-migrate-instructions--units (data)
+  "Return (TABLE . ORDER) for store record DATA.
+TABLE maps each instruction UUID to (:record RECORD :file FILE
+:instr INSTRUCTION): a directive's record and its source presentation
+share one UUID.  ORDER lists the UUIDs in record order."
+  (let ((table (make-hash-table :test #'equal))
+        order)
+    (dolist (record (plist-get data :directives))
+      (let ((id (plist-get record :id)))
+        (unless (gethash id table) (push id order))
+        (puthash id (plist-put (gethash id table) :record record) table)))
+    (dolist (entry (plist-get data :files))
+      (dolist (instruction (plist-get (cdr entry) :instructions))
+        (when-let* ((id (mevedel-instruction-store--instruction-uuid
+                         instruction)))
+          (unless (gethash id table) (push id order))
+          (puthash id (plist-put (plist-put (gethash id table)
+                                            :file (car entry))
+                                 :instr instruction)
+                   table))))
+    (cons table (nreverse order))))
+
+(defconst mevedel-migrate-instructions--activity-keys
+  '(:attempts :discussion :planning)
+  "Legacy directive fields holding append-only activity.")
+
 (defun mevedel-migrate-instructions--authored (unit)
   "Return what UNIT's author decided, for comparing it across sessions.
 Activity, display ids and links are compared separately or renumbered."
@@ -834,7 +861,7 @@ Activity, display ids and links are compared separately or renumbered."
          (properties (plist-get instr :properties)))
     (mevedel-instruction-store--authored
      (list :record (mevedel-instruction-store--without
-                    record mevedel-instruction-store--activity-keys)
+                    record mevedel-migrate-instructions--activity-keys)
            :file (plist-get unit :file)
            :instr (and instr
                        (plist-put (copy-sequence instr) :properties
@@ -869,7 +896,7 @@ with the instruction UUID."
   (let* ((sources (cl-remove-if-not (lambda (source) (plist-get source :current))
                                     sources))
          (tables (mapcar (lambda (source)
-                           (cons source (mevedel-instruction-store--units
+                           (cons source (mevedel-migrate-instructions--units
                                          (plist-get source :current))))
                          sources))
          (order (delete-dups (cl-loop for (_ . (_ . ids)) in tables append ids)))
@@ -900,7 +927,7 @@ with the instruction UUID."
         (when-let* ((record (plist-get unit :record)))
           (setq record (copy-sequence record))
           (let (sequences)
-            (dolist (key mevedel-instruction-store--activity-keys)
+            (dolist (key mevedel-migrate-instructions--activity-keys)
               (let (entries)
                 (dolist (variant (cons chosen (remq chosen variants)))
                   (dolist (entry (plist-get (plist-get (cdr variant) :record) key))
@@ -1030,16 +1057,12 @@ File names become relative to PATH's directory, where
 `mevedel-load-instructions' resolves them."
   (let* ((root (mevedel-instruction-store--root workspace))
          (base (file-name-directory path))
-         (scratch (mevedel-workspace--create :type 'project :id "migration-candidate"
-                                              :root root)))
-    (mevedel-workspace-set-directives
-     scratch (mevedel--deserialize-directives (plist-get record :directives) root))
+         (record (mevedel-notes-migration--convert record)))
     (mevedel-migrate-session--write
      path
      (list :format mevedel-instruction-store-format-version
            :version (mevedel-version)
            :ids (plist-get record :ids)
-           :directives (mevedel--serialize-directives scratch base)
            :files (mapcar (lambda (entry)
                             (cons (file-relative-name (expand-file-name (car entry) root)
                                                       base)
@@ -1065,7 +1088,7 @@ unresolved count when conflicts need the user.  Sessions are never changed."
          ((null (cl-remove-if-not (lambda (source) (plist-get source :current)) sources))
           (list :status 'none))
          ((null (plist-get merge :unresolved))
-          (let ((record (plist-get merge :data)))
+          (let ((record (mevedel-notes-migration--convert (plist-get merge :data))))
             ;; The runtime decoder is the schema the store must satisfy.
             (let ((check (mevedel-instruction-store--decode
                           (mevedel-instruction-store--print record) workspace)))

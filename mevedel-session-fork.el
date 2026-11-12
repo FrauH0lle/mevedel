@@ -252,7 +252,7 @@ only through PICKED-CUM-TURN.  Entries with non-integer
   '(name naming-state naming-input workspace execution-target authority-mode working-directory
     tasks task-status-notes last-task-write-turn touched-files
     permission-rules resource-grants permission-mode sandbox-mode plan-mode
-    directive-planning preset-name model-provider external-conversations
+    preset-name model-provider external-conversations
     last-outcome recovery-issues
     reasoning-effort turn-count reminders last-observed-date
     agent-types-snapshot pending-reminders
@@ -339,7 +339,6 @@ The identity and timestamp keywords describe the new materialized child."
            :permission-mode (mevedel-session-permission-mode session)
            :sandbox-mode (mevedel-session-sandbox-mode session)
            :plan-mode (mevedel-session-plan-mode session)
-           :directive-planning nil
            :preset-name (mevedel-session-preset-name session)
            :model-provider (mevedel-session-model-provider session)
            :external-conversations nil

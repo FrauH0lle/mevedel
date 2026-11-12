@@ -794,14 +794,13 @@
   (:quiet t)
   ,test
   (test)
-  :doc "a reused graphical directive frame clears its old filter and never filters a note"
+  :doc "a graphical frame reused from another conversation shows the note answer"
   (progn
    (skip-unless (display-graphic-p))
   (mevedel-note-conversation-test--with-source
-    (let* ((directive (save-excursion
-                        (forward-line -1)
-                        (mevedel--create-directive-in source (point) (line-end-position)
-                                                     nil "Prior directive")))
+    (let* ((prior (save-excursion
+                    (forward-line -1)
+                    (mevedel-note-create "Prior note")))
            (old-data (mevedel--chat-buffer "prior" t workspace))
            (old-view (buffer-local-value 'mevedel--view-buffer old-data)))
       (unwind-protect
@@ -809,24 +808,16 @@
             (mevedel-view-test--insert-data old-data "Prior question\n\n" nil)
             (mevedel-view-test--insert-data old-data "Prior answer\n" 'response)
             (with-current-buffer old-view (mevedel-view--full-rerender))
-            (mevedel-directive-frame-display directive old-view)
-            (should mevedel-directive-frame--filtered-p)
+            (mevedel-directive-frame-display prior old-view)
             (let* ((frame mevedel-directive-frame--frame)
                    (view (mevedel-note-send (mevedel-note-create "New note question"))))
+              (should (frame-live-p frame))
               (should (eq frame mevedel-directive-frame--frame))
-              (with-current-buffer old-view
-                (should-not (text-property-any (point-min) (point-max) 'invisible
-                                              mevedel-directive-frame--invisible-symbol)))
-              (should-not mevedel-directive-frame--filtered-p)
               (mevedel-note-conversation-test--answer (car sent) "Visible note answer")
               (with-current-buffer view
-                (condition-case nil
-                    (call-interactively (key-binding (kbd "C-c C-f")))
-                  (user-error nil))
                 (goto-char (point-min))
                 (should (search-forward "Visible note answer" nil t))
-                (should-not (invisible-p (1- (point)))))
-              (should-not mevedel-directive-frame--filtered-p)))
+                (should-not (invisible-p (1- (point)))))))
         (when (frame-live-p mevedel-directive-frame--frame)
           (mevedel-directive-frame-close)))))))
 

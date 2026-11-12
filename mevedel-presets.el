@@ -104,7 +104,6 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-forked-from-session-id "mevedel-structs" (cl-x) t)
-(defvar mevedel--current-directive-uuid)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
@@ -160,7 +159,7 @@
 (declare-function mevedel--turn-hold "mevedel-turn" (fsm))
 (declare-function mevedel--turn-release "mevedel-turn" (fsm))
 (declare-function mevedel-request-begin
-                  "mevedel-turn" (session &optional directive-uuid options))
+                  "mevedel-turn" (session &optional options))
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view-stream-ensure-progress-for-fsm
@@ -928,7 +927,6 @@ alist with mevedel-specific handlers added:
                                     ;; step's error must not read as stale.
                                     (mevedel-request-begin
                                      mevedel--session
-                                     mevedel--current-directive-uuid
                                      (list :admitted adopt))))
                                 (when (and mevedel--current-request
                                            (fboundp 'mevedel-request-id))

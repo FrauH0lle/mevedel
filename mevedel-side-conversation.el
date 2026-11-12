@@ -142,8 +142,6 @@
   "mevedel-session-artifacts")
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-directive-uuid
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-ephemeral-p "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-fsm "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-id "mevedel-structs" (cl-x) t)
@@ -197,7 +195,7 @@
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-begin
-                  "mevedel-turn" (session &optional directive-uuid options))
+                  "mevedel-turn" (session &optional options))
 (declare-function mevedel-request-end
                   "mevedel-turn" (&optional abort-plan-approval))
 (autoload 'mevedel-request-begin "mevedel-turn")
@@ -975,9 +973,6 @@ FROZEN-CONTEXT is the materialized gptel context plist."
     (user-error "No mevedel session in this buffer"))
   (unless (mevedel-claude-code-backend-p gptel-backend)
     (mevedel-engine-assert-local-history mevedel--session "/btw" gptel-backend t))
-  (when (and mevedel--current-request
-             (mevedel-request-directive-uuid mevedel--current-request))
-    (user-error "/btw is unavailable during directive requests"))
   (unless (mevedel-side-conversation--accepted-context-p)
     (user-error "Send a parent prompt before opening /btw"))
   (when (and prompt (not (string-blank-p prompt)))

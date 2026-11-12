@@ -190,7 +190,7 @@
       (should (eq 'paused (plist-get (plist-get saved :goal) :status)))
       (should (equal policy (plist-get (plist-get saved :goal) :implementation-policy)))))
 
-  :doc "ordinary Goals, agent/directive work, inactive Goals and non-owner buffers do nothing"
+  :doc "ordinary Goals, agent work, inactive Goals and non-owner buffers do nothing"
   (mevedel-implementation-startup-test--with-goal
       '(:model-provider "Balanced:balanced-model" :reasoning-effort nil
         :permission-mode edits)
@@ -201,8 +201,6 @@
       (setf (mevedel-goal-implementation-policy goal) policy)
       (let ((mevedel--agent-invocation t))
         (should-not (mevedel-implementation-policy-pause-failure buffer '(error "Child"))))
-      (let ((mevedel--current-directive-uuid "directive"))
-        (should-not (mevedel-implementation-policy-pause-failure buffer '(error "Directive"))))
       (with-temp-buffer
         (setq-local mevedel--session session)
         (should-not (mevedel-implementation-policy-pause-failure

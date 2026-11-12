@@ -568,21 +568,25 @@
              buffer session)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
-  :doc "a rolled-back Rewind keeps another session's activity and deletions"
+  :doc "a rolled-back Rewind keeps another session's note activity and deletions"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (let* ((session (mevedel-session-create "main" workspace))
            (buffer (generate-new-buffer "*test-rollback-other-session*"))
            (source-file (file-name-concat tempdir "source.el"))
-           (attempt (lambda (owner turn sequence)
-                      (mevedel-directive-attempt--create
-                       :sequence sequence :action 'implement
-                       :directive-request "x" :request "x" :result "done"
-                       :outcome 'success :patch "" :capture 'complete
-                       :captured-at "2026-11-07T00:00:00+0100"
-                       :checkpoint (list :session-id owner :turn turn))))
+           (change '(:id "other-2" :session-id "other-session" :turn 2))
            (restore (symbol-function 'mevedel-session-rewind-execute-restore))
-           source theirs doomed)
+           (stored (lambda (uuid key)
+                     (catch 'found
+                       (dolist (file (plist-get (plist-get (mevedel-instruction-store--read
+                                                            workspace)
+                                                           :data)
+                                                :files))
+                         (dolist (instruction (plist-get (cdr file) :instructions))
+                           (let ((properties (plist-get instruction :properties)))
+                             (when (equal uuid (plist-get properties 'mevedel-uuid))
+                               (throw 'found (plist-get properties key)))))))))
+           source notes theirs doomed)
       (unwind-protect
           (progn
             (test-mevedel-session-persistence--reset-instructions)
@@ -593,16 +597,13 @@
               (dolist (line '(1 2 3))
                 (goto-char (point-min))
                 (forward-line (1- line))
-                (mevedel--create-directive-in source (point) (+ 5 (point)) nil
-                                              (format "line %d" line))))
-            (setq theirs (cl-find "line 2" (mevedel-workspace-directives workspace)
-                                  :key #'mevedel-directive-request :test #'equal)
-                  doomed (cl-find "line 3" (mevedel-workspace-directives workspace)
-                                  :key #'mevedel-directive-request :test #'equal))
-            (setf (mevedel-directive-session-id theirs) "other-session"
-                  (mevedel-directive-attempts theirs)
-                  (list (funcall attempt "other-session" 1 1))
-                  (mevedel-directive-session-id doomed) "other-session")
+                (push (mevedel-note-create (format "line %d" line)) notes)))
+            (setq theirs (overlay-get (nth 1 notes) 'mevedel-uuid)
+                  doomed (overlay-get (nth 0 notes) 'mevedel-uuid))
+            (dolist (note (list (nth 1 notes) (nth 0 notes)))
+              (overlay-put note 'mevedel-note-state 'sent)
+              (overlay-put note 'mevedel-note-session-id "other-session"))
+            (mevedel-instruction-store-sync workspace)
             (with-current-buffer buffer
               (org-mode)
               (setq-local mevedel--workspace workspace)
@@ -623,18 +624,25 @@
                           ((symbol-function 'mevedel-session-rewind-execute-restore)
                            (lambda (&rest args)
                              (prog1 (apply restore args)
-                               ;; Another session settles and deletes meanwhile;
-                               ;; then this Rewind fails and rolls back.
-                               (setf (mevedel-directive-attempts theirs)
-                                     (append (mevedel-directive-attempts theirs)
-                                             (list (funcall attempt "other-session"
-                                                            2 2))))
-                               (mevedel-workspace-remove-directive workspace doomed)
+                               ;; Another session prepares a change and deletes
+                               ;; a note meanwhile; then this Rewind fails and
+                               ;; rolls back.
+                               (let ((note (mevedel--instruction-with-uuid theirs workspace)))
+                                 (overlay-put note 'mevedel-note-prepared-change change)
+                                 (mevedel-instruction-store-touch workspace))
+                               (mevedel-note-delete
+                                (mevedel--instruction-with-uuid doomed workspace))
                                (error "Injected Rewind failure")))))
                   (should-error (mevedel-session-rewind-rewind buffer target)))))
             (should (= 1 (mevedel-session-turn-count session)))
-            (should (= 2 (length (mevedel-directive-attempts theirs))))
-            (should-not (memq doomed (mevedel-workspace-directives workspace))))
+            (should (equal change
+                           (overlay-get (mevedel--instruction-with-uuid theirs workspace)
+                                        'mevedel-note-prepared-change)))
+            (should-not (mevedel--instruction-with-uuid doomed workspace))
+            ;; The held-back writes reach the store once the Rewind is over.
+            (mevedel-instruction-store-flush)
+            (should (equal change (funcall stored theirs 'mevedel-note-prepared-change)))
+            (should (eq 'closed (funcall stored doomed 'mevedel-note-state))))
         (when-let* ((impact (get-buffer "*mevedel-rewind-impact*")))
           (kill-buffer impact))
         (when (buffer-live-p source)

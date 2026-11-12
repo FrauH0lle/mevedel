@@ -80,7 +80,7 @@ SESSION must own BUFFER, which defaults to the current buffer.  Read buffer
 locals without switching buffers so status redisplay stays cheap.
 An admitted request keeps its captured
 policy even after its Goal pauses.  Without a request or pending handoff, only
-active ordinary root Goal turns inherit the Goal's policy; directives, agents,
+active ordinary root Goal turns inherit the Goal's policy; agents
 and Plan requests do not."
   (setq buffer (or buffer (current-buffer)))
   (when (buffer-live-p buffer)
@@ -93,9 +93,7 @@ and Plan requests do not."
            (pending (if current mevedel--pending-implementation-policy
                       (buffer-local-value 'mevedel--pending-implementation-policy buffer)))
            (invocation (if current mevedel--agent-invocation
-                         (buffer-local-value 'mevedel--agent-invocation buffer)))
-           (directive (if current mevedel--current-directive-uuid
-                        (buffer-local-value 'mevedel--current-directive-uuid buffer))))
+                         (buffer-local-value 'mevedel--agent-invocation buffer))))
       (when (and session (eq session owner))
         (cond
          ((and request (eq session (mevedel-request-session request)))
@@ -103,7 +101,6 @@ and Plan requests do not."
          (pending)
          ((and (eq buffer (mevedel-session-root-buffer session))
                (not invocation)
-               (not directive)
                (not (mevedel-session-plan-mode session)))
           (when-let* ((goal (mevedel-session-goal session))
                       ((eq (mevedel-goal-status goal) 'active)))
@@ -112,12 +109,11 @@ and Plan requests do not."
 (defun mevedel-implementation-policy-capture-preparation ()
   "Capture an unadmitted ordinary root turn's implementation authority.
 The record includes explicit nil policy and active accepted Goal identity.
-Admitted, child, directive and Plan requests keep their existing paths."
+Admitted, child and Plan requests keep their existing paths."
   (when (and mevedel--session
              (eq (current-buffer) (mevedel-session-root-buffer mevedel--session))
              (not mevedel--current-request)
              (not mevedel--agent-invocation)
-             (not mevedel--current-directive-uuid)
              (not (mevedel-session-plan-mode mevedel--session)))
     (let* ((policy (mevedel-implementation-policy-current))
            (goal (mevedel-session-goal mevedel--session))
@@ -144,8 +140,8 @@ Check in the source buffer.  Never replace or cancel a newer request."
     (buffer problem &optional (preparation nil preparation-supplied-p))
   "Pause BUFFER's active accepted-plan Goal after dispatch PROBLEM.
 Read-only policy inspection does not call this helper.  Actual submission and
-dispatch failures do, including failures before request admission.  Child and
-directive requests cannot pause an unrelated root Goal through this path.
+dispatch failures do, including failures before request admission.  Child
+requests cannot pause an unrelated root Goal through this path.
 When PREPARATION is supplied, only its unchanged unadmitted Goal owner may
 pause.  Explicit nil owns no Goal.  Stale refusal never pauses a Goal."
   (when (and (buffer-live-p buffer)
@@ -155,7 +151,6 @@ pause.  Explicit nil owns no Goal.  Stale refusal never pauses a Goal."
       (when-let* ((session mevedel--session)
                   ((eq buffer (mevedel-session-root-buffer session)))
                   ((not mevedel--agent-invocation))
-                  ((not mevedel--current-directive-uuid))
                   (goal (mevedel-session-goal session))
                   ((or (not preparation-supplied-p)
                        (and preparation

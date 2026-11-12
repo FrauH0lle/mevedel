@@ -45,43 +45,14 @@
 
 
 ;; `mevedel-directive'
-(declare-function mevedel-directive-has-activity-p
-                  "mevedel-directive" (directive))
-(autoload 'mevedel-directive-has-activity-p "mevedel-directive")
-
 ;; `mevedel-directive-source'
-(declare-function mevedel--create-directive-in
-                  "mevedel-directive-source"
-                  (buffer start end &optional bodyless directive-text span))
 (declare-function mevedel--delete-instruction
                   "mevedel-directive-source"
                   (instruction &optional buffer))
-(declare-function mevedel--delete-source-missing-directive
-                  "mevedel-directive-source" (record workspace))
-(declare-function mevedel--detached-directive-p
-                  "mevedel-directive-source" (directive))
-(declare-function mevedel--directive-record
-                  "mevedel-directive-source" (directive))
-(declare-function mevedel--directive-status
-                  "mevedel-directive-source" (directive))
-(declare-function mevedel--directive-text
-                  "mevedel-directive-source" (directive))
 (declare-function mevedel--instruction-anchor-for-instruction
                   "mevedel-directive-source" (instruction))
 (declare-function mevedel--instruction-persisted-properties
                   "mevedel-directive-source" (instruction))
-(declare-function mevedel--reattach-directive-overlay
-                  "mevedel-directive-source"
-                  (id anchor workspace buffer start end))
-(declare-function mevedel--remove-directive-presentation
-                  "mevedel-directive-source" (directive &optional buffer))
-(declare-function mevedel--set-directive-request
-                  "mevedel-directive-source" (directive request))
-(declare-function mevedel--set-directive-status
-                  "mevedel-directive-source" (directive status))
-(declare-function mevedel--subdirective-owner
-                  "mevedel-directive-source" (directive &optional workspace))
-
 ;; `mevedel-instruction-registry'
 (declare-function mevedel--instruction-activate-buffer
                   "mevedel-instruction-registry" (&optional buffer))
@@ -128,20 +99,6 @@
   "mevedel-plan-handoff")
 
 ;; `mevedel-structs'
-(declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempt-patch
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-planning-enabled
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-skills "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-subdirectives
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-subdirective-request "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-view-composer'
@@ -156,30 +113,6 @@
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 (autoload 'mevedel-workspace "mevedel-workspace")
 
-
-(defcustom mevedel-directive-color
-  (face-attribute 'font-lock-keyword-face :foreground nil 'default)
-  "Color to be used as a tint for directive overlays."
-  :type 'string
-  :group 'mevedel)
-
-(defcustom mevedel-directive-processing-color
-  (face-attribute 'warning :foreground nil 'default)
-  "Color to be used as a tint for directives being processed by the model."
-  :type 'string
-  :group 'mevedel)
-
-(defcustom mevedel-directive-success-color
-  (face-attribute 'success :foreground nil 'default)
-  "Color to be used as a tint for directives successfully processed by the model."
-  :type 'string
-  :group 'mevedel)
-
-(defcustom mevedel-directive-fail-color
-  (face-attribute 'error :foreground nil 'default)
-  "Color to be used as a tint for directives the model could not process."
-  :type 'string
-  :group 'mevedel)
 
 (defcustom mevedel-highlighted-instruction-color
   (face-attribute 'highlight :background nil 'default)
@@ -209,20 +142,6 @@ Only applicable to subinstructions, allowing finer control over tinting.
 
 Does not affect the label colors, just the backgrounds."
   :type 'float
-  :group 'mevedel)
-
-
-(defcustom mevedel-include-full-instructions t
-  "Control whether instructions are fully included in the prompt.
-
-When set to non-nil, the content of directives is
-included in the prompt submitted to the LLM.  When nil, only file and
-line numbers are included.
-
-Setting this to nil makes the initial prompt shorter but relies on the
-LLM to find and read the instructions.  Depending on the model, this
-might yield better or worse results."
-  :type 'boolean
   :group 'mevedel)
 
 
@@ -262,21 +181,6 @@ available."
       (mevedel--update-instruction-overlay original-highlighted-instruction))
     mevedel--highlighted-instruction))
 
-(defun mevedel-modify-directive ()
-  "Modify the directive under the point."
-  (interactive)
-  (when-let* ((directive (mevedel--highest-priority-instruction (mevedel--instructions-at (point) 'directive)
-                                                                t)))
-    (when (memq (mevedel--directive-status directive)
-                '(implementing discussing))
-      (mevedel--set-directive-status directive nil))
-    (let ((topmost-directive (mevedel--topmost-instruction directive 'directive)))
-      (when (eq (mevedel--directive-status topmost-directive) 'failed)
-        (mevedel--set-directive-status topmost-directive nil)
-        (mevedel--update-instruction-overlay topmost-directive t)))
-    (mevedel--read-directive directive)))
-
-
 (defun mevedel-delete-instructions ()
   "Delete instruction(s) either at point or within the selected region.
 
@@ -309,10 +213,8 @@ deleted.  Throw a user error if no instructions to delete were found."
 
 (defun mevedel--delete-all-instructions-of-type (type interactivep)
   "Delete instructions of TYPE in the current workspace.
-TYPE is `note', `directive', or nil for both.  INTERACTIVEP requests
-confirmation and offers inclusion of Source-missing directive records.
-Return the deleted count; Source-missing records count once each, without
-contributing to the buffer count.  Archived records are never deleted."
+TYPE is `note' or nil.  INTERACTIVEP requests confirmation.
+Return the deleted count."
   (let* ((workspace (mevedel--instruction-buffer-workspace (current-buffer)))
          (mevedel--instruction-state-key-override
           (mevedel--instruction-workspace-key workspace))
@@ -328,38 +230,12 @@ contributing to the buffer count.  Archived records are never deleted."
                (or (null type)
                    (eq type (overlay-get instruction 'mevedel-instruction-type))))
              (mevedel--all-instructions))))
-         (missing
-          (when (and workspace (or (null type) (eq type 'directive)))
-            (seq-filter
-             (lambda (record)
-               (eq 'source-missing
-                   (plist-get (mevedel-directive-anchor record) :state)))
-             (mevedel-workspace-directives workspace))))
          (noun (symbol-name (or type 'instruction)))
          (buffer-count (length (delete-dups (mapcar #'overlay-buffer instructions)))))
-    (when missing
-      (setq missing
-            (when (and interactivep
-                       (let ((query-replace-map (copy-keymap query-replace-map)))
-                         (define-key query-replace-map (kbd "RET") 'skip)
-                         (define-key query-replace-map [return] 'skip)
-                         (y-or-n-p
-                          (format "Include %d Source-missing directive%s as well (default no)? "
-                                  (length missing)
-                                  (if (= 1 (length missing)) "" "s")))))
-              missing)))
-    (let* ((count (+ (length instructions) (length missing)))
+    (let* ((count (length instructions))
            (summary (format "%d %s%s in %d buffer%s"
                             count noun (if (= count 1) "" "s")
                             buffer-count (if (= buffer-count 1) "" "s"))))
-      ;; Match single deletion's activity guard before making any changes.
-      (dolist (record (append missing
-                              (delq nil (mapcar #'mevedel--directive-record
-                                                (seq-filter #'mevedel--directivep
-                                                            instructions)))))
-        (when (mevedel-directive-has-activity-p record)
-          (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (or workspace 'global))
-                                       "Archive directives with activity")))
       (when interactivep
         (when (zerop count)
           (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (or workspace 'global))
@@ -373,8 +249,6 @@ contributing to the buffer count.  Archived records are never deleted."
         ;; Deleting a parent already deletes its nested directives.
         (unless (overlay-get instruction 'mevedel-marked-for-deletion)
           (mevedel--delete-instruction instruction)))
-      (dolist (record missing)
-        (mevedel--delete-source-missing-directive record workspace))
       (when (memq mevedel--highlighted-instruction instructions)
         (setq mevedel--highlighted-instruction nil))
       (unless (zerop count)
@@ -383,25 +257,14 @@ contributing to the buffer count.  Archived records are never deleted."
 
 ;;;###autoload
 (defun mevedel-delete-all-instructions ()
-  "Delete notes and visible directives in the current workspace.
+  "Delete notes in the current workspace.
 All buffers in that workspace are included.  Without a workspace, operate
 on the shared global bucket of all buffers without a workspace instead.
-Interactively, confirm counts and offer Source-missing directives too,
-defaulting to no.  Archived directives remain; activity requires archiving."
+Interactively, confirm the number of notes and buffers."
   (interactive)
   (mevedel--delete-all-instructions-of-type nil (called-interactively-p 'any)))
 
 ;;;###autoload
-(defun mevedel-delete-all-directives ()
-  "Delete visible directives and their subdirectives in the current workspace.
-All buffers in that workspace are included.  Without a workspace, operate
-on the shared global bucket of all buffers without a workspace instead.
-Interactively, offer Source-missing records once (default no), then confirm
-counts.  Archived directives remain; activity requires archiving.
-Leave notes intact."
-  (interactive)
-  (mevedel--delete-all-instructions-of-type 'directive (called-interactively-p 'any)))
-
 (defun mevedel-next-instruction ()
   "Cycle through instructions in the forward direction."
   (interactive)
@@ -413,19 +276,6 @@ Leave notes intact."
   (interactive)
   (unless (mevedel--cycle-instruction nil 'previous)
     (mevedel--print-instruction-not-found 'previous nil)))
-
-
-(defun mevedel-next-directive ()
-  "Cycle through directives in the forward direction."
-  (interactive)
-  (unless (mevedel--cycle-instruction 'directive 'next)
-    (mevedel--print-instruction-not-found 'next 'directive)))
-
-(defun mevedel-previous-directive ()
-  "Cycle through directives in the backward direction."
-  (interactive)
-  (unless (mevedel--cycle-instruction 'directive 'previous)
-    (mevedel--print-instruction-not-found 'previous 'directive)))
 
 
 (defun mevedel--stashed-buffer-instructions (buffer)
@@ -533,26 +383,7 @@ Returns the deleted instruction overlay."
     (when target
       (mevedel--delete-instruction target))))
 
-(defun mevedel--directive-empty-p (directive)
-  "Check if DIRECTIVE is empty.
-
-A directive is empty if it does not have a body or secondary directives."
-  (let* ((record (or (mevedel--directive-record directive)
-                     (error "Directive record not found")))
-         (requests
-          (cons (mevedel-directive-request record)
-                (mapcar #'mevedel-subdirective-request
-                        (mevedel-directive-subdirectives record)))))
-    (not (cl-some (lambda (request)
-                    (not (string-empty-p request)))
-                  requests))))
-
-
 ;;;###autoload
-(defun mevedel--directivep (instruction)
-  "Return non-nil if INSTRUCTION is a directive."
-  (eq (mevedel--instruction-type instruction) 'directive))
-
 (cl-defun mevedel--highest-priority-instruction (instructions &optional return-highlighted)
   "Return the instruction with the highest priority from the INSTRUCTIONS list.
 
@@ -580,20 +411,11 @@ INSTRUCTIONS list."
 (defun mevedel--instruction-type (instruction)
   "Return the type of the INSTRUCTION overlay.
 
-Instruction type can either be `note' or `directive'."
+The instruction type is `note'."
   (if-let* ((type (overlay-get instruction 'mevedel-instruction-type)))
       type
     (error "%s is not an instruction overlay" instruction)))
 
-
-(defun mevedel-get-directive-patch (directive)
-  "Get the stored patch for DIRECTIVE, if any.
-Returns the unified diff string, or nil if no patch is stored."
-  (when-let* ((record (mevedel--directive-record directive))
-              (attempt (car (last (mevedel-directive-attempts record))))
-              (patch (mevedel-directive-attempt-patch attempt))
-              ((not (string-empty-p patch))))
-    patch))
 
 (defun mevedel--parent-instruction (instruction &optional of-type)
   "Return the parent of the given INSTRUCTION overlay.
@@ -608,9 +430,6 @@ If OF-TYPE is non-nil, returns the parent with the given type."
                                 (or (null of-type)
                                     (eq (mevedel--instruction-type instr)
                                         of-type))
-                                (not
-                                 (and (mevedel--detached-directive-p instruction)
-                                      (mevedel--detached-directive-p instr)))
                                 (<= (overlay-start instr) beg
                                     end (overlay-end instr))
                                 ;; Equal ranges can result from replacement.
@@ -650,26 +469,6 @@ itself."
       (setq children (cl-set-difference children
                                         (mevedel--child-instructions child))))
     children))
-
-(defun mevedel--nested-directives (directive)
-  "Return every directive nested under DIRECTIVE in stable source order."
-  (sort
-   (cl-remove-if-not
-    (lambda (instruction)
-      (and (mevedel--directivep instruction)
-           (not (eq instruction directive))))
-    (mevedel--wholly-contained-instructions
-     (overlay-buffer directive)
-     (overlay-start directive)
-     (overlay-end directive)))
-   (lambda (a b)
-     (or (< (overlay-start a) (overlay-start b))
-         (and (= (overlay-start a) (overlay-start b))
-              (or (> (overlay-end a) (overlay-end b))
-                  (and (= (overlay-end a) (overlay-end b))
-                       (string-lessp (overlay-get a 'mevedel-uuid)
-                                     (overlay-get b 'mevedel-uuid)))))))))
-
 
 (defun mevedel--instruction-bufferlevel-p (instruction)
   "Return t if INSTRUCTION spans the entirety of its buffer."
@@ -741,23 +540,6 @@ If PRED is non-nil, then the best instruction must also satisfy it.  The
 PRED must be a function which accepts an instruction."
   (unless instruction
     (cl-return-from mevedel--topmost-instruction nil))
-  ;; Durable directive ownership outlives source geometry.  Replacements can
-  ;; make parent and detail presentations coextensive without changing owner.
-  (when (eq of-type 'directive)
-    (when-let* ((owner (mevedel--subdirective-owner instruction))
-                (parent
-                 (with-current-buffer (overlay-buffer instruction)
-                   ;; Registry lookup can hydrate this file recursively while
-                   ;; its restored presentations are still being rendered.
-                   (save-restriction
-                     (widen)
-                     (cl-find (mevedel-directive-id (car owner))
-                              (overlays-in (point-min) (point-max))
-                              :key (lambda (overlay)
-                                     (overlay-get overlay 'mevedel-uuid))
-                              :test #'equal)))))
-      (cl-return-from mevedel--topmost-instruction
-        (and (or (null pred) (funcall pred parent)) parent))))
   (with-current-buffer (overlay-buffer instruction)
     (let ((best-instruction instruction))
       (cl-labels ((parent-instr (instr)
@@ -775,21 +557,6 @@ PRED must be a function which accepts an instruction."
         nil))))
 
 
-(defun mevedel--directive-at-point ()
-  "Return the top-level owner of the selected directive at point, or nil.
-Prefer the highlighted directive when present, otherwise overlay priority."
-  (mevedel--topmost-instruction
-   (mevedel--highest-priority-instruction
-    (mevedel--instructions-at (point) 'directive) t)
-   'directive))
-
-(defun mevedel--directive-truncated-text (directive)
-  "Return the truncated directive text of the DIRECTIVE overlay.
-
-Returns an empty string if there is no directive text."
-  (mevedel-truncate-directive (mevedel--directive-text directive)))
-
-
 (defcustom mevedel-instructions-truncated-max 100
   "Maximum display length for truncated directive text.
 Used by `mevedel-truncate-directive' to limit the length of directive
@@ -803,192 +570,6 @@ text shown in UI elements such as the minibuffer prompt."
 Returns TEXT truncated if longer than the maximum, otherwise returns
 TEXT unchanged.  Truncation uses ellipsis to indicate omitted content."
   (mevedel--truncate-display text mevedel-instructions-truncated-max t))
-
-(defun mevedel--read-directive (directive)
-  "Prompt user to enter a directive text via minibuffer for DIRECTIVE."
-  (let ((original-directive-text (mevedel--directive-text directive))
-        (original-directive-status (mevedel--directive-status directive))
-        (set-directive-text (lambda (directive text)
-                              (mevedel--set-directive-request directive text)
-                              (unless (overlay-get directive 'mevedel-instruction-collapse-p)
-                                (overlay-put directive 'mevedel-instruction-collapse-p
-                                             (if (> (length text)
-                                                    mevedel-instructions-truncated-max)
-                                                 'collapse
-                                               'expand))))))
-    (minibuffer-with-setup-hook
-        (lambda ()
-          (add-hook 'minibuffer-exit-hook
-                    (lambda ()
-                      (let ((directive-text (minibuffer-contents)))
-                        (funcall set-directive-text directive directive-text)
-                        (mevedel--update-instruction-overlay directive)))
-                    nil t)
-          (add-hook 'after-change-functions
-                    (lambda (_beg _end _len)
-                      (mevedel--set-directive-request
-                       directive (minibuffer-contents))
-                      (mevedel--update-instruction-overlay directive))
-                    nil t))
-      (condition-case _err
-          (read-from-minibuffer "Directive: " original-directive-text)
-        (quit
-         (if (string-empty-p original-directive-text)
-             (mevedel--delete-instruction directive)
-           (funcall set-directive-text directive original-directive-text)
-           (mevedel--set-directive-status directive original-directive-status)
-           (mevedel--update-instruction-overlay directive nil))
-         (signal 'quit nil))))))
-
-
-(defun mevedel--directive-llm-prompt (directive)
-  "Craft the prompt for the LLM model associated with the DIRECTIVE."
-  (when (mevedel--directive-empty-p directive)
-    (error "Directive %s is empty" directive))
-  (let* ((directive-buffer (overlay-buffer directive))
-         (directive-filename (buffer-file-name directive-buffer))
-         (directive-filename-relpath
-          (when directive-filename
-            (with-current-buffer directive-buffer
-              (file-relative-name
-               directive-filename
-               (mevedel-workspace-root (mevedel-workspace)))))))
-    (cl-destructuring-bind (directive-region-info-string directive-region-string)
-        (mevedel--overlay-region-info directive)
-      (let ((expanded-directive-text
-             (let* ((detached-p (mevedel--detached-directive-p directive))
-                    (secondary-directives
-                     (if detached-p
-                         (mevedel-directive-subdirectives
-                          (mevedel--directive-record directive))
-                       (mevedel--nested-directives directive)))
-                    (sd-typename (if (not (eq (mevedel--directive-status directive)
-                                              'implemented))
-                                     "hint"
-                                   "correction")))
-               (concat
-                (if (mevedel--instruction-bufferlevel-p directive)
-                    ""
-                  (concat
-                   (format ", %s" directive-region-info-string)
-                   (if (or (string-empty-p directive-region-string)
-                           (not mevedel-include-full-instructions))
-                       "."
-                     (let ((markdown-delimiter
-                            (mevedel--delimiting-markdown-backticks directive-region-string)))
-                       (concat
-                        (format ", which correspond%s to:"
-                                (if (mevedel--multiline-string-p directive-region-string) "" "s"))
-                        "\n\n"
-                        (format "%s\n%s\n%s"
-                                markdown-delimiter
-                                directive-region-string
-                                markdown-delimiter))))))
-                "\n\n"
-                (if (not (string-empty-p (mevedel--directive-text directive)))
-                    (format "The directive is:\n\n%s"
-                            (mevedel--markdown-enquote
-                             (mevedel--directive-text directive)))
-                  (format "The directive is composed entirely out of %ss, so you should \
-treat them as subdirectives, instead."
-                          sd-typename))
-                (cl-loop
-                 for sd in secondary-directives
-                 for sd-request =
-                 (if detached-p
-                     (mevedel-subdirective-request sd)
-                   (mevedel--directive-text sd))
-                 when (not (string-empty-p sd-request))
-                 concat
-                 (if detached-p
-                     (format "\n\nYou have the %s:\n\n%s"
-                             sd-typename
-                             (mevedel--markdown-enquote sd-request))
-                   (concat
-                    "\n\n"
-                    (cl-destructuring-bind (sd-region-info sd-region)
-                        (mevedel--overlay-region-info sd)
-                      (concat
-                       (format "For file `%s`, %s"
-                               directive-filename-relpath
-                               sd-region-info)
-                       (let ((sd-text (mevedel--markdown-enquote sd-request)))
-                         (if (mevedel--bodyless-instruction-p sd)
-                             (format ", you have a %s:\n\n%s"
-                                     sd-typename
-                                     sd-text)
-                           (let ((markdown-delimiter
-                                  (mevedel--delimiting-markdown-backticks
-                                   sd-region)))
-                             (concat
-                              (if mevedel-include-full-instructions
-                                  (format ", which correspond%s to:\n\n%s"
-                                          (if (mevedel--multiline-string-p
-                                               sd-region)
-                                              "" "s")
-                                          (format "%s\n%s\n%s"
-                                                  markdown-delimiter
-                                                  sd-region
-                                                  markdown-delimiter))
-                                ".")
-                              (format "\n\nYou have the %s:\n\n%s"
-                                      sd-typename
-                                      sd-text))))))))))))))
-        (with-temp-buffer
-          (insert
-           (concat
-            "Listed below is a directive."
-            (format "\n\n### Directive\n\n")
-            (format "For %s%s"
-                    (if directive-filename
-                        (format "file `%s`" directive-filename-relpath)
-                      (format "buffer `%s`" (buffer-name directive-buffer)))
-                    expanded-directive-text)))
-          (buffer-substring-no-properties (point-min) (point-max)))))))
-
-(defun mevedel--directive-action-context (record workspace)
-  "Return RECORD's live directive and validated prompt in WORKSPACE.
-
-This is the shared individual and batch submission eligibility check."
-  (let* ((anchor (mevedel-directive-anchor record))
-         (evidence (plist-get anchor :evidence))
-         (directive
-          (or
-           (mevedel--instruction-with-uuid
-            (mevedel-directive-id record) workspace)
-           (when (and (eq 'source-missing (plist-get anchor :state))
-                      (plist-get evidence :bodyless)
-                      (null (plist-get evidence :parent-uuid))
-                      (null (mevedel-directive-subdirectives record)))
-             (let ((buffer
-                    (generate-new-buffer
-                     (format " *mevedel-directive-context %s*"
-                             (mevedel-directive-id record)))))
-               (with-current-buffer buffer
-                 (setq-local mevedel--workspace workspace
-                             buffer-file-name (plist-get anchor :file)
-                             default-directory
-                             (mevedel-workspace-root workspace))
-                 (let ((overlay
-                        (mevedel--reattach-directive-overlay
-                         (mevedel-directive-id record) anchor workspace
-                         buffer (point-min) (point-min))))
-                   (overlay-put overlay 'mevedel-transient-source-missing t)
-                   overlay)))))))
-    (unless directive
-      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace)
-                                   "Directive prompt context is unavailable; reattach its source first"))
-    (condition-case err
-        (list :directive directive
-              :prompt (mevedel--directive-llm-prompt directive))
-      (error
-       (when (overlay-get directive 'mevedel-transient-source-missing)
-         (let ((buffer (overlay-buffer directive)))
-           (mevedel--remove-directive-presentation directive)
-           (when (buffer-live-p buffer)
-             (kill-buffer buffer))))
-       (signal (car err) (cdr err))))))
-
 
 (provide 'mevedel-overlays)
 ;;; mevedel-overlays.el ends here

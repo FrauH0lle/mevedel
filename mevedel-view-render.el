@@ -108,7 +108,6 @@
 ;; `mevedel-structs'
 (declare-function mevedel-request-active-elapsed-seconds
                   "mevedel-structs" (request &optional now))
-(declare-function mevedel-request-directive-uuid "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-current-segment "mevedel-structs"
                   (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
@@ -1540,8 +1539,8 @@ without NEXT returns the complete turns."
 
 (defvar-local mevedel-view--directive-ranges-cache nil
   "Memo for `mevedel-view--directive-ranges' in a data buffer.
-A list (TICK ALLOW-OPEN RANGES): TICK is the buffer's modification tick
-when RANGES were scanned and ALLOW-OPEN the flag the scan used.  The
+A cons (TICK . RANGES): TICK is the buffer's modification tick
+when RANGES were scanned.  The
 scan walks the whole transcript, so an unmodified redraw must not
 repeat it.")
 
@@ -1553,22 +1552,17 @@ within one buffer state.  Each call returns fresh shallow copies so a
 caller's `plist-put' cannot corrupt the memo."
   (with-current-buffer data-buf
     (let ((tick (buffer-modified-tick))
-          (allow-open
-           (and mevedel--current-request
-                (mevedel-request-directive-uuid mevedel--current-request)))
           (cache mevedel-view--directive-ranges-cache))
-      (unless (and cache
-                   (equal (nth 0 cache) tick)
-                   (equal (nth 1 cache) allow-open))
+      (unless (and cache (equal (car cache) tick))
         (setq cache
-              (list tick allow-open
+              (cons tick
                     (mapcar
                      (lambda (range)
                        (plist-put range :render-id
                                   (gensym "mevedel-view-directive-turn-")))
-                     (mevedel-transcript-buffer-directive-ranges allow-open)))
+                     (mevedel-transcript-buffer-directive-ranges)))
               mevedel-view--directive-ranges-cache cache))
-      (mapcar #'copy-sequence (nth 2 cache)))))
+      (mapcar #'copy-sequence (cdr cache)))))
 
 (defun mevedel-view--group-transcript-turns (segments data-buf)
   "Group SEGMENTS and annotate first-class directive turns in DATA-BUF."
@@ -6715,15 +6709,11 @@ list added to the heading's text."
                mevedel-view-collapsed nil)
              extra))))
 
-(defun mevedel-view--live-turn-needs-header-p (start end data-buf)
+(defun mevedel-view--live-turn-needs-header-p (start end _data-buf)
   "Return non-nil when running calls at END need an `Assistant' heading.
 START..END is the in-flight turn's rendering.  The heading is missing
 when no turn heading precedes END there, or the last one belongs to
-another role, such as a mailbox delivery.  A directive request in
-DATA-BUF has its own heading, so it never needs one."
-  (unless (with-current-buffer data-buf
-            (and mevedel--current-request
-                 (mevedel-request-directive-uuid mevedel--current-request)))
+another role, such as a mailbox delivery."
     (let ((pos start) last)
       (while (and (< pos end)
                   (setq pos (text-property-any pos end 'mevedel-view-type
@@ -6733,7 +6723,7 @@ DATA-BUF has its own heading, so it never needs one."
                        pos 'mevedel-view-type nil end)
                       end)))
       (not (and last (eq (get-text-property last 'mevedel-view-turn-role)
-                         'assistant))))))
+                         'assistant)))))
 
 (defun mevedel-view--render-assistant-turn
     (segments data-buf &optional variant-button directive continuation-p)

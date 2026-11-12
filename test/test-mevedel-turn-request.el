@@ -159,8 +159,7 @@
       (should (eq session (mevedel-request-session req)))
       (should (eq 'running
                   (mevedel-session-agent-root-activity session)))
-      (should (hash-table-p (mevedel-request-file-snapshots req)))
-      (should (null (mevedel-request-directive-uuid req)))))
+      (should (hash-table-p (mevedel-request-file-snapshots req)))))
 
   :doc "starts in-flight conversation checkpoints"
   (with-temp-buffer
@@ -238,24 +237,6 @@
       (mevedel-recovery-report session "request" 'request "Root failed" nil)
       (mevedel-request-begin session)
       (should (= 2 (length (mevedel-session-recovery-issues session))))))
-
-  :doc "sets directive-uuid when provided"
-  (with-temp-buffer
-    (let* ((ws (mevedel-workspace-get-or-create
-                'file "/tmp/p1/" "/tmp/p1/" "p1"))
-           (session (mevedel-session-create "main" ws))
-           (req (mevedel-request-begin session "test-uuid")))
-      (should (equal "test-uuid" (mevedel-request-directive-uuid req)))))
-
-  :doc "stamps directive planning authority onto the request"
-  (with-temp-buffer
-    (let* ((ws (mevedel-workspace-get-or-create
-                'file "/tmp/p1/" "/tmp/p1/" "p1"))
-           (session (mevedel-session-create "main" ws)))
-      (setf (mevedel-session-directive-planning session)
-            '(:directive-id "d1" :phase planning))
-      (should (mevedel-request-plan-read-only
-               (mevedel-request-begin session)))))
 
   :doc "records agent origin when request begins in a sub-agent buffer"
   (with-temp-buffer

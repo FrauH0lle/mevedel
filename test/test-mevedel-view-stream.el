@@ -3396,22 +3396,7 @@ turn's later text, live and after reconstruction."
         (with-current-buffer view-buf
           (setq mevedel-view-segments--number nil
                 mevedel-view-segments--buffer nil))
-        (kill-buffer archive))))
-
-  :doc "a directive request's running calls get no Assistant heading"
-  (mevedel-view-stream-test--with-buffers
-    (let ((mevedel-view-tool-boundary-render-delay 0))
-      (with-current-buffer data-buf
-        (setq-local mevedel--current-request
-                    (mevedel-request--create :directive-uuid "directive-1")))
-      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
-      (mevedel-view-stream-test--batch
-       data-buf (list '(:name "Read" :args (:file_path "a"))))
-      (let ((text (mevedel-view-stream-test--history view-buf)))
-        (should (string-match-p "● Read: a" text))
-        (should-not (string-match-p "Assistant" text)))
-      (with-current-buffer data-buf
-        (setq-local mevedel--current-request nil)))))
+        (kill-buffer archive)))))
 
 
 ;;

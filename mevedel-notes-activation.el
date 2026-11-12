@@ -20,8 +20,6 @@
 (autoload 'mevedel-instruction-store-visit "mevedel-persistence")
 
 ;; `mevedel-structs'
-(declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-workspace'
@@ -99,10 +97,7 @@ All comparisons are lexical; a registered ancestor does not own a file."
              (let ((cached-root (mevedel-workspace-root workspace)))
                (when (and (stringp cached-root)
                           (equal root (file-name-as-directory cached-root)))
-                 (throw 'found key)))
-           (dolist (directive (mevedel-workspace-directives workspace))
-             (when (equal file (plist-get (mevedel-directive-anchor directive) :file))
-               (throw 'found key)))))
+                 (throw 'found key)))))
        mevedel-workspace--registry))
     nil))
 

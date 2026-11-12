@@ -1755,9 +1755,8 @@ AGENTS.local.md after AGENTS.md.  Do not acknowledge them until delivery."
           (owner (mevedel-tool-fs-read--workspace-instruction-owner))
           (scope (if (and (not mevedel--agent-invocation)
                           (bound-and-true-p mevedel--current-request)
-                          (or (mevedel-request-directive-uuid mevedel--current-request)
-                              (plist-get (mevedel-request-context mevedel--current-request)
-                                         :mevedel-native-isolated)))
+                          (plist-get (mevedel-request-context mevedel--current-request)
+                                     :mevedel-native-isolated))
                      mevedel--current-request
                    session)))
       ;; Queue one event per instruction file, broadest scope first, so a

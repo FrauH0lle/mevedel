@@ -923,55 +923,6 @@ cover, so the permission step's warning about it is captured here."
 ;;
 ;;; Step list builder
 
-(mevedel-deftest mevedel-pipeline--untracked-filesystem-effects-p
-  ()
-  ,test
-  (test)
-  :doc "classifies shell/eval and delegated mutation surfaces"
-  (should
-   (mevedel-pipeline--untracked-filesystem-effects-p
-    (mevedel-tool--create :name "Bash" :groups '(eval))))
-  (should
-   (mevedel-pipeline--untracked-filesystem-effects-p
-    (mevedel-tool--create :name "Agent" :groups '(agents) :read-only-p t)))
-  (should
-   (mevedel-pipeline--untracked-filesystem-effects-p
-    (mevedel-tool--create :name "SendMessage" :groups '(agents) :read-only-p t)))
-  (should
-   (mevedel-pipeline--untracked-filesystem-effects-p
-    (mevedel-tool--create :name "MkDir" :groups '(edit))))
-  (should-not
-   (mevedel-pipeline--untracked-filesystem-effects-p
-    (mevedel-tool--create :name "Edit" :groups '(edit) :snapshot-p t)))
-  (should-not
-   (mevedel-pipeline--untracked-filesystem-effects-p
-    (mevedel-tool--create :name "Read" :groups '(read) :read-only-p t))))
-
-(mevedel-deftest mevedel-pipeline--step-capture-coverage
-  ()
-  ,test
-  (test)
-  :doc "marks accepted directive tools whose filesystem effects are untracked"
-  (let* ((request (mevedel-request--create :directive-uuid "directive"))
-         (tool (mevedel-tool--create :name "Eval" :groups '(eval)))
-         next-context)
-    (mevedel-pipeline--step-capture-coverage
-     (list :tool tool :request request)
-     (lambda (context) (setq next-context context))
-     #'ignore)
-    (should next-context)
-    (should (equal '("Eval")
-                   (mapcar #'car
-                           (mevedel-request-untracked-effects request)))))
-
-  :doc "messages mark delegated effects even though the tool is directly read-only"
-  (let* ((request (mevedel-request--create :directive-uuid "directive"))
-         (tool (mevedel-tool--create :name "SendMessage" :read-only-p t)))
-    (mevedel-pipeline--step-capture-coverage
-     (list :tool tool :request request) #'ignore #'ignore)
-    (should (equal '(("SendMessage" . "Delegated work can modify files outside parent snapshots"))
-                   (mevedel-request-untracked-effects request)))))
-
 (mevedel-deftest mevedel-pipeline--step-snapshot ()
   ,test
   (test)
@@ -4980,7 +4931,6 @@ cover, so the permission step's warning about it is captured here."
             #'mevedel-pipeline--step-normalize-paths
             #'mevedel-pipeline--step-prepare-resources
             #'mevedel-tool-permission-step
-            #'mevedel-pipeline--step-capture-coverage
             #'mevedel-pipeline--step-handler
             #'mevedel-pipeline--step-render-transform
             #'mevedel-pipeline--step-post-tool-hooks
@@ -4994,8 +4944,8 @@ cover, so the permission step's warning about it is captured here."
   (let* ((tool (mevedel-tool--create
                 :name "WriteTool" :read-only-p nil :snapshot-p t))
          (steps (mevedel-pipeline--build-steps tool)))
-    (should (eq #'mevedel-pipeline--step-snapshot (nth 6 steps)))
-    (should (eq #'mevedel-pipeline--step-handler (nth 7 steps))))
+    (should (eq #'mevedel-pipeline--step-snapshot (nth 5 steps)))
+    (should (eq #'mevedel-pipeline--step-handler (nth 6 steps))))
 
   :doc "mutating tools without a snapshot declaration skip snapshotting"
   (let ((tool (mevedel-tool--create :name "MkDir" :read-only-p nil)))

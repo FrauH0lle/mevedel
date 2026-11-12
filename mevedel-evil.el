@@ -223,22 +223,6 @@ the ordinary view action outside the composer."
   (when (mevedel-evil--in-composer-p)
     (goto-char (max (point) (mevedel-view--input-start)))))
 
-(defun mevedel-evil--source-maps ()
-  "Offer RET for source actions only in Evil normal state.
-The existing dispatch key and all vanilla bindings remain available."
-  (dolist (symbol '(mevedel-directive-actions-map
-                    mevedel-directive-processing-actions-map
-                    mevedel-directive-succeeded-actions-map
-                    mevedel-directive-failed-actions-map))
-    (dolist (key '("RET" "<return>"))
-      (define-key (symbol-value symbol) (kbd key)
-                  '(menu-item "" mevedel--ov-actions-dispatch
-                              :filter mevedel-evil--source-action)))))
-
-(defun mevedel-evil--source-action (command)
-  "Return source action COMMAND only in normal state."
-  (and (mevedel-evil--normal-p) command))
-
 (defun mevedel-evil--selection (function &rest args)
   "Call selection FUNCTION with ARGS using Evil's explicit visual range.
 Creation receives a span argument, even when characterwise bounds happen
@@ -319,7 +303,6 @@ is harmless.  No evil-collection dependency is needed."
                    :before #'mevedel-evil--fragment-maps))
     (eval-after-load 'mevedel-view
       '(eval-after-load 'mevedel-view-composer '(mevedel-evil--composer-keys)))
-    (eval-after-load 'mevedel-overlay-ui '(mevedel-evil--source-maps))
     (dolist (command '(mevedel-delete-instructions))
       (evil-set-command-property command :keep-visual t))
     (advice-add 'mevedel-delete-instructions :around #'mevedel-evil--selection)

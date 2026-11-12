@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Exercise native undo/redo, including registry cleanup and directive history.
+;; Exercise native undo/redo, including registry cleanup and note links.
 
 ;;; Code:
 
@@ -11,7 +11,6 @@
 (require 'mevedel-directive-source)
 (require 'mevedel-overlays)
 (require 'mevedel-instruction-undo)
-(require 'mevedel-directive)
 (require 'mevedel-persistence)
 (require 'helpers
          (file-name-concat
@@ -193,33 +192,30 @@
         (set-buffer-modified-p nil))
       (kill-buffer other-buffer)
       (delete-file file)))
-  :doc "restores links to a partner whose presentation detached in another buffer"
+  :doc "restores links to a partner whose code was deleted in another buffer"
   (let* ((workspace (mevedel-workspace--create
                      :type 'file :id "partner-undo" :root "/tmp" :name "partner-undo"))
-         (cell (mevedel-instruction-test--make-directive
-                "partner body\n" "Partner" workspace))
-         (directive (cdr cell))
-         (uuid (overlay-get directive 'mevedel-uuid)))
+         (cell (mevedel-instruction-test--make-note "partner body\n" workspace))
+         (partner (cdr cell)))
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--workspace workspace)
           (insert "before\nselected\nafter\n")
           (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 8 17)))
             (mevedel-link-instructions (list (overlay-get overlay 'mevedel-id))
-                                      (list (overlay-get directive 'mevedel-id)))
+                                      (list (overlay-get partner 'mevedel-id)))
             (buffer-enable-undo)
             (setq buffer-undo-list nil)
             (delete-region 8 17)
             (mevedel--all-instructions)
             (with-current-buffer (car cell)
-              (delete-region (overlay-start directive) (overlay-end directive)))
+              (delete-region (overlay-start partner) (overlay-end partner)))
             (undo-boundary)
             (undo-only 1)
-            (let ((partner (mevedel--instruction-with-uuid uuid workspace)))
-              (should (equal (list (overlay-get partner 'mevedel-id))
-                             (mevedel--instruction-outlinks overlay)))
-              (should (equal (list (overlay-get overlay 'mevedel-id))
-                             (mevedel--instruction-inlinks partner))))))
+            (should (equal (list (overlay-get partner 'mevedel-id))
+                           (mevedel--instruction-outlinks overlay)))
+            (should (equal (list (overlay-get overlay 'mevedel-id))
+                           (mevedel--instruction-inlinks partner)))))
       (mevedel-instruction-test--discard cell)))
   :doc "rejected edits and disabled undo do not add presentation entries"
   (with-temp-buffer
@@ -235,85 +231,39 @@
     (buffer-disable-undo)
     (delete-region 8 17)
     (should (eq t buffer-undo-list)))
-  :doc "restores nested source presentations after parent or nested-only deletion"
+  :doc "restores nested note geometry after parent or nested-only deletion"
   (dolist (whole-tree '(nil t))
-    (let* ((workspace (mevedel-workspace--create
-                       :type 'file :id (format "tree-undo-%s" whole-tree)
-                       :root "/tmp" :name "tree-undo"))
-           (cell (mevedel-instruction-test--make-directive
-                  "outer child tail\n" "Parent" workspace))
-           (parent (cdr cell))
-           (record (mevedel--directive-record parent)))
-      (unwind-protect
-          (with-current-buffer (car cell)
-            (let* ((child (mevedel--create-directive-in
-                           (current-buffer) 7 12 nil "Child"))
-                   (child-id (overlay-get child 'mevedel-id))
-                   (nested (mevedel--subdirective-record child)))
-              (buffer-enable-undo)
-              (setq buffer-undo-list nil)
-              (delete-region (if whole-tree (overlay-start parent) 7)
-                             (if whole-tree (overlay-end parent) 12))
-              (mevedel--all-instructions)
-              (should-not (overlay-buffer child))
-              (undo-boundary)
-              (undo-only 1)
-              (should (eq (current-buffer) (overlay-buffer child)))
-              (should (= 7 (overlay-start child)))
-              (should (= 12 (overlay-end child)))
-              (should (= child-id (overlay-get child 'mevedel-id)))
-              (should (= 2 (hash-table-count (mevedel--instruction-id-usage-map))))
-              (should (equal (list nested) (mevedel-directive-subdirectives record)))
-              (undo-boundary)
-              (undo-redo 1)
-              (should-not (overlay-buffer child))
-              (should (= (if whole-tree 1 0)
-                         (length (mevedel-directive-subdirectives record))))
-              (undo-boundary)
-              (undo-only 1)
-              (should (eq nested (mevedel--subdirective-record child)))
-              (should (= child-id (overlay-get child 'mevedel-id)))
-              (should (= 2 (hash-table-count (mevedel--instruction-id-usage-map))))))
-        (mevedel-instruction-test--discard cell))))
-  :doc "directive undo restores the original overlay and keeps newer history"
-  (let* ((workspace (mevedel-workspace--create
-                     :type 'file :id "undo" :root "/tmp" :name "undo"))
-         (cell (mevedel-instruction-test--make-directive
-                "before\nselected\nafter\n" "Keep history" workspace))
-         (overlay (cdr cell))
-         (record (mevedel--directive-record overlay))
-         (start (overlay-start overlay))
-         (end (overlay-end overlay))
-         reference)
-    (unwind-protect
-        (with-current-buffer (car cell)
-          (setq reference (mevedel-instruction-test--create-note-in (current-buffer) end (point-max)))
-          (mevedel-link-instructions (list (overlay-get reference 'mevedel-id))
-                                    (list (overlay-get overlay 'mevedel-id)))
+    ;; Each iteration owns its registry, as a killed buffer's notes stay listed.
+    (let ((mevedel--instruction-states (make-hash-table :test #'equal)))
+      (with-temp-buffer
+        (insert "outer child tail\n")
+        (let* ((parent (mevedel-instruction-test--create-note-in
+                        (current-buffer) 1 17 'char))
+               (child (mevedel-instruction-test--create-note-in
+                       (current-buffer) 7 12 'char))
+               (child-id (overlay-get child 'mevedel-id)))
           (buffer-enable-undo)
           (setq buffer-undo-list nil)
-          (delete-region start end)
-          (setf (mevedel-directive-attempts record)
-                (list (mevedel-instruction-test--attempt)))
+          (delete-region (if whole-tree (overlay-start parent) 7)
+                         (if whole-tree (overlay-end parent) 12))
+          (mevedel--all-instructions)
+          (should (= (overlay-start child) (overlay-end child)))
           (undo-boundary)
           (undo-only 1)
-          (should (eq overlay (mevedel--instruction-with-uuid
-                               (mevedel-directive-id record) workspace)))
-          (should (eq 'attached (plist-get (mevedel-directive-anchor record) :state)))
-          (should (equal (list (overlay-get reference 'mevedel-id))
-                         (mevedel--instruction-inlinks overlay)))
-          (should (= 1 (length (mevedel-directive-attempts record))))
+          (should (eq (current-buffer) (overlay-buffer child)))
+          (should (= 7 (overlay-start child)))
+          (should (= 12 (overlay-end child)))
+          (should (= child-id (overlay-get child 'mevedel-id)))
+          (should (= 2 (hash-table-count (mevedel--instruction-id-usage-map))))
           (undo-boundary)
           (undo-redo 1)
-          (should (eq 'detached (plist-get (mevedel-directive-anchor record) :state)))
-          (should (equal (list (overlay-get reference 'mevedel-id))
-                         (mevedel--instruction-inlinks overlay)))
+          (should (eq (current-buffer) (overlay-buffer child)))
+          (should (= (overlay-start child) (overlay-end child)))
           (undo-boundary)
           (undo-only 1)
-          (should (= start (overlay-start overlay)))
-          (should (= end (overlay-end overlay)))
-          (should (= 1 (length (mevedel-directive-attempts record)))))
-      (mevedel-instruction-test--discard cell))))
+          (should (= 7 (overlay-start child)))
+          (should (= child-id (overlay-get child 'mevedel-id)))
+          (should (= 2 (hash-table-count (mevedel--instruction-id-usage-map)))))))))
 
 (provide 'test-mevedel-instruction-undo)
 ;;; test-mevedel-instruction-undo.el ends here

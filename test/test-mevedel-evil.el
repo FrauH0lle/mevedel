@@ -324,21 +324,6 @@ Keep the real transcript alive and leave recovery and geometry functions intact.
   :doc "An initialized composer before Evil preserves real normal/insert routing"
   (mevedel-evil-test--cold-composer nil))
 
-(defmacro mevedel-evil-test--file-buffer (text &rest body)
-  "Run BODY in a real visited temporary source file containing TEXT."
-  (declare (indent 1) (debug t))
-  `(let ((file (make-temp-file "mevedel-evil-source-" nil ".txt" ,text)))
-     (unwind-protect
-         (mevedel-evil-test--buffer
-           (insert ,text)
-           (setq-local buffer-file-name file
-                       mevedel--workspace
-                       (mevedel-workspace--create
-                        :id file :root (file-name-directory file) :type 'file))
-           ,@body)
-       (unlock-file file)
-       (delete-file file))))
-
 (defun mevedel-evil-test--partial-change (span edge command)
   "Check real COMMAND at EDGE of a multiline reference of shape SPAN.
 Compute expected text and geometry from the aggregate text replacement,
@@ -479,19 +464,6 @@ independently of the product's primitive change hooks."
     (let ((inhibit-read-only t))
       (mevedel-evil-test--keys "h j k l g G <escape>"))
     (should (string-suffix-p "hjklgG" (buffer-string))))
-  :doc "source RET dispatch is normal-only and insert RET remains newline"
-  (mevedel-evil-test--buffer
-    (insert "abc\ndef\n")
-    (mevedel--create-directive-in (current-buffer) 1 4 nil "request" 'char)
-    (goto-char 2)
-    (let ((calls 0))
-      (cl-letf (((symbol-function 'mevedel--ov-actions-dispatch)
-                 (lambda () (interactive) (cl-incf calls))))
-        (mevedel-evil-test--keys "RET")
-        (should (= calls 1))
-        (mevedel-evil-test--keys "i RET <escape>")
-        (should (= calls 1))
-        (should (equal (buffer-string) "a\nbc\ndef\n")))))
   :doc "empty side composer keeps abort and close controls in both states"
   (mevedel-evil-test--buffer
     (with-temp-buffer
@@ -801,31 +773,6 @@ independently of the product's primitive change hooks."
     (let ((buffer-read-only t))
       (should-error (mevedel-evil-test--keys "c l")))
     (should-not mevedel--instruction-replacement-held))
-  :doc "directive real change keys retain authored records and undo anchor geometry"
-  (dolist (span '(char line))
-    (dolist (command '("c l" "c c" "s" "R"))
-      (mevedel-evil-test--file-buffer "before\nx\nafter\n"
-        (let* ((overlay (mevedel--create-directive-in
-                         (current-buffer) 8 (if (eq span 'line) 10 9)
-                         nil "Keep the request" span))
-               (record (mevedel--directive-record overlay)))
-          (goto-char 8)
-          (setq buffer-undo-list nil)
-          (mevedel-evil-test--keys (concat command " N E W <escape>"))
-          (should (eq record (mevedel--directive-record overlay)))
-          (should (eq (plist-get (mevedel-directive-anchor record) :state) 'attached))
-          (should (equal (mevedel--directive-text overlay) "Keep the request"))
-          (should (equal (buffer-substring-no-properties
-                          (overlay-start overlay) (overlay-end overlay))
-                         (if (or (eq span 'line) (equal command "c c"))
-                             "NEW\n" "NEW")))
-          (mevedel-evil-test--keys "u")
-          (should (equal (buffer-string) "before\nx\nafter\n"))
-          (should (= (overlay-start overlay) 8))
-          (should (= (overlay-end overlay) (if (eq span 'line) 10 9)))
-          (mevedel-evil-test--keys "C-r")
-          (should (eq record (mevedel--directive-record overlay)))
-          (should (eq (plist-get (mevedel-directive-anchor record) :state) 'attached))))))
   :doc "fine undo follows Evil grouping and eventually restores both span shapes"
   (dolist (span '(char line))
     (mevedel-evil-test--buffer

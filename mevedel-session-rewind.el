@@ -67,7 +67,7 @@
 (declare-function mevedel-session-artifacts-instructions-current-path "mevedel-session-artifacts" (save-path))
 (declare-function mevedel-session-artifacts-instructions-dir "mevedel-session-artifacts" (save-path))
 (declare-function mevedel-session-artifacts-instructions-turn-path "mevedel-session-artifacts" (save-path turn))
-(declare-function mevedel-session-artifacts-load-instructions "mevedel-session-artifacts" (session buffer &optional turn directive-records preserve-directives-p))
+(declare-function mevedel-session-artifacts-load-instructions "mevedel-session-artifacts" (session buffer &optional turn snapshot-only))
 (declare-function mevedel-session-artifacts-printed-value "mevedel-session-artifacts" (value))
 (declare-function mevedel-session-artifacts-read-artifact "mevedel-session-artifacts" (session logical &optional committed-only))
 (declare-function mevedel-session-artifacts-read-file-raw "mevedel-session-artifacts" (path))
@@ -1215,7 +1215,6 @@ candidate's surviving turn count."
         (> (or (mevedel-skill-invocation-record-turn record) 0) turn))
       (mevedel-session-invoked-skills session))
      (mevedel-session-permission-queue candidate) nil
-     (mevedel-session-directive-planning candidate) nil
      (mevedel-session-pending-plan-approval candidate) nil
      (mevedel-session-plan-metadata candidate) nil
      (mevedel-session-goal candidate) nil
@@ -1659,7 +1658,7 @@ head CAS.  BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                 (condition-case instruction-error
                     (unless
                         (mevedel-session-artifacts-load-instructions
-                         session buffer nil nil t)
+                         session buffer nil t)
                       (error "Published instruction snapshot is unavailable"))
                   (error
                    (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
@@ -1828,8 +1827,7 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
           (unless store-intent
             (unless
                 (mevedel-session-artifacts-load-instructions
-                 session buffer (1- (plist-get target :cum-turn))
-                 nil t)
+                 session buffer (1- (plist-get target :cum-turn)) t)
               (error "Instruction restore failed during Rewind")))
           (mevedel-session-artifacts-save-instructions
            session buffer t)
@@ -1910,8 +1908,7 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                     (goto-char (min original-point (point-max)))))
                 (unless store-intent
                   (mevedel-session-artifacts-load-instructions
-                   session buffer original-turn
-                   nil t))
+                   session buffer original-turn t))
                 (mevedel-session-persistence-notify-session-event
                  session 'rerender))
             (error
@@ -2307,7 +2304,7 @@ and the file plan the caller confirmed."
                     :warning))))
               (condition-case instruction-error
                   (mevedel-session-artifacts-load-instructions
-                   session buffer nil nil t)
+                   session buffer nil t)
                 (error
                  (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                   'mevedel

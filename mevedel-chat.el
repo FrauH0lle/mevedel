@@ -1339,7 +1339,7 @@ The effective model and effort apply only to this request, not saved selection."
             (if (and mevedel--session (mevedel-session-audit-session mevedel--session))
                 (mevedel-claude-code-btw-send (or model-input native-input) policy)
               (mevedel-claude-code-send (or model-input native-input) policy))
-          (when (and mevedel--session (not mevedel--current-directive-uuid)
+          (when (and mevedel--session
                      (assoc "root" (mevedel-session-external-conversations mevedel--session)))
             (mevedel-claude-code-release-history mevedel--session))
           (setq-local mevedel--pending-model-input model-input)

@@ -48,12 +48,7 @@
 (autoload 'mevedel-artifact-store-note-writes "mevedel-artifact-store")
 
 ;; `mevedel-directive'
-(declare-function mevedel-directive-set-anchor
-                  "mevedel-directive" (directive anchor))
-
 ;; `mevedel-directive-source'
-(declare-function mevedel--directive-record
-                  "mevedel-directive-source" (directive))
 (declare-function mevedel--mark-buffer-source-missing
                   "mevedel-directive-source" (buffer))
 
@@ -119,7 +114,6 @@
                   "mevedel-session-persistence" (session buffer))
 
 ;; `mevedel-structs'
-(declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-ephemeral-p "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-one-shot-mutations-p
                   "mevedel-structs" (cl-x) t)
@@ -1291,8 +1285,7 @@ before/after snapshots and must check freshness and fence the replacement on
 the target; the same callback handles rollback. Buffer synchronization stays
 inside this transaction.
 Rollback never overwrites an intervening edit; it reports incomplete recovery."
-  (require 'mevedel-directive)
-  (require 'mevedel-overlays)
+    (require 'mevedel-overlays)
   (let ((owner-current-p currentp)
         (checks (delete-dups (delq nil (mapcar (lambda (change) (plist-get change :resource-check))
                                                changes)))))
@@ -1318,16 +1311,7 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
               (let* ((overlays (append (car (overlay-lists))
                                        (cdr (overlay-lists))))
                      (entry (assq buffer
-                                  (mevedel--instruction-alist-value)))
-                     anchors)
-                (dolist (overlay overlays)
-                  (when (eq (overlay-get overlay 'mevedel-instruction-type)
-                            'directive)
-                    (when-let* ((record (mevedel--directive-record overlay)))
-                      (push (cons record
-                                  (copy-tree
-                                   (mevedel-directive-anchor record)))
-                            anchors))))
+                                  (mevedel--instruction-alist-value))))
                 (list :buffer buffer
                       :group (prepare-change-group)
                       :minimum minimum
@@ -1338,7 +1322,6 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
                       :content (buffer-substring (point-min) (point-max))
                       :instruction-present (and entry t)
                       :instructions (and entry (copy-sequence (cdr entry)))
-                      :anchors anchors
                       :overlays
                       (mapcar
                        (lambda (overlay)
@@ -1381,8 +1364,6 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
                             (plist-get snapshot :instructions))
                     (setq alist (assq-delete-all buffer alist)))
                   (mevedel--set-instruction-alist-value alist))
-                (dolist (anchor (plist-get snapshot :anchors))
-                  (mevedel-directive-set-anchor (car anchor) (cdr anchor)))
                 (narrow-to-region (plist-get snapshot :minimum)
                                   (plist-get snapshot :maximum))
                 (goto-char (plist-get snapshot :point))

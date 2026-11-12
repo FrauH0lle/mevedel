@@ -195,7 +195,7 @@ Without OWNER, use the current conversation, including before admission."
                    (and invocation
                         (mevedel-agent-invocation-plan-read-only invocation)))))
          (apply-patch-visible-p
-          (and plan-read-only-p (not (mevedel-plan-directive-p session request)))))
+          plan-read-only-p))
     (lambda (name)
       (and (not (and invocation (equal name "Monitor")))
            (mevedel-tool-goal-available-p name owner)

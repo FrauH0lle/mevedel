@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 
-;; Passive workspace, directive, session, request, and task data shapes plus
-;; shape-local invariants and constructors.  Workspace, directive, and request
+;; Passive workspace, session, request, and task data shapes plus
+;; shape-local invariants and constructors.  Workspace and request
 ;; lifecycle behavior belongs to their focused owners.
 
 ;;; Code:
@@ -52,67 +52,7 @@ check project dir first, then global."
 
 
 ;;
-;;; Directive and workspace structs
-
-(cl-defstruct (mevedel-subdirective
-               (:constructor mevedel-subdirective--create)
-               (:copier nil))
-  "One current parent-owned nested directive."
-  id
-  request
-  anchor)
-
-(cl-defstruct (mevedel-directive-attempt
-               (:constructor mevedel-directive-attempt--create)
-               (:copier nil))
-  "One immutable terminal implementation attempt."
-  sequence
-  action
-  directive-request
-  request
-  result
-  outcome
-  patch
-  capture
-  covered-files
-  gaps
-  untracked-effects
-  captured-at
-  checkpoint
-  plan
-  plan-context
-  plan-selection
-  consumed-subdirectives)
-
-(cl-defstruct (mevedel-directive-discussion-turn
-               (:constructor mevedel-directive-discussion-turn--create)
-               (:copier nil))
-  "One immutable terminal directive discussion turn."
-  sequence
-  directive-request
-  message
-  request
-  result
-  outcome
-  attempt-index
-  checkpoint)
-
-(cl-defstruct (mevedel-directive (:constructor mevedel-directive--create))
-  "Workspace-owned directive identity and current authored state."
-  id
-  request
-  anchor
-  state
-  session-id
-  planning-enabled
-  ;; Skills attached to implementation prompts, as (:name NAME
-  ;; :source-file FILE) plists keyed by canonical SKILL.md source.
-  skills
-  plan
-  planning
-  attempts
-  discussion
-  subdirectives)
+;;; Workspace structs
 
 (cl-defstruct (mevedel-workspace (:constructor mevedel-workspace--create))
   "Project-level shared state.
@@ -125,8 +65,7 @@ One workspace per project, shared by all sessions for that project."
   journal-observation ; disposable public journal observation for prompt discovery
   journal-cleanup-at ; client time of the last journal expiry opportunity
   memory-observation ; disposable proposal counts for cockpit display
-  memory-schedule   ; disposable automatic-review timing and setting snapshot
-  directives)       ; list of workspace-owned mevedel-directive structs
+  memory-schedule)  ; disposable automatic-review timing and setting snapshot
 
 
 ;;
@@ -214,7 +153,6 @@ workspace."
   permission-mode   ; current permission mode
   sandbox-mode      ; current child-process confinement policy
   plan-mode         ; non-nil during a sticky Plan conversation
-  directive-planning ; transient active directive-planning record
   preset-name       ; selected mevedel preset symbol
   model-provider    ; exact "BACKEND:MODEL" session selector or nil
   external-conversations ; scope -> native ownership, installed history and turn state
@@ -754,9 +692,6 @@ Return the expanded paths activated."
   "The `mevedel-request' struct for the active request.
 Set at request start and cleared by the request lifecycle owner.")
 
-(defvar-local mevedel--current-directive-uuid nil
-  "UUID of the directive currently being processed.")
-
 (defvar-local mevedel--agent-invocation nil
   "Invocation that owns this retained agent conversation buffer.")
 
@@ -805,10 +740,9 @@ Created at request start, cleared in the termination handler."
   model-policy      ; frozen effective backend/model/effort, independent of selection
   implementation-policy ; accepted full policy captured at admission, or nil
   permission-mode-override ; scoped canonical authority, or nil for live baseline
-  workspace-instruction-hashes ; fresh directive's acknowledged path instructions
+  workspace-instruction-hashes ; isolated request's acknowledged path instructions
   file-snapshots    ; hash-table: filepath -> original content at request start
   untracked-effects ; alist: source -> reason capture cannot be complete
-  directive-uuid    ; UUID of directive being processed, if any
   plan-read-only    ; immutable Plan capability boundary for this request
   one-shot-mutations-p ; non-read-only tools require one-time approval
   ephemeral-p       ; suppress request-owned durable conversation artifacts

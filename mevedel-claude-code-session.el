@@ -35,8 +35,6 @@
 (autoload 'mevedel-skills-request-model-policy "mevedel-skills-invoke")
 
 ;; `mevedel-structs'
-(defvar mevedel--current-directive-uuid)
-
 (defun mevedel-claude-code--forget-instructions (session owner)
   "Forget SESSION's path-instruction acknowledgements for conversation OWNER."
   (setf (mevedel-session-workspace-instruction-hashes session)
@@ -138,13 +136,12 @@ An omitted policy resolves through the common request model resolver."
                            mevedel--session)
                       (user-error "Select Claude Code in a mevedel session first")))
          (buffer (current-buffer))
-         (directive mevedel--current-directive-uuid)
          ;; A shared-item question keeps its own context, apart from the room.
-         (shared (and (not directive) (mevedel-shared-conversation-current)))
-         ;; Directive and item prompts carry their precisely selected durable
+         (shared (mevedel-shared-conversation-current))
+         ;; Item prompts carry their precisely selected durable
          ;; history.  Resuming hidden history would reintroduce excluded turns,
          ;; and their turns must not enter the root's native history.
-         (isolated (or directive shared))
+         (isolated shared)
          (history (and (not isolated)
                        (alist-get "root" (mevedel-session-external-conversations session)
                                   nil nil #'equal)))
@@ -161,7 +158,7 @@ An omitted policy resolves through the common request model resolver."
                        (buffer-substring
                         (mevedel-transcript-prompt-transform-start) (point-max))))))
          (request (or mevedel--current-request
-                      (mevedel-request-begin session directive)))
+                      (mevedel-request-begin session)))
          (system-prompt gptel-system-prompt)
          tools record selected)
     (condition-case err
@@ -220,7 +217,7 @@ An omitted policy resolves through the common request model resolver."
      tools
      (lambda (id)
        (mevedel-claude-code-history-assert-current history)
-       ;; Each directive or item turn starts an isolated native conversation
+       ;; Each item turn starts an isolated native conversation
        ;; that is never resumed, so its identity needs no durable reference.
        (unless isolated
          ;; A submitted prompt belongs to native history even if interruption

@@ -11,7 +11,6 @@
           "helpers"))
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-conversation)
-(require 'mevedel-directive)
 (require 'mevedel-directive-activity)
 (require 'mevedel-notes)
 (require 'mevedel-persistence)
@@ -334,11 +333,8 @@
 (mevedel-deftest mevedel-view--directive-ranges ()
   ,test
   (test)
-  :doc "caches by buffer tick and request directive without exposing its memo"
+  :doc "caches historical ranges by buffer tick without exposing its memo"
   (with-temp-buffer
-    (setq-local
-     mevedel--current-request
-     (mevedel-request--create :id "request" :directive-uuid "directive-1"))
     (insert
      (mevedel--format-hook-audit-record
       '(:type directive-turn-boundary :edge start
@@ -358,20 +354,13 @@
                   (plist-get
                    (car (mevedel-view--directive-ranges (current-buffer)))
                    :action)))
-      (setf (mevedel-request-directive-uuid mevedel--current-request)
-            "directive-2")
-      (let ((request-invalidated
-             (plist-get
-              (car (mevedel-view--directive-ranges (current-buffer)))
-              :render-id)))
-        (should-not (eq render-id request-invalidated))
-        (goto-char (point-max))
-        (insert "tail")
-        (should-not
-         (eq request-invalidated
-             (plist-get
-              (car (mevedel-view--directive-ranges (current-buffer)))
-              :render-id)))))))
+      (goto-char (point-max))
+      (insert "tail")
+      (should-not
+       (eq render-id
+           (plist-get
+            (car (mevedel-view--directive-ranges (current-buffer)))
+            :render-id))))))
 
 
 (mevedel-deftest mevedel-view--tool-one-liner ()
@@ -10295,13 +10284,7 @@
             ;; a delivery after the assistant's heading needs a new one
             (insert (header 'user "You\n") "delivered\n")
             (should (mevedel-view--live-turn-needs-header-p
-                     (point-min) (point-max) data))
-            ;; a directive request never needs one
-            (with-current-buffer data
-              (setq-local mevedel--current-request
-                          (mevedel-request--create :directive-uuid "d")))
-            (should-not (mevedel-view--live-turn-needs-header-p
-                         (point-min) (point-max) data)))
+                     (point-min) (point-max) data)))
         (kill-buffer data)))))
 
 (mevedel-deftest mevedel-view--history-boundary-target ()

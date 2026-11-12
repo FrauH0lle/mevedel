@@ -1,8 +1,8 @@
-;;; test-mevedel-overlays.el -- Overlay containment and context tests -*- lexical-binding: t -*-
+;;; test-mevedel-overlays.el -- Overlay command diagnostic tests -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
-;; Contract tests for containment, prompt, context, and tag behavior.
+;; Contract tests for workspace-scoped instruction command diagnostics.
 
 ;;; Code:
 
@@ -11,24 +11,13 @@
 (require 'mevedel-directive-source)
 (require 'mevedel-overlay-ui)
 (require 'mevedel-persistence)
-(require 'mevedel-chat)
 (require 'mevedel-structs)
-(require 'mevedel-directive)
 (require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
-
-;; `gptel'
-(defvar gptel-default-mode)
-
-(require 'mevedel-instruction-test-support
-         (file-name-concat
-          (file-name-directory
-           (or buffer-file-name load-file-name byte-compile-current-file))
-          "mevedel-instruction-test-support"))
 
 (mevedel-deftest mevedel-delete-instructions/source-diagnostics ()
   (let* ((root (file-name-as-directory (make-temp-file "mevedel-source-scope-" t)))
@@ -66,124 +55,6 @@
                              messages)))))
       (when (buffer-live-p buffer) (kill-buffer buffer))
       (delete-directory root t))))
-
-(mevedel-deftest mevedel--directive-at-point ()
-  ,test
-  (test)
-  :doc "resolves priority and highlighted selection to its directive owner"
-  (with-temp-buffer
-    (insert "abcdefghijklmn")
-    (let* ((overlays
-            (mapcar
-             (lambda (spec)
-               (let ((overlay (make-overlay (nth 0 spec) (nth 1 spec))))
-                 (overlay-put overlay 'mevedel-instruction t)
-                 (overlay-put overlay 'mevedel-instruction-type (nth 2 spec))
-                 (overlay-put overlay 'priority (nth 3 spec))
-                 overlay))
-             '((1 10 directive 10) (3 7 directive 20)
-               (4 12 directive 30) (5 8 note 100)
-               (14 14 directive 40))))
-           (root (nth 0 overlays))
-           (other (nth 2 overlays)))
-      (goto-char 6)
-      (cl-loop for highlighted in (cons nil overlays)
-               for expected in (list other root root other other other)
-               do (let ((mevedel--highlighted-instruction highlighted))
-                    (should (eq expected (mevedel--directive-at-point)))))
-      (let ((mevedel--highlighted-instruction root))
-        (goto-char 13)
-        (should-not (mevedel--directive-at-point))
-        (goto-char 14)
-        (should (eq (nth 4 overlays) (mevedel--directive-at-point)))))))
-
-(mevedel-deftest mevedel-get-directive-patch ()
-  ,test
-  (test)
-  :doc "reads patch history from the latest workspace-owned attempt"
-  (let* ((workspace (mevedel-workspace--create
-                     :type 'file :id "patch" :root "/tmp" :name "patch"))
-         (record (mevedel-directive--create
-                  :id "directive" :request "Request"
-                  :anchor '(:state attached) :state 'implemented
-                  :attempts
-                  (list
-                   (mevedel-directive-attempt--create :patch "first")
-                   (mevedel-directive-attempt--create :patch "latest"))))
-         (buffer (generate-new-buffer " *directive-patch-owner*")))
-    (unwind-protect
-        (with-current-buffer buffer
-          (insert "source")
-          (setq-local mevedel--workspace workspace)
-          (mevedel-workspace-add-directive workspace record)
-          (let ((directive (make-overlay (point-min) (point-max))))
-            (overlay-put directive 'mevedel-uuid "directive")
-            (overlay-put directive 'mevedel-instruction-type 'directive)
-            (should (equal "latest"
-                           (mevedel-get-directive-patch directive)))
-            (setf (mevedel-directive-attempt-patch
-                   (car (last (mevedel-directive-attempts record))))
-                  "")
-            (should-not (mevedel-get-directive-patch directive))))
-      (kill-buffer buffer))))
-
-(mevedel-deftest mevedel--directive-action-context
-  (:vars
-   ((gptel-default-mode 'markdown-mode)
-    (mevedel--instruction-states (make-hash-table :test #'equal))
-    (mevedel--instruction-current-state-key :global)))
-  ,test
-  (test)
-  :doc "uses real prompt construction for attached eligibility"
-  (let* ((fixture (mevedel-instruction-test--source-fixture))
-         (workspace (nth 1 fixture))
-         (overlay (nth 4 fixture))
-         (record (nth 5 fixture)))
-    (unwind-protect
-        (let ((context (mevedel--directive-action-context record workspace)))
-          (should (eq overlay (plist-get context :directive)))
-          (should (string-match-p "Preserve this"
-                                  (plist-get context :prompt))))
-      (mevedel-instruction-test--discard-source fixture)))
-
-  :doc "rejects region-backed source-missing submission with one shared error"
-  (let* ((fixture (mevedel-instruction-test--source-fixture))
-         (workspace (nth 1 fixture))
-         (buffer (nth 3 fixture))
-         (record (nth 5 fixture)))
-    (unwind-protect
-        (progn
-          (with-current-buffer buffer
-            (mevedel--mark-buffer-source-missing buffer))
-          (should-error
-           (mevedel--directive-action-context record workspace)
-           :type 'user-error))
-      (mevedel-instruction-test--discard-source fixture)))
-
-  :doc "reconstructs a top-level bodyless directive without source text"
-  (let* ((fixture (mevedel-instruction-test--source-fixture))
-         (workspace (nth 1 fixture))
-         (buffer (nth 3 fixture))
-         record context transient)
-    (unwind-protect
-        (progn
-          (with-current-buffer buffer
-            (setq record
-                  (mevedel--directive-record
-                   (mevedel--create-directive-in
-                    buffer (point-max) (point-max) t "Bodyless request")))
-            (mevedel--mark-buffer-source-missing buffer))
-          (setq context
-                (mevedel--directive-action-context record workspace)
-                transient (plist-get context :directive))
-          (should (overlay-get transient 'mevedel-transient-source-missing))
-          (should (string-match-p "Bodyless request"
-                                  (plist-get context :prompt)))
-          (should (eq 'source-missing
-                      (plist-get (mevedel-directive-anchor record) :state))))
-      (when (and transient (overlay-buffer transient))
-        (kill-buffer (overlay-buffer transient)))
-      (mevedel-instruction-test--discard-source fixture))))
 
 (provide 'test-mevedel-overlays)
 ;;; test-mevedel-overlays.el ends here

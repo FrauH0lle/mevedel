@@ -105,16 +105,7 @@
     (mevedel-plan-mode-enter session)
     (should (equal selection
                    (plist-get (mevedel-session-plan-metadata session)
-                              :selection))))
-
-  :doc "rejects ordinary Plan while directive planning owns the session"
-  (let ((session
-         (mevedel-session--create
-          :authority-mode 'pid-lock
-          :name "test"
-          :directive-planning '(:directive-id "d1" :phase approval))))
-    (should-error (mevedel-plan-mode-enter session) :type 'user-error)
-    (should-not (mevedel-session-plan-mode session))))
+                              :selection)))))
 
 (mevedel-deftest mevedel-plan-mode-exit
   (:doc "leaves Plan without changing the underlying permission mode")

@@ -292,8 +292,6 @@
          replaced)
     (unwind-protect
         (progn
-          (with-current-buffer chat-buf
-            (setq-local mevedel--current-directive-uuid nil))
           (cl-letf (((symbol-function 'mevedel-workspace)
                      (lambda (&optional _buffer) ws))
                     ((symbol-function 'mevedel--generate-final-patch)

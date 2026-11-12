@@ -89,24 +89,31 @@ Mirrors the call in `mevedel-session-persistence--restore-buffer'."
     (setq-local mevedel--workspace workspace)
     (mevedel-session-artifacts-load-instructions session data)))
 
-(defun test-mevedel-instruction-ws--requests (workspace)
-  "Return the sorted directive requests of WORKSPACE."
-  (sort (mapcar #'mevedel-directive-request
-                (mevedel-workspace-directives workspace))
+(defun test-mevedel-instruction-ws--note (source text line)
+  "Create note TEXT on LINE of SOURCE and return its overlay."
+  (with-current-buffer source
+    (goto-char (point-min))
+    (forward-line (1- line))
+    (mevedel-note-create text)))
+
+(defun test-mevedel-instruction-ws--texts (workspace)
+  "Return the sorted note texts of WORKSPACE."
+  (sort (mapcar (lambda (note) (plist-get (plist-get note :properties) 'mevedel-note-text))
+                (mevedel-notes--entries workspace))
         #'string<))
 
-(defun test-mevedel-instruction-ws--reference-count (workspace source)
+(defun test-mevedel-instruction-ws--note-count (workspace source)
   "Return how many live notes SOURCE holds in WORKSPACE."
   (mevedel--instruction-activate-workspace workspace)
   (cl-count-if (lambda (instruction)
-                               (eq 'note (overlay-get instruction 'mevedel-instruction-type)))
+                 (eq 'note (overlay-get instruction 'mevedel-instruction-type)))
                (alist-get source (mevedel--instruction-alist))))
 
 (defun test-mevedel-instruction-ws--activity (workspace)
-  "Return (SESSION-ID ATTEMPT-COUNT) of WORKSPACE's first directive."
-  (let ((record (car (mevedel-workspace-directives workspace))))
-    (list (mevedel-directive-session-id record)
-          (length (mevedel-directive-attempts record)))))
+  "Return (SESSION-ID CHANGE-ID) of WORKSPACE's first note."
+  (let ((properties (plist-get (car (mevedel-notes--entries workspace)) :properties)))
+    (list (plist-get properties 'mevedel-note-session-id)
+          (plist-get (plist-get properties 'mevedel-note-prepared-change) :id))))
 
 (defun test-mevedel-instruction-ws--snapshot-text (session)
   "Return the raw current instruction snapshot text of SESSION."
@@ -120,48 +127,37 @@ Mirrors the call in `mevedel-session-persistence--restore-buffer'."
   (:quiet t)
   ,test
   (test)
-  :doc "case 1: resuming session A keeps directives and notes saved by B"
+  :doc "case 1: resuming session A keeps notes saved by B"
   (test-mevedel-instruction-ws--with-workspace (workspace source data)
-    (with-current-buffer source
-      (mevedel--create-directive-in source (point-min) (+ 5 (point-min))
-                                    nil "made before A saved"))
+    (test-mevedel-instruction-ws--note source "made before A saved" 1)
     (let ((a (test-mevedel-instruction-ws--save "a" workspace data)))
       (push a sessions)
-      (with-current-buffer source
-        (mevedel--create-directive-in source (+ 6 (point-min)) (+ 9 (point-min))
-                                      nil "made in B")
-        (mevedel-instruction-test--create-note-in source (point-min) (point-max)))
+      (test-mevedel-instruction-ws--note source "made in B" 2)
       (let ((b (test-mevedel-instruction-ws--save "b" workspace data)))
         (push b sessions)
-        ;; Control: B's file really holds B's directive and note.
+        ;; Control: B's file really holds B's note.
         (should (string-match-p "made in B"
                                 (test-mevedel-instruction-ws--snapshot-text b)))
-        (should (= 1 (test-mevedel-instruction-ws--reference-count
-                      workspace source)))
-        ;; Resume A; the unchanged workspace still owns B's instructions.
+        (should (= 2 (test-mevedel-instruction-ws--note-count workspace source)))
+        ;; Resume A; the unchanged workspace still owns B's notes.
         (test-mevedel-instruction-ws--resume a workspace data)
         (should (equal '("made before A saved" "made in B")
-                       (test-mevedel-instruction-ws--requests workspace)))
-        (should (= 1 (test-mevedel-instruction-ws--reference-count
-                      workspace source)))))))
+                       (test-mevedel-instruction-ws--texts workspace)))
+        (should (= 2 (test-mevedel-instruction-ws--note-count workspace source)))))))
 
 (mevedel-deftest test-mevedel-instruction-ws-unsaved-lost-on-restart
   (:quiet t)
   ,test
   (test)
-  :doc "case 2: directives created after the last session save survive a restart"
+  :doc "case 2: notes created after the last session save survive a restart"
   (test-mevedel-instruction-ws--with-workspace (workspace source data)
-    (with-current-buffer source
-      (mevedel--create-directive-in source (point-min) (+ 5 (point-min))
-                                    nil "saved with the turn"))
+    (test-mevedel-instruction-ws--note source "saved with the turn" 1)
     (let ((a (test-mevedel-instruction-ws--save "a" workspace data)))
       (push a sessions)
-      (with-current-buffer source
-        (mevedel--create-directive-in source (+ 6 (point-min)) (+ 9 (point-min))
-                                      nil "created, then Emacs exits"))
+      (test-mevedel-instruction-ws--note source "created, then Emacs exits" 2)
       ;; Control: the live workspace has both, the only session snapshot
       ;; has one; the workspace store is the other carrier.
-      (should (= 2 (length (mevedel-workspace-directives workspace))))
+      (should (= 2 (length (mevedel-notes--entries workspace))))
       (should-not (string-match-p
                    "then Emacs exits"
                    (test-mevedel-instruction-ws--snapshot-text a)))
@@ -172,33 +168,23 @@ Mirrors the call in `mevedel-session-persistence--restore-buffer'."
       (test-mevedel-session-persistence--reset-instructions)
       (test-mevedel-instruction-ws--resume a workspace data)
       (should (equal '("created, then Emacs exits" "saved with the turn")
-                     (test-mevedel-instruction-ws--requests workspace))))))
+                     (test-mevedel-instruction-ws--texts workspace))))))
 
 (mevedel-deftest test-mevedel-instruction-ws-activity-follows-last-saver
   (:quiet t)
   ,test
   (test)
-  :doc "case 3: directive activity is the same whichever session resumes"
+  :doc "case 3: note activity is the same whichever session resumes"
   (test-mevedel-instruction-ws--with-workspace (workspace source data)
-    (let (directive a b)
-      (with-current-buffer source
-        (setq directive
-              (mevedel--create-directive-in source (point-min)
-                                            (+ 5 (point-min)) nil "do it")))
+    (let ((note (test-mevedel-instruction-ws--note source "do it" 1))
+          a b)
       (setq a (test-mevedel-instruction-ws--save "a" workspace data))
       (push a sessions)
-      ;; Activity recorded in the workspace record; only B saves afterwards.
-      (let ((record (mevedel--directive-record directive)))
-        (setf (mevedel-directive-session-id record) "ran-in-b"
-              (mevedel-directive-attempts record)
-              (list (mevedel-directive-attempt--create
-                     :sequence 1 :action 'implement
-                     :directive-request "do it" :request "do it"
-                     :result "done" :outcome (quote success) :patch ""
-                     :capture (quote incomplete) :covered-files nil :gaps nil
-                     :checkpoint (quote (:session-id "ran-in-b" :turn 1))
-                     :consumed-subdirectives nil
-                     :captured-at "2026-11-07T00:00:00+0100"))))
+      ;; Activity recorded on the workspace note; only B saves afterwards.
+      (overlay-put note 'mevedel-note-state 'sent)
+      (overlay-put note 'mevedel-note-session-id "ran-in-b")
+      (overlay-put note 'mevedel-note-prepared-change
+                   '(:id "change-1" :session-id "ran-in-b" :turn 1))
       (setq b (test-mevedel-instruction-ws--save "b" workspace data))
       (push b sessions)
       ;; Control: B's file carries the activity, A's does not.
@@ -208,7 +194,7 @@ Mirrors the call in `mevedel-session-persistence--restore-buffer'."
                                   (test-mevedel-instruction-ws--snapshot-text a)))
       (test-mevedel-instruction-ws--resume b workspace data)
       (let ((via-b (test-mevedel-instruction-ws--activity workspace)))
-        (should (equal '("ran-in-b" 1) via-b))
+        (should (equal '("ran-in-b" "change-1") via-b))
         (test-mevedel-instruction-ws--resume a workspace data)
         (should (equal via-b
                        (test-mevedel-instruction-ws--activity workspace)))))))
