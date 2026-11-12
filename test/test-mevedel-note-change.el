@@ -236,5 +236,21 @@
         (should entry)
         (should-not (plist-get entry :pre-backup-name))))))
 
+(mevedel-deftest mevedel-note-applied-history-gap
+  (:quiet t)
+  ,test
+  (test)
+  :doc "applying preserves an earlier capture gap instead of inventing file absence"
+  (mevedel-note-change-test--with-note
+    (setf (mevedel-session-file-snapshots session)
+          (list (list 0 (cons file '(:version 1 :gap "pre-turn capture unavailable")))))
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (mevedel-note-apply-change note)
+    (let* ((saved (mevedel-session-codec-read
+                   (mevedel-session-artifacts-sidecar-path (mevedel-session-save-path session))))
+           (entry (cdr (assoc file (cdr (assq 0 (plist-get saved :file-snapshots)))))))
+      (should (equal "pre-turn capture unavailable" (plist-get entry :gap))))))
+
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here
