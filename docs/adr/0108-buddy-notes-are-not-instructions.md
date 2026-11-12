@@ -2,6 +2,10 @@
 
 Status: accepted
 
+The shared note concept, conversations and closing lifecycle are defined by
+[ADR 0132](0132-notes-replace-references-directives-and-buddy-notes.md).
+This record owns Buddy's authorship, review authority and batched persistence.
+
 ## Current decision
 
 Buddy remarks are ordinary workspace notes with author `buddy`. They use the

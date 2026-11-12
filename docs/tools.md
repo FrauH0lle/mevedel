@@ -72,7 +72,7 @@ addresses so callers do not duplicate them on retry. Sends are batched after
 the other operations. Created notes show `agent` as author. Users can dismiss
 one with `mevedel-note-dismiss`, or all agent-authored notes in the workspace
 with `mevedel-note-dismiss-agent-notes`; the latter also syncs once and leaves
-user and Buddy notes alone.
+user notes and Buddy remarks alone.
 
 ## Shared editing
 
@@ -465,10 +465,9 @@ resource address is prepared with the `read` operation and reaches the handler
 as the same authorized attempt Read receives. The key is not part of the
 provider schema. `SharedEdit`'s `source` is the one such argument.
 
-During directive implementation, the pipeline also records conservative
-untracked-effect markers for non-read-only execution tools and agent dispatch.
-Those markers do not attempt to infer changed paths; they prevent the final
-attempt capture from claiming completeness and become explicit Rewind gaps.
+Rewind also reads frozen migrated directive attempts' untracked-effect markers
+as capture gaps. This compatibility reader does not infer changed paths or
+create new directive activity.
 
 ### Tool input validation and repair
 
@@ -737,9 +736,8 @@ atomic review transaction outside standalone/sticky Plan mode. Standalone/sticky
 Plan mode keeps session-only `ApplyPatch` available, including proposals from
 retained agents, but rejects any ordinary, shared, memory, or bare endpoint before
 local materialization. Mixed local/ordinary and ordinary-only proposals
-therefore fail before either side is touched. Directive Planning remains
-strictly read-only and does not allow `ApplyPatch`, including session-only
-proposals, or `Eval`. See
+therefore fail before either side is touched. Note conversations use the same
+Plan boundary. `Eval` is unavailable under Plan. See
 [`address-to-resource.md`](address-to-resource.md) for canonical grammar,
 freshness, and lifecycle contracts.
 

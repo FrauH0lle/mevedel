@@ -765,15 +765,14 @@ materialization, including mixed local/ordinary and ordinary-only calls, while
 other edit tools and `Eval` remain unavailable.
 
 Every agent turn started under Plan carries immutable Plan read-only
-authority: directive planning stamps its root request, and a spawn or
-follow-up made while sticky Plan is active stamps the new invocation. The
+authority: a spawn or follow-up made while sticky Plan is active stamps the
+new invocation. The
 stamp is copied into every nested invocation and request, including forked
 skills and their preparation. Those turns keep Plan tool and Bash restrictions
 after the root workflow advances to approval or implementation, or the user
-leaves Plan; mutable session phase is not an authority boundary. Unlike
-standalone/sticky Plan mode, directive Planning denies `ApplyPatch`, including
-session-only proposals, to its requests and retained agents. `Eval` is
-unavailable in both.
+leaves Plan; mutable session phase is not an authority boundary. The same
+session-only ApplyPatch exception applies in note conversations. `Eval` stays
+unavailable under Plan authority.
 
 A caller with Plan authority cannot direct a turn that lacks it.
 SendMessage to an active agent requires the target's current

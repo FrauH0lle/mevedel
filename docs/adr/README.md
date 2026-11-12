@@ -189,9 +189,14 @@ to the decision bearing that ID.
   the ssh-agent from local confinement.
 
 - [ADR 0130: Keep instructions in a workspace store](0130-keep-instructions-in-a-workspace-store.md)
-  amends where ADR 0072's Rewind prunes directive activity and ends ADR 0091's
-  per-session copies as the durable record.
+  owns current workspace note storage; ADR 0132 narrows its original directive
+  record scope.
 
 - [ADR 0131: Rewind reverts recorded changes](0131-rewind-reverts-recorded-changes.md)
   makes snapshot restoration ADR 0072's explicit force path and revises
   ADR 0091's objection to independent conversation sessions.
+
+- [ADR 0132: Notes replace references, directives and Buddy notes](0132-notes-replace-references-directives-and-buddy-notes.md)
+  supersedes ADRs 0087, 0088 and 0090's live directive workflow, complements
+  ADR 0108's Buddy ownership and narrows ADR 0130's record scope. Original
+  records and the ADR 0088 history destination remain available above.

@@ -124,8 +124,8 @@ workspace root when present, otherwise by project root or buffer name, so edits
 spread across several files of one workspace are reviewed together. That is what lets
 the model see a caller and its callee change in the same round.
 
-Buddy uses no session. It derives its workspace from the source buffer, the way
-directive dispatch already does, so it works on a file you have not started a
+Buddy uses no session. It derives its workspace from the source buffer,
+so it works on a file you have not started a
 conversation about. A live session is used only to attribute telemetry when one
 happens to exist.
 

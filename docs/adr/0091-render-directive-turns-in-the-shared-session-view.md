@@ -64,7 +64,9 @@ binding and warned rebinding.
 activity surface with a local composer.** The execution session kept only a
 compact event linking to that surface. It established conversational isolation,
 first-request session binding, warned rebinding, and complete local-discussion
-feedback for implementation; those boundaries remain.
+feedback for implementation. [ADR 0132](0132-notes-replace-references-directives-and-buddy-notes.md)
+replaces this directive workflow with isolated note conversations; only legacy
+directive turns retain the historical rendering and context-exclusion path.
 
 **ADR 0091 replaced the separate activity renderer and compact-event proxy with
 complete turns in the bound session view.** Streaming into the session and then

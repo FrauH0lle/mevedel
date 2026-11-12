@@ -231,7 +231,7 @@ Shared files survive session rename, fork, rewind and deletion, because they
 are workspace-owned. They are mutable, machine-local and temporary working
 material (the directory is not tracked in Git), distinct from curated
 `memory://` and immutable dated `memory://journal/` evidence. Neither scope participates
-in source snapshots, touched-file tracking, diagnostics or directive patch
+in source snapshots, touched-file tracking, diagnostics or source patch
 capture. Shared writes use the real backing path for normal filesystem edit
 permissions; they receive no session scratch exception in Plan mode.
 
@@ -366,9 +366,10 @@ published journal entries and shared-item text views) run over authorized
 client-local snapshots. Selecting that local helper target preserves the
 caller's permission context throughout asynchronous preparation; it does not
 substitute the global permission mode for the session's mode. Actual authority
-changes during preparation still refuse launch. A directive or shared-item conversation can
-retrieve relevant parent decisions this way without including the entire room
-in every request. The resource catalog advertises availability; the model
+changes during preparation still refuse launch. A shared-item conversation can
+retrieve relevant room decisions this way without including the entire room
+in every request. A note conversation has its own session root; saved-history
+search can retrieve other workspace conversations explicitly. The resource catalog advertises availability; the model
 chooses a search or read when the task needs it. Addresses grant neither new
 permissions nor cross-session access.
 
@@ -660,9 +661,8 @@ pipeline denies any proposal with an ordinary, shared, memory, or bare endpoint:
 mixed local/ordinary and ordinary-only proposals are denied tree-wide, and no
 local directory or ordinary target is touched. Permission mode and allow rules
 cannot widen that boundary. Other edit tools and `Eval` remain unavailable;
-resource recognition does not reopen those capabilities. Directive Planning
-has a separate strictly read-only boundary and does not allow `ApplyPatch`,
-including session-only proposals, or `Eval`.
+resource recognition does not reopen those capabilities. Note conversations
+use this same Plan boundary; there is no separate directive Planning workflow.
 
 See [`tools.md`](tools.md#resource-addresses-in-filesystem-shaped-tools),
 [`mentions.md`](mentions.md#atomic-binding-lifecycle),

@@ -1,8 +1,14 @@
 # Keep directive identity outside source overlays
 
-Status: accepted. Activity presentation follows [ADR 0091](0091-render-directive-turns-in-the-shared-session-view.md).
+Status: superseded by [ADR 0132](0132-notes-replace-references-directives-and-buddy-notes.md).
 
 ## Current decision
+
+Notes replace live directives. Workspace identity and survival of source loss
+remain, while isolated note sessions and bounded recently closed replace
+directive activity and archive. ADR 0132 owns the current decision.
+
+## Historical decision
 
 Directives and their activity are durable workspace records. An overlay presents
 an attached source anchor; losing it does not destroy the directive. References,
@@ -16,7 +22,7 @@ rows remain ordered and unfolded. Source-file deletion marks the source missing.
 When it returns, only an exact unambiguous match reattaches automatically;
 otherwise reattachment is explicit. Source presentation contains a short
 lifecycle/outcome label; the shared view and read-only inspector expose answers,
-patches, and history. See [directive views](../view.md#directive-turns-and-inspector).
+patches, and history. See [legacy directive history](../view.md#directive-turns-and-inspector).
 
 Nested directives belong to their topmost parent rather than owning independent
 activity. Prompt construction uses those durable records even if source deletion

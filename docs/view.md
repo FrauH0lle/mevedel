@@ -46,8 +46,9 @@ authoritative transcript.
 ## Buffer Roles
 
 - **Data buffer**: org-mode gptel buffer. Holds `mevedel--session`,
-  `mevedel--workspace`, the canonical mixed chat/directive transcript, tool
-  results, hidden render-data blocks, and persisted gptel metadata.
+  `mevedel--workspace`, the canonical transcript (including any pre-migration
+  directive turns), tool results, hidden render-data blocks, and persisted
+  gptel metadata.
 - **View buffer**: `mevedel-view-mode`. Holds `mevedel--data-buffer`,
   compact Markdown-rendered turns, status and interaction zones, and the
   input zone.
@@ -55,10 +56,10 @@ authoritative transcript.
   transcript. Resident retained agents use their live conversation buffer
   whether running or idle; cold and historical agents use the saved transcript
   file.
-- **Directive inspector**: explicit read-only projection of one workspace
-  directive record for durable access after compaction, archive, or source
-  loss. It replaces the currently displayed view and never owns a composer,
-  streaming target, or interaction registry.
+- **Directive history inspector**: explicit read-only projection of the frozen
+  pre-migration directive history kept on a migrated note. It replaces the
+  currently displayed view and never owns a composer, streaming target, or
+  interaction registry.
 
 Root data buffers keep visible names (`*mevedel:SESSION@WORKSPACE*`, view
 `*mevedel:SESSION@WORKSPACE:view*`): `t` (`mevedel-view-toggle-transcript`)
@@ -154,7 +155,7 @@ Opening a live transcript performs the synchronous full render needed to attach
 the stream tail. A settled retained or saved transcript opens with scheduled
 canonical projection, keeping the previous display until preparation completes.
 Resuming a session, rewinding it, starting a new segment, taking or following
-control, rolling back a failed directive request, and refreshing Source after a
+control, and refreshing Source after a
 Session Fork schedule the same projection rather than blocking on a complete
 rebuild.
 Subsequent live events use the main incremental renderer, except that retained-agent metadata
@@ -211,14 +212,15 @@ breadcrumb. Model-facing mailbox payloads and agent settlement are unchanged.
 Targeted tool-progress refreshes replace only the tool row and its nested
 calls, leaving separate completion and hook-audit rows untouched.
 
-Directive requests render in the ordinary session view as first-class turns.
-The directive header carries id, action, turn, and an exclusion badge; the
-submitted prompt is folded, while responses, tool blocks, permission prompts,
-Ask, agents, tasks, and progress use the existing renderer and interaction
-zones. Settled directive turns older than the newest chronological turn fold
-to one-line summaries by default. A newest directive turn remains expanded so
-its response stays visible; explicit fold state wins. Every summary expands
-back to the actual turn, which is never replaced by a compact event row.
+Pre-migration directive turns in saved sessions render in the ordinary session
+view as historical turns. Their header carries id, action, turn, and an
+exclusion badge; the submitted prompt is folded, while responses and tool blocks
+use the existing renderer. Such turns older than the newest chronological turn
+fold to one-line `◆` summaries by default; a newest such turn stays expanded,
+and explicit fold state wins. Every summary expands back to the actual turn.
+`RET` on a summary offers only
+historical actions: view the captured patch, Rewind before that implementation
+in its own session, or open the history inspector.
 
 Status, agent, task, and interaction redraws preserve the composer draft and
 point exactly,
@@ -292,7 +294,7 @@ and mailbox, reminder, hook-context, render-data, prompt, and ignored-range reco
 view of the buffer. Container payloads are opaque to that scan: an inline-skill
 render-data block carries the prepared root prompt and attachment names and
 bodies, reasoning and mailbox bodies are model- and agent-authored, and a prompt
-drawer holds the user's directive, so a control marker starting inside one
+drawer holds the user's prompt, so a control marker starting inside one
 stays data and never splits the enclosing span. Tool ranges and render-data /
 hook-audit ranges are exempt because they
 carry their own proof -- validation against the raw tool property runs or a
@@ -372,7 +374,7 @@ moving onto pending responses still has an accurate prompt and click target).
 Offscreen turn placeholders are then replaced one per timer callback; a reader
 never sees a placeholder replaced in front of them. Pending-history placeholders
 do not count as later rendered turns when deciding whether to collapse the
-newest directive. Each callback
+newest historical directive turn. Each callback
 captures the current draft and reader state, so typing between callbacks is
 preserved. Source text or property changes retire the old plan. Callbacks pause
 while the view is unattended or its transport is busy, and view teardown cancels
@@ -833,7 +835,7 @@ expanding rows never adds or moves a rule. The rule is decided when non-empty
 prose arrives: the activity above it is already rendered, so it needs no
 lookahead, and it belongs to the prose's live render unit, so retained
 activity is never rewritten. The search stops at turn-closing chrome, so a
-directive response without its own heading never takes a rule from the user
+historical directive response without its own heading never takes a rule from the user
 turn before it. Activity that ends a turn is closed by the turn's rule.
 
 `mevedel-activity-group.el` alone decides which activity folds, for this view
@@ -923,7 +925,7 @@ therefore does not move down when the heading would otherwise appear. The
 interim turn also ends with the settled turn's blank line and rule, so the
 progress row below does not move either. The labelled closing rule that
 replaces the plain rule when the request ends is one row taller.
-Directive requests keep their own heading instead. An expanded running group lists its
+Historical directive turns keep their own heading instead. An expanded running group lists its
 running calls after its settled children; they are not expandable, have no
 transcript source, and key no disclosure state. A fold or expansion of a
 running group survives its growth like any group's. Folding or unfolding a
@@ -1080,8 +1082,8 @@ Terminology:
   The mode badge (`[edits]`, `[Plan · edits]`, `[Editing …]`) starts the rail
   above a `> ` prompt. The badge and draft start at fixed columns in every
   mode, Ask included, so switching modes never moves the draft. Explicit and soft-wrapped continuation
-  lines are indented by the width of the prompt's last line (two columns, or
-  four after a directive's `◆ > `), so the draft forms one aligned column.
+  lines are indented by the width of the prompt's last line, so the draft
+  forms one aligned column.
   The indent is a display-only `line-prefix`/`wrap-prefix` on the composer
   overlay, recomputed whenever the prompt is rebuilt; the draft text,
   submissions, and kills never contain it. An empty final line uses the same
@@ -1235,24 +1237,24 @@ prompt starts with a read-only blank separator line so status,
 interaction, and request-progress rows stay visually distinct from the
 composer.
 
-## Directive Turns And Inspector
+<a id="directive-turns-and-inspector"></a>
 
-The explicit read-only directive inspector renders the current request,
-lifecycle and anchor state, implementation attempts, and discussion turns from
-the workspace record. It is the durable access path after compaction, source
-loss, or archive. Opening it replaces the current displayed view rather than
-splitting beside MevView. It owns no composer, streaming, or interaction
-callbacks; View patch, Reattach, Rewind before..., and Archive dispatch to the
-record or execution session. Its activity entries fold
-by default as an overview, and each rendered row resolves back to its own
-durable entry by activity kind and settlement sequence together, because
-Rewind acts on whichever entry the row resolved to. Source overlays expose the Activity action only after
-the directive owns a planning, discussion, or implementation turn.
+## Legacy directive turns and inspector
 
-## Directive Frame
+Directives no longer exist as live records. A note migrated from a directive
+with activity keeps a frozen copy of that history, and `mevedel-note-history`
+opens it in the read-only directive history inspector. The inspector renders the
+historical request, implementation attempts, and discussion turns. Opening it
+replaces the current displayed view rather than splitting beside MevView. It
+owns no composer, streaming, or interaction callbacks. View patch opens an
+attempt's captured patch; Rewind, Reattach, and Archive refuse, because the
+history is read-only. Sending the note starts a new conversation instead.
+
+## Note frame
 
 The retained frame surface displays a note's conversation, anchored at the note's
-source position. It shows
+source position; `mevedel-directive-frame.el` keeps its former directive name.
+It shows
 the real view buffer, so permissions, Ask, patch review, streaming, and the
 composer work in it unmodified and no second renderer exists. See
 [ADR 0106](adr/0106-directive-frame-is-a-child-frame.md) for why an overlay
@@ -1318,7 +1320,7 @@ computed from the parent frame at open, because fitting both dimensions sizes
 the frame to the longest unwrapped line in the transcript and readily exceeds
 the parent's width.
 
-When the directive's source buffer is displayed in more than one window, the
+When the note's source buffer is displayed in more than one window, the
 frame anchors to the window the user is in, preferring the selected window, then
 any window on the selected frame. It stays with that window afterwards, so
 scrolling a second window showing the same buffer neither moves the frame nor
@@ -1335,7 +1337,7 @@ layer rather than per-command covers every such surface, without per-command red
 The redirect hands input focus to the parent along with the buffer. Callers such
 as `pop-to-buffer` select the window the redirect returns; without moving focus
 too, the selected window and the focused frame would disagree and typing would
-still reach the directive frame. The redirect also re-wraps the incoming alist
+still reach the note frame. The redirect also re-wraps the incoming alist
 as a display action, since `display-buffer` takes `(FUNCTIONS . ALIST)` and
 reads a bare alist's first entry as an action function.
 
@@ -1356,7 +1358,7 @@ numbers worth counting, and they cost four columns of an already narrow frame.
 The view buffer tab line is mevedel-owned chrome. It shows session
 orientation on the left as `SESSION  WORKSPACE-ROOT` and operational
 state on the right as `MODE · REQUEST-STATE · MODEL · TOOL-COUNT`.
-When a user or directive prompt has scrolled above a window's top edge,
+When a user prompt has scrolled above a window's top edge,
 a separate header line below the status strip shows a one-line clickable prompt
 preview. The project path and session name remain in the status strip. The
 row stays reserved (empty when the original prompt header is visible), so
@@ -1364,8 +1366,7 @@ scrolling never shifts the transcript vertically. The preview
 follows the exchange at the top of each window independently, not the buffer
 point or the most recent submission. A visible prompt header does not pin
 itself; scrolling to a different exchange changes the preview. A window start
-inside hidden text, such as another directive's turn in a filtered directive
-frame, counts from the first visible position, so a hidden prompt is never
+inside hidden text counts from the first visible position, so a hidden prompt is never
 pinned and a visible header at the top pins nothing. Hidden prompt headers are
 skipped as well, so a top reached past a trailing hidden turn pins the last
 visible prompt above it. The preview
@@ -1432,7 +1433,7 @@ data buffer. The request state is `settling` while a lost turn's deferred
 terminal work still owns the session. The tab line is evaluated on every
 redisplay, so the strip is cached by its raw inputs: session name, root,
 target identity, publication and lease state, permission and Plan mode,
-directive scope, request state, model, Goal status and turns, preset, compaction, tool
+request state, model, Goal status and turns, preset, compaction, tool
 count, width, display type and selected window. Each redisplay reads them
 without entering the transcript buffer and formats labels only when one
 changes. Entering an Org transcript buffer swaps its many buffer-local
@@ -1446,7 +1447,7 @@ the data buffer does not display that buffer or change where quitting returns.
 
 Tables and information panels use `mevedel-window.el` for their temporary
 display lifecycle. Opening records the invoking window and the configuration
-of the frame actually used by `display-buffer`; this also handles directive
+of the frame actually used by `display-buffer`; this also handles note
 composers whose child frame redirects popups into its parent. Quitting uses
 `quit-window` and releases the disposable buffer. If the frame's other windows
 still match their post-display layout and buffers, it restores the original
@@ -1696,7 +1697,7 @@ only when its composer is empty and no side response is active. Refused inline
 delivery preserves both composers and their points. Side redraws use the same
 draft-preserving view machinery as root redraws. `/btw` requires an accepted
 parent prompt and is available only from the live root chat or Plan composer;
-directive, historical, agent, and side scopes cannot create one.
+historical, agent, and side scopes cannot create one.
 
 The status zone shows one **background work** panel for everything that runs
 beside the conversation: active agents, yielded Bash commands, and Monitors.
@@ -1900,8 +1901,7 @@ session records the artifact's (`:dedicated-artifact`). A saved session is
 hidden from the session chooser and the lobby listing and kept from expiry
 only while both agree; an open one goes by its own record, so a `meta.el` copied outside mevedel never makes another
 artifact's conversation its own, and one whose artifact is gone is an
-ordinary session again. It is never the default chat buffer for directives,
-and a fork or Save As of it is an ordinary chat. Deleting the artifact deletes its
+ordinary session again. A fork or Save As of it is an ordinary chat. Deleting the artifact deletes its
 dedicated session too. One open in this Emacs is closed first, ending its
 room, unless a turn is still running there, which refuses the deletion. One
 that cannot be deleted yet, because another client holds it or journal
@@ -2215,7 +2215,7 @@ retain fragment-relative selections inside the changed zone and use advancing
 markers for positions in neighboring zones. Growing or removing status rows
 therefore keeps the reader in the same permission prompt below them.
 
-Region-based directive creation uses
+Region-based note creation uses
 `mevedel-view-call-preserving-window-configuration` around minibuffer input.
 It restores the frame layout before reapplying chat anchors on acceptance,
 cancellation, or error, so a saved window configuration cannot overwrite a
@@ -2898,8 +2898,8 @@ In a managed root data buffer, gptel's `M-RET` menu action and prefix-0
 and queue as the composer. The existing draft remains unchanged, even when it
 equals the submitted text. Blank minibuffer input does nothing; edit or delete
 pending entries through the Pending Inputs cockpit. These commands do not mark
-raw transcript regions for later submission. A scoped directive composer or
-side conversation cannot use this root steering route.
+raw transcript regions for later submission. A side conversation cannot use
+this root steering route.
 
 Retained-agent buffers refuse native gptel steering: use `SendMessage`
 for their existing retained delivery path. Native gptel
@@ -2951,7 +2951,7 @@ entry being edited or converted, or input already claimed for dispatch refuses
 deletion. All deletion paths recheck session mutation authority and release
 reserved submission context; attachment files themselves are not deleted.
 Inputs already shown in full have no expansion control. An expanded row keeps
-only its number, collapse control and optional directive scope in the header;
+only its number, collapse control and optional retired-directive label in the header;
 the input appears once in the body, not again as an abbreviated header preview.
 Inspection does not pause delivery or clear a failure-review hold. The preview
 follows the entry's stable identity through reordering and closes when the entry
@@ -3029,7 +3029,7 @@ deleting the draft or closing the last interaction offers it again. The
 failure pause holds a background-event turn only while queued steering or
 follow-ups remain: once failed input is resolved, child results wake the idle
 root even before `R`, and closing the cockpit offers them. Resuming
-pending-input delivery, leaving directive planning, resolving readiness or
+pending-input delivery, resolving readiness or
 recovery holds, and successfully finishing manual compaction also offer held
 follow-ups first, then background mail. Those release edges do not start a
 Goal continuation when neither input remains. No live
@@ -3046,8 +3046,7 @@ draft is the gate rather than a pause: the edit that leaves the composer empty
 or whitespace-only, whether by sending, killing, or deleting the draft,
 schedules delivery again. Delivery is likewise held by a running root request,
 a running prompt hook or skill preparation, the Pending Inputs cockpit or
-failed steering awaiting review, a pending Plan approval, directive planning
-(which admits only its own Plan input), an accepted-plan implementation retry
+failed steering awaiting review, a pending Plan approval, an accepted-plan implementation retry
 or Goal handoff, and a paused, blocked, or budget-limited Goal that owns the
 next entry.
 
@@ -3138,7 +3137,7 @@ rerendered transcript exposes it through the same disclosure; it does not run
 the prompt hook again.
 
 The renderer builds hook audit surfaces from visible hook audit records.
-Buffer directive discovery and fork-point classification scan trusted audit
+Historical directive-turn discovery and fork-point classification scan trusted audit
 blocks directly, without copying the whole transcript. Range-limited scans omit
 partial records at either boundary and preserve the caller's narrowing. All audit
 readers share bounded pure decoding within the current buffer across projections,

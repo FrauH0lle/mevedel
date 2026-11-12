@@ -26,14 +26,11 @@ Key features:
 
 - Uses [gptel](https://github.com/karthink/gptel) for LLM integration with
   support for multiple backends.
-- Uses overlays for tracking instructions instead of raw text, decoupling
-  instructions from your raw text. The overlays are mostly intuitive and can be
-  customized, and try not to interfere with the regular Emacs workflow.
-- Can save your instruction overlays so you won't have to restart the labeling
-  process each session.
+- Uses overlays for tracking notes without inserting comments into source.
+  Notes follow edits and persist in the workspace across sessions.
 - Can categorize your notes with tags, and use tag query expressions in
   `@note:{query}` mentions to choose which notes to attach to a chat.
-- Can easily cycle through between instruction overlays across all buffers.
+- Can cycle through note overlays across buffers.
 - Retained asynchronous child agents plus focused explorer, verifier, and
   reviewer workflows using mevedel’s agent runtime.
 - Durable Goals (say "Create a goal for..." or use `/goal <objective>`) that
@@ -302,8 +299,10 @@ changeable. Explicit forks are ordinary chats and may change preset too.
 Note sessions include the ordinary skills, resources and memory capabilities,
 not another conversation's history, journal digests, edited-files reminder or
 active Goal. Explicitly mentioned notes and the selected code are frozen at send
-time. Note conversations stay out of the ordinary chat chooser and automatic
-session cleanup; reopen them from their notes instead.
+time. Note conversations stay out of the ordinary chat chooser; reopen them
+from their notes instead. Cleanup preserves them while open or recently-closed
+notes still refer to them. Once references expire they can be collected by the
+normal age limit, only when a safe local reference check proves them unreferenced.
 
 Choose **take** in the source menu, or use `M-x mevedel-note-take`, to implement
 the note yourself. Its label says **Buddy watches**: Buddy uses the note's text
@@ -391,8 +390,8 @@ conversion to resume safely.
 
 ### Overlays
 
-All instructions, notes or directives, are highlighted in the buffer via an
-overlay. The overlay contains an action menu which can be toggled via
+Notes are highlighted in the buffer via an overlay. The overlay contains an
+action menu which can be toggled via
 `mevedel-ov-dispatch-key` and grants access to common operations.
 
 Selections starting at the beginning of a line and ending at its end (or the
@@ -402,41 +401,33 @@ whole lines immediately above or below does not include those lines. Deleting
 part of the selection shrinks it, and joining across an edge includes the
 joined line. Character selections retain their character boundaries.
 
-Deleting all source text covered by a directive leaves a compact, zero-width
-detached row at that position. Its request, attempts, discussions, state, and
-actions remain available. If the file disappears, the workspace record remains
-available as Source missing until exact automatic or explicit reattachment.
 Deleting all source text covered by a note does not remove it: the note
 survives with an empty anchor. A missing file shows as source missing in the
-notes list. Nested directives remain
-current details of their topmost parent rather than owning separate activity;
-if the parent detaches, prompts and submissions still consume those durable
-details after their source presentations disappear.
+notes list. The note's text, state and conversation link remain available.
 
-Ordinary undo and redo restore source presentations after complete deletion,
-including detached directives, without rewinding directive
-history. Emacs selective undo (`undo-in-region`) does not replay these custom
+Ordinary undo and redo restore source presentations after complete deletion
+without rewinding conversation history. Emacs selective undo (`undo-in-region`)
+does not replay these custom
 overlay undo records, so it only restores text.
 
 Typing over a complete instruction with `delete-selection-mode` preserves its
 identity and covers the replacement text. A full deletion remains pending until
 the current command finishes: inserting at the deletion point in that command
-recovers the instruction, while leaving it empty detaches
-a directive. Line selections stay line selections. Separate noninteractive
+recovers the note's range, while leaving it empty keeps an empty anchor.
+Line selections stay line selections. Separate noninteractive
 delete/insert calls need a single replacement notification or an explicit held
 replacement scope; unrelated later commands do not resurrect deleted instructions.
 Replacing only an instruction's first or last covered line keeps the replacement
 alongside its surviving lines; unrelated adjacent insertions still stay outside.
-Replacing a whole parent and its nested instructions recovers only the outermost
-span: nested directive details/history remain on the parent without source
-presentations. Undo restores the nested instructions too.
+Replacing a whole parent and its nested notes recovers only the outermost
+span; nested notes retain their records without their former source ranges.
+Undo restores the nested presentations too.
 
-![Directive Overlay](.assets/images/ov-actions-menu.png)
+The source menu exposes the same note actions as the workspace notes list.
 
 | Custom Variable                      | Variable Description                                                      |
 |--------------------------------------|---------------------------------------------------------------------------|
 | `mevedel-ov-dispatch-key`            | Keybind to open overlay actions.                                          |
-| `mevedel-instructions-truncated-max` | Maximum display length for truncated directive text.                      |
 
 ### Evil
 
@@ -452,7 +443,7 @@ Setup requires Evil at call time and reports a clear error if it is missing.
 Evil is not a runtime dependency, and evil-collection is not required. The
 integration follows its special-buffer conventions: the session view, read-only
 tables, and reports start in normal state; editable `mevedel-surface-mode`
-buffers start in insert state. Directive/prompt minibuffers retain your configured
+buffers start in insert state. Note/prompt minibuffers retain your configured
 minibuffer state (Emacs state by default). Use `i` or `a` to type in the composer
 and Escape to return to normal-state navigation. In the session view,
 normal-state `RET` activates a row, `TAB` toggles it, `n`/`p` navigate displays,
@@ -497,7 +488,7 @@ visual state cleanly; vanilla Emacs region commands keep their existing behavior
 
 Evil change operators keep a fully deleted instruction pending across the
 following insert session (or replace session for `R`), so `cc`, `c`, `s`, and
-visual changes can replace it without losing its identity or directive history.
+visual changes can replace it without losing its identity or conversation link.
 Leaving the session without
 inserted text performs a full deletion. `cc`/`S` themselves insert a placeholder
 newline: it counts as replacement text, including for character spans, and can
@@ -505,7 +496,7 @@ keep a blank instruction even if you type nothing. Normal deletion such as `dd`
 resolves at command end. The integration leaves your undo backend and
 `evil-want-fine-undo` setting
 unchanged; ordinary source undo/redo restores presentations without rewinding
-directive activity. Selective region undo remains text-only.
+conversation history. Selective region undo remains text-only.
 
 ### Workspaces
 
@@ -537,9 +528,8 @@ memory roots, the configured plans directory, and manually configured roots.
 |-----------------------------------|-----------------------------------------------------------------------|
 | `mevedel-note-create`             | Create a note on the region or current line; text is optional.        |
 | `mevedel-notes-list`              | List the workspace's notes, grouped by attention state.               |
-| `mevedel-delete-instructions`     | Remove instructions either at point or within the selected region.    |
-| `mevedel-delete-all-instructions` | Confirm deletion of notes and visible directives in the current workspace. |
-| `mevedel-delete-all-directives`   | Confirm deletion of visible directives and their subdirectives.       |
+| `mevedel-delete-instructions`     | Close notes either at point or within the selected region.            |
+| `mevedel-delete-all-instructions` | Confirm deletion of notes in the current workspace.                    |
 | `mevedel`                         | Start or switch to a chat session; prefix arg prompts for directory/session. |
 | `mevedel-in-directory`            | Start or switch to a chat session rooted in a workspace subdirectory. |
 | `mevedel-init`                    | Bootstrap or refresh project instruction files.                       |
@@ -549,12 +539,9 @@ memory roots, the configured plans directory, and manually configured roots.
 
 Bulk deletion includes all buffers in the current workspace, not other
 workspaces. Buffers without a workspace share one global instruction bucket;
-invoking a bulk command there affects that shared bucket. When deleting
-directives (including with `mevedel-delete-all-instructions`), a separate prompt
-offers to include Source-missing records, defaulting to no (RET). Archived
-directives remain intact, and directives with activity must be archived rather
-than deleted. Counts include visible subdirectives and any selected Source-missing
-records; records without a source presentation do not add to the buffer count.
+invoking a bulk command there affects that shared bucket. Deletion closes notes;
+it never reverts their source changes. Use the recently-closed group to restore
+them within its retention limits.
 
 | Custom Variable               | Variable Description                                             |
 |-------------------------------|------------------------------------------------------------------|
@@ -752,9 +739,9 @@ A recommended `.gitignore` line is `.mevedel/sessions/` (or just `.mevedel/`).
 
 | Command                     | Command Description                                    |
 |-----------------------------|--------------------------------------------------------|
-| `mevedel-save-instructions` | Save current instruction overlays to a specified file. |
-| `mevedel-load-instructions` | Load instruction overlays from a specified file.       |
-| `mevedel-instruction-count` | Return the number of instructions currently loaded.    |
+| `mevedel-save-instructions` | Export current notes to a specified file.              |
+| `mevedel-load-instructions` | Import notes from a specified file.                    |
+| `mevedel-instruction-count` | Return the number of notes currently loaded.           |
 
 | Custom Variable                       | Variable Description                                             |
 |---------------------------------------|------------------------------------------------------------------|
@@ -771,7 +758,6 @@ separate instruction file per branch.
 
 | Command                               | Command Description                                               |
 |---------------------------------------|-------------------------------------------------------------------|
-| `mevedel-modify-directive`            | Modify an existing directive instruction at point.                |
 | `mevedel-note-edit`                   | Edit the note text at point.                                      |
 | `mevedel-note-set-tags`               | Set the tags of the note at point; an empty answer removes all.   |
 | `mevedel-link-instructions`           | Link instruction IDs; links do not attach notes to prompts.       |
@@ -789,15 +775,14 @@ match open notes only. An empty or malformed query matches nothing.
 
 | Command                            | Command Description                                                          |
 |------------------------------------|------------------------------------------------------------------------------|
-| `mevedel-open-directive-activity`  | Open the current directive's read-only durable inspector.                    |
-| `mevedel-list-directives`          | Choose a workspace directive for inspection or further action.               |
+| `mevedel-note-send`               | Send or reopen a note's isolated conversation.                               |
+| `mevedel-note-history`            | Inspect frozen directive history on a migrated note, read-only.              |
 | `mevedel-diff-apply-buffer`        | Apply the diff in the patch buffer with overlay preservation.                |
 | `mevedel-clear-patch-buffer`       | Clear the contents of the patch buffer for the current workspace.            |
 
 | Custom Variable                     | Variable Description                                       |
 |-------------------------------------|------------------------------------------------------------|
 | `mevedel-show-patch-buffer`         | Controls if patch buffer should be displayed automatically |
-| `mevedel-action-preset-alist`       | Alist mapping actions to presets.                          |
 
 Commands are also available via overlay actions. For example, you can preview
 the patch before applying it.
@@ -806,20 +791,14 @@ the patch before applying it.
 
 | Command                               | Command Description                                         |
 |---------------------------------------|-------------------------------------------------------------|
-| `mevedel-next-instruction`            | Cycle through instructions in the forward direction.        |
-| `mevedel-previous-instruction`        | Cycle through instructions in the backward direction.       |
-| `mevedel-next-directive`              | Cycle through directives in the forward direction.          |
-| `mevedel-previous-directive`          | Cycle through directives in the backward direction.         |
-| `mevedel-cycle-instructions-at-point` | Cycle through instructions at the point, highlighting them. |
+| `mevedel-next-instruction`            | Cycle through notes in the forward direction.               |
+| `mevedel-previous-instruction`        | Cycle through notes in the backward direction.              |
+| `mevedel-cycle-instructions-at-point` | Cycle through notes at point, highlighting them.            |
 
 ### Customization
 
 | Custom Variable                                  | Variable Description                             |
 |--------------------------------------------------|--------------------------------------------------|
-| `mevedel-directive-color`                        | Tint color for directive overlays                |
-| `mevedel-directive-processing-color`             | Tint color for directives being processed        |
-| `mevedel-directive-success-color`                | Tint color for successfully processed directives |
-| `mevedel-directive-fail-color`                   | Tint color for failed directives                 |
 | `mevedel-highlighted-instruction-color`          | Tint color for highlighted/focused instructions  |
 | `mevedel-instruction-bg-tint-intensity`          | Intensity for instruction background tint        |
 | `mevedel-instruction-label-tint-intensity`       | Intensity for instruction label tint             |
@@ -1462,8 +1441,8 @@ from gptel's API-reported token usage when available.
 | `mevedel-buddy-review` | Review recent edits now, without waiting for the idle timer. |
 | `mevedel-buddy-guide` | Ask what to build in this region, rather than what went wrong. |
 | `/buddy` | Implement it yourself: feed this session's plan, Goal, or latest exchange to Buddy and turn Buddy on. `/buddy BRIEF` states the brief; `/buddy off` stops. |
-| `mevedel-buddy-dismiss-note` | Dismiss the Buddy note at point. |
-| `mevedel-buddy-dismiss-notes` | Dismiss every Buddy note in this buffer. |
+| `mevedel-buddy-dismiss-note` | Dismiss the Buddy remark at point. |
+| `mevedel-buddy-dismiss-notes` | Dismiss every Buddy remark in this buffer. |
 
 See [`docs/compaction.md`](docs/compaction.md) for the full auto-compaction,
 summary prompt, and segment-rotation contract.

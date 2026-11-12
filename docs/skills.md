@@ -781,7 +781,7 @@ on the owned request or agent invocation. For instructions they apply only
 while the skill prepares and do not grant tools to the consuming request. These buckets outrank session and persistent rules for allow/ask
 resolution, while deny remains absolute across all buckets. Plan mode applies its capability restriction before skill allow grants: only
 ApplyPatch to explicit session-owned `work://` descendants has a bounded write
-exception, and directive planning has no patch exception. Goal execution uses
+exception. NoteWrite may create review notes, not mutate existing ones. Goal execution uses
 ordinary request permissions. See [Plan mode](plan-mode.md).
 
 Preparation's `!` commands run through the tool pipeline under the buffer's
