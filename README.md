@@ -266,19 +266,6 @@ in the echo area. `mevedel-note-edit`, `mevedel-note-delete`, and
 `mevedel-note-menu` are available through `M-x` too. Deleting a note never edits
 its source code. Creating or editing a note does not send anything to a model.
 
-`M-x mevedel-note-done` explicitly closes a note as done. Done and deleted notes
-share recently closed; `M-x mevedel-note-restore` brings one back with its text,
-tags and attachments. Restore follows the old code when it can find it; if the
-code changed, it falls back to the old line and column, clamped to the file.
-Notes never close merely because their code was edited.
-
-Recently closed keeps the newest 100 notes for up to 30 elapsed days by default.
-Customize `mevedel-notes-closed-max-count` and
-`mevedel-notes-closed-max-age-days`; nil disables either limit. Limits are checked
-when closing, listing or restoring closed notes and when writing the store, not
-by a background timer. Expiry never reverts file changes. Imported archived
-notes marked exempt from expiry do not count against these limits.
-
 `M-x mevedel-notes-list` lists the whole workspace, including unopened files,
 grouped by attention state. Use `v` or `RET` to visit, `e` to edit, `t` to edit
 tags, `d` to delete, `g` to refresh and `q` to close. Listing does not open the
@@ -291,6 +278,19 @@ to the selected note's identity, while tag queries re-evaluate current matches.
 Empty or unmatched queries attach nothing and report that clearly. Notes are
 never automatic prompt context. The mode line summarizes working, ready and
 stale notes in the current workspace using only in-memory state.
+
+`M-x mevedel-note-done` explicitly closes a note as done. Done and deleted notes
+share recently closed; `M-x mevedel-note-restore` brings one back with its text,
+tags and attachments. Restore follows the old code when it can find it; if the
+code changed, it falls back to the old line and column, clamped to the file.
+Notes never close merely because their code was edited.
+
+Recently closed keeps the newest 100 notes for up to 30 elapsed days by default.
+Customize `mevedel-notes-closed-max-count` and
+`mevedel-notes-closed-max-age-days`; nil disables either limit. Limits are checked
+when closing, listing or restoring closed notes and when writing the store, not
+by a background timer. Expiry never reverts file changes. Imported archived
+notes marked exempt from expiry do not count against these limits.
 
 Notes use the workspace instruction store, not a session's private state, and
 appear when their source file is opened, without starting a session or Buddy.

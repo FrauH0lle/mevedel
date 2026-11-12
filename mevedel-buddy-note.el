@@ -57,12 +57,16 @@ Each note is a plist with `:id', `:buffer', `:line', `:note',
 (defvar mevedel-buddy-note--changed-workspaces nil
   "Workspaces changed by the current review, synced once at settlement.")
 
+(defvar mevedel-buddy-note--prepared-buffers nil
+  "Buffers whose first-remark workspace setup ran during the current review.")
+
 (defvar mevedel-buddy-note--scope-buffers nil
   "Alist of names and exact buffers the running review may touch.
 Nil denies every tool call, including calls after abandonment.")
 
 (defun mevedel-buddy-note-finish-review ()
   "Persist the current review's whole change set through the checked store."
+  (setq mevedel-buddy-note--prepared-buffers nil)
   (dolist (record mevedel-buddy-note--notes)
     (unless (plist-get record :overlay)
       (plist-put record :line (mevedel-buddy-note--line record))))
@@ -82,6 +86,7 @@ Nil denies every tool call, including calls after abandonment.")
 
 (defun mevedel-buddy-note-restore ()
   "Rebuild the review index from canonical notes in its captured buffers."
+  (setq mevedel-buddy-note--prepared-buffers nil)
   (let (workspaces)
     (dolist (entry mevedel-buddy-note--scope-buffers)
       (when-let* ((workspace (mevedel--instruction-buffer-workspace (cdr entry))))
@@ -332,6 +337,11 @@ LINE.  Raw line counting is not annotation authority."
 (defun mevedel-buddy-note--make-overlay (buffer line note severity)
   "Return a note overlay on LINE of BUFFER showing NOTE at SEVERITY."
   (with-current-buffer buffer
+    (when (and buffer-file-name
+               (not (memq buffer mevedel-buddy-note--prepared-buffers)))
+      (mevedel-notes--ensure-workspace
+       (mevedel--instruction-buffer-workspace buffer))
+      (push buffer mevedel-buddy-note--prepared-buffers))
     (let* ((position (mevedel-buddy-note--position buffer line))
            (overlay (save-excursion
                       (goto-char position)

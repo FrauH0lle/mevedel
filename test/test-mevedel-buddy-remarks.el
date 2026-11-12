@@ -377,6 +377,36 @@ COMMAND defaults to guidance; it may also be the recorded-edit review command."
                         tools "add_note" name 2 "Check this" "significant")))))
       (should (equal "" (mevedel-remarks-test--labels))))))
 
+(mevedel-deftest mevedel-buddy-remarks/first-project-note
+  (:quiet t)
+  ,test
+  (test)
+  :doc "a project's first Buddy review creates its store and syncs the batch once"
+  (mevedel-remarks-test--with-source
+    (should (zerop (process-file "git" nil nil nil "init" "-q" directory)))
+    (delete-directory (file-name-concat directory ".mevedel"))
+    (let* ((name (buffer-name))
+           (writes 0)
+           (count-write (lambda (&rest _) (cl-incf writes))))
+      (advice-add 'mevedel-instruction-store-sync :before count-write)
+      (unwind-protect
+          (progn
+            (mevedel-remarks-test--review
+             (lambda (_prompt tools)
+               (dotimes (i 5)
+                 (mevedel-remarks-test--tool
+                  tools "add_note" name 2 (format "Concern %s" i) "significant")
+                 (run-hooks 'post-command-hook)
+                 (should (= 0 writes)))))
+            (should (= 1 writes))
+            (setq workspace mevedel--workspace)
+            (should (file-exists-p (mevedel-instruction-store-path workspace)))
+            (mevedel--clear-instruction-state workspace)
+            (mevedel-instruction-store-observe workspace)
+            (should (= 5 (cl-count ?\n (mevedel-remarks-test--labels))))
+            (should (equal "before\nselected code\nafter\n" (buffer-string))))
+        (advice-remove 'mevedel-instruction-store-sync count-write)))))
+
 (mevedel-deftest mevedel-buddy-remarks/cold-abort
   (:quiet t)
   ,test

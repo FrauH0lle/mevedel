@@ -115,6 +115,9 @@ Remarks persist in the workspace instruction store with their note identity,
 source anchor, author, text and severity. A new review restores existing remarks
 before building its bounded note context, so a restart does not erase earlier
 advice. An exact repeated remark on the same line reuses the existing identity.
+The first file-backed remark in a recognized project creates `.mevedel/`, like
+an ordinary note. Outside a project, an existing workspace state directory is
+needed for persistence; otherwise remarks stay in memory with a one-time notice.
 Remarks in buffers without a visited file stay in memory only; guidance still
 works there, but there is no durable file anchor to save or restore.
 Buddy can update or retract a remark when a later review finds its concern

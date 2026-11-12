@@ -450,6 +450,31 @@ Return its live source overlay, retaining its text, tags and attachments."
               (mevedel-note-delete note)))
         (?k (mevedel-buddy-keep-note note))))))
 
+(defun mevedel-notes--ensure-workspace (workspace)
+  "Prepare the current file's WORKSPACE for note storage, without syncing.
+Create `.mevedel/' only in a recognized project.  Return the actual workspace."
+  (unless (file-directory-p (mevedel-workspace-state-dir workspace))
+    (if-let* ((project (mevedel-workspace--project-current
+                        (file-name-directory buffer-file-name))))
+        (progn
+          (setq workspace (mevedel-workspace-get-or-create
+                           'project (project-root project) (project-root project)
+                           (project-name project)))
+          (setq-local mevedel--workspace workspace)
+          (make-directory (mevedel-workspace-state-dir workspace) t)
+          (unless (mevedel-notes--state-ignored-p
+                   (mevedel-workspace-root workspace))
+            (mevedel-diagnostic-message
+             (mevedel-diagnostic-scope workspace)
+             "Created .mevedel/; it is not covered by the project's .gitignore")))
+      (let ((root (mevedel-workspace-root workspace)))
+        (unless (member root mevedel-notes--unsaved-noticed)
+          (push root mevedel-notes--unsaved-noticed)
+          (mevedel-diagnostic-message
+           (mevedel-diagnostic-scope workspace)
+           "Notes outside a project are not saved")))))
+  workspace)
+
 ;;;###autoload
 (defun mevedel-note-create (&optional text)
   "Create a note with optional TEXT on the region or current line.
@@ -459,26 +484,7 @@ An empty string creates a code-only note.  Return the note overlay."
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
       (unless buffer-file-name
         (user-error "Notes need a source file"))
-      (unless (file-directory-p (mevedel-workspace-state-dir workspace))
-        (if-let* ((project (mevedel-workspace--project-current
-                           (file-name-directory buffer-file-name))))
-            (progn
-              (setq workspace (mevedel-workspace-get-or-create
-                               'project (project-root project) (project-root project)
-                               (project-name project)))
-              (setq-local mevedel--workspace workspace)
-              (make-directory (mevedel-workspace-state-dir workspace) t)
-              (unless (mevedel-notes--state-ignored-p
-                       (mevedel-workspace-root workspace))
-                (mevedel-diagnostic-message
-                 (mevedel-diagnostic-scope workspace)
-                 "Created .mevedel/; it is not covered by the project's .gitignore")))
-          (let ((root (mevedel-workspace-root workspace)))
-            (unless (member root mevedel-notes--unsaved-noticed)
-              (push root mevedel-notes--unsaved-noticed)
-              (mevedel-diagnostic-message
-               (mevedel-diagnostic-scope workspace)
-               "Notes outside a project are not saved")))))
+      (setq workspace (mevedel-notes--ensure-workspace workspace))
       (let* ((region (use-region-p))
              (note (mevedel--create-instruction-overlay-in
                     (current-buffer)
