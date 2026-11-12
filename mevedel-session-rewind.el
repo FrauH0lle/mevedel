@@ -2134,6 +2134,10 @@ just before sending it."
            (prepared (unless (eq selection :abort) (plist-get selection :plan))))
       (if (plist-get (and (listp selection) selection) :merge)
           (progn
+            (when-let* ((impact-buffer (get-buffer "*mevedel-rewind-impact*")))
+              (quit-windows-on impact-buffer t)
+              (when (buffer-live-p impact-buffer)
+                (kill-buffer impact-buffer)))
             (mevedel-session-rewind-merge-open
              buffer target boundary (plist-get selection :merge)
              mevedel-session-rewind--merge-resolutions)

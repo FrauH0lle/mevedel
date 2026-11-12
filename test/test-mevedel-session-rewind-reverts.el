@@ -296,7 +296,7 @@ With PATCH, run that ApplyPatch hunk through the real pipeline for capture."
                    ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
            (should-not (mevedel-session-rewind-rewind buffer target))
            (should (derived-mode-p 'mevedel-note-merge-mode))
-           (should-not (get-buffer-window "*mevedel-rewind-impact*"))
+           (should-not (get-buffer "*mevedel-rewind-impact*"))
            (should (equal transcript (with-current-buffer buffer (buffer-string))))
            (should (equal "mine\ntwo\nthree\nuser\n"
                           (mevedel-session-artifacts-read-file-raw path)))
