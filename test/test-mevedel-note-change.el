@@ -114,5 +114,32 @@
       (should (equal "before\nmy old\nafter\n" (buffer-string)))
       (should (equal "before\nold\nafter\n" (mevedel-test--read-file file))))))
 
+(mevedel-deftest mevedel-note-merge-change
+  (:quiet t)
+  ,test
+  (test)
+  :doc "merge shows three versions and confirms only resolved text into unchanged source"
+  (mevedel-note-change-test--with-note
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (with-current-buffer source
+      (goto-char (overlay-start note))
+      (insert "my "))
+    (let ((merge (mevedel-note-merge-change note)))
+      (with-current-buffer merge
+        (should smerge-mode)
+        (should (string-search "<<<<<<< yours now" (buffer-string)))
+        (should (string-search "||||||| what the AI saw" (buffer-string)))
+        (should (string-search ">>>>>>> AI" (buffer-string)))
+        (should-error (mevedel-note-merge-confirm) :type 'user-error)
+        (goto-char (point-min))
+        (search-forward "<<<<<<<")
+        (smerge-keep-lower)
+        (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))
+        (mevedel-note-merge-confirm))
+      (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))
+      (with-current-buffer source
+        (should (equal "before\nnew\nafter\n" (buffer-string)))))))
+
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here

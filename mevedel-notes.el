@@ -23,6 +23,7 @@
 (autoload 'mevedel-note-send-batch "mevedel-note-conversation" nil t)
 (autoload 'mevedel-note-reask "mevedel-note-conversation" nil t)
 (autoload 'mevedel-note-apply-change "mevedel-note-change" nil t)
+(autoload 'mevedel-note-merge-change "mevedel-note-merge" nil t)
 
 ;; `mevedel-directive-activity'
 (declare-function mevedel-open-directive-activity "mevedel-directive-activity"
@@ -491,10 +492,12 @@ Return its live source overlay, retaining its text, tags and attachments."
                              '((?h "history" "Inspect read-only pre-migration history")))
                            (when (overlay-get note 'mevedel-note-prepared-change)
                              '((?a "apply" "Apply prepared change")
-                               (?r "re-ask" "Ask again on current code"))))))
+                               (?r "re-ask" "Ask again on current code")
+                               (?m "merge" "Resolve in a three-way view"))))))
         (?s (mevedel-note-send note))
         (?a (mevedel-note-apply-change note))
         (?r (mevedel-note-reask note))
+        (?m (mevedel-note-merge-change note))
         (?e (mevedel-note-edit
              (read-string "Note: " (overlay-get note 'mevedel-note-text)) note))
         (?x (mevedel-note-done note))

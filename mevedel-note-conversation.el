@@ -26,6 +26,7 @@
 ;; `mevedel-note-change'
 (declare-function mevedel-note-change--note "mevedel-note-change" (&optional note))
 (autoload 'mevedel-note-apply-change "mevedel-note-change" nil t)
+(autoload 'mevedel-note-merge-change "mevedel-note-merge" nil t)
 
 ;; `gptel'
 (defvar gptel--known-presets)
@@ -35,6 +36,7 @@
   "C-c C-c" #'mevedel-view-send
   "C-c C-a" #'mevedel-note-apply-change
   "C-c C-n" #'mevedel-note-reask
+  "C-c C-g" #'mevedel-note-merge-change
   "C-c C-v" #'mevedel-note-show-sent
   "C-c C-q" #'mevedel-note-conversation-close
   "C-c C-z" #'mevedel-note-conversation-close)

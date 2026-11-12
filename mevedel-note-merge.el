@@ -1,0 +1,156 @@
+;;; mevedel-note-merge.el -- Checked three-way note merges -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Conflict markers live only in this separate editor.  Confirmation checks
+;; both visited text and disk snapshots before the normal patch transaction.
+
+;;; Code:
+
+(require 'smerge-mode)
+(require 'mevedel-note-change)
+
+(defvar-local mevedel-note-merge--note nil "Note whose change is being merged.")
+(defvar-local mevedel-note-merge--record nil "Prepared change captured on opening.")
+(defvar-local mevedel-note-merge--sections nil "Source snapshots and editable regions.")
+(defvar-local mevedel-note-merge--origin nil "Window state to restore on close.")
+
+(defvar-keymap mevedel-note-merge-mode-map
+  "C-c C-c" #'mevedel-note-merge-confirm
+  "C-c C-k" #'mevedel-note-merge-cancel)
+
+(define-derived-mode mevedel-note-merge-mode text-mode "Note Merge"
+  "Resolve note changes, then run \\[mevedel-note-merge-confirm]."
+  (setq-local header-line-format
+              " Resolve with smerge (C-c ^ u yours · C-c ^ l AI) · C-c C-c confirm · C-c C-k cancel")
+  (smerge-mode 1))
+
+(defun mevedel-note-merge--text (path coding)
+  "Return current text of PATH using CODING, including unsaved source edits."
+  (if-let* ((buffer (find-buffer-visiting path)))
+      (with-current-buffer buffer
+        (save-restriction (widen) (buffer-substring-no-properties (point-min) (point-max))))
+    (decode-coding-string (or (plist-get (mevedel-tool-patch--snapshot path) :bytes) "") coding)))
+
+(defun mevedel-note-merge--insert-side (text)
+  "Insert TEXT with a tagged separator when it has no final newline."
+  (insert text)
+  (unless (or (string-empty-p text) (string-suffix-p "\n" text))
+    (insert (propertize "\n" 'mevedel-note-merge-padding t 'rear-nonsticky t))))
+
+;;;###autoload
+(defun mevedel-note-merge-change (&optional note)
+  "Open NOTE's three versions in a separate smerge buffer, without writes."
+  (interactive)
+  (setq note (mevedel-note-change--note note))
+  (let* ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note)))
+         (record (mevedel-note-change--record note))
+         sections)
+    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+      (dolist (change (plist-get record :changes))
+        (let* ((path (plist-get change :path))
+               (base (cl-find path (plist-get record :before)
+                              :key (lambda (snapshot) (plist-get snapshot :path)) :test #'equal))
+               (disk (mevedel-tool-patch--snapshot path))
+               (buffer (find-buffer-visiting path))
+               (coding (if buffer (buffer-local-value 'buffer-file-coding-system buffer)
+                         (if (plist-get disk :exists)
+                             (cdr (mevedel-tool-patch--read-file path t)) 'utf-8-unix)))
+               (yours (mevedel-note-merge--text path coding))
+               (seen (decode-coding-string (or (plist-get base :bytes) "") coding))
+               (proposed (or (plist-get change :content) "")))
+          (when (cl-some (lambda (text) (string-search "\0" text)) (list yours seen proposed))
+            (user-error "Cannot merge binary source; re-ask on current code"))
+          (push (list :path path :disk disk :coding coding :yours yours :seen seen
+                      :proposed proposed :change change) sections)))
+      (let ((merge (generate-new-buffer (format "*Note %s merge*" (overlay-get note 'mevedel-id))))
+            (origin (list (selected-window) (current-buffer) (copy-marker (point))
+                          (window-start) (window-dedicated-p (selected-window)))))
+        (with-current-buffer merge
+          (mevedel-note-merge-mode)
+          (setq-local mevedel-note-merge--note note
+                      mevedel-note-merge--record record
+                      mevedel-note-merge--origin origin
+                      mevedel-note-merge--sections (nreverse sections))
+          (dolist (section mevedel-note-merge--sections)
+            (insert (propertize (format "File: %s\n" (plist-get section :path))
+                                'read-only t 'rear-nonsticky t))
+            (plist-put section :start (copy-marker (point)))
+            (insert "<<<<<<< yours now\n")
+            (mevedel-note-merge--insert-side (plist-get section :yours))
+            (insert "||||||| what the AI saw\n")
+            (mevedel-note-merge--insert-side (plist-get section :seen))
+            (insert "=======\n")
+            (mevedel-note-merge--insert-side (plist-get section :proposed))
+            (insert ">>>>>>> AI\n")
+            (plist-put section :end (copy-marker (point) t)))
+          (goto-char (point-min))
+          (set-buffer-modified-p nil))
+        (set-window-dedicated-p (selected-window) nil)
+        (switch-to-buffer merge)
+        merge))))
+
+(defun mevedel-note-merge-cancel ()
+  "Close this merge editor without changing source, restoring its origin."
+  (interactive)
+  (pcase-let ((`(,window ,buffer ,point ,start ,dedicated) mevedel-note-merge--origin)
+              (merge (current-buffer)))
+    (when (and (window-live-p window) (buffer-live-p buffer))
+      (set-window-dedicated-p window nil)
+      (set-window-buffer window buffer)
+      (set-window-point window point)
+      (set-window-start window start t)
+      (set-window-dedicated-p window dedicated))
+    (when (markerp point) (set-marker point nil))
+    (set-buffer-modified-p nil)
+    (kill-buffer merge)))
+
+(defun mevedel-note-merge-confirm ()
+  "Confirm resolved text only if this editor's source and waiting change match."
+  (interactive)
+  (let* ((note mevedel-note-merge--note)
+         (record mevedel-note-merge--record)
+         (sections mevedel-note-merge--sections)
+         (workspace (and (overlayp note) (overlay-buffer note)
+                         (mevedel--instruction-buffer-workspace (overlay-buffer note))))
+         changes)
+    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+      (unless (and workspace
+                   (equal (plist-get record :id)
+                          (plist-get (overlay-get note 'mevedel-note-prepared-change) :id)))
+        (user-error "The note or waiting change changed; reopen the merge"))
+      (save-excursion
+        (goto-char (point-min))
+        (when (re-search-forward "^\\(?:<<<<<<<\\|[|]\\{7\\}\\|=======\\|>>>>>>>\\)" nil t)
+          (user-error "Resolve all conflict markers before confirming")))
+      (dolist (section sections)
+        (let* ((path (plist-get section :path))
+               (coding (plist-get section :coding))
+               (text (buffer-substring (plist-get section :start) (plist-get section :end))))
+          (unless (and (equal (plist-get section :yours) (mevedel-note-merge--text path coding))
+                       (mevedel-change-same-p (plist-get section :disk)
+                                              (mevedel-tool-patch--snapshot path)))
+            (user-error "Source changed again: %s; reopen the merge" path))
+          (when (and (> (length text) 0)
+                     (get-text-property (1- (length text)) 'mevedel-note-merge-padding text))
+            (setq text (substring text 0 -1)))
+          (setq text (substring-no-properties text))
+          (push (list :path path :before (plist-get section :disk)
+                      :action (if (and (eq (plist-get (plist-get section :change) :action) 'delete)
+                                       (string-empty-p text)) 'delete 'write)
+                      :content text :bytes (encode-coding-string text coding)
+                      :mode (or (plist-get (plist-get section :disk) :mode)
+                                (plist-get (plist-get section :change) :mode))) changes)))
+      (setq changes (nreverse changes))
+      (dolist (change changes)
+        (when-let* ((buffer (find-buffer-visiting (plist-get change :path))))
+          (with-current-buffer buffer (undo-boundary))))
+      (mevedel-tool-patch-commit changes)
+      (dolist (change changes)
+        (when-let* ((buffer (find-buffer-visiting (plist-get change :path))))
+          (with-current-buffer buffer (undo-boundary))))
+      (mevedel-note-change--finish note record)
+      (mevedel-note-merge-cancel))))
+
+(provide 'mevedel-note-merge)
+;;; mevedel-note-merge.el ends here
