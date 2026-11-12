@@ -203,6 +203,33 @@
       (let ((restored (mevedel-note-restore 7 workspace)))
         (should (equal "Improve this function" (overlay-get restored 'mevedel-note-text)))
         (should (equal "old-directive" (overlay-get restored 'mevedel-uuid))))))
+  :doc "archived directives restore their old region after code changes with or without a file snapshot"
+  (dolist (snapshot '(nil t))
+    (let* ((data (mevedel-notes-migration-test--directive-store))
+           (record (car (plist-get data :directives)))
+           (anchor (plist-get record :anchor))
+           (instruction (car (plist-get (cdar (plist-get data :files)) :instructions))))
+      (setf (plist-get anchor :state) 'archived
+            (plist-get anchor :start) 12
+            (plist-get anchor :end) 23
+            (plist-get anchor :evidence) '(:uuid "old-directive" :text "second code")
+            (plist-get anchor :properties) (plist-get instruction :properties)
+            (plist-get instruction :overlay-start) 12
+            (plist-get instruction :overlay-end) 23
+            (plist-get instruction :anchor) (plist-get anchor :evidence))
+      (setf (plist-get record :anchor) anchor)
+      (unless snapshot (setf (plist-get data :files) nil))
+      (mevedel-notes-migration-test--workspace data
+        (with-current-buffer source
+          (erase-buffer)
+          (insert "first code\nreplacement\n")
+          (save-buffer))
+        (mevedel--clear-instruction-state workspace)
+        (mevedel-instruction-store-observe workspace)
+        (ert-info ((format "snapshot=%S closed=%S" snapshot (mevedel-notes-closed workspace)))
+          (let ((restored (mevedel-note-restore 7 workspace)))
+            (should (= 12 (overlay-start restored)))
+            (should (= 23 (overlay-end restored))))))))
   :doc "detached records allocate a number above all used and retired numbers"
   (let* ((data (mevedel-notes-migration-test--directive-store))
          (record (car (plist-get data :directives))))

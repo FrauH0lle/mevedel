@@ -531,20 +531,22 @@ Return its live source overlay, retaining its text, tags and attachments."
             note))))))
 
 (defun mevedel-notes--restore-bounds (instruction)
-  "Resolve closed INSTRUCTION in the widened source, falling back to its line."
+  "Resolve closed INSTRUCTION, falling back to its line or absolute positions."
   (or (mevedel-persistence-resolve-instruction-anchor
        (plist-get instruction :overlay-start)
        (plist-get instruction :overlay-end)
        (plist-get instruction :anchor) nil)
-      (pcase-let ((`(,line ,column ,end-line ,end-column)
-                   (plist-get instruction :closed-position)))
-        (goto-char (point-min))
-        (forward-line (1- line))
-        (let ((start (min (line-end-position) (+ (point) column))))
+      (when-let* ((position (plist-get instruction :closed-position)))
+        (pcase-let ((`(,line ,column ,end-line ,end-column) position))
           (goto-char (point-min))
-          (forward-line (1- end-line))
-          (cons start (max start (min (line-end-position)
-                                     (+ (point) end-column))))))))
+          (forward-line (1- line))
+          (let ((start (min (line-end-position) (+ (point) column))))
+            (goto-char (point-min))
+            (forward-line (1- end-line))
+            (cons start (max start (min (line-end-position)
+                                       (+ (point) end-column)))))))
+      (let ((start (max (point-min) (min (point-max) (plist-get instruction :overlay-start)))))
+        (cons start (max start (min (point-max) (plist-get instruction :overlay-end)))))))
 
 ;;;###autoload
 (defun mevedel-notes-legacy-histories (workspace)

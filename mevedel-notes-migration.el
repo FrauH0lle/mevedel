@@ -380,7 +380,17 @@ carries its evidence as a plist."
             (setq properties (plist-put properties 'mevedel-note-state 'closed))
             (nconc instruction
                    (list :closed-reason 'archived :closed-at (float-time)
-                         :open-state 'unsent :closed-position '(1 0 1 0)
+                         :open-state 'unsent
+                         :closed-position
+                         (when-let* ((content (plist-get (cdr file) :original-content)))
+                           (with-temp-buffer
+                             (insert content)
+                             (cl-mapcan
+                              (lambda (position)
+                                (goto-char (max (point-min) (min (point-max) position)))
+                                (list (line-number-at-pos) (- (point) (line-beginning-position))))
+                              (list (plist-get instruction :overlay-start)
+                                    (plist-get instruction :overlay-end)))))
                          :expiry-exempt t)))
           (when (and directive
                      (cl-some (lambda (key) (plist-get directive key))
