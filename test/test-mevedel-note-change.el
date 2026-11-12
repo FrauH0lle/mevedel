@@ -185,6 +185,34 @@
       (should (equal "before\nnew\nafter\nuser addition\n"
                      (mevedel-test--read-file
                       (mevedel-session-artifacts-backup-path
+                       (mevedel-session-save-path session) (plist-get entry :backup-name)))))))
+  :doc "manual merge retains the actual unsaved source and confirmed result in file history"
+  (mevedel-note-change-test--with-note
+    (setf (mevedel-session-turn-count session) 3)
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (with-current-buffer source
+      (goto-char (overlay-start note))
+      (insert "my "))
+    (with-current-buffer (mevedel-note-merge-change note)
+      (goto-char (point-min))
+      (search-forward "<<<<<<<")
+      (smerge-keep-lower)
+      (goto-char (point-min))
+      (search-forward "new")
+      (replace-match "manual resolution")
+      (mevedel-note-merge-confirm))
+    (let* ((saved (mevedel-session-codec-read
+                   (mevedel-session-artifacts-sidecar-path (mevedel-session-save-path session))))
+           (entry (cdr (assoc file (cdr (assq 3 (plist-get saved :file-snapshots)))))))
+      (should entry)
+      (should (equal "before\nmy old\nafter\n"
+                     (mevedel-test--read-file
+                      (mevedel-session-artifacts-backup-path
+                       (mevedel-session-save-path session) (plist-get entry :pre-backup-name)))))
+      (should (equal "before\nmanual resolution\nafter\n"
+                     (mevedel-test--read-file
+                      (mevedel-session-artifacts-backup-path
                        (mevedel-session-save-path session) (plist-get entry :backup-name))))))))
 
 (provide 'test-mevedel-note-change)
