@@ -12,14 +12,19 @@
 (require 'mevedel-chat)
 (require 'mevedel-directive-frame)
 (require 'mevedel-file-state)
+(require 'mevedel-mentions)
 (require 'mevedel-notes)
 (require 'mevedel-persistence)
 (require 'mevedel-presets)
 (require 'mevedel-reminders)
 (require 'mevedel-session-artifacts)
+(require 'mevedel-session-control-transfer)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-view-composer)
+
+;; `gptel'
+(defvar gptel--known-presets)
 
 (defvar-keymap mevedel-note-conversation-mode-map
   :doc "Note conversation actions; ordinary characters remain composer input."
@@ -38,6 +43,15 @@
 (define-minor-mode mevedel-note-conversation-mode
   "Note conversation controls on an ordinary session view."
   :lighter "" :interactive nil)
+
+(defun mevedel-note-conversation-attention-state (properties)
+  "Project live conversation work for note PROPERTIES using only cached state."
+  (when-let* ((id (plist-get properties 'mevedel-note-session-id))
+              (data (mevedel-session-control-transfer-root-buffer-for-id id)))
+    (and (mevedel-turn-busy-p data) 'working)))
+
+(add-hook 'mevedel-notes-attention-state-functions
+          #'mevedel-note-conversation-attention-state)
 
 (defun mevedel-note-conversation-send-reply ()
   "Send the note composer, or save an explicitly opened pending-input edit."
@@ -102,14 +116,42 @@ DATA contains request text and tool schemas, never transport credentials."
       (display-buffer report)
       report)))
 
-(defun mevedel-note-conversation--prompt (note)
-  "Capture NOTE's authored text and current code as a request."
-  (with-current-buffer (overlay-buffer note)
-    (format "Note %s at %s:%d\n\n%s\n\nNoted code at send time:\n```\n%s\n```"
-            (overlay-get note 'mevedel-id) buffer-file-name
-            (line-number-at-pos (overlay-start note))
-            (or (overlay-get note 'mevedel-note-text) "")
-            (buffer-substring-no-properties (overlay-start note) (overlay-end note)))))
+(defun mevedel-note-conversation--literal (text)
+  "Keep captured TEXT inert without changing ordinary at-sign code syntax."
+  (let ((tokens (append (mapcar #'car mevedel-mention-handlers)
+                        (mapcar (lambda (preset)
+                                  (concat "@" (regexp-quote (format "%s" (car preset))) "\\_>"))
+                                gptel--known-presets))))
+    (propertize
+     (replace-regexp-in-string
+      (concat "\\(^\\|[[:space:]]\\)\\(" (mapconcat #'identity tokens "\\|") "\\)")
+      "\\1\\\\\\2" text)
+     'mevedel-mention-literal t)))
+
+(defun mevedel-note-conversation--prompt (note session)
+  "Capture NOTE's authored text, code and explicit attachments for SESSION.
+Escape mention syntax in the frozen result so later requests, reloads and
+compaction cannot reinterpret captured code or attached prose as new input.
+Only note/ref mentions are frozen here; other authored mentions use the
+ordinary request-time transform, where media has an active request owner."
+  (let ((expansion
+         (let ((mevedel-mention-handlers
+                (cl-remove-if-not (lambda (handler) (memq (cadr handler) '(note ref)))
+                                  mevedel-mention-handlers)))
+           (mevedel-mentions-expand-user-input
+            (mevedel-mentions-prepare-user-input
+             (or (overlay-get note 'mevedel-note-text) "") session)
+            session t))))
+    (with-current-buffer (overlay-buffer note)
+      (format "Note %s at %s:%d\n\n%s\n\nNoted code at send time:\n```\n%s\n```\n\n%s"
+              (overlay-get note 'mevedel-id) buffer-file-name
+              (line-number-at-pos (overlay-start note))
+              (plist-get expansion :text)
+              (mevedel-note-conversation--literal
+               (buffer-substring-no-properties (overlay-start note) (overlay-end note)))
+              (mevedel-note-conversation--literal
+               (mapconcat (lambda (item) (plist-get item :body))
+                          (plist-get expansion :reminder-items) "\n\n"))))))
 
 (defun mevedel-note-conversation--send-notes (notes)
   "Send or reopen NOTES in one session and return its focused view."
@@ -130,7 +172,6 @@ DATA contains request text and tool schemas, never transport credentials."
                          (lambda (item) (equal id (overlay-get item 'mevedel-note-session-id)))
                          notes)
                   (user-error "Notes already belong to different conversations; send them separately")))
-             (prompt (unless id (mapconcat #'mevedel-note-conversation--prompt notes "\n\n")))
              (data (if id
                        (or (cdr (cl-find-if
                                  (lambda (entry)
@@ -148,7 +189,9 @@ DATA contains request text and tool schemas, never transport credentials."
               (mevedel-note-conversation-setup)
             (mevedel-preset-apply 'mevedel-note data)
             (mevedel-session-artifacts-save session data nil t)
-            (mevedel--submit-generated-turn prompt)))
+            (mevedel--submit-generated-turn
+             (mapconcat (lambda (item) (mevedel-note-conversation--prompt item session))
+                        notes "\n\n"))))
         (unless id
           (dolist (item notes)
             (overlay-put item 'mevedel-note-session-id (mevedel-session-session-id session))

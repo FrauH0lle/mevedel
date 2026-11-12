@@ -41,6 +41,7 @@ Called when folding as well as refreshing: use only cached state, never I/O.")
     (define-key map (kbd "TAB") #'mevedel-notes-list-toggle-closed)
     (define-key map (kbd "t") #'mevedel-notes-list-tags)
     (define-key map (kbd "e") #'mevedel-notes-list-edit)
+    (define-key map (kbd "s") #'mevedel-notes-list-send)
     (define-key map (kbd "g") #'mevedel-notes-list-refresh)
     (define-key map (kbd "q") #'mevedel-window-quit)
     map)
@@ -48,7 +49,7 @@ Called when folding as well as refreshing: use only cached state, never I/O.")
 
 (define-derived-mode mevedel-notes-list-mode tabulated-list-mode "Notes"
   "Workspace notes grouped by the attention they need.
-Use v or RET to visit, e to edit text, t to edit tags, d to delete,
+Use v or RET to visit, s to send, e to edit text, t to edit tags, d to delete,
 x for done, r to restore, TAB to fold recently closed, g to refresh
 and q to return to the invoking window."
   (setq tabulated-list-format
@@ -156,6 +157,14 @@ and q to return to the invoking window."
   (interactive)
   (mevedel-note-delete (mevedel-notes-list--selected-note))
   (mevedel-notes-list-refresh))
+
+(defun mevedel-notes-list-send ()
+  "Send or reopen the selected note's conversation and return its view."
+  (interactive)
+  (let ((list-buffer (current-buffer))
+        (view (mevedel-note-send (mevedel-notes-list--selected-note))))
+    (with-current-buffer list-buffer (mevedel-notes-list-refresh))
+    view))
 
 (defun mevedel-notes-list-done ()
   "Mark the selected open note done without changing its code."

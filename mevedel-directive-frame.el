@@ -249,6 +249,9 @@ view buffer is displayed outside the directive frame."
   (let ((buffer mevedel-directive-frame--view-buffer))
     (when (and mevedel-directive-frame-filter
                mevedel-directive-frame--directive-id
+               (not (and (overlayp mevedel-directive-frame--directive)
+                         (eq (overlay-get mevedel-directive-frame--directive
+                                          'mevedel-instruction-type) 'note)))
                (buffer-live-p buffer)
                (not (mevedel-directive-frame--filter-elsewhere-p buffer)))
       (with-current-buffer buffer
@@ -290,6 +293,10 @@ frame grows with the answer instead of resizing on every chunk."
   (interactive)
   (unless (frame-live-p mevedel-directive-frame--frame)
     (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No directive frame is open"))
+  (when (and (overlayp mevedel-directive-frame--directive)
+             (eq (overlay-get mevedel-directive-frame--directive 'mevedel-instruction-type) 'note))
+    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer))
+                                   "Note conversations show their whole transcript"))
   (if mevedel-directive-frame--filtered-p
       (progn
         (mevedel-directive-frame--clear-filter)
@@ -460,6 +467,7 @@ display type, and recreates it otherwise."
                (width . 0) (height . 0) (visibility . nil)
                ,@params))))
     (let ((window (frame-root-window frame)))
+      (set-window-dedicated-p window nil)
       (set-window-buffer window buffer)
       (set-window-parameter window 'no-delete-other-windows t)
       (set-window-dedicated-p window t)
@@ -608,6 +616,11 @@ an ordinary window when child frames are unavailable."
             (mevedel--directive-record
              (or (mevedel--topmost-instruction directive 'directive)
                  directive)))))))
+    (unless (eq mevedel-directive-frame--view-buffer view-buffer)
+      (mevedel-directive-frame--clear-filter mevedel-directive-frame--view-buffer)
+      (when (buffer-live-p mevedel-directive-frame--view-buffer)
+        (with-current-buffer mevedel-directive-frame--view-buffer
+          (mevedel-directive-frame-mode -1))))
     (cond
      ((or (not (mevedel-directive-frame--available-p))
           (and note-p (not (display-graphic-p))))

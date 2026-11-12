@@ -11,7 +11,12 @@
 (require 'mevedel-chat)
 (require 'mevedel-claude-code)
 (require 'mevedel-notes)
+(require 'mevedel-notes-list)
+(require 'mevedel-models)
+(require 'mevedel-permission-mode)
 (require 'mevedel-session-persistence)
+(require 'mevedel-session-codec)
+(require 'mevedel-session-fork)
 (require 'mevedel-transport)
 (require 'mevedel-journal-process)
 (require 'gptel-openai)
@@ -110,7 +115,7 @@
         (insert "A reply without the minibuffer"))
       (with-current-buffer source
         (should (equal "outside-before\nselected code\noutside-after\n" (buffer-string))))))
-  :doc "initial provider request and sent inspector exclude unrelated workspace context"
+  :doc "initial input includes capabilities and memory but excludes unrelated conversation context"
   (mevedel-note-conversation-test--with-source
     (make-directory (file-name-concat root ".mevedel" "memory") t)
     (write-region "UNRELATED-MEMORY-SECRET" nil
@@ -124,9 +129,10 @@
     (let* ((note (mevedel-note-create "Explain this code?"))
            (view (mevedel-note-send note))
            (payload (gptel--json-encode (plist-get (gptel-fsm-info (car sent)) :data))))
-      (dolist (expected '("Explain this code?" "selected code" "Project-only instruction"))
+      (dolist (expected '("Explain this code?" "selected code" "Project-only instruction"
+                          "UNRELATED-MEMORY-SECRET" "## Skills" "## Resources"))
         (should (string-search expected payload)))
-      (dolist (excluded '("UNRELATED-MEMORY-SECRET" "UNRELATED-NOTE-SECRET"
+      (dolist (excluded '("UNRELATED-NOTE-SECRET"
                           "UNRELATED-CHAT-SECRET" "outside-before" "outside-after"))
         (should-not (string-search excluded payload)))
       (with-current-buffer view
@@ -179,7 +185,152 @@
           (call-interactively #'mevedel)))
       (should-not (eq note-view (window-buffer (selected-window))))
       (with-current-buffer source
-        (should (eq note-view (mevedel-note-send note)))))))
+        (should (eq note-view (mevedel-note-send note))))))
+  :doc "ordinary saved selection excludes note conversations beyond forty summaries"
+  (mevedel-note-conversation-test--with-source
+    (dotimes (_ 41)
+      (let ((view (with-current-buffer source
+                    (goto-char (point-min))
+                    (forward-line 1)
+                    (mevedel-note-send (mevedel-note-create "Dedicated question")))))
+        (mevedel-note-conversation-test--answer (car sent) "Retained answer")
+        (let ((data (buffer-local-value 'mevedel--data-buffer view)))
+          (with-current-buffer data (mevedel-session-persistence-release-on-kill))
+          (mevedel-chat-discard-buffers data t))))
+    (with-current-buffer source
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (&rest _) (ert-fail "Saved note session offered in ordinary chooser"))))
+        (call-interactively #'mevedel))))
+  :doc "an explicit fork remains an ordinary discoverable chat with a changeable preset"
+  (mevedel-note-conversation-test--with-source
+    (let* ((view (mevedel-note-send (mevedel-note-create "Forkable question")))
+           (data (buffer-local-value 'mevedel--data-buffer view))
+           (session (buffer-local-value 'mevedel--session data)))
+      (mevedel-note-conversation-test--answer (car sent) "Forkable answer")
+      (let* ((target (cadr (assq 1 (mevedel-session-prompt-index session))))
+             (child (mevedel-session-fork-create data target 'conversation)))
+        (with-current-buffer view (mevedel-note-conversation-close))
+        (with-current-buffer source
+          (cl-letf (((symbol-function 'completing-read)
+                     (lambda (_prompt table &rest _)
+                       (let ((choices (delete "Start new session" (all-completions "" table))))
+                         (should (= 1 (length choices)))
+                         (should (string-search
+                                  (mevedel-session-session-id
+                                   (buffer-local-value 'mevedel--session child))
+                                  (car choices)))
+                         (car choices)))))
+            (call-interactively #'mevedel)))
+        (should (eq child (buffer-local-value 'mevedel--data-buffer
+                                             (window-buffer (selected-window)))))
+        (with-current-buffer child
+          (mevedel-preset-apply 'mevedel-discuss)
+          (should (eq 'mevedel-discuss (mevedel-session-preset-name mevedel--session))))))))
+
+(mevedel-deftest mevedel-session-persistence-cleanup-expired/note
+  (:quiet t)
+  ,test
+  (test)
+  :doc "closed note sessions survive even an unreadable store and do not displace the ordinary retention floor"
+  (mevedel-note-conversation-test--with-source
+    (let* ((ordinary (mevedel--chat-buffer "ordinary" t workspace))
+           (ordinary-session (buffer-local-value 'mevedel--session ordinary))
+           (note (mevedel-note-create "Retain my conversation"))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view))
+           (session (buffer-local-value 'mevedel--session data)))
+      (mevedel-note-conversation-test--answer (car sent) "Durable answer")
+      (with-current-buffer ordinary
+        (mevedel--insert-local-user-turn "An ordinary retained chat")
+        (mevedel-session-artifacts-save ordinary-session ordinary nil t))
+      (with-current-buffer source (mevedel-note-done note))
+      (mevedel-instruction-store-flush t)
+      (dolist (buffer (list ordinary data))
+        (with-current-buffer buffer (mevedel-session-persistence-release-on-kill))
+        (mevedel-chat-discard-buffers buffer t))
+      (let* ((path (mevedel-session-artifacts-sidecar-path
+                    (mevedel-session-save-path ordinary-session)))
+             (sidecar (mevedel-session-codec-read path)))
+        (mevedel-session-codec-write path (plist-put sidecar :updated-at "2001-01-01T00-00-00")))
+      (write-region "unreadable instruction store" nil
+                    (file-name-concat root ".mevedel" "instructions.el") nil 'silent)
+      (let ((mevedel-session-max-age-days 0)
+            (mevedel-session-keep-recent-count 1))
+        (should (zerop (mevedel-session-persistence-cleanup-expired workspace t))))
+      (should (file-directory-p (mevedel-session-save-path session)))
+      (should (file-directory-p (mevedel-session-save-path ordinary-session))))))
+
+(mevedel-deftest mevedel-note-send/frame-reuse
+  (:quiet t)
+  ,test
+  (test)
+  :doc "a reused graphical directive frame clears its old filter and never filters a note"
+  (progn
+   (skip-unless (display-graphic-p))
+  (mevedel-note-conversation-test--with-source
+    (let* ((directive (save-excursion
+                        (forward-line -1)
+                        (mevedel--create-directive-in source (point) (line-end-position)
+                                                     nil "Prior directive")))
+           (old-data (mevedel--chat-buffer "prior" t workspace))
+           (old-view (buffer-local-value 'mevedel--view-buffer old-data)))
+      (unwind-protect
+          (progn
+            (mevedel-view-test--insert-data old-data "Prior question\n\n" nil)
+            (mevedel-view-test--insert-data old-data "Prior answer\n" 'response)
+            (with-current-buffer old-view (mevedel-view--full-rerender))
+            (mevedel-directive-frame-display directive old-view)
+            (should mevedel-directive-frame--filtered-p)
+            (let* ((frame mevedel-directive-frame--frame)
+                   (view (mevedel-note-send (mevedel-note-create "New note question"))))
+              (should (eq frame mevedel-directive-frame--frame))
+              (with-current-buffer old-view
+                (should-not (text-property-any (point-min) (point-max) 'invisible
+                                              mevedel-directive-frame--invisible-symbol)))
+              (should-not mevedel-directive-frame--filtered-p)
+              (mevedel-note-conversation-test--answer (car sent) "Visible note answer")
+              (with-current-buffer view
+                (condition-case nil
+                    (call-interactively (key-binding (kbd "C-c C-f")))
+                  (user-error nil))
+                (goto-char (point-min))
+                (should (search-forward "Visible note answer" nil t))
+                (should-not (invisible-p (1- (point)))))
+              (should-not mevedel-directive-frame--filtered-p)))
+        (when (frame-live-p mevedel-directive-frame--frame)
+          (mevedel-directive-frame-close)))))))
+
+(mevedel-deftest mevedel-preset-apply/note-identity
+  (:quiet t)
+  ,test
+  (test)
+  :doc "fixed note identity refuses preset changes but retains model, effort and permission controls"
+  (mevedel-note-conversation-test--with-source
+    (let* ((view (mevedel-note-send (mevedel-note-create "A question")))
+           (data (buffer-local-value 'mevedel--data-buffer view)))
+      (mevedel-note-conversation-test--answer (car sent) "An answer")
+      (with-current-buffer data
+        (let ((system gptel-system-prompt)
+              (tools gptel-tools))
+          (should-error (mevedel-preset-apply 'mevedel-discuss) :type 'user-error)
+          (should-error (gptel-preset 'mevedel-discuss) :type 'user-error)
+          (should (eq system gptel-system-prompt))
+          (should (eq tools gptel-tools)))
+        (cl-letf (((symbol-plist 'note-reasoner)
+                   '(:reasoning-effort (member low high))))
+          (let ((backend (gptel-make-openai "Other" :key "test" :models '(note-reasoner))))
+            (mevedel-model-set-session-provider
+             mevedel--session (list :backend backend :model 'note-reasoner) data)
+            (mevedel-model-set-session-effort mevedel--session 'high data)
+            (mevedel-permission-mode-transition 'edits)
+            (mevedel-with-preset 'mevedel-discuss
+              (should (eq 'mevedel-note (mevedel-session-preset-name mevedel--session))))
+            (mevedel-preset-apply 'mevedel-note)
+            (should (eq 'note-reasoner gptel-model))
+            (should (eq 'high gptel-reasoning-effort))
+            (should (eq 'edits (mevedel-session-permission-mode mevedel--session)))
+            (should (eq 'mevedel-note gptel--preset))
+            (should (eq 'mevedel-note (mevedel-session-preset-name mevedel--session)))))))))
 
 (mevedel-deftest mevedel-note-send/edited-file-isolation
   (:quiet t)
@@ -199,6 +350,122 @@
         (should-not (string-search "UNRELATED-EDIT-SECRET" payload))
         (should-not (string-search "other.txt" payload)))
       (mevedel-note-conversation-test--answer (car sent) "Only this note."))))
+
+(mevedel-deftest mevedel-note-send/mentioned-notes
+  (:quiet t)
+  ,test
+  (test)
+  :doc "authored mentions freeze once; captured code and attached text cannot activate more notes"
+  (mevedel-note-conversation-test--with-source
+    (forward-line 1)
+    (let ((unmentioned (mevedel-note-create "UNMENTIONED-TEXT"))
+          (secret (file-name-concat root "not-requested.txt")))
+      (write-region "UNREQUESTED-FILE-SECRET" nil secret nil 'silent)
+      (goto-char (point-min))
+      (let ((context (mevedel-note-create
+                      (format "MENTIONED-TEXT @note:%s @file:%s"
+                              (overlay-get unmentioned 'mevedel-id) secret))))
+        (forward-line 1)
+        (end-of-line)
+        (insert (format " @note:%s @file:%s" (overlay-get unmentioned 'mevedel-id) secret))
+        (beginning-of-line)
+        (let* ((note (mevedel-note-create
+                      (format "Explain @note:%s" (overlay-get context 'mevedel-id))))
+               (view (mevedel-note-send note))
+               (payload (gptel--json-encode (plist-get (gptel-fsm-info (car sent)) :data))))
+          (should (string-search "MENTIONED-TEXT" payload))
+          (should (string-search "outside-before" payload))
+          (should-not (string-search "UNMENTIONED-TEXT" payload))
+          (should-not (string-search "UNREQUESTED-FILE-SECRET" payload))
+          (mevedel-note-conversation-test--answer (car sent) "Frozen answer")
+          (with-current-buffer source
+            (mevedel-note-edit "CHANGED-MENTION-CONTENT" context)
+            (save-buffer)
+            (mevedel-instruction-store-flush t))
+          (let ((data (buffer-local-value 'mevedel--data-buffer view)))
+            (with-current-buffer data (mevedel-session-persistence-release-on-kill))
+            (mevedel-chat-discard-buffers data t))
+          (kill-buffer source)
+          (setq source (find-file-noselect file))
+          (with-current-buffer source
+            (setq-local mevedel--workspace workspace)
+            (mevedel-instruction-store-observe workspace)
+            (goto-char (point-min))
+            (forward-line 1)
+            (setq view (mevedel-note-send)))
+          (with-current-buffer view
+            (goto-char (point-max))
+            (insert "Follow up without a new mention")
+            (call-interactively (key-binding (kbd "C-c C-c"))))
+          (let ((next (gptel--json-encode (plist-get (gptel-fsm-info (car sent)) :data))))
+            (should (string-search "MENTIONED-TEXT" next))
+            (should-not (string-search "CHANGED-MENTION-CONTENT" next))
+            (should-not (string-search "UNREQUESTED-FILE-SECRET" next))
+            (should-not (string-search "UNMENTIONED-TEXT" next)))
+          (mevedel-note-conversation-test--answer (car sent) "Still frozen"))))))
+
+(mevedel-deftest mevedel-note-send/literal-code
+  (:quiet t)
+  ,test
+  (test)
+  :doc "freezing does not alter ordinary at-sign decorators in captured code"
+  (mevedel-note-conversation-test--with-source
+    (insert "@property @Override @param @media ")
+    (beginning-of-line)
+    (mevedel-note-send (mevedel-note-create "Explain these annotations"))
+    (let ((payload (gptel--json-encode (plist-get (gptel-fsm-info (car sent)) :data))))
+      (should (string-search "@property @Override @param @media selected code" payload)))
+    (mevedel-note-conversation-test--answer (car sent) "Annotations retained")))
+
+(mevedel-deftest mevedel-note-send/request-mentions
+  (:quiet t)
+  ,test
+  (test)
+  :doc "authored file media uses request-time expansion without persistent gptel context"
+  (mevedel-note-conversation-test--with-source
+    (let ((image (file-name-concat root "image.png")))
+      (write-region "note image bytes" nil image nil 'silent)
+      (cl-letf (((symbol-plist 'test-model)
+                 '(:capabilities (media) :mime-types ("image/png"))))
+        (let* ((note (mevedel-note-create (concat "Explain @file:" image)))
+               (view (mevedel-note-send note))
+               (data (buffer-local-value 'mevedel--data-buffer view))
+               (payload (gptel--json-encode (plist-get (gptel-fsm-info (car sent)) :data))))
+          (should (string-search "data:image/png;base64," payload))
+          (with-current-buffer data
+            (should-not gptel-context)
+            (should-not gptel-use-context))
+          (mevedel-note-conversation-test--answer (car sent) "Image explained"))))))
+
+(mevedel-deftest mevedel-notes-list-send
+  (:quiet t)
+  ,test
+  (test)
+  :doc "list send focuses the note conversation and projects working then sent without a second request"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Send from the list"))
+           (uuid (overlay-get note 'mevedel-uuid))
+           (list-buffer (mevedel-notes-list workspace))
+           view)
+      (with-current-buffer list-buffer
+        (goto-char (point-min))
+        (while (and (not (eobp)) (not (equal uuid (tabulated-list-get-id)))) (forward-line 1))
+        (should (equal uuid (tabulated-list-get-id)))
+        (should (commandp (key-binding "s")))
+        (setq view (call-interactively (key-binding "s"))))
+      (should (eq view (window-buffer (selected-window))))
+      (with-current-buffer list-buffer
+        (mevedel-notes-list-refresh)
+        (should (string-search "working" (buffer-string))))
+      (mevedel-note-conversation-test--answer (car sent) "List answer")
+      (with-current-buffer list-buffer
+        (mevedel-notes-list-refresh)
+        (should-not (string-search "working" (buffer-string)))
+        (goto-char (point-min))
+        (while (and (not (eobp)) (not (equal uuid (tabulated-list-get-id)))) (forward-line 1))
+        (should (equal uuid (tabulated-list-get-id)))
+        (should (eq view (call-interactively (key-binding "s")))))
+      (should (= 1 (length sent))))))
 
 (mevedel-deftest mevedel-note-send-batch
   (:quiet t)
@@ -322,7 +589,7 @@
   (:quiet t)
   ,test
   (test)
-  :doc "native note session retains its exact initial context without memory recall"
+  :doc "native note session retains its exact initial context including ordinary capabilities"
   (mevedel-note-conversation-test--with-source
     (let ((mevedel-claude-code-directory (file-name-concat root "claude"))
           (acp--shutdown-grace-period 0)
@@ -350,7 +617,8 @@
                   (not (mevedel-turn-busy-p data)))
                 (should prompts)
                 (should (string-search "Native question?" (format "%S" prompts)))
-                (should-not (string-search "NATIVE-MEMORY-SECRET" (format "%S" prompts)))
+                (dolist (text '("NATIVE-MEMORY-SECRET" "## Skills" "## Resources"))
+                  (should (string-search text (format "%S" prompts))))
                 (with-current-buffer view
                   (let* ((report (call-interactively (key-binding (kbd "C-c C-v"))))
                          (payload (with-current-buffer report
