@@ -200,6 +200,7 @@ Chat / view
   mevedel-notes.el            source note create/edit/delete, labels and entry hints
   mevedel-notes-list.el       workspace notes grouped by attention, visit/edit/tag/delete actions
   mevedel-note-mentions.el    explicit note number/tag attachments, current code and UUID lookup
+  mevedel-note-resource.el    read-only workspace note documents for Read, Glob and Grep
   mevedel-mentions.el         @ref and @file mention expansion
   mevedel-directive-persistence.el  workspace directive record codec
   mevedel-persistence.el      workspace instruction store, export/import, restore

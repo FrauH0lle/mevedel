@@ -6,7 +6,7 @@ Read does not expand wildcards or read directories.
 
 - Relative paths start at the session working directory. Resource families:
   `work://`, `artifact://`, `skill://`, `agent://`, `history://`, `memory://`,
-  `memory://journal/`, `mcp://`, `shared://`, and `mevedel://`. Read bare roots for available entries;
+  `memory://journal/`, `mcp://`, `shared://`, `notes://`, and `mevedel://`. Read bare roots for available entries;
   the memory index is `memory://root`.
 - Text returns numbered lines starting at 1, by default up to 2000 lines.
   Use `offset` and `limit` for a focused range; files over 512 KB require a

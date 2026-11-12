@@ -107,6 +107,7 @@ or observe a store from redisplay."
 (defun mevedel-notes--entries (workspace)
   "Return lightweight open note snapshots in WORKSPACE without visiting files.
 Each snapshot holds :file, :line, :properties, :uuid and cached :source-missing.
+The internal :source is a live overlay or a stashed instruction record.
 Stashed positions refer to the last observed source; visiting re-anchors it."
   (let (notes)
     (dolist (entry (plist-get (mevedel--instruction-state
@@ -121,6 +122,7 @@ Stashed positions refer to the last observed source; visiting re-anchors it."
                   (when (and (overlay-buffer note)
                              (eq (overlay-get note 'mevedel-instruction-type) 'note))
                     (push (list :file buffer-file-name
+                                :source note
                                 :source-missing mevedel--buffer-source-missing
                                 :line (line-number-at-pos (overlay-start note))
                                 :uuid (overlay-get note 'mevedel-uuid)
@@ -134,6 +136,7 @@ Stashed positions refer to the last observed source; visiting re-anchors it."
                 (content (plist-get (cdr entry) :original-content)))
             (when (eq (plist-get properties 'mevedel-instruction-type) 'note)
               (push (list :file (car entry)
+                          :source note
                           :source-missing (plist-get (cdr entry) :source-missing)
                           :line (if content
                                     (1+ (cl-count ?\n content :end
