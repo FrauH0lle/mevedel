@@ -296,6 +296,7 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tools-list.el       native tools cockpit list
 
 Support
+  mevedel-change.el           recorded byte-change preparation, hunk conflicts, strict rollback
   mevedel-file-state.el       LRU file cache
   mevedel-diff-apply.el       transactional unified diff staging/application
   mevedel-theme-faces.el      active-theme-derived face registration and refresh
