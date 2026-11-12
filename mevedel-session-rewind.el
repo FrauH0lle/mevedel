@@ -488,6 +488,9 @@ carries the plan-entry plist."
                        backup-path nil 'no-async))
              (delete-file backup-path))))))))
 
+(defvar mevedel-session-rewind--written-states nil
+  "Cell of attempted after-states, retained across nonlocal exits.")
+
 (defun mevedel-session-rewind--apply-restore-action (session entry)
   "Apply one restore ENTRY (plan-entry plist) for SESSION."
   (let* ((path        (plist-get entry :path))
@@ -502,6 +505,9 @@ carries the plan-entry plist."
       ('conflict (error "Unresolved Rewind conflict: %s" path))
       ('noop nil)
       ('delete
+       (when mevedel-session-rewind--written-states
+         (push (list :path path :exists nil :bytes nil)
+               (car mevedel-session-rewind--written-states)))
        (when (file-exists-p path)
          (delete-file path)))
       ((or 'create 'restore 'overwrite)
@@ -513,6 +519,9 @@ carries the plan-entry plist."
          (let ((dir (file-name-directory path)))
            (when (and dir (not (file-directory-p dir)))
              (make-directory dir t)))
+         (when mevedel-session-rewind--written-states
+           (push (list :path path :exists t :bytes content)
+                 (car mevedel-session-rewind--written-states)))
          (let ((coding-system-for-write 'no-conversion))
            (write-region content nil path nil 'silent)))))))
 
@@ -1384,23 +1393,33 @@ portable lease and publication control directories are never copied."
                  (list :path path :existed t :backup backup))
              (list :path path :existed nil))))
 
-(defun mevedel-session-rewind--rollback-restore-files (backups)
+(defun mevedel-session-rewind--rollback-restore-files (backups written)
   "Restore file BACKUPS captured for a failed Rewind.
+Only restore WRITTEN after-states that still belong to this transaction.
 Return descriptions of every artifact that could not be restored."
   (let (failures)
     (dolist (entry backups)
       (let ((path (plist-get entry :path)))
-        (condition-case err
-            (if (plist-get entry :existed)
-                (progn
-                  (make-directory (file-name-directory path) t)
-                  (copy-file (plist-get entry :backup) path t t t))
-              (when (file-exists-p path)
-                (delete-file path)))
-          (error
-           (push (format "%s (%s)" path (error-message-string err))
-                 failures)))))
-    (nreverse failures)))
+        (when (cl-find path written :key (lambda (state) (plist-get state :path)) :test #'equal)
+          (condition-case err
+              (setq failures
+                    (nconc failures
+                           (mevedel-change-rollback
+                            (list (list :path path :exists (plist-get entry :existed)
+                                        :bytes (when (plist-get entry :existed)
+                                                 (mevedel-session-artifacts-read-file-raw
+                                                  (plist-get entry :backup)))))
+                            written #'mevedel-session-rewind--file-state
+                            (lambda (_before _after)
+                              (if (plist-get entry :existed)
+                                  (progn
+                                    (make-directory (file-name-directory path) t)
+                                    (copy-file (plist-get entry :backup) path t t t))
+                                (when (file-exists-p path) (delete-file path)))))))
+            (error (setq failures (nconc failures (list (cons path err)))))))))
+    (mapcar (lambda (failure)
+              (format "%s (%s)" (car failure) (error-message-string (cdr failure))))
+            failures)))
 
 (defun mevedel-session-rewind-rewind-publication-artifacts
     (session buffer staging-path &optional state)
@@ -1497,7 +1516,8 @@ head CAS.  BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
           (generate-new-buffer " *mevedel-remote-rewind-staging*"))
          (mevedel-instruction-store--inhibit workspace)
          store-intent
-         file-backups
+         file-backups restore-result
+         (mevedel-session-rewind--written-states (list nil))
          project-restore-started
          publish-attempted
          committed
@@ -1548,13 +1568,11 @@ head CAS.  BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                      (error
                       "Captured files changed after Rewind confirmation")))
                  (setq project-restore-started t)
-                 (let ((result
-                        (mevedel-session-rewind-execute-restore
-                         session plan)))
-                   (when (plist-get result :failed)
+                 (setq restore-result (mevedel-session-rewind-execute-restore session plan))
+                   (when (plist-get restore-result :failed)
                      (error "File restore failed on %s: %s"
-                            (plist-get result :failed)
-                            (plist-get result :error))))))
+                            (plist-get restore-result :failed)
+                            (plist-get restore-result :error)))))
               (setq publish-attempted t)
               (condition-case publish-error
                   (mevedel-session-publication-publish
@@ -1656,7 +1674,7 @@ head CAS.  BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                      session
                      (lambda ()
                        (mevedel-session-rewind--rollback-restore-files
-                        file-backups))))
+                        file-backups (car mevedel-session-rewind--written-states)))))
             (error
              (push
               (format "Project rollback authority (%s)"
@@ -1740,7 +1758,8 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
          ;; then a durable intent lets recovery finish or drop the prune.
          (mevedel-instruction-store--inhibit workspace)
          store-intent
-         file-backups source-moved published session-installed
+         file-backups restore-result source-moved published session-installed
+         (mevedel-session-rewind--written-states (list nil))
          file-restore-started buffer-install-started committed
          rollback-failures)
     (with-current-buffer original-buffer
@@ -1769,12 +1788,11 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                  session (or (mevedel-session-turn-count candidate) 0)
                  (plist-get target :cum-turn)))
           (setq file-restore-started t)
-          (let ((result
-                 (mevedel-session-rewind-execute-restore session plan)))
-            (when (plist-get result :failed)
+          (setq restore-result (mevedel-session-rewind-execute-restore session plan))
+            (when (plist-get restore-result :failed)
               (error "File restore failed on %s: %s"
-                     (plist-get result :failed)
-                     (plist-get result :error))))
+                     (plist-get restore-result :failed)
+                     (plist-get restore-result :error)))
           (rename-file (directory-file-name save-path)
                        rollback-path)
           (setq source-moved t)
@@ -1855,7 +1873,7 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                 (nconc
                  rollback-failures
                  (mevedel-session-rewind--rollback-restore-files
-                  file-backups))))
+                  file-backups (car mevedel-session-rewind--written-states)))))
         (when buffer-install-started
           (condition-case err
               (progn
@@ -2159,7 +2177,8 @@ and the file plan the caller confirmed."
          (source (copy-sequence session))
          (staging-buffer (generate-new-buffer " *mevedel-restore-staging*"))
          (workspace (mevedel-session-workspace session))
-         candidate plan file-backups file-restore-started committed
+         candidate plan file-backups restore-result file-restore-started committed
+         (mevedel-session-rewind--written-states (list nil))
          rollback-failures)
     (setf (mevedel-session-publication source) publication)
     (unwind-protect
@@ -2228,13 +2247,11 @@ and the file plan the caller confirmed."
                         plan file-backup-dir))
                  (when plan
                    (setq file-restore-started t)
-                   (let ((result
-                          (mevedel-session-rewind-execute-restore
-                           candidate plan)))
-                     (when (plist-get result :failed)
+                   (setq restore-result (mevedel-session-rewind-execute-restore candidate plan))
+                     (when (plist-get restore-result :failed)
                        (error "File restore failed on %s: %s"
-                              (plist-get result :failed)
-                              (plist-get result :error)))))))
+                              (plist-get restore-result :failed)
+                              (plist-get restore-result :error))))))
               (mevedel-session-publication-publish
                session
                (mevedel-session-rewind-rewind-publication-artifacts
@@ -2303,7 +2320,7 @@ and the file plan the caller confirmed."
                      session
                      (lambda ()
                        (mevedel-session-rewind--rollback-restore-files
-                        file-backups))))
+                        file-backups (car mevedel-session-rewind--written-states)))))
             (error
              (push
               (format "Restore rollback authority (%s)"

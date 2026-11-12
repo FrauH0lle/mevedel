@@ -87,6 +87,8 @@ replacement reaching a deleted run's gap, must not be guessed through."
 Return :bytes or :conflicts, plus zero-based current-coordinate :ranges."
   (let ((changes (mevedel-change--runs base proposed))
         (intervening (mevedel-change--runs base current))
+        (source-offsets (mevedel-change--line-offsets proposed))
+        (current-offsets (mevedel-change--line-offsets current))
         edits conflicts ranges)
     (dolist (change changes)
       (pcase-let ((`(,start ,end ,new-start ,new-end) change)
@@ -101,21 +103,29 @@ Return :bytes or :conflicts, plus zero-based current-coordinate :ranges."
               (setq offset (+ offset (- (- d c) (- b a)))))
             (when (<= b end)
               (setq end-offset (+ end-offset (- (- d c) (- b a)))))))
-        (if touched
+        (cond
+         ((and (= (length touched) 1)
+               (= start (nth 0 (car touched)))
+               (= end (nth 1 (car touched)))
+               (equal (substring proposed (aref source-offsets new-start)
+                                 (aref source-offsets new-end))
+                      (substring current (aref current-offsets (nth 2 (car touched)))
+                                 (aref current-offsets (nth 3 (car touched))))))
+          (push (list (nth 2 (car touched)) (nth 3 (car touched))) ranges))
+         (touched
             (let ((first (1+ (apply #'min (mapcar (lambda (run) (nth 2 run)) touched))))
                   (last (apply #'max (mapcar (lambda (run) (nth 3 run)) touched))))
               (push (list (min (+ start offset) (1- first))
                           (max (+ end end-offset) last)) ranges)
               (push (list :path path :start-line first :end-line (max first last)
                           :base-start-line (1+ start) :base-end-line (max (1+ start) end))
-                    conflicts))
+                    conflicts)))
+         (t
           (push (list (+ start offset) (+ end offset)) ranges)
-          (push (list (+ start offset) (+ end offset) new-start new-end) edits))))
+          (push (list (+ start offset) (+ end offset) new-start new-end) edits)))))
     (if conflicts
         (list :conflicts (nreverse conflicts) :ranges (nreverse ranges))
-      (let ((source-offsets (mevedel-change--line-offsets proposed))
-            (current-offsets (mevedel-change--line-offsets current)))
-        (with-temp-buffer
+      (with-temp-buffer
           (set-buffer-multibyte nil)
           (insert current)
           ;; Descending coordinates preserve the positions of earlier runs.
@@ -126,7 +136,7 @@ Return :bytes or :conflicts, plus zero-based current-coordinate :ranges."
               (goto-char (1+ (aref current-offsets start)))
               (insert (substring proposed (aref source-offsets new-start)
                                  (aref source-offsets new-end)))))
-          (list :bytes (buffer-string) :ranges (nreverse ranges)))))))
+          (list :bytes (buffer-string) :ranges (nreverse ranges))))))
 
 (defun mevedel-change-prepare (before after current &optional reverse strict)
   "Prepare a BEFORE/AFTER recorded change against CURRENT, without writing.

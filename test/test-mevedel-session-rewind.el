@@ -1787,7 +1787,8 @@
                              (file-name-directory session-dir) "tracked.el"))
                    (target '(:segment 1 :turn 1 :cum-turn 1
                              :fork-point-id "remote-point"))
-                   (plan (list (list :path tracked :action 'overwrite)))
+                   (plan (list (list :path tracked :action 'overwrite
+                                     :bytes "rewound project bytes\n")))
                    (reserve-function
                     (symbol-function
                      'mevedel-session-durability-call-with-reserved-lease))
@@ -1830,12 +1831,6 @@
                      ((symbol-function
                        'mevedel-session-rewind-restore-plan)
                       (lambda (&rest _) plan))
-                     ((symbol-function
-                       'mevedel-session-rewind-execute-restore)
-                      (lambda (_session _plan)
-                        (write-region "rewound project bytes\n" nil
-                                      tracked nil 'silent)
-                        '(:succeeded 1 :failed nil :total 1)))
                      ((symbol-function 'mevedel-session-publication-publish)
                       (lambda (actual-session _artifacts)
                         (setf (mevedel-session-pending-publication
@@ -2409,7 +2404,7 @@
                 (funcall function)))
              ((symbol-function
                'mevedel-session-rewind--rollback-restore-files)
-              (lambda (actual-backups)
+              (lambda (actual-backups _written)
                 (setq rolled-back actual-backups)
                 nil))
              ((symbol-function
@@ -2441,21 +2436,26 @@
   ,test
   (test)
   :doc "reports every file whose rollback fails"
-  (let* ((path-a "/tmp/rewind-a")
-         (path-b "/tmp/rewind-b")
-         (backups
-          `((:path ,path-a :existed t :backup "/tmp/backup-a")
-            (:path ,path-b :existed t :backup "/tmp/backup-b")))
-         (failures
-          (cl-letf (((symbol-function 'make-directory) #'ignore)
-                    ((symbol-function 'copy-file)
-                     (lambda (_source target &rest _)
-                       (error "Cannot restore %s" target))))
-            (mevedel-session-rewind--rollback-restore-files
-             backups))))
-    (should (= 2 (length failures)))
-    (should (string-match-p (regexp-quote path-a) (nth 0 failures)))
-    (should (string-match-p (regexp-quote path-b) (nth 1 failures)))))
+  (let* ((directory (make-temp-file "rewind-rollback-" t))
+         (path-a (file-name-concat directory "a"))
+         (path-b (file-name-concat directory "b"))
+         (backup (file-name-concat directory "backup")))
+    (unwind-protect
+        (progn
+          (write-region "before" nil backup nil 'silent)
+          (dolist (path (list path-a path-b)) (write-region "after" nil path nil 'silent))
+          (let ((failures
+                 (cl-letf (((symbol-function 'copy-file)
+                            (lambda (_source target &rest _)
+                              (error "Cannot restore %s" target))))
+                   (mevedel-session-rewind--rollback-restore-files
+                    (mapcar (lambda (path) (list :path path :existed t :backup backup))
+                            (list path-a path-b))
+                    (mapcar #'mevedel-session-rewind--file-state (list path-a path-b))))))
+            (should (= 2 (length failures)))
+            (should (string-match-p (regexp-quote path-a) (nth 0 failures)))
+            (should (string-match-p (regexp-quote path-b) (nth 1 failures)))))
+      (delete-directory directory t))))
 
 
 ;;
