@@ -57,6 +57,18 @@ has since changed.
   workspace. It costs a state-directory check plus at most one read or hash:
   bounded I/O, but I/O. Callers avoid creating workspaces on hot paths such as
   redisplay, timers or process filters.
+- File visits are a separate, nonblocking activation path. A local roots-only
+  index remembers remote workspaces whose observed or written store has notes,
+  and removes roots when their store has none. The first visit under an indexed
+  root queues at most one background read per Emacs run; the hook performs no
+  remote I/O. This path suppresses ordinary workspace activation and installs
+  only into already-visited source buffers, without source filesystem probes.
+  The read requires the SSH master opened by the visit. It resolves its target
+  interpreter inside the child, never waits for target program discovery, and
+  disables SSH's reconnect fallback. Missing sharing, a lost master, or a failed
+  read skips restoration with one debug-level diagnostic; the next explicit
+  workspace operation remains the fallback. Unsupported targets are not read
+  synchronously. No note content is mirrored locally.
 
 **Format version.** The record carries `:format`, independent of the package
 version, so two installations of different versions share one workspace. An
@@ -163,6 +175,14 @@ that distinction.
   reuses, as a lost turn's attempt already did in memory.
 
 ## Decision history
+
+### 2026-11-12: Restore known remote notes after restart
+
+Memory-only remote activation left persisted notes invisible after restarting
+Emacs until an explicit workspace operation. The roots-only local index enables
+one connected-only background read without adding remote I/O to file visits or
+changing steady-state note rendering. Ordinary activation and observation stay
+synchronous explicit-operation boundaries.
 
 ### 2026-11-12: First-note activation in recognized projects
 

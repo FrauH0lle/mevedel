@@ -46,10 +46,16 @@ claim subsequent user edits as a note change. Confirming a partial detailed
 review records only accepted paths and drops the rest of the waiting proposal.
 
 Original note conversations are excluded from ordinary live and saved chat
-selection. Automatic session cleanup preserves them and does not count them
-against the newest ordinary-session retention floor, including when their notes
-are recently closed or the instruction store is unreadable. This is conservative:
-automatic cleanup also keeps the conversation after the note record expires.
+selection. Cleanup and saved-session deletion preserve them while any live,
+stashed or recently closed note references them. After the last note leaves the
+store, its conversation becomes eligible for normal age-based cleanup, without
+the newest ordinary-session retention floor. Note conversations never consume
+that floor. Reference checks preserve dirty state and combine loaded records
+with one local store read per sweep, bounded to 16 MiB. An unloaded workspace,
+remote root, absent, oversized, unsupported or unreadable store retains its note
+conversations rather than risking history loss; chooser filtering adds no store I/O.
+Missing or malformed session metadata also requires a reference check, using
+the session directory's stable ID rather than trusting a missing note marker.
 Explicit Conversation and Worktree forks remain ordinary discoverable sessions,
 may change preset, and follow ordinary cleanup rules.
 Reusing an existing directive child frame clears its old filter; note answers

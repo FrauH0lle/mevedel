@@ -73,6 +73,7 @@
 (declare-function mevedel-session-artifacts-sessions-dir
                   "mevedel-session-artifacts" (workspace))
 (autoload 'mevedel-session-artifacts-sessions-dir "mevedel-session-artifacts")
+(defvar mevedel-sessions-directory)
 
 ;; `mevedel-session-control-fs'
 (declare-function mevedel-session-control-fs-file-hash
@@ -81,8 +82,11 @@
                   "mevedel-session-control-fs" (result))
 (declare-function mevedel-session-control-fs-run-program
                   "mevedel-session-control-fs" (operations &optional lock-directory))
+(declare-function mevedel-session-control-fs-run-program-async
+                  "mevedel-session-control-fs" (operations callback &optional scope connected-only))
 (autoload 'mevedel-session-control-fs-program-value "mevedel-session-control-fs")
 (autoload 'mevedel-session-control-fs-run-program "mevedel-session-control-fs")
+(autoload 'mevedel-session-control-fs-run-program-async "mevedel-session-control-fs")
 (autoload 'mevedel-session-control-fs-file-hash "mevedel-session-control-fs")
 
 ;; `mevedel-structs'
@@ -124,6 +128,9 @@
 (declare-function mevedel-workspace-state-dir "mevedel-workspace" (workspace))
 (autoload 'mevedel-workspace-state-dir "mevedel-workspace")
 (defvar mevedel--workspace)
+
+;; `mevedel-workspace-identity'
+(declare-function mevedel-workspace-identity-read "mevedel-workspace-identity" (root))
 
 (defcustom mevedel-patch-outdated-instructions t
   "Automatically patch instructions when the save file is outdated if non-nil."
@@ -535,9 +542,10 @@ restore when their file is visited."
                   (mevedel--instruction-alist))))
       (let ((mevedel--inhibit-source-missing-restore t))
         (cl-loop for (file . _) in (mevedel--instruction-alist)
-                 when (or (not lazy) (find-buffer-visiting file))
+                 for visited = (and lazy (get-file-buffer file))
+                 when (or (not lazy) visited)
                  do (cl-multiple-value-bind (_ restored kia)
-                        (mevedel--restore-file-instructions file t workspace)
+                        (mevedel--restore-file-instructions file t workspace visited)
                       (cl-incf total-restored restored)
                       (cl-incf total-kia kia))))
       (when (or preserve-directives-p directive-records)
@@ -1064,6 +1072,47 @@ bytes read, the precondition a later write names."
                    workspace bytes (plist-get decoded :data)))
               (append (list :hash (secure-hash 'sha256 bytes)) decoded))))))))
 
+(defun mevedel-instruction-store-note-session-ids (workspace)
+  "Return WORKSPACE's retained note session IDs, or t when uncertain.
+Inspect live, stashed and closed records without changing dirty state.
+An unloaded workspace, pending store or remote root retains everything.
+For a loaded local workspace, one bounded read checks the current store
+as well, without installing it or triggering migration."
+  (condition-case nil
+      (let* ((state (gethash (mevedel--instruction-workspace-key workspace)
+                             mevedel--instruction-states))
+             (observed (plist-get state :store-observation)))
+        (if (or (file-remote-p (mevedel-workspace-root workspace))
+                (null (plist-get observed :data))
+                (plist-get state :store-pending))
+            t
+          (let* ((limit (* 16 1024 1024))
+                 (bytes (mevedel-session-control-fs-read-file
+                         (mevedel-instruction-store-path workspace)
+                         'no-conversion (1+ limit)))
+                 (decoded (and (<= (length bytes) limit)
+                               (mevedel-instruction-store--decode bytes workspace)))
+                 ids)
+            (if (not (eq (plist-get decoded :status) 'ok))
+                t
+              (cl-labels
+                  ((retain (properties)
+                     (when-let* ((id (plist-get properties 'mevedel-note-session-id)))
+                       (cl-pushnew id ids :test #'equal))))
+                (dolist (entry (plist-get state :instructions))
+                  (if (bufferp (car entry))
+                      (dolist (note (cdr entry))
+                        (retain (overlay-properties note)))
+                    (dolist (note (plist-get (cdr entry) :instructions))
+                      (retain (plist-get note :properties)))))
+                (dolist (closed (plist-get state :closed-notes))
+                  (retain (plist-get (plist-get closed :instruction) :properties)))
+                (dolist (entry (plist-get (plist-get decoded :data) :files))
+                  (dolist (note (plist-get (cdr entry) :instructions))
+                    (retain (plist-get note :properties)))))
+              ids))))
+    (error t)))
+
 (defun mevedel-instruction-store--write (workspace expected data)
   "Replace WORKSPACE's store with DATA while it still has hash EXPECTED.
 EXPECTED nil requires the store to be absent.  Return the new hash, or
@@ -1506,6 +1555,15 @@ with `mevedel-load-instructions'."
 
 (defun mevedel-instruction-store--observe (workspace hash data)
   "Record that WORKSPACE's store holds DATA with HASH."
+  (mevedel-notes-remember-remote-root
+   (mevedel-workspace-root workspace)
+   (cl-some (lambda (entry)
+              (cl-some (lambda (instruction)
+                         (eq (plist-get (plist-get instruction :properties)
+                                        'mevedel-instruction-type)
+                             'note))
+                       (plist-get (cdr entry) :instructions)))
+            (plist-get data :files)))
   (let ((key (mevedel--instruction-workspace-key workspace)))
     (setf (plist-get (mevedel--instruction-state key) :store-pending) nil
           (plist-get (mevedel--instruction-state key) :store-observation)
@@ -2060,6 +2118,52 @@ check.  Return LOAD's value."
           (if-let* ((hash (mevedel-instruction-store--write workspace expected record)))
               (mevedel-instruction-store--observe workspace hash record)
             (user-error "The instruction store changed while importing; load the file again")))))))
+
+(defun mevedel-instruction-store-read-connected (root)
+  "Read indexed remote ROOT once without waiting for target I/O.
+Only a live SSH master may carry the read.  A failed carrier leaves state
+untouched until an explicit workspace operation observes it normally."
+  (let* ((mevedel-instruction-store--activating t)
+         (workspace (mevedel-workspace-get-or-create 'project root root root))
+         timer)
+    (cl-labels
+        ((failed (reason)
+           (mevedel-diagnostic-warning
+            root 'mevedel (format "Background note restore skipped: %s" reason) :debug))
+         (fresh-p ()
+           (and (null (plist-get (mevedel-instruction-store--observation workspace) :data))
+                (mevedel-instruction-store--memory-empty-p workspace))))
+      (when (fresh-p)
+        (condition-case err
+            (let ((process
+                   (mevedel-session-control-fs-run-program-async
+                    (list (list :op 'read :path (mevedel-instruction-store-path workspace)
+                                :coding 'no-conversion :optional t))
+                    (lambda (results failure)
+                      (when timer (cancel-timer timer))
+                      (condition-case err
+                          (cond
+                           (failure (failed (error-message-string failure)))
+                           ;; An explicit operation may have changed notes while
+                           ;; the read was in flight.  Its newer state wins.
+                           ((not (fresh-p)))
+                           ((eq (plist-get (car results) :status) 'absent)
+                            (mevedel-notes-remember-remote-root root nil))
+                           (t
+                            (let* ((bytes (mevedel-session-control-fs-program-value (car results)))
+                                   (decoded (mevedel-instruction-store--decode bytes workspace)))
+                              (if (eq (plist-get decoded :status) 'ok)
+                                  (progn
+                                    (mevedel-instruction-store--install
+                                     workspace (plist-get decoded :data) t)
+                                    (mevedel-instruction-store--observe
+                                     workspace (secure-hash 'sha256 bytes) (plist-get decoded :data)))
+                                (failed (plist-get decoded :reason))))))
+                        (error (failed (error-message-string err)))))
+                    root t)))
+              (when (process-live-p process)
+                (setq timer (run-at-time 15 nil #'delete-process process))))
+          (error (failed (error-message-string err))))))))
 
 (defun mevedel-instruction-store-visit (file &optional key root)
   "Restore visited FILE from cached KEY or the local store at ROOT.
