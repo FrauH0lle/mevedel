@@ -280,9 +280,16 @@ by a background timer. Expiry never reverts file changes. Imported archived
 notes marked exempt from expiry do not count against these limits.
 
 Notes use the workspace instruction store, not a session's private state, and
-survive reloads wherever the workspace already has a `.mevedel/` state directory.
-As with references, a directory without workspace state keeps them in memory
-until instructions are exported or a session first creates that state directory.
+appear when their source file is opened, without starting a session or Buddy.
+The file-visit hook discovers only local stores; remote visits restore notes
+already remembered by this Emacs, without observing the remote store. Resume or
+an explicit workspace operation loads remote state.
+
+The first note in a recognized project (VCS or project.el) creates `.mevedel/`
+and saves the note. If the project's `.gitignore` does not cover `.mevedel/`,
+the command tells you; it never changes your ignore policy. Outside a project,
+an existing workspace state directory still saves notes. Otherwise notes stay
+in memory, and a one-time message says they are not saved there.
 The store and exports now use instruction format 2; a format-1 installation
 refuses them without clearing its live instructions or overwriting the file.
 Format-1 stores are not loaded by this version.

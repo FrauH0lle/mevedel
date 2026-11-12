@@ -11,6 +11,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'project)
 (require 'mevedel-directive-source)
 (require 'mevedel-instruction-registry)
 (require 'mevedel-overlay-ui)
@@ -30,6 +31,23 @@
 
 (defvar-local mevedel-notes--last-hinted nil
   "Note most recently announced by the local entry hint.")
+
+(defvar mevedel-notes--unsaved-noticed nil
+  "Nonproject roots whose in-memory-only note status was announced.")
+
+(defun mevedel-notes--state-ignored-p (root)
+  "Return non-nil when ROOT's Git ignore policy covers `.mevedel/'."
+  (with-temp-buffer
+    (let ((default-directory root))
+      (and (condition-case nil
+               (zerop (process-file
+                       "git" nil (list t nil) nil
+                       "-c" "core.excludesFile=/dev/null"
+                       "check-ignore" "--no-index" "-v" ".mevedel/"))
+             (file-error nil))
+           (string-match-p
+            "\\(?:\\`\\|/\\)\\.gitignore:[0-9]+:[^!\n]"
+            (buffer-string))))))
 
 (defun mevedel-notes--display-text (note)
   "Return NOTE's bounded, single-line display text, keeping authored text intact."
@@ -290,6 +308,26 @@ An empty string creates a code-only note.  Return the note overlay."
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
       (unless buffer-file-name
         (user-error "Notes need a source file"))
+      (unless (file-directory-p (mevedel-workspace-state-dir workspace))
+        (if-let* ((project (mevedel-workspace--project-current
+                           (file-name-directory buffer-file-name))))
+            (progn
+              (setq workspace (mevedel-workspace-get-or-create
+                               'project (project-root project) (project-root project)
+                               (project-name project)))
+              (setq-local mevedel--workspace workspace)
+              (make-directory (mevedel-workspace-state-dir workspace) t)
+              (unless (mevedel-notes--state-ignored-p
+                       (mevedel-workspace-root workspace))
+                (mevedel-diagnostic-message
+                 (mevedel-diagnostic-scope workspace)
+                 "Created .mevedel/; it is not covered by the project's .gitignore")))
+          (let ((root (mevedel-workspace-root workspace)))
+            (unless (member root mevedel-notes--unsaved-noticed)
+              (push root mevedel-notes--unsaved-noticed)
+              (mevedel-diagnostic-message
+               (mevedel-diagnostic-scope workspace)
+               "Notes outside a project are not saved")))))
       (let* ((region (use-region-p))
              (note (mevedel--create-instruction-overlay-in
                     (current-buffer)
