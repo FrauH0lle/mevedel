@@ -320,7 +320,8 @@
     (kill-buffer (find-buffer-visiting second))
     (mevedel--clear-instruction-state workspace)
     (let* ((session (mevedel-session-create "mentions" workspace))
-           (expansion (mevedel-mentions-expand-user-input "Explain @note:2" session))
+           (prepared (mevedel-mentions-prepare-user-input "Explain @note:2" session))
+           (expansion (mevedel-mentions-expand-user-input prepared session))
            (body (mapconcat (lambda (item) (plist-get item :body))
                             (plist-get expansion :reminder-items) "\n")))
       (should (string-match-p "contents attached" (plist-get expansion :text)))
@@ -417,6 +418,43 @@
       (should (string-match-p "first code" body))
       (should (string-match-p "unreadable" body))
       (should-not (string-match-p "second code" body)))))
+
+(mevedel-deftest mevedel-mentions-note-send-cost
+  (:quiet t)
+  ,test
+  (test)
+  :doc "binding and expanding several note mentions observes the store once"
+  (mevedel-notes-list-test--workspace
+    (let* ((session (mevedel-session-create "mentions" workspace))
+           (observations 0)
+           (counter (lambda (&rest _) (cl-incf observations))))
+      (advice-add 'mevedel-instruction-store-observe :before counter)
+      (unwind-protect
+          (with-temp-buffer
+            (setq-local mevedel--session session mevedel--workspace workspace)
+            (let* ((prepared (mevedel-mentions-prepare-user-input "@note:1 @note:2 @ref:1" session))
+                   (expansion (mevedel-mentions-expand-user-input prepared session)))
+              (should (string-match-p "contents attached" (plist-get expansion :text)))
+              (should (= 1 observations))))
+        (advice-remove 'mevedel-instruction-store-observe counter))))
+  :doc "tag attachments read unopened current sources without visiting their files"
+  (mevedel-notes-list-test--workspace
+    (dolist (file (list first second))
+      (with-current-buffer (find-buffer-visiting file)
+        (mevedel-note-set-tags '(review))))
+    (mevedel-instruction-store-flush t)
+    (dolist (file (list first second)) (kill-buffer (find-buffer-visiting file)))
+    (with-temp-file second (insert "new heading\nbefore\nsecond code\n"))
+    (let* ((session (mevedel-session-create "unopened" workspace))
+           (prepared (mevedel-mentions-prepare-user-input "@note:{review}" session))
+           (expansion (mevedel-mentions-expand-user-input prepared session))
+           (body (mapconcat (lambda (item) (plist-get item :body))
+                            (plist-get expansion :reminder-items) "\n")))
+      (should (string-match-p "first code" body))
+      (should (string-match-p "second code" body))
+      (should (string-match-p "second.el.*, line 3" body))
+      (should-not (find-buffer-visiting first))
+      (should-not (find-buffer-visiting second)))))
 
 (mevedel-deftest mevedel-notes-mode-line
   (:quiet t)

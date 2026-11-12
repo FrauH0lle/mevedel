@@ -265,6 +265,8 @@ an absolute pathname even when the path is currently unavailable."
          (working-directory
           (and session (mevedel-session-working-directory session)))
          (result (mevedel-mention-bindings-copy-text text)))
+    (when (and workspace (string-match-p "@\\(?:note\\|ref\\):" text))
+      (mevedel-instruction-store-observe workspace))
     (mevedel-mentions--bind-user-input-matches
      result "@note:\\([0-9]+\\)" 'note
      (lambda (captures)
