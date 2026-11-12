@@ -210,6 +210,32 @@
       (mevedel-notes-list-refresh)
       (should-not (string-match-p "review\\|parser" (buffer-string))))))
 
+(mevedel-deftest mevedel-note-set-tags/queryable
+  (:quiet t)
+  ,test
+  (test)
+  :doc "unqueryable tag symbols are refused without replacing existing tags"
+  (mevedel-notes-list-test--workspace
+    (with-current-buffer (find-buffer-visiting first)
+      (mevedel-note-set-tags '(review))
+      (dolist (name '("123" "needs review" "and" "or" "not" "nil" "unfinished("))
+        (should-error (mevedel-note-set-tags (list (intern name))) :type 'user-error)
+        (should (equal '(review) (overlay-get (mevedel-notes--at-point) 'mevedel-note-tags))))
+      (cl-letf (((symbol-function 'completing-read-multiple)
+                 (lambda (&rest _) '("123"))))
+        (should-error (call-interactively #'mevedel-note-set-tags) :type 'user-error))))
+  :doc "the list tag prompt rejects the same unqueryable tags as the source command"
+  (mevedel-notes-list-test--workspace
+    (setq list-buffer (mevedel-notes-list workspace))
+    (with-current-buffer list-buffer
+      (goto-char (point-min))
+      (search-forward "First thought")
+      (cl-letf (((symbol-function 'completing-read-multiple)
+                 (lambda (&rest _) '("needs review"))))
+        (should-error (call-interactively (key-binding "t")) :type 'user-error)))
+    (with-current-buffer (find-buffer-visiting first)
+      (should-not (overlay-get (mevedel-notes--at-point) 'mevedel-note-tags)))))
+
 (mevedel-deftest mevedel-note-capf/unopened
   (:quiet t)
   ,test
@@ -225,6 +251,7 @@
   (mevedel-notes-list-test--workspace
     (kill-buffer (find-buffer-visiting second))
     (mevedel--clear-instruction-state workspace)
+    (mevedel-instruction-store-observe workspace)
     (with-temp-buffer
       (setq-local mevedel--session (mevedel-session-create "completion" workspace))
       (dolist (kind '(note ref))
@@ -239,7 +266,15 @@
           (funcall exit "2" 'finished)
           (let ((binding (get-text-property 0 'mevedel-mention-binding (buffer-string))))
             (should (eq kind (plist-get binding :kind)))
-            (should (stringp (plist-get binding (if (eq kind 'note) :note-uuid :reference-uuid))))))))))
+            (should (stringp (plist-get binding (if (eq kind 'note) :note-uuid :reference-uuid)))))))))
+  :doc "note completion uses loaded metadata even when the store becomes unreadable"
+  (mevedel-notes-list-test--workspace
+    (with-temp-file (mevedel-instruction-store-path workspace) (insert "invalid"))
+    (with-temp-buffer
+      (setq-local mevedel--session (mevedel-session-create "cached-completion" workspace))
+      (insert "@note:")
+      (let ((completion (mevedel-note-capf)))
+        (should (member "2" (all-completions "" (nth 2 completion))))))))
 
 (mevedel-deftest mevedel-mentions-install
   (:quiet t)

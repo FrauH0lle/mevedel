@@ -205,13 +205,8 @@ and q to return to the invoking window."
 (defun mevedel-notes-list-tags ()
   "Edit the selected note's complete tag set."
   (interactive)
-  (let* ((note (mevedel-notes-list--selected-note))
-         (tags (overlay-get note 'mevedel-note-tags)))
-    (mevedel-note-set-tags
-     (mapcar #'intern (completing-read-multiple
-                       "Tags (empty removes all): " (mapcar #'symbol-name tags)
-                       nil nil (mapconcat #'symbol-name tags ",")))
-     note))
+  (let ((note (mevedel-notes-list--selected-note)))
+    (mevedel-note-set-tags (mevedel-notes--read-tags note) note))
   (mevedel-notes-list-refresh))
 
 (defun mevedel-notes-list-edit ()

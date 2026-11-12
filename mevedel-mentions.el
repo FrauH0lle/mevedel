@@ -1044,7 +1044,6 @@ Do not open source files merely to offer a note."
                                      (mevedel-session-workspace mevedel--session)
                                    (mevedel-workspace))))
             (require 'mevedel-notes)
-            (mevedel-instruction-store-observe workspace)
             (let* ((entries (mevedel-notes--entries workspace))
                    (candidates
                     (if query
