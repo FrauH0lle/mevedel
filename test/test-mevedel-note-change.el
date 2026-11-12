@@ -82,5 +82,24 @@
     (should (string-search "change ready"
                            (overlay-get (overlay-get note 'mevedel-label-overlay) 'after-string)))))
 
+(mevedel-deftest mevedel-note-apply-change
+  (:quiet t)
+  ,test
+  (test)
+  :doc "apply writes the prepared change and one undo restores the source"
+  (mevedel-note-change-test--with-note
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+    (with-current-buffer source
+      (buffer-enable-undo)
+      (setq buffer-undo-list nil)
+      (mevedel-note-apply-change note)
+      (should (equal "before\nnew\nafter\n" (buffer-string)))
+      (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))
+      (should-not (eq 'closed (overlay-get note 'mevedel-note-state)))
+      (should-not (eq 'ready (mevedel-notes-attention-state note)))
+      (undo-only 1)
+      (should (equal "before\nold\nafter\n" (buffer-string))))))
+
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here
