@@ -1,27 +1,25 @@
 ---
-name: "Delegation model preference"
-description: "Let the coordinating model choose delegated models using the current preset and task needs, without a fixed-model fallback."
+name: "Delegation roles and implementation-model preference"
+description: "Delegate implementation appropriately; use Codex gpt-6.1-sol at high or greater effort, reserving gpt-6-astra for hard parts."
 type: user
 ---
 
-For multi-agent work (pair partners, reviewers, implementers and other
-sub-agents), the coordinating model should choose an appropriate model and
-effort for the task, using the current preset's available choices and policy
-as context. There is no standing preference for a particular model or a
-fixed high-effort fallback. Respect explicit model and effort settings in
-the current preset and the user's request.
+# Delegation roles and model selection
 
-The user also prefers the main assistant to act as orchestrator, reviewer, and
-coordinator, delegating implementation to agents when appropriate. This is a
-role preference, not a requirement to delegate every task.
+## Coordination role
 
-**Why:** on 2026-10-30, the user explicitly replaced the fixed-model
-delegation preference with coordinator-selected models, for example from
-the current preset. The earlier fallback was causing one model to be chosen
-too consistently. The coordination role preference was stated on 2026-10-26.
+The user prefers the main assistant to act as orchestrator, reviewer, and coordinator, delegating implementation to agents when appropriate. This role preference, stated on 2026-10-26, is not a requirement to delegate every task.
 
-**How to apply:** follow explicit user selections first, then the current
-preset's model and effort policy. Where selection is discretionary, choose
-for the delegated task rather than importing an old model preference from
-memory. Check current model availability before choosing. Coordinate and
-review delegated implementation when it is appropriate to delegate.
+## Implementation-model preference
+
+**User correction, 2026-11-07** (`segment-0001.chat.org`, turn 39): for delegated implementation, use Codex **gpt-6.1-sol** at effort **“high or more”**; reserve **gpt-6-astra** for **“hard” parts**.
+
+This corrected the assistant's plan to continue implementation with a gpt-6-astra agent. Apply it to implementation work, not automatically to pair partners, reviewers, or every other delegated role. “Hard” was not given a precise threshold.
+
+## Other delegated roles and current configuration
+
+On 2026-10-30, the user replaced an earlier fixed-model fallback with coordinator-selected models informed by the current preset and task needs, because the fallback caused one model to be chosen too consistently. The November 7 correction supplies a more specific preference for implementation; it does not establish a fixed model for every role.
+
+Respect explicit selections in the current user request and applicable preset constraints. Check current availability rather than assuming a remembered model is selectable. If the implementation preference cannot be met under the current configuration, surface that mismatch rather than silently claiming to have followed it.
+
+For discretionary selections outside the implementation preference, choose model and effort for the delegated task. Coordinate and review delegated implementation when delegation is appropriate.
