@@ -37,6 +37,13 @@ Return an ordinary tool result immediately; no tool callback is retained."
                                           (plist-get change :path)))
                                        changes))))
     (unless notes (error "No open note owns this conversation"))
+    (with-current-buffer data-buffer
+      (when mevedel--current-request
+        (let ((snapshots (mevedel-request-file-snapshots mevedel--current-request)))
+          (dolist (before (plist-get record :before))
+            (let ((path (plist-get before :path)))
+              (when (equal (gethash path snapshots 'missing) (plist-get before :bytes))
+                (remhash path snapshots)))))))
     (dolist (entry notes)
       (let ((note (mevedel-notes--resolve (plist-get entry :uuid) workspace)))
         (overlay-put note 'mevedel-note-prepared-change record)

@@ -289,5 +289,26 @@
                               (should-error (mevedel-note-merge-change note) :type 'user-error)))))
     (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))))
 
+(mevedel-deftest mevedel-note-prepared-history
+  (:quiet t)
+  ,test
+  (test)
+  :doc "an unchanged preparation capture never records later user edits as an applied change"
+  (mevedel-note-change-test--with-note
+    (with-current-buffer data-buf
+      (let* ((snapshots (make-hash-table :test #'equal))
+             (mevedel--current-request (mevedel-request--create :file-snapshots snapshots)))
+        (puthash file "before\nold\nafter\n" snapshots)
+        (mevedel-note-change-test--propose
+         data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+        (with-current-buffer source
+          (goto-char (point-max))
+          (insert "user edit\n")
+          (save-buffer))
+        (mevedel-session-artifacts-save session data-buf nil t)))
+    (let ((saved (mevedel-session-codec-read
+                  (mevedel-session-artifacts-sidecar-path (mevedel-session-save-path session)))))
+      (should-not (cdr (assq 0 (plist-get saved :file-snapshots)))))))
+
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here
