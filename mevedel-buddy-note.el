@@ -23,6 +23,7 @@
 
 ;; `mevedel-buddy'
 (declare-function mevedel-buddy--guide-payload "mevedel-buddy" (beg end))
+(declare-function mevedel-buddy--payload-lines "mevedel-buddy" (payload))
 
 ;; `mevedel-notes'
 (declare-function mevedel-note-close "mevedel-notes" (note reason))
@@ -70,15 +71,40 @@ Nil denies every tool call, including calls after abandonment.")
 (defvar mevedel-buddy-note--taken nil
   "Captured taken-note goals and code owned by the current review.")
 
-(defun mevedel-buddy-note-prepare-taken (payload)
-  "Add taken-note briefs and numbered code to PAYLOAD, capturing their state."
-  (setq mevedel-buddy-note--taken nil)
-  (let (sections)
+(defvar mevedel-buddy-note--goals nil
+  "Captured authored goals near the current review's shown code.")
+
+(defvar mevedel-buddy-note--level nil
+  "Captured automatic dial level; nil means an explicitly requested review.")
+
+(defun mevedel-buddy-note-prepare-context (payload &optional level)
+  "Add invited goal context to PAYLOAD, capturing automatic dial LEVEL.
+Taken notes supply their code and brief.  Active also receives authored goals
+within six lines of the edited region; other notes remain out of the prompt."
+  (setq mevedel-buddy-note--taken nil
+        mevedel-buddy-note--goals nil
+        mevedel-buddy-note--level level)
+  (let ((shown (mevedel-buddy--payload-lines payload)) sections)
     (dolist (entry mevedel-buddy-note--scope-buffers)
       (with-current-buffer (cdr entry)
         (save-restriction
           (widen)
           (dolist (note (overlays-in (point-min) (point-max)))
+            (when (and (eq 'note (overlay-get note 'mevedel-instruction-type))
+                       (not (eq 'buddy (overlay-get note 'mevedel-note-author)))
+                       (not (string-blank-p (or (overlay-get note 'mevedel-note-text) ""))))
+              (let ((first (line-number-at-pos (overlay-start note)))
+                    (last (line-number-at-pos (overlay-end note))))
+                (when (or (eq 'taken (overlay-get note 'mevedel-note-state))
+                          (and (eq level 'active)
+                               (seq-some (lambda (line) (<= (- first 6) line (+ last 6)))
+                                         (cdr (assoc (car entry) shown)))))
+                  (push (list :overlay note :text (overlay-get note 'mevedel-note-text))
+                        mevedel-buddy-note--goals)
+                  (unless (eq 'taken (overlay-get note 'mevedel-note-state))
+                    (push (format "\nNearby goal, note %s at %s:%s-%s: %s\n"
+                                  (overlay-get note 'mevedel-id) (car entry) first last
+                                  (overlay-get note 'mevedel-note-text)) sections)))))
             (when (eq 'taken (overlay-get note 'mevedel-note-state))
               (push (list :overlay note
                           :text (overlay-get note 'mevedel-note-text)
@@ -91,7 +117,43 @@ Nil denies every tool call, including calls after abandonment.")
                             (mevedel-buddy--guide-payload
                              (overlay-start note) (overlay-end note)))
                     sections))))))
-    (concat payload (mapconcat #'identity (nreverse sections) "\n"))))
+    (concat payload (mapconcat #'identity (nreverse sections) "\n")
+            (when level
+              (format (concat "\nWorkspace dial: %s. Quiet: only taken-note code. "
+                              "Watching: likely mistakes only. Active: ideas only near "
+                              "the supplied goals; elsewhere behave like Watching.\n") level)))))
+
+(defun mevedel-buddy-note--near-goal-p (buffer position records distance &optional taken)
+  "Whether BUFFER's POSITION is within DISTANCE lines of captured RECORDS.
+The authored goal must still match.  TAKEN requires the note still be taken."
+  (seq-some
+   (lambda (record)
+     (let ((note (plist-get record :overlay)))
+       (and (eq buffer (overlay-buffer note))
+            (or (not taken) (eq 'taken (overlay-get note 'mevedel-note-state)))
+            (equal (plist-get record :text) (overlay-get note 'mevedel-note-text))
+            (with-current-buffer buffer
+              (save-restriction
+                (widen)
+                (<= (- (line-number-at-pos (overlay-start note)) distance)
+                    (line-number-at-pos position)
+                    (+ (line-number-at-pos (max (overlay-start note)
+                                               (1- (overlay-end note)))) distance)))))))
+   records))
+
+(defun mevedel-buddy-note--admission (buffer position kind)
+  "Return a refusal for KIND at BUFFER's POSITION, or nil when invited."
+  (cond
+   ((not (member kind '(nil "mistake" "idea"))) "Unknown remark kind")
+   ((and (eq 'quiet mevedel-buddy-note--level)
+         (not (mevedel-buddy-note--near-goal-p
+               buffer position mevedel-buddy-note--taken 0 t)))
+    "Quiet only watches taken-note code")
+   ((and (equal kind "idea") mevedel-buddy-note--level
+         (or (not (eq 'active mevedel-buddy-note--level))
+             (not (mevedel-buddy-note--near-goal-p
+                   buffer position mevedel-buddy-note--goals 6))))
+    "Ideas need Active and a nearby known goal")))
 
 (defun mevedel-buddy-note-looks-done (id)
   "Say taken note ID looks done if its captured goal and code are still current.
@@ -119,7 +181,9 @@ This is feedback only: the user must explicitly close the note."
 (defun mevedel-buddy-note-finish-review ()
   "Persist the current review's whole change set through the checked store."
   (setq mevedel-buddy-note--prepared-buffers nil
-        mevedel-buddy-note--taken nil)
+        mevedel-buddy-note--taken nil
+        mevedel-buddy-note--goals nil
+        mevedel-buddy-note--level nil)
   (dolist (record mevedel-buddy-note--notes)
     (unless (plist-get record :overlay)
       (plist-put record :line (mevedel-buddy-note--line record))))
@@ -429,9 +493,10 @@ LINE.  Raw line counting is not annotation authority."
   (when-let* ((review-buffer (mevedel-buddy-note--scope-buffer buffer-name)))
     (eq review-buffer (get-buffer buffer-name))))
 
-(defun mevedel-buddy-note-add (buffer-name line note severity)
+(defun mevedel-buddy-note-add (buffer-name line note severity &optional kind)
   "Attach NOTE to LINE of BUFFER-NAME at SEVERITY.
 
+KIND is the string mistake or idea, defaulting to mistake.
 Return the note id, reusing an exact repeat, or an explanatory string."
   (let ((buffer (get-buffer buffer-name))
         (number (mevedel-buddy-note--integer line)))
@@ -444,6 +509,8 @@ Return the note id, reusing an exact repeat, or an explanatory string."
       (format "Line %s was not shown in this review" line))
      ((not (member severity (mevedel-buddy-note--severities)))
       (format "Unknown severity: %s" severity))
+     ((mevedel-buddy-note--admission
+       buffer (mevedel-buddy-note--position buffer number) kind))
      (t
       (let* ((actual-line
               (with-current-buffer buffer
@@ -750,7 +817,9 @@ the review, not once per tool call."
              :description "The concise remark.")
             (:name "severity" :type string
              :enum ["trivial" "significant" "critical"]
-             :description "How much this matters."))
+             :description "How much this matters.")
+            (:name "kind" :type string :enum ["mistake" "idea"]
+             :description "A likely mistake, or a goal-directed idea (Active only)."))
     :category "buddy")
    (gptel-make-tool
     :name "update_note"

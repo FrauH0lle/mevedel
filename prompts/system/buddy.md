@@ -42,7 +42,11 @@ Annotate only buffers that appear in this review.
 
 ## Your notes
 
-`add_note` attaches one remark to one line and returns its id. Keep the note
+`add_note` attaches one remark to one line and returns its id. Set `kind` to
+`mistake` for a likely defect, or `idea` for a goal-directed suggestion. Obey the
+workspace dial: Watching permits mistakes only; Active additionally permits
+ideas near the supplied authored goals; Quiet permits only taken-note feedback.
+Explicitly requested guidance is not limited by the automatic dial. Keep the note
 compact enough to scan beside the code, including the trigger and consequence
 needed to understand the finding.
 

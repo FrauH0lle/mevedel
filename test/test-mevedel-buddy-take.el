@@ -183,5 +183,49 @@ AUTOMATIC exercises the idle review policy without waiting for idle time."
       (should-not (mevedel-take-test--review
                    (lambda (&rest _) (ert-fail "Quiet spoke after drop")) t)))))
 
+(mevedel-deftest mevedel-buddy-review/dial
+  (:quiet t)
+  ,test
+  (test)
+  :doc "Quiet makes no unasked request without a taken note"
+  (mevedel-take-test--with-source
+    (mevedel-buddy-set-level 'quiet workspace)
+    (insert "edited ")
+    (should-not (mevedel-take-test--review
+                 (lambda (&rest _) (ert-fail "Quiet made an unasked request")) t)))
+  :doc "Watching permits mistakes but refuses ideas even beside a known goal"
+  (mevedel-take-test--with-source
+    (mevedel-buddy-set-level 'watching workspace)
+    (mevedel-note-create "Add retry with backoff")
+    (insert "edited ")
+    (let ((name (buffer-name)))
+      (should
+       (mevedel-take-test--review
+        (lambda (_prompt tools)
+          (should (integerp (mevedel-take-test--tool
+                             tools "add_note" name 2 "A likely mistake" "significant" "mistake")))
+          (should (stringp (mevedel-take-test--tool
+                            tools "add_note" name 2 "An unasked idea" "significant" "idea")))) t)))
+    (should (string-search "A likely mistake" (mevedel-take-test--labels)))
+    (should-not (string-search "An unasked idea" (mevedel-take-test--labels))))
+  :doc "Active allows ideas by a nearby authored goal but not elsewhere"
+  (mevedel-take-test--with-source
+    (mevedel-buddy-set-level 'active workspace)
+    (let ((name (buffer-name)))
+      (insert "edited ")
+      (mevedel-take-test--review
+       (lambda (_prompt tools)
+         (should (stringp (mevedel-take-test--tool
+                           tools "add_note" name 2 "Ungrounded idea" "significant" "idea")))) t)
+      (mevedel-note-create "Add retry with backoff")
+      (insert "again ")
+      (mevedel-take-test--review
+       (lambda (prompt tools)
+         (should (string-search "Add retry with backoff" prompt))
+         (should (integerp (mevedel-take-test--tool
+                            tools "add_note" name 2 "Try jitter too" "significant" "idea")))) t)
+      (should (string-search "Try jitter too" (mevedel-take-test--labels)))
+      (should-not (string-search "Ungrounded idea" (mevedel-take-test--labels))))))
+
 (provide 'test-mevedel-buddy-take)
 ;;; test-mevedel-buddy-take.el ends here

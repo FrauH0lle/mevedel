@@ -51,7 +51,7 @@
 ;; `mevedel-buddy-note'
 (declare-function mevedel-buddy-note-capture-markers "mevedel-buddy-note" (buffer-names))
 (declare-function mevedel-buddy-note-finish-review "mevedel-buddy-note" ())
-(declare-function mevedel-buddy-note-prepare-taken "mevedel-buddy-note" (payload))
+(declare-function mevedel-buddy-note-prepare-context "mevedel-buddy-note" (payload &optional level))
 (declare-function mevedel-buddy-note-release-markers "mevedel-buddy-note" ())
 (declare-function mevedel-buddy-note-restore "mevedel-buddy-note" ())
 (declare-function mevedel-buddy-note-serialize "mevedel-buddy-note" ())
@@ -560,7 +560,7 @@ insertion, which the user feels as lag while the request is in flight."
        ((and buffer-name (string-match "^ *\\([0-9]+\\) " line))
         (let ((entry (assoc buffer-name result)))
           (push (string-to-number (match-string 1 line)) (cdr entry))))))
-    (mapcar (lambda (entry) (cons (car entry) (nreverse (cdr entry))))
+    (mapcar (lambda (entry) (cons (car entry) (delete-dups (nreverse (cdr entry)))))
             (nreverse result))))
 
 (defun mevedel-buddy--format-changes (changes)
@@ -813,7 +813,8 @@ started by the idle timer, which an explicit request may preempt."
     (condition-case err
         (progn
           (mevedel-buddy-note-restore)
-          (setq payload (mevedel-buddy-note-prepare-taken payload))
+          (setq payload (mevedel-buddy-note-prepare-context
+                         payload (and automatic (mevedel-buddy-level))))
           (mevedel-buddy-note-capture-markers
            (mevedel-buddy--payload-lines payload)))
       (error
@@ -919,19 +920,21 @@ AUTOMATIC retains ordinary review preemption.  A changed source abandons the
 snapshot without retiring edits or sending stale line numbers to a model.
 TAKEN-NAMES includes watched buffers even when they have no recorded edits."
   (let* ((source (current-buffer))
+         (quiet (and automatic (eq 'quiet (mevedel-buddy-level))))
          (generation (cl-incf mevedel-buddy--generation))
          (through (current-time))
-         (names (delete-dups (append taken-names (mevedel-buddy--changed-buffers changes))))
+         (names (delete-dups (append taken-names
+                                    (unless quiet (mevedel-buddy--changed-buffers changes)))))
          (stamps (mapcar
                   (lambda (name)
                     (with-current-buffer name
                       (list (current-buffer) (buffer-chars-modified-tick)
                             (buffer-name) buffer-file-name default-directory)))
                   names))
-         (groups (mapcar
+         (groups (unless quiet (mapcar
                   (lambda (group) (reverse (cdr group)))
                   (seq-group-by (lambda (change) (plist-get change :buffer))
-                                (reverse changes))))
+                                (reverse changes)))))
          sections dispatching)
     (setq mevedel-buddy--running scope-key
           mevedel-buddy--running-automatic automatic)
@@ -1007,6 +1010,9 @@ user.  Returns non-nil when preparation was scheduled."
          (changes (seq-filter #'mevedel-buddy--live-change-p
                               (mevedel-buddy--changes-for-scope scope-key))))
     (cond
+     ((and automatic (eq 'quiet (mevedel-buddy-level)) (null taken))
+      (mevedel-buddy--retire-changes scope-key (current-time))
+      nil)
      ((and (null changes) (null taken)) nil)
      (mevedel-buddy--running nil)
      (t
