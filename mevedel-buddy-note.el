@@ -545,14 +545,18 @@ Return the note id, reusing an exact repeat, or an explanatory string."
                 mevedel-buddy-note--notes))
         id)))))
 
-(defun mevedel-buddy-note-update (id note)
-  "Replace the text of note ID with NOTE, leaving it where it is."
+(defun mevedel-buddy-note-update (id note &optional kind)
+  "Replace the text of note ID with NOTE, leaving it where it is.
+KIND is the string mistake or idea, defaulting to mistake."
   (if-let* ((record (mevedel-buddy-note--find id)))
       (cond
        ((not (mevedel-buddy-note--in-scope-p (plist-get record :buffer)))
         (format "Note %s is not in the review scope" (plist-get record :id)))
        ((not (mevedel-buddy-note--owned-p record))
         (format "Note %s is no longer owned by this review" id))
+       ((let ((overlay (plist-get record :overlay)))
+          (mevedel-buddy-note--admission
+           (overlay-buffer overlay) (overlay-start overlay) kind)))
        (t
         (let ((overlay (plist-get record :overlay)))
           (plist-put record :note note)
@@ -825,7 +829,7 @@ the review, not once per tool call."
              :enum ["trivial" "significant" "critical"]
              :description "How much this matters.")
             (:name "kind" :type string :enum ["mistake" "idea"]
-             :description "A likely mistake, or a goal-directed idea (Active only)."))
+             :description "A likely mistake, or a goal-directed idea (automatic Active only)."))
     :category "buddy")
    (gptel-make-tool
     :name "update_note"
@@ -836,7 +840,9 @@ the review, not once per tool call."
     :args '((:name "note_id" :type integer
              :description "The note_id from the note list.")
             (:name "note" :type string
-             :description "Replacement remark text."))
+             :description "Replacement remark text.")
+            (:name "kind" :type string :enum ["mistake" "idea"]
+             :description "A likely mistake, or a goal-directed idea (automatic Active only)."))
     :category "buddy")
    (gptel-make-tool
     :name "remove_note"

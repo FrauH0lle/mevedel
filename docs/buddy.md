@@ -192,7 +192,7 @@ A review covers the **region around your change**, not only the lines you
 touched. The payload carries six lines of context either side of each change,
 and every numbered line in it can carry a note — so a bug sitting next to an
 edit gets named even though you did not introduce it this round.
-Quiet limits new remarks to taken-note code; Watching refuses ideas; Active
+Quiet limits new or updated remarks to taken-note code; Watching refuses ideas; Active
 permits ideas only within six lines of a captured authored goal whose text
 still matches. Taken goals are included even without a pending edit, and
 completion feedback is accepted only while both the goal and captured code

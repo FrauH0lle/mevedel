@@ -444,5 +444,42 @@ AUTOMATIC exercises the idle review policy without waiting for idle time."
         (lambda (prompt _tools)
           (should (string-search "SHARED-PROJECT-BRIEF" prompt))) t)))))
 
+(mevedel-deftest mevedel-buddy-review/update-dial
+  (:quiet t)
+  ,test
+  (test)
+  :doc "automatic remark updates obey the same dial as new remarks"
+  (dolist (level '(quiet watching))
+    (mevedel-take-test--with-source
+      (mevedel-buddy-mode 1)
+      (goto-char (point-min))
+      (insert "edited ")
+      (let ((name (buffer-name)) id)
+        (should
+         (mevedel-take-test--review
+          (lambda (_prompt tools)
+            (setq id (mevedel-take-test--tool
+                      tools "add_note" name 1 "Original remark" "significant" "mistake"))
+            (should (integerp id)))))
+        (goto-char (point-min)) (forward-line 1)
+        (mevedel-note-take (mevedel-note-create "Implement the selected code"))
+        (mevedel-buddy-set-level level workspace)
+        (should
+         (mevedel-take-test--review
+          (lambda (_prompt tools)
+            (should
+             (string-match-p
+              (if (eq level 'quiet) "Quiet" "Ideas")
+              (if (eq level 'quiet)
+                  (mevedel-take-test--tool tools "update_note" id "Uninvited update")
+                (mevedel-take-test--tool tools "update_note" id "Uninvited update" "idea"))))
+            (let ((invited (mevedel-take-test--tool
+                            tools "add_note" name 2 "Taken concern" "significant" "mistake")))
+              (should (integerp invited))
+              (mevedel-take-test--tool tools "update_note" invited "Current taken concern"))) t))
+        (should (string-search "Original remark" (mevedel-take-test--labels)))
+        (should (string-search "Current taken concern" (mevedel-take-test--labels)))
+        (should-not (string-search "Uninvited update" (mevedel-take-test--labels)))))))
+
 (provide 'test-mevedel-buddy-take)
 ;;; test-mevedel-buddy-take.el ends here
