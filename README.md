@@ -279,6 +279,19 @@ when closing, listing or restoring closed notes and when writing the store, not
 by a background timer. Expiry never reverts file changes. Imported archived
 notes marked exempt from expiry do not count against these limits.
 
+`M-x mevedel-notes-list` lists the whole workspace, including unopened files,
+grouped by attention state. Use `v` or `RET` to visit, `e` to edit, `t` to edit
+tags, `d` to delete, `g` to refresh and `q` to close. Listing does not open the
+source files. `M-x mevedel-note-set-tags` also edits the tags at point; an empty
+answer removes every tag.
+
+Mention `@note:3` in a chat to attach that note's current code and text, or
+`@note:{parser and not tests}` to attach notes matching a tag query. Numbers bind
+to the selected note's identity, while tag queries re-evaluate current matches.
+Empty or unmatched queries attach nothing and report that clearly. Notes are
+never automatic prompt context. The mode line summarizes working, ready and
+stale notes in the current workspace using only in-memory state.
+
 Notes use the workspace instruction store, not a session's private state, and
 appear when their source file is opened, without starting a session or Buddy.
 The file-visit hook discovers only local stores; remote visits restore notes

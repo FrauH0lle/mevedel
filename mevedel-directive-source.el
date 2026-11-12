@@ -290,6 +290,7 @@ shape, links, and directive activity.  Calls are idempotent."
     mevedel-uuid
     mevedel-instruction-type
     mevedel-note-text
+    mevedel-note-tags
     mevedel-note-author
     mevedel-note-state
     mevedel-note-buddy-severity
