@@ -296,9 +296,16 @@ notes marked exempt from expiry do not count against these limits.
 
 Notes use the workspace instruction store, not a session's private state, and
 appear when their source file is opened, without starting a session or Buddy.
-The file-visit hook discovers only local stores; remote visits restore notes
-already remembered by this Emacs, without observing the remote store. Resume or
-an explicit workspace operation loads remote state.
+The file-visit hook discovers local stores and restores remembered notes without
+remote I/O. A small local index (`$XDG_STATE_HOME/mevedel/remote-notes.el`, or
+`~/.local/state/mevedel/remote-notes.el`) remembers only remote workspace roots
+with notes, never note content. After a restart, the first file visit in an
+indexed root queues one background store read for that Emacs run. For direct
+SSH/SCP roots it uses only the visit's existing SSH master and restores notes
+in already-visited buffers.
+Unindexed roots cause no remote notes traffic. If connection sharing is absent,
+the master disappears, or the read fails, it does not reconnect or fall back to
+blocking I/O; resume or an explicit workspace operation loads the notes instead.
 
 The first note in a recognized project (VCS or project.el) creates `.mevedel/`
 and saves the note. If the project's `.gitignore` does not cover `.mevedel/`,
