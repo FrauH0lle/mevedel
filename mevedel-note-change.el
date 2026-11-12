@@ -34,6 +34,25 @@
                               (mevedel-tool-patch--snapshot (plist-get change :path)))
                             changes)))))
 
+(defun mevedel-note-change--touches-p (note record)
+  "Return non-nil when RECORD changes NOTE's marked source lines."
+  (with-current-buffer (overlay-buffer note)
+    (save-restriction
+      (widen)
+      (when-let* ((change (cl-find buffer-file-name (plist-get record :changes)
+                                  :key (lambda (item) (plist-get item :path)) :test #'equal)))
+        (or (eq 'delete (plist-get change :action))
+            (let* ((before (cl-find buffer-file-name (plist-get record :before)
+                                    :key (lambda (item) (plist-get item :path)) :test #'equal))
+                   (start (1- (line-number-at-pos (overlay-start note))))
+                   (end (line-number-at-pos (max (overlay-start note) (1- (overlay-end note))))))
+              (cl-some (lambda (run)
+                         (mevedel-change--overlap-p start end (nth 0 run) (nth 1 run)))
+                       (mevedel-change--runs
+                        (or (plist-get before :bytes) "")
+                        (or (plist-get change :bytes)
+                            (encode-coding-string (plist-get change :content) 'utf-8-unix))))))))))
+
 (defun mevedel-note-prepare-change (proposal changes data-buffer)
   "Hold PROPOSAL and CHANGES for DATA-BUFFER's notes without writing source.
 Return an ordinary tool result immediately; no tool callback is retained."
@@ -47,6 +66,12 @@ Return an ordinary tool result immediately; no tool callback is retained."
                  (mevedel-notes--entries workspace)))
          (record (mevedel-note-change-record proposal changes data-buffer)))
     (unless notes (error "No open note owns this conversation"))
+    (setq notes (mapcar (lambda (entry)
+                         (mevedel-notes--resolve (plist-get entry :uuid) workspace)) notes))
+    ;; New-file-only work still belongs to the requesting conversation.
+    (setq notes (or (cl-remove-if-not
+                     (lambda (note) (mevedel-note-change--touches-p note record)) notes)
+                    notes))
     (with-current-buffer data-buffer
       (when mevedel--current-request
         (let ((snapshots (mevedel-request-file-snapshots mevedel--current-request)))
@@ -54,11 +79,10 @@ Return an ordinary tool result immediately; no tool callback is retained."
             (let ((path (plist-get before :path)))
               (when (equal (gethash path snapshots 'missing) (plist-get before :bytes))
                 (remhash path snapshots)))))))
-    (dolist (entry notes)
-      (let ((note (mevedel-notes--resolve (plist-get entry :uuid) workspace)))
-        (overlay-put note 'mevedel-note-prepared-change record)
-        (overlay-put note 'mevedel-note-attention-state 'ready)
-        (mevedel-notes--render note)))
+    (dolist (note notes)
+      (overlay-put note 'mevedel-note-prepared-change record)
+      (overlay-put note 'mevedel-note-attention-state 'ready)
+      (mevedel-notes--render note))
     (mevedel-instruction-store-touch workspace)
     (mevedel-instruction-store-flush t)
     (let* ((result (mevedel-tool-patch-result proposal changes))

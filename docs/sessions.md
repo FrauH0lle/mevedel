@@ -31,8 +31,11 @@ dispatch, not regenerated from later source edits.
 
 Ordinary filesystem and TRAMP source patches from ApplyPatch become prepared
 changes, not writes or pending provider callbacks. Their preparation-time base
-and proposal persist on the workspace note record. The latest proposal replaces
-the waiting one; the ordinary tool transcript retains earlier proposals.
+and proposal persist on the workspace note record. A batch proposal attaches only
+to the notes whose code it changes; auxiliary files travel with that proposal.
+If none of the session's noted code is touched, it attaches to all session notes
+so work such as extraction into a new file remains available. The latest proposal
+replaces those notes' waiting change; the ordinary tool transcript retains earlier proposals.
 Resource-address patches keep the normal ApplyPatch path.
 
 User apply and confirmed manual merge record the actual application-time pair

@@ -95,7 +95,29 @@
     (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))
     (should (eq 'ready (mevedel-notes-attention-state note)))
     (should (string-search "change ready"
-                           (overlay-get (overlay-get note 'mevedel-label-overlay) 'after-string)))))
+                           (overlay-get (overlay-get note 'mevedel-label-overlay) 'after-string))))
+  :doc "batch proposals attach only to touched code and preserve a sibling's waiting change"
+  (mevedel-note-change-test--with-note
+    (let ((sibling (with-current-buffer source
+                     (goto-char (point-min))
+                     (let ((item (mevedel-note-create "Other request")))
+                       (overlay-put item 'mevedel-note-state 'sent)
+                       (overlay-put item 'mevedel-note-session-id
+                                    (mevedel-session-session-id session))
+                       item))))
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+      (should (eq 'ready (mevedel-notes-attention-state note)))
+      (should-not (eq 'ready (mevedel-notes-attention-state sibling)))
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-before\n+BEFORE\n*** End Patch")
+      (should (eq 'ready (mevedel-notes-attention-state note)))
+      (should (eq 'ready (mevedel-notes-attention-state sibling)))
+      (mevedel-note-apply-change note)
+      (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))
+      (should (eq 'ready (mevedel-notes-attention-state sibling)))
+      (mevedel-note-apply-change sibling)
+      (should (equal "BEFORE\nnew\nafter\n" (mevedel-test--read-file file))))))
 
 (mevedel-deftest mevedel-note-apply-change
   (:quiet t)
