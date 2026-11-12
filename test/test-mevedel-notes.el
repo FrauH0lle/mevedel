@@ -153,6 +153,26 @@
         (should (string-match-p "Shared by sessions"
                                 (car (mevedel-notes-test--labels))))))))
 
+(mevedel-deftest mevedel-note-edit
+  (:quiet t)
+  ,test
+  (test)
+  :doc "explicit note target persists to its own workspace from another buffer"
+  (mevedel-notes-test--with-source
+    (let* ((note (mevedel-note-create "Before"))
+           (other-root (file-name-concat directory "other"))
+           (other (mevedel-workspace--create
+                   :type 'file :id other-root :root other-root :name "other")))
+      (make-directory (file-name-concat other-root ".mevedel") t)
+      (with-temp-buffer
+        (setq-local mevedel--workspace other)
+        (mevedel-note-edit "Changed from another workspace" note))
+      (mevedel-instruction-store-flush t)
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (should (string-match-p "Changed from another workspace"
+                              (car (mevedel-notes-test--labels)))))))
+
 (mevedel-deftest mevedel-note-menu
   (:quiet t)
   ,test

@@ -97,7 +97,8 @@
   (interactive (let ((note (mevedel-notes--at-point)))
                  (list (read-string "Note: " (overlay-get note 'mevedel-note-text))
                        note)))
-  (let ((workspace (mevedel--instruction-buffer-workspace (current-buffer))))
+  (let ((workspace (mevedel--instruction-buffer-workspace
+                    (if note (overlay-buffer note) (current-buffer)))))
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
       (setq note (or note (mevedel-notes--at-point)))
       (overlay-put note 'mevedel-note-text text)
@@ -108,7 +109,8 @@
 (defun mevedel-note-delete (&optional note)
   "Delete NOTE, defaulting to the note at point, without changing code."
   (interactive)
-  (let ((workspace (mevedel--instruction-buffer-workspace (current-buffer))))
+  (let ((workspace (mevedel--instruction-buffer-workspace
+                    (if note (overlay-buffer note) (current-buffer)))))
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
       (mevedel--delete-instruction (or note (mevedel-notes--at-point))))))
 
@@ -116,7 +118,8 @@
 (defun mevedel-note-menu (&optional note)
   "Show the actions menu for NOTE, defaulting to the note at point."
   (interactive)
-  (let ((workspace (mevedel--instruction-buffer-workspace (current-buffer))))
+  (let ((workspace (mevedel--instruction-buffer-workspace
+                    (if note (overlay-buffer note) (current-buffer)))))
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
       (setq note (or note (mevedel-notes--at-point)))
       (pcase (car (read-multiple-choice
