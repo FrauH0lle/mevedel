@@ -22,10 +22,8 @@
 (declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
 
 ;; `mevedel-buddy'
-(declare-function mevedel-buddy--changes-for-scope "mevedel-buddy" (scope-key))
-(declare-function mevedel-buddy--guide-payload "mevedel-buddy" (beg end))
-(declare-function mevedel-buddy--payload-lines "mevedel-buddy" (payload))
-(declare-function mevedel-buddy--scope-key "mevedel-buddy" ())
+(declare-function mevedel-buddy-guide-payload "mevedel-buddy" (beg end))
+(declare-function mevedel-buddy-payload-lines "mevedel-buddy" (payload))
 
 ;; `mevedel-notes'
 (declare-function mevedel-note-close "mevedel-notes" (note reason))
@@ -60,27 +58,29 @@ have its per-request cost scale with file size rather than edit size."
 Each note is a plist with `:id', `:buffer', `:line', `:note',
 `:severity', `:status', and `:overlay'.")
 
-(defvar mevedel-buddy-note--changed-workspaces nil
-  "Workspaces changed by the current review, synced once at settlement.")
+(cl-defstruct (mevedel-buddy-note--run
+               (:constructor mevedel-buddy-note--make-run) (:copier nil))
+  "Everything one Buddy review owns, from begin to end."
+  (scope nil :documentation "Alist of names and exact buffers the review may touch.")
+  (taken nil :documentation "Captured taken-note goals and code.")
+  (goals nil :documentation "Captured authored goals near the shown code.")
+  (level nil :documentation "Automatic dial level; nil for an explicit review.")
+  (prepared nil :documentation "Buffers whose first-remark workspace setup ran.")
+  (changed nil :documentation "Workspaces changed, synced once at the end."))
 
-(defvar mevedel-buddy-note--prepared-buffers nil
-  "Buffers whose first-remark workspace setup ran during the current review.")
+(defvar mevedel-buddy-note--run nil
+  "The running review, or nil outside one.  Nil denies every tool call.")
 
-(defvar mevedel-buddy-note--scope-buffers nil
-  "Alist of names and exact buffers the running review may touch.
-Nil denies every tool call, including calls after abandonment.")
+(defun mevedel-buddy-note--field (slot)
+  "Return SLOT of the running review, or nil when none runs.
+Every tool-path read goes through this, so a call after the review ended
+or was abandoned is denied instead of signalling on a nil run."
+  (and mevedel-buddy-note--run
+       (cl-struct-slot-value 'mevedel-buddy-note--run slot
+                             mevedel-buddy-note--run)))
 
-(defvar mevedel-buddy-note--taken nil
-  "Captured taken-note goals and code owned by the current review.")
-
-(defvar mevedel-buddy-note--goals nil
-  "Captured authored goals near the current review's shown code.")
-
-(defvar mevedel-buddy-note--level nil
-  "Captured automatic dial level; nil means an explicitly requested review.")
-
-(defun mevedel-buddy-note--taken-payload (note shown)
-  "Return bounded NOTE code near SHOWN lines or the source cursor."
+(defun mevedel-buddy-note--taken-payload (note shown changes)
+  "Return bounded NOTE code near SHOWN lines, CHANGES or the source cursor."
   (let* ((first (line-number-at-pos (overlay-start note)))
          (last (line-number-at-pos (max (overlay-start note) (1- (overlay-end note)))))
          (limit (max 1 mevedel-buddy-note-read-limit))
@@ -89,7 +89,7 @@ Nil denies every tool call, including calls after abandonment.")
                   (and (equal (buffer-name) (plist-get change :buffer))
                        (< (plist-get change :beg) (overlay-end note))
                        (> (plist-get change :end) (overlay-start note))))
-                (mevedel-buddy--changes-for-scope (mevedel-buddy--scope-key))))
+                changes))
          (focus (or (when edit
                       (line-number-at-pos (min (point-max) (plist-get edit :beg))))
                     (seq-find (lambda (line) (<= first line last)) shown)
@@ -103,18 +103,18 @@ Nil denies every tool call, including calls after abandonment.")
         (concat
          (when (or (> from first) (< to last))
            (format "Code spans lines %s-%s; use read_buffer for the rest.\n" first last))
-         (mevedel-buddy--guide-payload
+         (mevedel-buddy-guide-payload
           beg (min (line-end-position) (overlay-end note))))))))
 
-(defun mevedel-buddy-note-prepare-context (payload &optional level)
-  "Add invited goal context to PAYLOAD, capturing automatic dial LEVEL.
+(defun mevedel-buddy-note--prepare-context (payload changes)
+  "Add invited goal context to PAYLOAD and capture the run's goals.
 Taken notes supply their code and brief.  Active also receives authored goals
-within six lines of the edited region; other notes remain out of the prompt."
-  (setq mevedel-buddy-note--taken nil
-        mevedel-buddy-note--goals nil
-        mevedel-buddy-note--level level)
-  (let ((shown (mevedel-buddy--payload-lines payload)) sections)
-    (dolist (entry mevedel-buddy-note--scope-buffers)
+within six lines of the edited region; other notes remain out of the prompt.
+CHANGES are the scope's tracked changes."
+  (let ((shown (mevedel-buddy-payload-lines payload))
+        (level (mevedel-buddy-note--field 'level))
+        sections taken goals)
+    (dolist (entry (mevedel-buddy-note--field 'scope))
       (with-current-buffer (cdr entry)
         (save-restriction
           (widen)
@@ -132,7 +132,7 @@ within six lines of the edited region; other notes remain out of the prompt."
                           nearby)
                   (push (list :overlay note :text (overlay-get note 'mevedel-note-text)
                               :taken (not nearby))
-                        mevedel-buddy-note--goals)
+                        goals)
                   (unless (mevedel-note-watching-p note)
                     (push (format "\nNearby goal, note %s at %s:%s-%s: %s\n"
                                   (overlay-get note 'mevedel-id) (car entry) first last
@@ -143,21 +143,23 @@ within six lines of the edited region; other notes remain out of the prompt."
                           :text (overlay-get note 'mevedel-note-text)
                           :code (buffer-substring-no-properties
                                  (overlay-start note) (overlay-end note)))
-                    mevedel-buddy-note--taken)
+                    taken)
               (push (format "\nTaken note %s. User's brief: %s\n%s"
                             (overlay-get note 'mevedel-id)
                             (replace-regexp-in-string
                              "[ \t\r\n]+" " " (or (overlay-get note 'mevedel-note-text) ""))
                             (mevedel-buddy-note--taken-payload
-                             note (cdr (assoc (car entry) shown))))
+                             note (cdr (assoc (car entry) shown)) changes))
                     sections))))))
+    (setf (mevedel-buddy-note--run-taken mevedel-buddy-note--run) taken
+          (mevedel-buddy-note--run-goals mevedel-buddy-note--run) goals)
     (concat payload (mapconcat #'identity (nreverse sections) "\n")
             (when level
               (format (concat "\nWorkspace dial: %s. Quiet: only taken-note code. "
                               "Watching: likely mistakes only. Active: ideas only near "
                               "the supplied goals; elsewhere behave like Watching.\n") level)))))
 
-(defun mevedel-buddy-note-review-hash (context)
+(defun mevedel-buddy-note--review-hash (context)
   "Hash captured goals and taken code together with request CONTEXT."
   (cl-labels ((records (entries)
                 (sort
@@ -173,8 +175,8 @@ within six lines of the edited region; other notes remain out of the prompt."
     (let ((print-length nil) (print-level nil))
       (secure-hash 'sha256
                    (prin1-to-string
-                    (list context (records mevedel-buddy-note--taken)
-                          (records mevedel-buddy-note--goals)))))))
+                    (list context (records (mevedel-buddy-note--field 'taken))
+                          (records (mevedel-buddy-note--field 'goals))))))))
 
 (defun mevedel-buddy-note--near-goal-p (buffer position records distance &optional taken)
   "Whether BUFFER's POSITION is within DISTANCE lines of captured RECORDS.
@@ -199,14 +201,14 @@ The authored goal must still match.  TAKEN requires the note still be taken."
   "Return a refusal for KIND at BUFFER's POSITION, or nil when invited."
   (cond
    ((not (member kind '(nil "mistake" "idea"))) "Unknown remark kind")
-   ((and (eq 'quiet mevedel-buddy-note--level)
+   ((and (eq 'quiet (mevedel-buddy-note--field 'level))
          (not (mevedel-buddy-note--near-goal-p
-               buffer position mevedel-buddy-note--taken 0 t)))
+               buffer position (mevedel-buddy-note--field 'taken) 0 t)))
     "Quiet only watches taken-note code")
-   ((and (equal kind "idea") mevedel-buddy-note--level
-         (or (not (eq 'active mevedel-buddy-note--level))
+   ((and (equal kind "idea") (mevedel-buddy-note--field 'level)
+         (or (not (eq 'active (mevedel-buddy-note--field 'level)))
              (not (mevedel-buddy-note--near-goal-p
-                   buffer position mevedel-buddy-note--goals 6))))
+                   buffer position (mevedel-buddy-note--field 'goals) 6))))
     "Ideas need Active and a nearby known goal")))
 
 (defun mevedel-buddy-note-looks-done (id)
@@ -216,7 +218,7 @@ This is feedback only: the user must explicitly close the note."
                     (lambda (record)
                       (equal (mevedel-buddy-note--integer id)
                              (overlay-get (plist-get record :overlay) 'mevedel-id)))
-                    mevedel-buddy-note--taken))
+                    (mevedel-buddy-note--field 'taken)))
             (note (plist-get record :overlay))
             (buffer (overlay-buffer note))
             ((eq buffer (mevedel-buddy-note--scope-buffer (buffer-name buffer))))
@@ -232,34 +234,36 @@ This is feedback only: the user must explicitly close the note."
         (format "Note %s looks done; waiting for the user to mark done" id))
     "Taken note or its goal/code changed; review it again"))
 
-(defun mevedel-buddy-note-finish-review ()
-  "Persist the current review's whole change set through the checked store."
-  (setq mevedel-buddy-note--prepared-buffers nil
-        mevedel-buddy-note--taken nil
-        mevedel-buddy-note--goals nil
-        mevedel-buddy-note--level nil)
-  (dolist (record mevedel-buddy-note--notes)
-    (unless (plist-get record :overlay)
-      (plist-put record :line (mevedel-buddy-note--line record))))
-  (let ((workspaces mevedel-buddy-note--changed-workspaces))
-    (setq mevedel-buddy-note--changed-workspaces nil)
-    (dolist (workspace workspaces)
-      (mevedel-instruction-store-touch workspace))
-    (when workspaces
-      (mevedel-instruction-store-flush))))
+(defun mevedel-buddy-note-end-review ()
+  "End the running review: persist its accepted remarks and clear the run.
+Release the markers and clear the run even when persistence fails; the
+error is re-signalled.  Calling it with no run is harmless."
+  (unwind-protect
+      (when-let* ((run mevedel-buddy-note--run))
+        (dolist (record mevedel-buddy-note--notes)
+          (unless (plist-get record :overlay)
+            (plist-put record :line (mevedel-buddy-note--line record))))
+        (let ((workspaces (mevedel-buddy-note--run-changed run)))
+          (dolist (workspace workspaces)
+            (mevedel-instruction-store-touch workspace))
+          (when workspaces
+            (mevedel-instruction-store-flush))))
+    (mevedel-buddy-note-release-markers)
+    (setq mevedel-buddy-note--run nil)))
 
 (defun mevedel-buddy-note--changed (overlay)
   "Record OVERLAY's workspace for the review's single final store sync."
-  (when-let* ((buffer (overlay-buffer overlay))
+  (when-let* ((run mevedel-buddy-note--run)
+              (buffer (overlay-buffer overlay))
               ((buffer-local-value 'buffer-file-name buffer))
               (workspace (mevedel--instruction-buffer-workspace buffer)))
-    (cl-pushnew workspace mevedel-buddy-note--changed-workspaces)))
+    (cl-pushnew workspace (mevedel-buddy-note--run-changed run))))
 
-(defun mevedel-buddy-note-restore ()
+(defun mevedel-buddy-note--restore ()
   "Rebuild the review index from canonical notes in its captured buffers."
-  (setq mevedel-buddy-note--prepared-buffers nil)
-  (let (workspaces)
-    (dolist (entry mevedel-buddy-note--scope-buffers)
+  (let ((scope (mevedel-buddy-note--field 'scope))
+        workspaces)
+    (dolist (entry scope)
       (when-let* ((workspace (mevedel--instruction-buffer-workspace (cdr entry))))
         (cl-pushnew workspace workspaces)))
     (setq mevedel-buddy-note--notes
@@ -285,13 +289,13 @@ This is feedback only: the user must explicitly close the note."
 				 (let ((source (cdr scope)))
 				   (or (equal file (buffer-local-value 'buffer-file-name source))
                                        (equal file (buffer-local-value 'buffer-file-truename source)))))
-                               mevedel-buddy-note--scope-buffers))
+                               scope))
 			 ;; Local aliases may need filesystem identity, but a review
 			 ;; must not resolve a remote truename or stat its source.
 			 (and (not (file-remote-p file))
                               (find-buffer-visiting
                                file (lambda (source)
-                                      (rassq source mevedel-buddy-note--scope-buffers))))))))
+                                      (rassq source scope))))))))
           (when buffer
             (push (list :id (plist-get props 'mevedel-id)
                         :buffer (buffer-name buffer)
@@ -300,7 +304,7 @@ This is feedback only: the user must explicitly close the note."
                         :severity (plist-get props 'mevedel-note-buddy-severity)
                         :status 'dismissed :overlay nil)
                   mevedel-buddy-note--notes))))))
-  (dolist (entry mevedel-buddy-note--scope-buffers)
+  (dolist (entry (mevedel-buddy-note--field 'scope))
     (with-current-buffer (cdr entry)
       (add-hook 'kill-buffer-hook #'mevedel-buddy-note--on-kill-buffer nil t)
       (dolist (overlay (overlays-in (point-min) (point-max)))
@@ -315,6 +319,32 @@ This is feedback only: the user must explicitly close the note."
                                   'active 'kept)
                       :overlay overlay)
                 mevedel-buddy-note--notes))))))
+
+(defun mevedel-buddy-note-begin-review (buffer-names payload level context changes)
+  "Start a review of BUFFER-NAMES and return its prepared request.
+
+Install the run, rebuild the review index, add goal context to PAYLOAD,
+hash the goals and taken code with CONTEXT and capture markers for the
+lines shown.  LEVEL is the automatic dial level or nil; CHANGES are the
+scope's tracked changes.  Return (:payload :taken-notes :review-hash).
+
+Every path must reach `mevedel-buddy-note-end-review', even when this
+signals partway."
+  (setq mevedel-buddy-note--run
+        (mevedel-buddy-note--make-run
+         :level level
+         :scope (delq nil (mapcar (lambda (name)
+                                    (when-let* ((buffer (get-buffer name)))
+                                      (cons name buffer)))
+                                  buffer-names))))
+  (mevedel-buddy-note--restore)
+  (let* ((payload (mevedel-buddy-note--prepare-context payload changes))
+         (hash (mevedel-buddy-note--review-hash context)))
+    (mevedel-buddy-note-capture-markers (mevedel-buddy-payload-lines payload))
+    (list :payload payload
+          :taken-notes (mapcar (lambda (record) (plist-get record :overlay))
+                               (mevedel-buddy-note--field 'taken))
+          :review-hash hash)))
 
 (defvar mevedel-buddy-note--markers nil
   "Alist of captured line boundaries for the running review.
@@ -509,10 +539,10 @@ LINE.  Raw line counting is not annotation authority."
   "Return a note overlay on LINE of BUFFER showing NOTE at SEVERITY."
   (with-current-buffer buffer
     (when (and buffer-file-name
-               (not (memq buffer mevedel-buddy-note--prepared-buffers)))
+               (not (memq buffer (mevedel-buddy-note--field 'prepared))))
       (mevedel-notes--ensure-workspace
        (mevedel--instruction-buffer-workspace buffer))
-      (push buffer mevedel-buddy-note--prepared-buffers))
+      (push buffer (mevedel-buddy-note--run-prepared mevedel-buddy-note--run)))
     (let* ((position (mevedel-buddy-note--position buffer line))
            (overlay (save-excursion
                       (goto-char position)
@@ -536,7 +566,7 @@ LINE.  Raw line counting is not annotation authority."
 
 (defun mevedel-buddy-note--scope-buffer (buffer-name)
   "Return the exact review buffer recorded for BUFFER-NAME."
-  (cdr (assoc buffer-name mevedel-buddy-note--scope-buffers)))
+  (cdr (assoc buffer-name (mevedel-buddy-note--field 'scope))))
 
 (defun mevedel-buddy-note--in-scope-p (buffer-name)
   "Return non-nil when BUFFER-NAME may be touched by the running review."

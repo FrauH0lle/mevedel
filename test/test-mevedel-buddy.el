@@ -62,7 +62,7 @@
                       (with-timeout (5 (ert-fail "Subscription Buddy did not settle"))
                         (while mevedel-buddy--running (accept-process-output nil 0.01)))
                       (should (equal '("sonnet") models))
-                      (should-not mevedel-buddy-note--scope-buffers)
+                      (should-not mevedel-buddy-note--run)
                       (should-not mevedel-buddy--request-buffer)))
           ,test))))
   (test)
@@ -443,19 +443,21 @@
 
   :doc "`mevedel-buddy--settle' clears the annotatable buffer list"
   (progn
-    (setq mevedel-buddy-note--scope-buffers
-          (list (cons "some-buffer" (current-buffer)))
+    (setq mevedel-buddy-note--run
+          (mevedel-buddy-note--make-run
+           :scope (list (cons "some-buffer" (current-buffer))))
           mevedel-buddy--running "scope")
     (mevedel-buddy--settle "scope" nil)
-    (should-not mevedel-buddy-note--scope-buffers))
+    (should-not mevedel-buddy-note--run))
 
   :doc "`mevedel-buddy--settle' cleans up and re-signals a store flush error"
   (let* ((buf (current-buffer))
          (marker (copy-marker 1))
          (mevedel-buddy-note--markers (list (list "b" (list 1 marker marker))))
-         (mevedel-buddy-note--changed-workspaces '(ws))
          (mevedel-buddy--request-buffer nil))
-    (setq mevedel-buddy-note--scope-buffers (list (cons (buffer-name buf) buf))
+    (setq mevedel-buddy-note--run
+          (mevedel-buddy-note--make-run
+           :scope (list (cons (buffer-name buf) buf)) :changed '(ws))
           mevedel-buddy--running "scope"
           mevedel-buddy--running-automatic t)
     (let* ((generation mevedel-buddy--generation)
@@ -473,7 +475,7 @@
      (should (string-match-p
               "has ended"
               (funcall (gptel-tool-function read-tool) (buffer-name buf) 1 1))))
-    (should-not mevedel-buddy-note--scope-buffers)
+    (should-not mevedel-buddy-note--run)
     (should-not mevedel-buddy--running)
     (should-not mevedel-buddy--running-automatic)
     (should-not mevedel-buddy-note--markers)
@@ -487,14 +489,42 @@
     (setq mevedel-buddy--request-buffer request
           mevedel-buddy--running "scope")
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-buddy-note-finish-review)
+        (cl-letf (((symbol-function 'mevedel-buddy-note-end-review)
                    (lambda () (setq finished t))))
           (should-error (mevedel-buddy--settle "scope" nil))
           (should finished)
           (should-not mevedel-buddy--running))
       (with-current-buffer request (setq-local kill-buffer-hook nil))
-      (kill-buffer request))))
+      (kill-buffer request)))
 
+  :doc "`mevedel-buddy--settle' leaves a newer run untouched when an older call arrives"
+  (let* ((buf (mevedel-test--buddy-buffer "newer-run" "alpha\nbeta\n"))
+         (mevedel-buddy--request-buffer nil)
+         (old-generation (cl-incf mevedel-buddy--generation))
+         (old-tools (mevedel-buddy-note-tools
+                     (lambda ()
+                       (mevedel-buddy--current-generation-p old-generation))))
+         (add (seq-find (lambda (tool) (equal "add_note" (gptel-tool-name tool)))
+                        old-tools))
+         newer)
+    (setq mevedel-buddy--running "scope")
+    (mevedel-buddy--settle "scope" nil)
+    ;; A newer review starts, as `mevedel-buddy--request' does.
+    (cl-incf mevedel-buddy--generation)
+    (setq mevedel-buddy--running "newer")
+    (with-current-buffer buf
+      (mevedel-buddy-note-begin-review
+       (list "newer-run") (mevedel-buddy-guide-payload (point-min) (point-max))
+       nil '("newer") nil))
+    (setq newer mevedel-buddy-note--run)
+    (should (string-match-p
+             "has ended"
+             (funcall (gptel-tool-function add) "newer-run" 1 "late" "trivial")))
+    (should (eq newer mevedel-buddy-note--run))
+    (should (assoc "newer-run" (mevedel-buddy-note--run-scope newer)))
+    (should-not (mevedel-buddy-note--run-changed newer))
+    (should (equal "newer" mevedel-buddy--running))
+    (mevedel-buddy--settle "newer" nil)))
 (mevedel-deftest mevedel-buddy-review
   (:after-each (mevedel-test--buddy-cleanup))
   ,test
@@ -786,25 +816,25 @@
 ;;
 ;;; Guidance channel
 
-(mevedel-deftest mevedel-buddy--guide-payload
+(mevedel-deftest mevedel-buddy-guide-payload
   (:after-each (mevedel-test--buddy-cleanup))
   ,test
   (test)
 
-  :doc "`mevedel-buddy--guide-payload' describes the whole buffer with a header"
+  :doc "`mevedel-buddy-guide-payload' describes the whole buffer with a header"
   (let ((buf (mevedel-test--buddy-buffer "guide-all.el" "alpha\nbeta\n")))
     (with-current-buffer buf
-      (let ((payload (mevedel-buddy--guide-payload (point-min) (point-max))))
+      (let ((payload (mevedel-buddy-guide-payload (point-min) (point-max))))
         (should (string-match-p "Buffer: guide-all.el" payload))
         (should (string-match-p "Cursor: line" payload))
         (should (string-match-p "alpha" payload))
         (should (string-match-p "beta" payload)))))
 
-  :doc "`mevedel-buddy--guide-payload' describes only the given bounds"
+  :doc "`mevedel-buddy-guide-payload' describes only the given bounds"
   (let ((buf (mevedel-test--buddy-buffer
               "guide-region.el" "alpha\nbeta\ngamma\n")))
     (with-current-buffer buf
-      (let ((payload (mevedel-buddy--guide-payload
+      (let ((payload (mevedel-buddy-guide-payload
                       (point-min)
                       (save-excursion (goto-char (point-min))
                                       (forward-line 2)
@@ -812,11 +842,11 @@
         (should (string-match-p "alpha" payload))
         (should-not (string-match-p "gamma" payload)))))
 
-  :doc "`mevedel-buddy--guide-payload' numbers lines from their real position"
+  :doc "`mevedel-buddy-guide-payload' numbers lines from their real position"
   (let ((buf (mevedel-test--buddy-buffer
               "guide-lines.el" "alpha\nbeta\ngamma\n")))
     (with-current-buffer buf
-      (let ((payload (mevedel-buddy--guide-payload
+      (let ((payload (mevedel-buddy-guide-payload
                       (save-excursion (goto-char (point-min))
                                       (forward-line 2)
                                       (point))
@@ -914,8 +944,8 @@
       (should-not (mevedel-buddy--changes-for-scope
                    (mevedel-buddy--scope-key))))))
 
-(mevedel-deftest mevedel-buddy--payload-lines
-  (:doc "`mevedel-buddy--payload-lines' returns the lines each buffer showed")
+(mevedel-deftest mevedel-buddy-payload-lines
+  (:doc "`mevedel-buddy-payload-lines' returns the lines each buffer showed")
   ,test
   (test)
   (let ((payload (concat "=== Buffer: one.el  Mode: x  Scope: s  Cursor: line 1 ===\n"
@@ -926,7 +956,7 @@
                          "=== Buffer: two.el  Mode: x  Scope: s  Cursor: line 1 ===\n"
                          "    7 +gamma\n")))
     (should (equal '(("one.el" 1 2) ("two.el" 7))
-                   (mevedel-buddy--payload-lines payload)))))
+                   (mevedel-buddy-payload-lines payload)))))
 
 (mevedel-deftest mevedel-buddy--response-action
   (:doc "`mevedel-buddy--response-action' counts tool rounds and nothing else")

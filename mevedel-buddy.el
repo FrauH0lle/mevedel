@@ -49,16 +49,11 @@
 (autoload 'mevedel-auth-assert-ready "mevedel-auth")
 
 ;; `mevedel-buddy-note'
-(declare-function mevedel-buddy-note-capture-markers "mevedel-buddy-note" (buffer-names))
-(declare-function mevedel-buddy-note-finish-review "mevedel-buddy-note" ())
-(declare-function mevedel-buddy-note-prepare-context "mevedel-buddy-note" (payload &optional level))
-(declare-function mevedel-buddy-note-review-hash "mevedel-buddy-note" (context))
-(declare-function mevedel-buddy-note-release-markers "mevedel-buddy-note" ())
-(declare-function mevedel-buddy-note-restore "mevedel-buddy-note" ())
+(declare-function mevedel-buddy-note-begin-review "mevedel-buddy-note"
+                  (buffer-names payload level context changes))
+(declare-function mevedel-buddy-note-end-review "mevedel-buddy-note" ())
 (declare-function mevedel-buddy-note-serialize "mevedel-buddy-note" ())
 (declare-function mevedel-buddy-note-tools "mevedel-buddy-note" (currentp))
-(defvar mevedel-buddy-note--scope-buffers)
-(defvar mevedel-buddy-note--taken)
 
 ;; `mevedel-chat'
 (defvar mevedel--session)
@@ -554,7 +549,7 @@ changed.  Edits that cancel out yield no section at all."
                       (line-number-at-pos (point))))
             (mevedel-buddy--number-diff-lines diff))))
 
-(defun mevedel-buddy--payload-lines (payload)
+(defun mevedel-buddy-payload-lines (payload)
   "Return an alist of (BUFFER-NAME . LINE-NUMBERS) shown in PAYLOAD.
 
 Only lines the model was actually shown can carry a note, so only those
@@ -757,14 +752,11 @@ changes are offered again."
         ;; Preparation can be cancelled before the first request loads note
         ;; tools.
         (when (featurep 'mevedel-buddy-note)
-          (mevedel-buddy-note-finish-review)))
-    ;; A store flush error must not leave markers held, the scope open or the
-    ;; review marked running; the new generation stops straggler tool calls.
+          (mevedel-buddy-note-end-review)))
+    ;; A store flush error must not leave the review marked running; the new
+    ;; generation stops straggler tool calls.
     (cl-incf mevedel-buddy--generation)
-    (when (featurep 'mevedel-buddy-note)
-      (mevedel-buddy-note-release-markers))
-    (setq mevedel-buddy-note--scope-buffers nil
-          mevedel-buddy--running nil
+    (setq mevedel-buddy--running nil
           mevedel-buddy--running-automatic nil
           mevedel-buddy--request-buffer nil)))
 
@@ -826,31 +818,22 @@ TAKEN-ONLY means PAYLOAD has no edited-code section."
       (mevedel-diagnostic-user-error (mevedel-diagnostic-scope source) "No model resolves for the buddy workload"))
     (setq mevedel-buddy--running scope-key
           mevedel-buddy--running-automatic automatic
-          mevedel-buddy--request-buffer request-buffer
-          mevedel-buddy-note--scope-buffers
-          (delq nil
-                (mapcar (lambda (name)
-                          (when-let* ((buffer (get-buffer name)))
-                            (cons name buffer)))
-                        buffer-names)))
+          mevedel-buddy--request-buffer request-buffer)
     (condition-case err
         (progn
-          (mevedel-buddy-note-restore)
-          (setq payload (mevedel-buddy-note-prepare-context
-                         payload level)
-                taken-notes (mapcar (lambda (record) (plist-get record :overlay))
-                                    mevedel-buddy-note--taken)
-                review-hash (mevedel-buddy-note-review-hash
-                             (list scope-key level brief)))
+          (let ((begun (mevedel-buddy-note-begin-review
+                        buffer-names payload level (list scope-key level brief)
+                        (mevedel-buddy--changes-for-scope scope-key))))
+            (setq payload (plist-get begun :payload)
+                  taken-notes (plist-get begun :taken-notes)
+                  review-hash (plist-get begun :review-hash)))
           (when (and automatic taken-only taken-notes
                      (cl-every (lambda (note)
                                  (equal review-hash
                                         (overlay-get note 'mevedel-note-buddy-reviewed-hash)))
                                taken-notes))
             (mevedel-buddy--settle scope-key reviewed-through)
-            (cl-return-from mevedel-buddy--request nil))
-          (mevedel-buddy-note-capture-markers
-           (mevedel-buddy--payload-lines payload)))
+            (cl-return-from mevedel-buddy--request nil)))
       (error
        (mevedel-buddy--settle scope-key nil)
        (signal (car err) (cdr err))))
@@ -1200,7 +1183,7 @@ edits and request state live only in memory."
 ;;
 ;;; Guidance
 
-(defun mevedel-buddy--guide-payload (beg end)
+(defun mevedel-buddy-guide-payload (beg end)
   "Return the text between BEG and END described for guidance.
 
 Lines are numbered from their real position so `add_note' arguments
@@ -1237,7 +1220,7 @@ made outranks one started by a timer."
                 "abort it with `mevedel-buddy-abort'"))
   (mevedel-buddy--request
    (mevedel-buddy--scope-key) 'buddy-guide
-   (mevedel-buddy--guide-payload
+   (mevedel-buddy-guide-payload
     (if (use-region-p) (region-beginning) (point-min))
     (if (use-region-p) (region-end) (point-max)))
    (list (buffer-name))

@@ -29,7 +29,7 @@
           (mevedel-instruction-store--dirty nil)
           (mevedel-instruction-store--failed nil)
           (mevedel-buddy-note--notes nil)
-          (mevedel-buddy-note--changed-workspaces nil)
+          (mevedel-buddy-note--run nil)
           (mevedel-note-labels 'expanded)
           (gptel--known-backends nil)
           (mevedel-model-workloads '((buddy :provider "BuddyTest:test")))
