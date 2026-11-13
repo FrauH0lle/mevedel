@@ -30,6 +30,9 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+(defvar mevedel-note-change-test--workspace-type 'file
+  "Workspace authority exercised by the note fixture.")
+
 (defmacro mevedel-note-change-test--with-note (&rest body)
   "Run BODY with a sent note in a real source file and session."
   (declare (indent 0))
@@ -45,7 +48,8 @@
             (gptel--known-tools (copy-tree gptel--known-tools))
             (mevedel-preset--registry (copy-tree mevedel-preset--registry))
             (post-command-hook (copy-sequence post-command-hook))
-            (workspace (mevedel-workspace-get-or-create 'file root root "changes"))
+            (workspace (mevedel-workspace-get-or-create
+                        mevedel-note-change-test--workspace-type root root "changes"))
             (session (mevedel-session-create "changes" workspace root))
             (old-buffers (buffer-list))
             source note result)
@@ -1023,45 +1027,50 @@
         (mevedel-note-revert-change suggestion 0)
         (should (equal "agent-after\n" (mevedel-test--read-file other)))
         (should (equal "before\nold\nafter\n" (mevedel-test--read-file file))))))
-  :doc "reverting a reloaded suggestion preserves earlier edits, even after a failed store load"
-  (dolist (unreadable '(nil t))
-    (mevedel-note-change-test--with-note
-      (let ((snapshots (make-hash-table :test #'equal)))
-        (puthash file "before\nold\nafter\n" snapshots)
-        (with-current-buffer source
-          (goto-char (point-max))
-          (insert "agent addition\n")
-          (save-buffer))
-        (mevedel-session-artifacts-snapshot-modified session 0 snapshots)
-        (setf (mevedel-session-preset-name session) 'mevedel-implement)
-        (with-current-buffer data-buf
-          (setq result
-                (mevedel-tool-note-write
-                 (list :operations
-                       (vector (list :action "create" :file_path "source.txt" :start_line 2
-                                     :text "AI suggestion" :prepared_change
-                                     "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch"))))))
-        (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get result :result)))
-        (let* ((uuid (match-string 1 (plist-get result :result)))
-               (suggestion (mevedel-notes--resolve uuid workspace)))
-          (mevedel-note-apply-change suggestion)
-          (mevedel-note-done suggestion)
-          (mevedel-instruction-store-flush t)
-          (let* ((store (mevedel-instruction-store-path workspace))
-                 (saved (mevedel-test--read-file store)))
-            (when unreadable
-              (mevedel--clear-instruction-state workspace)
-              (write-region "Unreadable store" nil store nil 'silent)
-              (mevedel-session-artifacts-load-instructions session data-buf))
-            (mevedel-session-artifacts-save session data-buf nil t)
-            (when unreadable
-              (write-region saved nil store nil 'silent)))
-          (mevedel--clear-instruction-state workspace)
-          (mevedel-instruction-store-observe workspace)
-          (mevedel-note-revert-change uuid 0 workspace)
-          (should (equal "before\nold\nafter\nagent addition\n" (mevedel-test--read-file file)))
+  :doc "portable project revert preserves earlier edits, even after a failed store load"
+  (let ((mevedel-note-change-test--workspace-type 'project))
+    (dolist (unreadable '(nil t))
+      (mevedel-note-change-test--with-note
+        (should (mevedel-session-codec-portable-authority-p session))
+        (let ((snapshots (make-hash-table :test #'equal)))
+          (puthash file "before\nold\nafter\n" snapshots)
           (with-current-buffer source
-            (should (equal "before\nold\nafter\nagent addition\n" (buffer-string)))))))))
+            (goto-char (point-max))
+            (insert "agent addition\n")
+            (save-buffer))
+          (with-current-buffer data-buf
+            (let ((mevedel--current-request
+                   (mevedel-request--create :turn 0 :file-snapshots snapshots)))
+              (mevedel-session-artifacts-save session data-buf nil t)))
+          (setf (mevedel-session-preset-name session) 'mevedel-implement)
+          (with-current-buffer data-buf
+            (setq result
+                  (mevedel-tool-note-write
+                   (list :operations
+                         (vector (list :action "create" :file_path "source.txt" :start_line 2
+                                       :text "AI suggestion" :prepared_change
+                                       "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch"))))))
+          (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get result :result)))
+          (let* ((uuid (match-string 1 (plist-get result :result)))
+                 (suggestion (mevedel-notes--resolve uuid workspace)))
+            (mevedel-note-apply-change suggestion)
+            (mevedel-note-done suggestion)
+            (mevedel-instruction-store-flush t)
+            (let* ((store (mevedel-instruction-store-path workspace))
+                   (saved (mevedel-test--read-file store)))
+              (when unreadable
+                (mevedel--clear-instruction-state workspace)
+                (write-region "Unreadable store" nil store nil 'silent)
+                (mevedel-session-artifacts-load-instructions session data-buf))
+              (mevedel-session-artifacts-save session data-buf nil t)
+              (when unreadable
+                (write-region saved nil store nil 'silent)))
+            (mevedel--clear-instruction-state workspace)
+            (mevedel-instruction-store-observe workspace)
+            (mevedel-note-revert-change uuid 0 workspace)
+            (should (equal "before\nold\nafter\nagent addition\n" (mevedel-test--read-file file)))
+            (with-current-buffer source
+              (should (equal "before\nold\nafter\nagent addition\n" (buffer-string))))))))))
 
 (mevedel-deftest mevedel-note-apply-change/edited-capture
   (:quiet t :doc "Rewind leaves user edits made between the turn capture and suggestion apply")

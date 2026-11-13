@@ -20,6 +20,10 @@
 
 (declare-function mevedel-patch-review-start "mevedel-patch-review" (proposal callback data-buffer))
 
+;; `mevedel-session-rewind'
+(declare-function mevedel-session-rewind-read-backup "mevedel-session-rewind" (session backup-name))
+(autoload 'mevedel-session-rewind-read-backup "mevedel-session-rewind")
+
 (defun mevedel-note-change-record (proposal changes data-buffer)
   "Capture prepared PROPOSAL and CHANGES owned by DATA-BUFFER's current turn."
   (with-current-buffer data-buffer
@@ -288,9 +292,7 @@ When SELECTED is non-nil, prepare only those reviewed changes."
                                   (not (equal (and bytes (secure-hash 'sha256 bytes))
                                               (plist-get old :backup-name))))
                              (list :gap (format "edited after turn %d" turn)))
-                            (old (and name (mevedel-session-artifacts-read-file-raw
-                                            (mevedel-session-artifacts-backup-path
-                                             (mevedel-session-save-path session) name))))
+                            (old (and name (mevedel-session-rewind-read-backup session name)))
                             (t bytes)) pre))
       (when-let* ((buffer (find-buffer-visiting (plist-get change :path))))
         (with-current-buffer buffer (undo-boundary))))
@@ -411,9 +413,7 @@ Confirming a partial selection drops the rest of this waiting change."
                       path (plist-get record :gap)))
         (cl-labels ((snapshot (name)
                       (list :path path :exists (and name t)
-                            :bytes (and name (mevedel-session-artifacts-read-file-raw
-                                              (mevedel-session-artifacts-backup-path
-                                               (mevedel-session-save-path session) name)))
+                            :bytes (and name (mevedel-session-rewind-read-backup session name))
                             ;; File history records bytes, not modes; retain today's mode.
                             :mode (and name (plist-get current :mode)))))
           (let* ((before (snapshot (plist-get record :pre-backup-name)))
