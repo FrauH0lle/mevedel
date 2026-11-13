@@ -87,7 +87,9 @@
            `(progn
               (require 'mevedel-notes-activation)
               (when (featurep 'mevedel-buddy) (error "Reader was not cold"))
-              (let ((reads 0))
+              (defvar mevedel-note-labels)
+              (let ((reads 0)
+                    (mevedel-note-labels 'expanded))
                 (advice-add 'mevedel-session-control-fs-read-file :before
                             (lambda (path &rest _)
                               (when (string-suffix-p "/buddy-level" path) (cl-incf reads))))

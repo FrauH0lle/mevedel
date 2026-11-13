@@ -183,7 +183,8 @@ Use WORKSPACE-ROOT as its root when non-nil."
   (test)
 
   :doc "keeps a whole-line note at bol when a diff rewrites its prefix"
-  (let* ((file (make-temp-file "mevedel-overlay-prefix-" nil ".txt"
+  (let* ((mevedel-note-labels 'expanded)
+         (file (make-temp-file "mevedel-overlay-prefix-" nil ".txt"
                                "before\nProvision old\nafter\n"))
          (buffer (find-file-noselect file))
          (reference (mevedel-test--overlay-on-text

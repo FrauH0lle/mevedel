@@ -25,7 +25,8 @@
                    `(progn
                       (setq load-path ',load-path)
                       (setq native-comp-enable-subr-trampolines nil
-                            native-comp-jit-compilation nil)
+                            native-comp-jit-compilation nil
+                            mevedel-note-labels 'expanded)
                       (require 'cl-lib)
                       (require 'loaddefs-gen)
                       (let* ((directory (make-temp-file "note-autoloads-" t))

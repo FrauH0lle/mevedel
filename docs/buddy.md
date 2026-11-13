@@ -38,8 +38,8 @@ an invalid or unreadable setting reports a diagnostic and also uses Active.
 
 `mevedel-note-take` turns on Buddy for that source buffer and invites review of
 the note's code with its text as the brief, at every dial level. Use **take** in
-the note's modified-key menu or `T` in the notes list. The label says **Buddy
-watches**. Buddy may mark it **looks done** when its stated goal is met, but
+the note's modified-key menu or `T` in the notes list. The expanded label says
+**Buddy watches**. Buddy may mark it **looks done** when its stated goal is met, but
 never closes it: `mevedel-note-done` is explicit. Editing the goal or its code
 retires earlier completion feedback. Automatic taken-only reviews do not resend
 unchanged code and goals after a successful review. Changes made in flight,
@@ -50,10 +50,10 @@ review. Explicit review commands are never suppressed.
 unsent, retaining its conversation and source code. Sending a taken note makes
 it sent. Dropping, sending or closing ends that note's invitation; ordinary
 dial-based reviews may still run. After a restart, restored taken notes remain
-taken but show **paused**. Restoration neither starts Buddy nor reads the saved
-dial. Taking the note again resumes its watch; setting the workspace dial resumes
-its takes, including files visited later, for this Emacs session. There is no
-prompt on visit. Unknown remote files remain
+taken but show **paused** in the expanded label. Restoration neither starts Buddy
+nor reads the saved dial. Taking the note again resumes its watch; setting the
+workspace dial resumes its takes, including files visited later, for this Emacs
+session. There is no prompt on visit. Unknown remote files remain
 unclaimed on visit; explicit Buddy activation uses normal workspace detection.
 
 ## Feeding a session to Buddy
@@ -275,14 +275,20 @@ must not read as "every buffer in Emacs".
 
 ## How a note is laid out
 
-The common note label sits below the complete source line and shows its number,
-Buddy authorship, bounded text and available actions. The full authored text is
-retained for editing. Buddy remarks tint their code and color their label amber
-(`mevedel-note-buddy`, `mevedel-note-label-buddy`). The modified-key menu offers
-edit, dismiss and keep;
-plain letters still insert source text. Moving point never switches between
-two Buddy-specific render styles, and no Buddy relayout hook scans remarks on
-each line move.
+Buddy remarks use the common note display, initially collapsed according to
+`mevedel-note-labels`: code tint and the entry echo hint remain, without a label.
+Expanded labels sit below the complete source line with a
+`Note N · author · state · KEY: menu` header and the full text indented below,
+filled to `fill-column` bounded by window width. In the modified-key menu,
+`e` expands/collapses, `i` edits (formerly `e`), and `w` copies full text to the
+kill ring; dismiss and keep remain available. Plain letters insert source text.
+`mevedel-notes-toggle-labels` expands all notes in the current buffer if any are
+collapsed, otherwise collapses all. Display state is overlay-local, not saved;
+moving point never changes style. `mevedel-note-label-buddy` inherits
+`font-lock-warning-face` and is bold; `mevedel-note-buddy` uses `:extend t`
+and a background blending 15% of that foreground into the default background.
+Tints refresh at load and theme enable without overriding user-customized
+backgrounds.
 
 ## Line numbers resolve through markers
 

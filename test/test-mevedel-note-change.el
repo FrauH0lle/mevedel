@@ -43,6 +43,7 @@
             (mevedel--instruction-states (make-hash-table :test #'equal))
             (mevedel-instruction-store--dirty nil)
             (mevedel-instruction-store--failed nil)
+            (mevedel-note-labels 'expanded)
             (mevedel-workspace--registry (make-hash-table :test #'equal))
             (gptel--known-presets (copy-tree gptel--known-presets))
             (gptel--known-tools (copy-tree gptel--known-tools))

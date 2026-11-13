@@ -313,7 +313,8 @@
   (test)
   :doc "re-ask sends current noted code and a fresh change can be applied"
   (mevedel-note-conversation-test--with-source
-    (let* ((note (mevedel-note-create "Improve this code"))
+    (let* ((mevedel-note-labels 'expanded)
+           (note (mevedel-note-create "Improve this code"))
            (view (mevedel-note-send note))
            (data (buffer-local-value 'mevedel--data-buffer view)))
       (mevedel-note-conversation-test--answer (car sent) "I can improve it.")

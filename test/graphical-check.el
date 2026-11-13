@@ -13,6 +13,7 @@
 ;; The view fixture's buffer macro; the runner loads it only in the child.
 (cl-eval-when (compile) (require 'helpers))
 
+(declare-function mevedel-notes-toggle-labels "mevedel-notes" ())
 (declare-function mevedel-tool-render-data-format "mevedel-tool-render-data"
                   (render-data &optional tool-use-id))
 (declare-function mevedel-view--setup "mevedel-view" (view-buf data-buf &optional options))
@@ -447,7 +448,8 @@ holds failures."
           (let ((transient-mark-mode t))
             (set-mark (- (point) 8))
             (activate-mark)
-            (mevedel-note-create "Use an index if this lookup becomes frequent"))
+            (mevedel-note-create
+             "Use an index if this lookup becomes frequent. Keep the complete explanation visible when expanded, including why repeated scans could become expensive as the number of users grows."))
           (goto-char (point-min))
           (forward-line 6)
           (overlay-put (mevedel-note-create "Keep the ordering stable")
@@ -462,6 +464,12 @@ holds failures."
           (redisplay t)
           (let ((coding-system-for-write 'no-conversion))
             (with-temp-file (file-name-concat output "notes.png")
+              (set-buffer-multibyte nil)
+              (insert (x-export-frames nil 'png))))
+          (mevedel-notes-toggle-labels)
+          (redisplay t)
+          (let ((coding-system-for-write 'no-conversion))
+            (with-temp-file (file-name-concat output "notes-expanded.png")
               (set-buffer-multibyte nil)
               (insert (x-export-frames nil 'png))))
           (setq list-buffer (mevedel-notes-list workspace))

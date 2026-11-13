@@ -10,6 +10,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'color)
 (require 'subr-x)
 (require 'project)
 (require 'mevedel-note-source)
@@ -50,41 +51,67 @@
 (declare-function mevedel-view-call-preserving-window-configuration
                   "mevedel-view-composer" (thunk))
 
+(defcustom mevedel-note-labels 'collapsed
+  "Initial display of note labels in source buffers.
+Individual label toggles last only while the note's overlay is live."
+  :type '(choice (const collapsed) (const expanded))
+  :group 'mevedel)
+
 (defface mevedel-note-you
-  '((((background dark)) :background "#1e3550" :extend t)
-    (t :background "#dfeafa" :extend t))
+  '((t :extend t))
   "Code covered by a note you wrote."
   :group 'mevedel)
 
 (defface mevedel-note-agent
-  '((((background dark)) :background "#3a2648" :extend t)
-    (t :background "#efe3f6" :extend t))
+  '((t :extend t))
   "Code covered by a note an agent wrote."
   :group 'mevedel)
 
 (defface mevedel-note-buddy
-  '((((background dark)) :background "#3d2f17" :extend t)
-    (t :background "#fbeedb" :extend t))
+  '((t :extend t))
   "Code covered by a Buddy remark."
   :group 'mevedel)
 
 (defface mevedel-note-label-you
-  '((((background dark)) :foreground "#8fbdf2" :weight bold)
-    (t :foreground "#184f95" :weight bold))
+  '((t :inherit font-lock-function-name-face :weight bold))
   "Label of a note you wrote."
   :group 'mevedel)
 
 (defface mevedel-note-label-agent
-  '((((background dark)) :foreground "#c690e6" :weight bold)
-    (t :foreground "#7a3e9d" :weight bold))
+  '((t :inherit font-lock-keyword-face :weight bold))
   "Label of a note an agent wrote."
   :group 'mevedel)
 
 (defface mevedel-note-label-buddy
-  '((((background dark)) :foreground "#e0a24a" :weight bold)
-    (t :foreground "#a86200" :weight bold))
+  '((t :inherit font-lock-warning-face :weight bold))
   "Label of a Buddy remark."
   :group 'mevedel)
+
+(defun mevedel-notes--theme-colors (&rest _)
+  "Derive note tints from the current theme, preserving user backgrounds."
+  (dolist (pair '((mevedel-note-you . mevedel-note-label-you)
+                  (mevedel-note-agent . mevedel-note-label-agent)
+                  (mevedel-note-buddy . mevedel-note-label-buddy)))
+    (let* ((face (car pair))
+           (background (face-attribute face :background nil t))
+           (specs (list (get face 'customized-face) (get face 'saved-face)
+                        (get face 'face-override-spec)
+                        (cadr (assq 'user (get face 'theme-face))))))
+      (unless (or (cl-some (lambda (spec)
+                            (let ((value (plist-get (face-spec-choose spec) :background)))
+                              (and value (not (eq value 'unspecified)))))
+                          specs)
+                  (and (not (memq background '(nil unspecified)))
+                       (not (equal background (get face 'mevedel-note-theme-background)))))
+        (let ((color (mevedel--tint (face-background 'default nil t)
+                                    (or (face-foreground (cdr pair) nil t)
+                                        (face-foreground 'default nil t)) 0.15)))
+          (set-face-background face color)
+          (put face 'mevedel-note-theme-background color))))))
+
+(mevedel-notes--theme-colors)
+(add-hook 'enable-theme-functions #'mevedel-notes--theme-colors)
+(add-hook 'disable-theme-functions #'mevedel-notes--theme-colors)
 
 (defvar-local mevedel-notes--last-hinted nil
   "Note most recently announced by the local entry hint.")
@@ -266,16 +293,19 @@ Refuse unavailable sources before a caller starts mutating the notes."
                              (or (overlay-get note 'mevedel-note-text) ""))
    80 nil nil "…"))
 
-(defun mevedel-notes--actions-hint (&optional note)
-  "Return the current modified-key menu hint for NOTE."
-  (format "%s: send, %s, edit, done, %s"
+(defun mevedel-notes--actions-hint (&optional note menu-only)
+  "Return the current modified-key menu hint for NOTE.
+When MENU-ONLY is non-nil, omit the action list."
+  (format "%s: %s"
           (if-let* ((key (where-is-internal #'mevedel--ov-actions-dispatch
                                            mevedel-note-actions-map t)))
               (key-description key)
             "M-x mevedel-note-menu")
-          (if (and note (mevedel-note-watching-p note)) "drop" "take")
-          (pcase (and note (overlay-get note 'mevedel-note-author))
-            ('buddy "dismiss, keep") ('agent "dismiss") (_ "delete"))))
+          (if menu-only "menu"
+            (format "send, %s, edit, done, %s"
+                    (if (and note (mevedel-note-watching-p note)) "drop" "take")
+                    (pcase (and note (overlay-get note 'mevedel-note-author))
+                      ('buddy "dismiss, keep") ('agent "dismiss") (_ "delete"))))))
 
 (defun mevedel-notes--entry-hint ()
   "Announce the note and its next actions when point enters it."
@@ -291,9 +321,46 @@ Refuse unavailable sources before a caller starts mutating the notes."
                    (mevedel-notes--display-text note)
                    (mevedel-notes--actions-hint note)))))))
 
+(defun mevedel-notes--label-string (header text)
+  "Fill HEADER and full TEXT for a label in the current source buffer."
+  (let ((width (max 4 (min fill-column (window-body-width
+                                      (get-buffer-window (current-buffer) t))))))
+    (with-temp-buffer
+      (setq-local fill-column (- width 2))
+      (insert header)
+      (fill-region (point-min) (point-max))
+      (unless (string-empty-p text)
+        (insert "\n")
+        (let ((start (point)))
+          (insert text)
+          (fill-region start (point-max))))
+      (untabify (point-min) (point-max))
+      (goto-char (point-min))
+      (while (not (eobp))
+        ;; Filling leaves unbroken tokens wider than the column intact.
+        (move-to-column fill-column)
+        (when (or (not (eolp)) (> (current-column) fill-column))
+          (when (> (current-column) fill-column)
+            (backward-char)
+            (when (bolp)
+              ;; Escape a control wider than the column so wrapping advances.
+              (let ((character (char-after)))
+                (delete-char 1)
+                (insert (format "\\%03o" character)))
+              (beginning-of-line)
+              (move-to-column fill-column)))
+          (insert "\n")
+          (forward-line -1))
+        (beginning-of-line)
+        (insert "  ")
+        (forward-line 1))
+      (concat "\n" (buffer-string)))))
+
 (defun mevedel-notes--render (note)
   "Render NOTE's label below its code."
   (with-current-buffer (overlay-buffer note)
+    (unless (overlay-get note 'mevedel-note-labels)
+      (overlay-put note 'mevedel-note-labels mevedel-note-labels))
     (save-excursion
       (goto-char (overlay-end note))
       (when (and (> (point) (overlay-start note)) (bolp))
@@ -313,33 +380,55 @@ Refuse unavailable sources before a caller starts mutating the notes."
                          ((eq author 'buddy) 'mevedel-note-label-buddy)
                          ((eq author 'agent) 'mevedel-note-label-agent)
                          (t 'mevedel-note-label-you)))
-             (text (format "\n  Note %s · %s · %s · %s%s · %s"
-                           (overlay-get note 'mevedel-id)
-                           (pcase author
-                             ('buddy "Buddy") ('agent "AI") (_ "you"))
-                           (mevedel-notes--display-text note)
-                           (pcase (mevedel-notes-attention-state note)
-                             ('ready "change ready") ('stale "change stale")
-                             (_ (if (eq 'taken (overlay-get note 'mevedel-note-state))
-                                    (if (not (mevedel-note-watching-p note))
-                                        "you're on it"
-                                      (if (overlay-get note 'mevedel-note-buddy-looks-done)
-                                          "looks done · done? · Buddy watches"
-                                        "you're on it · Buddy watches"))
-                                  (if (overlay-get note 'mevedel-note-session-id) "sent" "not sent"))))
-                           (if (and (eq 'taken (overlay-get note 'mevedel-note-state))
-                                    (not (mevedel-note-watching-p note)))
-                               " · paused" "")
-                           (mevedel-notes--actions-hint note))))
+             (text (when (eq 'expanded (overlay-get note 'mevedel-note-labels))
+                     (mevedel-notes--label-string
+                      (format "Note %s · %s · %s%s · %s"
+                              (overlay-get note 'mevedel-id)
+                              (pcase author
+                                ('buddy "Buddy") ('agent "AI") (_ "you"))
+                              (pcase (mevedel-notes-attention-state note)
+                                ('ready "change ready") ('stale "change stale")
+                                (_ (if (eq 'taken (overlay-get note 'mevedel-note-state))
+                                       (if (not (mevedel-note-watching-p note))
+                                           "you're on it"
+                                         (if (overlay-get note 'mevedel-note-buddy-looks-done)
+                                             "looks done · done? · Buddy watches"
+                                           "you're on it · Buddy watches"))
+                                     (if (overlay-get note 'mevedel-note-session-id) "sent" "not sent"))))
+                              (if (and (eq 'taken (overlay-get note 'mevedel-note-state))
+                                       (not (mevedel-note-watching-p note)))
+                                  " · paused" "")
+                              (mevedel-notes--actions-hint note t))
+                      (or (overlay-get note 'mevedel-note-text) "")))))
         (overlay-put note 'keymap mevedel-note-actions-map)
         (unless (eq code-face (overlay-get note 'face))
           (overlay-put note 'face code-face))
         (move-overlay label (overlay-start note) end)
         (unless (and (equal text (overlay-get label 'after-string))
-                     (eq face (get-text-property 0 'face (overlay-get label 'after-string))))
-          (overlay-put label 'after-string (propertize text 'face face)))))
+                     (or (null text)
+                         (eq face (get-text-property 0 'face (overlay-get label 'after-string)))))
+          (overlay-put label 'after-string (and text (propertize text 'face face))))))
     (add-hook 'after-change-functions #'mevedel-notes--after-change nil t)
     (add-hook 'post-command-hook #'mevedel-notes--entry-hint nil t)))
+
+;;;###autoload
+(defun mevedel-notes-toggle-labels ()
+  "Expand every note label in this buffer, or collapse if all are expanded."
+  (interactive)
+  (let* ((notes (cl-remove-if-not
+                 (lambda (note)
+                   (and (overlay-buffer note)
+                        (eq 'note (overlay-get note 'mevedel-instruction-type))))
+                 (cdr (assq (current-buffer) (mevedel--instruction-alist)))))
+         (display (if (cl-every (lambda (note)
+                                 (eq 'expanded (overlay-get note 'mevedel-note-labels)))
+                               notes)
+                      'collapsed 'expanded)))
+    (save-restriction
+      (widen)
+      (dolist (note notes)
+        (overlay-put note 'mevedel-note-labels display)
+        (mevedel-notes--render note)))))
 
 (defun mevedel-notes--after-change (beg end old-length)
   "Reposition labels touched by BEG..END after replacing OLD-LENGTH characters."
@@ -668,8 +757,12 @@ Return its live source overlay, retaining its text, tags and attachments."
       (pcase (car (read-multiple-choice
                    (format "Note %s: " (overlay-get note 'mevedel-id))
                    (append '((?s "send" "Send or reopen the note conversation")
-                             (?e "edit" "Edit note text")
+                             (?i "edit" "Edit note text")
+                             (?w "copy text" "Copy full note text to the kill ring")
                              (?x "done" "Mark note done"))
+                           (if (eq 'expanded (overlay-get note 'mevedel-note-labels))
+                               '((?e "collapse" "Hide the note label"))
+                             '((?e "expand" "Show the full note label")))
                            (if (mevedel-note-watching-p note)
                                '((?t "drop" "Stop watching this note"))
                              '((?t "take" "Implement yourself with Buddy watching")))
@@ -694,8 +787,14 @@ Return its live source overlay, retaining its text, tags and attachments."
         (?t (if (mevedel-note-watching-p note)
                 (mevedel-note-drop note)
               (mevedel-note-take note)))
-        (?e (mevedel-note-edit
+        (?e (overlay-put note 'mevedel-note-labels
+                         (if (eq 'expanded (overlay-get note 'mevedel-note-labels))
+                             'collapsed 'expanded))
+            (mevedel-notes--render note))
+        (?i (mevedel-note-edit
              (read-string "Note: " (overlay-get note 'mevedel-note-text)) note))
+        (?w (kill-new (or (overlay-get note 'mevedel-note-text) ""))
+            (message "mevedel: note text copied"))
         (?x (mevedel-note-done note))
         (?d (pcase (overlay-get note 'mevedel-note-author)
               ('buddy (mevedel-buddy-dismiss-note note))

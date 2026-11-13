@@ -55,6 +55,7 @@
             (mevedel-workspace--registry (make-hash-table :test #'equal))
             (mevedel-instruction-store--dirty nil)
             (mevedel-instruction-store--failed nil)
+            (mevedel-note-labels 'expanded)
             (post-command-hook (copy-sequence post-command-hook))
             (workspace (mevedel-workspace-get-or-create 'file root root "notes"))
             (session (mevedel-session-create "notes" workspace root))

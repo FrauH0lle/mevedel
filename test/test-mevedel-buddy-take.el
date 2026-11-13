@@ -28,6 +28,7 @@
           (mevedel-instruction-store--dirty nil)
           (mevedel-instruction-store--failed nil)
           (mevedel-instruction-store--warned nil)
+          (mevedel-note-labels 'expanded)
           (mevedel-buddy--changes (make-hash-table :test #'equal))
           (mevedel-buddy--last-review (make-hash-table :test #'equal))
           (mevedel-buddy--levels (make-hash-table :test #'equal))

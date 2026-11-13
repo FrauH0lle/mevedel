@@ -93,7 +93,7 @@
 
 (mevedel-deftest mevedel-buddy-note-add
   (:after-each (mevedel-test--note-cleanup))
-  ,test
+  (let ((mevedel-note-labels 'expanded)) ,test)
   (test)
 
   :doc "`mevedel-buddy-note-add' puts an overlay on the named line"
@@ -191,7 +191,7 @@
 
 (mevedel-deftest mevedel-buddy-note-update
   (:after-each (mevedel-test--note-cleanup))
-  ,test
+  (let ((mevedel-note-labels 'expanded)) ,test)
   (test)
 
   :doc "`mevedel-buddy-note-update' replaces the text and keeps the line"

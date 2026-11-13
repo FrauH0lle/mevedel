@@ -115,6 +115,7 @@
 (autoload 'mevedel-note-revert-change "mevedel-note-change" nil t)
 (autoload 'mevedel-note-set-tags "mevedel-notes" nil t)
 (autoload 'mevedel-notes-list "mevedel-notes-list" nil t)
+(autoload 'mevedel-notes-toggle-labels "mevedel-notes" nil t)
 (autoload 'mevedel-menu "mevedel-menu" nil t)
 (autoload 'mevedel-menu-open "mevedel-menu" nil t)
 (autoload 'mevedel-pending-inputs-clear "mevedel-pending-inputs" nil t)

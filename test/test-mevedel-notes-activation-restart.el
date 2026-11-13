@@ -28,7 +28,8 @@
                    `(progn
                       (setq load-path ',load-path
                             native-comp-enable-subr-trampolines nil
-                            native-comp-jit-compilation nil)
+                            native-comp-jit-compilation nil
+                            mevedel-note-labels 'expanded)
                       (require 'cl-lib)
                       (require 'tramp-sh)
                       (setq tramp-histfile-override t
@@ -211,7 +212,7 @@
                                               (let ((text (overlay-get overlay 'after-string)))
                                                 (when (and text
                                                            (string-match
-                                                            " · you · \\(.*\\) · not sent · " text))
+                                                            " · you · not sent · [^\n]*\n  \\(.*\\)\\'" text))
                                                   (match-string 1 text))))
                                             (overlays-in (point-min) (point-max))))))
                                  buffers))

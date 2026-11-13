@@ -246,14 +246,23 @@ A note is a marked code range with optional text, created by you or the agent
 (or as a Buddy remark). Use `M-x mevedel-note-create` in a visited source file
 to mark the active region, or the current line when no region is active. The
 text is optional: submitting an empty answer keeps a code-only note. A label
-below the code shows the note's number, author, text, state and next actions.
+is collapsed by default (`mevedel-note-labels` is `collapsed`): the code stays
+tinted, but no label is shown. Expanded labels sit below the complete source
+line with a `Note N · author · state · KEY: menu` header. The full text appears
+indented below it, filled to `fill-column` bounded by the window width.
+Set `mevedel-note-labels` to `expanded` to show labels initially instead.
 Notes follow source edits. A note is unsent, sent, taken or closed (done,
 deleted or dismissed). Its context reaches a prompt only when you send or
 mention it.
 
 Inside a note, `M-m` (or `mevedel-ov-dispatch-key`) opens its actions menu.
 Plain letters still insert source text; entering a note also shows its actions
-in the echo area. `mevedel-note-edit`, `mevedel-note-delete`, and
+in the echo area, even when collapsed. In the menu, `e` expands or collapses
+the label, `i` edits (formerly `e`), and `w` copies the full text to the kill
+ring. `M-x mevedel-notes-toggle-labels` expands all notes in the current buffer
+if any are collapsed; otherwise it collapses them all. Display state belongs
+to each live overlay and is not persisted. Moving point never changes style.
+`mevedel-note-edit`, `mevedel-note-delete`, and
 `mevedel-note-menu` are available through `M-x` too. Deleting a note never edits
 its source code. Creating or editing a note does not send anything to a model.
 
@@ -305,7 +314,7 @@ notes still refer to them. Once references expire they can be collected by the
 normal age limit, only when a safe local reference check proves them unreferenced.
 
 Choose **take** in the source menu, or use `M-x mevedel-note-take`, to implement
-the note yourself. Its label says **Buddy watches**: Buddy uses the note's text
+the note yourself. Its expanded label says **Buddy watches**: Buddy uses its text
 as its brief and may say **looks done**, but only you mark it done. **Drop**
 (`M-x mevedel-note-drop`) returns it to unsent and stops that watch without
 changing code or discarding its conversation. Sending a taken note instead
@@ -380,11 +389,14 @@ per-session instruction snapshots are ignored on resume, not imported or deleted
 Old saved sessions still resume; their former directive turns appear as ordinary
 turns and participate in ordinary conversation context.
 
-Noted code is tinted by author and its label below uses the matching color:
-blue for your notes, purple for agent notes and amber for Buddy remarks. The
+Noted code is tinted by author, matching the theme-derived label color. The
 faces are `mevedel-note-you`, `mevedel-note-agent` and `mevedel-note-buddy`
 for the code, and `mevedel-note-label-you`, `mevedel-note-label-agent` and
-`mevedel-note-label-buddy` for the labels.
+`mevedel-note-label-buddy` for the labels. Labels are bold and inherit
+`font-lock-function-name-face` (you), `font-lock-keyword-face` (agent), or
+`font-lock-warning-face` (Buddy). Code backgrounds blend 15% of the matching
+foreground into the default background at load and theme enable, without overriding
+user-customized tint backgrounds. Code faces use `:extend t`.
 
 The note conversation frame uses `mevedel-note-frame-width`,
 `mevedel-note-frame-height`, `mevedel-note-frame-min-height` and

@@ -36,6 +36,7 @@
           (workspace (mevedel-workspace--create
                       :type 'file :id directory :root directory :name "notes"))
           (mevedel--instruction-states (make-hash-table :test #'equal))
+          (mevedel-note-labels 'expanded)
           (mevedel-instruction-store--dirty nil)
           (mevedel-instruction-store--failed nil)
           source)
@@ -63,6 +64,74 @@
    (mapcar (lambda (overlay) (overlay-get overlay 'after-string))
            (overlays-in (point-min) (point-max)))))
 
+(mevedel-deftest mevedel-notes-toggle-labels
+  (:quiet t)
+  ,test
+  (test)
+  :doc "labels default to collapsed"
+  (should (eq 'collapsed (default-value 'mevedel-note-labels)))
+  :doc "notes start tinted without labels; toggles stay stable across point motion"
+  (mevedel-notes-test--with-source
+    (let* ((mevedel-note-labels 'collapsed)
+           (first (mevedel-note-create "First")))
+      (goto-char (point-min))
+      (let ((second (mevedel-note-create "Second")))
+        (should-not (mevedel-notes-test--labels))
+        (should (eq 'mevedel-note-you (overlay-get first 'face)))
+        (cl-letf (((symbol-function 'read-multiple-choice)
+                   (lambda (_prompt choices &rest _)
+                     (should (equal "expand" (cadr (assq ?e choices))))
+                     (assq ?e choices))))
+          (mevedel-note-menu first))
+        (should (= 1 (length (mevedel-notes-test--labels))))
+        (should (string-search "First" (car (mevedel-notes-test--labels))))
+        (call-interactively #'mevedel-notes-toggle-labels)
+        (should (= 2 (length (mevedel-notes-test--labels))))
+        (goto-char (overlay-start first))
+        (run-hooks 'post-command-hook)
+        (goto-char (point-max))
+        (run-hooks 'post-command-hook)
+        (should (= 2 (length (mevedel-notes-test--labels))))
+        (cl-letf (((symbol-function 'read-multiple-choice)
+                   (lambda (_prompt choices &rest _)
+                     (should (equal "collapse" (cadr (assq ?e choices))))
+                     (assq ?e choices))))
+          (mevedel-note-menu second))
+        (should (= 1 (length (mevedel-notes-test--labels))))
+        (call-interactively #'mevedel-notes-toggle-labels)
+        (should (= 2 (length (mevedel-notes-test--labels))))
+        (call-interactively #'mevedel-notes-toggle-labels)
+        (should-not (mevedel-notes-test--labels))
+        (mevedel-note-edit "Changed" first)
+        (should-not (mevedel-notes-test--labels))
+        (call-interactively #'mevedel-notes-toggle-labels)
+        (mevedel-instruction-store-flush t)
+        (mevedel--clear-instruction-state workspace)
+        (mevedel-instruction-store-observe workspace)
+        (should-not (mevedel-notes-test--labels)))))
+  :doc "buffer toggles include notes outside the narrowing and preserve point and restriction"
+  (mevedel-notes-test--with-source
+    (let* ((mevedel-note-labels 'collapsed)
+           (note (mevedel-note-create "Outside narrowing")))
+      (goto-char (point-min))
+      (mevedel-note-create "Inside narrowing")
+      (narrow-to-region (point-min) (line-end-position))
+      (let ((position (point)) (end (point-max)))
+        (call-interactively #'mevedel-notes-toggle-labels)
+        (should (= position (point)))
+        (should (= end (point-max)))
+        (should (string-search "Outside narrowing"
+                               (overlay-get (overlay-get note 'mevedel-label-overlay)
+                                            'after-string)))
+        (should (= (overlay-start note)
+                   (overlay-start (overlay-get note 'mevedel-label-overlay))))
+        (should (= (overlay-end note)
+                   (overlay-end (overlay-get note 'mevedel-label-overlay))))
+        (save-restriction
+          (widen)
+          (should (= 2 (length (mevedel-notes-test--labels)))))
+        (widen)))))
+
 (mevedel-deftest mevedel-note-create
   (:quiet t)
   ,test
@@ -72,8 +141,48 @@
     (mevedel-note-create "Check this")
     (should (equal "before\nselected code\nafter\n" (buffer-string)))
     (let ((label (string-join (mevedel-notes-test--labels))))
-      (should (string-match-p "Note 1.*you.*Check this.*not sent" label))
-      (should (string-match-p "edit.*delete" label))))
+      (should (string-match-p "Note 1.*you.*not sent.*menu\n  Check this" label))
+      (should-not (string-match-p "edit.*delete" label))))
+  :doc "note colors inherit the theme and preserve customized tint backgrounds"
+  (mevedel-notes-test--with-source
+    (let ((face-spec (get 'mevedel-note-agent 'face-override-spec))
+          (buddy-spec (get 'mevedel-note-buddy 'face-override-spec))
+          (theme-properties (copy-sequence (symbol-plist 'mevedel-notes-test)))
+          (custom-known-themes (copy-sequence custom-known-themes))
+          (custom-enabled-themes (copy-sequence custom-enabled-themes)))
+      (unwind-protect
+          (progn
+            (deftheme mevedel-notes-test "Private note palette.")
+            (custom-theme-set-faces
+             'mevedel-notes-test
+             '(default ((t (:foreground "white" :background "black"))))
+             '(font-lock-function-name-face ((t (:foreground "red"))))
+             '(font-lock-keyword-face ((t (:foreground "green"))))
+             '(font-lock-warning-face ((t (:foreground "blue")))))
+            (enable-theme 'mevedel-notes-test)
+            (mevedel-note-create "Theme colors")
+            (dolist (entry '((mevedel-note-you mevedel-note-label-you font-lock-function-name-face "#260000")
+                             (mevedel-note-agent mevedel-note-label-agent font-lock-keyword-face "#002600")
+                             (mevedel-note-buddy mevedel-note-label-buddy font-lock-warning-face "#000026")))
+              (pcase-let ((`(,tint ,label ,parent ,background) entry))
+                (should (eq parent (face-attribute label :inherit)))
+                (should (eq 'bold (face-attribute label :weight)))
+                (should (eq t (face-attribute tint :extend)))
+                (should (equal background (face-background tint)))))
+            (face-spec-set 'mevedel-note-agent '((t (:background "purple"))))
+            (face-spec-set 'mevedel-note-buddy '((t (:inherit default))))
+            (custom-theme-set-faces
+             'mevedel-notes-test
+             '(default ((t (:foreground "black" :background "white"))))
+             '(font-lock-function-name-face ((t (:foreground "blue")))))
+            (enable-theme 'mevedel-notes-test)
+            (should (equal "#d8d8ff" (face-background 'mevedel-note-you)))
+            (should (equal "purple" (face-background 'mevedel-note-agent)))
+            (should (equal "white" (face-background 'mevedel-note-buddy nil t))))
+        (face-spec-set 'mevedel-note-agent face-spec)
+        (face-spec-set 'mevedel-note-buddy buddy-spec)
+        (disable-theme 'mevedel-notes-test)
+        (setplist 'mevedel-notes-test theme-properties))))
   :doc "region note without text labels below the whole line and follows edits"
   (mevedel-notes-test--with-source
     (let ((transient-mark-mode t))
@@ -105,12 +214,30 @@
     (should (= 2 (length (mevedel-notes-test--labels))))
     (should (string-match-p "A region"
                             (string-join (mevedel-notes-test--labels)))))
-  :doc "multiline and long authored text stays complete but the label stays bounded"
+  :doc "tabs and overwide controls in narrow labels wrap without stalling or losing text"
   (mevedel-notes-test--with-source
-    (let* ((text (concat "First\nsecond " (make-string 500 ?x)))
+    (let* ((fill-column 4)
+           (note (mevedel-note-create "\tvalue\u0080"))
+           (label (overlay-get (overlay-get note 'mevedel-label-overlay) 'after-string)))
+      (dolist (line (split-string label "\n" t))
+        (should (<= (string-width line) fill-column)))
+      (should (string-search "value\\200" (replace-regexp-in-string "[ \n]+" "" label)))
+      (should (equal "\tvalue\u0080" (overlay-get note 'mevedel-note-text)))))
+  :doc "expanded labels show a menu header and full indented text filled to the column"
+  (mevedel-notes-test--with-source
+    (let* ((fill-column 60)
+           (text (concat "First paragraph has several words.\n\nSecond " (make-string 500 ?x)))
            (note (mevedel-note-create text)))
-      (should (= 1 (cl-count ?\n (car (mevedel-notes-test--labels)))))
-      (should (< (length (car (mevedel-notes-test--labels))) 240))
+      (let* ((label (car (mevedel-notes-test--labels)))
+             (lines (split-string label "\n" t)))
+        (should (equal "  Note 1 · you · not sent · M-m: menu" (car lines)))
+        (dolist (line lines)
+          (should (string-prefix-p "  " line))
+          (should (<= (string-width line) fill-column)))
+        (should (string-search (make-string 500 ?x)
+                               (replace-regexp-in-string "[ \n]+" "" label)))
+        (should (string-search "First paragraph has several words." label))
+        (should (string-search "\n  \n  Second" label)))
       (mevedel--clear-instruction-state workspace)
       (mevedel-instruction-store-observe workspace)
       (cl-letf (((symbol-function 'read-string)
@@ -233,8 +360,8 @@
     ;; These stubs supply user input at the minibuffer boundary only.
     (cl-letf (((symbol-function 'read-multiple-choice)
                (lambda (_prompt choices &rest _)
-                  (should (equal '(?s ?e ?x ?t ?d) (mapcar #'car choices)))
-                 (assq ?e choices)))
+                  (should (equal '(?s ?i ?w ?x ?e ?t ?d) (mapcar #'car choices)))
+                 (assq ?i choices)))
               ((symbol-function 'read-string)
                (lambda (&rest _) "After")))
       (call-interactively (key-binding (kbd "M-m"))))
@@ -243,6 +370,24 @@
     (mevedel--clear-instruction-state workspace)
     (mevedel-instruction-store-observe workspace)
     (should (string-match-p "After" (car (mevedel-notes-test--labels)))))
+  :doc "copy text copies the full authored text without expanding or changing code"
+  (mevedel-notes-test--with-source
+    (let* ((mevedel-note-labels 'collapsed)
+           (text (concat "First\n\nSecond " (make-string 500 ?x)))
+           (kill-ring nil)
+           (kill-ring-yank-pointer nil)
+           (note (mevedel-note-create text))
+           messages)
+      (cl-letf (((symbol-function 'read-multiple-choice)
+                 (lambda (_prompt choices &rest _)
+                   (should (equal "copy text" (cadr (assq ?w choices))))
+                   (assq ?w choices))))
+        (mevedel-test--with-captured-messages messages
+          (mevedel-note-menu note)))
+      (should (equal text (current-kill 0)))
+      (should (string-match-p "copied" messages))
+      (should-not (mevedel-notes-test--labels))
+      (should (equal "before\nselected code\nafter\n" (buffer-string)))))
   :doc "menu deletion removes the note and label without changing source"
   (mevedel-notes-test--with-source
     (mevedel-note-create "Delete me")
@@ -425,7 +570,7 @@
     (mevedel-instruction-store-observe workspace)
     (should-not (mevedel-notes-test--labels))
     (mevedel-note-restore 1 workspace)
-    (should (string-match-p "Note 1.*Finish this"
+    (should (string-match-p "Note 1.*menu\n  Finish this"
                             (car (mevedel-notes-test--labels)))))
   :doc "closing a parent note refreshes the surviving nested presentation"
   (mevedel-notes-test--with-source

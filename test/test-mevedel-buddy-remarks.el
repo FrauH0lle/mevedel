@@ -30,6 +30,7 @@
           (mevedel-instruction-store--failed nil)
           (mevedel-buddy-note--notes nil)
           (mevedel-buddy-note--changed-workspaces nil)
+          (mevedel-note-labels 'expanded)
           (gptel--known-backends nil)
           (mevedel-model-workloads '((buddy :provider "BuddyTest:test")))
           source)
@@ -95,8 +96,17 @@ COMMAND defaults to guidance; it may also be the recorded-edit review command."
          (should (integerp (mevedel-remarks-test--tool
                             tools "add_note" name 2 "Check this" "significant"))))))
     (should (equal "before\nselected code\nafter\n" (buffer-string)))
-    (should (string-match-p "Note [0-9]+.*Buddy.*Check this.*edit.*dismiss.*keep"
+    (should (string-match-p "Note [0-9]+.*Buddy.*menu\n +Check this"
                             (mevedel-remarks-test--labels)))
+    (goto-char (point-min))
+    (forward-line 1)
+    (cl-letf (((symbol-function 'read-multiple-choice)
+               (lambda (_prompt choices &rest _)
+                 (should (equal "edit" (cadr (assq ?i choices))))
+                 (should (equal "dismiss" (cadr (assq ?d choices))))
+                 (should (equal "keep" (cadr (assq ?k choices))))
+                 (assq ?e choices))))
+      (mevedel-note-menu))
     (should (file-exists-p (mevedel-instruction-store-path workspace))))
   :doc "a fresh review restores the remark and does not duplicate unchanged advice"
   (mevedel-remarks-test--with-source
@@ -114,7 +124,7 @@ COMMAND defaults to guidance; it may also be the recorded-edit review command."
          (should (string-match-p (format "note_id %s \\[active\\]" id) prompt))
          (should (= id (mevedel-remarks-test--tool
                         tools "add_note" name 2 "Check this" "significant")))))
-      (should (= 1 (cl-count ?\n (mevedel-remarks-test--labels))))))
+      (should (= 2 (cl-count ?\n (mevedel-remarks-test--labels))))))
   :doc "a later review retracts a fixed concern from labels and the durable store"
   (mevedel-remarks-test--with-source
     (let ((name (buffer-name)) id)
@@ -159,7 +169,7 @@ COMMAND defaults to guidance; it may also be the recorded-edit review command."
          (should (string-match-p "no longer owned"
                                  (mevedel-remarks-test--tool
                                   tools "update_note" id "Must not replace")))))
-      (should (string-match-p "you.*Check this" (mevedel-remarks-test--labels)))
+      (should (string-match-p "you.*\n +Check this" (mevedel-remarks-test--labels)))
       (should-not (string-match-p "Buddy\\|Must not replace"
                                   (mevedel-remarks-test--labels)))))
   :doc "a multi-remark review writes once, including update and retraction"
@@ -185,7 +195,7 @@ COMMAND defaults to guidance; it may also be the recorded-edit review command."
             (should (= 1 writes))
             (mevedel--clear-instruction-state workspace)
             (mevedel-instruction-store-observe workspace)
-            (should (= 4 (cl-count ?\n (mevedel-remarks-test--labels))))
+            (should (= 8 (cl-count ?\n (mevedel-remarks-test--labels))))
             (should (string-match-p "Updated" (mevedel-remarks-test--labels)))
             (setq writes 0)
             (mevedel-remarks-test--review (lambda (_prompt _tools)))
@@ -255,7 +265,7 @@ COMMAND defaults to guidance; it may also be the recorded-edit review command."
          (with-current-buffer source (goto-char (point-min)) (insert "new line\n"))
          (should (= id (mevedel-remarks-test--tool
                         tools "add_note" name 2 "Check this" "significant")))))
-      (should (= 1 (cl-count ?\n (mevedel-remarks-test--labels))))))
+      (should (= 2 (cl-count ?\n (mevedel-remarks-test--labels))))))
   :doc "a recorded-edit review places remarks without changing code or focus"
   (mevedel-remarks-test--with-source
     (mevedel-buddy-mode 1)
@@ -272,7 +282,7 @@ COMMAND defaults to guidance; it may also be the recorded-edit review command."
       (should (equal code (buffer-string)))
       (should (= position (point)))
       (should (eq window (selected-window)))
-      (should (string-match-p "Buddy.*Check this" (mevedel-remarks-test--labels))))))
+      (should (string-match-p "Buddy.*\n +Check this" (mevedel-remarks-test--labels))))))
 
 (mevedel-deftest mevedel-buddy-remarks/dismiss-in-flight
   (:quiet t)
@@ -313,7 +323,7 @@ COMMAND defaults to guidance; it may also be the recorded-edit review command."
        (lambda (_prompt tools)
          (setq id (mevedel-remarks-test--tool
                    tools "add_note" name 2 "Check this" "significant"))))
-      (should (string-match-p "Buddy.*Check this" (mevedel-remarks-test--labels)))
+      (should (string-match-p "Buddy.*\n +Check this" (mevedel-remarks-test--labels)))
       (goto-char (point-min)) (forward-line 1)
       (mevedel-buddy-dismiss-note)
       (should (equal "" (mevedel-remarks-test--labels)))
@@ -464,7 +474,7 @@ COMMAND defaults to guidance; it may also be the recorded-edit review command."
             (should (file-exists-p (mevedel-instruction-store-path workspace)))
             (mevedel--clear-instruction-state workspace)
             (mevedel-instruction-store-observe workspace)
-            (should (= 5 (cl-count ?\n (mevedel-remarks-test--labels))))
+            (should (= 10 (cl-count ?\n (mevedel-remarks-test--labels))))
             (should (equal "before\nselected code\nafter\n" (buffer-string))))
         (advice-remove 'mevedel-instruction-store-sync count-write)))))
 
