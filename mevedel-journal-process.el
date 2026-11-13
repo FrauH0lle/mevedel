@@ -221,7 +221,8 @@ WORKSPACE is used to verify that client-owned evidence remains available."
 (defun mevedel-journal-process--source (workspace capture policy)
   "Return verified CAPTURE evidence bounded to POLICY's usable input budget.
 Use the generator's exact prompt accounting, retaining explicit omissions."
-  (let* ((source (mevedel-journal-capture-evidence workspace capture))
+  (let* ((source (mevedel-journal-evidence-digest-source
+                  (mevedel-journal-capture-evidence workspace capture)))
          (system (mevedel-context-summary--prompt 'digest))
          (usable (mevedel-model-usable-input-tokens policy))
          (marker "\n[omitted completed-work evidence: summarization input limit]\n"))

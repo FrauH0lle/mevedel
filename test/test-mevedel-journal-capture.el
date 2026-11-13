@@ -67,6 +67,40 @@
         (delete-directory directory t)
         (mevedel-workspace-clear-registry))))
 
+  :doc "tool volume cannot displace middle dialogue and the frozen capture stays bounded"
+  (mevedel-test-journal-capture--with-session
+   (lambda (session buffer)
+     (mevedel-test-journal-capture--turn
+      session buffer "Opening user request: preserve local state." "Initial assistant response.")
+     (with-current-buffer buffer
+       (goto-char (point-max))
+       (let ((start (point)))
+         (insert "\nMiddle user correction: batch operations first.\n")
+         (remove-text-properties start (point) '(gptel nil)))
+       (insert (propertize "Middle assistant decision: permit a helper when batching is insufficient.\n"
+                           'gptel 'response))
+       (dotimes (index 64)
+         (insert "#+begin_tool\n")
+         (let ((start (point)))
+           (insert "(:name \"Read\" :args (:file_path \"fixture.txt\"))\n\n"
+                   "Observed tool output.\n" (make-string 4000 ?x))
+           (put-text-property start (point) 'gptel (cons 'tool (format "read-%d" index))))
+         (insert "\n#+end_tool\n"))
+       (insert (propertize "Final assistant conclusion: keep all user capabilities.\n" 'gptel 'response))
+       (setf (mevedel-session-turn-count session) 2)
+       (mevedel-session-artifacts-save session buffer t)
+       (let* ((capture (mevedel-journal-capture-checkpoint session buffer))
+              (source (mevedel-journal-capture-evidence (mevedel-session-workspace session) capture)))
+         (should (> (string-bytes (mevedel-session-artifacts-read-artifact
+                                  session "segment-0001.chat.org" t)) (* 128 1024)))
+         (should (<= (string-bytes source) (* 96 1024)))
+         (should (string-match-p "Opening user request" source))
+         (should (string-match-p "Middle user correction: batch operations first" source))
+         (should (string-match-p "Middle assistant decision: permit a helper" source))
+         (should (string-match-p "Final assistant conclusion" source))
+         (should (string-match-p "Observed tool output" source))
+         (should (string-match-p "remaining supporting evidence omitted" source))))))
+
   :doc "rejects an oversized descriptor before publication or pinning, preserving later capture eligibility"
   (mevedel-test-journal-capture--with-session
    (lambda (session buffer)

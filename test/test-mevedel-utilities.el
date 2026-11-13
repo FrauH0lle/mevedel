@@ -2243,7 +2243,15 @@ CAPTURE, when non-nil, is called with the stub's arguments."
     (should (equal "héll[..]" bounded))
     (should (<= (string-bytes bounded) 9)))
   :doc "rejects a budget that cannot hold its marker"
-  (should-error (mevedel--truncate-bytes "text" 2 "[...]")))
+  (should-error (mevedel--truncate-bytes "text" 2 "[...]"))
+  :doc "bounds large multibyte strings at character boundaries, including the marker"
+  (let* ((source (concat (make-string 100000 #x754c) "end"))
+         (result (mevedel--truncate-bytes source 32768 "[omitted]")))
+    (should (<= (string-bytes result) 32768))
+    (should (string-prefix-p (make-string 100 #x754c) result))
+    (should (string-suffix-p "[omitted]" result))
+    (should (= (% (- (string-bytes result) (string-bytes "[omitted]")) 3) 0))
+    (should-not (cl-some (lambda (char) (eq (char-charset char) 'eight-bit)) result))))
 
 (mevedel-deftest mevedel--unified-diff ()
   ,test

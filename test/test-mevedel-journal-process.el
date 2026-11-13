@@ -460,6 +460,64 @@
                  (should (mevedel-journal-pins-present-p (mevedel-session-save-path session))))))
          (write-region original nil path nil 'silent)))))
 
+  :doc "large real captures reach the digest with bounded intent and final decisions"
+  (mevedel-test-journal-capture--with-session
+   (lambda (session buffer)
+     ;; A large model window isolates the journal byte cap from token admission.
+     (put 'fast-model :context-window 1000)
+     (mevedel-test-journal-capture--turn
+      session buffer "User correction: isolate the runner to protect local state."
+      (concat (make-string 100000 #x754c)
+              "\nFinal decision: use the isolated runner because it protects local state."))
+     (let* ((workspace (mevedel-session-workspace session))
+            (capture (car (mevedel-journal-capture-seal session buffer 'session-end)))
+            (original (mevedel-journal-capture-evidence workspace capture))
+            body)
+       (should (> (string-bytes (mevedel-session-artifacts-read-artifact
+                                session "segment-0001.chat.org" t))
+                  mevedel-journal-evidence-digest-max-bytes))
+       (should (<= (string-bytes original) mevedel-journal-evidence-digest-max-bytes))
+       (cl-letf (((symbol-function 'gptel-request)
+                  (lambda (prompt &rest args)
+                    (setq body prompt)
+                    (funcall (plist-get args :callback) mevedel-test-journal-process--digest nil))))
+         (should-not (plist-get (mevedel-journal-process-next workspace) :error)))
+       (should body)
+       ;; The generator adds its evidence envelope outside the source allowance.
+       (should (<= (string-bytes body)
+                   (+ mevedel-journal-evidence-digest-max-bytes 256)))
+       (should (string-match-p "User correction: isolate the runner" body))
+       (should (string-match-p "Final decision: use the isolated runner" body))
+       (should (string-match-p "Completed turn 1; source: segment-0001.chat.org" body))
+       (should (string-match-p "middle of capture unavailable" body)))))
+
+  :doc "an already-frozen oversized capture still meets the request backstop"
+  (mevedel-test-journal-capture--with-session
+   (lambda (session buffer)
+     (put 'fast-model :context-window 1000)
+     (mevedel-test-journal-capture--turn session buffer "Request" "Result")
+     (let* ((workspace (mevedel-session-workspace session))
+            (capture (car (mevedel-journal-capture-seal session buffer 'session-end)))
+            (path (file-name-concat (mevedel-journal-capture--directory workspace (plist-get capture :id))
+                                    "capture.json"))
+            ;; Baseline shape: one unclassified blob, far above the producer's budgets.
+            (frozen (concat "Frozen opening\n" (make-string 700000 ?x) "\nFrozen closing\n"))
+            (record (json-parse-string (mevedel-session-control-fs-read-file path)))
+            body)
+       (puthash "evidence" frozen record)
+       (puthash "evidence-sha256" (secure-hash 'sha256 (encode-coding-string frozen 'utf-8-unix)) record)
+       (write-region (json-serialize record) nil path nil 'silent)
+       (cl-letf (((symbol-function 'gptel-request)
+                  (lambda (prompt &rest args)
+                    (setq body prompt)
+                    (funcall (plist-get args :callback) mevedel-test-journal-process--digest nil))))
+         (should-not (plist-get (mevedel-journal-process-next workspace) :error)))
+       (should (> (string-bytes frozen) (* 5 mevedel-journal-evidence-digest-max-bytes)))
+       (should (<= (string-bytes body) (+ mevedel-journal-evidence-digest-max-bytes 256)))
+       (should (string-match-p "Frozen opening" body))
+       (should (string-match-p "Frozen closing" body))
+       (should (string-match-p "middle of capture unavailable" body)))))
+
   :doc "multibyte evidence is explicitly bounded to the captured model's input budget"
   (let ((saved-plist (copy-tree (symbol-plist 'fast-model)))
         (mevedel-model-reserve-tokens 0))
