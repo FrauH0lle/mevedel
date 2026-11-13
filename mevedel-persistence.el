@@ -99,8 +99,7 @@ versions can share one workspace and import each other's exports.")
 
 (defcustom mevedel-notes-closed-max-count 100
   "Maximum number of ordinary notes retained in recently closed.
-Nil disables the count limit.  Zero expires notes immediately on closure.
-Migrated archives marked :expiry-exempt neither expire nor count here."
+Nil disables the count limit.  Zero expires notes immediately on closure."
   :type '(choice (const :tag "No count limit" nil) natnum)
   :group 'mevedel)
 
@@ -120,13 +119,12 @@ it never removes open notes or undoes file changes."
                                (lambda (a b)
                                  (> (plist-get a :closed-at)
                                     (plist-get b :closed-at)))))
-      (when (or (plist-get instruction :expiry-exempt)
-                (and (or (null mevedel-notes-closed-max-count)
-                         (< count mevedel-notes-closed-max-count))
-                     (or (null mevedel-notes-closed-max-age-days)
-                         (< (- now (plist-get instruction :closed-at))
-                            (* 86400 mevedel-notes-closed-max-age-days)))))
-        (unless (plist-get instruction :expiry-exempt) (cl-incf count))
+      (when (and (or (null mevedel-notes-closed-max-count)
+                     (< count mevedel-notes-closed-max-count))
+                 (or (null mevedel-notes-closed-max-age-days)
+                     (< (- now (plist-get instruction :closed-at))
+                        (* 86400 mevedel-notes-closed-max-age-days))))
+        (cl-incf count)
         (puthash (plist-get (plist-get instruction :properties) 'mevedel-uuid)
                  t keep)))
     keep))

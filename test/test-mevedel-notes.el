@@ -590,27 +590,7 @@
         (mevedel-instruction-store-observe workspace)
         (let ((mevedel-notes-closed-max-age-days nil))
           (should-not (mevedel-notes-closed workspace))
-          (should-error (mevedel-note-restore 1 workspace) :type 'user-error)))))
-  :doc "imported archived notes are exempt from both ordinary retention limits"
-  (mevedel-notes-test--with-source
-    (mevedel-note-create "Migrated archive")
-    (mevedel-note-done)
-    (let ((path (file-name-concat directory "archive.el")))
-      (mevedel-save-instructions path)
-      ;; Supply the current-format output that archive migration will produce.
-      (let* ((data (with-temp-buffer (insert-file-contents path) (read (current-buffer))))
-             (instruction (car (plist-get (cdar (plist-get data :files)) :instructions))))
-        (setf (plist-get (cdar (plist-get data :files)) :instructions)
-              (list (plist-put instruction :expiry-exempt t)))
-        (write-region (prin1-to-string data) nil path nil 'silent))
-      (let ((mevedel-notes-closed-max-count 0)
-            (mevedel-notes-closed-max-age-days 0))
-        (mevedel-load-instructions path)
-        (mevedel--clear-instruction-state workspace)
-        (mevedel-instruction-store-observe workspace)
-        (mevedel-note-restore 1 workspace)
-        (should (string-match-p "Migrated archive"
-                                (car (mevedel-notes-test--labels))))))))
+          (should-error (mevedel-note-restore 1 workspace) :type 'user-error))))))
 
 (mevedel-deftest mevedel-note-source-missing
   (:quiet t)

@@ -396,17 +396,6 @@ If OF-TYPE is non-nil, returns the parent with the given type."
                                     (< end (overlay-end instr)))))
                          (mevedel--instructions-in beg end))))))
 
-(defun mevedel--subinstruction-of-p (sub parent)
-  "Return t is instruction SUB is contained entirely within instruction PARENT.
-
-In this case, an instruction is _not_ considered a subinstruction of
-itself."
-  (and (eq (overlay-buffer sub)
-           (overlay-buffer parent))
-       (<= (overlay-start parent) (overlay-start sub) (overlay-end sub) (overlay-end parent))
-       (and (/= (overlay-start parent) (overlay-start sub))
-            (/= (overlay-end parent) (overlay-end sub)))))
-
 (defun mevedel--child-instructions (instruction)
   "Return the direct child instructions of the given INSTRUCTION overlay."
   (let ((children (cl-remove-if (lambda (instr)
@@ -420,16 +409,6 @@ itself."
       (setq children (cl-set-difference children
                                         (mevedel--child-instructions child))))
     children))
-
-(defun mevedel--instruction-bufferlevel-p (instruction)
-  "Return t if INSTRUCTION spans the entirety of its buffer."
-  (let ((buffer (overlay-buffer instruction)))
-    (when buffer
-      (with-current-buffer buffer
-        (without-restriction
-          (and (= (overlay-start instruction) (point-min))
-               (= (overlay-end instruction) (point-max))))))))
-
 
 (defun mevedel--buffer-has-instructions-p (buffer)
   "Return non-nil if BUFFER has any mevedel instructions associated with it."
@@ -463,19 +442,6 @@ Optionally return only instructions of specific TYPE."
                                         type))
                                (null type))))
                     (overlays-in start end)))
-
-(defun mevedel--partially-contained-instructions (buffer start end)
-  "Return instructions in BUFFER that overlap with START and END.
-
-Does not return instructions that contain the region in its entirety."
-  (with-current-buffer buffer
-    (cl-remove-if-not (lambda (ov)
-                        (and (overlay-get ov 'mevedel-instruction)
-                             (or (<= (overlay-start ov) start)
-                                 (>= (overlay-end ov) end))
-                             (not (and (<= (overlay-start ov) start)
-                                       (>= (overlay-end ov) end)))))
-                      (overlays-in start end))))
 
 (defun mevedel--all-instructions ()
   "Return a list of all currently loaded instructions."

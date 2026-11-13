@@ -57,15 +57,12 @@
                   "mevedel-overlays" (start end &optional type))
 (declare-function mevedel--parent-instruction
                   "mevedel-overlays" (instruction &optional of-type))
-(declare-function mevedel--subinstruction-of-p
-                  "mevedel-overlays" (sub parent))
 (declare-function mevedel--topmost-instruction
                   "mevedel-overlays" (instruction &optional of-type pred))
 (autoload 'mevedel--child-instructions "mevedel-overlays")
 (autoload 'mevedel--instructions-at "mevedel-overlays")
 (autoload 'mevedel--instructions-in "mevedel-overlays")
 (autoload 'mevedel--parent-instruction "mevedel-overlays")
-(autoload 'mevedel--subinstruction-of-p "mevedel-overlays")
 (autoload 'mevedel--topmost-instruction "mevedel-overlays")
 (defvar mevedel--default-instruction-priority)
 
@@ -240,7 +237,6 @@ shape and links.  Calls are idempotent."
     mevedel-note-buddy-code
     mevedel-note-kept-from-buddy
     mevedel-span
-    mevedel-instruction-collapse-p
     mevedel-links
     evaporate)
   "Overlay properties that are part of the instruction data model.

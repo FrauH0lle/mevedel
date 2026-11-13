@@ -275,7 +275,8 @@
   :doc "dismissing a note deletes its overlay and keeps the record"
   (let* ((buf (mevedel-test--note-buffer "note-dismiss" "one\ntwo\n"))
          (id (mevedel-test--add-note buf 1 "dismiss me")))
-    (mevedel-buddy-note-dismiss id "user")
+    (mevedel-buddy-note--dismiss-overlay
+     (plist-get (mevedel-buddy-note--find id) :overlay) "user")
     (should (null (mevedel-test--note-overlays buf)))
     (should (eq 'dismissed (plist-get (mevedel-buddy-note--find id) :status))))
 
@@ -308,7 +309,8 @@
   :doc "`mevedel-buddy-note-serialize' keeps dismissed notes, labelled"
   (let* ((buf (mevedel-test--note-buffer "note-ser-dismissed" "one\n"))
          (id (mevedel-test--add-note buf 1 "rejected advice")))
-    (mevedel-buddy-note-dismiss id "user")
+    (mevedel-buddy-note--dismiss-overlay
+     (plist-get (mevedel-buddy-note--find id) :overlay) "user")
     (let ((text (mevedel-buddy-note-serialize)))
       (should (string-match-p "dismissed" text))
       (should (string-match-p "rejected advice" text))))
@@ -327,9 +329,9 @@
   (let ((buf (mevedel-test--note-buffer "note-cap" "one\n"))
         (mevedel-buddy-note-serialize-limit 3))
     (dotimes (index 10)
-      (mevedel-buddy-note-dismiss
-       (mevedel-test--add-note buf 1 (format "note number %d" index))
-       "user"))
+      (let ((id (mevedel-test--add-note buf 1 (format "note number %d" index))))
+        (mevedel-buddy-note--dismiss-overlay
+         (plist-get (mevedel-buddy-note--find id) :overlay) "user")))
     (let ((text (mevedel-buddy-note-serialize)))
       (should (= 3 (length (seq-filter (lambda (line)
                                          (string-prefix-p "- note_id" line))

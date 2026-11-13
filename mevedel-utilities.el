@@ -1547,20 +1547,6 @@ running turn or its response has no live marker there."
     (plist-put info :reasoning-marker nil)
     (plist-put info :reasoning-block nil)))
 
-(defun mevedel--apply-face-to-match (regex string face)
-  "Apply FACE as a text property to the REGEX match in STRING.
-
-If FACE is nil, removes the face property from the REGEX match in
-STRING."
-  (with-temp-buffer
-    (insert string)
-    (goto-char (point-min))
-    (while (re-search-forward regex nil t)
-      (if face
-          (add-text-properties (match-beginning 0) (match-end 0) `(face ,face))
-        (remove-text-properties (match-beginning 0) (match-end 0) '(face nil))))
-    (buffer-string)))
-
 (defun mevedel--restore-overlay (buffer overlay-start overlay-end properties)
   "Helper function to restore an instruction overlay in BUFFER.
 
@@ -1639,10 +1625,6 @@ in the buffer, and the second being the content of the span itself."
                                                            "eol"
                                                          (format "%d" end-colno))))))))
                          (buffer-substring-no-properties beg end)))))))))
-
-(defun mevedel--multiline-string-p (str)
-  "Check if STR contain multiple lines."
-  (string-match-p "\n" str))
 
 (defun mevedel--tag-query-prefix-from-infix (query)
   "Transform the tag QUERY to prefix notation for Lisp.

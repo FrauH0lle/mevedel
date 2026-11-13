@@ -25,11 +25,6 @@
 (defvar-local mevedel-notes-list--closed-expanded nil
   "Whether the recently closed group is expanded.")
 
-(defvar mevedel-notes-list-extra-entries-functions nil
-  "Functions appending additional groups to the notes list.
-Each receives the workspace and returns tabulated-list entries.
-Called when folding as well as refreshing: use only cached state, never I/O.")
-
 (defvar mevedel-notes-list-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map tabulated-list-mode-map)
@@ -94,16 +89,11 @@ and q to return to the invoking window."
                                    "" "" "" "")))
             (and mevedel-notes-list--closed-expanded mevedel-notes-list--closed-rows))))
 
-(add-hook 'mevedel-notes-list-extra-entries-functions #'mevedel-notes-list--closed-entries)
-
 (defun mevedel-notes-list--print ()
   "Print cached rows without observing the store or visiting source files."
   (setq tabulated-list-entries
         (append mevedel-notes-list--open-entries
-                (apply #'append
-                       (mapcar (lambda (function)
-                                 (funcall function mevedel-notes-list--workspace))
-                               mevedel-notes-list-extra-entries-functions))))
+                (mevedel-notes-list--closed-entries mevedel-notes-list--workspace)))
   (tabulated-list-print t))
 
 (defun mevedel-notes-list-toggle-closed ()

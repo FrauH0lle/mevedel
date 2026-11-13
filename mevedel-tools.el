@@ -193,19 +193,16 @@ Without OWNER, use the current conversation, including before admission."
                    (and (mevedel-request-p request)
                         (mevedel-request-plan-read-only request))
                    (and invocation
-                        (mevedel-agent-invocation-plan-read-only invocation)))))
-         (apply-patch-visible-p
-          plan-read-only-p))
+                        (mevedel-agent-invocation-plan-read-only invocation))))))
     (lambda (name)
       (and (not (and invocation (equal name "Monitor")))
            (mevedel-tool-goal-available-p name owner)
            (not (and plan-read-only-p
                      (when-let* ((registered (or (mevedel-tool-for-call name)
                                                 (mevedel-tool-get name))))
-                       (if (equal name "ApplyPatch")
-                           (not apply-patch-visible-p)
-                         (or (equal name "Eval")
-                             (memq 'edit (mevedel-tool-groups registered)))))))))))
+                       (and (not (equal name "ApplyPatch"))
+                            (or (equal name "Eval")
+                                (memq 'edit (mevedel-tool-groups registered)))))))))))
 
 (defun mevedel-tools-native-roster (owner)
   "Return the registered tools for the current `gptel-tools' offered to OWNER.

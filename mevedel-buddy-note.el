@@ -599,14 +599,6 @@ KIND is the string mistake or idea, defaulting to mistake."
         (mevedel--delete-instruction overlay nil t)))
     (setq mevedel-buddy-note--notes (delq record mevedel-buddy-note--notes))))
 
-(defun mevedel-buddy-note-dismiss (id &optional reason)
-  "Dismiss note ID for REASON, keeping the record so it is not repeated."
-  (when-let* ((record (mevedel-buddy-note--find id)))
-    (when-let* ((overlay (plist-get record :overlay))
-                ((overlay-buffer overlay)))
-      (mevedel-buddy-note--dismiss-overlay overlay reason))
-    record))
-
 (defun mevedel-buddy-note--dismiss-overlay (note &optional reason)
   "Close Buddy NOTE as dismissed, retaining REASON in the transient index."
   (unless (eq 'buddy (overlay-get note 'mevedel-note-author))

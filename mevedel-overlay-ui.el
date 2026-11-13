@@ -82,8 +82,6 @@
 (declare-function mevedel--highest-priority-instruction
                   "mevedel-overlays"
                   (instructions &optional return-highlighted))
-(declare-function mevedel--instruction-bufferlevel-p
-                  "mevedel-overlays" (instruction))
 (declare-function mevedel--instruction-type
                   "mevedel-overlays" (instruction))
 (declare-function mevedel--instructions-at
@@ -95,7 +93,6 @@
 (declare-function mevedel-delete-instructions "mevedel-overlays" ())
 (autoload 'mevedel--child-instructions "mevedel-overlays")
 (autoload 'mevedel--highest-priority-instruction "mevedel-overlays")
-(autoload 'mevedel--instruction-bufferlevel-p "mevedel-overlays")
 (autoload 'mevedel--instruction-type "mevedel-overlays")
 (autoload 'mevedel--instructions-at "mevedel-overlays")
 (autoload 'mevedel--parent-instruction "mevedel-overlays")
@@ -145,27 +142,6 @@
   (interactive (list (mevedel--ov-actions-getov) t))
   (mevedel-note-menu instruction))
 
-
-(defun mevedel--ov-actions-clear (&optional _instructions)
-  "Clear instructions.
-Deletes all instructions at point and removes the eldoc hook that
-provides help for instruction actions if not other instructions are
-active in the buffer."
-  (interactive)
-  (mevedel-delete-instructions)
-  (with-current-buffer (current-buffer)
-    (unless (alist-get (current-buffer) (mevedel--instruction-alist))
-      (remove-hook 'eldoc-documentation-functions 'mevedel--ov-actions-help 'local))))
-
-
-(defun mevedel--ov-actions-cycle (&optional instructions)
-  "Collapse or expand INSTRUCTIONS."
-  (interactive (list (mevedel--ov-actions-getov)))
-  (if (eq (overlay-get instructions 'mevedel-instruction-collapse-p)
-          'collapse)
-      (overlay-put instructions 'mevedel-instruction-collapse-p 'expand)
-    (overlay-put instructions 'mevedel-instruction-collapse-p 'collapse))
-  (mevedel--update-instruction-overlay instructions))
 
 (defun mevedel--ov-actions-help (callback)
   "Eldoc documentation function for `mevedel' instruction actions.
