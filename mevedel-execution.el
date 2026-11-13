@@ -545,6 +545,10 @@ Only a write that ran and failed leaves the outcome unknown."
   (let ((state (mevedel-execution--state-for-session authority)))
     (condition-case err
         (progn
+          ;; The publication gate may reject nesting before the filesystem does.
+          (when (mevedel-transport-busy-p (mevedel-session-save-path authority))
+            (signal 'mevedel-session-control-fs-busy
+                    (list (mevedel-session-save-path authority))))
           (unless (mevedel-session-durability-set-unsettled-mutation
                    authority nil)
             (error "Remote mutation authority changed before settlement"))
@@ -596,7 +600,9 @@ connection is the caller\'s to use."
             '(:durable-unsettled-mutation t))))))
 
 (defun mevedel-execution-unsettled-mutation-p (session)
-  "Return non-nil while SESSION has live or unproved remote mutation."
+  "Return non-nil while SESSION has live or unproved remote mutation.
+First retry a proved settlement whose durable write was deferred."
+  (mevedel-execution--flush-owed-mutation-settlement session)
   (or (mevedel-execution--state-unknown-outcome
        (mevedel-execution--state-for-session session))
       (mevedel-execution--durable-mutation-latch-p session)))

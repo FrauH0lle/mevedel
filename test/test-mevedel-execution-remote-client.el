@@ -181,13 +181,19 @@
 (defun test-mevedel-execution-remote-client--stop-long-mutation
     (session execution-id)
   "Stop the yielded mutation EXECUTION-ID and wait for settlement."
-  (let (result)
-    (mevedel-execution-stop
-     session "accept-owner" execution-id
-     (lambda (value) (setq result value)))
-    (with-timeout (20 (ert-fail "Long owner mutation did not stop"))
-      (while (null result)
-        (accept-process-output nil 0.05)))
+  (let ((settle (symbol-function 'mevedel-execution--write-mutation-settlement))
+        result)
+    ;; A completion can arrive while another target operation is still in flight.
+    (cl-letf (((symbol-function 'mevedel-execution--write-mutation-settlement)
+               (lambda (record authority)
+                 (mevedel-transport-call-as-remote-operation
+                  (lambda () (funcall settle record authority))))))
+      (mevedel-execution-stop
+       session "accept-owner" execution-id
+       (lambda (value) (setq result value)))
+      (with-timeout (20 (ert-fail "Long owner mutation did not stop"))
+        (while (null result)
+          (accept-process-output nil 0.05))))
     (should (plist-get result :claimed-final-p))))
 
 (defun test-mevedel-execution-remote-client--acquire-after-expiry
