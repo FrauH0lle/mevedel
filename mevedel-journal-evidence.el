@@ -50,23 +50,6 @@
 (defconst mevedel-journal-evidence-digest-max-bytes (* 128 1024)
   "Maximum frozen evidence bytes admitted to a journal digest request.")
 
-(defun mevedel-journal-evidence--truncate (text budget marker)
-  "Bound TEXT to a UTF-8 byte BUDGET, ending truncated text with MARKER.
-Search character boundaries by byte count, without display-width work on
-large transcript strings."
-  (if (<= (string-bytes text) budget)
-      text
-    (let* ((available (- budget (string-bytes marker)))
-           (low 0) (high (min (length text) available)))
-      (when (< available 0)
-        (error "Byte budget cannot hold its omission marker"))
-      (while (< low high)
-        (let ((middle (/ (+ low high 1) 2)))
-          (if (<= (string-bytes (substring text 0 middle)) available)
-              (setq low middle)
-            (setq high (1- middle)))))
-      (concat (substring text 0 low) marker))))
-
 (defun mevedel-journal-evidence-digest-source (source &optional budget)
   "Return a compact digest view of frozen untrusted SOURCE.
 Keep the opening context and closing conclusions when the source exceeds
@@ -80,9 +63,9 @@ The original capture remains intact for inspection and recovery."
          (half (/ (- budget (string-bytes marker)) 2)))
     (if (<= (string-bytes source) budget)
         source
-      (concat (mevedel-journal-evidence--truncate source half "")
+      (concat (mevedel--truncate-bytes source half "")
               marker
-              (reverse (mevedel-journal-evidence--truncate (reverse source) half ""))))))
+              (reverse (mevedel--truncate-bytes (reverse source) half ""))))))
 
 (defun mevedel-journal-evidence--turn (start end)
   "Return dialogue and supporting evidence for the completed START to END span.
@@ -96,7 +79,7 @@ reasoning and hidden audits are represented by an explicit omission notice."
         (pcase (car segment)
           ((or 'user 'prompt 'response) (push segment dialogue))
           ((or 'tool 'mailbox 'hook-context 'task-background)
-           (push (mevedel-journal-evidence--truncate
+           (push (mevedel--truncate-bytes
                   (mevedel-transcript-project-segments (list segment) :tool-output-max 512)
                   2048 "\n[supporting evidence truncated: digest item limit]\n")
                  supporting)))))
@@ -217,7 +200,7 @@ are explicit.  Request-time admission also applies the model input budget."
           (concat
            (mevedel-journal-evidence-digest-source text (* 64 1024))
            "\nSupporting evidence (reminders, reasoning and hidden audits omitted):\n"
-           (mevedel-journal-evidence--truncate
+           (mevedel--truncate-bytes
             supporting (- (* 32 1024) 128)
             "\n[remaining supporting evidence omitted: digest capture limit]\n"))
           :sources (nreverse sources) :unavailable (nreverse unavailable))))

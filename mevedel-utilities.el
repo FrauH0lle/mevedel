@@ -382,10 +382,18 @@ CONTEXT-LINES defaults to diff's three lines of context."
 Truncation never splits a multibyte character.  MARKER must fit LIMIT."
   (if (<= (string-bytes text) limit)
       text
-    (let ((available (- limit (string-bytes marker))))
+    (let* ((available (- limit (string-bytes marker)))
+           (low 0)
+           (high (min (length text) available)))
       (when (< available 0) (error "Byte budget cannot hold its omission marker"))
-      (concat (decode-coding-string (string-limit text available nil 'utf-8) 'utf-8)
-              marker))))
+      ;; Search character boundaries by encoded byte count; `string-limit'
+      ;; with a coding system is quadratic on large multibyte strings.
+      (while (< low high)
+        (let ((mid (ceiling (+ low high) 2)))
+          (if (<= (string-bytes (substring text 0 mid)) available)
+              (setq low mid)
+            (setq high (1- mid)))))
+      (concat (substring text 0 low) marker))))
 
 (defun mevedel--duration-label (seconds)
   "Return a compact whole-second label for SECONDS, such as \"12s\".

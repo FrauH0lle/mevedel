@@ -491,6 +491,33 @@
        (should (string-match-p "Completed turn 1; source: segment-0001.chat.org" body))
        (should (string-match-p "middle of capture unavailable" body)))))
 
+  :doc "an already-frozen oversized capture still meets the request backstop"
+  (mevedel-test-journal-capture--with-session
+   (lambda (session buffer)
+     (put 'fast-model :context-window 1000)
+     (mevedel-test-journal-capture--turn session buffer "Request" "Result")
+     (let* ((workspace (mevedel-session-workspace session))
+            (capture (car (mevedel-journal-capture-seal session buffer 'session-end)))
+            (path (file-name-concat (mevedel-journal-capture--directory workspace (plist-get capture :id))
+                                    "capture.json"))
+            ;; Baseline shape: one unclassified blob, far above the producer's budgets.
+            (frozen (concat "Frozen opening\n" (make-string 700000 ?x) "\nFrozen closing\n"))
+            (record (json-parse-string (mevedel-session-control-fs-read-file path)))
+            body)
+       (puthash "evidence" frozen record)
+       (puthash "evidence-sha256" (secure-hash 'sha256 (encode-coding-string frozen 'utf-8-unix)) record)
+       (write-region (json-serialize record) nil path nil 'silent)
+       (cl-letf (((symbol-function 'gptel-request)
+                  (lambda (prompt &rest args)
+                    (setq body prompt)
+                    (funcall (plist-get args :callback) mevedel-test-journal-process--digest nil))))
+         (should-not (plist-get (mevedel-journal-process-next workspace) :error)))
+       (should (> (string-bytes frozen) (* 5 mevedel-journal-evidence-digest-max-bytes)))
+       (should (<= (string-bytes body) (+ mevedel-journal-evidence-digest-max-bytes 256)))
+       (should (string-match-p "Frozen opening" body))
+       (should (string-match-p "Frozen closing" body))
+       (should (string-match-p "middle of capture unavailable" body)))))
+
   :doc "multibyte evidence is explicitly bounded to the captured model's input budget"
   (let ((saved-plist (copy-tree (symbol-plist 'fast-model)))
         (mevedel-model-reserve-tokens 0))
