@@ -1035,6 +1035,62 @@ signals a `user-error', so a gated operation must stop before any I/O."
         (setf (mevedel-session-publication-active-p session) nil
               (mevedel-session-publication-preparation-token session) nil)))))
 
+(defconst test-mevedel-durability-async--updates
+  (list (lambda (session) (mevedel-session-durability-lease-renew session))
+        (lambda (session)
+          (mevedel-session-durability-set-unsettled-mutation session t))
+        (lambda (session)
+          (car (test-mevedel-durability-async--call
+                #'mevedel-session-durability--update-owned-lease-async
+                session '(active publishing) 'active 90))))
+  "The synchronous, unsettled-mutation and asynchronous lease updates.
+Each takes the session and returns non-nil only when it committed.")
+
+(mevedel-deftest mevedel-session-durability--bind-latest ()
+  ,test
+  (test)
+  :doc "every update binds an unactivated claim beside the lease as contested"
+  (dolist (update test-mevedel-durability-async--updates)
+    (dolist (without-bytes '(nil t))
+      (test-mevedel-durability-async--with-lease (root session)
+        (let* ((directory (mevedel-session-durability--lease-path root))
+               (next (1+ (plist-get (mevedel-session-lease session)
+                                    :generation))))
+          (let ((mevedel-session-durability--client-id (make-string 64 ?b)))
+            (mevedel-session-durability--create-plist
+             (mevedel-session-durability--generation-path directory next)
+             (mevedel-session-durability--lease-record
+              "*claimant*" next 'claiming nil nil
+              (plist-get (mevedel-session-lease session) :renewed-at))))
+          (when without-bytes
+            (setf (mevedel-session-lease session)
+                  (mevedel-session-durability--strip-assumption
+                   (mevedel-session-lease session))))
+          (should-not (funcall update session))
+          (should (eq 'contested
+                      (plist-get (mevedel-session-lease session) :state)))
+          (should (= next (plist-get (mevedel-session-lease session)
+                                     :generation)))))))
+  :doc "every update reads past an aborted bound generation to the head"
+  (dolist (update test-mevedel-durability-async--updates)
+    (test-mevedel-durability-async--with-lease (root session)
+      (let* ((directory (mevedel-session-durability--lease-path root))
+             (head (mevedel-session-lease session))
+             (aborted (mevedel-session-durability--lease-record
+                       "*owner*" (1+ (plist-get head :generation)) 'aborted
+                       nil nil (plist-get head :renewed-at))))
+        (mevedel-session-durability--create-plist
+         (mevedel-session-durability--generation-path
+          directory (plist-get aborted :generation))
+         aborted)
+        (mevedel-session-durability--bind-lease session aborted 'owned)
+        (should-not (funcall update session))
+        ;; The older generation is still this client's live head.
+        (should (eq 'owned (plist-get (mevedel-session-lease session) :state)))
+        (should (equal (plist-get head :generation)
+                       (plist-get (mevedel-session-lease session)
+                                  :generation)))))))
+
 (mevedel-deftest mevedel-session-durability-bind-observed-lease ()
   ,test
   (test)

@@ -1709,7 +1709,8 @@ The lease updates that follow, reserve, head commit and finish, name their
 declines the same way: a `user-error` naming the first unmet condition in the
 order observed, such as an invalid lease record, a lease state the update does
 not accept, a lease held by another client, a newer generation, a changed
-publication head, an expired lease, or a lease taken during the commit. Only
+publication head, an expired lease, or a lease that changed before the update
+committed. Only
 a failed program or an unavailable clock keeps its own error and leaves the lease
 binding unchanged. Messages name the condition, never paths or lease bytes.
 Freeze runs only after
@@ -3113,8 +3114,9 @@ a session object exists without acquiring or mutating the lease.
 Each generation also carries the required boolean `:unsettled-mutation` latch.
 Managed mutation on a portable project target sets it before child launch.
 Renewal, publishing,
-release, and takeover preserve it. Proven settlement clears it by updating the
-exact owned generation only after no other armed mutating record remains; an
+release, and takeover preserve it. Setting or clearing it claims the next
+generation from the exact owned head, so it also fences older writers. Proven
+settlement clears it only after no other armed mutating record remains; an
 unprovable result keeps it set. A restored owner therefore blocks mutation
 without reconstructing process records, and explicit acknowledgement must
 durably clear the owned generation before transient blocking state is removed.
