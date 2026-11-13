@@ -1,8 +1,8 @@
 ;;; test-mevedel-notes-activation-restart.el --- SSH restart acceptance -*- lexical-binding: t -*-
 
 ;;; Commentary:
-;; Opt in with MEVEDEL_TEST_SSH_ROOT and MEVEDEL_TEST_SSH_CONFIG.  The fixed
-;; remote fixture must contain only an empty, pre-existing .mevedel directory.
+;; Opt in with MEVEDEL_TEST_SSH_ROOT and MEVEDEL_TEST_SSH_CONFIG.  The configured
+;; SSH fixture must contain only an empty, pre-existing .mevedel directory.
 ;; Separate writer and reader Emacsen share only isolated HOME/XDG state.
 
 ;;; Code:
@@ -94,7 +94,8 @@
          owned)
     (unwind-protect
         (progn
-          (should (equal root "/ssh:mevedel-host:/home/mevedel/notes-tramp-test/"))
+          (should (equal (file-remote-p root 'method) "ssh"))
+          (should-not (file-remote-p root 'hop))
           (should (file-exists-p config))
           (should (equal (directory-files root nil directory-files-no-dot-files-regexp)
                          '(".mevedel")))
