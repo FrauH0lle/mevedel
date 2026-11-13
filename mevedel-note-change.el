@@ -340,7 +340,7 @@ When SELECTED is non-nil, prepare only those reviewed changes."
       (when (equal (plist-get record :id)
                    (plist-get (plist-get (plist-get entry :properties)
                                         'mevedel-note-prepared-change) :id))
-        (let ((item (mevedel-notes--resolve (plist-get entry :uuid) workspace)))
+        (when-let* ((item (mevedel-notes--resolve (plist-get entry :uuid) workspace)))
           (overlay-put item 'mevedel-note-applied-changes
                        (cl-adjoin (append (list :session-id (plist-get record :session-id)
                                                 :turn (plist-get record :turn))

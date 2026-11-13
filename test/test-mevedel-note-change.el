@@ -381,6 +381,34 @@
       (should-error (call-interactively (key-binding "a")) :type 'user-error))
     (should (equal "external before\nold\nafter\n" (mevedel-test--read-file file)))))
 
+(mevedel-deftest mevedel-note-apply-change/missing-sibling
+  (:quiet t :doc "a missing batch sibling does not interrupt apply or lose its durable revert record")
+  (mevedel-note-change-test--with-note
+    (let* ((uuid (overlay-get note 'mevedel-uuid))
+           (other (file-name-concat root "other.txt"))
+           (created (file-name-concat root "created.txt"))
+           (sibling (progn
+                      (write-region "other\n" nil other nil 'silent)
+                      (find-file-noselect other))))
+      (with-current-buffer sibling
+        (setq-local mevedel--workspace workspace)
+        (let ((item (mevedel-note-create "Batch sibling")))
+          (overlay-put item 'mevedel-note-state 'sent)
+          (overlay-put item 'mevedel-note-session-id (mevedel-session-session-id session))))
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Add File: created.txt\n+created\n*** End Patch")
+      (kill-buffer sibling)
+      (delete-file other)
+      (mevedel-note-apply-change note)
+      (should (equal "created\n" (mevedel-test--read-file created)))
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (setq note (mevedel-notes--resolve uuid workspace))
+      (should-not (overlay-get note 'mevedel-note-prepared-change))
+      (should (overlay-get note 'mevedel-note-applied-changes))
+      (mevedel-note-revert-change uuid 0 workspace)
+      (should-not (file-exists-p created)))))
+
 (mevedel-deftest mevedel-note-apply-change/unencodable
   (:quiet t :doc "apply and revert refuse lossy encoding without changing disk or unsaved text")
   (dolist (revert '(nil t))
