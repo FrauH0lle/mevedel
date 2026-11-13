@@ -10,6 +10,7 @@
 (require 'mevedel-buddy-note)
 (require 'mevedel-chat)
 (require 'mevedel-models)
+(require 'mevedel-persistence)
 (require 'mevedel-system)
 (require 'mevedel-workspace)
 (require 'gptel)
@@ -446,7 +447,36 @@
           (list (cons "some-buffer" (current-buffer)))
           mevedel-buddy--running "scope")
     (mevedel-buddy--settle "scope" nil)
-    (should-not mevedel-buddy-note--scope-buffers)))
+    (should-not mevedel-buddy-note--scope-buffers))
+
+  :doc "`mevedel-buddy--settle' cleans up and re-signals a store flush error"
+  (let* ((buf (current-buffer))
+         (marker (copy-marker 1))
+         (mevedel-buddy-note--markers (list (list "b" (list 1 marker marker))))
+         (mevedel-buddy-note--changed-workspaces '(ws))
+         (mevedel-buddy--request-buffer nil))
+    (setq mevedel-buddy-note--scope-buffers (list (cons (buffer-name buf) buf))
+          mevedel-buddy--running "scope"
+          mevedel-buddy--running-automatic t)
+    (let* ((generation mevedel-buddy--generation)
+           (read-tool
+            (seq-find (lambda (tool) (equal (gptel-tool-name tool) "read_buffer"))
+                      (mevedel-buddy-note-tools
+                       (lambda ()
+                         (mevedel-buddy--current-generation-p generation))))))
+     (cl-letf (((symbol-function 'mevedel-instruction-store-touch) #'ignore)
+              ((symbol-function 'mevedel-instruction-store-flush)
+               (lambda () (error "Flush failed"))))
+      (should-error (mevedel-buddy--settle "scope" nil)))
+     ;; The settled review's own tool call must be refused.
+     (should (string-match-p
+              "not in the review scope"
+              (funcall (gptel-tool-function read-tool) (buffer-name buf) 1 1))))
+    (should-not mevedel-buddy-note--scope-buffers)
+    (should-not mevedel-buddy--running)
+    (should-not mevedel-buddy--running-automatic)
+    (should-not mevedel-buddy-note--markers)
+    (should-not (marker-buffer marker))))
 
 (mevedel-deftest mevedel-buddy-review
   (:after-each (mevedel-test--buddy-cleanup))
