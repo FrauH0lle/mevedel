@@ -1022,5 +1022,27 @@
         (should (equal text (with-current-buffer source (buffer-string))))
         (should (= 1 (length (mevedel-notes-closed workspace))))))))
 
+(mevedel-deftest mevedel-note-menu/note-write
+  (:quiet t :doc "the action menu offers and performs revert for an applied main-chat suggestion")
+  (mevedel-note-change-test--with-note
+    (setf (mevedel-session-preset-name session) 'mevedel-implement)
+    (with-current-buffer data-buf
+      (setq result
+            (mevedel-tool-note-write
+             (list :operations
+                   (vector (list :action "create" :file_path "source.txt" :start_line 2
+                                 :text "AI suggestion" :prepared_change
+                                 "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch"))))))
+    (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get result :result)))
+    (let ((suggestion (mevedel-notes--resolve (match-string 1 (plist-get result :result)) workspace)))
+      (mevedel-note-apply-change suggestion)
+      (should-not (overlay-get suggestion 'mevedel-note-session-id))
+      (with-current-buffer source
+        (cl-letf (((symbol-function 'read-multiple-choice)
+                   (lambda (_prompt choices &rest _)
+                     (or (assq ?u choices) (ert-fail "Applied suggestion offers no revert action")))))
+          (mevedel-note-menu suggestion)))
+      (should (equal "before\nold\nafter\n" (mevedel-test--read-file file))))))
+
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here
