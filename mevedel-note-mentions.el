@@ -80,7 +80,13 @@ Check Read authority before probing or restoring the source file."
           (list :error "permission denied"))
          ((not (file-readable-p file)) (list :error "unreadable or missing source"))
          (t
-          (if-let* ((body (mevedel-note-mentions--format entry workspace)))
+          (if-let* ((body
+                     (or (mevedel-note-mentions--format entry workspace)
+                         ;; Changed stashed code needs the source diff remapping.
+                         (when-let* ((note (mevedel-notes--resolve
+                                           (plist-get entry :uuid) workspace)))
+                           (mevedel-note-mentions--format
+                            (plist-put (copy-sequence entry) :source note) workspace)))))
               (list :body body)
             (list :error "unavailable"))))
       (file-error (list :error (format "unreadable source: %s" (error-message-string err)))))))

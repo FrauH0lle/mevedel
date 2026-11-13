@@ -277,5 +277,26 @@
       (should (string-search "unsent" (mevedel-tool-note-test--read
                                        data-buf (concat "notes://" id ".md")))))))
 
+(mevedel-deftest mevedel-note-dismiss-agent-notes/lookup-cost (:quiet t)
+  ,test
+  (test)
+  :doc "bulk dismissal collects entries once and restores each source once"
+  (mevedel-tool-note-test--workspace
+    (mevedel-tool-note-test--create data-buf file)
+    (mevedel-tool-note-test--create data-buf file)
+    (kill-buffer (find-buffer-visiting file))
+    (let* ((builds 0) (restores 0)
+           (count-build (lambda (&rest _) (cl-incf builds)))
+           (count-restore (lambda (&rest _) (cl-incf restores))))
+      (advice-add 'mevedel-notes--entries :before count-build)
+      (advice-add 'mevedel--restore-file-instructions :before count-restore)
+      (unwind-protect
+          (progn
+            (should (= 2 (mevedel-note-dismiss-agent-notes workspace)))
+            (should (= 1 builds))
+            (should (= 1 restores)))
+        (advice-remove 'mevedel-notes--entries count-build)
+        (advice-remove 'mevedel--restore-file-instructions count-restore)))))
+
 (provide 'test-mevedel-tool-note)
 ;;; test-mevedel-tool-note.el ends here

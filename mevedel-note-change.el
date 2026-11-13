@@ -104,8 +104,7 @@ Return an ordinary tool result immediately; no tool callback is retained."
                  (mevedel-notes--entries workspace)))
          (record (mevedel-note-change-record proposal changes data-buffer)))
     (unless notes (error "No open note owns this conversation"))
-    (setq notes (mapcar (lambda (entry)
-                         (mevedel-notes--resolve (plist-get entry :uuid) workspace)) notes))
+    (setq notes (mevedel-notes--resolve-entries notes workspace))
     ;; New-file-only work still belongs to the requesting conversation.
     (setq notes (or (cl-remove-if-not
                      (lambda (note) (mevedel-note-change--touches-p note record)) notes)

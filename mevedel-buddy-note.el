@@ -911,12 +911,12 @@ Default to the current workspace and return the number dismissed."
   (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
     (mevedel-instruction-store-observe workspace)
     (let ((dismissed 0)
-          (notes (cl-loop for entry in (mevedel-notes--entries workspace)
-                          when (eq 'buddy (plist-get (plist-get entry :properties)
-                                                    'mevedel-note-author))
-                          collect (or (mevedel-notes--resolve (plist-get entry :uuid) workspace)
-                                      (user-error "Source unavailable for note %s; no notes dismissed"
-                                                  (plist-get entry :uuid))))))
+          (notes (mevedel-notes--resolve-entries
+                  (cl-remove-if-not
+                   (lambda (entry)
+                     (eq 'buddy (plist-get (plist-get entry :properties) 'mevedel-note-author)))
+                   (mevedel-notes--entries workspace))
+                  workspace)))
       (unwind-protect
           (dolist (note notes)
             (mevedel-buddy-note--dismiss-overlay note)

@@ -9,6 +9,7 @@
 (require 'mevedel)
 (require 'mevedel-notes)
 (require 'mevedel-mentions)
+(require 'mevedel-note-mentions)
 (require 'mevedel-persistence)
 (require 'mevedel-permission-rules)
 (require 'mevedel-permissions)
@@ -455,6 +456,26 @@
       (should (string-match-p "second.el.*, line 3" body))
       (should-not (find-buffer-visiting first))
       (should-not (find-buffer-visiting second)))))
+
+(mevedel-deftest mevedel-mentions-note-remap
+  (:quiet t)
+  ,test
+  (test)
+  :doc "externally rewritten stashed code falls back to source remapping"
+  (mevedel-notes-list-test--workspace
+    (with-current-buffer (find-buffer-visiting second)
+      (mevedel-note-set-tags '(review)))
+    (mevedel-instruction-store-flush t)
+    (kill-buffer (find-buffer-visiting second))
+    (with-temp-file second (insert "new heading\nbefore\nsecond revised code\n"))
+    (let* ((session (mevedel-session-create "remap" workspace))
+           (prepared (mevedel-mentions-prepare-user-input "@note:{review}" session))
+           (expansion (mevedel-mentions-expand-user-input prepared session))
+           (body (mapconcat (lambda (item) (plist-get item :body))
+                            (plist-get expansion :reminder-items) "\n")))
+      (should (string-match-p "second revised code" body))
+      (should (string-match-p "second.el.*, line 3" body))
+      (should (find-buffer-visiting second)))))
 
 (mevedel-deftest mevedel-notes-mode-line
   (:quiet t)

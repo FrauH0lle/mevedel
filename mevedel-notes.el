@@ -205,6 +205,24 @@ Restore only the selected note's file, not every stashed source file."
                  :key (lambda (note) (overlay-get note 'mevedel-uuid))
                  :test #'equal)))))
 
+(defun mevedel-notes--resolve-entries (entries workspace)
+  "Resolve note ENTRIES in WORKSPACE, restoring each source at most once.
+Refuse unavailable sources before a caller starts mutating the notes."
+  (let ((mevedel--instruction-state-key-override
+         (mevedel--instruction-workspace-key workspace))
+        (notes (make-hash-table :test #'equal)))
+    (dolist (file (delete-dups (mapcar (lambda (entry) (plist-get entry :file)) entries)))
+      (mevedel--restore-file-instructions file nil workspace)
+      (when-let* ((buffer (find-buffer-visiting file)))
+        (dolist (note (cdr (assq buffer (mevedel--instruction-alist))))
+          (when (overlay-buffer note)
+            (puthash (overlay-get note 'mevedel-uuid) note notes)))))
+    (mapcar (lambda (entry)
+              (let ((uuid (plist-get entry :uuid)))
+                (or (gethash uuid notes)
+                    (user-error "Source unavailable for note %s; no notes changed" uuid))))
+            entries)))
+
 (defun mevedel-notes--display-text (note)
   "Return NOTE's bounded, single-line display text, keeping authored text intact."
   (truncate-string-to-width
@@ -426,12 +444,12 @@ Return the number dismissed.  User and Buddy notes are left alone."
   (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
     (mevedel-instruction-store-observe workspace)
     (let ((count 0)
-          (notes (cl-loop for entry in (mevedel-notes--entries workspace)
-                          when (eq 'agent (plist-get (plist-get entry :properties)
-                                                    'mevedel-note-author))
-                          collect (or (mevedel-notes--resolve (plist-get entry :uuid) workspace)
-                                      (user-error "Source unavailable for note %s; no notes dismissed"
-                                                  (plist-get entry :uuid))))))
+          (notes (mevedel-notes--resolve-entries
+                  (cl-remove-if-not
+                   (lambda (entry)
+                     (eq 'agent (plist-get (plist-get entry :properties) 'mevedel-note-author)))
+                   (mevedel-notes--entries workspace))
+                  workspace)))
       (unwind-protect
           (dolist (note notes)
             (mevedel-note-dismiss note)
