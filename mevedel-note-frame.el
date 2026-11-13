@@ -202,9 +202,7 @@ already shows -- session name, workspace root, execution target, preset
            (tools (mevedel-tools-active-count data-buffer)))
       (concat
        (propertize "◆ " 'face 'mevedel-view-note-scope)
-       (propertize (if (and (stringp id) (> (length id) 8))
-                       (substring id 0 8)
-                     (or id "note"))
+       (propertize (or id "note")
                    'face 'mevedel-view-note-scope)
        (propertize " · " 'face 'shadow)
        (propertize (or state "idle") 'face 'shadow)

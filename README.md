@@ -789,16 +789,6 @@ the patch before applying it.
 | `mevedel-previous-instruction`        | Cycle through notes in the backward direction.              |
 | `mevedel-cycle-instructions-at-point` | Cycle through notes at point, highlighting them.            |
 
-### Customization
-
-| Custom Variable                                  | Variable Description                             |
-|--------------------------------------------------|--------------------------------------------------|
-| `mevedel-highlighted-instruction-color`          | Tint color for highlighted/focused instructions  |
-| `mevedel-instruction-bg-tint-intensity`          | Intensity for instruction background tint        |
-| `mevedel-instruction-label-tint-intensity`       | Intensity for instruction label tint             |
-| `mevedel-highlighted-instruction-tint-intensity` | Intensity for highlighted instruction tint       |
-| `mevedel-subinstruction-tint-coefficient`        | Coefficient applied to nested instruction tints  |
-
 ### Command index
 
 - `mevedel-note-create` / `mevedel-notes-list`

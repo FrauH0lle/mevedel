@@ -119,6 +119,40 @@
         (call-interactively #'mevedel-note-edit))
       (should-not (overlay-buffer note)))))
 
+(mevedel-deftest mevedel-cycle-instructions-at-point/note-label
+  (:quiet t)
+  ,test
+  (test)
+  :doc "cycling overlapping notes highlights the selected label and clears the old face"
+  (mevedel-notes-test--with-source
+    (let* ((mevedel--highlighted-instruction nil)
+           (child (mevedel-note-create "Child"))
+           (parent (let ((transient-mark-mode t))
+                     (goto-char (point-max))
+                     (set-mark (point-min))
+                     (activate-mark)
+                     (mevedel-note-create "Parent"))))
+      (goto-char (overlay-start child))
+      (call-interactively #'mevedel-cycle-instructions-at-point)
+      (should (eq 'highlight (get-text-property
+                              0 'face (overlay-get (overlay-get child 'mevedel-label-overlay)
+                                                   'after-string))))
+      (call-interactively #'mevedel-cycle-instructions-at-point)
+      (should (eq 'shadow (get-text-property
+                           0 'face (overlay-get (overlay-get child 'mevedel-label-overlay)
+                                                'after-string))))
+      (should (eq 'highlight (get-text-property
+                              0 'face (overlay-get (overlay-get parent 'mevedel-label-overlay)
+                                                   'after-string))))
+      (call-interactively #'mevedel-cycle-instructions-at-point)
+      (should (eq 'shadow (get-text-property
+                           0 'face (overlay-get (overlay-get parent 'mevedel-label-overlay)
+                                                'after-string))))
+      (let* ((label (overlay-get child 'mevedel-label-overlay))
+             (before (overlay-get label 'after-string)))
+        (mevedel-note-edit "Child" child)
+        (should (eq before (overlay-get label 'after-string)))))))
+
 (mevedel-deftest mevedel-note-persistence
   (:quiet t)
   ,test

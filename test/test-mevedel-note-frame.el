@@ -336,14 +336,22 @@ its own parent"
   (:doc "`mevedel-note-frame--header' leads with note identity")
   ,test
   (test)
-  :doc "shortens the note id and keeps live request state"
+  :doc "keeps the full note display number and live request state"
   (mevedel-note-frame-test--with-view
-    (setq mevedel-note-frame--note-id "f041faf5-1234-5678")
-    (let ((header (substring-no-properties
-                   (mevedel-note-frame--header))))
-      (should (string-search "f041faf5" header))
-      (should-not (string-search "f041faf5-1234" header))
-      (should (string-search "tool" header)))))
+    (let* ((file (file-name-concat root "source.el"))
+           source)
+      (unwind-protect
+          (progn
+            (write-region "noted code\n" nil file nil 'silent)
+            (setq source (find-file-noselect file))
+            (with-current-buffer source
+              (let ((note (mevedel-note-frame-test--note 1 11 1234)))
+                (setq mevedel-note-frame--note-id
+                      (format "Note %s" (overlay-get note 'mevedel-id)))))
+            (let ((header (substring-no-properties (mevedel-note-frame--header))))
+              (should (string-search "Note 1234" header))
+              (should (string-search "tool" header))))
+        (when (buffer-live-p source) (kill-buffer source))))))
 
 (mevedel-deftest mevedel-note-frame--display-in-parent
   (:doc "`mevedel-note-frame--display-in-parent' keeps pop-ups out of the frame")

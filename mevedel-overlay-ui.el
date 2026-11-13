@@ -103,11 +103,6 @@
 (autoload 'mevedel-delete-instructions "mevedel-overlays" nil t)
 (defvar mevedel--default-instruction-priority)
 (defvar mevedel--highlighted-instruction)
-(defvar mevedel-highlighted-instruction-color)
-(defvar mevedel-highlighted-instruction-tint-intensity)
-(defvar mevedel-instruction-bg-tint-intensity)
-(defvar mevedel-instruction-label-tint-intensity)
-(defvar mevedel-subinstruction-tint-coefficient)
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-skill-name "mevedel-skills-core" (cl-x) t)

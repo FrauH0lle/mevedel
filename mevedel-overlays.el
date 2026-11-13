@@ -104,37 +104,6 @@
 (autoload 'mevedel-workspace "mevedel-workspace")
 
 
-(defcustom mevedel-highlighted-instruction-color
-  (face-attribute 'highlight :background nil 'default)
-  "Color for currently highlighted instructions."
-  :type 'string
-  :group 'mevedel)
-
-(defcustom mevedel-instruction-bg-tint-intensity 0.15
-  "Default intensity for background tinting of instructions."
-  :type 'float
-  :group 'mevedel)
-
-(defcustom mevedel-instruction-label-tint-intensity 0.25
-  "Default intensity for label tinting of instructions."
-  :type 'float
-  :group 'mevedel)
-
-(defcustom mevedel-highlighted-instruction-tint-intensity 0.25
-  "Default intensity for tinting of highlighted instructions."
-  :type 'float
-  :group 'mevedel)
-
-(defcustom mevedel-subinstruction-tint-coefficient 0.4
-  "Coefficient multiplied by tint intensities.
-
-Only applicable to subinstructions, allowing finer control over tinting.
-
-Does not affect the label colors, just the backgrounds."
-  :type 'float
-  :group 'mevedel)
-
-
 (defvar mevedel--default-instruction-priority -99)
 (defvar mevedel--highlighted-instruction nil)
 

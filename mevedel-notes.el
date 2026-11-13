@@ -269,6 +269,7 @@ Refuse unavailable sources before a caller starts mutating the notes."
                           (overlay-put overlay 'mevedel-note-owner note)
                           (overlay-put note 'mevedel-label-overlay overlay)
                           overlay)))
+             (face (if (eq note mevedel--highlighted-instruction) 'highlight 'shadow))
              (text (format "\n  Note %s · %s · %s · %s%s · %s"
                            (overlay-get note 'mevedel-id)
                            (pcase (overlay-get note 'mevedel-note-author)
@@ -289,8 +290,9 @@ Refuse unavailable sources before a caller starts mutating the notes."
                            (mevedel-notes--actions-hint note))))
         (overlay-put note 'keymap mevedel-note-actions-map)
         (move-overlay label (overlay-start note) end)
-        (unless (equal text (overlay-get label 'after-string))
-          (overlay-put label 'after-string (propertize text 'face 'shadow)))))
+        (unless (and (equal text (overlay-get label 'after-string))
+                     (eq face (get-text-property 0 'face (overlay-get label 'after-string))))
+          (overlay-put label 'after-string (propertize text 'face face)))))
     (add-hook 'after-change-functions #'mevedel-notes--after-change nil t)
     (add-hook 'post-command-hook #'mevedel-notes--entry-hint nil t)))
 
