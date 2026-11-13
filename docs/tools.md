@@ -465,8 +465,11 @@ resource address is prepared with the `read` operation and reaches the handler
 as the same authorized attempt Read receives. The key is not part of the
 provider schema. `SharedEdit`'s `source` is the one such argument.
 
-Rewind reports capture gaps from current turn evidence. It has no reader for
-former directive attempts or their untracked-effect markers.
+After permission, the `capture-coverage` step records a turn's mutating `eval`
+tools (Bash, Eval), `edit` tools without `:snapshot-p`, and Agent and
+SendMessage as untracked effects. The session keeps them per turn in the
+optional `:untracked-effects` field (absent means none); Rewind lists them as
+known coverage gaps. It has no reader for former directive attempts.
 
 ### Tool input validation and repair
 

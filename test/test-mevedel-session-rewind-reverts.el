@@ -13,9 +13,11 @@
           "mevedel-session-test-support"))
 (require 'mevedel-session-rewind)
 (require 'mevedel-session-rewind-merge)
+(require 'mevedel-session-artifacts)
 (require 'mevedel-pipeline)
 (require 'mevedel-tool-patch)
 (require 'mevedel-note-merge)
+(require 'mevedel-report)
 
 (defun mevedel-test-rewind-reverts--call (turns current check &optional patch)
   "Record TURNS, install CURRENT bytes, and call CHECK in a real session.
@@ -105,6 +107,22 @@ With PATCH, run that ApplyPatch hunk through the real pipeline for capture."
                     (mevedel-session-artifacts-read-file-raw path)))
      (with-current-buffer buffer
        (should-not (string-match-p "Prompt" (buffer-string))))))
+  :doc "one Rewind reads each immutable backup only once across repeated planning"
+  (mevedel-test-rewind-reverts--call
+   '(("one\ntwo\n" "ONE\ntwo\n") ("ONE\ntwo\n" "UNO\ntwo\n"))
+   "UNO\ntwo\n"
+   (lambda (buffer target _path)
+     (let ((reads (make-hash-table :test #'equal))
+           (read-file (symbol-function 'mevedel-session-artifacts-read-file-raw)))
+       (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                 ((symbol-function 'mevedel-session-artifacts-read-file-raw)
+                  (lambda (file)
+                    (when (string-match-p "/file-history/" file)
+                      (cl-incf (gethash (file-name-nondirectory file) reads 0)))
+                    (funcall read-file file))))
+         (should (mevedel-session-rewind-rewind buffer target)))
+       (should (> (hash-table-count reads) 0))
+       (maphash (lambda (_name count) (should (= 1 count))) reads))))
   :doc "conflict cancellation preserves all files, unsaved text and conversation"
   (mevedel-test-rewind-reverts--call
    '(("one\ntwo\nthree\n" "one\nTWO\nthree\n"))
@@ -244,6 +262,60 @@ With PATCH, run that ApplyPatch hunk through the real pipeline for capture."
        (should (equal "clean-1\n"
                       (mevedel-session-artifacts-read-file-raw
                        (file-name-concat (file-name-directory path) "other.txt")))))))
+  :doc "rollback restores only written files and preserves the edit refusing a later write"
+  (mevedel-test-rewind-reverts--call
+   '(("one\ntwo\n" "ONE\ntwo\n")) "ONE\ntwo\n"
+   (lambda (buffer target path)
+     (let ((apply-action (symbol-function 'mevedel-session-rewind--apply-restore-action))
+           (transcript (with-current-buffer buffer (buffer-string))))
+       (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                 ((symbol-function 'mevedel-session-rewind--apply-restore-action)
+                  (lambda (session entry)
+                    (prog1 (funcall apply-action session entry)
+                      (unless (equal path (plist-get entry :path))
+                        (write-region "concurrent\ntwo\n" nil path nil 'silent))))))
+         (should-error (mevedel-session-rewind-rewind buffer target)))
+       (should (equal "concurrent\ntwo\n" (mevedel-test--read-file path)))
+       (should (equal "clean-1\n"
+                      (mevedel-test--read-file
+                       (file-name-concat (file-name-directory path) "other.txt"))))
+       (should (equal transcript (with-current-buffer buffer (buffer-string)))))))
+  :doc "quit after a written file rolls that file back before abandoning Rewind"
+  (mevedel-test-rewind-reverts--call
+   '(("one\ntwo\n" "ONE\ntwo\n")) "ONE\ntwo\n"
+   (lambda (buffer target path)
+     (let ((apply-action (symbol-function 'mevedel-session-rewind--apply-restore-action))
+           quit)
+       (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                 ((symbol-function 'mevedel-session-rewind--apply-restore-action)
+                  (lambda (session entry)
+                    (funcall apply-action session entry)
+                    (signal 'quit nil))))
+         (condition-case nil
+             (mevedel-session-rewind-rewind buffer target)
+           (quit (setq quit t))))
+       (should quit)
+       (should (equal "ONE\ntwo\n" (mevedel-test--read-file path)))
+       (should (equal "clean-1\n"
+                      (mevedel-test--read-file
+                       (file-name-concat (file-name-directory path) "other.txt")))))))
+  :doc "a failed results render still rolls all completed file writes back"
+  (mevedel-test-rewind-reverts--call
+   '(("one\ntwo\n" "ONE\ntwo\n")) "ONE\ntwo\n"
+   (lambda (buffer target path)
+     (let ((render (symbol-function 'mevedel-report-render)) injected)
+       (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                 ((symbol-function 'mevedel-report-render)
+                  (lambda (report &rest args)
+                    (if (equal "Restore results" (plist-get report :title))
+                        (progn (setq injected t) (error "Injected results render failure"))
+                      (apply render report args)))))
+         (should-error (mevedel-session-rewind-rewind buffer target)))
+       (should injected)
+       (should (equal "ONE\ntwo\n" (mevedel-test--read-file path)))
+       (should (equal "clean-1\n"
+                      (mevedel-test--read-file
+                       (file-name-concat (file-name-directory path) "other.txt")))))))
   :doc "literal pipeline captures preserve CRLF when reversing a real ApplyPatch"
   (mevedel-test-rewind-reverts--call
    '(("one\r\ntwo\r\nthree\r\nfour\r\n" "ONE\r\ntwo\r\nthree\r\nfour\r\n"))
@@ -272,6 +344,17 @@ With PATCH, run that ApplyPatch hunk through the real pipeline for capture."
                     (should (string-match-p "later capture failed" (buffer-string))))
                   nil)))
        (should-not (mevedel-session-rewind-rewind buffer target)))))
+  :doc "an already undone hunk preserves unrelated user edits without a conflict"
+  (mevedel-test-rewind-reverts--call
+   '(("one\ntwo\nthree\nfour\n" "ONE\ntwo\nthree\nfour\n"))
+   "one\ntwo\nthree\nuser\n"
+   (lambda (buffer target path)
+     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+               ((symbol-function 'read-char-choice)
+                (lambda (&rest _) (ert-fail "Already undone hunk conflicts"))))
+       (should (mevedel-session-rewind-rewind buffer target)))
+     (should (equal "one\ntwo\nthree\nuser\n"
+                    (mevedel-test--read-file path)))))
   :doc "a change already undone by the user needs no file write or force"
   (mevedel-test-rewind-reverts--call
    '(("one\ntwo\n" "ONE\ntwo\n")) "one\ntwo\n"
@@ -315,6 +398,19 @@ With PATCH, run that ApplyPatch hunk through the real pipeline for capture."
                            (file-name-concat (file-name-directory path) "other.txt"))))
            (with-current-buffer buffer
              (should-not (string-match-p "Prompt" (buffer-string)))))))))
+  :doc "keeping a deleted current file in a Rewind merge leaves it deleted"
+  (mevedel-test-rewind-reverts--call
+   '(("one\ntwo\n" "ONE\ntwo\n")) "ONE\ntwo\n"
+   (lambda (buffer target path)
+     (delete-file path)
+     (save-window-excursion
+       (cl-letf (((symbol-function 'read-char-choice) (lambda (&rest _) ?m))
+                 ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+         (mevedel-session-rewind-rewind buffer target)
+         (goto-char (point-min)) (search-forward "<<<<<<<")
+         (smerge-keep-upper)
+         (mevedel-note-merge-confirm)
+         (should-not (file-exists-p path))))))
   :doc "merge chains conflicting turns newest first and writes neither round early"
   (mevedel-test-rewind-reverts--call
    '(("one\ntwo\nthree\nfour\n" "ONE\ntwo\nthree\nfour\n")

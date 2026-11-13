@@ -55,9 +55,9 @@
       (should-error (mevedel-cockpit-surface-details) :type 'user-error)
       (with-timeout (45 (ert-fail "Recovery did not admit history scan"))
 	(while mevedel-memory-list--recovery (accept-process-output nil .01)))
-      ;; A no-op recovery keeps its scan, which may already be done; refresh
-      ;; so the remaining checks observe a loading scan deterministically.
-      (unless mevedel-memory-list--job (mevedel-memory-list-refresh))
+      ;; Topics may already be current while history still runs; restart both
+      ;; observations so the remaining checks see their loading state.
+      (mevedel-memory-list-refresh)
       (should mevedel-memory-list--job)
       (should (string-search "Loading history" (overlay-get mevedel-memory-list--notice 'before-string)))
       (mevedel-memory-list-history)

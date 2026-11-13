@@ -22,8 +22,10 @@
 (declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
 
 ;; `mevedel-buddy'
+(declare-function mevedel-buddy--changes-for-scope "mevedel-buddy" (scope-key))
 (declare-function mevedel-buddy--guide-payload "mevedel-buddy" (beg end))
 (declare-function mevedel-buddy--payload-lines "mevedel-buddy" (payload))
+(declare-function mevedel-buddy--scope-key "mevedel-buddy" ())
 
 ;; `mevedel-notes'
 (declare-function mevedel-note-close "mevedel-notes" (note reason))
@@ -41,7 +43,7 @@ workspace.  This bounds model context, not the number of open remarks."
   :group 'mevedel-buddy)
 
 (defcustom mevedel-buddy-note-read-limit 200
-  "Positive maximum number of lines one `read_buffer' call returns.
+  "Positive maximum lines in a taken section or one `read_buffer' call.
 
 Both bounds of a read are required, so this only caps how much one call
 may ask for.  A background feature that fires on an idle timer must not
@@ -77,6 +79,33 @@ Nil denies every tool call, including calls after abandonment.")
 (defvar mevedel-buddy-note--level nil
   "Captured automatic dial level; nil means an explicitly requested review.")
 
+(defun mevedel-buddy-note--taken-payload (note shown)
+  "Return bounded NOTE code near SHOWN lines or the source cursor."
+  (let* ((first (line-number-at-pos (overlay-start note)))
+         (last (line-number-at-pos (max (overlay-start note) (1- (overlay-end note)))))
+         (limit (max 1 mevedel-buddy-note-read-limit))
+         (edit (seq-find
+                (lambda (change)
+                  (and (equal (buffer-name) (plist-get change :buffer))
+                       (< (plist-get change :beg) (overlay-end note))
+                       (> (plist-get change :end) (overlay-start note))))
+                (mevedel-buddy--changes-for-scope (mevedel-buddy--scope-key))))
+         (focus (or (when edit
+                      (line-number-at-pos (min (point-max) (plist-get edit :beg))))
+                    (seq-find (lambda (line) (<= first line last)) shown)
+                    (line-number-at-pos (point))))
+         (from (max first (min (1+ (- last limit)) (- focus (/ limit 2)))))
+         (to (min last (+ from limit -1))))
+    (save-excursion
+      (goto-char (point-min)) (forward-line (1- from))
+      (let ((beg (max (point) (overlay-start note))))
+        (forward-line (- to from))
+        (concat
+         (when (or (> from first) (< to last))
+           (format "Code spans lines %s-%s; use read_buffer for the rest.\n" first last))
+         (mevedel-buddy--guide-payload
+          beg (min (line-end-position) (overlay-end note))))))))
+
 (defun mevedel-buddy-note-prepare-context (payload &optional level)
   "Add invited goal context to PAYLOAD, capturing automatic dial LEVEL.
 Taken notes supply their code and brief.  Active also receives authored goals
@@ -104,7 +133,7 @@ within six lines of the edited region; other notes remain out of the prompt."
                   (push (list :overlay note :text (overlay-get note 'mevedel-note-text)
                               :taken (not nearby))
                         mevedel-buddy-note--goals)
-                  (unless (eq 'taken (overlay-get note 'mevedel-note-state))
+                  (unless (mevedel-note-watching-p note)
                     (push (format "\nNearby goal, note %s at %s:%s-%s: %s\n"
                                   (overlay-get note 'mevedel-id) (car entry) first last
                                   (replace-regexp-in-string
@@ -119,14 +148,33 @@ within six lines of the edited region; other notes remain out of the prompt."
                             (overlay-get note 'mevedel-id)
                             (replace-regexp-in-string
                              "[ \t\r\n]+" " " (or (overlay-get note 'mevedel-note-text) ""))
-                            (mevedel-buddy--guide-payload
-                             (overlay-start note) (overlay-end note)))
+                            (mevedel-buddy-note--taken-payload
+                             note (cdr (assoc (car entry) shown))))
                     sections))))))
     (concat payload (mapconcat #'identity (nreverse sections) "\n")
             (when level
               (format (concat "\nWorkspace dial: %s. Quiet: only taken-note code. "
                               "Watching: likely mistakes only. Active: ideas only near "
                               "the supplied goals; elsewhere behave like Watching.\n") level)))))
+
+(defun mevedel-buddy-note-review-hash (context)
+  "Hash captured goals and taken code together with request CONTEXT."
+  (cl-labels ((records (entries)
+                (sort
+                 (mapcar (lambda (record)
+                           (let ((note (plist-get record :overlay)))
+                             (list (overlay-get note 'mevedel-uuid)
+                                   (overlay-get note 'mevedel-id)
+                                   (plist-get record :text)
+                                   (plist-get record :code)
+                                   (plist-get record :taken))))
+                         entries)
+                 (lambda (a b) (string< (car a) (car b))))))
+    (let ((print-length nil) (print-level nil))
+      (secure-hash 'sha256
+                   (prin1-to-string
+                    (list context (records mevedel-buddy-note--taken)
+                          (records mevedel-buddy-note--goals)))))))
 
 (defun mevedel-buddy-note--near-goal-p (buffer position records distance &optional taken)
   "Whether BUFFER's POSITION is within DISTANCE lines of captured RECORDS.
@@ -526,7 +574,8 @@ Return the note id, reusing an exact repeat, or an explanatory string."
              (existing
               (seq-find (lambda (record)
                           (and (equal buffer-name (plist-get record :buffer))
-                               (= actual-line (mevedel-buddy-note--line record))
+                               (or (eq 'dismissed (plist-get record :status))
+                                   (= actual-line (mevedel-buddy-note--line record)))
                                (equal note (plist-get record :note))))
                         mevedel-buddy-note--notes))
              (overlay (unless existing
@@ -639,12 +688,14 @@ be told to maintain notes it cannot see.
 Active and dismissed notes are both described.  Dismissed ones are
 labelled so the model can see what the user already rejected instead of
 raising it again."
-  (let ((notes (seq-take (seq-filter
-                          (lambda (record)
-                            (mevedel-buddy-note--in-scope-p
-                             (plist-get record :buffer)))
-                          mevedel-buddy-note--notes)
-                         mevedel-buddy-note-serialize-limit)))
+  (let* ((scoped (seq-filter
+                  (lambda (record)
+                    (mevedel-buddy-note--in-scope-p (plist-get record :buffer)))
+                  mevedel-buddy-note--notes))
+         (dismissed (lambda (record) (eq 'dismissed (plist-get record :status))))
+         (notes (seq-take (append (seq-filter dismissed scoped)
+                                  (seq-remove dismissed scoped))
+                          mevedel-buddy-note-serialize-limit)))
     (if (null notes)
         ""
       (concat

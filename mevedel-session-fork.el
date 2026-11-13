@@ -151,6 +151,7 @@
                   "mevedel-structs" (session body))
 (declare-function mevedel-session-execution-target "mevedel-structs" (cl-x))
 (declare-function mevedel-session-file-snapshots "mevedel-structs" (cl-x))
+(declare-function mevedel-session-untracked-effects "mevedel-structs" (cl-x))
 (declare-function mevedel-session-fork-type "mevedel-structs" (cl-x))
 (declare-function mevedel-session-forked-from-fork-point-id "mevedel-structs" (cl-x))
 (declare-function mevedel-session-forked-from-session-id "mevedel-structs" (cl-x))
@@ -275,6 +276,7 @@ only through PICKED-CUM-TURN.  Entries with non-integer
     current-segment forked-from-session-id forked-from-turn fork-type
     forked-from-fork-point-id worktree-source-root worktree-directory
     worktree-branch worktree-base-commit prompt-index chapters file-snapshots
+    untracked-effects
     ptc-checkpoints durable-tree-ensured
     agent-transcripts invoked-skills permission-queue permission-absence
     pending-plan-approval
@@ -458,6 +460,13 @@ The identity and timestamp keywords describe the new materialized child."
                 (mevedel-session-rewind-reduce-file-snapshots
                  (mevedel-session-file-snapshots session) turn)
               (mevedel-session-file-snapshots session))
+            t)
+           :untracked-effects
+           (copy-tree
+            (if fork-p
+                (mevedel-session-rewind-reduce-file-snapshots
+                 (mevedel-session-untracked-effects session) turn)
+              (mevedel-session-untracked-effects session))
             t)
            :ptc-checkpoints nil
            :checkpoint-state nil

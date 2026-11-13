@@ -377,6 +377,7 @@ Default to the note at point.  Taking Buddy's remark first keeps it as yours."
         (mevedel-buddy-keep-note note))
       (overlay-put note 'mevedel-note-state 'taken)
       (overlay-put note 'mevedel-note-buddy-looks-done nil)
+      (overlay-put note 'mevedel-note-buddy-reviewed-hash nil)
       (puthash (overlay-get note 'mevedel-uuid) t mevedel-notes--taken-watches)
       (with-current-buffer (overlay-buffer note) (mevedel-buddy-mode 1))
       (mevedel-notes--render note)

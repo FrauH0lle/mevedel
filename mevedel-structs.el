@@ -229,6 +229,7 @@ workspace."
   prompt-index      ; alist: (segment-number . list of prompt plists) for picker
   chapters          ; closed /clear chats, oldest first: (:segment LAST :title STR-OR-NIL :closed-at ISO)
   file-snapshots    ; alist: (turn-number . file-map alist) for file-history restore
+  untracked-effects ; alist: (turn-number . ((tool . reason) ...)) outside file-snapshots
   ptc-checkpoints   ; durable unfinished/settled ToolCall envelopes; never guest state
   ;; Non-nil once this process has ensured the session directory tree and the
   ;; workspace ignore entries.  Re-ensuring them on every save costs target

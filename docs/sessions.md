@@ -414,7 +414,8 @@ publication does not itself bound this main-thread work.
 Live session state may advance before its corresponding transcript is durable.
 Ordinary sidecar-only writes therefore use the last committed root projection
 for `:current-segment`, `:total-turn-count`, `:prompt-index`, `:file-snapshots`,
-`:chapters`, `:first-user-message`, and `:latest-user-message`. Agent activity,
+`:untracked-effects`, `:chapters`, `:first-user-message`, and
+`:latest-user-message`. Agent activity,
 mail arrival, or another metadata update cannot publish a newer root turn or
 segment without its matching transcript. The committed first-message preview
 is owned by this same projection, not a second cache or a sidecar readback.
@@ -544,7 +545,9 @@ exact or recursive session resource grants, tasks, prompt-index (driving the
 rewind picker
 and latest resume preview), `:file-snapshots` (per-turn pre-turn checkpoints of
 tracked files, including absent markers and known capture gaps; post-turn
-copies remain alongside them for historical Fork), workspace identity,
+copies remain alongside them for historical Fork), optional
+`:untracked-effects` (per-turn tools whose file effects bypass those
+checkpoints, reported by Rewind as gaps), workspace identity,
 `:working-directory`, fork lineage (`:fork-type`, `:forked-from-session-id`,
 `:forked-from-turn`, and `:forked-from-fork-point-id`), and Worktree Fork
 origin (`:worktree-source-root`, `:worktree-directory`, `:worktree-branch`, and
@@ -2724,7 +2727,8 @@ captured manifest. A failed rollback reports every inconsistent path and
 promotes its temporary repair directory to the target-side specialized
 recovery marker and bytes described above; a successful Rewind removes those
 rollback bytes and does not create a recovery tree. Every settled model turn, including the first, owns a durable pre-turn
-checkpoint. The impact marks coverage as complete or lists known gaps; gaps do
+checkpoint. The impact marks coverage as complete or lists known gaps, including
+turns that ran Bash, Eval, Agent or SendMessage; gaps do
 not disable Rewind and are never presented as restored paths. Rewind creates no child session. A portable
 session's superseded head stays published, so `mevedel-redo` can restore its
 conversation as described below; a PID-lock session has no redo. Existing

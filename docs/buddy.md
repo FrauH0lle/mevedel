@@ -41,7 +41,10 @@ the note's code with its text as the brief, at every dial level. Use **take** in
 the note's modified-key menu or `T` in the notes list. The label says **Buddy
 watches**. Buddy may mark it **looks done** when its stated goal is met, but
 never closes it: `mevedel-note-done` is explicit. Editing the goal or its code
-retires earlier completion feedback.
+retires earlier completion feedback. Automatic taken-only reviews do not resend
+unchanged code and goals after a successful review. Changes made in flight,
+an abandoned review, a new brief or dial level, or taking again still invite a
+review. Explicit review commands are never suppressed.
 
 **Drop** (`mevedel-note-drop`, or `T` again in the list) returns the note to
 unsent, retaining its conversation and source code. Sending a taken note makes
@@ -149,7 +152,10 @@ another project merely by changing what it visits.
 Remarks persist in the workspace instruction store with their note identity,
 source anchor, author, text and severity. A new review restores existing remarks
 before building its bounded note context, so a restart does not erase earlier
-advice. An exact repeated remark on the same line reuses the existing identity.
+advice. An exact repeated live remark on the same line reuses its identity;
+dismissed remarks match by buffer and text even after lines move. Dismissed
+remarks take priority in the bounded prompt so open and kept notes cannot
+crowd out the advice already rejected.
 The first file-backed remark in a recognized project creates `.mevedel/`, like
 an ordinary note. Outside a project, an existing workspace state directory is
 needed for persistence; otherwise remarks stay in memory with a one-time notice.
@@ -199,7 +205,10 @@ Quiet limits new or updated remarks to taken-note code; Watching refuses ideas; 
 permits ideas only within six lines of a captured authored goal whose text
 still matches. Taken goals are included even without a pending edit, and
 completion feedback is accepted only while both the goal and captured code
-still match the live taken note.
+still match the live taken note. Each taken section sends at most
+`mevedel-buddy-note-read-limit` lines around the edit or source cursor, with
+`read_buffer` available for the rest. Paused takes near an Active edit supply
+their goal as ordinary nearby notes, not as watched code.
 
 It does not stop there. `read_buffer` returns a bounded range of a buffer
 already in the review, for a question the diff raised but cannot settle — a

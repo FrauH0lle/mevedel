@@ -57,6 +57,27 @@
                      (insert-file-contents index)
                      (read (current-buffer)))
                    nil)))
+  :doc "a note write merges the current root index instead of its stale cache"
+  (let* ((other "/mevedelmock:notes-index:/other/")
+         (mevedel-notes-activation--remote-index
+          (cons index '("/mevedelmock:notes-index:/stale/")))
+         (rename (symbol-function 'rename-file))
+         (renames 0))
+    (make-directory (file-name-directory index) t)
+    (with-temp-file index (prin1 (list other) (current-buffer)))
+    (cl-letf (((symbol-function 'rename-file)
+               (lambda (from to &rest args)
+                 (when (equal to index)
+                   (cl-incf renames)
+                   (should (equal (with-temp-buffer
+                                    (insert-file-contents index) (read (current-buffer)))
+                                  (list other))))
+                 (apply rename from to args))))
+      (with-current-buffer source (mevedel-note-create "Remember both clients")))
+    (should (= 1 renames))
+    (should (equal (sort (with-temp-buffer
+                          (insert-file-contents index) (read (current-buffer))) #'string<)
+                   (sort (list root other) #'string<))))
   :doc "a local note never creates the remote-roots index"
   (let ((buffer (find-file-noselect (file-name-concat local "source.el"))))
     (unwind-protect

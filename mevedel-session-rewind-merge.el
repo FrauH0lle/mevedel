@@ -14,6 +14,7 @@
   "Resolve BUFFER's Rewind PLAN for TARGET and BOUNDARY without source writes.
 RESOLUTIONS holds already resolved newer turns.  Confirmation resumes Rewind."
   (let* ((session (buffer-local-value 'mevedel--session buffer))
+         (cache mevedel-session-rewind--backup-cache)
          (tick (with-current-buffer buffer (buffer-chars-modified-tick)))
          (history (copy-tree (mevedel-session-file-snapshots session)))
          (turn (plist-get target :cum-turn))
@@ -36,7 +37,9 @@ RESOLUTIONS holds already resolved newer turns.  Confirmation resumes Rewind."
                         :yours (decode-coding-string (or (plist-get (plist-get entry :current) :bytes) "") coding)
                         :seen (decode-coding-string (or (plist-get (plist-get entry :base) :bytes) "") coding)
                         :proposed (decode-coding-string (or (plist-get (plist-get entry :proposed) :bytes) "") coding)
-                        :change (list :action (unless (plist-get (plist-get entry :proposed) :exists) 'delete)))
+                        :change (list :action (unless (and (plist-get (plist-get entry :proposed) :exists)
+                                                          (plist-get (plist-get entry :current) :exists))
+                                                'delete)))
                   sections))))
       (if (null sections)
           (let ((mevedel-session-rewind--merge-resolutions resolutions))
@@ -61,7 +64,8 @@ RESOLUTIONS holds already resolved newer turns.  Confirmation resumes Rewind."
                                                               (plist-get change :bytes)))))
                             resolutions)))
                   (mevedel-note-merge-cancel)
-                  (let ((mevedel-session-rewind--merge-resolutions resolutions))
+                  (let ((mevedel-session-rewind--merge-resolutions resolutions)
+                        (mevedel-session-rewind--backup-cache cache))
                     (mevedel-session-rewind-rewind buffer target boundary))))))
           (with-current-buffer merge
             (setq-local header-line-format
