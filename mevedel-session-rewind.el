@@ -434,18 +434,29 @@ RESOLUTIONS supplies checked intermediate states from the merge editor."
     (mevedel-session-rewind--sorted-file-plan plan)))
 
 (defun mevedel-session-rewind--checkpoint-gaps (session cum-turn)
-  "Return known SESSION checkpoint gaps from CUM-TURN onwards."
-  (append
-   (cl-loop for (turn . entries) in (mevedel-session-file-snapshots session)
-            when (>= turn cum-turn)
-            append (cl-loop for (path . checkpoint) in entries
-                            when (plist-get checkpoint :gap)
-                            collect (list :path path :turn turn
-                                          :reason (plist-get checkpoint :gap))))
-   (cl-loop for (turn . effects) in (mevedel-session-untracked-effects session)
-            when (>= turn cum-turn)
-            append (cl-loop for (tool . reason) in effects
-                            collect (list :path tool :turn turn :reason reason)))))
+  "Return SESSION gaps from CUM-TURN onwards, grouping tool effects by tool."
+  (let (tools)
+    (dolist (turn (mevedel-session-untracked-effects session))
+      (when (>= (car turn) cum-turn)
+        (dolist (effect (cdr turn))
+          (let ((entry (assoc (car effect) tools)))
+            (unless entry
+              (push (setq entry (list (car effect) nil nil)) tools))
+            (cl-pushnew (car turn) (nth 1 entry))
+            (cl-pushnew (cdr effect) (nth 2 entry) :test #'equal)))))
+    (append
+     (cl-loop for (turn . entries) in (mevedel-session-file-snapshots session)
+              when (>= turn cum-turn)
+              append (cl-loop for (path . checkpoint) in entries
+                              when (plist-get checkpoint :gap)
+                              collect (list :path path :turn turn
+                                            :reason (plist-get checkpoint :gap))))
+     (mapcar (lambda (entry)
+               (let ((count (length (nth 1 entry))))
+                 (list :path (car entry)
+                       :reason (format "%d turn%s: %s" count (if (= count 1) "" "s")
+                                       (string-join (nreverse (nth 2 entry)) "; ")))))
+             (nreverse tools)))))
 
 (defvar-local mevedel-session-rewind--plan-buffer-session nil
   "Buffer-local session for the `*mevedel-rewind-impact*' buffer.

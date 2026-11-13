@@ -2732,8 +2732,9 @@ promotes its temporary repair directory to the target-side specialized
 recovery marker and bytes described above; a successful Rewind removes those
 rollback bytes and does not create a recovery tree. Every settled model turn, including the first, owns a durable pre-turn
 checkpoint. The impact marks coverage as complete or lists known gaps, including
-turns that ran Bash, Eval, Agent or SendMessage; gaps do
-not disable Rewind and are never presented as restored paths. Rewind creates no child session. A portable
+turns that ran Bash, Eval, Agent or SendMessage. These effects appear once per
+tool, with the number of discarded turns; file capture gaps remain separate.
+Gaps do not disable Rewind and are never presented as restored paths. Rewind creates no child session. A portable
 session's superseded head stays published, so `mevedel-redo` can restore its
 conversation as described below; a PID-lock session has no redo. Existing
 child sessions and worktrees are not removed; children forked after the target
