@@ -1017,6 +1017,7 @@ to conversation delivery, leaving only the stable system contract."
   "Return the built-in prompt profile for PRESET, or nil."
   (pcase preset
     ('mevedel-implement 'main)
+    ('mevedel-note 'note)
     (_ nil)))
 
 (defun mevedel-system--effective-system-prompt ()

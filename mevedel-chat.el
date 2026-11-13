@@ -882,7 +882,8 @@ Completion labels include identity, because display names need not be unique."
   (with-current-buffer chat-buffer
     (unless (mevedel-session-preset-name mevedel--session)
       (mevedel-preset-apply
-       (alist-get mevedel-default-chat-preset mevedel-action-preset-alist)))))
+       (or (alist-get mevedel-default-chat-preset mevedel-action-preset-alist)
+           'mevedel-implement)))))
 
 (defun mevedel--display-chat-buffer (chat-buffer)
   "Ensure CHAT-BUFFER has a preset and display its view."

@@ -357,8 +357,8 @@
       (should (= 1 (length sent))))))
 
 (mevedel-deftest mevedel-note-reask/admission
-  (:quiet t :doc "re-ask refuses busy, settling and read-only sessions without changing the transcript")
-  (dolist (state '(working settling read-only))
+  (:quiet t :doc "re-ask refuses busy, settling, compacting and read-only sessions without changing the transcript")
+  (dolist (state '(working settling compacting read-only))
     (mevedel-note-conversation-test--with-source
       (let* ((note (mevedel-note-create "Improve this code"))
              (view (mevedel-note-send note))
@@ -371,6 +371,7 @@
         (with-current-buffer data
           (let ((before (buffer-string))
                 (mevedel--turn-settlements-pending (and (eq state 'settling) '(pending)))
+                (mevedel-compact-run-in-flight (eq state 'compacting))
                 (mevedel-session--read-only-mode (eq state 'read-only)))
             (when (eq state 'read-only) (setq buffer-read-only t))
             (should-error (mevedel-note-reask note) :type 'user-error)
@@ -548,6 +549,27 @@
         (should (eq 'user (overlay-get restored 'mevedel-note-author)))
         (should (overlay-get restored 'mevedel-note-kept-from-buddy))
         (should (overlay-get restored 'mevedel-note-session-id))))))
+
+(mevedel-deftest mevedel-inspect-effective-prompt/note
+  (:quiet t :doc "note conversations expose their profile and ordered prompt components")
+  (mevedel-note-conversation-test--with-source
+    (let ((view (mevedel-note-send (mevedel-note-create "Explain this code"))))
+      (mevedel-note-conversation-test--answer (car sent) "An answer.")
+      (with-current-buffer view
+        (with-current-buffer (mevedel-inspect-effective-prompt)
+          (should (string-search "Profile: note" (buffer-string)))
+          (should (string-search "** workspace-config" (buffer-string)))
+          (should-not (string-search "component breakdown unavailable" (buffer-string))))))))
+
+(mevedel-deftest mevedel/default-preset
+  (:quiet t :doc "a removed saved default falls back to the implement preset for a new chat")
+  (mevedel-note-conversation-test--with-source
+    (let ((mevedel-default-chat-preset 'discuss))
+      (call-interactively #'mevedel)
+      (let* ((view (window-buffer (selected-window)))
+             (data (buffer-local-value 'mevedel--data-buffer view)))
+        (should (eq 'mevedel-implement
+                    (mevedel-session-preset-name (buffer-local-value 'mevedel--session data))))))))
 
 (mevedel-deftest mevedel-note-send/chat-selection-isolation
   (:quiet t)

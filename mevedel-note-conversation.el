@@ -270,7 +270,7 @@ NO-DISPLAY leaves focus alone; DEFER-WRITE lets a batch caller sync the store."
                        (mevedel-session-persistence-resume-id workspace id)
                        (user-error "Note conversation is unavailable: %s" id))))
         (with-current-buffer data
-          (when (mevedel-turn-busy-p)
+          (when (or (mevedel-turn-busy-p) mevedel-compact-run-in-flight)
             (user-error "Note conversation is still working"))
           (when (or buffer-read-only mevedel-session--read-only-mode)
             (user-error "Note conversation is read-only"))
