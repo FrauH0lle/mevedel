@@ -1428,8 +1428,10 @@ connection charges for, so the program path is proved here too."
                                                       (if (and (null value) (zerop refusals))
                                                           (progn
                                                             (setq refusals (1+ refusals))
-                                                            (signal 'mevedel-session-control-fs-busy
-                                                                    (list "/target/.lease")))
+                                                            (mevedel-transport-call-as-remote-operation
+                                                             (lambda ()
+                                                               (funcall original-set-unsettled
+                                                                        authority value))))
                                                         (funcall original-set-unsettled authority value))))
                                                    ((symbol-function 'write-region)
                                                     (lambda (start end filename &rest args)
@@ -1441,24 +1443,26 @@ connection charges for, so the program path is proved here too."
                                                           (signal 'file-error '("Injected spool failure"))
                                                         (apply original-write-region
                                                                start end filename args)))))
-                                                (setq result
-                                                      (test-mevedel-execution--start-managed
-                                                       side remote-root '("sh" "-c" "printf output")
-                                                       :yield-time-ms nil))
-                                                (should (= 1 refusals))
-                                                (should
-                                                 (eq 'output-write-failed
-                                                     (plist-get (plist-get result :facts) :termination)))
-                                                ;; The write is owed, not lost, and the target latch says so
-                                                ;; until it lands.
-                                                (should
-                                                 (mevedel-session-durability-unsettled-mutation-p parent))
-                                                (should (mevedel-execution-mutation-blocked-p parent))
-                                                ;; The parent decision point owns the shared mutation authority
-                                                ;; and writes the side conversation's settlement debt.
-                                                (should-not (mevedel-execution-mutation-refused-p parent))
-                                                (should-not
-                                                 (mevedel-session-durability-unsettled-mutation-p parent))))
+                                                (dolist (consumer '(admission transfer))
+                                                  (setq refusals 0
+                                                        result
+                                                        (test-mevedel-execution--start-managed
+                                                         side remote-root '("sh" "-c" "printf output")
+                                                         :yield-time-ms nil))
+                                                  (should (= 1 refusals))
+                                                  (should
+                                                   (eq 'output-write-failed
+                                                       (plist-get (plist-get result :facts) :termination)))
+                                                  ;; The write is owed, not lost, until a parent decision
+                                                  ;; point settles the side conversation's shared debt.
+                                                  (should
+                                                   (mevedel-session-durability-unsettled-mutation-p parent))
+                                                  (should (mevedel-execution-mutation-blocked-p parent))
+                                                  (if (eq consumer 'admission)
+                                                      (should-not (mevedel-execution-mutation-refused-p parent))
+                                                    (should (mevedel-session-control-transfer-drained-p parent)))
+                                                  (should-not
+                                                   (mevedel-session-durability-unsettled-mutation-p parent)))))
       (dolist (session (list side parent))
         (when session
           (mevedel-execution-teardown-session session)))
