@@ -41,7 +41,7 @@ workspace.  This bounds model context, not the number of open remarks."
   :group 'mevedel-buddy)
 
 (defcustom mevedel-buddy-note-read-limit 200
-  "Positive maximum number of lines one `read_buffer' call returns.
+  "Positive maximum lines in a taken section or one `read_buffer' call.
 
 Both bounds of a read are required, so this only caps how much one call
 may ask for.  A background feature that fires on an idle timer must not
@@ -77,6 +77,25 @@ Nil denies every tool call, including calls after abandonment.")
 (defvar mevedel-buddy-note--level nil
   "Captured automatic dial level; nil means an explicitly requested review.")
 
+(defun mevedel-buddy-note--taken-payload (note shown)
+  "Return bounded NOTE code near SHOWN lines or the source cursor."
+  (let* ((first (line-number-at-pos (overlay-start note)))
+         (last (line-number-at-pos (max (overlay-start note) (1- (overlay-end note)))))
+         (limit (max 1 mevedel-buddy-note-read-limit))
+         (focus (or (seq-find (lambda (line) (<= first line last)) shown)
+                    (line-number-at-pos (point))))
+         (from (max first (min (1+ (- last limit)) (- focus (/ limit 2)))))
+         (to (min last (+ from limit -1))))
+    (save-excursion
+      (goto-char (point-min)) (forward-line (1- from))
+      (let ((beg (max (point) (overlay-start note))))
+        (forward-line (- to from))
+        (concat
+         (when (or (> from first) (< to last))
+           (format "Code spans lines %s-%s; use read_buffer for the rest.\n" first last))
+         (mevedel-buddy--guide-payload
+          beg (min (line-end-position) (overlay-end note))))))))
+
 (defun mevedel-buddy-note-prepare-context (payload &optional level)
   "Add invited goal context to PAYLOAD, capturing automatic dial LEVEL.
 Taken notes supply their code and brief.  Active also receives authored goals
@@ -104,7 +123,7 @@ within six lines of the edited region; other notes remain out of the prompt."
                   (push (list :overlay note :text (overlay-get note 'mevedel-note-text)
                               :taken (not nearby))
                         mevedel-buddy-note--goals)
-                  (unless (eq 'taken (overlay-get note 'mevedel-note-state))
+                  (unless (mevedel-note-watching-p note)
                     (push (format "\nNearby goal, note %s at %s:%s-%s: %s\n"
                                   (overlay-get note 'mevedel-id) (car entry) first last
                                   (replace-regexp-in-string
@@ -119,8 +138,8 @@ within six lines of the edited region; other notes remain out of the prompt."
                             (overlay-get note 'mevedel-id)
                             (replace-regexp-in-string
                              "[ \t\r\n]+" " " (or (overlay-get note 'mevedel-note-text) ""))
-                            (mevedel-buddy--guide-payload
-                             (overlay-start note) (overlay-end note)))
+                            (mevedel-buddy-note--taken-payload
+                             note (cdr (assoc (car entry) shown))))
                     sections))))))
     (concat payload (mapconcat #'identity (nreverse sections) "\n")
             (when level

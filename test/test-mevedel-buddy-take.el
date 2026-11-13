@@ -241,6 +241,60 @@ AUTOMATIC exercises the idle review policy without waiting for idle time."
       (should (string-search "Try jitter too" (mevedel-take-test--labels)))
       (should-not (string-search "Ungrounded idea" (mevedel-take-test--labels))))))
 
+(mevedel-deftest mevedel-buddy-review/large-take
+  (:quiet t)
+  ,test
+  (test)
+  :doc "a large take sends bounded code around the edit and can read the rest"
+  (mevedel-take-test--with-source
+    (erase-buffer)
+    (dotimes (i 3000) (insert (format "source line %s\n" (1+ i))))
+    (let ((transient-mark-mode t)
+          (mevedel-buddy-note-read-limit 12)
+          (name (buffer-name)))
+      (goto-char (point-min)) (set-mark (point-max)) (activate-mark)
+      (let ((note (mevedel-note-create "Review this large goal")))
+        (mevedel-note-take note)
+        (mevedel-buddy-set-level 'quiet workspace)
+        (goto-char (point-min)) (forward-line 1499) (insert "edited ")
+        (should
+         (mevedel-take-test--review
+          (lambda (prompt tools)
+            (should (string-search "edited source line 1500" prompt))
+            (should (= 12 (with-temp-buffer
+                            (insert prompt)
+                            (how-many "^ *[0-9]+  " (point-min) (point-max)))))
+            (should (string-search "read_buffer" prompt))
+            (should (stringp (mevedel-take-test--tool
+                              tools "add_note" name 1 "Not shown" "significant")))
+            (should (string-search "source line 1" (mevedel-take-test--tool
+                                                    tools "read_buffer" name 1 2)))
+            (should (integerp (mevedel-take-test--tool
+                               tools "add_note" name 1 "Now shown" "significant")))) t))))))
+
+(mevedel-deftest mevedel-buddy-review/paused-goal
+  (:quiet t)
+  ,test
+  (test)
+  :doc "Active shows a paused taken note's nearby goal before allowing ideas"
+  (mevedel-take-test--with-source
+    (let ((note (mevedel-note-create "Add retry with backoff"))
+          (name (buffer-name)))
+      (mevedel-note-take note)
+      (mevedel-instruction-store-flush t)
+      (mevedel--clear-instruction-state workspace)
+      (clrhash mevedel-notes--taken-watches)
+      (mevedel-instruction-store-observe workspace)
+      (should (string-search "paused" (mevedel-take-test--labels)))
+      (insert "edited ")
+      (should
+       (mevedel-take-test--review
+        (lambda (prompt tools)
+          (should (string-search "Nearby goal" prompt))
+          (should (string-search "Add retry with backoff" prompt))
+          (should (integerp (mevedel-take-test--tool
+                             tools "add_note" name 2 "Try jitter" "significant" "idea")))) t)))))
+
 (mevedel-deftest mevedel-buddy-review/brief-boundaries
   (:quiet t)
   ,test

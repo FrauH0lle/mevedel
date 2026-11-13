@@ -202,7 +202,10 @@ Quiet limits new or updated remarks to taken-note code; Watching refuses ideas; 
 permits ideas only within six lines of a captured authored goal whose text
 still matches. Taken goals are included even without a pending edit, and
 completion feedback is accepted only while both the goal and captured code
-still match the live taken note.
+still match the live taken note. Each taken section sends at most
+`mevedel-buddy-note-read-limit` lines around the edit or source cursor, with
+`read_buffer` available for the rest. Paused takes near an Active edit supply
+their goal as ordinary nearby notes, not as watched code.
 
 It does not stop there. `read_buffer` returns a bounded range of a buffer
 already in the review, for a question the diff raised but cannot settle — a
