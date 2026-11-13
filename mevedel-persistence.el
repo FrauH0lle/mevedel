@@ -1082,12 +1082,12 @@ Raw positions are only valid against the content they were saved with."
                          instructions)))
     (mevedel-instruction-store--without entry '(:instructions))))
 
-(defun mevedel-instruction-store--assign-ids (units origins mine theirs)
+(defun mevedel-instruction-store--assign-ids (units origins mine theirs base their-units)
   "Return merged id state for UNITS, renumbering colliding new ids.
 UNITS is a list of (UUID . UNIT); ORIGINS maps UUIDs to `mine' or
 `theirs'.  MINE and THEIRS are the two records' id state.  A display id
 two instructions share is reassigned on the one this client contributed,
-above every used and retired id."
+above every used and retired id.  BASE and THEIR-UNITS map known UUIDs to units."
   (let* ((mine-ids (plist-get mine :ids))
          (theirs-ids (plist-get theirs :ids))
          (retired (delete-dups (append (plist-get mine-ids :retired-ids)
@@ -1110,8 +1110,12 @@ above every used and retired id."
                            units)))
       (when-let* ((instruction (plist-get (cdr unit) :instr))
                   (id (plist-get (plist-get instruction :properties) 'mevedel-id)))
-        (if (and (gethash id owners)
-                 (not (equal (gethash id owners) (car unit))))
+        (if (or (and (gethash id owners)
+                     (not (equal (gethash id owners) (car unit))))
+                (and (eq 'mine (gethash (car unit) origins))
+                     (not (gethash (car unit) base))
+                     (not (gethash (car unit) their-units))
+                     (<= id (or (plist-get theirs-ids :id-counter) 0))))
             (let ((fresh (cl-incf counter)))
               (setcdr unit
                       (plist-put (copy-sequence (cdr unit)) :instr
@@ -1187,7 +1191,7 @@ LIST holding (UUID . REQUEST-TEXT) for each change of MINE refused."
                        (and (eq (plist-get props 'mevedel-note-state) 'closed)
                             (not (gethash (car unit) keep)))))
                    units)))
-    (let ((ids (mevedel-instruction-store--assign-ids units origins mine theirs))
+    (let ((ids (mevedel-instruction-store--assign-ids units origins mine theirs bt tt))
           files)
       (dolist (unit units)
         (when-let* ((instruction (plist-get (cdr unit) :instr)))
@@ -1303,7 +1307,16 @@ resolve as a workspace.  The first session saved there creates both."
       (let* ((observed (mevedel-instruction-store--observation workspace))
              (mine (mevedel-instruction-store--serialize workspace))
              (tries 0)
-             outcome)
+             (outcome
+              (and (stringp (plist-get observed :hash))
+                   (equal (plist-put (copy-sequence mine) :rewinds
+                                     (plist-get (plist-get observed :data) :rewinds))
+                          (plist-get observed :data))
+                   (condition-case nil
+                       (equal (plist-get observed :hash)
+                              (mevedel-instruction-store--current-hash workspace))
+                     (error nil))
+                   'unchanged)))
         (while (null outcome)
           (let* ((theirs (mevedel-instruction-store--read workspace))
                  (data (plist-get theirs :data))

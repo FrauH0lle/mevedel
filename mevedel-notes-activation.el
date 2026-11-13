@@ -57,6 +57,8 @@
   "Remember remote ROOT locally when HAS-NOTES; otherwise forget it."
   (when (and (stringp root) (file-remote-p root nil 'never))
     (setq root (file-name-as-directory root))
+    ;; shortcut: simultaneous writers can still race; lock if that recurs.
+    (setq mevedel-notes-activation--remote-index nil)
     (let* ((roots (mevedel-notes-activation--remote-roots))
            (updated (if has-notes
                         (if (member root roots) roots (cons root roots))
@@ -64,7 +66,12 @@
       (unless (equal roots updated)
         (let ((file (car mevedel-notes-activation--remote-index)))
           (make-directory (file-name-directory file) t)
-          (with-temp-file file (prin1 updated (current-buffer))))
+          (let ((temporary (make-temp-file file)))
+            (unwind-protect
+                (progn
+                  (with-temp-file temporary (prin1 updated (current-buffer)))
+                  (rename-file temporary file t))
+              (when (file-exists-p temporary) (delete-file temporary)))))
         (setcdr mevedel-notes-activation--remote-index updated)))))
 
 (defun mevedel-notes-activation--remote-visit (file)

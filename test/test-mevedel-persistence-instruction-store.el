@@ -187,6 +187,52 @@ Return the new workspace struct."
                      (test-mevedel-instruction-store--listed workspace)))
       ;; Control: an unchanged store costs one hash and changes nothing.
       (should (eq 'current (mevedel-instruction-store-observe workspace)))))
+  :doc "unchanged sync hashes but does not read, while a local edit still reads and writes"
+  (test-mevedel-instruction-store--with-workspace (workspace source)
+    (let* ((note (test-mevedel-instruction-store--note source "base"))
+           (read-store (symbol-function 'mevedel-instruction-store--read))
+           (reads 0))
+      (mevedel-instruction-store-sync workspace)
+      (cl-letf (((symbol-function 'mevedel-instruction-store--read)
+                 (lambda (&rest args) (cl-incf reads) (apply read-store args))))
+        (should (eq 'unchanged (mevedel-instruction-store-sync workspace)))
+        (should (= 0 reads))
+        (mevedel-note-edit "edited" note)
+        (should (eq 'written (mevedel-instruction-store-sync workspace)))
+        (should (= 1 reads)))
+      (should (equal '("edited") (test-mevedel-instruction-store--listed workspace)))))
+  :doc "uncertain sync evidence falls back to a full read without losing notes"
+  (dolist (scenario '(hash-error absent observation changed corrupt))
+    (test-mevedel-instruction-store--with-workspace (workspace source)
+      (let* ((note (test-mevedel-instruction-store--note source "base"))
+             (uuid (overlay-get note 'mevedel-uuid))
+             (read-store (symbol-function 'mevedel-instruction-store--read))
+             (hash-store (symbol-function 'mevedel-instruction-store--current-hash))
+             (reads 0))
+        (mevedel-instruction-store-sync workspace)
+        (pcase scenario
+          ('absent (delete-file (mevedel-instruction-store-path workspace)))
+          ('observation
+           (setf (plist-get (mevedel--instruction-state
+                            (mevedel--instruction-workspace-key workspace)) :store-observation) nil))
+          ('changed
+           (test-mevedel-instruction-store--other-client
+            workspace (lambda (record)
+                        (test-mevedel-instruction-store--edit-record
+                         record uuid 'mevedel-note-text "theirs"))))
+          ('corrupt (write-region "broken" nil (mevedel-instruction-store-path workspace) nil 'silent)))
+        (cl-letf (((symbol-function 'mevedel-instruction-store--read)
+                   (lambda (&rest args) (cl-incf reads) (apply read-store args)))
+                  ((symbol-function 'mevedel-instruction-store--current-hash)
+                   (lambda (&rest args)
+                     (if (eq scenario 'hash-error) (error "Hash unavailable")
+                       (apply hash-store args)))))
+          (if (eq scenario 'corrupt)
+              (should-error (mevedel-instruction-store-sync workspace))
+            (should (memq (mevedel-instruction-store-sync workspace) '(unchanged written merged))))
+          (should (= 1 reads)))
+        (should (equal (if (eq scenario 'changed) '("theirs") '("base"))
+                       (test-mevedel-instruction-store--texts workspace))))))
   :doc "a note edited in the minibuffer is written once, after it returns"
   (test-mevedel-instruction-store--with-workspace (workspace source)
     (let* ((overlay (test-mevedel-instruction-store--note source "base"))
@@ -333,6 +379,27 @@ Return the new workspace struct."
         (should (equal ids (delete-dups (copy-sequence ids))))
         (should (equal "one" (test-mevedel-instruction-store--stored-text
                               workspace first-id))))))
+  :doc "a stale client's new note cannot reuse a number past the other counter"
+  (test-mevedel-instruction-store--with-workspace (workspace source)
+    (let* ((first (test-mevedel-instruction-store--note source "one" 1))
+           (uuid (overlay-get first 'mevedel-uuid)))
+      (test-mevedel-instruction-store--other-client
+       workspace (lambda (record)
+                   (plist-put record :ids '(:id-counter 10 :used-ids (1) :retired-ids nil))))
+      (let* ((mine (test-mevedel-instruction-store--note source "two" 2))
+             (new-uuid (overlay-get mine 'mevedel-uuid)))
+        (should (= 11 (test-mevedel-instruction-store--stored workspace new-uuid 'mevedel-id)))
+        (should (= 1 (test-mevedel-instruction-store--stored workspace uuid 'mevedel-id))))))
+  :doc "editing an existing note preserves its number below another client's counter"
+  (test-mevedel-instruction-store--with-workspace (workspace source)
+    (let* ((note (test-mevedel-instruction-store--note source "one"))
+           (uuid (overlay-get note 'mevedel-uuid)))
+      (test-mevedel-instruction-store--other-client
+       workspace (lambda (record)
+                   (plist-put record :ids '(:id-counter 10 :used-ids (1) :retired-ids nil))))
+      (mevedel-note-edit "edited" note)
+      (should (eq 'merged (mevedel-instruction-store-sync workspace)))
+      (should (= 1 (test-mevedel-instruction-store--stored workspace uuid 'mevedel-id)))))
   :doc "a write landing between this client's read and write is merged on retry"
   (test-mevedel-instruction-store--with-workspace (workspace source)
     (let* ((first (test-mevedel-instruction-store--note source "one" 1))
