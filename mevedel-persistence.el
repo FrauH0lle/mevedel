@@ -48,11 +48,14 @@
                   "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-program-value
                   "mevedel-session-control-fs" (result))
+(declare-function mevedel-session-control-fs-read-file
+                  "mevedel-session-control-fs" (path &optional coding-system max-bytes))
 (declare-function mevedel-session-control-fs-run-program
                   "mevedel-session-control-fs" (operations &optional lock-directory))
 (declare-function mevedel-session-control-fs-run-program-async
                   "mevedel-session-control-fs" (operations callback &optional scope connected-only))
 (autoload 'mevedel-session-control-fs-program-value "mevedel-session-control-fs")
+(autoload 'mevedel-session-control-fs-read-file "mevedel-session-control-fs")
 (autoload 'mevedel-session-control-fs-run-program "mevedel-session-control-fs")
 (autoload 'mevedel-session-control-fs-run-program-async "mevedel-session-control-fs")
 (autoload 'mevedel-session-control-fs-file-hash "mevedel-session-control-fs")
