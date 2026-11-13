@@ -280,13 +280,18 @@ When SELECTED is non-nil, prepare only those reviewed changes."
     (dolist (change changes)
       (let* ((path (plist-get change :path))
              (old (cdr (assoc path previous)))
+             (bytes (plist-get (or (plist-get change :history-before)
+                                   (plist-get change :before)) :bytes))
              (name (plist-get old :pre-backup-name)))
         (puthash path (cond ((plist-get old :gap) (list :gap (plist-get old :gap)))
+                            ((and old
+                                  (not (equal (and bytes (secure-hash 'sha256 bytes))
+                                              (plist-get old :backup-name))))
+                             (list :gap (format "edited after turn %d" turn)))
                             (old (and name (mevedel-session-artifacts-read-file-raw
                                             (mevedel-session-artifacts-backup-path
                                              (mevedel-session-save-path session) name))))
-                            (t (plist-get (or (plist-get change :history-before)
-                                             (plist-get change :before)) :bytes))) pre))
+                            (t bytes)) pre))
       (when-let* ((buffer (find-buffer-visiting (plist-get change :path))))
         (with-current-buffer buffer (undo-boundary))))
     (mevedel-tool-patch-commit changes)

@@ -1063,6 +1063,43 @@
           (with-current-buffer source
             (should (equal "before\nold\nafter\nagent addition\n" (buffer-string)))))))))
 
+(mevedel-deftest mevedel-note-apply-change/edited-capture
+  (:quiet t :doc "Rewind leaves user edits made between the turn capture and suggestion apply")
+  (mevedel-note-change-test--with-note
+    (setf (mevedel-session-preset-name session) 'mevedel-implement)
+    (with-current-buffer data-buf
+      (insert "*** Improve source\n")
+      (mevedel-request-begin session)
+      (puthash file "before\nold\nafter\n"
+               (mevedel-request-file-snapshots mevedel--current-request))
+      (with-current-buffer source
+        (goto-char (point-max))
+        (insert "agent addition\n")
+        (save-buffer))
+      (setq result
+            (mevedel-tool-note-write
+             (list :operations
+                   (vector (list :action "create" :file_path "source.txt" :start_line 2
+                                 :text "AI suggestion" :prepared_change
+                                 "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")))))
+      (insert (propertize "Prepared.\n" 'gptel 'response))
+      (setf (mevedel-session-turn-count session) 1)
+      (mevedel-session-artifacts-save session data-buf t)
+      (mevedel-request-end))
+    (with-current-buffer source
+      (goto-char (point-min))
+      (insert "USER LINE\n")
+      (save-buffer))
+    (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get result :result)))
+    (mevedel-note-apply-change
+     (mevedel-notes--resolve (match-string 1 (plist-get result :result)) workspace))
+    (let ((target (copy-sequence
+                   (cdar (last (mevedel-session-rewind--prompt-candidates session))))))
+      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+        (mevedel-session-rewind-rewind data-buf target)))
+    (should (equal "USER LINE\nbefore\nnew\nafter\nagent addition\n"
+                   (mevedel-test--read-file file)))))
+
 (mevedel-deftest mevedel-note-revert-change/deleted-origin
   (:quiet t :doc "a deleted originating main chat refuses revert without touching source or reopening the note")
   (mevedel-note-change-test--with-note

@@ -45,7 +45,10 @@ prepared the change, not whichever turn is current when it is applied. Each
 path entry uses `:version`, `:backup-time`, `:pre-backup-name` and `:backup-name`;
 the names address literal-byte SHA-256 backups under `file-history/`. Manual
 merges use captured visiting text, including unsaved edits, as their pre-image.
-Existing capture gaps remain gaps. A preparation that made no write does not
+Existing capture gaps remain gaps. Reusing a turn's earlier pre-image requires
+the pre-apply bytes to match that turn's last captured result; intervening edits
+instead leave a gap, so whole-turn reversal cannot claim the user's work.
+A preparation that made no write does not
 claim subsequent user edits as a note change. Confirming a partial detailed
 review records only accepted paths and drops the rest of the waiting proposal.
 Notes retain deduplicated session/turn references to their applied changes.
