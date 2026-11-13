@@ -536,24 +536,28 @@ With PATCH, run that ApplyPatch hunk through the real pipeline for capture."
   (let* ((dir (make-temp-file "mevedel-merge-pairs-" t))
          (turns '(3 1 2))
          (paths (mapcar (lambda (turn) (file-name-concat dir (format "f%d.txt" turn))) turns))
-         got)
+         merge got)
     (unwind-protect
         (save-window-excursion
           (cl-mapc (lambda (path turn)
                      (write-region (format "mine%d\n" turn) nil path nil 'silent))
                    paths turns)
-          (mevedel-note-merge-open
-           "*pairs*"
-           (cl-mapcar (lambda (path turn)
-                        (list :path path :disk (mevedel-tool-patch--snapshot path)
-                              :coding 'utf-8-unix :yours (format "mine%d\n" turn)
-                              :seen "base\n" :proposed (format "ai%d\n" turn)
-                              :data (list :turn turn)))
-                      paths turns)
-           (lambda (pairs) (setq got pairs)))
+          (setq merge
+                (mevedel-note-merge-open
+                 "*pairs*"
+                 (cl-mapcar (lambda (path turn)
+                              (list :path path :disk (mevedel-tool-patch--snapshot path)
+                                    :coding 'utf-8-unix :yours (format "mine%d\n" turn)
+                                    :seen "base\n" :proposed (format "ai%d\n" turn)
+                                    :data (list :turn turn)))
+                            paths turns)
+                 (lambda (pairs) (setq got pairs))))
           (goto-char (point-min))
           (while (search-forward "<<<<<<<" nil t) (smerge-keep-lower))
           (mevedel-note-merge-confirm))
+      (when (buffer-live-p merge)
+        (with-current-buffer merge (set-buffer-modified-p nil))
+        (kill-buffer merge))
       (delete-directory dir t))
     (should (equal turns (mapcar (lambda (pair) (plist-get (cdr pair) :turn)) got)))
     (should (equal paths (mapcar (lambda (pair) (plist-get (car pair) :path)) got)))
