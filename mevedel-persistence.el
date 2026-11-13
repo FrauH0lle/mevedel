@@ -475,12 +475,16 @@ It must be one named function registered once: a per-buffer closure
 per instruction buffer grows the global hook without bound and runs
 every closure on every kill in Emacs.
 
-A buffer with no file is left alone before anything else happens.  This
+A buffer with no file or instruction overlays is left alone before anything
+else happens.  This
 hook sees every buffer Emacs kills, including internal ones such as
 ` *Compiler Input*', and instructions are stashed by file: resolving a
 workspace for a buffer that has none can only cost time or fail."
   (let ((buffer (current-buffer)))
-    (when-let* ((file (buffer-file-name buffer)))
+    (when-let* ((file (buffer-file-name buffer))
+                ((save-restriction
+                   (widen)
+                   (mevedel--instructions-in (point-min) (point-max)))))
       (mevedel--instruction-activate-buffer buffer)
       (when (mevedel--buffer-has-instructions-p buffer)
         (if (file-exists-p file)

@@ -1377,6 +1377,8 @@
                      (mevedel-test--read-file file)))
       (setq note (mevedel-notes--resolve note-uuid workspace)
             suggestion (mevedel-notes--resolve (overlay-get suggestion 'mevedel-uuid) workspace))
+      (with-current-buffer source
+        (should (= 2 (length (mevedel--instructions-in (point-min) (point-max))))))
       (mevedel-note-send note)
       (with-current-buffer data
         (mevedel-tool-patch-handler
