@@ -138,6 +138,9 @@
             (progn
               (dolist (operation operations)
                 (let* ((action (plist-get operation :action))
+                       (tags (when (plist-member operation :tags)
+                               (mevedel-notes--validate-tags
+                                (mapcar #'intern (append (plist-get operation :tags) nil)))))
                        (prepared (when (plist-get operation :prepared_change)
                                    (unless (equal action "create")
                                      (error "Attach prepared_change only when creating a note"))
@@ -159,8 +162,7 @@
                        (overlay-put note 'mevedel-note-prepared-change prepared)
                        (overlay-put note 'mevedel-note-attention-state 'ready))
                      (if (plist-member operation :tags)
-                         (mevedel-note-set-tags
-                          (mapcar #'intern (append (plist-get operation :tags) nil)) note)
+                         (mevedel-note-set-tags tags note)
                        (when (equal action "create")
                          (mevedel-notes--render note))))
                     ((or "close" "done") (mevedel-note-done note))

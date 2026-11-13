@@ -102,6 +102,40 @@
     (should (string-match-p "Closing, sending and marking[\n ]+done require the user's request"
                             (buffer-string)))))
 
+(mevedel-deftest mevedel-tool-note-write/invalid-tags (:quiet t)
+  ,test
+  (test)
+  :doc "invalid create tags leave no note, prepared change or store mutation"
+  (dolist (tags '(["needs review"] ["123"] ["and"]))
+    (mevedel-tool-note-test--workspace
+      (mevedel-tool-note-test--create data-buf file)
+      (let* ((before (mevedel-tool-note-test--read data-buf "notes://"))
+             (store (mevedel-test--read-file (mevedel-instruction-store-path workspace)))
+             (outcome (mevedel-tool-note-test--write
+                       data-buf
+                       (vector (list :action "create" :file_path file :start_line 2
+                                     :text "Invalid suggestion" :tags tags :prepared_change
+                                     "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")))))
+        (should (eq 'error (plist-get outcome :status)))
+        (should (string-search "cannot be used in a note query" (plist-get outcome :result)))
+        (should (equal before (mevedel-tool-note-test--read data-buf "notes://")))
+        (should (equal store (mevedel-test--read-file (mevedel-instruction-store-path workspace))))
+        (should (equal "before\nold\nafter\n" (mevedel-test--read-file file))))))
+  :doc "invalid edit tags preserve the note's existing text, tags and store"
+  (mevedel-tool-note-test--workspace
+    (let* ((id (mevedel-tool-note-test--create data-buf file :tags ["review"]))
+           (address (concat "notes://" id ".md"))
+           (before (mevedel-tool-note-test--read data-buf address))
+           (store (mevedel-test--read-file (mevedel-instruction-store-path workspace)))
+           (outcome (mevedel-tool-note-test--write
+                     data-buf (vector (list :action "edit" :id id
+                                            :text "Should not replace Finding"
+                                            :tags ["needs review"])))))
+      (should (eq 'error (plist-get outcome :status)))
+      (should (string-search "cannot be used in a note query" (plist-get outcome :result)))
+      (should (equal before (mevedel-tool-note-test--read data-buf address)))
+      (should (equal store (mevedel-test--read-file (mevedel-instruction-store-path workspace)))))))
+
 (mevedel-deftest mevedel-tool-note-write (:quiet t)
   ,test
   (test)

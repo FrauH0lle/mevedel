@@ -328,6 +328,18 @@ Refuse unavailable sources before a caller starts mutating the notes."
              "Tags (empty removes all): " (mapcar #'symbol-name tags)
              nil nil (mapconcat #'symbol-name tags ",")))))
 
+(defun mevedel-notes--validate-tags (tags)
+  "Validate queryable TAGS and return the unchanged list of symbols."
+  (unless (and (proper-list-p tags) (cl-every #'symbolp tags))
+    (user-error "Tags must be a list of symbols"))
+  (dolist (tag tags)
+    (unless (and tag (not (memq tag '(and or not)))
+                 (condition-case nil
+                     (eq tag (read (symbol-name tag)))
+                   (error nil)))
+      (user-error "Tag %S cannot be used in a note query" tag)))
+  tags)
+
 ;;;###autoload
 (defun mevedel-note-set-tags (tags &optional note)
   "Replace NOTE's tags with TAGS, a list of symbols.
@@ -338,14 +350,7 @@ Default to the note at point.  An empty list removes every tag."
   (setq note (or note (mevedel-notes--at-point)))
   (let ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note))))
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
-      (unless (and (proper-list-p tags) (cl-every #'symbolp tags))
-        (user-error "Tags must be a list of symbols"))
-      (dolist (tag tags)
-        (unless (and tag (not (memq tag '(and or not)))
-                     (condition-case nil
-                         (eq tag (read (symbol-name tag)))
-                       (error nil)))
-          (user-error "Tag %S cannot be used in a note query" tag)))
+      (mevedel-notes--validate-tags tags)
       (overlay-put note 'mevedel-note-tags (delete-dups (copy-sequence tags)))
       (mevedel-notes--render note)
       (mevedel-instruction-store-touch workspace))))
