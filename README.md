@@ -255,11 +255,13 @@ Notes follow source edits. A note is unsent, sent, taken or closed (done,
 deleted or dismissed). Its context reaches a prompt only when you send or
 mention it.
 
-Inside a note, `M-m` (or `mevedel-ov-dispatch-key`) opens its actions menu.
-Plain letters still insert source text; entering a note also shows its actions
-in the echo area, even when collapsed. In the menu, `e` expands or collapses
-the label, `i` edits (formerly `e`), and `w` copies the full text to the kill
-ring. `M-x mevedel-notes-toggle-labels` expands all notes in the current buffer
+Inside a note, `M-m` (or `mevedel-ov-dispatch-key`) opens an inline **Actions** row.
+Its keys are `s` send/reopen, `t` take/drop, `i` edit, `g` tags, `x` done,
+`k` delete/dismiss, `b` keep a Buddy remark, `w` copy text, `S` settings and
+`e` expand/collapse. `a` apply and `m` merge appear only for a prepared change;
+`r` revert appears only for applied changes. Plain letters still insert source
+text outside the menu; entering a note shows an echo-area hint even when collapsed.
+`M-x mevedel-notes-toggle-labels` expands all notes in the current buffer
 if any are collapsed; otherwise it collapses them all. Display state belongs
 to each live overlay and is not persisted. Moving point never changes style.
 `mevedel-note-edit`, `mevedel-note-delete`, and
@@ -269,10 +271,10 @@ its source code. Creating or editing a note does not send anything to a model.
 Choose **send** in that menu, or use `M-x mevedel-note-send`, to open the note's
 own conversation beside the code. Graphical Emacs uses an anchored child frame;
 terminal Emacs uses a side window. Type below the prompt and press `C-c C-c`
-to reply. The transcript above is read-only. `C-c C-v` shows the retained initial
-provider input, including its instructions and tool definitions. `C-c C-z` closes
-the child frame (`C-c C-q` also closes the conversation window) without losing
-the conversation or draft. Sending a sent note
+to reply. The transcript above is read-only. `C-c C-v` shows retained provider
+inputs, including instructions and tool definitions. A hint above the prompt
+shows `C-c C-z close`, plus `C-c C-a apply · C-c C-g merge` while a change waits.
+Closing leaves the conversation and draft alive. Sending a sent note
 reopens its conversation without making another request.
 
 Source-file ApplyPatch changes in a note conversation wait as **change ready**;
@@ -283,7 +285,7 @@ proposal replaces the waiting one, while earlier proposals remain in the
 conversation. Applying does not mark the note done.
 
 An overlapping source edit makes apply refuse and shows **change stale**.
-Use `C-c C-n` in the conversation to re-ask on the current noted code, or
+Continue in the ordinary composer to request a revised change, or use
 `C-c C-g` to open a separate three-way smerge editor. Resolve there, then use
 `C-c C-c` to confirm or `C-c C-k` to cancel. Confirmation refuses if the source
 changed again; generated conflict markers never go into the source. Merging
@@ -304,8 +306,13 @@ Notes already sharing a conversation reopen it together; notes belonging to
 different conversations must be sent separately. Each conversation is a normal
 saved session with its own history and Rewind. There is no separate Discuss or
 Implement action: the session's permission mode decides whether edits are allowed.
-The original note's preset is fixed, but model, effort and permission mode remain
-changeable. Explicit forks are ordinary chats and may change preset too.
+Choose `S` in the Actions row for a settings transient: base preset, the existing
+chat model/effort selector, and permission mode. Before send, settings persist
+on the note without contacting a model; afterward they change its live session.
+The base preset defaults to `mevedel-implement` and remains changeable. A durable
+note layer keeps isolation, input recording and conversation keys across preset
+changes and resume, preserving the base preset's system prompt and tools.
+Explicit forks are ordinary chats without that layer.
 Note sessions include the ordinary skills, resources and memory capabilities,
 not another conversation's history, journal digests, edited-files reminder or
 active Goal. Explicitly mentioned notes and the selected code are frozen at send

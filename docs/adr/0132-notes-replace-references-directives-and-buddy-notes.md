@@ -47,16 +47,28 @@ or a side window when child frames are unavailable. There is no per-note
 Discuss, Implement or Plan action: session permissions and Plan mode govern
 tools. Ask requires approval for mutations; it is not a read-only mode. Plan
 mode restricts project writes through the normal tool boundary, while allowing
-session-owned plan files and new review notes. The original note session's
-preset is fixed; model, effort and permission mode remain changeable. Explicit
-forks are ordinary chats and may change preset.
+session-owned plan files and new review notes. The base preset defaults to
+`mevedel-implement` and remains user-selectable, as do model, effort and permission
+mode. A settings transient uses the existing chat model selector; choices persist
+on an unsent note and update its live session after send. A separate durable note
+layer restores isolation, input recording and keys after preset changes and
+resume. It preserves the base preset's `:system` and tools, filtering only the
+`journal`, `active-goal` and `goal-policy` prompt components. Explicit forks are
+ordinary chats without the note layer.
+
+The source menu is one inline **Actions** row: `s` send/reopen, `t` take/drop,
+`i` edit, `g` tags, `x` done, `k` delete/dismiss, `b` keep a Buddy remark,
+`w` copy, `S` settings and `e` expand/collapse. Apply/merge (`a`/`m`) appear only
+for prepared changes, revert (`r`) only for applied changes. The conversation
+hint above the prompt shows `C-c C-z close`, plus
+`C-c C-a apply · C-c C-g merge` while a change waits.
 
 **Source ApplyPatch proposals wait as prepared changes.** Preparation returns
 without writing source or holding the model turn open. The waiting record
 retains the proposal and base file bytes and is shared by batch siblings. Apply
 preserves disjoint later edits and refuses conflicting or unsaved edits. The
-user can re-ask on current code or resolve in a separate three-way smerge
-buffer; generated conflict markers never enter the source file. Confirmation
+user can request a revision in the ordinary composer or resolve in a separate
+three-way smerge buffer; generated conflict markers never enter the source file. Confirmation
 rechecks current source before writing. Resource-address patches retain their
 ordinary ApplyPatch behavior; preparation is not a general sandbox for Bash,
 Eval or other tools.
@@ -146,6 +158,15 @@ clobbering another conversation's later edits.
   is retained.
 
 ## Decision history
+
+**The original note preset was fixed.** The first implementation used a dedicated
+`mevedel-note` preset inheriting `mevedel-implement`, and refused ordinary preset
+changes to keep note isolation intact. The user required a chosen base preset,
+model, effort and permission mode before sending, with the same controls after
+send. Making note behavior a durable layer instead of a preset identity meets
+that requirement without discarding the chosen preset's system prompt or tools.
+The dedicated re-ask command and duplicate close binding were also removed:
+follow-ups use the ordinary composer and `C-c C-z` is the note close key.
 
 **Dismissed notes originally shared the count limit.** High-volume remark
 dismissals could evict the user's done or deleted notes and release their

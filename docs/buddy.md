@@ -279,9 +279,13 @@ Buddy remarks use the common note display, initially collapsed according to
 `mevedel-note-labels`: code tint and the entry echo hint remain, without a label.
 Expanded labels sit below the complete source line with a
 `Note N · author · state · KEY: menu` header and the full text indented below,
-filled to `fill-column` bounded by window width. In the modified-key menu,
-`e` expands/collapses, `i` edits (formerly `e`), and `w` copies full text to the
-kill ring; dismiss and keep remain available. Plain letters insert source text.
+filled to `fill-column` bounded by window width. The modified-key menu opens an
+inline **Actions** row: `s` send/reopen, `t` take/drop, `i` edit, `g` tags,
+`x` done, `k` delete/dismiss, `b` keep a Buddy remark, `w` copy, `S` settings and
+`e` expand/collapse. `a` apply and `m` merge appear only for prepared changes;
+`r` revert appears only for applied changes. Plain letters outside the menu
+insert source text. Settings configure the base preset, model/effort and
+permission mode without sending; for a sent note they change its live session.
 `mevedel-notes-toggle-labels` expands all notes in the current buffer if any are
 collapsed, otherwise collapses all. Display state is overlay-local, not saved;
 moving point never changes style. `mevedel-note-label-buddy` inherits

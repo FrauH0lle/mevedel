@@ -240,7 +240,8 @@ translation; the generic source owner remains independent of Evil. Neither
 replacement resolution nor undo changes a note's conversation or state.
 
 Sending a note (`mevedel-note-send`, or `mevedel-note-send-batch` for several
-notes) creates an ordinary durable session with the `mevedel-note` preset and
+notes) creates an ordinary durable session with a user-chosen base preset
+(default `mevedel-implement`) and a separate durable note layer, then
 submits one generated turn: the note text, the noted code at send time, and
 the explicitly mentioned notes, with mention syntax in captured text made
 inert. It never forks or reads another chat's history. The conversation then
@@ -560,9 +561,11 @@ order (later parents win, then the child). Ordinary preset keys resolve to
 composition semantics. Persistent application is buffer- and session-local;
 request-only application is dynamically scoped for variables. Its agent roster
 and tool catalog are read by tool calls after dispatch, so they last until the
-request ends, when teardown reinstalls the session preset's. The built-ins are
-`mevedel-implement` and `mevedel-note`, which inherits it for note
-conversations. There is no retired-preset substitution on resume.
+request ends, when teardown reinstalls the session preset's. The built-in base
+preset is `mevedel-implement`. Note conversations add isolation, input recording
+and keys independently of the selected base preset, preserving its system prompt
+and tools across preset changes and resume. There is no retired-preset
+substitution on resume.
 Presets can also merge named model tiers and workload maps.
 Dispatch resolves session values, tier values, workload values, then explicit
 Agent policy or request-owning skill policy. Skill preset entries use

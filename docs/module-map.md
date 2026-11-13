@@ -197,6 +197,7 @@ Chat / view
   mevedel-notes.el            source note actions, labels and entry hints
   mevedel-notes-activation.el autoloaded file-visit restoration and roots-only remote note discovery
   mevedel-note-conversation.el isolated durable note send/batch/reopen, composer controls and sent-input inspection
+  mevedel-note-settings.el    persisted unsent settings and live session settings through the chat model picker
   mevedel-note-change.el      nonblocking prepared source changes, checked apply, detailed review and actual per-turn application history
   mevedel-note-merge.el       separate localized three-way smerge editor with checked explicit confirmation
   mevedel-notes-list.el       workspace notes grouped by attention, visit/edit/tag/send/close/restore actions

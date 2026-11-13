@@ -14,9 +14,14 @@ transcript and file-change history own the conversation. Reopening a sent note
 resumes that session. Closing its child frame or terminal side window leaves
 the session and composer draft alive.
 
-The `mevedel-note` preset is the original note session's fixed identity. Ordinary preset
-changes are refused; model, effort, permission mode and temporary request-only
-presets remain available. It uses ordinary editing tools, with edits governed by
+The base preset defaults to `mevedel-implement` and can be changed normally.
+The note's **Settings** transient selects that preset, model/effort through the
+existing chat selector, and permission mode. Before send these choices persist
+on the workspace note; after send they update its live session. A durable note
+layer reapplies isolation, input recording and conversation keys after preset
+changes and resume, without replacing the base preset's `:system` or tools.
+It filters only the `journal`, `active-goal` and `goal-policy` prompt components.
+The session uses ordinary editing tools, with edits governed by
 the session permission mode and Plan restrictions. Its automatic observations
 include project instructions, environment, tools, the skills roster, resource
 descriptions and memory. It excludes journal digests, another chat's history,
@@ -27,8 +32,12 @@ Other authored mentions use the ordinary request-time attachment path.
 `C-c C-v` in the note view opens the
 session's retained numbered JSON files under `note-input/`: every assembled API request, or the
 native provider's system text and submitted content, in dispatch order as
-separate JSON documents. This includes re-asks and follow-ups, captured at
+separate JSON documents. This includes follow-ups, captured at
 dispatch rather than regenerated from later source edits.
+
+The hint above the composer shows `C-c C-z close`, adding
+`C-c C-a apply · C-c C-g merge` while a prepared change waits. Closing preserves
+the draft. Requests for revisions use the ordinary composer.
 
 Ordinary filesystem and TRAMP source patches from ApplyPatch become prepared
 changes, not writes or pending provider callbacks. Their preparation-time base
@@ -99,8 +108,8 @@ remote root, absent, oversized, unsupported or unreadable store retains its note
 conversations rather than risking history loss; chooser filtering adds no store I/O.
 Missing or malformed session metadata also requires a reference check, using
 the session directory's stable ID rather than trusting a missing note marker.
-Explicit Conversation and Worktree forks remain ordinary discoverable sessions,
-may change preset, and follow ordinary cleanup rules.
+Explicit Conversation and Worktree forks remain ordinary discoverable sessions
+without the note layer, and follow ordinary cleanup rules.
 The notes list's `s` action sends or
 reopens its selected note, and its working state uses cached live session state.
 
