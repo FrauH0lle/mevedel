@@ -13,6 +13,7 @@
           "mevedel-session-test-support"))
 (require 'mevedel-session-rewind)
 (require 'mevedel-session-rewind-merge)
+(require 'mevedel-session-artifacts)
 (require 'mevedel-pipeline)
 (require 'mevedel-tool-patch)
 (require 'mevedel-note-merge)
@@ -106,6 +107,22 @@ With PATCH, run that ApplyPatch hunk through the real pipeline for capture."
                     (mevedel-session-artifacts-read-file-raw path)))
      (with-current-buffer buffer
        (should-not (string-match-p "Prompt" (buffer-string))))))
+  :doc "one Rewind reads each immutable backup only once across repeated planning"
+  (mevedel-test-rewind-reverts--call
+   '(("one\ntwo\n" "ONE\ntwo\n") ("ONE\ntwo\n" "UNO\ntwo\n"))
+   "UNO\ntwo\n"
+   (lambda (buffer target _path)
+     (let ((reads (make-hash-table :test #'equal))
+           (read-file (symbol-function 'mevedel-session-artifacts-read-file-raw)))
+       (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                 ((symbol-function 'mevedel-session-artifacts-read-file-raw)
+                  (lambda (file)
+                    (when (string-match-p "/file-history/" file)
+                      (cl-incf (gethash (file-name-nondirectory file) reads 0)))
+                    (funcall read-file file))))
+         (should (mevedel-session-rewind-rewind buffer target)))
+       (should (> (hash-table-count reads) 0))
+       (maphash (lambda (_name count) (should (= 1 count))) reads))))
   :doc "conflict cancellation preserves all files, unsaved text and conversation"
   (mevedel-test-rewind-reverts--call
    '(("one\ntwo\nthree\n" "one\nTWO\nthree\n"))

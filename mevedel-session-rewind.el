@@ -239,17 +239,26 @@
           (setq best-version v
                 best          (cdr entry)))))))
 
+(defvar mevedel-session-rewind--backup-cache nil
+  "Immutable backup bytes cached for one Rewind, including its merge rounds.")
+
 (defun mevedel-session-rewind-read-backup (session backup-name)
   "Return SESSION's BACKUP-NAME as literal bytes.
 
 Portable project Rewind resolves only the committed immutable publication.  File
 sessions retain their existing direct file-history read."
-  (if (mevedel-session-codec-portable-authority-p session)
-      (mevedel-session-artifacts-read-artifact
-       session (file-name-concat "file-history" backup-name) t)
-    (mevedel-session-artifacts-read-file-raw
-     (mevedel-session-artifacts-backup-path
-      (mevedel-session-save-path session) backup-name))))
+  (let ((cache (and (string-match-p "\\`[0-9a-f]\\{64\\}\\'" backup-name)
+                    mevedel-session-rewind--backup-cache)))
+    (or (and cache (gethash backup-name cache))
+      (let ((bytes
+             (if (mevedel-session-codec-portable-authority-p session)
+                 (mevedel-session-artifacts-read-artifact
+                  session (file-name-concat "file-history" backup-name) t)
+               (mevedel-session-artifacts-read-file-raw
+                (mevedel-session-artifacts-backup-path
+                 (mevedel-session-save-path session) backup-name)))))
+        (when cache (puthash backup-name bytes cache))
+        bytes))))
 
 (defun mevedel-session-rewind-state-at-turn
     (session cum-turn &optional before-turn)
@@ -1973,7 +1982,9 @@ response asks for.  With `before' -- the default -- TARGET's turn is
 discarded with everything later, which is what picking one of the user's
 own prompts asks for, since the point of naming a prompt is to return to
 just before sending it."
-  (let ((session (buffer-local-value 'mevedel--session buffer)))
+  (let ((session (buffer-local-value 'mevedel--session buffer))
+        (mevedel-session-rewind--backup-cache
+         (or mevedel-session-rewind--backup-cache (make-hash-table :test #'equal))))
     (unless (and session (plist-get target :fork-point-id))
       (user-error "Rewind requires a settled assistant response"))
     (mevedel-session-artifacts-assert-mutation-authority session buffer)
