@@ -299,10 +299,109 @@
       (should (eq first mevedel-telemetry--lag-timer)))))
 
 (mevedel-deftest mevedel-telemetry--lag-tick
-  (:vars ((mevedel-native--load-state "unavailable in fallback tests"))
+  (:vars ((mevedel-native--load-state "unavailable in fallback tests")
+          (mevedel-telemetry--memory-due nil))
    :after-each (mevedel-telemetry--lag-stop))
   ,test
   (test)
+  :doc "samples process memory once per interval with the largest buffer's identity"
+  (let* ((root (make-temp-file "mevedel-telemetry-lag-" t))
+         (session (test-mevedel-telemetry--session root))
+         (noninteractive nil))
+    (unwind-protect
+        (with-temp-buffer
+          (rename-buffer " *test-memory-sample-largest*" t)
+          (insert (make-string 5000000 ?x))
+          (cl-letf (((symbol-function 'process-attributes)
+                     (lambda (_pid) '((rss . 4321) (state . "S")))))
+            (mevedel-telemetry-record session 'request-start :request-id "request-m")
+            (mevedel-telemetry--lag-tick)
+            (mevedel-telemetry--lag-tick))
+          (let ((samples (test-mevedel-telemetry--events session 'memory-sample)))
+            (should (= 1 (length samples)))
+            (let ((sample (car samples)))
+              (should-not (plist-get sample :dropped-keys))
+              (should (= 4321 (plist-get sample :rss-kb)))
+              (should (<= 5000000 (plist-get sample :largest-buffer-chars)
+                          (plist-get sample :buffer-chars-total)))
+              (should (equal (substring (secure-hash 'sha256 (buffer-name)) 0 16)
+                             (plist-get sample :largest-buffer-hash)))
+              (should (eq 'fundamental-mode (plist-get sample :largest-buffer-mode)))
+              (should (natnump (plist-get sample :frames)))
+              (should (< 0 (plist-get sample :threads))))))
+      (delete-directory root t)))
+
+  :doc "omits resident memory the platform does not report"
+  (let* ((root (make-temp-file "mevedel-telemetry-lag-" t))
+         (session (test-mevedel-telemetry--session root))
+         (noninteractive nil))
+    (unwind-protect
+        (dolist (attributes '(nil ((state . "S"))))
+          (setq mevedel-telemetry--memory-due nil)
+          (cl-letf (((symbol-function 'process-attributes)
+                     (lambda (_pid) attributes)))
+            (mevedel-telemetry-record session 'request-start :request-id "request-n")
+            (mevedel-telemetry--lag-tick))
+          (let ((sample (car (last (test-mevedel-telemetry--events
+                                    session 'memory-sample)))))
+            (should sample)
+            (should-not (plist-member sample :rss-kb))
+            (should-not (plist-get sample :dropped-keys))
+            (should (natnump (plist-get sample :buffers)))))
+      (delete-directory root t)))
+
+  :doc "samples again after the interval, not after a heartbeat restart"
+  (let* ((root (make-temp-file "mevedel-telemetry-lag-" t))
+         (session (test-mevedel-telemetry--session root))
+         (noninteractive nil)
+         (count (lambda () (length (test-mevedel-telemetry--events
+                                    session 'memory-sample)))))
+    (unwind-protect
+        (progn
+          (mevedel-telemetry-record session 'request-start :request-id "request-a")
+          (mevedel-telemetry--lag-tick)
+          (should (= 1 (funcall count)))
+          (let ((due mevedel-telemetry--memory-due))
+            (should (< (float-time) due))
+            ;; A new request restarts the heartbeat; the deadline survives.
+            (mevedel-telemetry--lag-stop)
+            (setq mevedel-telemetry--lag-windows nil)
+            (mevedel-telemetry-record session 'request-start :request-id "request-b")
+            (mevedel-telemetry--lag-tick)
+            (should (= 1 (funcall count)))
+            (should (= due mevedel-telemetry--memory-due)))
+          ;; Once the interval has passed, the next heartbeat samples.
+          (setq mevedel-telemetry--memory-due (- (float-time) 1))
+          (mevedel-telemetry--lag-tick)
+          (should (= 2 (funcall count)))
+          (should (< (float-time) mevedel-telemetry--memory-due)))
+      (delete-directory root t)))
+
+  :doc "inspects the local process while a remote buffer is current"
+  (let* ((root (make-temp-file "mevedel-telemetry-lag-" t))
+         (session (test-mevedel-telemetry--session root))
+         (noninteractive nil)
+         (remote-calls nil)
+         (file-name-handler-alist
+          (cons (cons "\\`/mevedel-remote-test:"
+                      (lambda (operation &rest args)
+                        (push operation remote-calls)
+                        (let ((inhibit-file-name-handlers
+                               (cons (cdr (car file-name-handler-alist))
+                                     inhibit-file-name-handlers))
+                              (inhibit-file-name-operation operation))
+                          (apply operation args))))
+                file-name-handler-alist)))
+    (unwind-protect
+        (progn
+          (mevedel-telemetry-record session 'request-start :request-id "request-r")
+          (with-temp-buffer
+            (setq default-directory "/mevedel-remote-test:host:/")
+            (mevedel-telemetry--lag-tick))
+          (should (test-mevedel-telemetry--events session 'memory-sample))
+          (should-not (memq 'process-attributes remote-calls)))
+      (delete-directory root t)))
+
   :doc "watches only while a request runs, then for its tail"
   (let* ((root (make-temp-file "mevedel-telemetry-lag-" t))
          (session (test-mevedel-telemetry--session root))
