@@ -32,8 +32,8 @@ RESOLUTIONS holds already resolved newer turns.  Confirmation resumes Rewind."
                  (coding (if source (buffer-local-value 'buffer-file-coding-system source)
                            (if (plist-get disk :exists)
                                (cdr (mevedel-tool-patch--read-file path t)) 'utf-8-unix))))
-            (push (list :path path :disk disk :coding coding :entry entry
-                        :source-yours (mevedel-note-merge--text path coding)
+            (push (list :path path :disk disk :coding coding :data entry
+                        :source-yours (mevedel-note-merge-current-text path coding)
                         :yours (decode-coding-string (or (plist-get (plist-get entry :current) :bytes) "") coding)
                         :seen (decode-coding-string (or (plist-get (plist-get entry :base) :bytes) "") coding)
                         :proposed (decode-coding-string (or (plist-get (plist-get entry :proposed) :bytes) "") coding)
@@ -52,11 +52,8 @@ RESOLUTIONS holds already resolved newer turns.  Confirmation resumes Rewind."
                                (= tick (with-current-buffer buffer (buffer-chars-modified-tick)))
                                (equal history (mevedel-session-file-snapshots session)))
                     (user-error "Conversation changed; restart Rewind"))
-                  (dolist (change changes)
-                    (let* ((path (plist-get change :path))
-                           (section (cl-find path mevedel-note-merge--sections
-                                             :key (lambda (s) (plist-get s :path)) :test #'equal))
-                           (entry (plist-get section :entry)))
+                  (pcase-dolist (`(,change . ,entry) changes)
+                    (let ((path (plist-get change :path)))
                       (push (cons (cons path (plist-get entry :turn))
                                   (list :before (plist-get entry :current)
                                         :after (list :path path :exists (not (eq (plist-get change :action) 'delete))

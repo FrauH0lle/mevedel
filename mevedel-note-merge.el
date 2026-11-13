@@ -20,7 +20,9 @@
   "Open NAME with editable three-way SECTIONS and confirmation callback COMMIT.
 Each section supplies :path, :disk, :coding, :yours, :seen and :proposed.
 Optional :source-yours checks source text separately from intermediate :yours.
-COMMIT receives resolved changes and owns closing the editor on success."
+Optional :data is caller-owned and returned untouched.
+COMMIT receives a list of (CHANGE . DATA), one per section in order, and owns
+closing the editor on success."
   (let ((default-directory temporary-file-directory))
     (unless (executable-find "git")
       (user-error "Three-way merge requires a local git executable")))
@@ -60,7 +62,7 @@ COMMIT receives resolved changes and owns closing the editor on success."
               " Resolve with smerge (C-c ^ u yours · C-c ^ l AI) · C-c C-c confirm · C-c C-k cancel")
   (smerge-mode 1))
 
-(defun mevedel-note-merge--text (path coding)
+(defun mevedel-note-merge-current-text (path coding)
   "Return current text of PATH using CODING, including unsaved source edits."
   (if-let* ((buffer (find-buffer-visiting path)))
       (with-current-buffer buffer
@@ -125,7 +127,7 @@ COMMIT receives resolved changes and owns closing the editor on success."
                (coding (if buffer (buffer-local-value 'buffer-file-coding-system buffer)
                          (if (plist-get disk :exists)
                              (cdr (mevedel-tool-patch--read-file path t)) 'utf-8-unix)))
-               (yours (mevedel-note-merge--text path coding))
+               (yours (mevedel-note-merge-current-text path coding))
                (seen (decode-coding-string (or (plist-get base :bytes) "") coding))
                (proposed (or (plist-get change :content)
                              (and (plist-get change :bytes)
@@ -180,7 +182,7 @@ COMMIT receives resolved changes and owns closing the editor on success."
                (coding (plist-get section :coding))
                (text (buffer-substring (plist-get section :start) (plist-get section :end))))
           (unless (and (equal (or (plist-get section :source-yours) (plist-get section :yours))
-                              (mevedel-note-merge--text path coding))
+                              (mevedel-note-merge-current-text path coding))
                        (mevedel-change-same-p (plist-get section :disk)
                                               (mevedel-tool-patch--snapshot path)))
             (user-error "Source changed again: %s; reopen the merge" path))
@@ -199,7 +201,9 @@ COMMIT receives resolved changes and owns closing the editor on success."
                                 (plist-get (plist-get section :change) :mode))) changes)))
       (setq changes (nreverse changes))
       (if mevedel-note-merge--commit
-          (funcall mevedel-note-merge--commit changes)
+          (funcall mevedel-note-merge--commit
+                   (cl-mapcar (lambda (change section) (cons change (plist-get section :data)))
+                              changes sections))
         (mevedel-note-change--commit note record changes)
         (mevedel-note-merge-cancel)))))
 
