@@ -152,6 +152,28 @@
       (should (string-match-p "second.el:2.*Second thought.*unsent" (buffer-string))))
     (with-current-buffer (find-buffer-visiting second)
       (should (equal "before\nsecond code\n" (buffer-string)))))
+  :doc "closed imports without a saved position show the first line"
+  (mevedel-notes-list-test--workspace
+    (with-current-buffer (find-buffer-visiting first)
+      (goto-char (point-min))
+      (mevedel-note-done)
+      (let ((export (file-name-concat directory "notes.el")))
+        (mevedel-save-instructions export)
+        (let* ((data (with-temp-buffer
+                       (insert-file-contents export)
+                       (read (current-buffer))))
+               (instruction (car (plist-get (cdr (assoc "first.el" (plist-get data :files)))
+                                            :instructions))))
+          (cl-remf instruction :closed-position)
+          (setf (plist-get (cdr (assoc "first.el" (plist-get data :files))) :instructions)
+                (list instruction))
+          (write-region (prin1-to-string data) nil export nil 'silent))
+        (mevedel-load-instructions export)))
+    (setq list-buffer (mevedel-notes-list workspace))
+    (with-current-buffer list-buffer
+      (call-interactively (key-binding (kbd "TAB")))
+      (should (string-match-p "first.el:1.*First thought.*done" (buffer-string)))
+      (should-not (string-match-p "first.el:nil" (buffer-string)))))
   :doc "missing source uses cached live and stashed flags without row probes"
   (mevedel-notes-list-test--workspace
     (setq list-buffer (mevedel-notes-list workspace))

@@ -127,7 +127,7 @@ and q to return to the invoking window."
                       (let ((instruction (plist-get entry :instruction)))
                         (mevedel-notes-list--entry
                          (list :file (plist-get entry :file)
-                               :line (car (plist-get instruction :closed-position))
+                               :line (or (car (plist-get instruction :closed-position)) 1)
                                :uuid (plist-get (plist-get instruction :properties) 'mevedel-uuid)
                                :properties (plist-get instruction :properties)
                                :closed-reason (plist-get instruction :closed-reason)))))

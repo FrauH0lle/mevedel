@@ -585,10 +585,9 @@ The decision chain:
   1. Extract specifier values via tool-struct getters when missing
   2. Resolve absolute decisions across all buckets:
        any bucket yields `deny' -> deny;
-       standalone/sticky Plan allows only prepared ApplyPatch proposals
-       confined to session-owned work descendants;
-       read-only Plan requests deny all native edits, including that ApplyPatch,
-       and Eval -> deny
+       standalone/sticky Plan and read-only Plan requests allow only
+       prepared ApplyPatch proposals confined to session-owned work
+       descendants; other native edits and Eval -> deny
   3. Call the tool checker, when present, to decide command authority
   4. Resolve allow/ask rules innermost-first:
        invocation -> request -> session -> persistent -> defcustom.

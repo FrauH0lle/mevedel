@@ -77,6 +77,19 @@
           (should-not submissions)
           (should-not (file-exists-p index)))
       (advice-remove 'tramp-send-command counter)))
+  :doc "a cold remote read names the workspace without project discovery"
+  (let* ((mevedel-workspace--registry (make-hash-table :test #'equal))
+         (probes 0)
+         (counter (lambda (&rest _) (cl-incf probes))))
+    (unwind-protect
+        (progn
+          (advice-add 'project-current :before counter)
+          (mevedel-instruction-store-read-connected root)
+          (should (equal (file-name-nondirectory (directory-file-name local))
+                         (mevedel-workspace-name
+                          (gethash (cons 'project root) mevedel-workspace--registry))))
+          (should (zerop probes)))
+      (advice-remove 'project-current counter)))
   :doc "a stale indexed unsupported target skips once without synchronous fallback"
   (progn
     (make-directory (file-name-directory index) t)

@@ -299,7 +299,7 @@ an absolute pathname even when the path is currently unavailable."
 ;;; Customization
 
 (defgroup mevedel-mentions nil
-  "Customization for mevedel's @ref and @file mention system."
+  "Customization for mevedel's @note, @ref and @file mention system."
   :group 'mevedel)
 
 (defcustom mevedel-file-mention-directory-max-entries 1000
@@ -1202,7 +1202,7 @@ When a file is selected, replaces @file:path with the absolute path."
 
 
 ;;
-;;; Font-lock support for @ref mentions
+;;; Font-lock support for note mentions
 
 (defun mevedel-mentions--fontify-keyword (regexp end)
   "Search forward for a valid mention matching REGEXP before END."
@@ -1214,14 +1214,14 @@ When a file is selected, replaces @file:path with the absolute path."
     found))
 
 (defun mevedel--fontify-ref-id-keyword (end)
-  "Font-lock matcher for @ref:ID mentions up to END.
+  "Font-lock matcher for @note:ID and @ref:ID mentions up to END.
 Highlights note IDs.  Skips mentions in non-user regions
 or adjacent to quoting chars; see
 `mevedel-mentions--valid-mention-context-p'."
   (mevedel-mentions--fontify-keyword "@\\(?:note\\|ref\\):\\([0-9]+\\)" end))
 
 (defun mevedel--fontify-ref-tag-keyword (end)
-  "Font-lock matcher for @ref:{tag} mentions up to END.
+  "Font-lock matcher for @note:{tag} and @ref:{tag} mentions up to END.
 Highlights valid tag queries.  Skips mentions in non-user regions
 or adjacent to quoting chars."
   (mevedel-mentions--fontify-keyword "@\\(?:note\\|ref\\):{\\([^}]*\\)}" end))
@@ -1280,7 +1280,7 @@ Skips mentions in non-user regions or adjacent to quoting chars."
              '(:box (:line-width -1) :inherit success)
            '(:box (:line-width -1) :inherit shadow)))
      prepend))
-  "Font-lock keyword list for `@ref:'/`@ref{}'/`@file:'/`@agent:'/`@mcp:' mentions.")
+  "Font-lock keywords for @note, @ref, @file, @agent and @mcp mentions.")
 
 (defun mevedel-agent-capf ()
   "Completion-at-point function for @agent:name mentions.
@@ -1320,10 +1320,10 @@ using each agent's description as the candidate annotation."
 
 (defun mevedel-mention-capf ()
   "Completion-at-point for the leading `@' of mention prefixes.
-Offers `@ref:', `@ref:{}', `@file:', `@agent:', and `@mcp:' as
-candidates when point sits immediately after `@' possibly followed by
+Offers `@note:', `@note:{}', `@ref:', `@ref:{}', `@file:', `@agent:' and
+`@mcp:' as candidates when point sits immediately after `@' possibly followed by
 alphabetic characters.  Once the prefix is complete, the type-specific
-capfs (`mevedel-note-capf' etc.) take over.  For `@ref:{}' the
+capfs (`mevedel-note-capf' etc.) take over.  For braced note queries the
 exit-function positions point between the braces."
   (save-excursion
     (let ((orig-point (point)))
@@ -1453,7 +1453,7 @@ Requires mcp.el to be loaded; returns nil otherwise."
 
 (defun mevedel-mentions-install ()
   "Install font-lock and completion support for mevedel mentions.
-Adds font-lock keywords for @ref/@file/@agent/@mcp and pushes the
+Adds font-lock keywords for @note/@ref/@file/@agent/@mcp and pushes the
 mention-specific capfs onto the buffer-local
 `completion-at-point-functions'.  `mevedel-mention-capf' handles the
 bare `@' prefix; the other capfs fire once the prefix is complete."

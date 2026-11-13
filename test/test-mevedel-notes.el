@@ -590,7 +590,33 @@
         (mevedel-instruction-store-observe workspace)
         (let ((mevedel-notes-closed-max-age-days nil))
           (should-not (mevedel-notes-closed workspace))
-          (should-error (mevedel-note-restore 1 workspace) :type 'user-error))))))
+          (should-error (mevedel-note-restore 1 workspace) :type 'user-error)))))
+  :doc "a closed import without a timestamp cannot block later store writes"
+  (mevedel-notes-test--with-source
+    (dolist (text '("Undated" "Recent"))
+      (mevedel-note-create text)
+      (mevedel-note-done))
+    (let ((export (file-name-concat directory "notes.el")))
+      (mevedel-save-instructions export)
+      (let* ((data (with-temp-buffer
+                     (insert-file-contents export)
+                     (read (current-buffer))))
+             (info (cdar (plist-get data :files))))
+        (setf (plist-get info :instructions)
+              (mapcar (lambda (instruction)
+                        (when (= 1 (plist-get (plist-get instruction :properties) 'mevedel-id))
+                          (cl-remf instruction :closed-at))
+                        instruction)
+                      (plist-get info :instructions)))
+        (write-region (prin1-to-string data) nil export nil 'silent))
+      (let ((mevedel-notes-closed-max-count nil)
+            (mevedel-notes-closed-max-age-days nil))
+        (mevedel-load-instructions export)
+        (mevedel-instruction-store-sync workspace)
+        (should (= 2 (length (mevedel-notes-closed workspace))))))
+    ;; An undated record is oldest, so ordinary age expiry can remove it.
+    (mevedel-instruction-store-sync workspace)
+    (should (= 1 (length (mevedel-notes-closed workspace))))))
 
 (mevedel-deftest mevedel-note-source-missing
   (:quiet t)

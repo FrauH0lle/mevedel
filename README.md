@@ -1426,7 +1426,7 @@ from gptel's API-reported token usage when available.
 | `mevedel-buddy-guide` | Ask what to build in this region, rather than what went wrong. |
 | `/buddy` | Implement it yourself: feed this session's plan, Goal, or latest exchange to Buddy and turn Buddy on. `/buddy BRIEF` states the brief; `/buddy off` stops. |
 | `mevedel-buddy-dismiss-note` | Dismiss the Buddy remark at point. |
-| `mevedel-buddy-dismiss-notes` | Dismiss every Buddy remark in this buffer. |
+| `mevedel-buddy-dismiss-notes` | Dismiss every Buddy remark in this workspace. |
 
 See [`docs/compaction.md`](docs/compaction.md) for the full auto-compaction,
 summary prompt, and segment-rotation contract.

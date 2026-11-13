@@ -117,12 +117,12 @@ it never removes open notes or undoes file changes."
         (count 0))
     (dolist (instruction (sort (copy-sequence instructions)
                                (lambda (a b)
-                                 (> (plist-get a :closed-at)
-                                    (plist-get b :closed-at)))))
+                                 (> (or (plist-get a :closed-at) 0)
+                                    (or (plist-get b :closed-at) 0)))))
       (when (and (or (null mevedel-notes-closed-max-count)
                      (< count mevedel-notes-closed-max-count))
                  (or (null mevedel-notes-closed-max-age-days)
-                     (< (- now (plist-get instruction :closed-at))
+                     (< (- now (or (plist-get instruction :closed-at) 0))
                         (* 86400 mevedel-notes-closed-max-age-days))))
         (cl-incf count)
         (puthash (plist-get (plist-get instruction :properties) 'mevedel-uuid)
@@ -1789,7 +1789,9 @@ check.  Return LOAD's value."
 Only a live SSH master may carry the read.  A failed carrier leaves state
 untouched until an explicit workspace operation observes it normally."
   (let* ((mevedel-instruction-store--activating t)
-         (workspace (mevedel-workspace-get-or-create 'project root root root))
+         (workspace (mevedel-workspace-get-or-create
+                     'project root root
+                     (file-name-nondirectory (directory-file-name root))))
          timer)
     (cl-labels
         ((failed (reason)
