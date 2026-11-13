@@ -48,9 +48,13 @@ merges use captured visiting text, including unsaved edits, as their pre-image.
 Existing capture gaps remain gaps. A preparation that made no write does not
 claim subsequent user edits as a note change. Confirming a partial detailed
 review records only accepted paths and drops the rest of the waiting proposal.
-Notes retain deduplicated session/turn references to their applied changes,
-including suggestions prepared with NoteWrite in a main chat. These references
-survive closing and restoring a note, but do not extend session retention.
+Notes retain deduplicated session/turn references to their applied changes.
+For suggestions prepared outside the note's own conversation, each reference
+also names the literal-byte backups just before and after that application.
+Note revert uses only those paths and copies, not the main chat's whole turn,
+so its other edits, including earlier edits to the same file, survive.
+Live and recently closed notes retain these backups across session saves.
+The references survive closing and restoring a note, but do not extend session retention.
 If the originating chat was deleted or expired, revert refuses clearly without
 touching source files.
 

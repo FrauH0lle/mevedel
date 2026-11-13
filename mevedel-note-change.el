@@ -273,7 +273,9 @@ When SELECTED is non-nil, prepare only those reviewed changes."
          (session (buffer-local-value 'mevedel--session data))
          (turn (plist-get record :turn))
          (previous (cdr (assq turn (mevedel-session-file-snapshots session))))
-         (pre (make-hash-table :test #'equal)))
+         (pre (make-hash-table :test #'equal))
+         (foreign (not (equal id (overlay-get note 'mevedel-note-session-id))))
+         files)
     (mevedel-session-artifacts-assert-new-mutation-authority session)
     (dolist (change changes)
       (let* ((path (plist-get change :path))
@@ -295,6 +297,15 @@ When SELECTED is non-nil, prepare only those reviewed changes."
            (mevedel-session-codec-portable-authority-p session))
           (mevedel-session-artifacts--critical-artifacts nil))
       (mevedel-session-artifacts-snapshot-modified session turn pre)
+      (when foreign
+        (dolist (change changes)
+          (when-let* ((entry (mevedel-session-artifacts--file-history-maybe-snapshot
+                             session (plist-get change :path)
+                             (plist-get (or (plist-get change :history-before)
+                                            (plist-get change :before)) :bytes))))
+            (cl-remf (cdr entry) :version)
+            (cl-remf (cdr entry) :backup-time)
+            (push entry files))))
       (when mevedel-session-artifacts--critical-artifacts
         (mevedel-session-publication-publish
          session (nreverse mevedel-session-artifacts--critical-artifacts) t)))
@@ -304,16 +315,16 @@ When SELECTED is non-nil, prepare only those reviewed changes."
                                                 (not (eq 'absent (gethash (car entry) pre 'absent))))
                                               previous))
                         (lambda (a b) (string< (car a) (car b))))))
+    (mevedel-note-change--finish note record files)
     (with-current-buffer data
       (when (and mevedel--current-request (= turn (mevedel-request-turn mevedel--current-request)))
         (maphash (lambda (path bytes)
                    (puthash path bytes (mevedel-request-file-snapshots mevedel--current-request))) pre))
       (let ((mevedel--current-request nil))
-        (mevedel-session-artifacts-save session data nil t)))
-    (mevedel-note-change--finish note record)))
+        (mevedel-session-artifacts-save session data nil t)))))
 
-(defun mevedel-note-change--finish (note record)
-  "Retain applied RECORD ownership on NOTE and its batch siblings."
+(defun mevedel-note-change--finish (note record files)
+  "Retain applied RECORD ownership and FILES on NOTE and its batch siblings."
   (let ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note))))
     (dolist (entry (mevedel-notes--entries workspace))
       (when (equal (plist-get record :id)
@@ -321,8 +332,11 @@ When SELECTED is non-nil, prepare only those reviewed changes."
                                         'mevedel-note-prepared-change) :id))
         (let ((item (mevedel-notes--resolve (plist-get entry :uuid) workspace)))
           (overlay-put item 'mevedel-note-applied-changes
-                       (cl-adjoin (list :session-id (plist-get record :session-id)
-                                        :turn (plist-get record :turn))
+                       (cl-adjoin (append (list :session-id (plist-get record :session-id)
+                                                :turn (plist-get record :turn))
+                                          (unless (equal (plist-get record :session-id)
+                                                         (overlay-get item 'mevedel-note-session-id))
+                                            (list :files files)))
                                   (overlay-get item 'mevedel-note-applied-changes)
                                   :test #'equal))
           (overlay-put item 'mevedel-note-prepared-change nil)
@@ -377,10 +391,9 @@ Confirming a partial selection drops the rest of this waiting change."
           (mevedel-note-change--commit note record changes)
           (message "mevedel: change applied; mark the note done when ready"))))))
 
-(defun mevedel-note-change--revert-plan (session turn)
-  "Prepare SESSION's applied TURN for reversal, refusing all conflicts."
-  (let ((entries (cdr (assq turn (mevedel-session-file-snapshots session))))
-        changes conflicts)
+(defun mevedel-note-change--revert-plan (session turn entries)
+  "Prepare SESSION's applied TURN ENTRIES for reversal, refusing all conflicts."
+  (let (changes conflicts)
     (unless entries (user-error "No applied change at turn %s" turn))
     (dolist (entry entries)
       (let* ((path (car entry))
@@ -503,7 +516,12 @@ note only after success; do not change the conversation or its history."
              (session (buffer-local-value 'mevedel--session data))
              (turn (plist-get pair :turn)))
         (mevedel-session-artifacts-assert-new-mutation-authority session)
-        (mevedel-tool-patch-commit (mevedel-note-change--revert-plan session turn))
+        (mevedel-tool-patch-commit
+         (mevedel-note-change--revert-plan
+          session turn (if (equal own-id id)
+                           (cdr (assq turn (mevedel-session-file-snapshots session)))
+                         (or (plist-get pair :files)
+                             (user-error "This note has no captured application files")))))
         (when (eq 'done (plist-get target :closed-reason))
           (mevedel-note-restore (plist-get target :uuid) workspace)
           (mevedel-instruction-store-flush t))

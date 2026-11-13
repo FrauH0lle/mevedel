@@ -66,6 +66,9 @@ conversation history. Applying records the actual file changes under the
 originating session turn, and clears the waiting record from batch siblings.
 Applied changes can be reverted individually with the shared checked reversal
 engine of [ADR 0131](0131-rewind-reverts-recorded-changes.md).
+Suggestions from another session retain their application-specific backup names
+on the note, so reverting them never reverses unrelated changes in that turn.
+Those references preserve the backups, not the originating session's lifetime.
 
 **Take hands implementation to the user.** Buddy watches the taken note's code
 using its text as brief at every dial level, including Quiet. After an Emacs

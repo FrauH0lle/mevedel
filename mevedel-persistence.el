@@ -1505,6 +1505,28 @@ than overwrite.  Installing RECORD would replace held-back edits in memory."
     (when (equal (plist-get observed :hash) (plist-get before :hash))
       (mevedel-instruction-store--observe workspace nil record))))
 
+(defun mevedel-instruction-store-applied-backups (session)
+  "Return backup names referenced by SESSION's live and closed applied notes."
+  (let* ((workspace (mevedel-session-workspace session))
+         (state (mevedel--instruction-state (mevedel--instruction-workspace-key workspace)))
+         names)
+    (cl-labels ((retain (props)
+                  (dolist (pair (plist-get props 'mevedel-note-applied-changes))
+                    (when (equal (mevedel-session-session-id session) (plist-get pair :session-id))
+                      (dolist (file (plist-get pair :files))
+                        (dolist (key '(:pre-backup-name :backup-name))
+                          (when-let* ((name (plist-get (cdr file) key)))
+                            (cl-pushnew name names :test #'equal))))))))
+      (dolist (file (plist-get state :instructions))
+        (if (bufferp (car file))
+            (dolist (note (cdr file))
+              (when (overlay-buffer note) (retain (overlay-properties note))))
+          (dolist (note (plist-get (cdr file) :instructions))
+            (retain (plist-get note :properties)))))
+      (dolist (closed (plist-get state :closed-notes))
+        (retain (plist-get (plist-get closed :instruction) :properties))))
+    names))
+
 (defun mevedel-instruction-store--rewind-note (instruction session-id surviving-turn)
   "Rewind INSTRUCTION's note activity owned by SESSION-ID past SURVIVING-TURN.
 Mutate only lifecycle properties; preserve its text, anchor and session link."
