@@ -639,8 +639,7 @@
   :doc "inserting a newline just after noted code preserves its ready change"
   (mevedel-notes-test--with-source
     (let ((note (mevedel-note-create "Waiting change")))
-      (overlay-put note 'mevedel-note-prepared-change '(:test t))
-      (overlay-put note 'mevedel-note-attention-state 'ready)
+      (mevedel-note-hold-change (list note) '(:test t))
       (goto-char (overlay-end note))
       (insert "\n")
       (should (equal "selected code" (buffer-substring-no-properties
@@ -652,8 +651,7 @@
   :doc "deleting the final noted character still makes its change stale"
   (mevedel-notes-test--with-source
     (let ((note (mevedel-note-create "Waiting change")))
-      (overlay-put note 'mevedel-note-prepared-change '(:test t))
-      (overlay-put note 'mevedel-note-attention-state 'ready)
+      (mevedel-note-hold-change (list note) '(:test t))
       (delete-region (1- (overlay-end note)) (overlay-end note))
       (should (eq 'stale (mevedel-notes-attention-state note))))))
 
@@ -1142,6 +1140,202 @@
     (mevedel-instruction-store-observe workspace)
     (mevedel-note-restore 1 workspace)
     (should (string-match-p "Keep my history" (car (mevedel-notes-test--labels))))))
+
+(defun mevedel-notes-test--dirty-p (workspace)
+  "Return non-nil when WORKSPACE has an unflushed store touch."
+  (and (memq workspace mevedel-instruction-store--dirty) t))
+
+(mevedel-deftest mevedel-note-mark-sent (:quiet t)
+  ,test
+  (test)
+  :doc "marks notes sent, keeps an existing session id, fills an absent one and touches once"
+  (mevedel-notes-test--with-source
+    (let ((first (mevedel-note-create "First"))
+          (second (progn (goto-char (point-min)) (mevedel-note-create "Second"))))
+      (mevedel-instruction-store-flush t)
+      (setq mevedel-instruction-store--dirty nil)
+      (overlay-put first 'mevedel-note-session-id "existing")
+      (mevedel-note-mark-sent (list first second) "new")
+      (should (equal "existing" (overlay-get first 'mevedel-note-session-id)))
+      (should (equal "new" (overlay-get second 'mevedel-note-session-id)))
+      (should (eq 'sent (overlay-get first 'mevedel-note-state)))
+      (should (eq 'sent (overlay-get second 'mevedel-note-state)))
+      (should (mevedel-notes-test--dirty-p workspace)))))
+
+(mevedel-deftest mevedel-note-hold-change (:quiet t)
+  ,test
+  (test)
+  :doc "holds the record as ready on every note, renders it and touches without flushing"
+  (mevedel-notes-test--with-source
+    (let ((first (mevedel-note-create "First"))
+          (second (progn (goto-char (point-min)) (mevedel-note-create "Second")))
+          (record '(:id "r" :session-id "s" :turn 1))
+          flushes)
+      (mevedel-instruction-store-flush t)
+      (setq mevedel-instruction-store--dirty nil)
+      (cl-letf (((symbol-function 'mevedel-instruction-store-flush)
+                 (lambda (&rest _) (push t flushes))))
+        (mevedel-note-hold-change (list first second) record))
+      (should-not flushes)
+      (dolist (note (list first second))
+        (should (eq record (overlay-get note 'mevedel-note-prepared-change)))
+        (should (eq 'ready (mevedel-notes-attention-state note)))
+        (should (string-search "change ready"
+                               (overlay-get (overlay-get note 'mevedel-label-overlay)
+                                            'after-string))))
+      (should (mevedel-notes-test--dirty-p workspace)))))
+
+(mevedel-deftest mevedel-note-record-applied (:quiet t)
+  ,test
+  (test)
+  :doc "records the applied pair on every batch sibling, with files only for a foreign session"
+  (mevedel-notes-test--with-source
+    (let* ((own (mevedel-note-create "Own"))
+           (foreign (progn (goto-char (point-min)) (mevedel-note-create "Foreign")))
+           (unrelated (progn (goto-char (point-max)) (forward-line -1)
+                             (mevedel-note-create "Unrelated")))
+           (record '(:id "r" :session-id "s" :turn 2))
+           (files '(("a.el" :backup-name "b"))))
+      (mevedel-note-mark-sent (list own) "s")
+      (mevedel-note-mark-sent (list foreign) "other")
+      (mevedel-note-hold-change (list own foreign) record)
+      (mevedel-note-hold-change (list unrelated) '(:id "x" :session-id "s" :turn 1))
+      (setq mevedel-instruction-store--dirty nil)
+      (mevedel-note-record-applied record files workspace)
+      (should (equal '((:session-id "s" :turn 2))
+                     (overlay-get own 'mevedel-note-applied-changes)))
+      (should (equal `((:session-id "s" :turn 2 :files ,files))
+                     (overlay-get foreign 'mevedel-note-applied-changes)))
+      (dolist (note (list own foreign))
+        (should-not (overlay-get note 'mevedel-note-prepared-change))
+        (should-not (overlay-get note 'mevedel-note-attention-state)))
+      (should (overlay-get unrelated 'mevedel-note-prepared-change))
+      (should-not (overlay-get unrelated 'mevedel-note-applied-changes))
+      (should (mevedel-notes-test--dirty-p workspace)))))
+
+(mevedel-deftest mevedel-note-mark-stale (:quiet t)
+  ,test
+  (test)
+  :doc "marks the prepared change stale and renders it"
+  (mevedel-notes-test--with-source
+    (let ((note (mevedel-note-create "Waiting")))
+      (mevedel-note-hold-change (list note) '(:id "r"))
+      (mevedel-note-mark-stale note)
+      (should (eq 'stale (mevedel-notes-attention-state note)))
+      (should (string-search "change stale"
+                             (overlay-get (overlay-get note 'mevedel-label-overlay)
+                                          'after-string))))))
+
+(mevedel-deftest mevedel-note-set-settings (:quiet t)
+  ,test
+  (test)
+  :doc "merges settings into the note's own and touches the store"
+  (mevedel-notes-test--with-source
+    (let ((note (mevedel-note-create "Configure")))
+      (overlay-put note 'mevedel-note-settings '(:preset a :effort low))
+      (setq mevedel-instruction-store--dirty nil)
+      (mevedel-note-set-settings note '(:effort high :provider p))
+      (should (equal '(high p a)
+                     (mapcar (lambda (key)
+                               (plist-get (overlay-get note 'mevedel-note-settings) key))
+                             '(:effort :provider :preset))))
+      (should (mevedel-notes-test--dirty-p workspace)))))
+
+(mevedel-deftest mevedel-note-keep (:quiet t)
+  ,test
+  (test)
+  :doc "keeps a Buddy remark as the user's note and touches the store"
+  (mevedel-notes-test--with-source
+    (let ((note (mevedel-note-make source (point) (line-end-position) :text "Hm" :author 'buddy)))
+      (setq mevedel-instruction-store--dirty nil)
+      (mevedel-note-keep note)
+      (should (eq 'user (overlay-get note 'mevedel-note-author)))
+      (should (overlay-get note 'mevedel-note-kept-from-buddy))
+      (should (mevedel-notes-test--dirty-p workspace))))
+  :doc "refuses a note that is not a Buddy remark"
+  (mevedel-notes-test--with-source
+    (let ((note (mevedel-note-create "Mine")))
+      (should-error (mevedel-note-keep note) :type 'user-error)
+      (should (eq 'user (overlay-get note 'mevedel-note-author)))
+      (should-not (overlay-get note 'mevedel-note-kept-from-buddy)))))
+
+(mevedel-deftest mevedel-note-make (:quiet t)
+  ,test
+  (test)
+  :doc "creates an unsent note in a buffer without a file and neither writes nor touches the store"
+  (mevedel-notes-test--with-source
+    (let ((scratch (generate-new-buffer " *note-make*")))
+      (unwind-protect
+          (with-current-buffer scratch
+            (setq-local mevedel--workspace workspace)
+            (insert "remark\n")
+            (let ((note (mevedel-note-make scratch 1 7 :text "Unsaved" :author 'buddy
+                                           :span 'line)))
+              (should-not buffer-file-name)
+              (should (eq 'buddy (overlay-get note 'mevedel-note-author)))
+              (should (eq 'unsent (overlay-get note 'mevedel-note-state)))
+              (should (equal "Unsaved" (overlay-get note 'mevedel-note-text)))
+              (should (overlay-get note 'mevedel-label-overlay))))
+        (set-buffer-modified-p nil)
+        (kill-buffer scratch))
+      (should-not mevedel-instruction-store--dirty)
+      (should-not (file-exists-p (mevedel-instruction-store-path workspace)))))
+  :doc "leaves an unrelated active region, point and the selected window untouched"
+  (mevedel-notes-test--with-source
+    (let ((transient-mark-mode t) (window (selected-window)))
+      (set-window-buffer window source)
+      (goto-char (point-max))
+      (push-mark (point-min) t t)
+      (let ((mark (mark)) (point (point)))
+        (mevedel-note-make source 8 21 :text "Agent" :author 'agent)
+        (should (region-active-p))
+        (should (= mark (mark)))
+        (should (= point (point)))
+        (should (eq window (selected-window)))))))
+
+(mevedel-deftest mevedel-notes-rewind-live (:quiet t)
+  ,test
+  (test)
+  :doc "live, stashed and closed notes get the same Rewind result"
+  (mevedel-notes-test--with-source
+    (let* ((live (mevedel-note-create "Live"))
+           (keys '(mevedel-note-state mevedel-note-prepared-change
+                   mevedel-note-attention-state mevedel-note-applied-changes))
+           (build (lambda ()
+                    (list :open-state 'sent
+                          :properties
+                          (list 'mevedel-note-state 'sent
+                                'mevedel-note-session-id "s"
+                                'mevedel-note-prepared-change '(:session-id "s" :turn 2)
+                                'mevedel-note-attention-state 'ready
+                                'mevedel-note-applied-changes
+                                '((:session-id "s" :turn 1) (:session-id "s" :turn 3)
+                                  (:session-id "o" :turn 3))))))
+           (stashed (funcall build))
+           (closed (funcall build))
+           (state (mevedel--instruction-state (mevedel--instruction-workspace-key workspace))))
+      (mevedel-note-hold-change (list live) '(:session-id "s" :turn 2))
+      (mevedel-note-mark-sent (list live) "s")
+      (overlay-put live 'mevedel-note-applied-changes
+                   '((:session-id "s" :turn 1) (:session-id "s" :turn 3)
+                     (:session-id "o" :turn 3)))
+      (push (list "stashed.el" :instructions (list stashed)) (plist-get state :instructions))
+      ;; Seed the key in place; setf on an absent key would rebind STATE.
+      (plist-put state :closed-notes nil)
+      (push (list :file "closed.el" :instruction closed) (plist-get state :closed-notes))
+      (cl-flet ((summary (plist) (mapcar (lambda (key) (plist-get plist key)) keys)))
+        (mevedel-notes-rewind-live workspace "s" 1)
+        (let ((expected '(sent nil nil ((:session-id "s" :turn 1) (:session-id "o" :turn 3)))))
+          (should (equal expected (summary (plist-get stashed :properties))))
+          (should (equal expected (summary (plist-get closed :properties))))
+          (should (equal expected (mapcar (lambda (key) (overlay-get live key)) keys))))
+        ;; Turn 0 returns sent notes, open or closed, to unsent.
+        (mevedel-notes-rewind-live workspace "s" 0)
+        (should (eq 'unsent (overlay-get live 'mevedel-note-state)))
+        (should (eq 'unsent (plist-get (plist-get stashed :properties) 'mevedel-note-state)))
+        (should (eq 'unsent (plist-get closed :open-state)))
+        (should (equal '((:session-id "o" :turn 3))
+                       (overlay-get live 'mevedel-note-applied-changes)))))))
 
 (provide 'test-mevedel-notes)
 ;;; test-mevedel-notes.el ends here

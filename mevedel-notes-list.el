@@ -115,7 +115,7 @@ and q to return to the invoking window."
   (interactive)
   (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope mevedel-notes-list--workspace)
     (mevedel-instruction-store-observe mevedel-notes-list--workspace)
-    (let ((notes (mevedel-notes--entries mevedel-notes-list--workspace))
+    (let ((notes (mevedel-notes-open mevedel-notes-list--workspace))
           entries)
       (dolist (group '(ready stale working sent taken unsent))
         (when-let* ((members
@@ -145,7 +145,7 @@ and q to return to the invoking window."
 (defun mevedel-notes-list--selected-note ()
   "Resolve the selected row's exact live note, or refuse."
   (or (when-let* ((uuid (tabulated-list-get-id))
-                  (note (mevedel-notes--resolve
+                  (note (mevedel-note-resolve
                          uuid mevedel-notes-list--workspace)))
         (and (eq (overlay-get note 'mevedel-instruction-type) 'note) note))
       (mevedel-diagnostic-user-error

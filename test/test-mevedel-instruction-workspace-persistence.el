@@ -99,7 +99,7 @@ Mirrors the call in `mevedel-session-persistence--restore-buffer'."
 (defun test-mevedel-instruction-ws--texts (workspace)
   "Return the sorted note texts of WORKSPACE."
   (sort (mapcar (lambda (note) (plist-get (plist-get note :properties) 'mevedel-note-text))
-                (mevedel-notes--entries workspace))
+                (mevedel-notes-open workspace))
         #'string<))
 
 (defun test-mevedel-instruction-ws--note-count (workspace source)
@@ -111,7 +111,7 @@ Mirrors the call in `mevedel-session-persistence--restore-buffer'."
 
 (defun test-mevedel-instruction-ws--activity (workspace)
   "Return (SESSION-ID CHANGE-ID) of WORKSPACE's first note."
-  (let ((properties (plist-get (car (mevedel-notes--entries workspace)) :properties)))
+  (let ((properties (plist-get (car (mevedel-notes-open workspace)) :properties)))
     (list (plist-get properties 'mevedel-note-session-id)
           (plist-get (plist-get properties 'mevedel-note-prepared-change) :id))))
 
@@ -157,7 +157,7 @@ Mirrors the call in `mevedel-session-persistence--restore-buffer'."
       (test-mevedel-instruction-ws--note source "created, then Emacs exits" 2)
       ;; Control: the live workspace has both, the only session snapshot
       ;; has one; the workspace store is the other carrier.
-      (should (= 2 (length (mevedel-notes--entries workspace))))
+      (should (= 2 (length (mevedel-notes-open workspace))))
       (should-not (string-match-p
                    "then Emacs exits"
                    (test-mevedel-instruction-ws--snapshot-text a)))

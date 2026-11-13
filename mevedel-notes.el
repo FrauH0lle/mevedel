@@ -22,6 +22,9 @@
 ;; `mevedel-note-conversation'
 (autoload 'mevedel-note-send "mevedel-note-conversation" nil t)
 (autoload 'mevedel-note-send-batch "mevedel-note-conversation" nil t)
+(declare-function mevedel-note-conversation-refresh-hint
+                  "mevedel-note-conversation" (&optional note))
+(autoload 'mevedel-note-conversation-refresh-hint "mevedel-note-conversation")
 (autoload 'mevedel-note-apply-change "mevedel-note-change" nil t)
 (autoload 'mevedel-note-revert-change "mevedel-note-change" nil t)
 (autoload 'mevedel-note-merge-change "mevedel-note-merge" nil t)
@@ -212,11 +215,13 @@ or observe a store from redisplay."
   (setq global-mode-string (list global-mode-string)))
 (add-to-list 'global-mode-string '(:eval (mevedel-notes-mode-line)) t)
 
-(defun mevedel-notes--entries (workspace)
+(defun mevedel-notes-open (workspace)
   "Return lightweight open note snapshots in WORKSPACE without visiting files.
 Each snapshot holds :file, :line, :properties, :uuid and cached :source-missing.
-The internal :source is a live overlay or a stashed instruction record.
-Stashed positions refer to the last observed source; visiting re-anchors it."
+The :source is a live overlay or a stashed instruction record; treat it as
+opaque.  :properties is a fresh plist; stashed entries copy theirs, so changing
+a snapshot never changes the canonical note.  Stashed positions refer to the
+last observed source; visiting re-anchors it."
   (let (notes)
     (dolist (entry (plist-get (mevedel--instruction-state
                              (mevedel--instruction-workspace-key workspace))
@@ -258,7 +263,7 @@ Stashed positions refer to the last observed source; visiting re-anchors it."
                   (< (plist-get (plist-get a :properties) 'mevedel-id)
                      (plist-get (plist-get b :properties) 'mevedel-id))))))
 
-(defun mevedel-notes--resolve (identity workspace)
+(defun mevedel-note-resolve (identity workspace)
   "Return the live note with numeric ID or UUID IDENTITY in WORKSPACE.
 Restore only the selected note's file, not every stashed source file."
   (when-let* ((entry (cl-find-if
@@ -266,7 +271,7 @@ Restore only the selected note's file, not every stashed source file."
                        (equal identity (if (integerp identity)
                                            (plist-get (plist-get note :properties) 'mevedel-id)
                                          (plist-get note :uuid))))
-                     (mevedel-notes--entries workspace))))
+                     (mevedel-notes-open workspace))))
     (let ((file (plist-get entry :file))
           (uuid (plist-get entry :uuid))
           (mevedel--instruction-state-key-override
@@ -277,8 +282,9 @@ Restore only the selected note's file, not every stashed source file."
                  :key (lambda (note) (overlay-get note 'mevedel-uuid))
                  :test #'equal)))))
 
-(defun mevedel-notes--resolve-entries (entries workspace)
-  "Resolve note ENTRIES in WORKSPACE, restoring each source at most once.
+(defun mevedel-notes-resolve-entries (entries workspace)
+  "Resolve note ENTRIES from `mevedel-notes-open' in WORKSPACE.
+Restore each source at most once and return the live notes in ENTRIES' order.
 Refuse unavailable sources before a caller starts mutating the notes."
   (let ((mevedel--instruction-state-key-override
          (mevedel--instruction-workspace-key workspace))
@@ -469,15 +475,15 @@ Refuse unavailable sources before a caller starts mutating the notes."
     (when-let* ((note (overlay-get overlay 'mevedel-note-owner)))
       (if (overlay-buffer note)
           (progn
-            (when (and (overlay-get note 'mevedel-note-prepared-change)
-                       (if (zerop old-length)
-                           (and (< beg (overlay-end note))
-                                (> end (overlay-start note)))
-                         (and (<= beg (overlay-end note))
-                              (>= end (overlay-start note)))))
-              (overlay-put note 'mevedel-note-attention-state 'stale))
             (overlay-put note 'mevedel-note-buddy-looks-done nil)
-            (mevedel-notes--render note))
+            (if (and (overlay-get note 'mevedel-note-prepared-change)
+                     (if (zerop old-length)
+                         (and (< beg (overlay-end note))
+                              (> end (overlay-start note)))
+                       (and (<= beg (overlay-end note))
+                            (>= end (overlay-start note)))))
+                (mevedel-note-mark-stale note)
+              (mevedel-notes--render note)))
         (mevedel--delete-instruction-overlay note)))))
 
 (defun mevedel-notes--at-point ()
@@ -545,7 +551,7 @@ Default to the note at point.  Taking Buddy's remark first keeps it as yours."
   (let ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note))))
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
       (when (eq 'buddy (overlay-get note 'mevedel-note-author))
-        (mevedel-buddy-keep-note note))
+        (mevedel-note-keep note))
       (overlay-put note 'mevedel-note-state 'taken)
       (overlay-put note 'mevedel-note-buddy-looks-done nil)
       (overlay-put note 'mevedel-note-buddy-reviewed-hash nil)
@@ -569,6 +575,135 @@ Default to the note at point.  Taking Buddy's remark first keeps it as yours."
       (mevedel-notes--render note)
       (mevedel-instruction-store-touch workspace)))
   note)
+
+
+;;
+;;; Lifecycle transitions
+
+;; Each verb owns the properties that change together and only the render,
+;; conversation-hint and store-touch effects its callers need.  None flushes:
+;; a caller that needs durability flushes after the verb.
+
+(defun mevedel-notes--workspace (notes)
+  "Return the workspace owning the first live note in NOTES."
+  (mevedel--instruction-buffer-workspace (overlay-buffer (car notes))))
+
+(defun mevedel-note-mark-sent (notes session-id)
+  "Mark live NOTES sent in conversation SESSION-ID, then touch the store once.
+A note keeps its existing session id."
+  (dolist (note notes)
+    (unless (overlay-get note 'mevedel-note-session-id)
+      (overlay-put note 'mevedel-note-session-id session-id))
+    (overlay-put note 'mevedel-note-state 'sent)
+    (mevedel-notes--render note)
+    (mevedel-note-conversation-refresh-hint note))
+  (when notes (mevedel-instruction-store-touch (mevedel-notes--workspace notes))))
+
+(defun mevedel-note-hold-change (notes record)
+  "Hold prepared change RECORD on live NOTES as ready, then touch the store once.
+The caller validates RECORD and computes its :note-extents."
+  (dolist (note notes)
+    (overlay-put note 'mevedel-note-prepared-change record)
+    (overlay-put note 'mevedel-note-attention-state 'ready)
+    (mevedel-notes--render note)
+    ;; An unlinked suggestion has no conversation; without an id the hint
+    ;; would fall back to the current one and advertise changes it cannot apply.
+    (when (overlay-get note 'mevedel-note-session-id)
+      (mevedel-note-conversation-refresh-hint note)))
+  (when notes (mevedel-instruction-store-touch (mevedel-notes--workspace notes))))
+
+(defun mevedel-note-record-applied (record files workspace)
+  "Record applied change RECORD on every open note in WORKSPACE that holds it.
+Each such note gains the applied pair, with FILES only when RECORD belongs to
+another session's suggestion, and loses its prepared change and attention.
+Touch the store once."
+  (dolist (entry (mevedel-notes-open workspace))
+    (when (equal (plist-get record :id)
+                 (plist-get (plist-get (plist-get entry :properties)
+                                       'mevedel-note-prepared-change) :id))
+      (when-let* ((item (mevedel-note-resolve (plist-get entry :uuid) workspace)))
+        (overlay-put item 'mevedel-note-applied-changes
+                     (cl-adjoin (append (list :session-id (plist-get record :session-id)
+                                              :turn (plist-get record :turn))
+                                        (unless (equal (plist-get record :session-id)
+                                                       (overlay-get item 'mevedel-note-session-id))
+                                          (list :files files)))
+                                (overlay-get item 'mevedel-note-applied-changes)
+                                :test #'equal))
+        (overlay-put item 'mevedel-note-prepared-change nil)
+        (overlay-put item 'mevedel-note-attention-state nil)
+        (mevedel-notes--render item)
+        (mevedel-note-conversation-refresh-hint item))))
+  (mevedel-instruction-store-touch workspace))
+
+(defun mevedel-note-mark-stale (note)
+  "Mark NOTE's prepared change stale and render it."
+  (overlay-put note 'mevedel-note-attention-state 'stale)
+  (mevedel-notes--render note))
+
+(defun mevedel-note-set-settings (note settings)
+  "Merge the plist SETTINGS into NOTE's conversation settings and touch the store."
+  (let ((merged (copy-sequence (overlay-get note 'mevedel-note-settings))))
+    (while settings
+      (setq merged (plist-put merged (pop settings) (pop settings))))
+    (overlay-put note 'mevedel-note-settings merged)
+    (mevedel-instruction-store-touch (mevedel-notes--workspace (list note)))))
+
+(defun mevedel-note-keep (note)
+  "Keep Buddy's NOTE as a user note, touching the store for file-backed buffers."
+  (unless (eq 'buddy (overlay-get note 'mevedel-note-author))
+    (user-error "Not a Buddy remark"))
+  (overlay-put note 'mevedel-note-author 'user)
+  (overlay-put note 'mevedel-note-kept-from-buddy t)
+  (mevedel--update-instruction-overlay note t)
+  (when (buffer-local-value 'buffer-file-name (overlay-buffer note))
+    (mevedel-instruction-store-touch (mevedel-notes--workspace (list note))))
+  note)
+
+(defun mevedel-notes-rewind-instruction (instruction session-id surviving-turn)
+  "Rewind INSTRUCTION's note activity owned by SESSION-ID past SURVIVING-TURN.
+INSTRUCTION is a persisted record with :properties.  Mutate only lifecycle
+properties; preserve its text, anchor and session link."
+  (let* ((props (plist-get instruction :properties))
+         (change (plist-get props 'mevedel-note-prepared-change)))
+    (when (equal session-id (plist-get props 'mevedel-note-session-id))
+      (when (zerop surviving-turn)
+        (when (eq 'sent (plist-get props 'mevedel-note-state))
+          (plist-put props 'mevedel-note-state 'unsent))
+        (when (eq 'sent (plist-get instruction :open-state))
+          (plist-put instruction :open-state 'unsent))))
+    (when (and (equal session-id (plist-get change :session-id))
+               (> (or (plist-get change :turn) 0) surviving-turn))
+      (plist-put props 'mevedel-note-prepared-change nil)
+      (plist-put props 'mevedel-note-attention-state nil))
+    (when-let* ((pairs (plist-get props 'mevedel-note-applied-changes)))
+      (plist-put props 'mevedel-note-applied-changes
+                 (cl-remove-if (lambda (pair)
+                                 (and (equal session-id (plist-get pair :session-id))
+                                      (> (plist-get pair :turn) surviving-turn))) pairs))))
+  instruction)
+
+(defun mevedel-notes-rewind-live (workspace session-id turn)
+  "Apply committed SESSION-ID Rewind to TURN to WORKSPACE's current notes.
+Keep memory in step with the new merge base, including crash recovery."
+  (let ((state (mevedel--instruction-state (mevedel--instruction-workspace-key workspace))))
+    (dolist (file (plist-get state :instructions))
+      (if (bufferp (car file))
+          (dolist (note (cdr file))
+            (let* ((before (overlay-properties note))
+                   (instruction (list :properties (copy-sequence before)))
+                   (after (plist-get (mevedel-notes-rewind-instruction
+                                      instruction session-id turn) :properties)))
+              (unless (equal before after)
+                (dolist (key '(mevedel-note-state mevedel-note-prepared-change
+                              mevedel-note-applied-changes mevedel-note-attention-state))
+                  (overlay-put note key (plist-get after key)))
+                (mevedel--update-instruction-overlay note t)
+                (mevedel-note-conversation-refresh-hint note))))
+        (dolist (instruction (plist-get (cdr file) :instructions))
+          (mevedel-notes-rewind-instruction instruction session-id turn))))
+    (dolist (closed (plist-get state :closed-notes))
+      (mevedel-notes-rewind-instruction (plist-get closed :instruction) session-id turn))))
 
 (defun mevedel-notes--restore-taken (buffer)
   "Label restored takes in BUFFER; watch only explicitly resumed notes."
@@ -618,11 +753,11 @@ Return the number dismissed.  User and Buddy notes are left alone."
   (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
     (mevedel-instruction-store-observe workspace)
     (let ((count 0)
-          (notes (mevedel-notes--resolve-entries
+          (notes (mevedel-notes-resolve-entries
                   (cl-remove-if-not
                    (lambda (entry)
                      (eq 'agent (plist-get (plist-get entry :properties) 'mevedel-note-author)))
-                   (mevedel-notes--entries workspace))
+                   (mevedel-notes-open workspace))
                   workspace)))
       (unwind-protect
           (dolist (note notes)
@@ -880,6 +1015,21 @@ Create `.mevedel/' only in a recognized project.  Return the actual workspace."
            "Notes outside a project are not saved")))))
   workspace)
 
+(cl-defun mevedel-note-make (buffer beg end &key text author span)
+  "Create and render a note in BUFFER over BEG..END, and return its overlay.
+AUTHOR is `user' (default), `agent' or `buddy'; SPAN is `line' or nil for the
+exact range.  The note starts unsent with TEXT (default empty).  Work in
+BUFFER without a file, never read or change the region, point or selected
+window, and neither write nor touch the store: callers prepare the workspace
+and decide durability."
+  (let ((note (mevedel--create-instruction-overlay-in buffer beg end span)))
+    (overlay-put note 'mevedel-instruction-type 'note)
+    (overlay-put note 'mevedel-note-text (or text ""))
+    (overlay-put note 'mevedel-note-author (or author 'user))
+    (overlay-put note 'mevedel-note-state 'unsent)
+    (mevedel--update-instruction-overlay note t)
+    note))
+
 ;;;###autoload
 (cl-defun mevedel-note-create (&optional text &key defer-write)
   "Create a note with optional TEXT on the region or current line.
@@ -897,16 +1047,11 @@ DEFER-WRITE leaves durability to the caller's batch store sync."
         (user-error "Notes need a source file"))
       (setq workspace (mevedel-notes--ensure-workspace workspace))
       (let* ((region (use-region-p))
-             (note (mevedel--create-instruction-overlay-in
+             (note (mevedel-note-make
                     (current-buffer)
                     (if region (region-beginning) (line-beginning-position))
                     (if region (region-end) (line-end-position))
-                    (unless region 'line))))
-        (overlay-put note 'mevedel-instruction-type 'note)
-        (overlay-put note 'mevedel-note-text (or text ""))
-        (overlay-put note 'mevedel-note-author 'user)
-        (overlay-put note 'mevedel-note-state 'unsent)
-        (mevedel--update-instruction-overlay note t)
+                    :text text :span (unless region 'line))))
         (if defer-write
             (mevedel-instruction-store-touch workspace)
           (mevedel--instruction-store-write (current-buffer)))

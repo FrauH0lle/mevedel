@@ -100,7 +100,7 @@
           (mevedel-instruction-store-observe workspace)
           (let* ((entries
                   (append
-                   (mevedel-notes--entries workspace)
+                   (mevedel-notes-open workspace)
                    (mapcar
                     (lambda (closed)
                       (let* ((source (plist-get closed :instruction))

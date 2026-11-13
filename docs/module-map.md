@@ -194,7 +194,7 @@ Chat / view
   mevedel-overlays.el         instruction geometry, tags, context, prompts
   mevedel-note-source.el note anchor/presentation lifecycle and command-scoped replacement
   mevedel-overlay-ui.el       instruction overlay actions and rendering
-  mevedel-notes.el            source note actions, labels and entry hints
+  mevedel-notes.el            source note actions, labels and entry hints; owns the note lifecycle transitions (make, mark-sent, hold-change, record-applied, mark-stale, set-settings, keep), the note Rewind rule and the open-note queries
   mevedel-notes-activation.el autoloaded file-visit restoration and roots-only remote note discovery
   mevedel-note-conversation.el isolated durable note send/batch/reopen, composer controls and sent-input inspection
   mevedel-note-settings.el    persisted unsent settings and live session settings through the chat model picker
@@ -205,7 +205,7 @@ Chat / view
   mevedel-note-resource.el    read-only workspace note documents for Read, Glob and Grep
   mevedel-note-write.el       model note mutations, read-only authority and batched store sync
   mevedel-mentions.el         @note, @ref and @file mention expansion
-  mevedel-persistence.el      workspace note store, export/import, restore and Rewind lifecycle reconciliation
+  mevedel-persistence.el      workspace note store, export/import, restore and Rewind timing and stored-data pruning
   mevedel-session-codec.el    closed session sidecar codec and validation
   mevedel-session-checkpoint.el committed root projection, conversation consumption, and deferred ToolCall retirement
   mevedel-session-artifacts.el  paths, artifacts, snapshots, and segment writes

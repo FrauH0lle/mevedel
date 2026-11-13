@@ -102,7 +102,7 @@
       (mevedel--clear-instruction-state workspace)
       (mevedel-instruction-store-observe workspace)
       (should (eq 'mevedel-implement
-                  (plist-get (overlay-get (mevedel-notes--resolve uuid workspace)
+                  (plist-get (overlay-get (mevedel-note-resolve uuid workspace)
                                           'mevedel-note-settings) :preset)))))
   :doc "unsent model and effort choices stay on the note"
   (mevedel-note-settings-test--with-source
@@ -120,7 +120,7 @@
             (cl-letf (((symbol-function 'completing-read)
                        (lambda (&rest _) "Settings:beta")))
               (execute-kbd-macro (kbd "m RET e q")))
-            (setq note (mevedel-notes--resolve uuid workspace))
+            (setq note (mevedel-note-resolve uuid workspace))
             (should (equal '(:provider "Settings:beta" :effort low)
                            (overlay-get note 'mevedel-note-settings)))
             (should-not (overlay-get note 'mevedel-note-session-id)))
@@ -150,7 +150,7 @@
               (should (string-search "Static:beta" (buffer-string)))
               (should (string-search "effort high" (buffer-string))))
             (execute-kbd-macro (kbd "e q"))
-            (setq note (mevedel-notes--resolve uuid workspace))
+            (setq note (mevedel-note-resolve uuid workspace))
             (should (equal '(:preset settings-child :provider "Static:beta" :effort nil)
                            (overlay-get note 'mevedel-note-settings)))
             (should-not (overlay-get note 'mevedel-note-session-id)))
@@ -173,8 +173,7 @@
            (data (mevedel--chat-buffer nil t workspace root))
            (session (buffer-local-value 'mevedel--session data))
            (permission (default-toplevel-value 'mevedel-permission-mode)))
-      (overlay-put note 'mevedel-note-session-id (mevedel-session-session-id session))
-      (overlay-put note 'mevedel-note-state 'sent)
+      (mevedel-note-mark-sent (list note) (mevedel-session-session-id session))
       (mevedel-note-settings note)
       (cl-letf (((symbol-function 'completing-read)
                  (lambda (&rest _) "full-auto")))

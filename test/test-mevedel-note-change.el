@@ -66,8 +66,7 @@
                (goto-char (point-min))
                (forward-line 1)
                (setq note (mevedel-note-create "Improve this"))
-               (overlay-put note 'mevedel-note-state 'sent)
-               (overlay-put note 'mevedel-note-session-id (mevedel-session-session-id session)))
+               (mevedel-note-mark-sent (list note) (mevedel-session-session-id session)))
              (setf (mevedel-session-preset-name session) 'mevedel-implement
                    (mevedel-session-note-conversation session) t)
              (with-current-buffer data-buf
@@ -126,7 +125,7 @@
                    (* 3 (file-attribute-size (file-attributes file))))))
       (mevedel--clear-instruction-state workspace)
       (mevedel-instruction-store-observe workspace)
-      (setq note (mevedel-notes--resolve uuid workspace))
+      (setq note (mevedel-note-resolve uuid workspace))
       (mevedel-note-apply-change note t)
       (with-current-buffer view-buf
         (goto-char (point-min))
@@ -140,9 +139,7 @@
     (let ((sibling (with-current-buffer source
                      (goto-char (point-min))
                      (let ((item (mevedel-note-create "Other request")))
-                       (overlay-put item 'mevedel-note-state 'sent)
-                       (overlay-put item 'mevedel-note-session-id
-                                    (mevedel-session-session-id session))
+                       (mevedel-note-mark-sent (list item) (mevedel-session-session-id session))
                        item))))
       (mevedel-note-change-test--propose
        data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
@@ -162,9 +159,7 @@
     (let ((sibling (with-current-buffer source
                      (goto-char (point-min))
                      (let ((item (mevedel-note-create "Other request")))
-                       (overlay-put item 'mevedel-note-state 'sent)
-                       (overlay-put item 'mevedel-note-session-id
-                                    (mevedel-session-session-id session))
+                       (mevedel-note-mark-sent (list item) (mevedel-session-session-id session))
                        item))))
       (with-current-buffer source
         (goto-char (point-min))
@@ -181,9 +176,7 @@
                      (goto-char (point-min))
                      (forward-line 2)
                      (let ((item (mevedel-note-create "Other request")))
-                       (overlay-put item 'mevedel-note-state 'sent)
-                       (overlay-put item 'mevedel-note-session-id
-                                    (mevedel-session-session-id session))
+                       (mevedel-note-mark-sent (list item) (mevedel-session-session-id session))
                        (goto-char (overlay-start note))
                        (insert "my ")
                        item))))
@@ -214,8 +207,7 @@
       (with-current-buffer source
         (goto-char (point-min))
         (let ((second (mevedel-note-create "Change only this note")))
-          (overlay-put second 'mevedel-note-state 'sent)
-          (overlay-put second 'mevedel-note-session-id (mevedel-session-session-id session))))
+          (mevedel-note-mark-sent (list second) (mevedel-session-session-id session))))
       (mevedel-note-change-test--propose
        data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-before\n+BEFORE\n*** End Patch")
       (should-not (overlay-get note 'mevedel-note-prepared-change))
@@ -301,9 +293,7 @@
                      (goto-char (point-min))
                      (forward-line 2)
                      (let ((item (mevedel-note-create "Other request")))
-                       (overlay-put item 'mevedel-note-state 'sent)
-                       (overlay-put item 'mevedel-note-session-id
-                                    (mevedel-session-session-id session))
+                       (mevedel-note-mark-sent (list item) (mevedel-session-session-id session))
                        (move-overlay note (point-min) (overlay-start item))
                        item))))
       (mevedel-note-change-test--propose
@@ -395,8 +385,7 @@
       (with-current-buffer sibling
         (setq-local mevedel--workspace workspace)
         (let ((item (mevedel-note-create "Batch sibling")))
-          (overlay-put item 'mevedel-note-state 'sent)
-          (overlay-put item 'mevedel-note-session-id (mevedel-session-session-id session))))
+          (mevedel-note-mark-sent (list item) (mevedel-session-session-id session))))
       (mevedel-note-change-test--propose
        data-buf "*** Begin Patch\n*** Add File: created.txt\n+created\n*** End Patch")
       (kill-buffer sibling)
@@ -405,7 +394,7 @@
       (should (equal "created\n" (mevedel-test--read-file created)))
       (mevedel--clear-instruction-state workspace)
       (mevedel-instruction-store-observe workspace)
-      (setq note (mevedel-notes--resolve uuid workspace))
+      (setq note (mevedel-note-resolve uuid workspace))
       (should-not (overlay-get note 'mevedel-note-prepared-change))
       (should (overlay-get note 'mevedel-note-applied-changes))
       (mevedel-note-revert-change uuid 0 workspace)
@@ -455,13 +444,13 @@
           (mevedel--clear-instruction-state workspace)
           (mevedel-instruction-store-observe workspace)
           (write-region applied nil store nil 'silent))
-        (setq note (mevedel-notes--resolve uuid workspace))
+        (setq note (mevedel-note-resolve uuid workspace))
         (when resume
           (mevedel-session-persistence-lock-release (mevedel-session-save-path session) session)
           (kill-buffer data-buf))
         (should-error (mevedel-note-apply-change note) :type 'user-error)
         (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))
-        (setq note (mevedel-notes--resolve uuid workspace))
+        (setq note (mevedel-note-resolve uuid workspace))
         (should (overlay-get note 'mevedel-note-applied-changes))
         (should-not (overlay-get note 'mevedel-note-prepared-change))))))
 
@@ -483,11 +472,11 @@
         (mevedel--clear-instruction-state workspace)
         (mevedel-instruction-store-observe workspace)
         (write-region closed nil store nil 'silent))
-      (setq note (mevedel-notes--resolve uuid workspace))
+      (setq note (mevedel-note-resolve uuid workspace))
       (mevedel-note-revert-change note 0)
       (mevedel-instruction-store-observe workspace)
       (should-not (mevedel-notes-closed workspace))
-      (should (mevedel-notes--resolve uuid workspace))
+      (should (mevedel-note-resolve uuid workspace))
       (should (equal "before\nold\nafter\n" (mevedel-test--read-file file))))))
 
 (mevedel-deftest mevedel-note-revert-change/unseen-uuid
@@ -498,9 +487,7 @@
            (sibling (with-current-buffer source
                       (goto-char (overlay-start note))
                       (let ((item (mevedel-note-create "Other client's note")))
-                        (overlay-put item 'mevedel-note-state 'sent)
-                        (overlay-put item 'mevedel-note-session-id
-                                     (mevedel-session-session-id session))
+                        (mevedel-note-mark-sent (list item) (mevedel-session-session-id session))
                         item)))
            (uuid (overlay-get sibling 'mevedel-uuid)))
       (mevedel-note-change-test--propose
@@ -966,13 +953,13 @@
       (mevedel-note-revert-change uuid 0 workspace)
       (should-not (mevedel-notes-closed workspace))
       (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))
-      (let ((restored (mevedel-notes--resolve uuid workspace)))
+      (let ((restored (mevedel-note-resolve uuid workspace)))
         (should restored)
         (should (eq 'sent (overlay-get restored 'mevedel-note-state))))
       (mevedel--clear-instruction-state workspace)
       (mevedel-instruction-store-observe workspace)
       (should-not (mevedel-notes-closed workspace))
-      (should (mevedel-notes--resolve uuid workspace))))
+      (should (mevedel-note-resolve uuid workspace))))
   :doc "the source key reverts the only applied turn without offering empty turns"
   (mevedel-note-change-test--with-note
     (mevedel-note-change-test--propose
@@ -1122,7 +1109,7 @@
                                  "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch"))))))
     (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get result :result)))
     (let* ((uuid (match-string 1 (plist-get result :result)))
-           (suggestion (mevedel-notes--resolve uuid workspace)))
+           (suggestion (mevedel-note-resolve uuid workspace)))
       (should-not (overlay-get suggestion 'mevedel-note-session-id))
       (mevedel-note-apply-change suggestion)
       (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))
@@ -1155,7 +1142,7 @@
                                    :text "AI suggestion" :prepared_change
                                    "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch"))))))
       (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get result :result)))
-      (let ((suggestion (mevedel-notes--resolve (match-string 1 (plist-get result :result)) workspace)))
+      (let ((suggestion (mevedel-note-resolve (match-string 1 (plist-get result :result)) workspace)))
         (mevedel-note-apply-change suggestion)
         (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))
         (mevedel-note-revert-change suggestion 0)
@@ -1186,7 +1173,7 @@
                                        "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch"))))))
           (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get result :result)))
           (let* ((uuid (match-string 1 (plist-get result :result)))
-                 (suggestion (mevedel-notes--resolve uuid workspace)))
+                 (suggestion (mevedel-note-resolve uuid workspace)))
             (mevedel-note-apply-change suggestion)
             (mevedel-note-done suggestion)
             (mevedel-instruction-store-flush t)
@@ -1235,7 +1222,7 @@
       (save-buffer))
     (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get result :result)))
     (mevedel-note-apply-change
-     (mevedel-notes--resolve (match-string 1 (plist-get result :result)) workspace))
+     (mevedel-note-resolve (match-string 1 (plist-get result :result)) workspace))
     (let ((target (copy-sequence
                    (cdar (last (mevedel-session-rewind--prompt-candidates session))))))
       (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
@@ -1256,7 +1243,7 @@
                                  "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch"))))))
     (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get result :result)))
     (let* ((uuid (match-string 1 (plist-get result :result)))
-           (suggestion (mevedel-notes--resolve uuid workspace)))
+           (suggestion (mevedel-note-resolve uuid workspace)))
       (mevedel-note-apply-change suggestion)
       (mevedel-note-done suggestion)
       (mevedel-session-persistence-lock-release (mevedel-session-save-path session) session)
@@ -1283,7 +1270,7 @@
                                  :text "AI suggestion" :prepared_change
                                  "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch"))))))
     (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get result :result)))
-    (let ((suggestion (mevedel-notes--resolve (match-string 1 (plist-get result :result)) workspace)))
+    (let ((suggestion (mevedel-note-resolve (match-string 1 (plist-get result :result)) workspace)))
       (mevedel-note-apply-change suggestion)
       (should-not (overlay-get suggestion 'mevedel-note-session-id))
       (with-current-buffer source
@@ -1304,7 +1291,7 @@
       (should-not (mevedel-session-control-transfer-root-buffer-for-id id))
       (mevedel--clear-instruction-state workspace)
       (mevedel-instruction-store-observe workspace)
-      (setq note (mevedel-notes--resolve uuid workspace))
+      (setq note (mevedel-note-resolve uuid workspace))
       (with-current-buffer source
         (cl-letf (((symbol-function 'read-key)
                    (lambda (&rest _)
@@ -1357,6 +1344,30 @@
              (child (mevedel-session-fork-clone-session
                      restored 'fork :current-segment 1 :forked-from-turn 1)))
         (should (assoc "Bash" (cdr (assq 1 (mevedel-session-untracked-effects child)))))))))
+
+(mevedel-deftest mevedel-note-change/flush-points (:quiet t)
+  ,test
+  (test)
+  :doc "preparing flushes once after the note is ready; applying flushes once after the pair is recorded"
+  (mevedel-note-change-test--with-note
+    (let* (seen
+           (spy (lambda (&rest _)
+                 (push (list (mevedel-notes-attention-state note)
+                             (and (overlay-get note 'mevedel-note-prepared-change) t)
+                             (and (overlay-get note 'mevedel-note-applied-changes) t))
+                       seen))))
+      (advice-add 'mevedel-instruction-store-flush :before spy)
+      (unwind-protect
+          (progn
+            (mevedel-note-change-test--propose
+             data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+            (should (equal '((ready t nil)) seen))
+            (setq seen nil)
+            (mevedel-note-apply-change note)
+            ;; Applying flushes once after the pair is recorded; the settled note
+            ;; is back to its sent state and holds no prepared change.
+            (should (equal '((sent nil t)) (last seen))))
+        (advice-remove 'mevedel-instruction-store-flush spy)))))
 
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here

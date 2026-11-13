@@ -20,10 +20,6 @@
 
 (declare-function mevedel-patch-review-start "mevedel-patch-review" (proposal callback data-buffer))
 
-;; `mevedel-note-conversation'
-(declare-function mevedel-note-conversation-refresh-hint "mevedel-note-conversation" (&optional note))
-(autoload 'mevedel-note-conversation-refresh-hint "mevedel-note-conversation")
-
 ;; `mevedel-session-rewind'
 (declare-function mevedel-session-rewind-read-backup "mevedel-session-rewind" (session backup-name))
 (autoload 'mevedel-session-rewind-read-backup "mevedel-session-rewind")
@@ -117,10 +113,10 @@ Return an ordinary tool result immediately; no tool callback is retained."
                  (lambda (entry)
                    (equal id (plist-get (plist-get entry :properties)
                                         'mevedel-note-session-id)))
-                 (mevedel-notes--entries workspace)))
+                 (mevedel-notes-open workspace)))
          (record (mevedel-note-change-record proposal changes data-buffer)))
     (unless notes (error "No open note owns this conversation"))
-    (setq notes (mevedel-notes--resolve-entries notes workspace))
+    (setq notes (mevedel-notes-resolve-entries notes workspace))
     ;; New-file-only work still belongs to the requesting conversation.
     (setq notes (or (cl-remove-if-not
                      (lambda (note) (mevedel-note-change--touches-p note record)) notes)
@@ -136,12 +132,7 @@ Return an ordinary tool result immediately; no tool callback is retained."
             (let ((path (plist-get before :path)))
               (when (equal (gethash path snapshots 'missing) (plist-get before :bytes))
                 (remhash path snapshots)))))))
-    (dolist (note notes)
-      (overlay-put note 'mevedel-note-prepared-change record)
-      (overlay-put note 'mevedel-note-attention-state 'ready)
-      (mevedel-notes--render note)
-      (mevedel-note-conversation-refresh-hint note))
-    (mevedel-instruction-store-touch workspace)
+    (mevedel-note-hold-change notes record)
     (mevedel-instruction-store-flush t)
     (let* ((result (mevedel-tool-patch-result proposal changes))
            (text (plist-get result :result)))
@@ -164,13 +155,13 @@ Return an ordinary tool result immediately; no tool callback is retained."
                                        (equal (mevedel-session-session-id session)
                                               (plist-get (plist-get entry :properties)
                                                          'mevedel-note-session-id)))
-                                     (mevedel-notes--entries workspace)))
+                                     (mevedel-notes-open workspace)))
                             (entry (or (cl-find-if
                                         (lambda (entry)
                                           (plist-get (plist-get entry :properties)
                                                      'mevedel-note-prepared-change)) entries)
                                        (car entries))))
-                  (mevedel-notes--resolve (plist-get entry :uuid) workspace)))))
+                  (mevedel-note-resolve (plist-get entry :uuid) workspace)))))
     (unless (and (overlayp note) (overlay-buffer note)
                  (eq (overlay-get note 'mevedel-instruction-type) 'note))
       (user-error "No live note here"))
@@ -215,7 +206,7 @@ When SELECTED is non-nil, prepare only those reviewed changes."
                    (and (equal (plist-get record :id)
                                (plist-get (plist-get props 'mevedel-note-prepared-change) :id))
                         (eq 'stale (plist-get props 'mevedel-note-attention-state)))))
-               (mevedel-notes--entries
+               (mevedel-notes-open
                 (mevedel--instruction-buffer-workspace (overlay-buffer note)))))
       (user-error "Change stale; ask in the conversation or merge"))
     (dolist (before (plist-get record :before))
@@ -266,8 +257,7 @@ When SELECTED is non-nil, prepare only those reviewed changes."
                                       (decode-coding-string (plist-get result :bytes) coding))
                         :mode (plist-get result :mode)) changes)))))
     (when conflicts
-      (overlay-put note 'mevedel-note-attention-state 'stale)
-      (mevedel-notes--render note)
+      (mevedel-note-mark-stale note)
       (user-error "Change stale at %s; ask in the conversation or merge"
                   (mapconcat (lambda (conflict)
                                (format "%s:%d-%d" (plist-get conflict :path)
@@ -340,26 +330,9 @@ When SELECTED is non-nil, prepare only those reviewed changes."
 
 (defun mevedel-note-change--finish (note record files)
   "Retain applied RECORD ownership and FILES on NOTE and its batch siblings."
-  (let ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note))))
-    (dolist (entry (mevedel-notes--entries workspace))
-      (when (equal (plist-get record :id)
-                   (plist-get (plist-get (plist-get entry :properties)
-                                        'mevedel-note-prepared-change) :id))
-        (when-let* ((item (mevedel-notes--resolve (plist-get entry :uuid) workspace)))
-          (overlay-put item 'mevedel-note-applied-changes
-                       (cl-adjoin (append (list :session-id (plist-get record :session-id)
-                                                :turn (plist-get record :turn))
-                                          (unless (equal (plist-get record :session-id)
-                                                         (overlay-get item 'mevedel-note-session-id))
-                                            (list :files files)))
-                                  (overlay-get item 'mevedel-note-applied-changes)
-                                  :test #'equal))
-          (overlay-put item 'mevedel-note-prepared-change nil)
-          (overlay-put item 'mevedel-note-attention-state nil)
-          (mevedel-notes--render item)
-          (mevedel-note-conversation-refresh-hint item))))
-    (mevedel-instruction-store-touch workspace)
-    (mevedel-instruction-store-flush t)))
+  (mevedel-note-record-applied
+   record files (mevedel--instruction-buffer-workspace (overlay-buffer note)))
+  (mevedel-instruction-store-flush t))
 
 (defun mevedel-note-change--review (note record)
   "Open the existing detailed review for NOTE's waiting RECORD."
@@ -402,7 +375,7 @@ Confirming a partial selection drops the rest of this waiting change."
         (uuid (overlay-get note 'mevedel-uuid)))
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
       (mevedel-instruction-store-observe workspace)
-      (setq note (or (mevedel-notes--resolve uuid workspace)
+      (setq note (or (mevedel-note-resolve uuid workspace)
                      (user-error "Note no longer available: %s" uuid)))
       (let ((record (mevedel-note-change--record note))
             (changes (mevedel-note-change--plan note)))
@@ -457,7 +430,7 @@ Confirming a partial selection drops the rest of this waiting change."
 (defun mevedel-note-change--revert-target (note workspace)
   "Resolve live or closed NOTE in WORKSPACE, prompting without a context note."
   (mevedel-notes--load-closed workspace)
-  (let* ((entries (append (mevedel-notes--entries workspace)
+  (let* ((entries (append (mevedel-notes-open workspace)
                           (mapcar (lambda (entry)
                                     (let* ((instruction (plist-get entry :instruction))
                                            (props (plist-get instruction :properties)))
