@@ -749,16 +749,24 @@ changes are offered again."
   (when mevedel-buddy--timeout-timer
     (cancel-timer mevedel-buddy--timeout-timer)
     (setq mevedel-buddy--timeout-timer nil))
-  (when (buffer-live-p mevedel-buddy--request-buffer)
-    (kill-buffer mevedel-buddy--request-buffer))
-  ;; Preparation can be cancelled before the first request loads note tools.
-  (when (featurep 'mevedel-buddy-note)
-    (mevedel-buddy-note-finish-review)
-    (mevedel-buddy-note-release-markers))
-  (setq mevedel-buddy-note--scope-buffers nil
-        mevedel-buddy--running nil
-        mevedel-buddy--running-automatic nil
-        mevedel-buddy--request-buffer nil))
+  (unwind-protect
+      ;; A failing kill must not skip persisting accepted remarks.
+      (unwind-protect
+          (when (buffer-live-p mevedel-buddy--request-buffer)
+            (kill-buffer mevedel-buddy--request-buffer))
+        ;; Preparation can be cancelled before the first request loads note
+        ;; tools.
+        (when (featurep 'mevedel-buddy-note)
+          (mevedel-buddy-note-finish-review)))
+    ;; A store flush error must not leave markers held, the scope open or the
+    ;; review marked running; the new generation stops straggler tool calls.
+    (cl-incf mevedel-buddy--generation)
+    (when (featurep 'mevedel-buddy-note)
+      (mevedel-buddy-note-release-markers))
+    (setq mevedel-buddy-note--scope-buffers nil
+          mevedel-buddy--running nil
+          mevedel-buddy--running-automatic nil
+          mevedel-buddy--request-buffer nil)))
 
 (defun mevedel-buddy--abandon (reason)
   "Abandon the review in flight because of REASON, retiring nothing."
