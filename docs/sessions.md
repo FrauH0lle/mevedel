@@ -2441,6 +2441,9 @@ a project, automatic persistence requires existing workspace state; otherwise
 notes stay in memory with a notice. Imports do not create workspace state in
 arbitrary directories. While a minibuffer is active, writes wait until the
 command that read it returns.
+Edits held back by an unreadable store remain pending. Flush retries wait for
+the checkpoint interval, except for a forced flush such as Emacs exit; the
+unreadable-store warning is shown only once while the failure lasts.
 
 ### Explicit session migration
 

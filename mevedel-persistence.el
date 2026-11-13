@@ -1409,8 +1409,7 @@ failure is reported and the workspace
 stays pending, but is not retried by a non-forced flush until
 `mevedel-session-checkpoint-interval' seconds have passed, so a lasting
 failure does not repeat after every command.  An unreadable store is
-reported once and left to the next observation point, so it is not re-read
-after every command."
+reported once and retried on the same interval or by a forced flush."
   (unless (and (> (minibuffer-depth) 0) (not force))
     (dolist (workspace mevedel-instruction-store--dirty)
       (let ((failed (alist-get workspace mevedel-instruction-store--failed)))
@@ -1426,8 +1425,9 @@ after every command."
                                  nil t)
                       nil))
             (mevedel-instruction-store-unreadable
-             (setq mevedel-instruction-store--dirty
-                   (delq workspace mevedel-instruction-store--dirty))
+             (cl-pushnew workspace mevedel-instruction-store--dirty)
+             (setf (alist-get workspace mevedel-instruction-store--failed)
+                   (current-time))
              (mevedel-instruction-store--warn workspace 'unreadable
                                               (error-message-string err)))
             (error
