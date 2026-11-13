@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Owns accepted-plan preparation, crash-safe recovery, and Direct or Goal
+;; Owns accepted-plan preparation, crash-safe recovery, and Direct, Goal or Buddy
 ;; kickoff.  A Worktree implementation forks the planning session into the
 ;; worktree and hands it an ordinary Here handoff.  Plan conversation and
 ;; proposal UI remain in `mevedel-plan-mode'.
@@ -231,7 +231,7 @@ worktree fork, which runs its own Here handoff."
              (effort (plist-get selection :reasoning-effort)))
          (and (memq location '(here worktree))
               (memq context '(current fresh summary))
-              (memq (plist-get selection :execution) '(direct goal))
+              (memq (plist-get selection :execution) '(direct goal buddy))
               (memq (plist-get selection :mode)
                     mevedel-plan-handoff-implementation-modes)
               (or (null budget)
@@ -275,13 +275,29 @@ worktree fork, which runs its own Here handoff."
 
 (defun mevedel-plan-handoff--implementation-prompt
     (accepted-artifact plan-markdown &optional selection)
-  "Return the Direct prompt for ACCEPTED-ARTIFACT and PLAN-MARKDOWN."
+  "Return the Direct or Buddy prompt for ACCEPTED-ARTIFACT and PLAN-MARKDOWN.
+SELECTION chooses execution and supplies implementation-only input."
   (mevedel-plan-handoff-append-implementation-input
    (format
-    "Accepted plan artifact: %s\n\nAccepted plan:\n%s\n\nImplementation instructions:\nImplement the accepted plan against the current repository state. Preserve its stated outcomes and acceptance criteria while using repository evidence to choose the safest effective mechanics."
+    "Accepted plan artifact: %s\n\nAccepted plan:\n%s\n\nImplementation instructions:\n%s"
     (mevedel-plan-resource-address
      (plist-get accepted-artifact :path))
-    plan-markdown)
+    plan-markdown
+    (if (eq (plist-get selection :execution) 'buddy)
+        (concat
+         "The user will implement this plan themselves. Read the accepted plan "
+         "and relevant code, then create one note per plan step as concise "
+         "instructions for a human, with the step as its text. Anchor each note "
+         "to the right file and lines. Use one NoteWrite batch of create "
+         "operations so the store syncs once. If a step has no clear code "
+         "location, anchor it to the most relevant file you read and explain "
+         "that choice in your reply. Leave all notes unsent; the "
+         "user decides whether to take, send, edit or delete each one. "
+         "Do not edit code. Do not prepare changes; omit prepared_change from "
+         "every create operation. Do not send, take or close notes. "
+         "After creating the notes, summarize their numbers and corresponding "
+         "steps, and tell the user that the notes list shows them.")
+      "Implement the accepted plan against the current repository state. Preserve its stated outcomes and acceptance criteria while using repository evidence to choose the safest effective mechanics."))
    selection))
 
 (defun mevedel-plan-handoff--goal-kickoff-prompt
@@ -817,9 +833,10 @@ the durable retry was retained"
               (mevedel-plan-handoff--implementation-prompt
                accepted body selection)))
            (display-text
-            (if goal-p
-                "Implement accepted plan as Goal"
-              "Implement accepted plan"))
+            (pcase (plist-get selection :execution)
+              ('goal "Implement accepted plan as Goal")
+              ('buddy "Implement myself with notes")
+              (_ "Implement accepted plan")))
            (view-buffer
             (mevedel-view--interaction-target-buffer chat-buffer)))
       (with-current-buffer chat-buffer

@@ -292,7 +292,7 @@ Call in the owning chat buffer, where the session's preset policy lives."
 
 (defun mevedel-plan-mode--next-execution (execution)
   "Return the Plan execution choice after EXECUTION."
-  (if (eq execution 'direct) 'goal 'direct))
+  (or (cadr (memq execution '(direct goal buddy))) 'direct))
 
 (defun mevedel-plan-mode--next-context (context)
   "Return the implementation context after CONTEXT.
@@ -315,9 +315,10 @@ forks the planning session."
 
 (defun mevedel-plan-mode--execution-description (execution)
   "Return the compact UI description for EXECUTION."
-  (if (eq execution 'goal)
-      "continue until complete, blocked, paused, or budget-limited"
-    "one implementation turn"))
+  (pcase execution
+    ('goal "continue until complete, blocked, paused, or budget-limited")
+    ('buddy "Implement myself with notes")
+    (_ "one implementation turn")))
 
 (defun mevedel-plan-mode--effective-goal-budget (buffer)
   "Return the Goal budget effective in BUFFER, or nil when unbounded."
