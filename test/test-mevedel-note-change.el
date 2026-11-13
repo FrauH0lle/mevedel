@@ -18,6 +18,8 @@
 (require 'mevedel-view)
 (require 'mevedel-session-persistence)
 (require 'mevedel-session-codec)
+(require 'mevedel-session-fork)
+(require 'mevedel-session-rewind)
 (require 'mevedel-pipeline)
 (require 'mevedel-presets)
 (require 'mevedel-tools)
@@ -870,6 +872,47 @@
     (let ((err (should-error (mevedel-note-revert-change note 0) :type 'user-error)))
       (should (string-search "pre-turn capture unavailable" (error-message-string err))))
     (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))))
+
+(mevedel-deftest mevedel-note-rewind-untracked-effects
+  (:quiet t)
+  ,test
+  (test)
+  :doc "a note turn that runs Bash rewinds with incomplete coverage, and a fork keeps the gap"
+  (mevedel-note-change-test--with-note
+    (setf (mevedel-session-permission-mode session) 'full-auto)
+    (let (impact-text)
+      (with-current-buffer data-buf
+        (insert "*** Improve this note\n")
+        (mevedel-request-begin session)
+        (let (result)
+          (mevedel-pipeline-run-tool-outcome
+           (mevedel-tool-ensure "Bash") (lambda (value) (setq result value))
+           (list :command "sed -i s/old/shell/ source.txt" :description "Edit source"))
+          (with-timeout (60 (ert-fail "Bash did not settle"))
+            (while (null result) (accept-process-output nil 0.02))))
+        (should (equal "before\nshell\nafter\n" (mevedel-test--read-file file)))
+        (insert (propertize "Edited.\n" 'gptel 'response))
+        (setf (mevedel-session-turn-count session) 1)
+        (mevedel-session-artifacts-save session data-buf t)
+        (mevedel-request-end)
+        (let ((target (copy-sequence
+                       (cdar (last (mevedel-session-rewind--prompt-candidates session))))))
+          (cl-letf (((symbol-function 'display-buffer) #'ignore)
+                    ((symbol-function 'yes-or-no-p)
+                     (lambda (&rest _)
+                       (setq impact-text (with-current-buffer "*mevedel-rewind-impact*"
+                                           (buffer-string)))
+                       nil)))
+            (mevedel-session-rewind-rewind data-buf target))))
+      (should (string-match-p "Checkpoint coverage: incomplete" impact-text))
+      (should (string-match-p "Bash" impact-text))
+      (should (equal "before\nshell\nafter\n" (mevedel-test--read-file file)))
+      (let* ((saved (mevedel-session-codec-read
+                     (mevedel-session-artifacts-sidecar-path (mevedel-session-save-path session))))
+             (restored (plist-get (mevedel-session-codec-deserialize saved workspace) :session))
+             (child (mevedel-session-fork-clone-session
+                     restored 'fork :current-segment 1 :forked-from-turn 1)))
+        (should (assoc "Bash" (cdr (assq 1 (mevedel-session-untracked-effects child)))))))))
 
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here

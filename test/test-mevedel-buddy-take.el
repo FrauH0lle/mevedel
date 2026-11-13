@@ -31,6 +31,7 @@
           (mevedel-buddy--changes (make-hash-table :test #'equal))
           (mevedel-buddy--last-review (make-hash-table :test #'equal))
           (mevedel-buddy--levels (make-hash-table :test #'equal))
+          (mevedel-buddy--briefs (make-hash-table :test #'equal))
           (mevedel-notes--taken-watches (make-hash-table :test #'equal))
           (find-file-hook (copy-sequence find-file-hook))
           (post-command-hook (copy-sequence post-command-hook))
@@ -241,6 +242,93 @@ AUTOMATIC exercises the idle review policy without waiting for idle time."
       (should (string-search "Try jitter too" (mevedel-take-test--labels)))
       (should-not (string-search "Ungrounded idea" (mevedel-take-test--labels))))))
 
+(mevedel-deftest mevedel-buddy-review/settled-take
+  (:quiet t)
+  ,test
+  (test)
+  :doc "Quiet does not resend unchanged taken code after editing another file"
+  (mevedel-take-test--with-source
+    (mevedel-buddy-set-level 'quiet workspace)
+    (mevedel-note-take (mevedel-note-create "Implement this goal"))
+    (should (mevedel-take-test--review #'ignore t))
+    (let ((other (file-name-concat root "other.el")))
+      (write-region "unrelated code\n" nil other nil 'silent)
+      (with-current-buffer (find-file-noselect other)
+        (setq-local mevedel--workspace workspace)
+        (mevedel-buddy-mode 1)
+        (insert "edited ")
+        (should-not (mevedel-take-test--review #'ignore t)))))
+  :doc "edits made during a settled review still receive their own review"
+  (mevedel-take-test--with-source
+    (mevedel-buddy-set-level 'quiet workspace)
+    (mevedel-note-take (mevedel-note-create "Implement this goal"))
+    (should (mevedel-take-test--review
+             (lambda (&rest _)
+               (with-current-buffer source (insert "new edit "))) t))
+    (should (mevedel-take-test--review #'ignore t))
+    (should-not (mevedel-take-test--review #'ignore t)))
+  :doc "an abandoned review does not mark taken code as reviewed"
+  (mevedel-take-test--with-source
+    (mevedel-buddy-set-level 'quiet workspace)
+    (mevedel-note-take (mevedel-note-create "Implement this goal"))
+    (should (mevedel-take-test--review
+             (lambda (&rest _) (mevedel-buddy-abort)) t))
+    (should (mevedel-take-test--review #'ignore t)))
+  :doc "an edited goal receives a new review even when its code is unchanged"
+  (mevedel-take-test--with-source
+    (mevedel-buddy-set-level 'quiet workspace)
+    (let ((note (mevedel-note-create "Implement this goal")))
+      (mevedel-note-take note)
+      (should (mevedel-take-test--review #'ignore t))
+      (mevedel-note-edit "A revised goal" note)
+      (should (mevedel-take-test--review
+               (lambda (prompt _tools) (should (string-search "A revised goal" prompt))) t))))
+  :doc "taking a note again renews its invitation after a settled review"
+  (mevedel-take-test--with-source
+    (mevedel-buddy-set-level 'quiet workspace)
+    (let ((note (mevedel-note-create "Implement this goal")))
+      (mevedel-note-take note)
+      (should (mevedel-take-test--review #'ignore t))
+      (mevedel-note-drop note)
+      (mevedel-note-take note)
+      (should (mevedel-take-test--review #'ignore t))))
+  :doc "changing the dial renews review of unchanged taken code"
+  (mevedel-take-test--with-source
+    (mevedel-buddy-set-level 'quiet workspace)
+    (mevedel-note-take (mevedel-note-create "Implement this goal"))
+    (should (mevedel-take-test--review #'ignore t))
+    (mevedel-buddy-set-level 'watching workspace)
+    (should (mevedel-take-test--review #'ignore t)))
+  :doc "explicit reviews are never suppressed by a settled take"
+  (mevedel-take-test--with-source
+    (mevedel-buddy-set-level 'quiet workspace)
+    (mevedel-note-take (mevedel-note-create "Implement this goal"))
+    (should (mevedel-take-test--review #'ignore t))
+    (should (mevedel-take-test--review #'ignore))
+    (should (mevedel-take-test--review #'ignore)))
+  :doc "a changed workspace brief renews review of unchanged taken code"
+  (mevedel-take-test--with-source
+    (mevedel-buddy-set-level 'quiet workspace)
+    (mevedel-note-take (mevedel-note-create "Implement this goal"))
+    (should (mevedel-take-test--review #'ignore t))
+    (mevedel-buddy-set-brief (file-name-as-directory (mevedel-workspace-root workspace))
+                             "test" "Changed scope brief")
+    (should (mevedel-take-test--review
+             (lambda (prompt _tools) (should (string-search "Changed scope brief" prompt))) t))))
+
+(mevedel-deftest mevedel-buddy-review/printer-limits
+  (:quiet t)
+  ,test
+  (test)
+  :doc "printer limits cannot hide changed taken code from automatic review"
+  (mevedel-take-test--with-source
+    (mevedel-buddy-set-level 'quiet workspace)
+    (mevedel-note-take (mevedel-note-create "Implement this goal"))
+    (let ((print-level 2) (print-length 2))
+      (should (mevedel-take-test--review #'ignore t))
+      (insert "changed code ")
+      (should (mevedel-take-test--review #'ignore t)))))
+
 (mevedel-deftest mevedel-buddy-review/large-take
   (:quiet t)
   ,test
@@ -257,6 +345,7 @@ AUTOMATIC exercises the idle review policy without waiting for idle time."
         (mevedel-note-take note)
         (mevedel-buddy-set-level 'quiet workspace)
         (goto-char (point-min)) (forward-line 1499) (insert "edited ")
+        (goto-char (point-min))
         (should
          (mevedel-take-test--review
           (lambda (prompt tools)

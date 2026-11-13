@@ -41,7 +41,10 @@ the note's code with its text as the brief, at every dial level. Use **take** in
 the note's modified-key menu or `T` in the notes list. The label says **Buddy
 watches**. Buddy may mark it **looks done** when its stated goal is met, but
 never closes it: `mevedel-note-done` is explicit. Editing the goal or its code
-retires earlier completion feedback.
+retires earlier completion feedback. Automatic taken-only reviews do not resend
+unchanged code and goals after a successful review. Changes made in flight,
+an abandoned review, a new brief or dial level, or taking again still invite a
+review. Explicit review commands are never suppressed.
 
 **Drop** (`mevedel-note-drop`, or `T` again in the list) returns the note to
 unsent, retaining its conversation and source code. Sending a taken note makes

@@ -182,6 +182,7 @@
 (declare-function mevedel-session-chapters "mevedel-structs" (cl-x))
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x))
 (declare-function mevedel-session-file-snapshots "mevedel-structs" (cl-x))
+(declare-function mevedel-session-untracked-effects "mevedel-structs" (cl-x))
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x))
 (declare-function mevedel-session-lease "mevedel-structs" (cl-x))
 (declare-function mevedel-session-name "mevedel-structs" (cl-x))
@@ -434,12 +435,17 @@ RESOLUTIONS supplies checked intermediate states from the merge editor."
 
 (defun mevedel-session-rewind--checkpoint-gaps (session cum-turn)
   "Return known SESSION checkpoint gaps from CUM-TURN onwards."
-  (cl-loop for (turn . entries) in (mevedel-session-file-snapshots session)
-           when (>= turn cum-turn)
-           append (cl-loop for (path . checkpoint) in entries
-                           when (plist-get checkpoint :gap)
-                           collect (list :path path :turn turn
-                                         :reason (plist-get checkpoint :gap)))))
+  (append
+   (cl-loop for (turn . entries) in (mevedel-session-file-snapshots session)
+            when (>= turn cum-turn)
+            append (cl-loop for (path . checkpoint) in entries
+                            when (plist-get checkpoint :gap)
+                            collect (list :path path :turn turn
+                                          :reason (plist-get checkpoint :gap))))
+   (cl-loop for (turn . effects) in (mevedel-session-untracked-effects session)
+            when (>= turn cum-turn)
+            append (cl-loop for (tool . reason) in effects
+                            collect (list :path tool :turn turn :reason reason)))))
 
 (defvar-local mevedel-session-rewind--plan-buffer-session nil
   "Buffer-local session for the `*mevedel-rewind-impact*' buffer.
@@ -1188,6 +1194,11 @@ candidate's surviving turn count."
      (copy-tree
       (mevedel-session-rewind-reduce-file-snapshots
        (mevedel-session-file-snapshots session) target-turn before-p)
+      t)
+     (mevedel-session-untracked-effects candidate)
+     (copy-tree
+      (mevedel-session-rewind-reduce-file-snapshots
+       (mevedel-session-untracked-effects session) target-turn before-p)
       t)
      (mevedel-session-invoked-skills candidate)
      (cl-remove-if

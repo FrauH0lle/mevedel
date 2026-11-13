@@ -15,7 +15,7 @@
 (require 'mevedel-session-checkpoint)
 
 (defun test-mevedel-session-checkpoint--root (turn &optional segment)
-  "Return seven root fields describing TURN in SEGMENT."
+  "Return root fields describing TURN in SEGMENT."
   (list :current-segment (or segment 1)
         :total-turn-count turn
         :prompt-index (list (cons (or segment 1)
@@ -47,7 +47,7 @@
     (should (= 1 (plist-get projected :current-segment)))
     (should (= 0 (plist-get projected :total-turn-count)))
     (should-not (plist-get projected :prompt-index)))
-  :doc "detaches all seven seeded fields, including strings, from decoded state"
+  :doc "detaches all seeded root fields, including strings, from decoded state"
   (let* ((session (mevedel-session--create))
          (sidecar (test-mevedel-session-checkpoint--root 3 2))
          (before (mevedel-session-checkpoint--copy sidecar)))

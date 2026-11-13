@@ -480,7 +480,7 @@
             (with-current-buffer buffer (goto-char (point-max)) (insert "changed\n")))
           (advice-add 'mevedel-buddy--buffer-section :before count-section)
           (cl-letf (((symbol-function 'mevedel-buddy--request)
-                     (lambda (scope _profile payload _buffers through _automatic)
+                     (lambda (scope _profile payload _buffers through _automatic &optional _taken-only)
                        (should input-ran)
                        (should (= calls 2))
                        (should (string-search "buddy-first" payload))

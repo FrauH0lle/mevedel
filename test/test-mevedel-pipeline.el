@@ -4931,6 +4931,7 @@ cover, so the permission step's warning about it is captured here."
             #'mevedel-pipeline--step-normalize-paths
             #'mevedel-pipeline--step-prepare-resources
             #'mevedel-tool-permission-step
+            #'mevedel-pipeline--step-capture-coverage
             #'mevedel-pipeline--step-handler
             #'mevedel-pipeline--step-render-transform
             #'mevedel-pipeline--step-post-tool-hooks
@@ -4944,8 +4945,9 @@ cover, so the permission step's warning about it is captured here."
   (let* ((tool (mevedel-tool--create
                 :name "WriteTool" :read-only-p nil :snapshot-p t))
          (steps (mevedel-pipeline--build-steps tool)))
-    (should (eq #'mevedel-pipeline--step-snapshot (nth 5 steps)))
-    (should (eq #'mevedel-pipeline--step-handler (nth 6 steps))))
+    (should (eq #'mevedel-pipeline--step-capture-coverage (nth 5 steps)))
+    (should (eq #'mevedel-pipeline--step-snapshot (nth 6 steps)))
+    (should (eq #'mevedel-pipeline--step-handler (nth 7 steps))))
 
   :doc "mutating tools without a snapshot declaration skip snapshotting"
   (let ((tool (mevedel-tool--create :name "MkDir" :read-only-p nil)))

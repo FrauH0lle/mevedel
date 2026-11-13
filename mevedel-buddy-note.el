@@ -22,8 +22,10 @@
 (declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
 
 ;; `mevedel-buddy'
+(declare-function mevedel-buddy--changes-for-scope "mevedel-buddy" (scope-key))
 (declare-function mevedel-buddy--guide-payload "mevedel-buddy" (beg end))
 (declare-function mevedel-buddy--payload-lines "mevedel-buddy" (payload))
+(declare-function mevedel-buddy--scope-key "mevedel-buddy" ())
 
 ;; `mevedel-notes'
 (declare-function mevedel-note-close "mevedel-notes" (note reason))
@@ -82,7 +84,15 @@ Nil denies every tool call, including calls after abandonment.")
   (let* ((first (line-number-at-pos (overlay-start note)))
          (last (line-number-at-pos (max (overlay-start note) (1- (overlay-end note)))))
          (limit (max 1 mevedel-buddy-note-read-limit))
-         (focus (or (seq-find (lambda (line) (<= first line last)) shown)
+         (edit (seq-find
+                (lambda (change)
+                  (and (equal (buffer-name) (plist-get change :buffer))
+                       (< (plist-get change :beg) (overlay-end note))
+                       (> (plist-get change :end) (overlay-start note))))
+                (mevedel-buddy--changes-for-scope (mevedel-buddy--scope-key))))
+         (focus (or (when edit
+                      (line-number-at-pos (min (point-max) (plist-get edit :beg))))
+                    (seq-find (lambda (line) (<= first line last)) shown)
                     (line-number-at-pos (point))))
          (from (max first (min (1+ (- last limit)) (- focus (/ limit 2)))))
          (to (min last (+ from limit -1))))
@@ -146,6 +156,25 @@ within six lines of the edited region; other notes remain out of the prompt."
               (format (concat "\nWorkspace dial: %s. Quiet: only taken-note code. "
                               "Watching: likely mistakes only. Active: ideas only near "
                               "the supplied goals; elsewhere behave like Watching.\n") level)))))
+
+(defun mevedel-buddy-note-review-hash (context)
+  "Hash captured goals and taken code together with request CONTEXT."
+  (cl-labels ((records (entries)
+                (sort
+                 (mapcar (lambda (record)
+                           (let ((note (plist-get record :overlay)))
+                             (list (overlay-get note 'mevedel-uuid)
+                                   (overlay-get note 'mevedel-id)
+                                   (plist-get record :text)
+                                   (plist-get record :code)
+                                   (plist-get record :taken))))
+                         entries)
+                 (lambda (a b) (string< (car a) (car b))))))
+    (let ((print-length nil) (print-level nil))
+      (secure-hash 'sha256
+                   (prin1-to-string
+                    (list context (records mevedel-buddy-note--taken)
+                          (records mevedel-buddy-note--goals)))))))
 
 (defun mevedel-buddy-note--near-goal-p (buffer position records distance &optional taken)
   "Whether BUFFER's POSITION is within DISTANCE lines of captured RECORDS.

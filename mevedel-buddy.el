@@ -52,11 +52,13 @@
 (declare-function mevedel-buddy-note-capture-markers "mevedel-buddy-note" (buffer-names))
 (declare-function mevedel-buddy-note-finish-review "mevedel-buddy-note" ())
 (declare-function mevedel-buddy-note-prepare-context "mevedel-buddy-note" (payload &optional level))
+(declare-function mevedel-buddy-note-review-hash "mevedel-buddy-note" (context))
 (declare-function mevedel-buddy-note-release-markers "mevedel-buddy-note" ())
 (declare-function mevedel-buddy-note-restore "mevedel-buddy-note" ())
 (declare-function mevedel-buddy-note-serialize "mevedel-buddy-note" ())
 (declare-function mevedel-buddy-note-tools "mevedel-buddy-note" (currentp))
 (defvar mevedel-buddy-note--scope-buffers)
+(defvar mevedel-buddy-note--taken)
 
 ;; `mevedel-chat'
 (defvar mevedel--session)
@@ -789,13 +791,14 @@ the first."
   (when (and mevedel-buddy--running mevedel-buddy--running-automatic)
     (mevedel-buddy--abandon 'preempted)))
 
-(defun mevedel-buddy--request (scope-key profile payload buffer-names
-                                         reviewed-through level)
+(cl-defun mevedel-buddy--request (scope-key profile payload buffer-names
+                                         reviewed-through level &optional taken-only)
   "Send PAYLOAD for SCOPE-KEY using PROFILE and settle the result.
 
 BUFFER-NAMES bounds which buffers the review may touch.  REVIEWED-THROUGH
 is recorded when the review settles on its own.  LEVEL is the captured
-automatic dial level, or nil for an explicitly requested review."
+automatic dial level, or nil for an explicitly requested review.
+TAKEN-ONLY means PAYLOAD has no edited-code section."
   (require 'gptel)
   (require 'mevedel-buddy-note)
   (require 'mevedel-engine)
@@ -808,7 +811,8 @@ automatic dial level, or nil for an explicitly requested review."
         (generation (cl-incf mevedel-buddy--generation))
         (source (current-buffer))
         (brief (mevedel-buddy--brief-section scope-key))
-        (request-buffer (generate-new-buffer " *mevedel-buddy-request*")))
+        (request-buffer (generate-new-buffer " *mevedel-buddy-request*"))
+        taken-notes review-hash)
     (unless (plist-get policy :model)
       (kill-buffer request-buffer)
       (mevedel-diagnostic-user-error (mevedel-diagnostic-scope source) "No model resolves for the buddy workload"))
@@ -825,7 +829,18 @@ automatic dial level, or nil for an explicitly requested review."
         (progn
           (mevedel-buddy-note-restore)
           (setq payload (mevedel-buddy-note-prepare-context
-                         payload level))
+                         payload level)
+                taken-notes (mapcar (lambda (record) (plist-get record :overlay))
+                                    mevedel-buddy-note--taken)
+                review-hash (mevedel-buddy-note-review-hash
+                             (list scope-key level brief)))
+          (when (and automatic taken-only taken-notes
+                     (cl-every (lambda (note)
+                                 (equal review-hash
+                                        (overlay-get note 'mevedel-note-buddy-reviewed-hash)))
+                               taken-notes))
+            (mevedel-buddy--settle scope-key reviewed-through)
+            (cl-return-from mevedel-buddy--request nil))
           (mevedel-buddy-note-capture-markers
            (mevedel-buddy--payload-lines payload)))
       (error
@@ -842,6 +857,10 @@ automatic dial level, or nil for an explicitly requested review."
              ;; review's changes, and must not tear down whichever review
              ;; is running now.
              (when (mevedel-buddy--current-generation-p generation)
+               (when ok
+                 (dolist (note taken-notes)
+                   (when (overlay-buffer note)
+                     (overlay-put note 'mevedel-note-buddy-reviewed-hash review-hash))))
                (mevedel-buddy--telemetry 'buddy-review-settled
                                          :scope scope-key :settled ok
                                          :rounds rounds)
@@ -990,7 +1009,7 @@ TAKEN-NAMES includes watched buffers even when they have no recorded edits."
                            (mevedel-buddy--request
                             scope-key 'buddy
                             (concat payload (mevedel-buddy--severity-instruction))
-                            names through level)))))
+                            names through level (string-empty-p payload))))))
                  (error
                   (when (or dispatching (mevedel-buddy--current-generation-p generation))
                     (mevedel-buddy--abandon 'preparation-failed)))))))))

@@ -35,7 +35,10 @@ no inferred file-mode history: existing checkpoints record bytes and absence,
 not permissions.
 
 Capture coverage is unchanged. Shell, Eval and uncaptured agent effects are not
-made reversible. Known gaps remain visible, not presented as restored paths.
+made reversible. After permission, the pipeline records each turn's Bash, Eval
+and other unsnapshotted mutating tools, Agent and SendMessage as untracked
+effects. Rewind and the impact report treat them, like capture failures, as
+known gaps, never as restored paths, so coverage is reported incomplete.
 New pre-change captures use literal bytes, matching post-change capture; the
 human-facing final diff decodes them for presentation. Existing backup artifacts
 and the persisted index format remain unchanged and readable. Old backups
@@ -80,3 +83,9 @@ The initial reversal implementation offered only cancel and force. The notes
 redesign adds staged smerge resolutions so overlapping edits need not force a
 choice between abandoning Rewind and overwriting unrelated work. It reuses the
 prepared-change editor while retaining the all-or-nothing transaction.
+
+Removing directive records also removed the pipeline step that recorded
+untracked effects, because it was gated on a directive. A note turn running
+`sed -i` then rewound as "Checkpoint coverage: complete" and silently kept the
+shell change. The step now records for every request, and the effects persist
+per turn on the session rather than on a directive attempt.

@@ -217,6 +217,7 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-file-snapshots "mevedel-structs" (cl-x))
+(declare-function mevedel-request-untracked-effects "mevedel-structs" (cl-x))
 (declare-function mevedel-request-turn "mevedel-structs" (cl-x))
 (declare-function mevedel-session-chapters "mevedel-structs" (cl-x))
 (declare-function mevedel-session-control-transfer "mevedel-structs" (cl-x))
@@ -224,6 +225,7 @@
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x))
 (declare-function mevedel-session-execution-target "mevedel-structs" (cl-x))
 (declare-function mevedel-session-file-snapshots "mevedel-structs" (cl-x))
+(declare-function mevedel-session-untracked-effects "mevedel-structs" (cl-x))
 (declare-function mevedel-session-pending-publication "mevedel-structs" (cl-x))
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x))
 (declare-function mevedel-session-prompt-index "mevedel-structs" (cl-x))
@@ -2752,7 +2754,8 @@ Edits made after capture remain modified.  Nothing is published here."
       (mevedel-session-artifacts-snapshot-modified
        session
        (or (mevedel-session-turn-count session) 0)
-       (mevedel-request-file-snapshots mevedel--current-request)))
+       (mevedel-request-file-snapshots mevedel--current-request)
+       (mevedel-request-untracked-effects mevedel--current-request)))
     (setq instructions
           (mevedel-session-artifacts--instruction-artifacts session buffer))
     (with-current-buffer buffer
@@ -2983,7 +2986,9 @@ the caller's gate token."
                   (mevedel-session-artifacts-snapshot-modified
                    session
                    (or (mevedel-session-turn-count session) 0)
-                   pre-snapshots)))
+                   pre-snapshots
+                   (mevedel-request-untracked-effects
+                    mevedel--current-request))))
               (mevedel-session-artifacts-update-prompt-index session buffer)
               (let ((checkpoint
                      (mevedel-session-checkpoint-capture
@@ -3225,12 +3230,15 @@ timestamp: another save updates this checkpoint, not the file's turn history."
                                     :pre-backup-name pre-backup-name))))))
         (error (funcall gap (error-message-string err))))))))
 
-(defun mevedel-session-artifacts-snapshot-modified (session turn-n pre-snapshots)
+(defun mevedel-session-artifacts-snapshot-modified
+    (session turn-n pre-snapshots &optional untracked)
   "Snapshot files modified during TURN-N for SESSION.
 
 PRE-SNAPSHOTS is a hash-table mapping absolute path to the file's content
 at turn start (nil for paths that did not yet exist).  Typically the
 `file-snapshots' slot of the just-completed request.
+UNTRACKED is the request's alist of tool effects outside those snapshots;
+when non-nil it is recorded under TURN-N for Rewind's coverage report.
 
 For each changed path, persist its pre- and post-turn content or absence
 under TURN-N.  Known capture failures remain explicit gap entries.  TURN-N
@@ -3238,6 +3246,9 @@ is recorded even when no tracked file changed.  Returns the list of backup
 names written."
   (when (and (mevedel-session-save-path session)
              (hash-table-p pre-snapshots))
+    (when untracked
+      (setf (alist-get turn-n (mevedel-session-untracked-effects session))
+            (copy-tree untracked)))
     (let ((previous (cdr (assoc turn-n (mevedel-session-file-snapshots session))))
           entries written)
       (maphash
