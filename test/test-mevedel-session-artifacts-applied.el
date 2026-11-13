@@ -195,7 +195,25 @@ PORTABLE selects a portable session over a file one."
          (mevedel-session-artifacts-record-applied
           session 1 (list (test-mevedel-applied--change a "a3"))
           :then (lambda (_) (cl-incf thens) (error "Then failed"))))
-        (should (equal '(2 1) (list thens saves)))))))
+        (should (equal '(2 1) (list thens saves))))))
+  :doc "a failed pre-image read stops THEN and the save"
+  (test-mevedel-applied--with-session nil
+    (let ((a (test-mevedel-applied--file root "a.txt" "a1"))
+          (saves 0) (thens 0)
+          (save (symbol-function 'mevedel-session-artifacts-save)))
+      (test-mevedel-applied--seed session 1 a "a0")
+      (test-mevedel-applied--file root "a.txt" "a2")
+      (delete-file (file-name-concat
+                    (mevedel-session-save-path session) "file-history"
+                    (plist-get (test-mevedel-applied--entry session 1 a)
+                               :pre-backup-name)))
+      (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
+                 (lambda (&rest args) (cl-incf saves) (apply save args))))
+        (should-error
+         (mevedel-session-artifacts-record-applied
+          session 1 (list (test-mevedel-applied--change a "a1"))
+          :then (lambda (_) (cl-incf thens)))))
+      (should (equal '(0 0) (list thens saves))))))
 
 (provide 'test-mevedel-session-artifacts-applied)
 ;;; test-mevedel-session-artifacts-applied.el ends here
