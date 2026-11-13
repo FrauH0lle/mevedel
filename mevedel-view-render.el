@@ -6808,8 +6808,11 @@ before expanding children."
             :pending-count (mevedel-view--pending-running-count pending)
             :pending-failed (mevedel-view--pending-failed-count pending)
             :unconfined (plist-get group :unconfined)
-            :status (cond ((> (plist-get group :failed) 0) 'error)
-                          ((plist-get group :warning) 'warning))
+            ;; Only a group whose every call failed is an error; some
+            ;; failures warn, as the summary's own counts say which.
+            :status (let ((failed (plist-get group :failed)))
+                      (cond ((and (> failed 0) (= failed (plist-get group :tools))) 'error)
+                            ((or (> failed 0) (plist-get group :warning)) 'warning)))
             :reader-open reader-p
             ;; A new group must not hide a row the reader already opened or
             ;; is on.  An explicit fold of the group itself still takes
@@ -8957,10 +8960,16 @@ PRESERVED-LIVE-TAIL contains any view-only streamed text."
 LIVE-DATA-BUF owns live status.  RENDERING identifies the view.
 HISTORICAL-P suppresses live-only rows.  START-TIME is for diagnostics.
 The projection drew settled history only; in-flight tool calls return
-with the next boundary render of the live turn."
+with a live render of the turn.  Under a projection writer that render
+queues behind it and runs before redisplay, so the running rows never
+disappear from the screen; otherwise it waits for the next boundary render."
   (with-current-buffer (plist-get rendering :view-buffer)
     (when (and (not historical-p) mevedel-view--pending-tool-calls)
-      (mevedel-view--schedule-tool-boundary-render live-data-buf))
+      (if (and mevedel-view-render--owner
+               (mevedel-view-stream-in-flight-turn-start-position)
+               (markerp mevedel-view--data-turn-start))
+          (mevedel-view-render-live-update live-data-buf)
+        (mevedel-view--schedule-tool-boundary-render live-data-buf)))
     (unless mevedel-view--agent-transcript-p
       (mevedel-view-refresh-input-prompt)
       ;; Reset removed these zones too.  Materialize them under the current

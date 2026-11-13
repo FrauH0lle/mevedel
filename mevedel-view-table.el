@@ -577,6 +577,35 @@ A cell that fills its allocation needs no padding."
                       col-widths "┼")
            "┤")))
 
+(defun mevedel-view-table--border-at-p (pos string)
+  "Return non-nil when character POS of STRING is a rendered table border."
+  (or (eq (get-text-property pos 'font-lock-face string)
+          'mevedel-view-table-border)
+      (eq (get-text-property pos 'face string) 'mevedel-view-table-border)))
+
+(defun mevedel-view-table-plain-text (beg end)
+  "Return BEG..END of a rendered table as cell text without borders.
+Cells of one row are joined by tabs and separator rows are dropped.
+Empty cells between two borders are kept so columns stay aligned."
+  ;; shortcut: a wrapped cell's continuation lines copy as separate rows;
+  ;; rejoin them by row if pasted wrapped cells prove confusing.
+  (let (lines)
+    (dolist (line (split-string (buffer-substring beg end) "\n"))
+      (let ((cells nil) (cell-start 0))
+        (dotimes (i (length line))
+          (when (mevedel-view-table--border-at-p i line)
+            (push (substring-no-properties line cell-start i) cells)
+            (setq cell-start (1+ i))))
+        (push (substring-no-properties line cell-start) cells)
+        ;; Pieces outside the outer borders are empty; drop only those.
+        (let ((cells (mapcar #'string-trim cells)))
+          (while (equal (car cells) "") (pop cells))
+          (setq cells (nreverse cells))
+          (while (equal (car cells) "") (pop cells))
+          (when cells
+            (push (string-join cells "\t") lines)))))
+    (string-join (nreverse lines) "\n")))
+
 (defun mevedel-view-table--render-data-row (cells col-widths row-face window)
   "Build the rendered string for data row CELLS, possibly multi-line.
 COL-WIDTHS is the allocated column width list.  ROW-FACE, when

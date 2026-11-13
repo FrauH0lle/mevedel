@@ -123,11 +123,12 @@ commands (2 failed)'; then distinct completions by outcome, then messages."
 
 (defun mevedel-activity-group--group (entries)
   "Return the group of run ENTRIES, which start and end with members."
-  (let ((running 0) (failed 0) warning unconfined members)
+  (let ((running 0) (failed 0) (tools 0) warning unconfined members)
     (dolist (entry entries)
       (unless (eq (plist-get entry :role) 'transparent)
         (push entry members)
         (when (eq (plist-get entry :kind) 'tool)
+          (cl-incf tools)
           (when (plist-get entry :unconfined)
             (setq unconfined t))
           (pcase (plist-get entry :status)
@@ -141,11 +142,12 @@ commands (2 failed)'; then distinct completions by outcome, then messages."
           :summary (mevedel-activity-group--summary members)
           :running running
           :failed failed
+          :tools tools
           :warning warning
           :unconfined unconfined
           :status (cond ((> running 0) 'running)
-                        ((> failed 0) 'failed)
-                        (warning 'warning)
+                        ((and (> failed 0) (= failed tools)) 'failed)
+                        ((or (> failed 0) warning) 'warning)
                         (t 'completed)))))
 
 (defun mevedel-activity-group-partition (entries threshold)
@@ -161,11 +163,13 @@ stay single.
 
 A group is a plist: `:group' t, `:entries' its member and enclosed
 transparent entries, `:ids' their `:id's, `:summary', `:running' (running
-tools), `:failed' (failed tools), `:warning' (non-nil when a tool warned),
+tools), `:failed' (failed tools), `:tools' (all tools), `:warning' (non-nil
+when a tool warned),
 `:unconfined' (non-nil when a tool ran without sandbox confinement), and
 `:status', which is `running', `failed', `warning' or `completed'.  The
-summary counts each tool's failures beside it.  Running and failure facts
-are independent: a running group keeps its failure counts."
+summary counts each tool's failures beside it.  A group is `failed' only
+when every tool failed; some failures make it `warning'.  Running and
+failure facts are independent: a running group keeps its failure counts."
   (let (out run tail tools scope)
     (cl-flet ((close ()
                 (when run

@@ -53,7 +53,7 @@
 (declare-function mevedel-session-control-fs-run-program
                   "mevedel-session-control-fs" (operations &optional lock-directory))
 (declare-function mevedel-session-control-fs-run-program-async
-                  "mevedel-session-control-fs" (operations callback &optional scope connected-only))
+                  "mevedel-session-control-fs" (operations callback &optional scope lock-directory connected-only))
 (autoload 'mevedel-session-control-fs-program-value "mevedel-session-control-fs")
 (autoload 'mevedel-session-control-fs-read-file "mevedel-session-control-fs")
 (autoload 'mevedel-session-control-fs-run-program "mevedel-session-control-fs")
@@ -1881,7 +1881,7 @@ untouched until an explicit workspace operation observes it normally."
                                      workspace (secure-hash 'sha256 bytes) (plist-get decoded :data)))
                                 (failed (plist-get decoded :reason))))))
                         (error (failed (error-message-string err)))))
-                    root t)))
+                    root nil t)))
               (when (process-live-p process)
                 (setq timer (run-at-time 15 nil #'delete-process process))))
           (error (failed (error-message-string err))))))))

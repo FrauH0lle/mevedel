@@ -116,6 +116,22 @@ cosmetic issue. Test it the way the
 [testing conventions](docs/development.md#testing-conventions) describe for
 redraws.
 
+## RESPONSIVE BY DEFAULT
+
+Treat latency, responsiveness and resource use as review criteria, not polish.
+
+- **Keep the interactive path fast.** Typing, redraws and command response do
+  no blocking work. Move slow, remote or repeated work off that path, or bound
+  it. Count remote round trips: on a TRAMP workspace each one is a network
+  delay.
+- **Idle means idle.** With nothing running, mevedel does no polling, redraws
+  or file checks. Prefer event-driven updates; start a timer when its work
+  begins and cancel it when the work ends. Periodic work runs only while it
+  has a job, at a rate proportionate to that job.
+- **Measure.** Back performance claims with a measurement of the affected
+  path. Treat a measurable regression in latency, rendering cost, steady-state
+  CPU or idle wakeups as a defect.
+
 ## NO BACKWARDS COMPATIBILITY
 
 mevedel is under active development and has no backwards-compatibility

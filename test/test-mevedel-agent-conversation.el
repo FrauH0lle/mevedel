@@ -1280,7 +1280,7 @@
            :parent-data-buffer parent
            :parent-tool-use-id "call_summary"
            :sandbox-summary-cell (list summary)))
-         patched rerendered row-refreshed (row-found t))
+         patched rerendered row-refreshed handle-refreshed (row-found t))
     (unwind-protect
         (progn
           (with-current-buffer parent
@@ -1302,8 +1302,7 @@
                ((symbol-function 'mevedel-view-rerender)
                 (lambda (buffer) (setq rerendered buffer)))
                ((symbol-function 'mevedel-view-refresh-agent-rendering)
-                (lambda (&rest _)
-                  (error "Targeted refresh used after summary patch"))))
+                (lambda (&rest args) (setq handle-refreshed args))))
             (mevedel-agent-conversation-refresh invocation)
             (should (eq parent (nth 0 patched)))
             (should (equal "call_summary" (nth 1 patched)))
@@ -1313,13 +1312,16 @@
             ;; Only the patched row is redrawn, in the view, never the history.
             (should (equal (list view parent "call_summary") row-refreshed))
             (should-not rerendered)
-            ;; A row the view cannot find falls back to the full render.
+            (should-not handle-refreshed)
+            ;; A row the view cannot find, such as an agent handle, gets the
+            ;; handle refresh, never a full render.
             (setq row-found nil row-refreshed nil)
             (setf (car (mevedel-agent-invocation-sandbox-summary-cell invocation))
                   (plist-put (copy-sequence summary) :attempt-count 2))
             (mevedel-agent-conversation-refresh invocation)
             (should row-refreshed)
-            (should (eq view rerendered))))
+            (should (equal (list view "/root/summary") handle-refreshed))
+            (should-not rerendered)))
       (kill-buffer parent)
       (kill-buffer view)))
   :doc "summary redraw preserves a multiline leading-> composer draft"

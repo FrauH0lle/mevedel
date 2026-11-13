@@ -467,7 +467,9 @@ BOUNDARY returns reminder text, or nil, after each completed tool batch."
                             (setf (mevedel-engine-info request)
                                   (plist-put (mevedel-engine-info request)
                                              :mevedel-claude-continuation-sample-spent t)))
-                          (list :continue :json-false :stopReason "Mevedel will deliver the full context in a continuation prompt before further work."))
+                          ;; The model reads this beside the continuation prompt;
+                          ;; a "wait" here made it end the turn after steering.
+                          (list :continue :json-false :stopReason "Paused only to deliver input as a prompt; the turn has not ended. Continue the work as that input directs."))
                       (list :hookSpecificOutput
                             (list :hookEventName name :additionalContext context)))
                   '(:continue t)))))))

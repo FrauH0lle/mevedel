@@ -910,7 +910,8 @@ its row shows `✓`, or `×` for a failure, and it leaves the running count,
 so one early finisher never reshapes the run. A folded running group cannot
 show those rows, so its summary counts each failure beside its tool, as in
 `read 4 files (1 failed)`; once no call is left
-running, a failure takes the group's marker as `×`. The ID-less post-tool hook
+running, failures take the group's marker as `!`, or `×` when every call
+failed. The ID-less post-tool hook
 that precedes the result retires such a finished call first and never a
 bound sibling still running. A response that opens with tool
 calls has no turn in the transcript until the first result lands, so the
@@ -939,10 +940,11 @@ rows. If that redraw fails, the running decorations are still removed and a
 running group's settled marker is restored in place.
 
 Failed calls stay in their run, so a call failing never reshapes it. A folded
-group containing one takes the red `×` marker in the `error` face, and its
-summary counts the failures beside the tool phrase they belong to, as in
-`× 5 calls: ran 4 commands (2 failed), read 1 file ▸`, the same text its
-running form showed. Only the `×` and each `N failed` are red; the folded row
+group whose every call failed takes the red `×` marker in the `error` face; one
+where only some failed takes the warning `!`, since most of its work
+succeeded. Its summary counts the failures beside the tool phrase they belong
+to, as in `! 5 calls: ran 4 commands (2 failed), read 1 file ▸`, the same text
+its running form showed. Each `N failed` is red; the folded row
 still says which tool failed without a separate tail. The failed row inside the group carries its own `×`. Warning rows stay groupable; a group containing
 a warning carries `!`, and the warning stays visible on its nested row.
 Failed tool rows, including nested calls inside compound tools, start collapsed.
@@ -2931,6 +2933,11 @@ follow-up later starts one normal user turn. Steering always has delivery
 priority over follow-ups regardless of submission order; FIFO applies within
 each category. While idle, both send keys perform an ordinary immediate send.
 Slash commands cannot become pending input.
+
+While a completed turn is still saving or running its completion hooks, both
+send keys accept ordinary composer text as a queued follow-up. It starts only
+after settlement finishes and the normal delivery holds clear; it cannot steer
+the completed turn or start a new request before its history is published.
 
 The interaction zone shows up to three compact previews per category. Click or
 `RET` on an entry expands its input locally, with one entry open at a time.

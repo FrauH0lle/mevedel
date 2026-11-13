@@ -162,6 +162,25 @@
     (should (plist-get group :warning))
     (should (equal "5 calls: read 2 files, searched 2 patterns (2 failed), ran 1 command"
                    (plist-get group :summary))))
+  :doc "some failures warn; only a group whose every tool failed has failed"
+  (let ((status
+         (lambda (&rest statuses)
+           (let ((group
+                  (car (mevedel-activity-group-partition
+                        (mapcar (lambda (status)
+                                  (mevedel-view--activity-group-entry
+                                   (list :kind 'tool :count 1
+                                         :rendering (list :status status :group-tool "Read")
+                                         :group-child (list :tool "Read" :status status))))
+                                statuses)
+                        nil))))
+             (list (plist-get group :status)
+                   (plist-get (mevedel-view--tool-group-rendering group (current-buffer))
+                              :status))))))
+    (with-temp-buffer
+      (should (equal '(warning warning) (funcall status 'error 'success)))
+      (should (equal '(failed error) (funcall status 'error 'error)))
+      (should (equal '(completed nil) (funcall status 'success 'success)))))
   :doc "failures count beside each tool phrase, marked for styling"
   (let ((summary (plist-get
                   (car (mevedel-activity-group-partition

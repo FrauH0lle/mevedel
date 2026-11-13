@@ -1117,24 +1117,39 @@
       (should (equal (nreverse calls)
                      '(input status interaction progress)))))
 
-  :doc "in-flight calls return with a boundary render of the live turn"
+  :doc "in-flight calls return with a live render of the turn"
   (mevedel-view-test--with-buffers
-    (let (scheduled)
+    (let (scheduled live)
       (with-current-buffer view-buf
         (setq mevedel-view--pending-tool-calls
               (list (list (mevedel-view--pending-tool-claim-key
                            '(:name "Read" :args (:file_path "a")))
                           "Read" "a")))
         (cl-letf (((symbol-function 'mevedel-view--schedule-tool-boundary-render)
-                   (lambda (buffer) (push buffer scheduled))))
+                   (lambda (buffer) (push buffer scheduled)))
+                  ((symbol-function 'mevedel-view-render-live-update)
+                   (lambda (buffer) (push buffer live)))
+                  ((symbol-function 'mevedel-view-stream-in-flight-turn-start-position)
+                   (lambda () 1)))
+          ;; Without a projection writer, the boundary render brings them back.
           (mevedel-view--full-rerender-finish
            data-buf data-buf (list :view-buffer view-buf) nil (float-time))
           (should (equal (list data-buf) scheduled))
+          (should-not live)
           (setq scheduled nil)
+          ;; Under a writer the live render is queued before redisplay.
+          (let ((mevedel-view-render--owner t)
+                (mevedel-view--data-turn-start
+                 (with-current-buffer data-buf (copy-marker (point-min)))))
+            (mevedel-view--full-rerender-finish
+             data-buf data-buf (list :view-buffer view-buf) nil (float-time)))
+          (should (equal (list data-buf) live))
+          (should-not scheduled)
           ;; A historical projection draws no live turn.
           (mevedel-view--full-rerender-finish
            data-buf data-buf (list :view-buffer view-buf) t (float-time))
-          (should-not scheduled))
+          (should-not scheduled)
+          (should (equal (list data-buf) live)))
         (setq mevedel-view--pending-tool-calls nil)))))
 
 (mevedel-deftest mevedel-view--strip-render-data-display-text ()
@@ -9388,7 +9403,7 @@
           (should (= 1 (cl-count-if
                         (lambda (line)
                           (string-match-p
-                           "× 9 calls: read 8 files, ran 1 command (1 failed) ▸$" line))
+                           "! 9 calls: read 8 files, ran 1 command (1 failed) ▸$" line))
                         (split-string text "\n"))))
           (should-not (string-match-p "Bash:" text))
           (should-not (string-match-p "Error: command failed" text)))

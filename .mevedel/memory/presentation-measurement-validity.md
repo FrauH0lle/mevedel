@@ -1,6 +1,6 @@
 ---
 name: "Verify graphical results in an isolated, presenting environment"
-description: "Separate static appearance from presentation and timing claims; never replace live Emacs modules for graphical checks."
+description: "Match graphical fixtures and presentation evidence to the claim; never replace live Emacs modules for graphical checks."
 type: feedback
 ---
 
@@ -17,6 +17,14 @@ Consult the graphical-check section of `docs/development.md` for the maintained 
 **Historical fixture correction, 2026-10-24:** copying `font-lock-face` to `face` was a workaround, not the preferred setup. Missing fontification was attributed to fixture buffer names beginning with a space; rename such fixtures rather than retaining the face-copy recipe.
 
 Static captures can establish appearance but do not establish hover behavior, frame timing, or sustained performance. Use checks appropriate to each claim. Keep live inspection bounded and non-perturbing; an earlier row-property dump returned 20 MB without being necessary to establish the visual result.
+
+## Preserve realistic chrome in native geometry fixtures
+
+An Emacs 31.1 viewport investigation recorded 2026-11-10 found that a header-free native fixture moved only the viewport, while a corresponding fixture with a static header reproduced viewport-first point relocation. The header-free result had masked the mechanism rather than establishing its absence.
+
+**Reusable inference:** for native scrolling, point-preservation, and redisplay claims, include relevant header/tab chrome and body geometry in the isolated fixture. Check both viewport and point across redisplay; point movement may follow viewport movement rather than initiate it. Simplify a fixture only after establishing that the removed chrome does not control the behavior being tested.
+
+**Attribution limit:** this experiment demonstrated a native mechanism under an artificial stimulus. It did not establish that the mechanism caused the archived live composer exits or identify the origin of their pending state. A matching isolated mechanism is not a historical event trace.
 
 ## Protocol responsiveness is not completed presentation
 

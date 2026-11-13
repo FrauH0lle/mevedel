@@ -166,6 +166,40 @@ streams over stdin."
           (should (equal "one\n" (plist-get (nth 1 (car settled)) :value))))
       (delete-directory root t)))
 
+  :doc "async and sync programs share the stable parent lock"
+  (let* ((root (make-temp-file "mevedel-control-lock-" t))
+         (path (file-name-concat root "value"))
+         (pause (file-name-concat root "paused"))
+         (mevedel-session-control-fs--test-pause-file pause)
+         first second)
+    (unwind-protect
+        (progn
+          (mevedel-session-control-fs-run-program-async
+           (list (list :op 'write :path path :content "first"))
+           (lambda (results error) (setq first (list results error))) nil root)
+          (with-timeout (10 (ert-fail "Locked program never paused"))
+            (while (not (file-exists-p pause)) (accept-process-output nil 0.01)))
+          (should (mevedel-session-control-fs-async-busy-p root))
+          (let ((mevedel-session-control-fs--test-pause-file nil))
+            (mevedel-session-control-fs-run-program-async
+             (list (list :op 'verify :path path :content "first")
+                   (list :op 'write :path path :content "second"))
+             (lambda (results error) (setq second (list results error))) nil root))
+          (accept-process-output nil 0.05)
+          (should-not second)
+          (write-region "" nil (concat pause ".continue") nil 'silent)
+          (with-timeout (10 (ert-fail "Locked programs never settled"))
+            (while (not (and first second)) (accept-process-output nil 0.01)))
+          (should-not (cadr first))
+          (should-not (cadr second))
+          (should-not (mevedel-session-control-fs-async-busy-p root))
+          (should (equal '(ok ok) (mapcar (lambda (r) (plist-get r :status))
+                                         (car second))))
+          (should (equal "second" (mevedel-session-control-fs-read-file path))))
+      (write-region "" nil (concat pause ".continue") nil 'silent)
+      (mevedel-session-control-fs-wait-async)
+      (delete-directory root t)))
+
   :doc "runs synchronously where the editor is about to exit"
   (let* ((root (make-temp-file "mevedel-control-async-" t))
          (mevedel-session-control-fs--async-wait t)
@@ -248,6 +282,37 @@ streams over stdin."
           (should (equal "hello" (mevedel-session-control-fs-read-file path)))
           (should-not (cl-some (lambda (name) (string-prefix-p ".mevedel-control-fs-staged-" name))
                                (directory-files root))))
+      (delete-directory root t)))
+
+  :doc "an argument-carried child can finish before the launcher resumes"
+  (let* ((root (make-temp-file "mevedel-control-async-finished-" t))
+         (path (file-name-concat root "file"))
+         (spawn (symbol-function 'make-process))
+         (eof (symbol-function 'process-send-eof))
+         (calls 0) (eofs 0) settled)
+    (unwind-protect
+        (cl-letf (((symbol-function 'make-process)
+                   (lambda (&rest args)
+                     (let* ((process (apply spawn args))
+                            (proc (format "/proc/%d" (process-id process)))
+                            (deadline (+ (float-time) 5)))
+                       ;; Reap the real child without dispatching its sentinel.
+                       (while (and (file-exists-p proc) (< (float-time) deadline)))
+                       (should-not (file-exists-p proc))
+                       process)))
+                  ((symbol-function 'process-send-eof)
+                   (lambda (process) (cl-incf eofs) (funcall eof process))))
+          (mevedel-session-control-fs-run-program-async
+           (list (list :op 'write :path path :content "committed"))
+           (lambda (results error)
+             (cl-incf calls)
+             (setq settled (list results error))))
+          (should (mevedel-session-control-fs-wait-async 10))
+          (should (= 1 calls))
+          (should-not (nth 1 settled))
+          (should (eq 'ok (plist-get (car (car settled)) :status)))
+          (should (= 0 eofs))
+          (should (equal "committed" (mevedel-session-control-fs-read-file path))))
       (delete-directory root t)))
 
   :doc "a large local write is staged, never inlined, and its file lives until exit"

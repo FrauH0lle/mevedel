@@ -71,23 +71,38 @@
 (autoload 'mevedel-execution-unsettled-mutation-p "mevedel-execution")
 
 ;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-create "mevedel-execution-target" (directory))
+(declare-function mevedel-execution-target-incarnation-changed-p "mevedel-execution-target" (cl-x) t)
+(declare-function mevedel-execution-target-observe-incarnation "mevedel-execution-target" (target))
+(declare-function mevedel-execution-target-probe "mevedel-execution-target" (target &optional refresh sandbox-mode))
 (declare-function mevedel-execution-target-remote-p "mevedel-execution-target" (target))
+(declare-function mevedel-execution-target-restore-incarnation "mevedel-execution-target" (target incarnation))
+(autoload 'mevedel-execution-target-create "mevedel-execution-target")
+(autoload 'mevedel-execution-target-observe-incarnation "mevedel-execution-target")
+(autoload 'mevedel-execution-target-probe "mevedel-execution-target")
 (autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
+(autoload 'mevedel-execution-target-restore-incarnation "mevedel-execution-target")
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-flush-log "mevedel-hooks" (session))
 
 ;; `mevedel-journal-capture'
+(declare-function mevedel-journal-capture--read "mevedel-journal-capture" (workspace id &optional observation))
 (declare-function mevedel-journal-capture-seal-and-schedule "mevedel-journal-capture"
                   (session buffer trigger &optional captures))
 (autoload 'mevedel-journal-capture-seal-and-schedule "mevedel-journal-capture")
+(autoload 'mevedel-journal-capture--read "mevedel-journal-capture")
 
 
 ;; `mevedel-journal-pins'
+(declare-function mevedel-journal-pins-observe "mevedel-journal-pins" (session-dir))
 (declare-function mevedel-journal-pins-present-p "mevedel-journal-pins" (session-dir))
 (autoload 'mevedel-journal-pins-present-p "mevedel-journal-pins")
+(autoload 'mevedel-journal-pins-observe "mevedel-journal-pins")
 
 ;; `mevedel-journal-process'
+(declare-function mevedel-journal-process-discard "mevedel-journal-process" (workspace id &optional original-source))
+(autoload 'mevedel-journal-process-discard "mevedel-journal-process")
 (declare-function mevedel-journal-process-stop-all "mevedel-journal-process" ())
 (defvar mevedel-journal-process--inhibit-scheduling)
 
@@ -167,6 +182,7 @@
 
 ;; `mevedel-session-control-fs'
 (defvar mevedel-session-control-fs--async-wait)
+(declare-function mevedel-session-control-fs-async-busy-p "mevedel-session-control-fs" (directory))
 (declare-function mevedel-session-control-fs-path-exists-p "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-physical-path "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-program-value "mevedel-session-control-fs" (result))
@@ -193,15 +209,20 @@
   "mevedel-session-control-transfer")
 
 ;; `mevedel-session-durability'
+(declare-function mevedel-session-durability-cleanup-assessment "mevedel-session-durability" (session-dir))
+(declare-function mevedel-session-durability-discard-session "mevedel-session-durability" (session prepare-function))
 (declare-function mevedel-session-durability-call-with-reserved-lease "mevedel-session-durability" (session function))
 (declare-function mevedel-session-durability-disclose "mevedel-session-durability" (session))
 (declare-function mevedel-session-durability-lease-acquire "mevedel-session-durability" (session-dir buffer-name &optional session))
 (declare-function mevedel-session-durability-lease-owned-p "mevedel-session-durability" (session))
 (declare-function mevedel-session-durability-lease-release "mevedel-session-durability" (session-dir &optional session token))
 (declare-function mevedel-session-durability-lease-status "mevedel-session-durability" (session-dir))
+(declare-function mevedel-session-durability-set-unsettled-mutation "mevedel-session-durability" (session value &optional token))
 (defvar mevedel-session-durability--asserted-directories)
 (defvar mevedel-session-durability--transaction-clock)
 (autoload 'mevedel-session-durability-disclose "mevedel-session-durability")
+(autoload 'mevedel-session-durability-cleanup-assessment "mevedel-session-durability")
+(autoload 'mevedel-session-durability-discard-session "mevedel-session-durability")
 (autoload 'mevedel-session-durability-lease-acquire
   "mevedel-session-durability")
 (autoload 'mevedel-session-durability-lease-owned-p
@@ -265,6 +286,10 @@
 (autoload 'mevedel-session-publication-read-batch "mevedel-session-publication")
 
 ;; `mevedel-session-recovery'
+(declare-function mevedel-session-recovery--abandon "mevedel-session-recovery" (session))
+(declare-function mevedel-session-recovery-read "mevedel-session-recovery" (session-dir &optional root-observation))
+(autoload 'mevedel-session-recovery--abandon "mevedel-session-recovery")
+(autoload 'mevedel-session-recovery-read "mevedel-session-recovery")
 (defvar mevedel-session-recovery--mutation-cache)
 
 ;; `mevedel-session-rewind'
@@ -396,6 +421,8 @@
 (autoload 'mevedel-workspace-get-or-create "mevedel-workspace")
 
 ;; `mevedel-workspace-identity'
+(declare-function mevedel-workspace-identity-read "mevedel-workspace-identity" (root))
+(autoload 'mevedel-workspace-identity-read "mevedel-workspace-identity")
 (declare-function mevedel-workspace-identity-ensure "mevedel-workspace-identity" (root))
 (autoload 'mevedel-workspace-identity-ensure "mevedel-workspace-identity")
 
@@ -2621,6 +2648,20 @@ one field with no bound on its length."
   (when-let* ((session-id (plist-get (plist-get entry :summary) :session-id)))
     (mevedel-session-control-transfer-root-buffer-for-id session-id)))
 
+(defun mevedel-session-persistence--cleanup-reasons (assessment)
+  "Describe the cleanup blockers in ASSESSMENT.
+Pending journal captures are omitted: the journal settles them unattended."
+  (mapconcat
+   (lambda (reason)
+     (pcase reason
+       ('publishing "interrupted publication")
+       ('unsettled-mutation "unresolved mutation")
+       ('recovery "recovery data retained")
+       ('live-owner "live owner")
+       ('transfer-reserved "control transfer reserved")
+       (_ "unreadable control data")))
+   (remq 'journal-pins (plist-get assessment :reasons)) ", "))
+
 (defun mevedel-session-persistence--entry-authority (workspace entry)
   "Return `(:action LABEL :detail TEXT :held BOOL)' for WORKSPACE session ENTRY.
 
@@ -2632,8 +2673,8 @@ client is writing this session now, which is a narrower question than
 whether the row resumes: an expired lease offers a takeover precisely
 because nobody is writing it any more.
 
-A whole lease observation per candidate is one target round trip per row, so
-the state and the holder are read together."
+One assessment shares the lease and retention probes; individual reasons do
+not trigger another authority read."
   (cond
    ((when-let* ((buffer (mevedel-session-persistence--entry-live-buffer entry)))
       (list :action "Switch"
@@ -2644,26 +2685,38 @@ the state and the holder are read together."
             :held t)))
    ((eq (mevedel-session-authority-mode-for-workspace workspace)
         'portable)
-    (let* ((status (mevedel-session-durability-lease-status
+    (let* ((status (mevedel-session-durability-cleanup-assessment
                     (plist-get entry :save-path)))
            (host (plist-get status :host))
            (elsewhere (and host (not (equal host (system-name))) host)))
-      (pcase (plist-get status :state)
-        ('foreign
-         (list :action "Join"
-               :detail (format "held by %s" (or host "another client"))
-               :held t))
-        ('expired
-         (list :action "Take over"
-               :detail (if host
-                           (format "lease expired, was %s" host)
-                         "lease expired")
-               :held nil))
-        (_
-         (list :action "Resume"
-               :detail (and elsewhere
-                            (format "last held by %s" elsewhere))
-               :held nil)))))
+      (cond
+       ((and (plist-get status :recoverable)
+             ;; Pending captures alone are routine; the journal drains them on its own.
+             (remq 'journal-pins (plist-get status :reasons)))
+        (list :action "Recover"
+              :detail (concat "cleanup blocked: "
+                              (mevedel-session-persistence--cleanup-reasons status))
+              :held nil :cleanup status))
+       ((eq 'unknown (plist-get status :state))
+        (list :action "Inspect" :detail "cleanup blocked: unreadable control data"
+              :held nil :cleanup status))
+       (t
+        (pcase (plist-get status :state)
+          ('foreign
+           (list :action "Join"
+                 :detail (format "held by %s" (or host "another client"))
+                 :held t))
+          ('expired
+           (list :action "Take over"
+                 :detail (if host
+                             (format "lease expired, was %s" host)
+                           "lease expired")
+                 :held nil))
+          (_
+           (list :action "Resume"
+                 :detail (and elsewhere
+                              (format "last held by %s" elsewhere))
+                 :held nil)))))))
    ((mevedel-session-persistence--active-lock-p (plist-get entry :save-path))
     (list :action "Join" :detail "locked by another process" :held t))
    (t (list :action "Resume" :detail nil :held nil))))
@@ -2745,7 +2798,18 @@ the restored chat buffer and follow the session's authority: an unheld
 session resumes, one already open in this Emacs is switched to, one another
 client holds is joined read-only and follows the owner from there, and an
 expired lease is taken over.  Starting a new session alongside an active
-writer requires accepting the shared-files advisory once per Emacs process."
+writer requires accepting the shared-files advisory once per Emacs process.
+Recovery-blocked sessions offer Recover, Discard and Cancel.  Discard refreshes
+the chooser; it never implicitly starts a replacement session."
+  (let ((result 'refresh) refreshed)
+    (while (eq result 'refresh)
+      (setq result (mevedel-session-persistence--choose-entry-once workspace refreshed)
+            refreshed t))
+    result))
+
+(defun mevedel-session-persistence--choose-entry-once (workspace refreshed)
+  "Choose one WORKSPACE entry, or return `refresh' after a discard.
+REFRESHED keeps an empty chooser open after deleting its last session."
   ;; Expired sessions and locks left behind by dead Emacsen are swept before
   ;; listing, so the chooser never offers a row that exists only because
   ;; nothing has cleaned up after a previous invocation.
@@ -2758,7 +2822,7 @@ writer requires accepting the shared-files advisory once per Emacs process."
          (incompatible
           (mevedel-session-persistence--size-incompatible
            (plist-get enumeration :incompatible))))
-    (when (or sessions incompatible)
+    (when (or sessions incompatible refreshed)
       (let* ((new-label "Start new session")
              (held-p nil)
              (session-candidates
@@ -2778,7 +2842,9 @@ writer requires accepting the shared-files advisory once per Emacs process."
                      "%-10s %s" action
                      (mevedel-session-persistence--format-session-candidate
                       entry (plist-get authority :detail)))
-                    entry)))
+                    (if (plist-get authority :cleanup)
+                        (append entry (list :cleanup (plist-get authority :cleanup)))
+                      entry))))
                sessions))
              (incompatible-candidates
               (mapcar
@@ -2819,7 +2885,7 @@ writer requires accepting the shared-files advisory once per Emacs process."
             (if (eq (plist-get entry :kind) 'incompatible)
                 (if (eq (plist-get entry :status) 'undiscoverable)
                     (mevedel-diagnostic-user-error (mevedel-diagnostic-scope workspace) "Session transcript is not safely inspectable: %s"
-                                (plist-get entry :diagnostic))
+						   (plist-get entry :diagnostic))
                   (list
                    :action 'inspect
                    :buffer
@@ -2827,9 +2893,39 @@ writer requires accepting the shared-files advisory once per Emacs process."
                     (plist-get entry :save-path)
                     (plist-get entry :authority-mode)
                     (plist-get entry :publication) (mevedel-diagnostic-scope workspace))))
-              (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
-                (mevedel-session-persistence-restore
-                 (plist-get entry :save-path) nil nil workspace)))))))))
+              (let* ((assessment (plist-get entry :cleanup))
+                     (action (when (plist-get assessment :recoverable)
+                               (completing-read
+                                "Retained session: "
+                                '("Recover" "Discard" "Cancel") nil t nil nil "Recover"))))
+                (cond
+                 ((equal action "Cancel") (signal 'quit nil))
+                 ((equal action "Discard")
+                  (if (mevedel-session-persistence-discard workspace entry)
+                      'refresh
+                    (signal 'quit nil)))
+                 ((eq 'unknown (plist-get assessment :state))
+                  (list :action 'inspect :buffer
+                        (mevedel-session-artifacts-inspect-cold-session
+                         (plist-get entry :save-path) 'portable
+                         (plist-get entry :publication)
+                         (mevedel-diagnostic-scope workspace))))
+                 (t
+                  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+                    (let ((buffer (mevedel-session-persistence-restore
+                                   (plist-get entry :save-path) nil nil workspace))
+                          (recovery (plist-get assessment :recovery)))
+                      (when (equal action "Recover")
+                        (message "Recovery opened; %s. %s"
+                                 (mevedel-session-persistence--cleanup-reasons assessment)
+                                 (cond
+                                  ((and (listp recovery) (plist-get recovery :directory))
+                                   (format "Inspect recovery data at %s before explicitly abandoning it."
+                                           (plist-get recovery :directory)))
+                                  ((memq 'unsettled-mutation (plist-get assessment :reasons))
+                                   "Verify previous processes stopped before M-x mevedel-retry-target-readiness.")
+                                  (t "Review the last committed transcript; prior client-local staging may be unavailable."))))
+                      buffer))))))))))))
 
 (defun mevedel-session-persistence-choose-conversation-variant
     (variants current-session-id)
@@ -3135,6 +3231,102 @@ active because we cannot probe the remote process."
         (mevedel-session-persistence--same-host-lock-active-p lock-info)
       ;; Cross-host: cannot verify liveness, treat as active.
       t)))
+
+(defun mevedel-session-persistence--discard-identity (workspace entry &optional session)
+  "Validate WORKSPACE's selected ENTRY and return its cold SESSION identity.
+When SESSION is non-nil, recheck its target without accepting replacement."
+  (unless (eq 'portable (mevedel-session-authority-mode-for-workspace workspace))
+    (user-error "Explicit recovery discard requires a portable project session"))
+  (let* ((directory (file-name-as-directory
+                     (mevedel-session-control-fs-physical-path
+                      (plist-get entry :save-path))))
+         (sessions-directory (file-name-as-directory
+                              (mevedel-session-control-fs-physical-path
+                               (mevedel-session-artifacts-sessions-dir workspace)))))
+    (when (mevedel-session-control-fs-async-busy-p directory)
+      (user-error "Session has a pending local control program; retry when it settles"))
+    (unless (equal sessions-directory
+                   (file-name-directory (directory-file-name directory)))
+      (user-error "Session does not belong to this workspace's session directory"))
+    (when (mevedel-session-persistence--entry-live-buffer entry)
+      (user-error "Session is open in this Emacs; close it before discarding"))
+    (let* ((publication (mevedel-session-publication-read directory))
+           (sidecar (and publication
+                         (mevedel-session-persistence-load-sidecar
+                          (plist-get publication :sidecar)
+                          (mevedel-diagnostic-scope workspace))))
+           (identity (mevedel-workspace-identity-read (mevedel-workspace-root workspace))))
+      (unless (and sidecar identity
+                   (eq 'portable (plist-get sidecar :authority-mode))
+                   (equal identity (plist-get (plist-get sidecar :workspace) :workspace-id))
+                   (equal (plist-get sidecar :session-id)
+                          (plist-get (plist-get entry :summary) :session-id))
+                   (equal (plist-get publication :head)
+                          (plist-get (plist-get entry :publication) :head)))
+        (user-error "Session identity or publication changed; select it again"))
+      (let ((target (if session (mevedel-session-execution-target session)
+                      (mevedel-execution-target-create (mevedel-workspace-root workspace)))))
+        (unless session
+          (mevedel-execution-target-restore-incarnation
+           target (plist-get sidecar :target-incarnation)))
+        (if (and (not session) (mevedel-execution-target-remote-p target))
+            (let ((readiness (mevedel-execution-target-probe target t 'off)))
+              (unless (eq 'ready (plist-get readiness :status))
+                (user-error "Execution target is unavailable: %s"
+                            (or (plist-get readiness :error) (plist-get readiness :reason)))))
+          (mevedel-execution-target-observe-incarnation target))
+        (when (mevedel-execution-target-incarnation-changed-p target)
+          (user-error "Execution target changed; refusing session discard"))
+        (or session
+            (mevedel-session--create
+             :workspace workspace :authority-mode 'portable :execution-target target
+             :session-id (plist-get sidecar :session-id)
+             :name (plist-get sidecar :session-name) :save-path directory
+             :publication publication))))))
+
+(defun mevedel-session-persistence-discard (workspace entry)
+  "Confirm and discard WORKSPACE's retained session ENTRY without restoring it.
+Refuse changed identities and live owners.  Captures and recovery are settled
+through their owners before deletion; failure may retain approved omissions."
+  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+    (let* ((assessment (mevedel-session-durability-cleanup-assessment
+			(plist-get entry :save-path)))
+           (session (mevedel-session-persistence--discard-identity workspace entry))
+           (directory (mevedel-session-save-path session)))
+      (unless (memq (plist-get assessment :state) '(available expired))
+	(user-error "Session cannot be discarded: %s"
+                    (mevedel-session-persistence--cleanup-reasons assessment)))
+      (when (yes-or-no-p
+             (format (concat "Discard session %s (%s) permanently, including its transcript, "
+                             "recovery data and pending journal captures? Approved capture/recovery "
+                             "actions may persist if deletion fails. Project-file effects remain. "
+                             "Confirm the previous client and its child writers have stopped: ")
+                     (mevedel-session-name session)
+                     (or (and (plist-get assessment :reasons)
+                              (mevedel-session-persistence--cleanup-reasons assessment))
+			 "saved session data")))
+	(condition-case err
+            (mevedel-session-durability-discard-session
+             session
+             (lambda ()
+               (mevedel-session-persistence--discard-identity workspace entry session)
+               (dolist (proof (cdr (mevedel-journal-pins-observe directory)))
+		 (when (eq 'verify (plist-get proof :op))
+                   (let* ((id (file-name-base (plist-get proof :path)))
+                          (capture (mevedel-journal-capture--read workspace id)))
+                     (unless (and capture
+                                  (equal (mevedel-session-session-id session)
+					 (plist-get (plist-get capture :metadata) :session)))
+                       (user-error "Journal capture %s is unreadable or belongs to another session" id))
+                     (mevedel-journal-process-discard workspace id directory))))
+               (when (mevedel-session-recovery-read directory)
+		 (mevedel-session-recovery--abandon session))
+               (when (plist-get (mevedel-session-lease session) :unsettled-mutation)
+		 (unless (mevedel-session-durability-set-unsettled-mutation session nil)
+                   (user-error "Could not acknowledge unresolved mutation")))
+               (mevedel-session-persistence--discard-identity workspace entry session)))
+          (error (user-error "Session retained; approved recovery/capture actions may have completed: %s"
+                             (error-message-string err))))))))
 
 (cl-defun mevedel-session-persistence--delete-saved
     (workspace save-path portable max-age-seconds

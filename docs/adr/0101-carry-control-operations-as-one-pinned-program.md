@@ -57,6 +57,10 @@ into it. The program names that file relative to the pinned parent, with one
 `../` per missing level, so it resolves through the opened directory's real
 ancestors: a parent pathname swapped after the proof cannot redirect it.
 Staged files a stopped program did not consume are removed afterwards.
+A hard kill can leave local `.mevedel-control-fs-staged-` payloads or inline
+`.mevedel-control-fs-` scratch files, each with its six-alphanumeric suffix.
+Lease validation recognizes only those reserved families as non-authority,
+without hiding them from listing proofs or removing them during election.
 Remote targets keep the base64 carriers. Diagnostic bytes are encoded through a separate pipe and returned
 in a distinct trailing record. A killed process without that record reports
 its raw captured failure output.
@@ -78,8 +82,11 @@ interpreter paths for later lookup; an ordinary refused operation does not.
 nothing waits for it. It keeps the synchronous carrier's staged payload files,
 so no payload is base64-encoded or sent through a pipe; a request that fits the
 argument bounds travels as arguments and writes nothing to stdin, and a larger
-one streams as above. The job owns its staged files until delivery. Cleanup
-runs from the delivery timer before the callback, never from the sentinel;
+one streams as above. Only streamed requests send EOF: an argument-carried child
+can finish before the launcher resumes, and sending EOF then would replace its
+successful result with a process-not-running error. The job owns its staged
+files until delivery. Cleanup runs from the delivery timer before the callback,
+never from the sentinel;
 it removes unconsumed payloads even when a program stopped early. Failed or
 quit launches clean up before reporting failure. Cleanup errors are diagnostic
 and cannot replace the stored outcome. Each private buffer is cleaned up
@@ -101,7 +108,12 @@ dispatch is cancelled, the stored outcome is still delivered once, from a
 zero-second transport timer: neither lost nor replaced by an invented error.
 A request that fails to launch calls the callback before returning, once.
 Nothing orders an asynchronous program against others on the same target;
-callers serialize the ones that touch the same files.
+callers serialize the ones that touch the same files. Both carriers accept the
+same pinned lock directory. Portable session elections and final deletion use
+the stable sessions parent through that boundary, including asynchronous
+own-expiry reclaim; adding a lock only to deletion would not serialize claims.
+Pending local programs remain busy until their completion callback is delivered,
+so explicit session discard cannot delete beneath a queued continuation.
 
 Two to 32 independent unbounded reads may use GNU tar in the same process, keeping
 all proved parents open, refusing symlink leaves, and disabling inherited

@@ -158,5 +158,176 @@
       (let ((mevedel-journal-cleanup--inhibit-scheduling t)) (mevedel-journal-worker-stop-all))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-journal-worker--stop ()
+  (let* ((root (make-temp-file "mevedel-worker-descendants-" t))
+         (workspace (mevedel-workspace--create :root root :id root :type 'project))
+         (directory (mevedel-journal-store-claim-directory
+                     (mevedel-journal-store-directory root) 'digest-run))
+         (marker (file-name-concat root "paused"))
+         (release (file-name-concat root "continue"))
+         (kill-emacs-hook nil)
+         (mevedel-journal-enabled t)
+         (mevedel-journal-worker--processes nil)
+         (spawn (symbol-function 'make-process))
+         child shell descendants result alive-at-stop)
+    (unwind-protect
+        (progn
+          ;; Alter timing only, in the real worker's real shell, immediately
+          ;; before its existing staged claim publication.  No fake writes.
+          (cl-letf (((symbol-function 'make-process)
+                     (lambda (&rest args)
+                       (let* ((command (copy-sequence (plist-get args :command)))
+                              (run (read (car (last command))))
+                              (needle "      if test ! -d \"$leaf\" && ln -- \"$payload\" \"$leaf\"; then\n")
+                              (pause
+                               (format
+                                "      if test \"$PWD\" = %s && test \"$leaf\" = 00000000000000000001.claim; then\n        printf '%%s\\n' \"$BASHPID\" >%s\n        for ((i=0; i<300; i++)); do test ! -e %s || break; sleep 0.01; done\n      fi\n"
+                                (shell-quote-argument directory)
+                                (shell-quote-argument marker)
+                                (shell-quote-argument release))))
+                         (setcar
+                          (last command)
+                          (prin1-to-string
+                           `(progn
+                              (require 'mevedel-session-control-fs)
+                              (unless (string-match-p (regexp-quote ,needle)
+                                                      mevedel-session-control-fs--program-script)
+                                (error "Missing staged publication seam"))
+                              (setq mevedel-session-control-fs--program-script
+                                    (replace-regexp-in-string
+                                     (regexp-quote ,needle) ,(concat pause needle)
+                                     mevedel-session-control-fs--program-script t t))
+                              ,run)))
+                         (apply spawn (plist-put args :command command))))))
+            (setq child (mevedel-journal-worker-start
+                         workspace 'digest-prepare nil
+                         (lambda (reply) (setq result reply)))))
+          (let ((until (+ (float-time) 10)))
+            (while (and (not (file-exists-p marker)) (< (float-time) until))
+              (accept-process-output nil .005)))
+          (ert-info ((format "Worker status: %S; reply: %S; claim directory: %S"
+                             (process-status child) result directory))
+            (should (file-exists-p marker)))
+          (setq shell (with-temp-buffer
+                        (insert-file-contents marker)
+                        (string-to-number (buffer-string))))
+          (should (> shell 0))
+          (should (process-attributes shell))
+          (let ((group (alist-get 'pgrp (process-attributes shell))))
+            (setq descendants
+                  (seq-filter (lambda (pid)
+                                (eql group (alist-get 'pgrp (process-attributes pid))))
+                              (list-system-processes))))
+          (should-not (mevedel-journal-claim-current directory))
+          ,stop
+          (setq alive-at-stop
+                (seq-filter (lambda (pid)
+                              (let ((state (alist-get 'state (process-attributes pid))))
+                                (and state (not (equal state "Z")))))
+                            descendants))
+          (write-region "go" nil release nil 'silent)
+          (sleep-for .5)
+          ;; Check the durable symptom before the OS-liveness assertion so a
+          ;; red run identifies the valid late claim and refused immediate retry.
+          (let ((late (mevedel-journal-claim-current directory))
+                (retry (mevedel-journal-claim-acquire directory 120)))
+            (ert-info ((format "Late claim: %S; immediate retry: %S" late retry))
+              (should-not late)
+              (should retry)))
+          (should-not alive-at-stop)
+          (should-not (process-live-p child))
+          (should-not mevedel-journal-worker--processes)
+          (should-not result))
+      (when child (mevedel-journal-worker-cancel child))
+      (write-region "go" nil release nil 'silent)
+      ;; A red run still owns its paused shell; allow its bounded work to end
+      ;; before removing the fixture, rather than leaking the reproduction.
+      (let ((until (+ (float-time) 4)))
+        (while (and shell
+                    (let ((state (cdr (assq 'state (process-attributes shell)))))
+                      (and state (not (equal state "Z"))))
+                    (< (float-time) until))
+          (sleep-for .01)))
+      (delete-directory root t)))
+  (stop)
+  :doc "explicit cancellation stops real shells before staged claim publication"
+  (mevedel-journal-worker-cancel child)
+  :doc "stop-all stops real shells before staged claim publication"
+  (mevedel-journal-worker-stop-all)
+  :doc "the registered exit hook stops real shells before staged claim publication"
+  (run-hooks 'kill-emacs-hook))
+
+(mevedel-deftest mevedel-journal-worker-stop-all/shutdown-error ()
+  (let* ((root (make-temp-file "mevedel-worker-stop-error-" t))
+         (workspace (mevedel-workspace--create :root root :id root :type 'project))
+         (kill-emacs-hook kill-emacs-hook)
+         (mevedel-journal-worker--processes nil)
+         (mevedel-journal-process--pending (make-hash-table :test #'equal))
+         (mevedel-journal-process--recover-requested (make-hash-table :test #'equal))
+         (mevedel-journal-process--workers (make-hash-table :test #'equal))
+         (mevedel-journal-process--running (make-hash-table :test #'equal))
+         (stop (symbol-function 'mevedel-journal-worker--stop))
+         (attempts 0)
+         children)
+    (unwind-protect
+        (progn
+          (dotimes (n 2)
+            (let ((child (mevedel-journal-worker-start workspace 'recovery nil #'ignore)))
+              (push child children)
+              (puthash n child mevedel-journal-process--workers)))
+          (cl-letf (((symbol-function 'mevedel-journal-worker--stop)
+                     (lambda (child)
+                       (cl-incf attempts)
+                       (funcall stop child)
+                       ;; Simulate the deadline failure after real child teardown;
+                       ;; do not leave an unkillable process in the test runner.
+                       (when (= attempts 1) (error "Injected shutdown timeout")))))
+            (should-error ,stop-all :type 'error))
+          (should (= attempts 2))
+          (dolist (child children)
+            (should-not (process-live-p child))
+            (should-not (file-exists-p (process-get child 'mevedel-journal-worker-directory))))
+          (should-not mevedel-journal-worker--processes))
+      (mevedel-journal-worker-stop-all)
+      (delete-directory root t)))
+  (stop-all)
+  :doc "worker stop-all attempts later workers after a shutdown timeout"
+  (mevedel-journal-worker-stop-all)
+  :doc "digest stop-all attempts later workers after a shutdown timeout"
+  (mevedel-journal-process-stop-all))
+
+(mevedel-deftest mevedel-journal-worker-cancel/shutdown-error ()
+  ,test
+  (test)
+  :doc "a single owner still settles and delivers after a failed worker stop"
+  (let* ((root (make-temp-file "mevedel-worker-owner-error-" t))
+         (workspace (mevedel-workspace--create :root root :id root :type 'project))
+         (kill-emacs-hook kill-emacs-hook)
+         (mevedel-journal-worker--processes nil)
+         (mevedel-memory-pass--running (make-hash-table :test #'equal))
+         (claim (mevedel-journal-claim-acquire (file-name-concat root "claim") 120))
+         (child (mevedel-journal-worker-start workspace 'recovery nil #'ignore))
+         (stop (symbol-function 'mevedel-journal-worker--stop))
+         result warning
+         (state (list :workspace workspace :claim claim :worker child
+                      :admission-aborted t :callback (lambda (value) (setq result value)))))
+    (unwind-protect
+        (progn
+          (puthash (plist-get claim :directory) state mevedel-memory-pass--running)
+          (mevedel-test--with-captured-diagnostics warning
+            (cl-letf (((symbol-function 'mevedel-journal-worker--stop)
+                       (lambda (process)
+                         (funcall stop process)
+                         (error "Injected shutdown timeout"))))
+              (mevedel-memory-pass--finish state '(:outcome aborted))))
+          (should (equal warning (format "mevedel [%s]: Injected shutdown timeout\n" root)))
+          (should (eq 'cancelled (plist-get (mevedel-journal-claim-outcome claim) :status)))
+          (should (eq 'aborted (plist-get result :outcome)))
+          (should (zerop (hash-table-count mevedel-memory-pass--running)))
+          (should-not mevedel-journal-worker--processes)
+          (should-not (file-exists-p (process-get child 'mevedel-journal-worker-directory))))
+      (mevedel-journal-worker-stop-all)
+      (delete-directory root t))))
+
 (provide 'test-mevedel-journal-worker)
 ;;; test-mevedel-journal-worker.el ends here

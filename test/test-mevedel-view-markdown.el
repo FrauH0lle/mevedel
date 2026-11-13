@@ -1084,17 +1084,50 @@
                       (mevedel-view--buffer-substring-filter
                        (point-min) (point-max)))))))
 
-  :doc "a partial table region yields the complete table source"
+  :doc "a partial table region yields its cell text without borders"
   (with-temp-buffer
     (let ((source "| a | b |\n|---|---|\n| 1 | 2 |"))
       (insert source "\n")
       (mevedel-view-table-decorate (point-min) (point-max) nil)
       (goto-char (point-min))
       (search-forward "│ 1 │")
-      (should (equal source
+      (should (equal "1"
                      (substring-no-properties
                       (mevedel-view--buffer-substring-filter
                        (match-beginning 0) (match-end 0)))))))
+
+  :doc "partial rows join cells with tabs, drop separators, keep empty cells"
+  (with-temp-buffer
+    (insert "| a | b | c |\n|---|---|---|\n| 1 |  | 3 |\n| x | y | z |\n")
+    (mevedel-view-table-decorate (point-min) (point-max) nil)
+    (goto-char (point-min))
+    (search-forward "│ x")
+    (should (equal "a\tb\tc\n1\t\t3\nx"
+                   (substring-no-properties
+                    (mevedel-view--buffer-substring-filter
+                     (point-min) (point))))))
+
+  :doc "a box-drawing character inside a cell is content, not a border"
+  (with-temp-buffer
+    (insert "| a | b |\n|---|---|\n| 1│2 | 3 |\n")
+    (mevedel-view-table-decorate (point-min) (point-max) nil)
+    (goto-char (point-min))
+    (search-forward "1│2")
+    (should (equal "1│2"
+                   (substring-no-properties
+                    (mevedel-view--buffer-substring-filter
+                     (match-beginning 0) (match-end 0))))))
+
+  :doc "a region spanning prose and part of a table strips only the table"
+  (with-temp-buffer
+    (insert "before\n| a | b |\n|---|---|\n| 1 | 2 |\n")
+    (mevedel-view-table-decorate (point-min) (point-max) nil)
+    (goto-char (point-min))
+    (search-forward "│ a │ b │")
+    (should (equal "before\na\tb"
+                   (substring-no-properties
+                    (mevedel-view--buffer-substring-filter
+                     (point-min) (point))))))
 
   :doc "table links keep canonical source and activation across rerenders"
   (mevedel-test--with-displayed-buffer

@@ -1008,8 +1008,7 @@ An unaccepted dispatch retains the combined entry for retry or retraction."
    (let* ((session (buffer-local-value 'mevedel--session
                                        mevedel--data-buffer))
           (occupied
-           (or (buffer-local-value 'mevedel--current-request
-                                   mevedel--data-buffer)
+           (or (mevedel-turn-busy-p mevedel--data-buffer)
                (mevedel-session-pending-follow-ups session)
                (mevedel-view--occupied-root-workflow session)
                mevedel-view--prompt-hook-pending

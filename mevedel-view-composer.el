@@ -513,6 +513,18 @@
 (defconst mevedel-view--input-prompt "> "
   "Read-only prefix rendered at the start of the input zone.")
 
+(defun mevedel-view--propertize-input-prompt (start end)
+  "Mark START..END as the read-only input prompt.
+The prompt is its own field, so line and word motion stop at the input
+start instead of entering the prompt."
+  (add-text-properties
+   start end
+   '(read-only t
+     mevedel-view-prompt t
+     field mevedel-view-prompt
+     front-sticky (read-only mevedel-view-prompt)
+     rear-nonsticky (read-only mevedel-view-prompt field font-lock-face))))
+
 (defface mevedel-view-note-scope
   '((t :inherit font-lock-keyword-face :weight bold))
   "Face for note frames."
@@ -837,7 +849,8 @@ only explicit and soft-wrapped continuation lines receive it."
            (indent (make-string
                     (string-width
                      (buffer-substring-no-properties
-                      (save-excursion (goto-char start) (line-beginning-position))
+                      ;; `pos-bol' ignores the prompt field: measure from the true line start.
+                      (save-excursion (goto-char start) (pos-bol))
                       start))
                     ?\s)))
       (overlay-put mevedel-view--composer-display-overlay 'line-prefix indent)
@@ -1547,8 +1560,8 @@ defeat the character-width bound."
        (not wrap-prefix)
        (save-excursion
          (goto-char beg)
-         (let ((start (line-beginning-position))
-               (limit (line-end-position))
+         (let ((start (pos-bol))
+               (limit (pos-eol))
                (properties '(display invisible face font-lock-face composition
                              line-prefix wrap-prefix before-string after-string)))
            (and (<= end limit)
@@ -2173,13 +2186,7 @@ follows `mevedel-view--input-marker'."
                       (set-marker-insertion-type mevedel-view--input-marker nil)
                       (delete-region start end)
                       (insert (mevedel-view--input-prompt-string))
-                      (add-text-properties
-                       start (point)
-                       `(read-only t
-				   mevedel-view-prompt t
-				   front-sticky (read-only mevedel-view-prompt)
-				   rear-nonsticky
-				   (read-only mevedel-view-prompt font-lock-face))))
+                      (mevedel-view--propertize-input-prompt start (point)))
 		  (when (markerp mevedel-view--status-marker)
                     (set-marker-insertion-type
                      mevedel-view--status-marker status-type))
@@ -2922,10 +2929,6 @@ instead of the composer, preserving its draft."
     (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No data buffer associated with this view"))
   (unless (buffer-live-p mevedel--data-buffer)
     (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Data buffer has been killed"))
-  (when (and (mevedel-turn-busy-p mevedel--data-buffer)
-             (not (buffer-local-value 'mevedel--current-request
-                                      mevedel--data-buffer)))
-    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Turn settlement is still pending"))
   (when mevedel-view--prompt-hook-pending
     (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "A prompt hook is still running -- wait or abort first"))
   (when mevedel-view--pending-skill-submission
@@ -2964,6 +2967,9 @@ instead of the composer, preserving its draft."
              (active-request
               (buffer-local-value 'mevedel--current-request
                                   mevedel--data-buffer))
+             (settling
+              (buffer-local-value 'mevedel--turn-settlements-pending
+                                  mevedel--data-buffer))
              (occupied
               (and (not slash-parsed)
                    (mevedel-view--occupied-root-workflow session))))
@@ -2973,7 +2979,7 @@ instead of the composer, preserving its draft."
 	(when (and fork-target (not slash-parsed))
           (mevedel-session-rewind-assert-stable-source
            session mevedel--data-buffer "forking"))
-	(if (or active-request occupied)
+        (if (or active-request occupied settling)
             (let ((restore
                    (lambda ()
                      (when snapshot
@@ -2997,6 +3003,9 @@ instead of the composer, preserving its draft."
 		(funcall restore)
 		(mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer))
 		 "A request is already active -- wait or abort first"))
+               ((and settling (not steering-input))
+                ;; Publication still owns the old turn; the reply belongs next.
+                (mevedel-view--queue-follow-up input))
                ((not active-request)
 		(funcall restore)
 		(mevedel-view--occupied-root-workflow-error

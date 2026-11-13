@@ -96,7 +96,8 @@
                   :activity)))
       (should (equal "completed" (plist-get clean :status)))
       (should-not (plist-member clean :failed)))
-    (should (equal "failed" (plist-get activity :status)))
+    ;; One of four failed: the group warns rather than failing outright.
+    (should (equal "warning" (plist-get activity :status)))
     (should (cl-every (lambda (record) (equal activity (plist-get record :activity))) grouped))
     (should-not (plist-get (car (mevedel-collaboration--activity-records (cl-subseq records 0 2)))
                            :activity))

@@ -1120,11 +1120,11 @@ on kill so no timer outlives its view."
 ;;; Copying rendered Markdown
 
 (defun mevedel-view--buffer-substring-filter (beg end &optional delete)
-  "Return BEG..END with rendered tables restored to canonical Markdown.
-A region overlapping a rendered table yields that table's complete
-pipe-table source, spliced into the surrounding copied text, so pastes
-stay valid Markdown.  With DELETE non-nil the region is also deleted,
-matching `buffer-substring--filter'."
+  "Return BEG..END with rendered tables restored to copyable text.
+A table the region covers completely yields its pipe-table source, so
+pastes stay valid Markdown.  A partly covered table yields the selected
+cell text without borders.  With DELETE non-nil the region is also
+deleted, matching `buffer-substring--filter'."
   (let ((start (min beg end))
         (finish (max beg end)))
     (if (not (text-property-not-all
@@ -1139,9 +1139,18 @@ matching `buffer-substring--filter'."
                 (next (or (next-single-property-change
                            pos 'mevedel-view-table-source nil finish)
                           finish)))
-            (push (if source
-                      (substring-no-properties source)
-                    (buffer-substring pos next))
+            (push (cond
+                   ((not source) (buffer-substring pos next))
+                   ((and (or (= pos (point-min))
+                             (not (eq source (get-text-property
+                                              (1- pos)
+                                              'mevedel-view-table-source))))
+                         (or (= next (point-max))
+                             (not (eq source (get-text-property
+                                              next
+                                              'mevedel-view-table-source)))))
+                    (substring-no-properties source))
+                   (t (mevedel-view-table-plain-text pos next)))
                   parts)
             (setq pos next)))
         (prog1 (apply #'concat (nreverse parts))

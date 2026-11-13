@@ -700,14 +700,15 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
               ;; row.  Its counters change with every sandboxed command the
               ;; agent runs, and the full re-render this used to request took
               ;; 1.6 s of a long session's view each time.  A row the view
-              ;; cannot find still falls back to the full render.
-              (if (and patched-summary-p (not patched-render-data-p))
-                  (unless (with-current-buffer view
-                            (mevedel-view--refresh-tool-row
-                             parent
-                             (mevedel-agent-invocation-parent-tool-use-id
-                              invocation)))
-                    (mevedel-view-rerender view))
+              ;; cannot find as a tool row, such as a `Started' agent handle,
+              ;; gets the coalesced handle refresh; a full projection here
+              ;; would remove and re-add the running row on every command.
+              (unless (and patched-summary-p (not patched-render-data-p)
+                           (with-current-buffer view
+                             (mevedel-view--refresh-tool-row
+                              parent
+                              (mevedel-agent-invocation-parent-tool-use-id
+                               invocation))))
                 (mevedel-view-refresh-agent-rendering
                  view (mevedel-agent-invocation-path invocation)))))
         (error

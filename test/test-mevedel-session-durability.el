@@ -637,9 +637,9 @@
     (unwind-protect
         (progn
           (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
-                     (lambda (operations)
+                     (lambda (operations &optional lock-directory)
                        (cl-incf programs)
-                       (funcall run-program-function operations))))
+                       (funcall run-program-function operations lock-directory))))
             (should (mevedel-session-durability--claim-next
                      directory nil "*claim-cost*")))
           ;; Observation, fencing create with predecessor reads, and the
@@ -1179,7 +1179,7 @@
                ;; opening its program; both contenders are held at that
                ;; exact point so the races collide for real.
                ((symbol-function 'mevedel-session-control-fs-run-program)
-                (lambda (operations)
+                (lambda (operations &optional lock-directory)
                   (when (eq 'create (plist-get (car operations) :op))
                     (with-mutex claim-mutex
                       (cl-incf claim-count)
@@ -1189,7 +1189,7 @@
                       (condition-notify claim-condition t)
                       (while (< claim-count 2)
                         (condition-wait claim-condition))))
-                  (funcall run-program-function operations))))
+                  (funcall run-program-function operations lock-directory))))
             (dolist (client (list (make-string 64 ?b) (make-string 64 ?c)))
               (push
                (make-thread
@@ -1267,17 +1267,18 @@
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-session-durability--target-time)
                    (lambda (&optional _) now))
-                  ;; A claim finalizes through the program whose first
+                  ;; A claim finalizes through the program whose second
                   ;; operation is the settle write; the fencing create and
                   ;; the lease commits open with other verbs.
                   ((symbol-function 'mevedel-session-control-fs-run-program)
-                   (lambda (operations)
+                   (lambda (operations &optional lock-directory)
                      (if (and fail-finalization
-                              (eq 'write (plist-get (car operations) :op)))
+                              (eq 'verify (plist-get (car operations) :op))
+                              (eq 'write (plist-get (cadr operations) :op)))
                          (progn
                            (setq fail-finalization nil)
                            (error "Injected claim finalization crash"))
-                       (funcall run-program-function operations)))))
+                       (funcall run-program-function operations lock-directory)))))
           (should-error
            (mevedel-session-durability-lease-acquire
             session-dir "*interrupted*")
@@ -1481,14 +1482,14 @@
             ;; is the reentrant race this case pins.
             (cl-letf
                 (((symbol-function 'mevedel-session-control-fs-run-program)
-                  (lambda (operations)
+                  (lambda (operations &optional lock-directory)
                     (when (and (not injected)
                                (eq 'verify (plist-get (car operations) :op)))
                       (setq injected t)
                       (should
                        (mevedel-session-durability-set-unsettled-mutation
                         session t)))
-                    (funcall run-program-function operations))))
+                    (funcall run-program-function operations lock-directory))))
               (mevedel-session-durability-lease-renew session))
             (should injected)
             (should
@@ -1658,11 +1659,11 @@
           ;; clock operation is what arms the assumption for the next one.
           (should (mevedel-session-durability-lease-renew session))
           (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
-                     (lambda (operations)
+                     (lambda (operations &optional lock-directory)
                        (push (mapcar (lambda (op) (plist-get op :op))
                                      operations)
                              programs)
-                       (funcall program-function operations))))
+                       (funcall program-function operations lock-directory))))
             (should (mevedel-session-durability-lease-renew session)))
           (should (member programs
                           '(((verify write list-directory target-time))
@@ -1706,7 +1707,7 @@
                  ;; immediately before that program runs is the last moment a
                  ;; stale renewal could still overwrite the newer owner.
                  ((symbol-function 'mevedel-session-control-fs-run-program)
-                  (lambda (operations)
+                  (lambda (operations &optional lock-directory)
                     (when (and (not triggered)
                                (eq 'verify (plist-get (car operations) :op)))
                       (setq triggered t
@@ -1715,7 +1716,7 @@
                         (should
                          (mevedel-session-durability-lease-acquire
                           session-dir "*successor*"))))
-                    (funcall program-function operations))))
+                    (funcall program-function operations lock-directory))))
               (should-not
                (mevedel-session-durability-lease-renew session))
               (should triggered))
@@ -1765,7 +1766,7 @@
              ;; the new record.  That is the moment the contender must find
              ;; still outstanding.
              ((symbol-function 'mevedel-session-control-fs-run-program)
-              (lambda (operations)
+              (lambda (operations &optional lock-directory)
                 (when (and (equal (thread-name (current-thread))
                                   "mevedel-owner-renew")
                            (eq 'verify (plist-get (car operations) :op))
@@ -1775,7 +1776,7 @@
                     (condition-notify condition t)
                     (while (not renew-allowed)
                       (condition-wait condition))))
-                (funcall program-function operations))))
+                (funcall program-function operations lock-directory))))
           (should (mevedel-session-durability-lease-acquire
                    session-dir "*owner*" session))
           (setq initial nil
@@ -1844,7 +1845,7 @@
           ;; target program, so that is where consulting it is proved.
           (cl-letf
               (((symbol-function 'mevedel-session-control-fs-run-program)
-                (lambda (operations)
+                (lambda (operations &optional lock-directory)
                   (when (cl-find-if
                          (lambda (operation)
                            (and (eq 'list-directory (plist-get operation :op))
@@ -1854,7 +1855,7 @@
                                         lease-directory))))
                          operations)
                     (setq helper-called t))
-                  (funcall program-function operations))))
+                  (funcall program-function operations lock-directory))))
             (should-not
              (mevedel-session-durability-lease-renew session)))
           (should helper-called))
@@ -1990,12 +1991,12 @@
             ;; ahead of it; the observation before it must not trigger.
             (cl-letf
                 (((symbol-function 'mevedel-session-control-fs-run-program)
-                  (lambda (operations)
+                  (lambda (operations &optional lock-directory)
                     (when (and (not triggered)
                                (memq (plist-get (car operations) :op)
                                      '(create write verify)))
                       (trigger-successor))
-                    (funcall run-program-function operations))))
+                    (funcall run-program-function operations lock-directory))))
               (mevedel-session-durability-lease-release
                session-dir owner-session))
             (should triggered))
@@ -2555,7 +2556,7 @@
           ;; that program runs is the last moment the race can happen.
           (cl-letf
               (((symbol-function 'mevedel-session-control-fs-run-program)
-                (lambda (operations)
+                (lambda (operations &optional lock-directory)
                   (when (and (not triggered)
                              (eq 'verify (plist-get (car operations) :op)))
                     (setq triggered t
@@ -2566,7 +2567,7 @@
                         (should
                          (mevedel-session-durability-lease-acquire
                           session-dir "*successor*" successor-session)))))
-                  (funcall run-program-function operations))))
+                  (funcall run-program-function operations lock-directory))))
             (should-not
              (mevedel-session-durability-commit-publication-head
               owner-session ".publications/stale/manifest.el")))
@@ -3139,7 +3140,7 @@
           ;; as make-directory operations rather than wrapper calls.
           (cl-letf
               (((symbol-function 'mevedel-session-control-fs-run-program)
-                (lambda (operations)
+                (lambda (operations &optional lock-directory)
                   (dolist (operation operations)
                     (when (and (eq 'make-directory
                                    (plist-get operation :op))
@@ -3147,7 +3148,7 @@
                                 "/\\.publications"
                                 (plist-get operation :path)))
                       (cl-incf immutable-directories)))
-                  (funcall run-program-function operations))))
+                  (funcall run-program-function operations lock-directory))))
             (should
              (mevedel-session-publication-publish
               session
@@ -5049,8 +5050,8 @@
         (should (equal record (mevedel-session-durability--lease-head lease-dir)))
         (delete-directory directory t))
       (make-directory directory t)))
-  :doc "a head in another lease format is deleted only when its expiry is a whole cap behind"
-  (dolist (case '((-2000 t) (-500 nil)))
+  :doc "a head in another lease format is retained even when its expiry is old"
+  (dolist (case '((-2000 nil) (-500 nil)))
     (let ((record (let ((mevedel-session-durability--client-id foreign))
                     (mevedel-session-durability--lease-record
                      "old owner" 1 'released nil nil
@@ -5063,7 +5064,7 @@
       (should (eq (cadr case) (not (file-directory-p directory))))
       (when (file-directory-p directory) (delete-directory directory t))
       (make-directory lease-dir t)))
-  :doc "journal pins and recovery markers keep the session and release the claim"
+  :doc "journal pins and recovery markers keep the session without acquiring a claim"
   (dolist (blocker (list (lambda ()
                            (make-directory (file-name-concat directory ".journal-pins"))
                            (write-region "" nil (file-name-concat directory ".journal-pins"
@@ -5075,7 +5076,7 @@
     (funcall blocker)
     (should-not (mevedel-session-durability-delete-abandoned directory 1000))
     (should (file-directory-p directory))
-    (should (eq 'released (plist-get (mevedel-session-durability--lease-head lease-dir) :status))))
+    (should-not (mevedel-session-durability--lease-head lease-dir)))
   :doc "a competing generation after the claim keeps the session"
   (let ((claim (symbol-function 'mevedel-session-durability--claim-next)))
     (cl-letf (((symbol-function 'mevedel-session-durability--claim-next)
@@ -5108,6 +5109,323 @@
           ;; A temporary name resolving outside is not temporary.
           (should-not (mevedel-session-recovery--local-temporary-p escape)))
       (delete-directory child t))))
+
+(mevedel-deftest mevedel-session-durability-cleanup-assessment ()
+  (let* ((root (make-temp-file "mevedel-cleanup-assessment-" t))
+         (directory (file-name-concat root "session"))
+         (lease-dir (file-name-concat directory ".lease")))
+    (make-directory directory)
+    (unwind-protect (progn ,test) (delete-directory root t)))
+  (test)
+  :doc "absent authority is available without creating control directories"
+  (let ((assessment (mevedel-session-durability-cleanup-assessment directory)))
+    (should (eq 'available (plist-get assessment :state)))
+    (should-not (plist-get assessment :head))
+    (should-not (plist-get assessment :reasons))
+    (should-not (file-exists-p lease-dir)))
+  :doc "carrier crash scratch is not authority and does not prevent automatic cleanup"
+  (dolist (kind '(clean staged shell))
+    (make-directory lease-dir t)
+    (let* ((staged (list nil))
+           (shell (file-name-concat lease-dir ".mevedel-control-fs-Ab09Zx")))
+      (pcase kind
+        ('staged
+         (mevedel-session-control-fs--stage-payloads
+          (list (list :op 'write
+                      :path (mevedel-session-durability--generation-path lease-dir 1)
+                      :content "crash payload")) staged)
+         (should (car staged)))
+        ('shell (write-region "crash payload" nil shell nil 'silent)))
+      (let ((assessment (mevedel-session-durability-cleanup-assessment directory)))
+        (should (eq 'available (plist-get assessment :state)))
+        (should-not (plist-get assessment :head))
+        (should-not (plist-get assessment :reasons)))
+      (dolist (path (append (car staged) (when (eq kind 'shell) (list shell))))
+        (should (equal "crash payload"
+                       (with-temp-buffer (insert-file-contents path) (buffer-string)))))
+      (should (mevedel-session-durability-delete-abandoned directory 0))
+      (should-not (file-directory-p directory))))
+  :doc "scratch-like unknown names remain invalid authority"
+  (let ((case-fold-search t))
+    (make-directory lease-dir)
+    (dolist (name '(".mevedel-control-fs-Ab09Zx.extra"
+                    ".mevedel-control-fs-staged-too-long"
+                    ".mevedel-unrelated-Ab09Zx"
+                    ".MEVEDEL-CONTROL-FS-Ab09Zx"
+                    ".mevedel-control-fs-STAGED-Ab09Zx"))
+      (let ((path (file-name-concat lease-dir name)))
+        (write-region "unknown evidence" nil path nil 'silent)
+        (should (eq 'unknown
+                    (plist-get (mevedel-session-durability-cleanup-assessment directory) :state)))
+        (should-not (mevedel-session-durability-delete-abandoned directory 0))
+        (should (file-exists-p path))
+        (delete-file path))))
+  :doc "corrupt generations are unknown, never missing or recoverable authority"
+  (progn
+    (make-directory lease-dir)
+    (dolist (name '("00000000000000000001.el" "0.el"))
+      (write-region "(:generation" nil (file-name-concat lease-dir name) nil 'silent)
+      (let ((assessment (mevedel-session-durability-cleanup-assessment directory)))
+        (should (eq 'unknown (plist-get assessment :state)))
+        (should (memq 'invalid-authority (plist-get assessment :reasons)))
+        (should-not (plist-get assessment :recoverable)))
+      (delete-file (file-name-concat lease-dir name))))
+  :doc "lease state and crash-retention reasons share the same validated observation"
+  (progn
+    (make-directory lease-dir)
+    (dolist (case '((publishing -4000 t (publishing unsettled-mutation) expired t)
+                    (active 0 nil (live-owner) owned nil)
+                    (active -4000 nil nil expired nil)
+                    (released 0 t (unsettled-mutation) available t)))
+      (let ((record (mevedel-session-durability--lease-record
+                     "owner" 1 (nth 0 case) nil (nth 2 case)
+                     (+ (mevedel-session-durability--target-time lease-dir) (nth 1 case)))))
+        (mevedel-session-durability--write-generation lease-dir record)
+        (let ((assessment (mevedel-session-durability-cleanup-assessment directory)))
+          (should (equal record (plist-get assessment :head)))
+          (should (equal (plist-get record :host) (plist-get assessment :host)))
+          (should (equal (nth 3 case) (plist-get assessment :reasons)))
+          (should (eq (nth 4 case) (plist-get assessment :state)))
+          (should (eq (nth 5 case) (and (plist-get assessment :recoverable) t)))))))
+  :doc "unknown pin and recovery entries remain visible and protected"
+  (progn
+    (make-directory (file-name-concat directory ".journal-pins"))
+    (write-region "unsupported pin" nil
+                  (file-name-concat directory ".journal-pins" "unknown") nil 'silent)
+    (make-directory (file-name-concat directory ".recovery"))
+    (write-region "unresolved bytes" nil
+                  (file-name-concat directory ".recovery" "unknown") nil 'silent)
+    (let ((assessment (mevedel-session-durability-cleanup-assessment directory)))
+      (should (equal '(journal-pins recovery) (plist-get assessment :reasons)))
+      (should (plist-get assessment :recoverable))))
+  :doc "a reserved transfer is available to its requester but never discardable"
+  (let* ((mevedel-session-durability--client-id (make-string 64 ?a))
+         (owner-id (make-string 64 ?f))
+         (now (progn (make-directory lease-dir t)
+                     (mevedel-session-durability--target-time lease-dir)))
+         (fence-path (mevedel-session-transfer--fence-path lease-dir 1))
+         (session (test-mevedel-session-durability--local-session root)))
+    (let ((mevedel-session-durability--client-id owner-id))
+      (mevedel-session-durability--write-generation
+       lease-dir (mevedel-session-durability--lease-record
+                  "old owner" 1 'released nil nil now)))
+    (make-directory (file-name-directory fence-path) t)
+    (write-region
+     (prin1-to-string
+      (list :protocol-version 1 :generation 1 :request-id (make-string 32 ?b)
+            :session-id "reserved" :owner-client-id owner-id
+            :requester-client-id mevedel-session-durability--client-id
+            :expires-at (+ now 60)))
+     nil fence-path nil 'silent)
+    (setf (mevedel-session-save-path session) directory)
+    (let ((assessment (mevedel-session-durability-cleanup-assessment directory)))
+      (should (eq 'available (plist-get assessment :state)))
+      (should (equal '(transfer-reserved) (plist-get assessment :reasons)))
+      (should-not (plist-get assessment :recoverable)))
+    (should-not (mevedel-session-durability-delete-abandoned directory 0))
+    (should-error (mevedel-session-durability-discard-session session #'ignore))
+    (let ((mevedel-session-durability--client-id owner-id))
+      (should (eq 'foreign (plist-get
+                           (mevedel-session-durability-cleanup-assessment directory)
+                           :state))))
+    (should (file-exists-p fence-path)))
+  :doc "a valid record followed by unparsed bytes is invalid authority"
+  (progn
+    (make-directory lease-dir)
+    (write-region
+     (concat (mevedel-session-durability--record-bytes
+              (mevedel-session-durability--lease-record
+               "owner" 1 'released nil nil
+               (mevedel-session-durability--target-time lease-dir)))
+             "\nmalformed trailing record")
+     nil (file-name-concat lease-dir "00000000000000000001.el") nil 'silent)
+    (let ((assessment (mevedel-session-durability-cleanup-assessment directory)))
+      (should (equal '(invalid-authority) (plist-get assessment :reasons)))
+      (should (eq 'unknown (plist-get assessment :state))))))
+
+(mevedel-deftest mevedel-session-durability-discard-session ()
+  (let* ((root (make-temp-file "mevedel-discard-session-" t))
+         (directory (file-name-concat root "session"))
+         (lease-dir (file-name-concat directory ".lease"))
+         (session (test-mevedel-session-durability--local-session root))
+         (mevedel-session-durability--client-id (make-string 64 ?a)))
+    (make-directory lease-dir t)
+    (setf (mevedel-session-save-path session) directory)
+    (unwind-protect (progn ,test)
+      (mevedel-session-durability--cancel-renewal session)
+      (delete-directory root t)))
+  (test)
+  :doc "explicit discard acquires without restore or a second takeover prompt"
+  (let ((prepared nil))
+    (let ((mevedel-session-durability--client-id (make-string 64 ?f)))
+      (mevedel-session-durability--write-generation
+       lease-dir (mevedel-session-durability--lease-record
+                  "crashed publisher" 1 'publishing nil t
+                  (- (mevedel-session-durability--target-time lease-dir) 4000))))
+    (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (ert-fail "Second prompt"))))
+      (should
+       (mevedel-session-durability-discard-session
+        session
+        (lambda ()
+          (should (mevedel-session-durability-lease-owned-p session))
+          (should (plist-get (mevedel-session-lease session) :unsettled-mutation))
+          (should (mevedel-session-durability-set-unsettled-mutation session nil))
+          (setq prepared t)))))
+    (should prepared)
+    (should-not (file-exists-p directory))
+    (should-not (mevedel-session-lease session))
+    (should-not (mevedel-session-lease-renewal-timer session)))
+  :doc "failed preparation releases authority without erasing unresolved mutation"
+  (progn
+    (let ((mevedel-session-durability--client-id (make-string 64 ?f)))
+      (mevedel-session-durability--write-generation
+       lease-dir (mevedel-session-durability--lease-record
+                  "crashed" 1 'active nil t
+                  (- (mevedel-session-durability--target-time lease-dir) 4000))))
+    (should-error (mevedel-session-durability-discard-session
+                   session (lambda () (error "Preparation interrupted"))))
+    (should (file-directory-p directory))
+    (let ((head (mevedel-session-durability--lease-head lease-dir)))
+      (should (eq 'released (plist-get head :status)))
+      (should (plist-get head :unsettled-mutation)))
+    (should-not (mevedel-session-lease session)))
+  :doc "a malformed newer generation after assessment prevents election and survives"
+  (let ((run (symbol-function 'mevedel-session-control-fs-run-program))
+        (path (mevedel-session-durability--generation-path lease-dir 2))
+        injected prepared)
+    (mevedel-session-durability--write-generation
+     lease-dir (mevedel-session-durability--lease-record
+                "old owner" 1 'released nil nil
+                (mevedel-session-durability--target-time lease-dir)))
+    (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+               (lambda (operations &optional lock-directory)
+                 (when (and (not injected)
+                            (seq-some (lambda (op)
+                                        (and (eq 'list-directory (plist-get op :op))
+                                             (equal lease-dir (plist-get op :path))
+                                             (not (plist-get op :optional))))
+                                      operations))
+                   (setq injected t)
+                   (write-region "(:generation" nil path nil 'silent))
+                 (funcall run operations lock-directory))))
+      (should-error
+       (mevedel-session-durability-discard-session
+        session (lambda () (setq prepared t)))))
+    (should injected)
+    (should-not prepared)
+    (should (file-directory-p directory))
+    (should (equal "(:generation"
+                   (with-temp-buffer (insert-file-contents path) (buffer-string)))))
+  :doc "live ownership and malformed authority never reach preparation"
+  (dolist (record (list (mevedel-session-durability--lease-record
+                        "local owner" 1 'active nil nil
+                        (mevedel-session-durability--target-time lease-dir))
+                       '(:generation 1 :status released :expires-at 0)))
+    (mevedel-session-durability--write-generation lease-dir record)
+    (should-error
+     (mevedel-session-durability-discard-session
+      session (lambda () (ert-fail "Refused session reached preparation")))))
+  :doc "a new blocker between final observation and deletion fails closed"
+  (let ((run (symbol-function 'mevedel-session-control-fs-run-program))
+        (injected nil))
+    (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+               (lambda (operations &optional lock-directory)
+                 (when (seq-some (lambda (op) (eq 'delete-directory (plist-get op :op)))
+                                 operations)
+                   (should (equal root lock-directory))
+                   (setq injected t)
+                   (make-directory (file-name-concat directory ".journal-pins"))
+                   (write-region "unknown capture" nil
+                                 (file-name-concat directory ".journal-pins" "malformed")
+                                 nil 'silent))
+                 (funcall run operations lock-directory))))
+      (should-error (mevedel-session-durability-discard-session session #'ignore)))
+    (should injected)
+    (should (file-directory-p directory))
+    (should (eq 'released (plist-get (mevedel-session-durability--lease-head lease-dir)
+                                   :status))))
+  :doc "delayed activation and abort never recreate a removed claiming record"
+  (dolist (abort '(nil t))
+    (let ((run (symbol-function 'mevedel-session-control-fs-run-program))
+          injected)
+      (when abort
+        (mevedel-session-durability--write-generation
+         lease-dir (mevedel-session-durability--lease-record
+                    "old owner" 1 'released nil nil
+                    (mevedel-session-durability--target-time lease-dir))))
+      (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                 (lambda (operations &optional lock-directory)
+                   (if (not (eq 'create (plist-get (car operations) :op)))
+                       (funcall run operations lock-directory)
+                     (should (equal root lock-directory))
+                     (when abort
+                       (mevedel-session-durability--write-generation
+                        lease-dir
+                        (plist-put (mevedel-session-durability--lease-head lease-dir)
+                                   :buffer "changed predecessor")))
+                     (prog1 (funcall run operations lock-directory)
+                       (setq injected t)
+                       (delete-directory directory t)
+                       (make-directory lease-dir t))))))
+        (should-error (mevedel-session-durability-discard-session session #'ignore)))
+      (should injected)
+      (should-not (directory-files lease-dir nil "\\`[0-9]"))))
+  :doc "an unexpected lease record between final observation and deletion is protected"
+  (let ((run (symbol-function 'mevedel-session-control-fs-run-program)))
+    (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+               (lambda (operations &optional lock-directory)
+                 (when (seq-some (lambda (op) (eq 'delete-directory (plist-get op :op)))
+                                 operations)
+                   (write-region "malformed authority" nil
+                                 (file-name-concat lease-dir "0.el") nil 'silent))
+                 (funcall run operations lock-directory))))
+      (should-error (mevedel-session-durability-discard-session session #'ignore)))
+    (should (file-directory-p directory)))
+  :doc "expiry at the final target clock check retains the session"
+  (let ((mevedel-session-lease-seconds 1)
+        (run (symbol-function 'mevedel-session-control-fs-run-program)))
+    (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+               (lambda (operations &optional lock-directory)
+                 (when (seq-some (lambda (op) (eq 'delete-directory (plist-get op :op)))
+                                 operations)
+                   (sleep-for 1.1))
+                 (funcall run operations lock-directory))))
+      (should-error (mevedel-session-durability-discard-session session #'ignore)))
+    (should (file-directory-p directory))))
+
+(mevedel-deftest mevedel-session-durability-lease-acquire/scratch
+  (:doc "synchronous takeover preserves carrier scratch payloads without treating them as authority")
+  (dolist (scratch '(nil t))
+    (let* ((root (make-temp-file "mevedel-takeover-scratch-" t))
+           (directory (file-name-concat root ".lease"))
+           (session (test-mevedel-session-durability--local-session root))
+           (staged (list nil))
+           paths)
+      (setf (mevedel-session-save-path session) root)
+      (make-directory directory)
+      (unwind-protect
+          (progn
+            (let ((mevedel-session-durability--client-id (make-string 64 ?f)))
+              (mevedel-session-durability--write-generation
+               directory (mevedel-session-durability--lease-record "old" 1 'active nil nil 0)))
+            (when scratch
+              (mevedel-session-control-fs--stage-payloads
+               (list (list :op 'write
+                           :path (mevedel-session-durability--generation-path directory 2)
+                           :content "crash payload")) staged)
+              (should (car staged))
+              (setq paths (cons (file-name-concat directory ".mevedel-control-fs-Ab09Zx")
+                                (car staged)))
+              (write-region "crash payload" nil (car paths) nil 'silent))
+            (cl-letf (((symbol-function 'y-or-n-p) #'always))
+              (should (mevedel-session-durability-lease-acquire root "takeover" session)))
+            (should (mevedel-session-durability-lease-owned-p session))
+            (should (> (plist-get (mevedel-session-lease session) :generation) 1))
+            (dolist (path paths)
+              (should (equal "crash payload"
+                             (with-temp-buffer (insert-file-contents path) (buffer-string))))))
+        (mevedel-session-durability--cancel-renewal session)
+        (delete-directory root t)))))
 
 (provide 'test-mevedel-session-durability)
 ;;; test-mevedel-session-durability.el ends here

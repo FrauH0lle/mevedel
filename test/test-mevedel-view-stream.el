@@ -2678,7 +2678,7 @@ turn's later text, live and after reconstruction."
                                        'mevedel-view-pending-tool-live t))
         (should-not mevedel-view--pending-tool-calls))))
 
-  :doc "full rerender keeps ordinary text and leaves running rows to the live turn"
+  :doc "full rerender redraws the live turn with its running rows at once"
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer view-buf
       (setq mevedel-view--pending-tool-calls
@@ -2700,18 +2700,16 @@ turn's later text, live and after reconstruction."
       (should (string-match-p "● Read" (buffer-string)))
       (let ((mevedel-view-tool-boundary-render-delay 60))
         (mevedel-view--full-rerender)
+        ;; No timer: the live render queued behind the projection already
+        ;; replaced the view-only tail with the turn and its running row.
         (let ((text (buffer-substring-no-properties
                      (point-min) (point-max))))
-          ;; The preserved tail keeps its own text, not the running row.
-          (should (= 1 (mevedel-view-stream-test--count-substring
+          (should (= 0 (mevedel-view-stream-test--count-substring
                         "Calling Read" text)))
-          (should-not (string-match-p "● Read" text))
-          (should-not (text-property-any (point-min) (point-max)
-                                         'mevedel-view-pending-tool-live t)))
-        (should (eq 'incremental mevedel-view--pending-render-kind)))
-      (mevedel-view--flush-scheduled-render view-buf t)
-      (should (= 1 (mevedel-view-stream-test--count-substring
-                    "● Read" (buffer-string))))))
+          (should (= 1 (mevedel-view-stream-test--count-substring
+                        "● Read" text)))
+          (should (text-property-any (point-min) (point-max)
+                                     'mevedel-view-pending-tool-live t))))))
 
   :doc "incremental render preserves live tail when no replacement content is ready"
   (mevedel-view-stream-test--with-buffers
@@ -3026,7 +3024,7 @@ turn's later text, live and after reconstruction."
         (mevedel-view-stream-post-tool (car (last calls))))
       (let ((text (mevedel-view-stream-test--history view-buf)))
         (should (string-match-p
-                 "× 4 calls: read 3 files, searched 1 pattern (1 failed) ▸$" text))
+                 "! 4 calls: read 3 files, searched 1 pattern (1 failed) ▸$" text))
         (should-not (string-match-p "Read: a\\|Grep: x" text)))
       (with-current-buffer view-buf
         (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
@@ -6133,12 +6131,11 @@ turn's later text, live and after reconstruction."
                   (setq mevedel-view-spinner-power-policy 'save))
                 (mevedel-view--start-spinner-timer)
                 (mevedel-view--full-rerender)
-                ;; The projection leaves running rows to the live turn's
-                ;; next boundary render, which restores their phase.
-                (should-not (text-property-any
-                             (point-min) (point-max)
-                             'mevedel-view-pending-tool-live t))
-                (mevedel-view--flush-scheduled-render view-buf t)
+                ;; The live render queued behind the projection redraws the
+                ;; running rows before redisplay, restoring their phase.
+                (should (text-property-any
+                         (point-min) (point-max)
+                         'mevedel-view-pending-tool-live t))
                 (let ((position
                        (marker-position
                         (caar mevedel-view--spinner-tool-targets))))

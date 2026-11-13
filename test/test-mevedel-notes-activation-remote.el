@@ -143,9 +143,26 @@
       '((:op read :path "/ssh:mevedel-invalid-host:/project/.mevedel/instructions.el"
               :optional t))
       (lambda (results failure) (setq delivered (list results failure)))
-      'global t))
+      'global nil t))
     (should (equal (caar (cdr delivered)) 'file-error))
     (should-not (car delivered)))
+  :doc "connected-only still fails closed when ordinary async programs would run synchronously"
+  (let ((mevedel-session-control-fs--async-wait t)
+        (calls 0)
+        delivered)
+    (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+               (lambda (&rest _) (ert-fail "Connected-only used synchronous fallback"))))
+      (should-not
+       (mevedel-session-control-fs-run-program-async
+        '((:op read :path "/ssh:mevedel-invalid-host:/project/.mevedel/instructions.el"
+                :optional t))
+        (lambda (results failure)
+          (cl-incf calls)
+          (setq delivered (list results failure)))
+        'global nil t)))
+    (should (= calls 1))
+    (should-not (car delivered))
+    (should (eq 'file-error (car (cadr delivered)))))
   :doc "a connected SSH read returns real bytes without synchronous target probes"
   (let* ((root (or (getenv "MEVEDEL_TEST_SSH_ROOT")
                    (ert-skip "MEVEDEL_TEST_SSH_ROOT is not set")))
@@ -174,7 +191,7 @@
                  (mevedel-session-control-fs-run-program-async
                   (list (list :op 'read :path file :coding 'no-conversion))
                   (lambda (results failure) (setq delivered (list results failure)))
-                  root t)))
+                  root nil t)))
             (should (processp process))
             (should-not delivered)
             (with-timeout (15 (ert-fail "Connected read timed out"))
@@ -197,7 +214,7 @@
                      (mevedel-session-control-fs-run-program-async
                       (list (list :op 'read :path file :coding 'no-conversion))
                       (lambda (results failure) (setq delivered (list results failure)))
-                      root t)))
+                      root nil t)))
             (with-timeout (15 (ert-fail "Missing master read timed out"))
               (while (not delivered) (accept-process-output nil 0.02))))
           (should-not (car delivered))

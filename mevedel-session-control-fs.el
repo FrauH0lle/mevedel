@@ -1190,6 +1190,11 @@ is extracted to disk. A rejected archive requires fresh ordinary reads."
         (error "Unexpected control read archive member"))
       (nreverse results))))
 
+(defconst mevedel-session-control-fs-scratch-name-regexp
+  "\\`\\.mevedel-control-fs-\\(?:staged-\\)?[A-Za-z0-9]\\{6\\}\\'"
+  "Reserved scratch leaves from `make-temp-file' and the shell's mktemp.
+Interrupted carriers can leave these non-authoritative payloads behind.")
+
 (defconst mevedel-session-control-fs--stage-min-bytes 0
   "Smallest local payload written as a staged file instead of base64.
 Every local write is staged: the script's base64 path spends three
@@ -1553,7 +1558,20 @@ ProxyCommand=false makes a vanished master fail instead of reconnecting."
            (when-let* ((port (tramp-file-name-port vec))) (list "-p" port))
            (list (tramp-file-name-host vec))))))))
 
-(cl-defun mevedel-session-control-fs-run-program-async (operations callback &optional scope connected-only)
+(defun mevedel-session-control-fs-async-busy-p (directory)
+  "Return non-nil while a local asynchronous program addresses DIRECTORY.
+Include completed programs awaiting callback delivery: their continuations may
+still mutate storage after the target process has exited.  No target I/O runs."
+  (let* ((directory (mevedel-session-control-fs-physical-path directory))
+         (prefix (file-name-as-directory directory)))
+    (seq-some (lambda (job)
+                (seq-some (lambda (path)
+                            (or (equal directory path) (string-prefix-p prefix path)))
+                          (nth 2 job)))
+              mevedel-session-control-fs--async-jobs)))
+
+(cl-defun mevedel-session-control-fs-run-program-async
+    (operations callback &optional scope lock-directory connected-only)
   "Run OPERATIONS as one control program, then call CALLBACK.
 
 CALLBACK receives RESULTS, as `mevedel-session-control-fs-run-program'
@@ -1579,18 +1597,23 @@ process when the program runs asynchronously, and nil otherwise.
 `mevedel-session-control-fs-wait-async' waits for programs in flight.
 
 SCOPE is the captured diagnostic root, or `unavailable' for ownerless work.
+LOCK-DIRECTORY serializes the whole program with synchronous and asynchronous
+programs using that same physical directory, exactly as in the synchronous API.
+Without it callers must serialize programs touching the same files.
 CONNECTED-ONLY requires a live remote SSH master; never reconnect or use a
 synchronous fallback.  An unavailable carrier delivers a `file-error'.
 It carries bounded requests entirely in argv, so a stalled master cannot
-block Emacs writing the program to a pipe.  Oversized requests fail closed.
-Nothing orders an asynchronous program against other programs on the same
-target: callers serialize the ones that touch the same files."
+block Emacs writing the program to a pipe.  Oversized requests fail closed."
   (let* ((remote (file-remote-p (plist-get (car operations) :path)))
          (ssh (and connected-only
                    (not mevedel-session-control-fs--async-wait)
                    (ignore-errors
                      (mevedel-session-control-fs--connected-ssh-command
                       (plist-get (car operations) :path))))))
+    (when lock-directory
+      (setq lock-directory (mevedel-session-control-fs-physical-path lock-directory))
+      (unless (equal remote (file-remote-p lock-directory))
+        (error "Control lock crosses execution targets")))
     (when (and connected-only (not ssh))
       (funcall callback nil '(file-error "Connected-only SSH carrier unavailable"))
       (cl-return-from mevedel-session-control-fs-run-program-async nil))
@@ -1600,7 +1623,7 @@ target: callers serialize the ones that touch the same files."
                  (not (mevedel-session-control-fs--pipe-capable-p remote))))
         (let (results failure)
           (condition-case err
-              (setq results (mevedel-session-control-fs-run-program operations))
+              (setq results (mevedel-session-control-fs-run-program operations lock-directory))
             (error (setq failure err)))
           (funcall callback results failure)
           nil)
@@ -1616,7 +1639,10 @@ target: callers serialize the ones that touch the same files."
              (output (generate-new-buffer " *mevedel-control-fs-async*"))
              (stderr (generate-new-buffer " *mevedel-control-fs-async-stderr*"))
              (staged (list nil))
-             (job (list staged scope))
+             (job (list staged scope
+                        (mapcar (lambda (op)
+                                  (mevedel-session-control-fs-physical-path
+                                   (plist-get op :path))) operations)))
              ;; The transport queue coalesces work under `equal' keys, and
              ;; JOB is structurally equal across programs that stage
              ;; nothing: an uninterned symbol keeps each delivery its own.
@@ -1747,17 +1773,22 @@ target: callers serialize the ones that touch the same files."
                                        (append
                                         (list bash "-p" "-c"
                                               mevedel-session-control-fs--program-script
-                                              "mevedel-session-control-fs" "" "" "0")
+                                              "mevedel-session-control-fs"
+                                              (or mevedel-session-control-fs--test-pause-file "")
+                                              (if lock-directory (file-local-name lock-directory) "") "0")
                                         arguments) " "))))
                             (arguments
                                (append
                                 (list bash "-p" "-c"
                                       mevedel-session-control-fs--program-script
-                                      "mevedel-session-control-fs" "" "" "0")
+                                      "mevedel-session-control-fs"
+                                      (or mevedel-session-control-fs--test-pause-file "")
+                                      (if lock-directory (file-local-name lock-directory) "") "0")
                                 arguments))
                             (t (list bash "-p" "-c"
                                    mevedel-session-control-fs--pipe-bootstrap
-                                   bash "" "" "0")))
+                                   bash (or mevedel-session-control-fs--test-pause-file "")
+                                   (if lock-directory (file-local-name lock-directory) "") "0")))
                            :connection-type 'pipe :coding 'no-conversion
                            :file-handler (not ssh) :noquery t
                            :sentinel
@@ -1790,8 +1821,8 @@ target: callers serialize the ones that touch the same files."
                      (mevedel-session-control-fs--send-request-buffer process))
                    (with-temp-buffer
                      (mevedel-session-control-fs--insert-program-request fields)
-                     (mevedel-session-control-fs--send-request-buffer process)))
-                 (mevedel-session-control-fs--send-eof process)
+                     (mevedel-session-control-fs--send-request-buffer process))
+                   (mevedel-session-control-fs--send-eof process))
                  process)))
           ((error quit)
            (unless settled
