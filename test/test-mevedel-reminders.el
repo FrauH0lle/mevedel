@@ -1296,7 +1296,7 @@ this collapses both shapes to the delivered text."
     (let ((content (funcall (mevedel-reminder-content reminder) session)))
       (dolist (text '("Eval is unavailable"
                       "session-owned work:// descendants"
-                      "read-only Plan requests permit no file writes"
+                      "requests carrying inherited Plan limits permit ApplyPatch only"
                       "Agents you start inherit these Plan limits"
                       "critique of a draft plan"
                       "Bash is limited"
