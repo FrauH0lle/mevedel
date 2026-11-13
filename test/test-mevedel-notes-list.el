@@ -74,6 +74,46 @@
   (:quiet t)
   ,test
   (test)
+  :doc "folding and refresh keep point on the same note or group heading"
+  (mevedel-notes-list-test--workspace
+    (with-current-buffer (find-buffer-visiting first)
+      (goto-char (point-min))
+      (mevedel-note-done))
+    (setq list-buffer (mevedel-notes-list workspace))
+    (with-current-buffer list-buffer
+      (goto-char (point-min))
+      (search-forward "Recently closed")
+      (dolist (key '("TAB" "g" "TAB"))
+        (call-interactively (key-binding (kbd key)))
+        (should (string-match-p "Recently closed"
+                                (buffer-substring (line-beginning-position) (line-end-position)))))
+      (goto-char (point-min))
+      (search-forward "Second thought")
+      (let ((id (tabulated-list-get-id)))
+        (dolist (key '("TAB" "g"))
+          (call-interactively (key-binding (kbd key)))
+          (should (equal id (tabulated-list-get-id)))))
+      (goto-char (point-min))
+      (search-forward "Unsent")
+      (call-interactively (key-binding (kbd "TAB")))
+      (should (string-match-p "Unsent"
+                              (buffer-substring (line-beginning-position) (line-end-position))))))
+  :doc "done and delete retain the note when visible or the nearest row when hidden"
+  (dolist (key '("x" "d"))
+    (dolist (expanded '(nil t))
+      (mevedel-notes-list-test--workspace
+        (setq list-buffer (mevedel-notes-list workspace))
+        (with-current-buffer list-buffer
+          (when expanded (call-interactively (key-binding (kbd "TAB"))))
+          (goto-char (point-min))
+          (search-forward "Second thought")
+          (let ((id (tabulated-list-get-id)))
+            (call-interactively (key-binding key))
+            (if expanded
+                (should (equal id (tabulated-list-get-id)))
+              (should (string-match-p
+                       "Recently closed"
+                       (buffer-substring (line-beginning-position) (line-end-position))))))))))
   :doc "lists notes from unopened files after reload and visits with one key"
   (mevedel-notes-list-test--workspace
     (kill-buffer (find-buffer-visiting second))

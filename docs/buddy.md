@@ -277,9 +277,14 @@ must not read as "every buffer in Emacs".
 
 Buddy remarks use the common note display, initially collapsed according to
 `mevedel-note-labels`: code tint and the entry echo hint remain, without a label.
-Expanded labels sit below the complete source line with a
-`Note N · author · state · KEY: menu` header and the full text indented below,
-filled to `fill-column` bounded by window width. The modified-key menu opens an
+Expanded labels sit below the complete source line at the code's indentation:
+`┆ Note N · Buddy  note text`. The dashed bar and header use Buddy's label face;
+the full text uses the normal face, filled to `fill-column` bounded by window
+width, with the bar repeated on continuation lines. Other authors use `▍`.
+Only attention states appear after the header in the dimmed `shadow` face:
+`change ready`, `change stale`, `working…`, `Buddy watches`, `looks done`, or
+`paused` for paused takes. Labels omit sent/unsent status and menu instructions;
+the entry echo hint supplies the actions key. The modified-key menu opens an
 inline **Actions** row: `s` send/reopen, `t` take/drop, `i` edit, `g` tags,
 `x` done, `k` delete/dismiss, `b` keep a Buddy remark, `w` copy, `S` settings and
 `e` expand/collapse. `a` apply and `m` merge appear only for prepared changes;
@@ -289,8 +294,9 @@ permission mode without sending; for a sent note they change its live session.
 `mevedel-notes-toggle-labels` expands all notes in the current buffer if any are
 collapsed, otherwise collapses all. Display state is overlay-local, not saved;
 moving point never changes style. `mevedel-note-label-buddy` inherits
-`font-lock-warning-face` and is bold; `mevedel-note-buddy` uses `:extend t`
-and a background blending 15% of that foreground into the default background.
+`font-lock-warning-face` and is bold for the bar and header, not the note text;
+`mevedel-note-buddy` uses `:extend t` and a background blending 10% of that
+foreground into the default background.
 Tints refresh at load and theme enable without overriding user-customized
 backgrounds.
 

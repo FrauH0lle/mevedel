@@ -248,8 +248,13 @@ to mark the active region, or the current line when no region is active. The
 text is optional: submitting an empty answer keeps a code-only note. A label
 is collapsed by default (`mevedel-note-labels` is `collapsed`): the code stays
 tinted, but no label is shown. Expanded labels sit below the complete source
-line with a `Note N · author · state · KEY: menu` header. The full text appears
-indented below it, filled to `fill-column` bounded by the window width.
+line at the code's indentation: `▍ Note N · author  note text`. The bar and
+header use the author's label face; the full note text uses the normal face,
+filled to `fill-column` bounded by the window width. Each continuation line
+starts with the bar; Buddy remarks use `┆` instead. Only states needing
+attention appear after the header, dimmed: `change ready`, `change stale`,
+`working…`, `Buddy watches`, `looks done`, or `paused` for a paused take.
+Labels show neither sent/unsent status nor menu instructions.
 Set `mevedel-note-labels` to `expanded` to show labels initially instead.
 Notes follow source edits. A note is unsent, sent, taken or closed (done,
 deleted or dismissed). Its context reaches a prompt only when you send or
@@ -400,9 +405,9 @@ turns and participate in ordinary conversation context.
 Noted code is tinted by author, matching the theme-derived label color. The
 faces are `mevedel-note-you`, `mevedel-note-agent` and `mevedel-note-buddy`
 for the code, and `mevedel-note-label-you`, `mevedel-note-label-agent` and
-`mevedel-note-label-buddy` for the labels. Labels are bold and inherit
-`font-lock-function-name-face` (you), `font-lock-keyword-face` (agent), or
-`font-lock-warning-face` (Buddy). Code backgrounds blend 15% of the matching
+`mevedel-note-label-buddy` for the headers and bars. These are bold and inherit
+`font-lock-keyword-face` (you), `font-lock-function-name-face` (agent), or
+`font-lock-warning-face` (Buddy). Code backgrounds blend 10% of the matching
 foreground into the default background at load and theme enable, without overriding
 user-customized tint backgrounds. Code faces use `:extend t`.
 

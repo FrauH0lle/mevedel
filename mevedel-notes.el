@@ -82,12 +82,12 @@ Individual label toggles last only while the note's overlay is live."
   :group 'mevedel)
 
 (defface mevedel-note-label-you
-  '((t :inherit font-lock-function-name-face :weight bold))
+  '((t :inherit font-lock-keyword-face :weight bold))
   "Label of a note you wrote."
   :group 'mevedel)
 
 (defface mevedel-note-label-agent
-  '((t :inherit font-lock-keyword-face :weight bold))
+  '((t :inherit font-lock-function-name-face :weight bold))
   "Label of a note an agent wrote."
   :group 'mevedel)
 
@@ -114,7 +114,7 @@ Individual label toggles last only while the note's overlay is live."
                        (not (equal background (get face 'mevedel-note-theme-background)))))
         (let ((color (mevedel--tint (face-background 'default nil t)
                                     (or (face-foreground (cdr pair) nil t)
-                                        (face-foreground 'default nil t)) 0.15)))
+                                        (face-foreground 'default nil t)) 0.10)))
           (set-face-background face color)
           (put face 'mevedel-note-theme-background color))))))
 
@@ -302,19 +302,17 @@ Refuse unavailable sources before a caller starts mutating the notes."
                              (or (overlay-get note 'mevedel-note-text) ""))
    80 nil nil "…"))
 
-(defun mevedel-notes--actions-hint (&optional note menu-only)
-  "Return the current modified-key menu hint for NOTE.
-When MENU-ONLY is non-nil, omit the action list."
+(defun mevedel-notes--actions-hint (&optional note)
+  "Return the current modified-key menu hint for NOTE."
   (format "%s: %s"
           (if-let* ((key (where-is-internal #'mevedel--ov-actions-dispatch
                                            mevedel-note-actions-map t)))
               (key-description key)
             "M-x mevedel-note-menu")
-          (if menu-only "menu"
-            (format "send, %s, edit, done, %s"
-                    (if (and note (mevedel-note-watching-p note)) "drop" "take")
-                    (pcase (and note (overlay-get note 'mevedel-note-author))
-                      ('buddy "dismiss, keep") ('agent "dismiss") (_ "delete"))))))
+          (format "send, %s, edit, done, %s"
+                  (if (and note (mevedel-note-watching-p note)) "drop" "take")
+                  (pcase (and note (overlay-get note 'mevedel-note-author))
+                    ('buddy "dismiss, keep") ('agent "dismiss") (_ "delete")))))
 
 (defun mevedel-notes--entry-hint ()
   "Announce the note and its next actions when point enters it."
@@ -330,19 +328,17 @@ When MENU-ONLY is non-nil, omit the action list."
                    (mevedel-notes--display-text note)
                    (mevedel-notes--actions-hint note)))))))
 
-(defun mevedel-notes--label-string (header text)
-  "Fill HEADER and full TEXT for a label in the current source buffer."
-  (let ((width (max 4 (min fill-column (window-body-width
-                                      (get-buffer-window (current-buffer) t))))))
+(defun mevedel-notes--label-string (header text bar)
+  "Fill HEADER and full TEXT with BAR at the source indentation."
+  (let* ((width (max 4 (min fill-column (window-body-width
+                                       (get-buffer-window (current-buffer) t)))))
+         (indent (min (current-indentation) (- width 3)))
+         (prefix (concat (make-string indent ?\s) bar " ")))
     (with-temp-buffer
-      (setq-local fill-column (- width 2))
-      (insert header)
-      (fill-region (point-min) (point-max))
-      (unless (string-empty-p text)
-        (insert "\n")
-        (let ((start (point)))
-          (insert text)
-          (fill-region start (point-max))))
+      (setq-local fill-column (- width indent 2))
+      (insert header (if (string-empty-p text) "" "  ")
+              (propertize text 'face 'default))
+      (fill-region (point-min) (point-max) nil t)
       (untabify (point-min) (point-max))
       (goto-char (point-min))
       (while (not (eobp))
@@ -361,7 +357,7 @@ When MENU-ONLY is non-nil, omit the action list."
           (insert "\n")
           (forward-line -1))
         (beginning-of-line)
-        (insert "  ")
+        (insert prefix)
         (forward-line 1))
       (concat "\n" (buffer-string)))))
 
@@ -391,32 +387,35 @@ When MENU-ONLY is non-nil, omit the action list."
                          (t 'mevedel-note-label-you)))
              (text (when (eq 'expanded (overlay-get note 'mevedel-note-labels))
                      (mevedel-notes--label-string
-                      (format "Note %s · %s · %s%s · %s"
-                              (overlay-get note 'mevedel-id)
-                              (pcase author
-                                ('buddy "Buddy") ('agent "AI") (_ "you"))
-                              (pcase (mevedel-notes-attention-state note)
-                                ('ready "change ready") ('stale "change stale")
-                                (_ (if (eq 'taken (overlay-get note 'mevedel-note-state))
-                                       (if (not (mevedel-note-watching-p note))
-                                           "you're on it"
-                                         (if (overlay-get note 'mevedel-note-buddy-looks-done)
-                                             "looks done · done? · Buddy watches"
-                                           "you're on it · Buddy watches"))
-                                     (if (overlay-get note 'mevedel-note-session-id) "sent" "not sent"))))
-                              (if (and (eq 'taken (overlay-get note 'mevedel-note-state))
-                                       (not (mevedel-note-watching-p note)))
-                                  " · paused" "")
-                              (mevedel-notes--actions-hint note t))
-                      (or (overlay-get note 'mevedel-note-text) "")))))
+                      (concat
+                       (propertize
+                        (format "Note %s · %s"
+                                (overlay-get note 'mevedel-id)
+                                (pcase author
+                                  ('buddy "Buddy") ('agent "AI") (_ "you")))
+                        'face face)
+                       (let* ((paused (and (eq 'taken (overlay-get note 'mevedel-note-state))
+                                           (not (mevedel-note-watching-p note))))
+                              (state (pcase (mevedel-notes-attention-state note)
+                                       ('ready "change ready") ('stale "change stale")
+                                       ('working "working…")
+                                       ('taken
+                                        (unless paused
+                                          (if (overlay-get note 'mevedel-note-buddy-looks-done)
+                                              "looks done"
+                                            "Buddy watches"))))))
+                         (when (or state paused)
+                           (propertize (concat (and state (concat " · " state))
+                                               (and paused " · paused"))
+                                       'face 'shadow))))
+                      (or (overlay-get note 'mevedel-note-text) "")
+                      (propertize (if (eq author 'buddy) "┆" "▍") 'face face)))))
         (overlay-put note 'keymap mevedel-note-actions-map)
         (unless (eq code-face (overlay-get note 'face))
           (overlay-put note 'face code-face))
         (move-overlay label (overlay-start note) end)
-        (unless (and (equal text (overlay-get label 'after-string))
-                     (or (null text)
-                         (eq face (get-text-property 0 'face (overlay-get label 'after-string)))))
-          (overlay-put label 'after-string (and text (propertize text 'face face))))))
+        (unless (equal-including-properties text (overlay-get label 'after-string))
+          (overlay-put label 'after-string text))))
     (add-hook 'after-change-functions #'mevedel-notes--after-change nil t)
     (add-hook 'post-command-hook #'mevedel-notes--entry-hint nil t)))
 

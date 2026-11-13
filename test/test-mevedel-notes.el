@@ -131,13 +131,16 @@
   (:quiet t)
   ,test
   (test)
-  :doc "current-line note shows author, optional text, unsent state and actions"
+  :doc "current-line note shows a colored header and normal text without idle state or menu"
   (mevedel-notes-test--with-source
     (mevedel-note-create "Check this")
     (should (equal "before\nselected code\nafter\n" (buffer-string)))
     (let ((label (string-join (mevedel-notes-test--labels))))
-      (should (string-match-p "Note 1.*you.*not sent.*menu\n  Check this" label))
-      (should-not (string-match-p "edit.*delete" label))))
+      (should (equal "\n▍ Note 1 · you  Check this" label))
+      (should (eq 'mevedel-note-label-you
+                  (get-text-property (string-search "▍" label) 'face label)))
+      (should (eq 'default
+                  (get-text-property (string-search "Check this" label) 'face label)))))
   :doc "note colors inherit the theme and preserve customized tint backgrounds"
   (mevedel-notes-test--with-source
     (let ((face-spec (get 'mevedel-note-agent 'face-override-spec))
@@ -156,9 +159,9 @@
              '(font-lock-warning-face ((t (:foreground "blue")))))
             (enable-theme 'mevedel-notes-test)
             (mevedel-note-create "Theme colors")
-            (dolist (entry '((mevedel-note-you mevedel-note-label-you font-lock-function-name-face "#260000")
-                             (mevedel-note-agent mevedel-note-label-agent font-lock-keyword-face "#002600")
-                             (mevedel-note-buddy mevedel-note-label-buddy font-lock-warning-face "#000026")))
+            (dolist (entry '((mevedel-note-you mevedel-note-label-you font-lock-keyword-face "#001900")
+                             (mevedel-note-agent mevedel-note-label-agent font-lock-function-name-face "#190000")
+                             (mevedel-note-buddy mevedel-note-label-buddy font-lock-warning-face "#000019")))
               (pcase-let ((`(,tint ,label ,parent ,background) entry))
                 (should (eq parent (face-attribute label :inherit)))
                 (should (eq 'bold (face-attribute label :weight)))
@@ -169,9 +172,9 @@
             (custom-theme-set-faces
              'mevedel-notes-test
              '(default ((t (:foreground "black" :background "white"))))
-             '(font-lock-function-name-face ((t (:foreground "blue")))))
+             '(font-lock-keyword-face ((t (:foreground "blue")))))
             (enable-theme 'mevedel-notes-test)
-            (should (equal "#d8d8ff" (face-background 'mevedel-note-you)))
+            (should (equal "#e5e5ff" (face-background 'mevedel-note-you)))
             (should (equal "purple" (face-background 'mevedel-note-agent)))
             (should (equal "white" (face-background 'mevedel-note-buddy nil t))))
         (face-spec-set 'mevedel-note-agent face-spec)
@@ -216,23 +219,24 @@
            (label (overlay-get (overlay-get note 'mevedel-label-overlay) 'after-string)))
       (dolist (line (split-string label "\n" t))
         (should (<= (string-width line) fill-column)))
-      (should (string-search "value\\200" (replace-regexp-in-string "[ \n]+" "" label)))
+      (should (string-search "value\\200" (replace-regexp-in-string "[ ▍\n]+" "" label)))
       (should (equal "\tvalue\u0080" (overlay-get note 'mevedel-note-text)))))
-  :doc "expanded labels show a menu header and full indented text filled to the column"
+  :doc "expanded labels repeat the bar at code indentation and fill the full text"
   (mevedel-notes-test--with-source
+    (insert "    ")
     (let* ((fill-column 60)
            (text (concat "First paragraph has several words.\n\nSecond " (make-string 500 ?x)))
            (note (mevedel-note-create text)))
       (let* ((label (car (mevedel-notes-test--labels)))
              (lines (split-string label "\n" t)))
-        (should (equal "  Note 1 · you · not sent · M-m: menu" (car lines)))
+        (should (equal "    ▍ Note 1 · you  First paragraph has several words." (car lines)))
         (dolist (line lines)
-          (should (string-prefix-p "  " line))
+          (should (string-prefix-p "    ▍ " line))
           (should (<= (string-width line) fill-column)))
         (should (string-search (make-string 500 ?x)
-                               (replace-regexp-in-string "[ \n]+" "" label)))
+                               (replace-regexp-in-string "[ ▍\n]+" "" label)))
         (should (string-search "First paragraph has several words." label))
-        (should (string-search "\n  \n  Second" label)))
+        (should (string-search "\n    ▍ \n    ▍ Second" label)))
       (mevedel--clear-instruction-state workspace)
       (mevedel-instruction-store-observe workspace)
       (cl-letf (((symbol-function 'read-string)
@@ -258,18 +262,18 @@
       (goto-char (overlay-start child))
       (call-interactively #'mevedel-cycle-instructions-at-point)
       (should (eq 'highlight (get-text-property
-                              0 'face (overlay-get (overlay-get child 'mevedel-label-overlay)
+                              1 'face (overlay-get (overlay-get child 'mevedel-label-overlay)
                                                    'after-string))))
       (call-interactively #'mevedel-cycle-instructions-at-point)
       (should (eq 'mevedel-note-label-you (get-text-property
-                           0 'face (overlay-get (overlay-get child 'mevedel-label-overlay)
+                           1 'face (overlay-get (overlay-get child 'mevedel-label-overlay)
                                                 'after-string))))
       (should (eq 'highlight (get-text-property
-                              0 'face (overlay-get (overlay-get parent 'mevedel-label-overlay)
+                              1 'face (overlay-get (overlay-get parent 'mevedel-label-overlay)
                                                    'after-string))))
       (call-interactively #'mevedel-cycle-instructions-at-point)
       (should (eq 'mevedel-note-label-you (get-text-property
-                           0 'face (overlay-get (overlay-get parent 'mevedel-label-overlay)
+                           1 'face (overlay-get (overlay-get parent 'mevedel-label-overlay)
                                                 'after-string))))
       ;; The noted code carries the author's tint; an AI note gets its own.
       (should (eq 'mevedel-note-you (overlay-get child 'face)))
@@ -278,7 +282,7 @@
       (should (eq 'mevedel-note-agent (overlay-get child 'face)))
       (should (eq 'mevedel-note-label-agent
                   (get-text-property
-                   0 'face (overlay-get (overlay-get child 'mevedel-label-overlay)
+                   1 'face (overlay-get (overlay-get child 'mevedel-label-overlay)
                                         'after-string))))
       (overlay-put child 'mevedel-note-author 'user)
       (mevedel-notes--render child)
@@ -324,6 +328,27 @@
   (:quiet t)
   ,test
   (test)
+  :doc "labels dim only attention states after the header and leave body text normal"
+  (mevedel-notes-test--with-source
+    (let ((note (mevedel-note-create "Goal"))
+          (mevedel-notes--taken-watches (make-hash-table :test #'equal)))
+      (dolist (entry '((unsent . nil) (sent . nil) (ready . "change ready")
+                       (stale . "change stale") (working . "working…")
+                       (taken . "paused")))
+        (overlay-put note 'mevedel-note-state (if (eq (car entry) 'taken) 'taken 'unsent))
+        (overlay-put note 'mevedel-note-attention-state (car entry))
+        (overlay-put note 'mevedel-note-session-id (and (eq (car entry) 'sent) "sent-note"))
+        (mevedel-note-edit "Goal" note)
+        (let* ((label (car (mevedel-notes-test--labels)))
+               (status (cdr entry)))
+          (should (equal (concat "\n▍ Note 1 · you"
+                                 (and status (concat " · " status)) "  Goal") label))
+          (when status
+            (should (eq 'shadow (get-text-property (string-search status label) 'face label))))
+          (should (eq 'default (get-text-property (string-search "Goal" label) 'face label)))))
+      (puthash (overlay-get note 'mevedel-uuid) t mevedel-notes--taken-watches)
+      (mevedel-note-edit "Goal" note)
+      (should (string-search "you · Buddy watches  Goal" (car (mevedel-notes-test--labels))))))
   :doc "explicit note target persists to its own workspace from another buffer"
   (mevedel-notes-test--with-source
     (let* ((note (mevedel-note-create "Before"))
@@ -656,7 +681,7 @@
     (mevedel-instruction-store-observe workspace)
     (should-not (mevedel-notes-test--labels))
     (mevedel-note-restore 1 workspace)
-    (should (string-match-p "Note 1.*menu\n  Finish this"
+    (should (string-match-p "▍ Note 1 · you  Finish this"
                             (car (mevedel-notes-test--labels)))))
   :doc "closing a parent note refreshes the surviving nested presentation"
   (mevedel-notes-test--with-source

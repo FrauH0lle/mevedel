@@ -83,7 +83,7 @@ and q to return to the invoking window."
 (defun mevedel-notes-list--closed-entries (_workspace)
   "Return the cached recently closed group for _WORKSPACE."
   (when mevedel-notes-list--closed-rows
-    (append (list (list nil (vector "" (format "%s Recently closed (%d)"
+    (append (list (list 'closed (vector "" (format "%s Recently closed (%d)"
                                              (if mevedel-notes-list--closed-expanded "[-]" "[+]")
                                              (length mevedel-notes-list--closed-rows))
                                    "" "" "" "")))
@@ -91,10 +91,18 @@ and q to return to the invoking window."
 
 (defun mevedel-notes-list--print ()
   "Print cached rows without observing the store or visiting source files."
-  (setq tabulated-list-entries
-        (append mevedel-notes-list--open-entries
-                (mevedel-notes-list--closed-entries mevedel-notes-list--workspace)))
-  (tabulated-list-print t))
+  (let ((id (tabulated-list-get-id))
+        (line (line-number-at-pos))
+        (column (current-column)))
+    (setq tabulated-list-entries
+          (append mevedel-notes-list--open-entries
+                  (mevedel-notes-list--closed-entries mevedel-notes-list--workspace)))
+    (tabulated-list-print t)
+    (unless (equal id (tabulated-list-get-id))
+      (goto-char (point-min))
+      (forward-line (1- line))
+      (when (and (eobp) (not (bobp))) (forward-line -1))
+      (move-to-column column))))
 
 (defun mevedel-notes-list-toggle-closed ()
   "Expand or fold cached recently closed rows without store observation."
@@ -118,7 +126,7 @@ and q to return to the invoking window."
                       notes)))
           (setq entries
                 (append entries
-                        (list (list nil (vector "" (capitalize (symbol-name group))
+                        (list (list group (vector "" (capitalize (symbol-name group))
                                                 "" "" "" "")))
                         (mapcar #'mevedel-notes-list--entry members)))))
       (setq mevedel-notes-list--open-entries entries
