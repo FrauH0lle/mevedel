@@ -99,6 +99,34 @@
     (should (eq 'ready (mevedel-notes-attention-state note)))
     (should (string-search "change ready"
                            (overlay-get (overlay-get note 'mevedel-label-overlay) 'after-string))))
+  :doc "persisted proposals retain one old and one new file image and still apply after reload"
+  (mevedel-note-change-test--with-note
+    (let ((tail (concat (make-string 65536 ?x) "\n"))
+          (uuid (overlay-get note 'mevedel-uuid)))
+      (with-current-buffer source
+        (goto-char (point-max))
+        (insert tail)
+        (save-buffer))
+      (mevedel-instruction-store-touch workspace)
+      (mevedel-instruction-store-flush t)
+      (let* ((store (mevedel-instruction-store-path workspace))
+             (before-size (file-attribute-size (file-attributes store))))
+        (should (string-search (substring tail 0 -1) (mevedel-test--read-file store)))
+        (mevedel-note-change-test--propose
+         data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+        (should (< (- (file-attribute-size (file-attributes store)) before-size)
+                   (* 3 (file-attribute-size (file-attributes file))))))
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (setq note (mevedel-notes--resolve uuid workspace))
+      (mevedel-note-apply-change note t)
+      (with-current-buffer view-buf
+        (goto-char (point-min))
+        (search-forward "ApplyPatch ·")
+        (mevedel-patch-review-submit))
+      (should (equal (concat "before\nnew\nafter\n" tail) (mevedel-test--read-file file)))
+      (mevedel-note-revert-change note 0)
+      (should (equal (concat "before\nold\nafter\n" tail) (mevedel-test--read-file file)))))
   :doc "batch proposals attach only to touched code and preserve a sibling's waiting change"
   (mevedel-note-change-test--with-note
     (let ((sibling (with-current-buffer source
@@ -155,6 +183,40 @@
        data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n-after\n+AFTER\n*** End Patch")
       (should (eq 'ready (mevedel-notes-attention-state note)))
       (should (eq 'ready (mevedel-notes-attention-state sibling))))))
+
+(mevedel-deftest mevedel-tool-patch-handler/note-resource-move
+  (:quiet t :doc "a move to a resource uses ordinary patch application rather than a waiting change")
+  (mevedel-note-change-test--with-note
+    (let ((mevedel-resource-attempts-cell (list nil))
+          (destination (file-name-concat root ".mevedel/shared/moved.txt")))
+      (unwind-protect
+          (progn
+            (setf (mevedel-session-permission-mode session) 'full-auto)
+            (setq result (mevedel-note-change-test--propose
+                          data-buf "*** Begin Patch\n*** Update File: source.txt\n*** Move to: work://shared/moved.txt\n*** End Patch"))
+            (should-not (overlay-get note 'mevedel-note-prepared-change))
+            (should-not (file-exists-p file))
+            (should (equal "before\nold\nafter\n" (mevedel-test--read-file destination))))
+        (mevedel-resource-discard-attempts (car mevedel-resource-attempts-cell))))))
+
+(mevedel-deftest mevedel-note-conversation/batch-change-actions
+  (:quiet t :doc "conversation apply and merge choose the batch note with waiting work")
+  (dolist (command '(mevedel-note-apply-change mevedel-note-merge-change))
+    (mevedel-note-change-test--with-note
+      (with-current-buffer source
+        (goto-char (point-min))
+        (let ((second (mevedel-note-create "Change only this note")))
+          (overlay-put second 'mevedel-note-state 'sent)
+          (overlay-put second 'mevedel-note-session-id (mevedel-session-session-id session))))
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-before\n+BEFORE\n*** End Patch")
+      (should-not (overlay-get note 'mevedel-note-prepared-change))
+      (with-current-buffer view-buf
+        (if (eq command 'mevedel-note-merge-change)
+            (with-current-buffer (call-interactively command)
+              (mevedel-note-merge-confirm))
+          (call-interactively command)))
+      (should (equal "BEFORE\nold\nafter\n" (mevedel-test--read-file file))))))
 
 (mevedel-deftest mevedel-note-take/prepared-restore
   (:quiet t :doc "restored takes keep their prepared change and show paused in source and list")
@@ -566,6 +628,42 @@
         (should (assoc file entries))
         (should-not (assoc two entries)))))
 
+  :doc "detailed review merges saved disjoint edits made before or during review"
+  (dolist (timing '(before during))
+    (mevedel-note-change-test--with-note
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+      (when (eq timing 'during) (mevedel-note-apply-change note t))
+      (with-current-buffer source
+        (goto-char (point-max))
+        (insert "saved user edit\n")
+        (save-buffer))
+      (when (eq timing 'before) (mevedel-note-apply-change note t))
+      (with-current-buffer view-buf
+        (goto-char (point-min))
+        (search-forward "ApplyPatch ·")
+        (mevedel-patch-review-submit))
+      (should (equal "before\nnew\nafter\nsaved user edit\n" (mevedel-test--read-file file)))
+      (mevedel-note-revert-change note 0)
+      (should (equal "before\nold\nafter\nsaved user edit\n" (mevedel-test--read-file file)))))
+  :doc "detailed review preserves CRLF and UTF-8 bytes when merging saved edits"
+  (mevedel-note-change-test--with-note
+    (with-current-buffer source
+      (set-buffer-file-coding-system 'utf-8-dos)
+      (save-buffer))
+    (mevedel-note-change-test--propose
+     data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+n\u00e9w\n*** End Patch")
+    (with-current-buffer source
+      (goto-char (point-max))
+      (insert "saved\n")
+      (save-buffer))
+    (mevedel-note-apply-change note t)
+    (with-current-buffer view-buf
+      (goto-char (point-min))
+      (search-forward "ApplyPatch ·")
+      (mevedel-patch-review-submit))
+    (should (equal (encode-coding-string "before\nn\u00e9w\nafter\nsaved\n" 'utf-8-dos)
+                   (mevedel-session-artifacts-read-file-raw file))))
   :doc "detailed review preserves unsaved disjoint source text at confirmation"
   (mevedel-note-change-test--with-note
     (mevedel-note-change-test--propose
@@ -870,6 +968,81 @@
     (let ((err (should-error (mevedel-note-revert-change note 0) :type 'user-error)))
       (should (string-search "pre-turn capture unavailable" (error-message-string err))))
     (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))))
+
+(mevedel-deftest mevedel-note-revert-change/note-write
+  (:quiet t :doc "an applied NoteWrite suggestion remains reversible after closing and reloading")
+  (mevedel-note-change-test--with-note
+    (setf (mevedel-session-preset-name session) 'mevedel-implement)
+    (with-current-buffer data-buf
+      (setq result
+            (mevedel-tool-note-write
+             (list :operations
+                   (vector (list :action "create" :file_path "source.txt" :start_line 2
+                                 :text "AI suggestion" :prepared_change
+                                 "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch"))))))
+    (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get result :result)))
+    (let* ((uuid (match-string 1 (plist-get result :result)))
+           (suggestion (mevedel-notes--resolve uuid workspace)))
+      (should-not (overlay-get suggestion 'mevedel-note-session-id))
+      (mevedel-note-apply-change suggestion)
+      (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))
+      (mevedel-note-done suggestion)
+      (mevedel-instruction-store-flush t)
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (mevedel-note-revert-change uuid nil workspace)
+      (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))
+      (should-not (mevedel-notes-closed workspace)))))
+
+(mevedel-deftest mevedel-note-revert-change/deleted-origin
+  (:quiet t :doc "a deleted originating main chat refuses revert without touching source or reopening the note")
+  (mevedel-note-change-test--with-note
+    (setf (mevedel-session-preset-name session) 'mevedel-implement)
+    (with-current-buffer data-buf
+      (setq result
+            (mevedel-tool-note-write
+             (list :operations
+                   (vector (list :action "create" :file_path "source.txt" :start_line 2
+                                 :text "AI suggestion" :prepared_change
+                                 "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch"))))))
+    (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get result :result)))
+    (let* ((uuid (match-string 1 (plist-get result :result)))
+           (suggestion (mevedel-notes--resolve uuid workspace)))
+      (mevedel-note-apply-change suggestion)
+      (mevedel-note-done suggestion)
+      (mevedel-session-persistence-lock-release (mevedel-session-save-path session) session)
+      (kill-buffer data-buf)
+      (delete-directory (mevedel-session-save-path session) t)
+      (let ((before (mevedel-session-artifacts-read-file-raw file))
+            (text (with-current-buffer source (buffer-string)))
+            (err (should-error (mevedel-note-revert-change uuid nil workspace) :type 'user-error)))
+        (should (string-search "conversation that made this change no longer exists"
+                               (error-message-string err)))
+        (should (equal before (mevedel-session-artifacts-read-file-raw file)))
+        (should (equal text (with-current-buffer source (buffer-string))))
+        (should (= 1 (length (mevedel-notes-closed workspace))))))))
+
+(mevedel-deftest mevedel-note-menu/note-write
+  (:quiet t :doc "the action menu offers and performs revert for an applied main-chat suggestion")
+  (mevedel-note-change-test--with-note
+    (setf (mevedel-session-preset-name session) 'mevedel-implement)
+    (with-current-buffer data-buf
+      (setq result
+            (mevedel-tool-note-write
+             (list :operations
+                   (vector (list :action "create" :file_path "source.txt" :start_line 2
+                                 :text "AI suggestion" :prepared_change
+                                 "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch"))))))
+    (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get result :result)))
+    (let ((suggestion (mevedel-notes--resolve (match-string 1 (plist-get result :result)) workspace)))
+      (mevedel-note-apply-change suggestion)
+      (should-not (overlay-get suggestion 'mevedel-note-session-id))
+      (with-current-buffer source
+        (cl-letf (((symbol-function 'read-multiple-choice)
+                   (lambda (_prompt choices &rest _)
+                     (or (assq ?u choices) (ert-fail "Applied suggestion offers no revert action")))))
+          (mevedel-note-menu suggestion)))
+      (should (equal "before\nold\nafter\n" (mevedel-test--read-file file))))))
 
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here

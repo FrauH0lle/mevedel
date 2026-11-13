@@ -1498,11 +1498,16 @@ Mutate only lifecycle properties; preserve its text, anchor and session link."
         (when (eq 'sent (plist-get props 'mevedel-note-state))
           (plist-put props 'mevedel-note-state 'unsent))
         (when (eq 'sent (plist-get instruction :open-state))
-          (plist-put instruction :open-state 'unsent)))
-      (when (and (equal session-id (plist-get change :session-id))
-                 (> (or (plist-get change :turn) 0) surviving-turn))
-        (plist-put props 'mevedel-note-prepared-change nil)
-        (plist-put props 'mevedel-note-attention-state nil))))
+          (plist-put instruction :open-state 'unsent))))
+    (when (and (equal session-id (plist-get change :session-id))
+               (> (or (plist-get change :turn) 0) surviving-turn))
+      (plist-put props 'mevedel-note-prepared-change nil)
+      (plist-put props 'mevedel-note-attention-state nil))
+    (when-let* ((pairs (plist-get props 'mevedel-note-applied-changes)))
+      (plist-put props 'mevedel-note-applied-changes
+                 (cl-remove-if (lambda (pair)
+                                 (and (equal session-id (plist-get pair :session-id))
+                                      (> (plist-get pair :turn) surviving-turn))) pairs))))
   instruction)
 
 (defun mevedel-instruction-store--rewind-live-notes (workspace session-id turn)
@@ -1517,7 +1522,8 @@ Keep memory in step with the new merge base, including crash recovery."
                    (after (plist-get (mevedel-instruction-store--rewind-note
                                       instruction session-id turn) :properties)))
               (unless (equal before after)
-                (dolist (key '(mevedel-note-state mevedel-note-prepared-change mevedel-note-attention-state))
+                (dolist (key '(mevedel-note-state mevedel-note-prepared-change
+                              mevedel-note-applied-changes mevedel-note-attention-state))
                   (overlay-put note key (plist-get after key)))
                 (mevedel--update-instruction-overlay note t))))
         (dolist (instruction (plist-get (cdr file) :instructions))

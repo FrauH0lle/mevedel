@@ -68,6 +68,11 @@ workspace store's existing Rewind intent settles that lifecycle change and
 clears proposals from discarded turns, including after a crash. Sending an
 unsent zero-turn note starts again in the same session. ADR 0132 later removes
 directive-specific rendering; old saved directive turns are ordinary turns.
+NoteWrite suggestions retain their originating session/turn after application,
+even without a note conversation link. Rewind clears waiting suggestions and
+applied references owned by discarded turns before those turn numbers can be
+reused. References do not pin ordinary chats; reverting after their deletion
+or expiry refuses without touching source.
 
 ## Decision history
 

@@ -1118,14 +1118,27 @@ A remote artifact's file is checked by its origin when it is written."
         (puthash path t seen)))))
 
 (defun mevedel-tool-patch-planned-changes (proposal)
-  "Validate PROPOSAL and return its selected filesystem changes."
-  (let ((operations (plist-get proposal :operations))
-        (mevedel-tool-patch--remote (plist-get proposal :remote-artifact))
-        (checks (cl-mapcan (lambda (operation)
+  "Validate PROPOSAL and return its selected filesystem changes.
+Prepared note reviews select changes against their captured source snapshots."
+  (let* ((operations (plist-get proposal :operations))
+         (snapshots (plist-get proposal :prepared-snapshots))
+         (read-source
+          (lambda (path)
+            (if-let* ((snapshot (cl-find path snapshots :test #'equal
+                                        :key (lambda (item) (plist-get item :path)))))
+                (progn
+                  (unless (plist-get snapshot :exists)
+                    (error "File does not exist: %s" path))
+                  (let* ((last-coding-system-used nil)
+                         (text (decode-coding-string (plist-get snapshot :bytes) 'undecided)))
+                    (cons text last-coding-system-used)))
+              (mevedel-tool-patch--read-file path t))))
+         (mevedel-tool-patch--remote (plist-get proposal :remote-artifact))
+         (checks (cl-mapcan (lambda (operation)
                              (delq nil (list (plist-get operation :resource-check-path)
-                                             (plist-get operation :resource-check-move-path))))
+                                            (plist-get operation :resource-check-move-path))))
                            (plist-get proposal :operations)))
-        changes)
+         changes)
     (mevedel-tool-patch--validate-distinct-paths operations)
     (mapc #'funcall checks)
     (dolist (operation operations)
@@ -1134,7 +1147,8 @@ A remote artifact's file is checked by its origin when it is written."
          (let ((path (mevedel-tool-patch-physical-path operation)))
            (when (plist-get operation :selected)
              ;; A remote file's origin refuses to create an existing one.
-             (when (and (not (mevedel-tool-patch-remote-p path)) (file-exists-p path))
+             (when (and (not snapshots)
+                        (not (mevedel-tool-patch-remote-p path)) (file-exists-p path))
                (error "Cannot add existing file: %s" path))
              (push (append (list :action 'write :path path)
                            (and (plist-get operation :resource-path-p)
@@ -1147,7 +1161,7 @@ A remote artifact's file is checked by its origin when it is written."
            (when (plist-get operation :selected)
              (if (mevedel-tool-patch-remote-p path)
                  (mevedel-tool-patch--remote-entry path)
-               (mevedel-tool-patch--read-file path))
+               (funcall read-source path))
              (push (append (list :action 'delete :path path)
                            (and (plist-get operation :resource-path-p)
                                 '(:resource-p t))
@@ -1167,7 +1181,7 @@ A remote artifact's file is checked by its origin when it is written."
                                  (mevedel-tool-patch-hunk-changes-p hunk)))
                           hunks)
              (pcase-let* ((`(,content . ,coding)
-                           (mevedel-tool-patch--read-file path t))
+                           (funcall read-source path))
                           (updated
                            (mevedel-tool-patch-apply-hunks
                             content hunks (or (plist-get operation :rel-path) path))))
@@ -1185,8 +1199,9 @@ A remote artifact's file is checked by its origin when it is written."
                 (mevedel-tool-patch--physical-move-path operation)))
            (when (plist-get operation :selected)
              (pcase-let ((`(,content . ,coding)
-                          (mevedel-tool-patch--read-file path t)))
-               (when (and (not (mevedel-tool-patch-remote-p destination))
+                          (funcall read-source path)))
+               (when (and (not snapshots)
+                          (not (mevedel-tool-patch-remote-p destination))
                           (file-exists-p destination))
                  (error "Cannot move to existing file: %s" destination))
                (push (append (list :action 'delete :path path)
@@ -1206,7 +1221,11 @@ A remote artifact's file is checked by its origin when it is written."
                                       content)))
                                (append
                                 (unless (mevedel-tool-patch-remote-p path)
-                                  (list :mode (file-modes path)))
+                                  (list :mode (if snapshots
+                                                  (plist-get (cl-find path snapshots :test #'equal
+                                                                      :key (lambda (item) (plist-get item :path)))
+                                                             :mode)
+                                                (file-modes path))))
                                 (list :content updated
                                       :bytes
                                       (encode-coding-string updated coding)))))
@@ -1962,8 +1981,11 @@ matches fails as it does for a local file."
                           (eq (mevedel-session-preset-name mevedel--session) 'mevedel-note)
                           (not (cl-some
                                 (lambda (operation)
-                                  (mevedel-tool-patch-resource-address-p
-                                   (plist-get operation :rel-path)))
+                                  (or (mevedel-tool-patch-resource-address-p
+                                       (plist-get operation :rel-path))
+                                      (and (plist-get operation :move-rel-path)
+                                           (mevedel-tool-patch-resource-address-p
+                                            (plist-get operation :move-rel-path)))))
                                 (plist-get proposal :operations))))
                      (funcall callback (mevedel-note-prepare-change proposal changes data-buffer)))
                     ((memq mode '(edits full-auto))

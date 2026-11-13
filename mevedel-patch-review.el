@@ -1328,7 +1328,8 @@ refuses it later, leaves the review open with the conflict shown."
       (plist-put proposal :state 'submitting)
       (condition-case err
           (progn
-            (mevedel-tool-patch-assert-baseline proposal)
+            (unless (plist-get proposal :prepared-snapshots)
+              (mevedel-tool-patch-assert-baseline proposal))
             (let* ((changes (mevedel-tool-patch-planned-changes proposal))
                    (feedback-p (> (plist-get
                                    (mevedel-tool-patch-proposal-stats

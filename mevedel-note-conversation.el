@@ -90,15 +90,12 @@
 DATA contains request text and tool schemas, never transport credentials."
   (when (eq (mevedel-session-preset-name session) 'mevedel-note)
     (mevedel-session-artifacts-assert-new-mutation-authority session)
-    (let* ((file (file-name-concat (mevedel-session-save-path session) "note-input.json"))
-           (input (with-temp-buffer
-                    (when (file-exists-p file)
-                      (insert-file-contents file)
-                      (goto-char (point-max))
-                      (insert "\n\n"))
-                    (insert (gptel--json-encode data))
-                    (buffer-string))))
-      (mevedel--write-file-atomically file input 'utf-8-unix #o600))))
+    (let ((directory (file-name-concat (mevedel-session-save-path session) "note-input")))
+      (make-directory directory t)
+      (let* ((last (car (last (directory-files directory nil "\\`[0-9]+\\.json\\'"))))
+             (index (1+ (if last (string-to-number last) 0)))
+             (file (file-name-concat directory (format "%08d.json" index))))
+        (mevedel--write-file-atomically file (gptel--json-encode data) 'utf-8-unix #o600)))))
 
 (defun mevedel-note-conversation--record-gptel-input ()
   "Retain each gptel input after all context injection has finished."
@@ -123,13 +120,16 @@ DATA contains request text and tool schemas, never transport credentials."
   (interactive)
   (let* ((data mevedel--data-buffer)
          (session (buffer-local-value 'mevedel--session data))
-         (file (file-name-concat (mevedel-session-save-path session) "note-input.json"))
+         (directory (file-name-concat (mevedel-session-save-path session) "note-input"))
          (report (get-buffer-create (format "*Note sent: %s*" (mevedel-session-session-id session)))))
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope session)
       (with-current-buffer report
         (let ((inhibit-read-only t))
           (erase-buffer)
-          (insert-file-contents file)
+          (dolist (file (directory-files directory t "\\`[0-9]+\\.json\\'"))
+            (unless (bobp) (insert "\n\n"))
+            (insert-file-contents file)
+            (goto-char (point-max)))
           (special-mode)))
       (display-buffer report)
       report)))
@@ -193,11 +193,7 @@ sync to the caller's batch."
                          notes)
                   (user-error "Notes already belong to different conversations; send them separately")))
              (data (if id
-                       (or (cdr (cl-find-if
-                                 (lambda (entry)
-                                   (equal id (mevedel-session-session-id
-                                              (buffer-local-value 'mevedel--session (cdr entry)))))
-                                 (mevedel--workspace-sessions workspace)))
+                       (or (mevedel-session-control-transfer-root-buffer-for-id id)
                            (mevedel-session-persistence-resume-id workspace id)
                            (user-error "Note conversation is unavailable: %s" id))
                      (mevedel--chat-buffer nil t workspace
@@ -207,19 +203,23 @@ sync to the caller's batch."
         (dolist (item notes)
           (when (eq 'buddy (overlay-get item 'mevedel-note-author))
             (mevedel-buddy-keep-note item)))
-        (with-current-buffer data
-          (if id
-              (mevedel-note-conversation-setup)
-            (mevedel-preset-apply 'mevedel-note data)
-            (let ((mevedel-instruction-store--inhibit
-                   (if defer-write t mevedel-instruction-store--inhibit)))
-              (mevedel-session-artifacts-save session data nil t)))
-          (when (or (not id)
-                    (and (zerop (or (mevedel-session-turn-count session) 0))
-                         (eq 'unsent (overlay-get note 'mevedel-note-state))))
-            (mevedel--submit-generated-turn
-             (mapconcat (lambda (item) (mevedel-note-conversation--prompt item session))
-                        notes "\n\n"))))
+        (condition-case err
+            (with-current-buffer data
+              (if id
+                  (mevedel-note-conversation-setup)
+                (mevedel-preset-apply 'mevedel-note data)
+                (let ((mevedel-instruction-store--inhibit
+                       (if defer-write t mevedel-instruction-store--inhibit)))
+                  (mevedel-session-artifacts-save session data nil t)))
+              (when (or (not id)
+                        (and (zerop (or (mevedel-session-turn-count session) 0))
+                             (eq 'unsent (overlay-get note 'mevedel-note-state))))
+                (mevedel--submit-generated-turn
+                 (mapconcat (lambda (item) (mevedel-note-conversation--prompt item session))
+                            notes "\n\n"))))
+          ((error quit)
+           (unless id (mevedel-chat-discard-buffers data t))
+           (signal (car err) (cdr err))))
         (unless (and id (cl-every (lambda (item)
                                    (eq 'sent (overlay-get item 'mevedel-note-state)))
                                  notes))
@@ -262,11 +262,18 @@ NO-DISPLAY leaves focus alone; DEFER-WRITE lets a batch caller sync the store."
       (let* ((notes (cl-loop for entry in (mevedel-notes--entries workspace)
                              when (equal id (plist-get (plist-get entry :properties)
                                                        'mevedel-note-session-id))
-                             collect (mevedel-notes--resolve (plist-get entry :uuid) workspace)))
+                             collect (or (mevedel-notes--resolve (plist-get entry :uuid) workspace)
+                                         (user-error "Source unavailable for note %s"
+                                                     (plist-get (plist-get entry :properties)
+                                                                'mevedel-id)))))
              (data (or (mevedel-session-control-transfer-root-buffer-for-id id)
                        (mevedel-session-persistence-resume-id workspace id)
                        (user-error "Note conversation is unavailable: %s" id))))
         (with-current-buffer data
+          (when (or (mevedel-turn-busy-p) mevedel-compact-run-in-flight)
+            (user-error "Note conversation is still working"))
+          (when (or buffer-read-only mevedel-session--read-only-mode)
+            (user-error "Note conversation is read-only"))
           (mevedel--submit-generated-turn
            (concat "Reconsider the request on the current code below. Replace the waiting change; do not apply it.\n\n"
                    (mapconcat (lambda (item) (mevedel-note-conversation--prompt item mevedel--session))
@@ -281,10 +288,13 @@ NO-DISPLAY leaves focus alone; DEFER-WRITE lets a batch caller sync the store."
   (interactive
    (progn
      (mevedel--instruction-activate-buffer)
-     (let ((choices (cl-loop for note in (mevedel--all-instructions)
-                             when (eq (overlay-get note 'mevedel-instruction-type) 'note)
-                             collect (cons (format "%s: %s" (overlay-get note 'mevedel-id)
-                                                   (mevedel-notes--display-text note)) note))))
+     (let* ((choices (cl-loop for note in (mevedel--all-instructions)
+                              when (eq (overlay-get note 'mevedel-instruction-type) 'note)
+                              collect (cons (number-to-string (overlay-get note 'mevedel-id)) note)))
+            (completion-extra-properties
+             (list :annotation-function
+                   (lambda (id)
+                     (concat " " (mevedel-notes--display-text (cdr (assoc id choices))))))))
        (list (mapcar (lambda (choice) (cdr (assoc choice choices)))
                      (completing-read-multiple "Send notes: " choices nil t))))))
   (mevedel-note-conversation--send-notes (delete-dups (copy-sequence notes))

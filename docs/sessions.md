@@ -25,7 +25,7 @@ Goal policy. Explicit note/ref mentions in the note text expand once at send tim
 captured code and attachments cannot expand further mentions after reload.
 Other authored mentions use the ordinary request-time attachment path.
 `C-c C-v` in the note view opens the
-session's retained `note-input.json`: every assembled API request, or the
+session's retained numbered JSON files under `note-input/`: every assembled API request, or the
 native provider's system text and submitted content, in dispatch order as
 separate JSON documents. This includes re-asks and follow-ups, captured at
 dispatch rather than regenerated from later source edits.
@@ -40,7 +40,7 @@ replaces those notes' waiting change; the ordinary tool transcript retains earli
 Resource-address patches keep the normal ApplyPatch path.
 
 User apply and confirmed manual merge record the actual application-time pair
-in the note session's existing `:file-snapshots` history, keyed by the turn that
+in the originating session's existing `:file-snapshots` history, keyed by the turn that
 prepared the change, not whichever turn is current when it is applied. Each
 path entry uses `:version`, `:backup-time`, `:pre-backup-name` and `:backup-name`;
 the names address literal-byte SHA-256 backups under `file-history/`. Manual
@@ -48,11 +48,18 @@ merges use captured visiting text, including unsaved edits, as their pre-image.
 Existing capture gaps remain gaps. A preparation that made no write does not
 claim subsequent user edits as a note change. Confirming a partial detailed
 review records only accepted paths and drops the rest of the waiting proposal.
+Notes retain deduplicated session/turn references to their applied changes,
+including suggestions prepared with NoteWrite in a main chat. These references
+survive closing and restoring a note, but do not extend session retention.
+If the originating chat was deleted or expired, revert refuses clearly without
+touching source files.
 
 Rewind uses only this conversation's applied pairs. Rewinding before its first
 turn leaves its notes unsent, preserving their current text, anchors and session
 links. Sending again starts a new first turn in that same session. Waiting
-proposals from discarded turns are cleared. These changes settle through the
+proposals and applied-change references from discarded turns are cleared,
+including main-chat NoteWrite suggestions without a note conversation link.
+These changes settle through the
 workspace store's durable Rewind intent, including for unvisited and recently
 closed notes; restoring a closed note then restores its unsent state.
 

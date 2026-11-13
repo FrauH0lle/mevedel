@@ -232,6 +232,7 @@ shape and links.  Calls are idempotent."
     mevedel-note-state
     mevedel-note-session-id
     mevedel-note-prepared-change
+    mevedel-note-applied-changes
     mevedel-note-attention-state
     mevedel-note-buddy-severity
     mevedel-note-buddy-code
