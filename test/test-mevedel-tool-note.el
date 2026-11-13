@@ -222,7 +222,7 @@
       (kill-buffer (find-buffer-visiting file))
       (mevedel--clear-instruction-state workspace)
       (mevedel-instruction-store-observe workspace)
-      (let ((note (mevedel-notes--resolve id workspace)))
+      (let ((note (mevedel-note-resolve id workspace)))
         (should (string-search "change ready"
                                (overlay-get (overlay-get note 'mevedel-label-overlay) 'after-string)))
         (mevedel-note-apply-change note)
@@ -324,7 +324,7 @@
   (mevedel-tool-note-test--workspace
     (let* ((mevedel-note-labels 'collapsed)
            (id (mevedel-tool-note-test--create data-buf file :end_line 3))
-           (note (mevedel-notes--resolve id workspace)))
+           (note (mevedel-note-resolve id workspace)))
       (with-current-buffer (overlay-buffer note)
         (should (= 8 (overlay-start note)))
         (should (= 17 (overlay-end note)))
@@ -335,7 +335,7 @@
   :doc "newline tint follows edits and undo in both label modes and is removed on close"
   (mevedel-tool-note-test--workspace
     (let* ((id (mevedel-tool-note-test--create data-buf file))
-           (note (mevedel-notes--resolve id workspace)))
+           (note (mevedel-note-resolve id workspace)))
       (with-current-buffer (overlay-buffer note)
         (buffer-enable-undo)
         (dolist (display '(collapsed expanded))
@@ -365,7 +365,7 @@
   (mevedel-tool-note-test--workspace
     (write-region "before\nold\nafter" nil file nil 'silent)
     (let* ((id (mevedel-tool-note-test--create data-buf file :end_line 3))
-           (note (mevedel-notes--resolve id workspace)))
+           (note (mevedel-note-resolve id workspace)))
       (with-current-buffer (overlay-buffer note)
         (buffer-enable-undo)
         (setq buffer-undo-list nil)
@@ -420,7 +420,7 @@
       (with-current-buffer (find-buffer-visiting file)
         (goto-char (point-min))
         (mevedel-note-create "Human note"))
-      (mevedel-note-dismiss (mevedel-notes--resolve first workspace))
+      (mevedel-note-dismiss (mevedel-note-resolve first workspace))
       (should (string-search "dismissed" (mevedel-tool-note-test--read
                                           data-buf (concat "notes://" first ".md"))))
       (mevedel-note-restore first workspace)
@@ -465,14 +465,14 @@
     (let* ((builds 0) (restores 0)
            (count-build (lambda (&rest _) (cl-incf builds)))
            (count-restore (lambda (&rest _) (cl-incf restores))))
-      (advice-add 'mevedel-notes--entries :before count-build)
+      (advice-add 'mevedel-notes-open :before count-build)
       (advice-add 'mevedel--restore-file-instructions :before count-restore)
       (unwind-protect
           (progn
             (should (= 2 (mevedel-note-dismiss-agent-notes workspace)))
             (should (= 1 builds))
             (should (= 1 restores)))
-        (advice-remove 'mevedel-notes--entries count-build)
+        (advice-remove 'mevedel-notes-open count-build)
         (advice-remove 'mevedel--restore-file-instructions count-restore)))))
 
 (provide 'test-mevedel-tool-note)

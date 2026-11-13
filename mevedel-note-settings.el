@@ -17,7 +17,7 @@
 
 (defun mevedel-note-settings--note (scope)
   "Resolve SCOPE's note after persistence may have rebuilt its overlay."
-  (or (mevedel-notes--resolve (plist-get scope :uuid) (plist-get scope :workspace))
+  (or (mevedel-note-resolve (plist-get scope :uuid) (plist-get scope :workspace))
       (user-error "Note is no longer available")))
 
 (defun mevedel-note-settings-apply (settings data)
@@ -59,11 +59,7 @@ permission mode.  A present nil effort selects the provider default."
       (unless (overlay-buffer note) (user-error "Note is no longer available"))
       (if data
           (mevedel-note-settings-apply values data)
-        (let ((settings (copy-sequence (overlay-get note 'mevedel-note-settings))))
-          (while values
-            (setq settings (plist-put settings (pop values) (pop values))))
-          (overlay-put note 'mevedel-note-settings settings))
-        (mevedel-instruction-store-touch (plist-get scope :workspace))))))
+        (mevedel-note-set-settings note values)))))
 
 (defun mevedel-note-settings--preset ()
   "Choose the base preset for the note in this menu."

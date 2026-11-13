@@ -1443,7 +1443,7 @@
       (ert-info ((format "%S" outcome))
         (should (eq 'success (plist-get outcome :status))))
       (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get outcome :result)))
-      (setq suggestion (mevedel-notes--resolve (match-string 1 (plist-get outcome :result)) workspace))
+      (setq suggestion (mevedel-note-resolve (match-string 1 (plist-get outcome :result)) workspace))
       (mevedel-note-conversation-test--answer (car sent) "The suggestion is ready.")
       (mevedel-note-apply-change suggestion)
       (should (equal "outside-before\nsuggested code\noutside-after\n"
@@ -1455,8 +1455,8 @@
           (mevedel-rewind)))
       (should (equal "outside-before\nselected code\noutside-after\n"
                      (mevedel-test--read-file file)))
-      (setq note (mevedel-notes--resolve note-uuid workspace)
-            suggestion (mevedel-notes--resolve (overlay-get suggestion 'mevedel-uuid) workspace))
+      (setq note (mevedel-note-resolve note-uuid workspace)
+            suggestion (mevedel-note-resolve (overlay-get suggestion 'mevedel-uuid) workspace))
       (with-current-buffer source
         (should (= 2 (length (mevedel--instructions-in (point-min) (point-max))))))
       (mevedel-note-send note)
@@ -1465,7 +1465,7 @@
          #'ignore
          '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-selected code\n+new turn code\n*** End Patch")))
       (mevedel-note-conversation-test--answer (car sent) "A different change in the reused turn.")
-      (mevedel-note-apply-change (mevedel-notes--resolve note-uuid workspace))
+      (mevedel-note-apply-change (mevedel-note-resolve note-uuid workspace))
       (should (equal "outside-before\nnew turn code\noutside-after\n"
                      (mevedel-test--read-file file)))
       (should-error (mevedel-note-revert-change (overlay-get suggestion 'mevedel-uuid) nil workspace)
@@ -1497,7 +1497,7 @@
         (should (eq 'success (plist-get outcome :status)))
         (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get outcome :result)))
         (let* ((uuid (match-string 1 (plist-get outcome :result)))
-               (suggestion (mevedel-notes--resolve uuid workspace)))
+               (suggestion (mevedel-note-resolve uuid workspace)))
           (should-not (overlay-get suggestion 'mevedel-note-session-id))
           (should (eq 'ready (mevedel-notes-attention-state suggestion)))
           (mevedel-note-conversation-test--answer (car sent) "The suggestion is ready.")
@@ -1508,7 +1508,7 @@
                       ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
               (mevedel-rewind)))
           (when closed (mevedel-note-restore uuid workspace))
-          (setq suggestion (mevedel-notes--resolve uuid workspace))
+          (setq suggestion (mevedel-note-resolve uuid workspace))
           (should-not (eq 'ready (mevedel-notes-attention-state suggestion)))
           (should-error (mevedel-note-apply-change suggestion) :type 'user-error)
           (should (equal "outside-before\nselected code\noutside-after\n"
@@ -1595,8 +1595,30 @@
       (kill-buffer source)
       (mevedel--clear-instruction-state workspace)
       (mevedel-instruction-store-observe workspace)
-      (let ((restored (mevedel-notes--resolve (overlay-get note 'mevedel-uuid) workspace)))
+      (let ((restored (mevedel-note-resolve (overlay-get note 'mevedel-uuid) workspace)))
         (should (eq 'sent (overlay-get restored 'mevedel-note-state)))))))
+
+(mevedel-deftest mevedel-note-send/flush-point (:quiet t)
+  ,test
+  (test)
+  :doc "a send flushes once, after every note is already sent; a deferred send never flushes"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Flush order"))
+           (other (progn (goto-char (point-min)) (mevedel-note-create "Deferred")))
+           states
+           (spy (lambda (&rest _)
+                  (push (list (overlay-get note 'mevedel-note-state)
+                              (overlay-get other 'mevedel-note-state))
+                        states))))
+      (advice-add 'mevedel-instruction-store-flush :before spy)
+      (unwind-protect
+          (progn (mevedel-note-send note :no-display t)
+                 (should (equal '((sent unsent)) states))
+                 (setq states nil)
+                 (mevedel-note-send other :no-display t :defer-write t)
+                 (should (eq 'sent (overlay-get other 'mevedel-note-state)))
+                 (should-not states))
+        (advice-remove 'mevedel-instruction-store-flush spy)))))
 
 (provide 'test-mevedel-note-conversation)
 ;;; test-mevedel-note-conversation.el ends here

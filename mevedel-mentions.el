@@ -85,7 +85,7 @@
 (autoload 'mevedel-permission--invocation-context "mevedel-permissions")
 
 ;; `mevedel-notes'
-(declare-function mevedel-notes--entries "mevedel-notes" (workspace))
+(declare-function mevedel-notes-open "mevedel-notes" (workspace))
 
 ;; `mevedel-persistence'
 (declare-function mevedel--restore-file-instructions
@@ -1046,7 +1046,7 @@ Do not open source files merely to offer a note."
                                      (mevedel-session-workspace mevedel--session)
                                    (mevedel-workspace))))
             (require 'mevedel-notes)
-            (let* ((entries (mevedel-notes--entries workspace))
+            (let* ((entries (mevedel-notes-open workspace))
                    (candidates
                     (if query
 			(let ((counts (make-hash-table :test #'eq)))

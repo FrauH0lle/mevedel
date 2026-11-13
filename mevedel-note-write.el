@@ -76,21 +76,22 @@
             (when (or (not (zerop (forward-line (- end start))))
                       (and (eobp) (bolp) (> (point) (point-min))))
               (error "Note line is beyond source"))
-            (let ((transient-mark-mode t) (mark-active t))
-              (set-mark beg)
-              (goto-char (line-end-position))
-              (let ((note (mevedel-note-create (plist-get operation :text) :defer-write t)))
-                (overlay-put note 'mevedel-note-author 'agent)
-                note))))))))
+            (let ((workspace (mevedel--instruction-buffer-workspace (current-buffer))))
+              (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+                (setq workspace (mevedel-notes--ensure-workspace workspace))
+                (prog1 (mevedel-note-make (current-buffer) beg (line-end-position)
+                                          :text (plist-get operation :text)
+                                          :author 'agent)
+                  (mevedel-instruction-store-touch workspace))))))))))
 
 (defun mevedel-note-write--resolve (id session)
   "Resolve open note UUID ID in SESSION without accepting another workspace."
   (let* ((workspace (mevedel-session-workspace session))
-         (entry (cl-find id (mevedel-notes--entries workspace)
+         (entry (cl-find id (mevedel-notes-open workspace)
                          :key (lambda (entry) (plist-get entry :uuid)) :test #'equal)))
     (unless entry (error "No open note %s" id))
     (mevedel-note-write--source (plist-get entry :file) session)
-    (or (mevedel-notes--resolve id workspace) (error "Note source is unavailable"))))
+    (or (mevedel-note-resolve id workspace) (error "Note source is unavailable"))))
 
 (defun mevedel-note-write--prepared (patch session)
   "Capture suggested PATCH for SESSION without applying it."
@@ -159,8 +160,7 @@
                              (plist-put prepared :note-extents
                                         (delq nil (list (mevedel-note-change--base-extent
                                                          note prepared)))))
-                       (overlay-put note 'mevedel-note-prepared-change prepared)
-                       (overlay-put note 'mevedel-note-attention-state 'ready))
+                       (mevedel-note-hold-change (list note) prepared))
                      (if (plist-member operation :tags)
                          (mevedel-note-set-tags tags note)
                        (when (equal action "create")

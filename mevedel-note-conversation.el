@@ -137,7 +137,7 @@ Without NOTE, restore this session's hint during note conversation setup."
                      (and (equal (mevedel-session-session-id session)
                                  (plist-get properties 'mevedel-note-session-id))
                           (plist-get properties 'mevedel-note-prepared-change))))
-                 (mevedel-notes--entries (mevedel-session-workspace session)))))
+                 (mevedel-notes-open (mevedel-session-workspace session)))))
              (hint (propertize
                     (if waiting "C-c C-z close · C-c C-a apply · C-c C-g merge"
                       "C-c C-z close") 'face 'shadow)))
@@ -234,7 +234,7 @@ sync to the caller's batch."
              (session (buffer-local-value 'mevedel--session data)))
         (dolist (item notes)
           (when (eq 'buddy (overlay-get item 'mevedel-note-author))
-            (mevedel-buddy-keep-note item)))
+            (mevedel-note-keep item)))
         (condition-case err
             (with-current-buffer data
               (if id
@@ -259,13 +259,7 @@ sync to the caller's batch."
         (unless (and id (cl-every (lambda (item)
                                    (eq 'sent (overlay-get item 'mevedel-note-state)))
                                  notes))
-          (dolist (item notes)
-            (unless id
-              (overlay-put item 'mevedel-note-session-id (mevedel-session-session-id session)))
-            (overlay-put item 'mevedel-note-state 'sent)
-            (mevedel-notes--render item)
-            (mevedel-note-conversation-refresh-hint item))
-          (mevedel-instruction-store-touch workspace)
+          (mevedel-note-mark-sent notes (mevedel-session-session-id session))
           (unless defer-write (mevedel-instruction-store-flush t)))
         (let ((view (buffer-local-value 'mevedel--view-buffer data)))
           (unless no-display

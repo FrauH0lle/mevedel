@@ -516,16 +516,12 @@ LINE.  Raw line counting is not annotation authority."
     (let* ((position (mevedel-buddy-note--position buffer line))
            (overlay (save-excursion
                       (goto-char position)
-                      (mevedel--create-instruction-overlay-in
-                       buffer (line-beginning-position) (line-end-position) 'line))))
-      (overlay-put overlay 'mevedel-instruction-type 'note)
-      (overlay-put overlay 'mevedel-note-author 'buddy)
-      (overlay-put overlay 'mevedel-note-state 'unsent)
-      (overlay-put overlay 'mevedel-note-text note)
+                      (mevedel-note-make
+                       buffer (line-beginning-position) (line-end-position)
+                       :text note :author 'buddy :span 'line))))
       (overlay-put overlay 'mevedel-note-buddy-severity severity)
       (overlay-put overlay 'mevedel-note-buddy-code (mevedel-buddy-note--code overlay))
       (overlay-put overlay 'evaporate nil)
-      (mevedel--update-instruction-overlay overlay t)
       (mevedel-buddy-note--changed overlay)
       (add-hook 'kill-buffer-hook #'mevedel-buddy-note--on-kill-buffer nil t)
       overlay)))
@@ -919,14 +915,7 @@ the review, not once per tool call."
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
       (setq note (or note (mevedel-buddy-note--at-point)
                      (user-error "No Buddy remark at point")))
-      (unless (eq 'buddy (overlay-get note 'mevedel-note-author))
-        (user-error "Not a Buddy remark"))
-      (overlay-put note 'mevedel-note-author 'user)
-      (overlay-put note 'mevedel-note-kept-from-buddy t)
-      (mevedel--update-instruction-overlay note t)
-      (when (buffer-local-value 'buffer-file-name (overlay-buffer note))
-        (mevedel-instruction-store-touch workspace))
-      note)))
+      (mevedel-note-keep note))))
 
 (defun mevedel-buddy-note--at-point ()
   "Return a canonical Buddy note at point, independent of the review index."
@@ -957,11 +946,11 @@ Default to the current workspace and return the number dismissed."
   (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
     (mevedel-instruction-store-observe workspace)
     (let ((dismissed 0)
-          (notes (mevedel-notes--resolve-entries
+          (notes (mevedel-notes-resolve-entries
                   (cl-remove-if-not
                    (lambda (entry)
                      (eq 'buddy (plist-get (plist-get entry :properties) 'mevedel-note-author)))
-                   (mevedel-notes--entries workspace))
+                   (mevedel-notes-open workspace))
                   workspace)))
       (unwind-protect
           (dolist (note notes)

@@ -65,7 +65,7 @@ A child that outlives two minutes is killed and fails the test."
               (dolist (scenario '(commands stop-shares installation handoff-progress request-progress
                                   artifacts gptel chat chat-in-directory tools renderers
                                   live-execution claude worker-teardown native-btw lobby room
-                                  notes))
+                                  notes note-lifecycle))
                 (run entry scenario))
               ;; The first send saves a session that a second Emacs resumes.
               (run entry 'send state)

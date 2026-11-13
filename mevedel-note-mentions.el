@@ -27,7 +27,7 @@ Do not open source files merely to bind a token's identity."
                   (equal identity (if (integerp identity)
                                       (plist-get (plist-get entry :properties) 'mevedel-id)
                                     (plist-get entry :uuid))))
-                (mevedel-notes--entries workspace))))
+                (mevedel-notes-open workspace))))
 
 (defun mevedel-note-mentions--format (entry workspace)
   "Format ENTRY's current code and authored text as context in WORKSPACE."
@@ -66,7 +66,7 @@ Empty and malformed queries never select all notes."
        (lambda (entry)
          (mevedel-note-mentions--matches-p
           query (plist-get (plist-get entry :properties) 'mevedel-note-tags)))
-       (mevedel-notes--entries workspace)))))
+       (mevedel-notes-open workspace)))))
 
 (defun mevedel-note-mentions--attach (entry info workspace)
   "Return context for ENTRY in WORKSPACE, or an unavailable reason, using INFO.
@@ -83,7 +83,7 @@ Check Read authority before probing or restoring the source file."
           (if-let* ((body
                      (or (mevedel-note-mentions--format entry workspace)
                          ;; Changed stashed code needs the source diff remapping.
-                         (when-let* ((note (mevedel-notes--resolve
+                         (when-let* ((note (mevedel-note-resolve
                                            (plist-get entry :uuid) workspace)))
                            (mevedel-note-mentions--format
                             (plist-put (copy-sequence entry) :source note) workspace)))))

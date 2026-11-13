@@ -131,10 +131,10 @@
             (with-current-buffer data
               (should-not (plist-get (mevedel-session-plan-metadata mevedel--session)
                                      :implementation-retry)))
-            (let ((entries (mevedel-notes--entries workspace)))
+            (let ((entries (mevedel-notes-open workspace)))
               (should (= 2 (length entries)))
               (dolist (entry entries)
-                (let ((note (mevedel-notes--resolve (plist-get entry :uuid) workspace)))
+                (let ((note (mevedel-note-resolve (plist-get entry :uuid) workspace)))
                   (should (eq 'unsent (overlay-get note 'mevedel-note-state)))
                   (should-not (overlay-get note 'mevedel-note-prepared-change))
                   (should-not (overlay-get note 'mevedel-note-session-id))

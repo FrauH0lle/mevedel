@@ -174,6 +174,23 @@ temporary one."
                         (overlays-in (point-min) (point-max)))))
              (should-not (featurep 'mevedel-chat))
              (should-not (featurep 'mevedel-buddy)))
+            ('note-lifecycle
+             ;; Lifecycle verbs reach the conversation hint through a real
+             ;; autoload, and persistence reaches the Rewind rule the same way.
+             (call-process "git" nil nil nil "init" "-q")
+             (write-region ".mevedel/\n" nil ".gitignore" nil 'silent)
+             (write-region "noted code\n" nil "source.el" nil 'silent)
+             (should-not (featurep 'mevedel-note-conversation))
+             (with-current-buffer (find-file-noselect "source.el")
+               (let ((note (mevedel-note-create "Cold note"))
+                     (workspace (mevedel--instruction-buffer-workspace (current-buffer))))
+                 (mevedel-note-mark-sent (list note) "cold-session")
+                 (mevedel-note-hold-change (list note) '(:id "cold" :session-id "cold-session" :turn 1))
+                 (should (featurep 'mevedel-note-conversation))
+                 (should (eq 'ready (mevedel-notes-attention-state note)))
+                 (mevedel-notes-rewind-live workspace "cold-session" 0)
+                 (should (eq 'unsent (overlay-get note 'mevedel-note-state)))
+                 (should-not (overlay-get note 'mevedel-note-prepared-change)))))
             ('handoff-progress
              (require 'mevedel-plan-handoff)
              (require 'mevedel-view)

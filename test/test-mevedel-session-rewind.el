@@ -602,8 +602,7 @@
             (setq theirs (overlay-get (nth 1 notes) 'mevedel-uuid)
                   doomed (overlay-get (nth 0 notes) 'mevedel-uuid))
             (dolist (note (list (nth 1 notes) (nth 0 notes)))
-              (overlay-put note 'mevedel-note-state 'sent)
-              (overlay-put note 'mevedel-note-session-id "other-session"))
+              (mevedel-note-mark-sent (list note) "other-session"))
             (mevedel-instruction-store-sync workspace)
             (with-current-buffer buffer
               (org-mode)

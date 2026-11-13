@@ -31,15 +31,19 @@
 ;; `mevedel-instruction-edit'
 (autoload 'mevedel-instruction-replace-buffer-contents "mevedel-instruction-edit")
 
-;; `mevedel-note-conversation'
-(declare-function mevedel-note-conversation-refresh-hint "mevedel-note-conversation" (&optional note))
-(autoload 'mevedel-note-conversation-refresh-hint "mevedel-note-conversation")
-
 ;; `mevedel-note-source'
 (declare-function mevedel--mark-buffer-source-missing
                   "mevedel-note-source" (buffer))
 (declare-function mevedel--reconcile-note-sources
                   "mevedel-note-source" (workspace))
+
+;; `mevedel-notes'
+(declare-function mevedel-notes-rewind-instruction "mevedel-notes"
+                  (instruction session-id surviving-turn))
+(declare-function mevedel-notes-rewind-live "mevedel-notes"
+                  (workspace session-id turn))
+(autoload 'mevedel-notes-rewind-instruction "mevedel-notes")
+(autoload 'mevedel-notes-rewind-live "mevedel-notes")
 
 ;; `mevedel-overlay-ui'
 (declare-function mevedel--update-instruction-overlay
@@ -1496,7 +1500,7 @@ session's turn count would move past it."
                                workspace (plist-get theirs :hash) record)))
               (dolist (intent intents)
                 (when (eql turn (plist-get intent :to))
-                  (mevedel-instruction-store--rewind-live-notes workspace session-id turn)))
+                  (mevedel-notes-rewind-live workspace session-id turn)))
               (mevedel-instruction-store--settled workspace theirs hash record)
               (mevedel-instruction-store--owe workspace session-id nil)
               (setq result 'resolved))))))
@@ -1540,57 +1544,13 @@ than overwrite.  Installing RECORD would replace held-back edits in memory."
           (retain (plist-get (plist-get closed :instruction) :properties))))
       names)))
 
-(defun mevedel-instruction-store--rewind-note (instruction session-id surviving-turn)
-  "Rewind INSTRUCTION's note activity owned by SESSION-ID past SURVIVING-TURN.
-Mutate only lifecycle properties; preserve its text, anchor and session link."
-  (let* ((props (plist-get instruction :properties))
-         (change (plist-get props 'mevedel-note-prepared-change)))
-    (when (equal session-id (plist-get props 'mevedel-note-session-id))
-      (when (zerop surviving-turn)
-        (when (eq 'sent (plist-get props 'mevedel-note-state))
-          (plist-put props 'mevedel-note-state 'unsent))
-        (when (eq 'sent (plist-get instruction :open-state))
-          (plist-put instruction :open-state 'unsent))))
-    (when (and (equal session-id (plist-get change :session-id))
-               (> (or (plist-get change :turn) 0) surviving-turn))
-      (plist-put props 'mevedel-note-prepared-change nil)
-      (plist-put props 'mevedel-note-attention-state nil))
-    (when-let* ((pairs (plist-get props 'mevedel-note-applied-changes)))
-      (plist-put props 'mevedel-note-applied-changes
-                 (cl-remove-if (lambda (pair)
-                                 (and (equal session-id (plist-get pair :session-id))
-                                      (> (plist-get pair :turn) surviving-turn))) pairs))))
-  instruction)
-
-(defun mevedel-instruction-store--rewind-live-notes (workspace session-id turn)
-  "Apply committed SESSION-ID Rewind to TURN to WORKSPACE's current notes.
-Keep memory in step with the new merge base, including crash recovery."
-  (let ((state (mevedel--instruction-state (mevedel--instruction-workspace-key workspace))))
-    (dolist (file (plist-get state :instructions))
-      (if (bufferp (car file))
-          (dolist (note (cdr file))
-            (let* ((before (overlay-properties note))
-                   (instruction (list :properties (copy-sequence before)))
-                   (after (plist-get (mevedel-instruction-store--rewind-note
-                                      instruction session-id turn) :properties)))
-              (unless (equal before after)
-                (dolist (key '(mevedel-note-state mevedel-note-prepared-change
-                              mevedel-note-applied-changes mevedel-note-attention-state))
-                  (overlay-put note key (plist-get after key)))
-                (mevedel--update-instruction-overlay note t)
-                (mevedel-note-conversation-refresh-hint note))))
-        (dolist (instruction (plist-get (cdr file) :instructions))
-          (mevedel-instruction-store--rewind-note instruction session-id turn))))
-    (dolist (closed (plist-get state :closed-notes))
-      (mevedel-instruction-store--rewind-note (plist-get closed :instruction) session-id turn))))
-
 (defun mevedel-instruction-store--prune (_workspace data session-id _target-turn surviving-turn)
   "Discard note activity in DATA owned by SESSION-ID past SURVIVING-TURN.
 Preserve note text and anchors."
   (setq data (copy-tree data))
   (dolist (file (plist-get data :files))
     (dolist (instruction (plist-get (cdr file) :instructions))
-      (mevedel-instruction-store--rewind-note instruction session-id surviving-turn)))
+      (mevedel-notes-rewind-instruction instruction session-id surviving-turn)))
   data)
 
 (defun mevedel-instruction-store-settle-session (session)

@@ -141,7 +141,7 @@ Return the new workspace struct."
 (defun test-mevedel-instruction-store--texts (workspace)
   "Return WORKSPACE's in-memory note texts, sorted."
   (sort (mapcar (lambda (note) (plist-get (plist-get note :properties) 'mevedel-note-text))
-                (mevedel-notes--entries workspace))
+                (mevedel-notes-open workspace))
         #'string<))
 
 (defun test-mevedel-instruction-store--prepared-turn (workspace uuid)
@@ -769,12 +769,10 @@ SESSION prepared in turn 2, written to the store."
 (defun test-mevedel-instruction-store--prepare (note session-id turn)
   "Mark NOTE sent by SESSION-ID with a change prepared in TURN.
 The overlay properties are what preparing a change leaves behind."
-  (overlay-put note 'mevedel-note-state 'sent)
-  (overlay-put note 'mevedel-note-session-id session-id)
-  (overlay-put note 'mevedel-note-prepared-change
-               (list :id (format "%s-%d" session-id turn)
-                     :session-id session-id :turn turn))
-  (overlay-put note 'mevedel-note-attention-state 'ready))
+  (mevedel-note-mark-sent (list note) session-id)
+  (mevedel-note-hold-change (list note)
+                            (list :id (format "%s-%d" session-id turn)
+                                  :session-id session-id :turn turn)))
 
 (mevedel-deftest mevedel-instruction-store-rewind-end (:quiet t)
   ,test
