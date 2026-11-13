@@ -526,7 +526,8 @@ Return the note id, reusing an exact repeat, or an explanatory string."
              (existing
               (seq-find (lambda (record)
                           (and (equal buffer-name (plist-get record :buffer))
-                               (= actual-line (mevedel-buddy-note--line record))
+                               (or (eq 'dismissed (plist-get record :status))
+                                   (= actual-line (mevedel-buddy-note--line record)))
                                (equal note (plist-get record :note))))
                         mevedel-buddy-note--notes))
              (overlay (unless existing
@@ -647,12 +648,14 @@ be told to maintain notes it cannot see.
 Active and dismissed notes are both described.  Dismissed ones are
 labelled so the model can see what the user already rejected instead of
 raising it again."
-  (let ((notes (seq-take (seq-filter
-                          (lambda (record)
-                            (mevedel-buddy-note--in-scope-p
-                             (plist-get record :buffer)))
-                          mevedel-buddy-note--notes)
-                         mevedel-buddy-note-serialize-limit)))
+  (let* ((scoped (seq-filter
+                  (lambda (record)
+                    (mevedel-buddy-note--in-scope-p (plist-get record :buffer)))
+                  mevedel-buddy-note--notes))
+         (dismissed (lambda (record) (eq 'dismissed (plist-get record :status))))
+         (notes (seq-take (append (seq-filter dismissed scoped)
+                                  (seq-remove dismissed scoped))
+                          mevedel-buddy-note-serialize-limit)))
     (if (null notes)
         ""
       (concat

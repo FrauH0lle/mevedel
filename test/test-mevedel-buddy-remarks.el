@@ -347,7 +347,43 @@ COMMAND defaults to guidance; it may also be the recorded-edit review command."
             (mevedel-remarks-test--review
              (lambda (prompt _tools) (should (string-match-p "Check this" prompt))))
             (should (= 0 hashes)))
-        (advice-remove 'mevedel-session-control-fs-file-hash count-hash)))))
+        (advice-remove 'mevedel-session-control-fs-file-hash count-hash))))
+  :doc "dismissed advice stays visible when active and kept remarks fill the limit"
+  (mevedel-remarks-test--with-source
+    (let ((name (buffer-name))
+          (mevedel-buddy-note-serialize-limit 2))
+      (mevedel-remarks-test--review
+       (lambda (_prompt tools)
+         (mevedel-remarks-test--tool tools "add_note" name 1 "Rejected concern" "significant")
+         (mevedel-remarks-test--tool tools "add_note" name 2 "Kept concern" "significant")
+         (mevedel-remarks-test--tool tools "add_note" name 3 "Open concern" "significant")))
+      (goto-char (point-min)) (mevedel-buddy-dismiss-note)
+      (forward-line 1) (mevedel-buddy-keep-note)
+      (mevedel-remarks-test--review
+       (lambda (prompt _tools)
+         (should (string-match-p "\\[dismissed\\].*Rejected concern" prompt))
+         (should (= 2 (with-temp-buffer
+                        (insert prompt) (how-many "^- note_id" (point-min) (point-max))))))))))
+
+(mevedel-deftest mevedel-buddy-remarks/dismissed-moving-line
+  (:quiet t)
+  ,test
+  (test)
+  :doc "dismissed advice stays dismissed after lines are inserted above it"
+  (mevedel-remarks-test--with-source
+    (let ((name (buffer-name)) id)
+      (mevedel-remarks-test--review
+       (lambda (_prompt tools)
+         (setq id (mevedel-remarks-test--tool
+                   tools "add_note" name 2 "Check this" "significant"))))
+      (goto-char (point-min)) (forward-line 1)
+      (mevedel-buddy-dismiss-note)
+      (goto-char (point-min)) (insert "new line\n")
+      (mevedel-remarks-test--review
+       (lambda (_prompt tools)
+         (should (= id (mevedel-remarks-test--tool
+                        tools "add_note" name 3 "Check this" "significant")))))
+      (should (equal "" (mevedel-remarks-test--labels))))))
 
 (mevedel-deftest mevedel-buddy-remarks/file-alias
   (:quiet t)
