@@ -7,6 +7,8 @@
 ;;; Code:
 
 (require 'mevedel-buddy-note)
+(require 'mevedel-buddy)
+(require 'mevedel-persistence)
 (require 'gptel)
 (require 'helpers
          (file-name-concat
@@ -44,7 +46,9 @@
     (with-current-buffer buf
       (rename-buffer name t)
       (setq-local mevedel--workspace mevedel-test--note-workspace))
-    (push (cons name buf) mevedel-buddy-note--scope-buffers)
+    (unless mevedel-buddy-note--run
+      (setq mevedel-buddy-note--run (mevedel-buddy-note--make-run)))
+    (push (cons name buf) (mevedel-buddy-note--run-scope mevedel-buddy-note--run))
     buf))
 
 (defun mevedel-test--note-cleanup ()
@@ -52,9 +56,8 @@
   (when mevedel-test--note-workspace
     (mevedel--clear-instruction-state mevedel-test--note-workspace))
   (mevedel-buddy-note-release-markers)
-  (setq mevedel-buddy-note--scope-buffers nil
+  (setq mevedel-buddy-note--run nil
         mevedel-buddy-note--notes nil
-        mevedel-buddy-note--changed-workspaces nil
         mevedel-instruction-store--dirty nil)
   (remove-hook 'post-command-hook #'mevedel-instruction-store-flush)
   (dolist (buf mevedel-test--note-buffers)
@@ -115,8 +118,9 @@
 
   :doc "`mevedel-buddy-note-add' refuses a buffer outside the scope"
   (let ((buf (mevedel-test--note-buffer "note-scope" "one\n")))
-    (let ((mevedel-buddy-note--scope-buffers
-           (list (cons "other-buffer" (current-buffer)))))
+    (let ((mevedel-buddy-note--run
+           (mevedel-buddy-note--make-run
+            :scope (list (cons "other-buffer" (current-buffer))))))
       (should (string-match-p
                "not in the review scope"
                (mevedel-buddy-note-add (buffer-name buf) 1 "nope" "trivial")))
@@ -124,7 +128,7 @@
 
   :doc "`mevedel-buddy-note-add' refuses everything when no review is running"
   (let ((buf (mevedel-test--note-buffer "note-noscope" "one\n")))
-    (let ((mevedel-buddy-note--scope-buffers nil))
+    (let ((mevedel-buddy-note--run nil))
       (should (string-match-p
                "not in the review scope"
                (mevedel-buddy-note-add (buffer-name buf) 1 "nope" "trivial")))
@@ -423,8 +427,9 @@
   :doc "`mevedel-buddy-note-update' refuses a note outside the scope"
   (let* ((buf (mevedel-test--note-buffer "scope-update" "one\n"))
          (id (mevedel-test--add-note buf 1 "original")))
-    (let ((mevedel-buddy-note--scope-buffers
-           (list (cons "elsewhere" (current-buffer)))))
+    (let ((mevedel-buddy-note--run
+           (mevedel-buddy-note--make-run
+            :scope (list (cons "elsewhere" (current-buffer))))))
       (should (string-match-p "not in the review scope"
                               (mevedel-buddy-note-update id "rewritten"))))
     (should (equal "original" (plist-get (mevedel-buddy-note--find id) :note))))
@@ -432,8 +437,9 @@
   :doc "`mevedel-buddy-note-remove' refuses a note outside the scope"
   (let* ((buf (mevedel-test--note-buffer "scope-remove" "one\n"))
          (id (mevedel-test--add-note buf 1 "keep me")))
-    (let ((mevedel-buddy-note--scope-buffers
-           (list (cons "elsewhere" (current-buffer)))))
+    (let ((mevedel-buddy-note--run
+           (mevedel-buddy-note--make-run
+            :scope (list (cons "elsewhere" (current-buffer))))))
       (should (string-match-p "not in the review scope"
                               (mevedel-buddy-note-remove id))))
     (should (mevedel-buddy-note--find id)))
@@ -443,8 +449,8 @@
         (elsewhere (mevedel-test--note-buffer "scope-elsewhere" "one\n")))
     (mevedel-test--add-note here 1 "mine")
     (mevedel-test--add-note elsewhere 1 "other project")
-    (let* ((mevedel-buddy-note--scope-buffers
-            (list (cons "scope-here" here)))
+    (let* ((mevedel-buddy-note--run
+            (mevedel-buddy-note--make-run :scope (list (cons "scope-here" here))))
            (text (mevedel-buddy-note-serialize)))
       (should (string-match-p "mine" text))
       (should-not (string-match-p "other project" text)))))
@@ -551,15 +557,16 @@
 
   :doc "`mevedel-buddy-note-read-buffer' refuses a buffer outside the scope"
   (let ((_buf (mevedel-test--note-buffer "read-scope" "one\n")))
-    (let ((mevedel-buddy-note--scope-buffers
-           (list (cons "other-buffer" (current-buffer)))))
+    (let ((mevedel-buddy-note--run
+           (mevedel-buddy-note--make-run
+            :scope (list (cons "other-buffer" (current-buffer))))))
       (should (string-match-p
                "not in the review scope"
                (mevedel-buddy-note-read-buffer "read-scope" 1 1)))))
 
   :doc "`mevedel-buddy-note-read-buffer' refuses everything with no review"
   (let ((_buf (mevedel-test--note-buffer "read-noscope" "one\n")))
-    (let ((mevedel-buddy-note--scope-buffers nil))
+    (let ((mevedel-buddy-note--run nil))
       (should (string-match-p
                "not in the review scope"
                (mevedel-buddy-note-read-buffer "read-noscope" 1 1)))))
@@ -567,7 +574,8 @@
   :doc "`mevedel-buddy-note-read-buffer' refuses a buffer that is not live"
   (let ((dead (generate-new-buffer "read-dead")))
     (kill-buffer dead)
-    (let ((mevedel-buddy-note--scope-buffers (list (cons "read-dead" dead))))
+    (let ((mevedel-buddy-note--run
+           (mevedel-buddy-note--make-run :scope (list (cons "read-dead" dead)))))
       (should (string-match-p
                "Unknown buffer"
                (mevedel-buddy-note-read-buffer "read-dead" 1 1)))))
@@ -762,6 +770,83 @@
                             (funcall (gptel-tool-function remove) id)))
     (should (mevedel-buddy-note--find id))
     (should (mevedel-test--note-overlays buf))))
+
+;;
+;;; The review run
+
+(mevedel-deftest mevedel-buddy-note-begin-review
+  (:after-each (mevedel-test--note-cleanup))
+  ,test
+  (test)
+
+  :doc "`mevedel-buddy-note-begin-review' returns payload, taken notes and hash"
+  (let ((_buf (mevedel-test--note-buffer "begin-plain" "one\ntwo\n")))
+    (setq mevedel-buddy-note--run nil)
+    (let* ((payload (mevedel-buddy-guide-payload (point-min) (point-max)))
+           (begun (with-current-buffer _buf
+                    (mevedel-buddy-note-begin-review
+                     '("begin-plain") (mevedel-buddy-guide-payload (point-min) (point-max))
+                     nil '("scope") nil))))
+      (should (string-prefix-p "=== Buffer: " payload))
+      (should (string-search "=== Buffer: begin-plain" (plist-get begun :payload)))
+      (should (null (plist-get begun :taken-notes)))
+      (should (stringp (plist-get begun :review-hash)))
+      (should (assoc "begin-plain" (mevedel-buddy-note--field 'scope)))
+      (should mevedel-buddy-note--markers)))
+
+  :doc "`mevedel-buddy-note-end-review' clears the run and persists accepted remarks"
+  (let ((buf (mevedel-test--note-buffer "end-normal" "one\ntwo\n"))
+        touched flushed)
+    (setq mevedel-buddy-note--run nil)
+    (with-current-buffer buf
+      (mevedel-buddy-note-begin-review
+       '("end-normal") (mevedel-buddy-guide-payload (point-min) (point-max))
+       nil '("scope") nil))
+    (should (integerp (mevedel-buddy-note-add "end-normal" 1 "kept" "trivial")))
+    (cl-letf (((symbol-function 'mevedel-instruction-store-touch)
+               (lambda (workspace) (push workspace touched)))
+              ((symbol-function 'mevedel-instruction-store-flush)
+               (lambda () (setq flushed t))))
+      (mevedel-buddy-note-end-review))
+    (should (equal (list mevedel-test--note-workspace) touched))
+    (should flushed)
+    (should-not mevedel-buddy-note--run)
+    (should-not mevedel-buddy-note--markers)
+    (should (mevedel-test--note-overlays buf)))
+
+  :doc "`mevedel-buddy-note-end-review' cleans up after a partly initialised begin"
+  (let ((buf (mevedel-test--note-buffer "end-partial" "one\n")))
+    (setq mevedel-buddy-note--run nil)
+    (cl-letf (((symbol-function 'mevedel-buddy-note--restore)
+               (lambda () (error "Index failed"))))
+      (should-error (with-current-buffer buf
+                      (mevedel-buddy-note-begin-review
+                       '("end-partial") "" nil '("scope") nil))))
+    (should mevedel-buddy-note--run)
+    (mevedel-buddy-note-end-review)
+    (should-not mevedel-buddy-note--run)
+    (should-not mevedel-buddy-note--markers))
+
+  :doc "a call after the review ended is denied, not errored"
+  (let ((buf (mevedel-test--note-buffer "end-late" "one\ntwo\n")))
+    (setq mevedel-buddy-note--run nil)
+    (with-current-buffer buf
+      (mevedel-buddy-note-begin-review
+       '("end-late") (mevedel-buddy-guide-payload (point-min) (point-max))
+       'active '("scope") nil))
+    (let ((id (mevedel-buddy-note-add "end-late" 1 "mine" "trivial")))
+      (should (integerp id))
+      (mevedel-buddy-note-end-review)
+      (should (string-match-p "not in the review scope"
+                              (mevedel-buddy-note-add "end-late" 2 "x" "trivial" "idea")))
+      (should (string-match-p "not in the review scope"
+                              (mevedel-buddy-note-read-buffer "end-late" 1 1)))
+      (should (string-match-p "Unknown note\\|not in the review scope"
+                              (mevedel-buddy-note-update id "y")))
+      (should (string-match-p "not in the review scope" (mevedel-buddy-note-remove id)))
+      (should (string-match-p "changed; review it again"
+                              (mevedel-buddy-note-looks-done id)))
+      (should-not (mevedel-buddy-note--admission (current-buffer) 1 "idea")))))
 
 (provide 'test-mevedel-buddy-note)
 ;;; test-mevedel-buddy-note.el ends here

@@ -259,9 +259,11 @@ visited — would have their offsets replayed against unrelated content.
 
 ## Scope is an allowlist, and empty means nothing
 
-While a review runs, `mevedel-buddy-note--scope-buffers` maps each allowed name
-to the exact live buffer the review may touch, and every tool — `read_buffer`,
-`add_note`, `update_note`, `remove_note` — checks it. The note set described to
+While a review runs, one private run value (`mevedel-buddy-note--run`, started
+by `mevedel-buddy-note-begin-review` and cleared by `mevedel-buddy-note-end-review`)
+maps each allowed name to the exact live buffer the review may touch, and every
+tool — `read_buffer`, `add_note`, `update_note`, `remove_note` — checks it
+through one nil-safe reader. The note set described to
 the model is filtered the same way, so a review of one project never sees
 another's buffer names, line numbers, or note text.
 
