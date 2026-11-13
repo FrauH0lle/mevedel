@@ -277,7 +277,9 @@ must not read as "every buffer in Emacs".
 
 The common note label sits below the complete source line and shows its number,
 Buddy authorship, bounded text and available actions. The full authored text is
-retained for editing. The modified-key menu offers edit, dismiss and keep;
+retained for editing. Buddy remarks tint their code and color their label amber
+(`mevedel-note-buddy`, `mevedel-note-label-buddy`). The modified-key menu offers
+edit, dismiss and keep;
 plain letters still insert source text. Moving point never switches between
 two Buddy-specific render styles, and no Buddy relayout hook scans remarks on
 each line move.

@@ -380,6 +380,12 @@ per-session instruction snapshots are ignored on resume, not imported or deleted
 Old saved sessions still resume; their former directive turns appear as ordinary
 turns and participate in ordinary conversation context.
 
+Noted code is tinted by author and its label below uses the matching color:
+blue for your notes, purple for agent notes and amber for Buddy remarks. The
+faces are `mevedel-note-you`, `mevedel-note-agent` and `mevedel-note-buddy`
+for the code, and `mevedel-note-label-you`, `mevedel-note-label-agent` and
+`mevedel-note-label-buddy` for the labels.
+
 The note conversation frame uses `mevedel-note-frame-width`,
 `mevedel-note-frame-height`, `mevedel-note-frame-min-height` and
 `mevedel-note-frame-border-width`. The former directive-named modules, symbols

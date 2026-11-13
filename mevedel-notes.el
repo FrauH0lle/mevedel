@@ -50,6 +50,42 @@
 (declare-function mevedel-view-call-preserving-window-configuration
                   "mevedel-view-composer" (thunk))
 
+(defface mevedel-note-you
+  '((((background dark)) :background "#1e3550" :extend t)
+    (t :background "#dfeafa" :extend t))
+  "Code covered by a note you wrote."
+  :group 'mevedel)
+
+(defface mevedel-note-agent
+  '((((background dark)) :background "#3a2648" :extend t)
+    (t :background "#efe3f6" :extend t))
+  "Code covered by a note an agent wrote."
+  :group 'mevedel)
+
+(defface mevedel-note-buddy
+  '((((background dark)) :background "#3d2f17" :extend t)
+    (t :background "#fbeedb" :extend t))
+  "Code covered by a Buddy remark."
+  :group 'mevedel)
+
+(defface mevedel-note-label-you
+  '((((background dark)) :foreground "#8fbdf2" :weight bold)
+    (t :foreground "#184f95" :weight bold))
+  "Label of a note you wrote."
+  :group 'mevedel)
+
+(defface mevedel-note-label-agent
+  '((((background dark)) :foreground "#c690e6" :weight bold)
+    (t :foreground "#7a3e9d" :weight bold))
+  "Label of a note an agent wrote."
+  :group 'mevedel)
+
+(defface mevedel-note-label-buddy
+  '((((background dark)) :foreground "#e0a24a" :weight bold)
+    (t :foreground "#a86200" :weight bold))
+  "Label of a Buddy remark."
+  :group 'mevedel)
+
 (defvar-local mevedel-notes--last-hinted nil
   "Note most recently announced by the local entry hint.")
 
@@ -269,10 +305,17 @@ Refuse unavailable sources before a caller starts mutating the notes."
                           (overlay-put overlay 'mevedel-note-owner note)
                           (overlay-put note 'mevedel-label-overlay overlay)
                           overlay)))
-             (face (if (eq note mevedel--highlighted-instruction) 'highlight 'shadow))
+             (author (overlay-get note 'mevedel-note-author))
+             (code-face (pcase author
+                          ('buddy 'mevedel-note-buddy) ('agent 'mevedel-note-agent)
+                          (_ 'mevedel-note-you)))
+             (face (cond ((eq note mevedel--highlighted-instruction) 'highlight)
+                         ((eq author 'buddy) 'mevedel-note-label-buddy)
+                         ((eq author 'agent) 'mevedel-note-label-agent)
+                         (t 'mevedel-note-label-you)))
              (text (format "\n  Note %s · %s · %s · %s%s · %s"
                            (overlay-get note 'mevedel-id)
-                           (pcase (overlay-get note 'mevedel-note-author)
+                           (pcase author
                              ('buddy "Buddy") ('agent "AI") (_ "you"))
                            (mevedel-notes--display-text note)
                            (pcase (mevedel-notes-attention-state note)
@@ -289,6 +332,8 @@ Refuse unavailable sources before a caller starts mutating the notes."
                                " · paused" "")
                            (mevedel-notes--actions-hint note))))
         (overlay-put note 'keymap mevedel-note-actions-map)
+        (unless (eq code-face (overlay-get note 'face))
+          (overlay-put note 'face code-face))
         (move-overlay label (overlay-start note) end)
         (unless (and (equal text (overlay-get label 'after-string))
                      (eq face (get-text-property 0 'face (overlay-get label 'after-string))))

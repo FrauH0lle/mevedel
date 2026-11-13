@@ -139,16 +139,27 @@
                               0 'face (overlay-get (overlay-get child 'mevedel-label-overlay)
                                                    'after-string))))
       (call-interactively #'mevedel-cycle-instructions-at-point)
-      (should (eq 'shadow (get-text-property
+      (should (eq 'mevedel-note-label-you (get-text-property
                            0 'face (overlay-get (overlay-get child 'mevedel-label-overlay)
                                                 'after-string))))
       (should (eq 'highlight (get-text-property
                               0 'face (overlay-get (overlay-get parent 'mevedel-label-overlay)
                                                    'after-string))))
       (call-interactively #'mevedel-cycle-instructions-at-point)
-      (should (eq 'shadow (get-text-property
+      (should (eq 'mevedel-note-label-you (get-text-property
                            0 'face (overlay-get (overlay-get parent 'mevedel-label-overlay)
                                                 'after-string))))
+      ;; The noted code carries the author's tint; an AI note gets its own.
+      (should (eq 'mevedel-note-you (overlay-get child 'face)))
+      (overlay-put child 'mevedel-note-author 'agent)
+      (mevedel-notes--render child)
+      (should (eq 'mevedel-note-agent (overlay-get child 'face)))
+      (should (eq 'mevedel-note-label-agent
+                  (get-text-property
+                   0 'face (overlay-get (overlay-get child 'mevedel-label-overlay)
+                                        'after-string))))
+      (overlay-put child 'mevedel-note-author 'user)
+      (mevedel-notes--render child)
       (let* ((label (overlay-get child 'mevedel-label-overlay))
              (before (overlay-get label 'after-string)))
         (mevedel-note-edit "Child" child)
