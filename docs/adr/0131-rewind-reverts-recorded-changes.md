@@ -89,6 +89,15 @@ redesign adds staged smerge resolutions so overlapping edits need not force a
 choice between abandoning Rewind and overwriting unrelated work. It reuses the
 prepared-change editor while retaining the all-or-nothing transaction.
 
+Rewind and note revert share the checked per-file reversal, not one reversal
+plan. A single plan for both was considered and rejected: the rest is
+deliberately different policy. Rewind reverses several discarded turns newest
+first with staged merge resolutions and keeps its save/discard/abort prompt for
+modified buffers. Note revert reverses one applied turn's own entries, reads
+unsaved buffer text as the current state, keeps the current file mode and
+refuses every conflict. A common plan would move little code behind policy
+parameters.
+
 Removing directive records also removed the pipeline step that recorded
 untracked effects, because it was gated on a directive. A note turn running
 `sed -i` then rewound as "Checkpoint coverage: complete" and silently kept the

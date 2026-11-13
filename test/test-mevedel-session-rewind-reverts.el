@@ -512,7 +512,60 @@ With PATCH, run that ApplyPatch hunk through the real pipeline for capture."
                               (mevedel-test--read-file path)))
                (should (equal "clean-1\n" (mevedel-test--read-file
                                             (file-name-concat (file-name-directory path) "other.txt"))))
-               (should (equal transcript (with-current-buffer buffer (buffer-string))))))))))))
+               (should (equal transcript (with-current-buffer buffer (buffer-string)))))))))))
+  :doc "a Rewind merge with two conflicting files resolves each against its own entry"
+  (mevedel-test-rewind-reverts--call
+   '(("one\ntwo\n" "ONE\ntwo\n")) "mine\ntwo\n"
+   (lambda (buffer target path)
+     (let ((other (file-name-concat (file-name-directory path) "other.txt")))
+       (write-region "mine-other\n" nil other nil 'silent)
+       (save-window-excursion
+         (cl-letf (((symbol-function 'read-char-choice) (lambda (&rest _) ?m))
+                   ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+           (mevedel-session-rewind-rewind buffer target)
+           (goto-char (point-min))
+           (while (search-forward "<<<<<<<" nil t) (smerge-keep-lower))
+           (mevedel-note-merge-confirm)
+           (should (equal "one\ntwo\n" (mevedel-test--read-file path)))
+           (should (equal "clean-0\n" (mevedel-test--read-file other)))))))))
+
+(mevedel-deftest mevedel-note-merge-open (:quiet t)
+  ,test
+  (test)
+  :doc "COMMIT pairs each change with its own section's data across several turns"
+  (let* ((dir (make-temp-file "mevedel-merge-pairs-" t))
+         (turns '(3 1 2))
+         (paths (mapcar (lambda (turn) (file-name-concat dir (format "f%d.txt" turn))) turns))
+         merge got)
+    (unwind-protect
+        (save-window-excursion
+          (cl-mapc (lambda (path turn)
+                     (write-region (format "mine%d\n" turn) nil path nil 'silent))
+                   paths turns)
+          (setq merge
+                (mevedel-note-merge-open
+                 "*pairs*"
+                 (cl-mapcar (lambda (path turn)
+                              (list :path path :disk (mevedel-tool-patch--snapshot path)
+                                    :coding 'utf-8-unix :yours (format "mine%d\n" turn)
+                                    :seen "base\n" :proposed (format "ai%d\n" turn)
+                                    :data (list :turn turn)))
+                            paths turns)
+                 (lambda (pairs) (setq got pairs))))
+          (goto-char (point-min))
+          (while (search-forward "<<<<<<<" nil t) (smerge-keep-lower))
+          (mevedel-note-merge-confirm))
+      (when (buffer-live-p merge)
+        (with-current-buffer merge (set-buffer-modified-p nil))
+        (kill-buffer merge))
+      (delete-directory dir t))
+    (should (equal turns (mapcar (lambda (pair) (plist-get (cdr pair) :turn)) got)))
+    (should (equal paths (mapcar (lambda (pair) (plist-get (car pair) :path)) got)))
+    (should (equal '("ai3\n" "ai1\n" "ai2\n")
+                   (mapcar (lambda (pair) (plist-get (car pair) :content)) got)))
+    ;; Negative control: a mispairing (sorted turns) must not equal the real result.
+    (should-not (equal (sort (copy-sequence turns) #'<)
+                       (mapcar (lambda (pair) (plist-get (cdr pair) :turn)) got)))))
 
 (provide 'test-mevedel-session-rewind-reverts)
 ;;; test-mevedel-session-rewind-reverts.el ends here
