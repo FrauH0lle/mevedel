@@ -14,9 +14,10 @@ completed Goal is historical and does not block it.
 including implementation requests, remain planning input until the user exits
 Plan or accepts a proposal.
 
-To implement a plan yourself, run `/buddy`: it feeds the current plan to
-[Buddy](buddy.md#feeding-a-session-to-buddy) and leaves Plan mode and the
-pending proposal untouched.
+To implement an accepted plan yourself, choose **Buddy — Implement myself with
+notes** in the approval card's Execution setting. Alternatively, `/buddy` feeds
+the current plan to [Buddy](buddy.md#feeding-a-session-to-buddy) without creating
+step notes, leaving Plan mode and the pending proposal untouched.
 
 ## Planning model policy
 
@@ -174,7 +175,7 @@ The approval interaction has these axes:
 - Location: Here or Worktree.
 - Context: Current, Fresh, or Summary. Summary costs one additional model
   request.
-- Execution: Direct or Goal.
+- Execution: Direct, Goal, or Buddy (Implement myself with notes).
 - Budget: a positive Goal token limit, or Unlimited.
 - Mode: Ask, Edits, or Full-auto.
 - Model: the proposal-local implementation backend/model and reasoning effort.
@@ -238,7 +239,7 @@ session also shows it because hidden state is not persisted.
 Direct remains the default and sends one ordinary implementation turn. Goal is
 an explicit opt-in that continues automatically until complete, genuinely
 blocked, paused, or budget-limited. When Goal is selected, the approval shows
-the proposal's target token budget. With Direct, the Budget row stays as a
+the proposal's target token budget. With Direct or Buddy, the Budget row stays as a
 dimmed `Goal execution only` placeholder without a key, so cycling Execution
 never changes the card's height: with the composer anchored on its screen row,
 each toggle otherwise moved the card and the transcript above it by one row
@@ -255,10 +256,25 @@ acceptance all leave the ordinary session model, effort, and permission mode
 unchanged. Every implementation target and retry uses the accepted snapshot
 within its implementation scope.
 
+**Buddy — Implement myself with notes** submits one note-creation turn, not an
+implementation or a Goal. The prompt tells the assistant to read the accepted
+plan and relevant code, then use one NoteWrite batch to create one note per plan
+step, anchored to the right file and lines with concise instructions for a human.
+If a step has no clear code location, it uses the most relevant file it reads and
+explains that anchor in its reply. The notes stay unsent, without
+prepared changes. The assistant must not edit code or send, take or close notes.
+Its reply summarizes the note numbers and steps and points to the notes list.
+Open `M-x mevedel-notes-list` to take, send, edit or delete each one; taking invites
+[Buddy's watch](buddy.md#workspace-dial-and-taken-notes) while you implement it.
+This choice uses the same Location, Context, model, skill and retry machinery as
+Direct. It also exits sticky Plan, although NoteWrite creation is allowed there,
+so the accepted handoff does not retain the planning proposal guidance. The
+session's stored permission mode remains unchanged.
+
 ### Implementation-scoped policy
 
 The accepted Model, effort, and Mode form one strict implementation policy.
-Direct captures it on the one implementation request; retries reuse the same
+Direct and Buddy capture it on their one request; retries reuse the same
 accepted selection rather than resolving new defaults. Goal stores it on the
 durable Goal and uses it for every active ordinary root Goal turn, including
 user follow-ups, automatic continuation, and turns after `/goal resume`.
@@ -317,7 +333,8 @@ When the prepared submission is ready, the view releases its
 `Preparing implementation...` row before kickoff.
 
 After any valid location/context preparation, Direct submits its ordinary
-one-turn instruction. Goal instead constructs a Goal in the implementing
+one-turn instruction. Buddy submits its note-creation instruction with the view
+label `Implement myself with notes`. Goal instead constructs a Goal in the implementing
 session, using its own immutable accepted-plan path and the
 Plan-selected Goal budget. Its deterministic objective treats plan
 outcomes, constraints, and acceptance criteria as the completion contract while

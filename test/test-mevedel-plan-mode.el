@@ -1598,11 +1598,12 @@
                 (plist-get (mevedel-session-plan-metadata session) :status)))))
 
 (mevedel-deftest mevedel-plan-mode--next-execution
-  (:doc "toggles only Direct and Goal")
+  (:doc "cycles Direct, Goal and Buddy")
   ,test
   (test)
   (should (eq 'goal (mevedel-plan-mode--next-execution 'direct)))
-  (should (eq 'direct (mevedel-plan-mode--next-execution 'goal))))
+  (should (eq 'buddy (mevedel-plan-mode--next-execution 'goal)))
+  (should (eq 'direct (mevedel-plan-mode--next-execution 'buddy))))
 
 (mevedel-deftest mevedel-plan-mode--execution-description
   (:doc "describes one-turn and durable execution compactly")

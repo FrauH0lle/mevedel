@@ -821,6 +821,18 @@ not cancel compaction already running; `/compact` remains available for manual
 compaction. Reopening a session restores the configured default. Claude shows
 **compact provider** instead, because its native compaction is provider-managed.
 
+To carry out an accepted plan yourself, cycle **Execution** (`e`) in its approval
+card to **Buddy — Implement myself with notes**, then accept. The assistant reads
+the plan and code and creates one unsent note per step, anchored beside the
+relevant code, in one NoteWrite batch. It does not edit code or prepare changes.
+Its reply lists the note numbers and steps; open `M-x mevedel-notes-list` to
+take, send, edit or delete each note. Taking a note invites Buddy to watch while
+you implement it. As with Direct, acceptance exits Plan without changing the
+session's stored permission mode; the selected Mode applies only to this turn.
+See [Plan mode](docs/plan-mode.md#acceptance-and-recovery) for handoff and retry
+behavior. `/buddy` remains a separate way to share a brief without accepting a
+plan or creating step notes.
+
 Use `/btw [QUESTION]` for an independent, multi-turn aside with the current
 context. On Claude Code, finish the parent turn first: mevedel forks the native
 history rather than copying the visible transcript. The adapter must advertise
