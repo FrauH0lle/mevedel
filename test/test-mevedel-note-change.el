@@ -1291,6 +1291,32 @@
           (mevedel-note-menu suggestion)))
       (should (equal "before\nold\nafter\n" (mevedel-test--read-file file))))))
 
+(mevedel-deftest mevedel-note-menu/own-session
+  (:quiet t :doc "an applied note conversation retains menu revert after unloading and store reload")
+  (mevedel-note-change-test--with-note
+    (let ((uuid (overlay-get note 'mevedel-uuid))
+          (id (mevedel-session-session-id session)))
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+      (mevedel-note-apply-change note)
+      (mevedel-session-persistence-lock-release (mevedel-session-save-path session) session)
+      (kill-buffer data-buf)
+      (should-not (mevedel-session-control-transfer-root-buffer-for-id id))
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (setq note (mevedel-notes--resolve uuid workspace))
+      (with-current-buffer source
+        (cl-letf (((symbol-function 'read-key)
+                   (lambda (&rest _)
+                     (let ((text (replace-regexp-in-string
+                                  "[][]" "" (overlay-get
+                                             (overlay-get note 'mevedel-label-overlay)
+                                             'after-string))))
+                       (should (string-search "revert" (downcase text))))
+                     ?r)))
+          (mevedel-note-menu note)))
+      (should (equal "before\nold\nafter\n" (mevedel-test--read-file file))))))
+
 (mevedel-deftest mevedel-note-rewind-untracked-effects
   (:quiet t)
   ,test
