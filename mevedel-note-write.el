@@ -69,9 +69,13 @@
         (save-restriction
           (widen)
           (goto-char (point-min))
-          (unless (zerop (forward-line (1- start))) (error "Note line is beyond source"))
+          (when (or (not (zerop (forward-line (1- start))))
+                    (and (eobp) (bolp) (> (point) (point-min))))
+            (error "Note line is beyond source"))
           (let ((beg (point)))
-            (unless (zerop (forward-line (- end start))) (error "Note line is beyond source"))
+            (when (or (not (zerop (forward-line (- end start))))
+                      (and (eobp) (bolp) (> (point) (point-min))))
+              (error "Note line is beyond source"))
             (let ((transient-mark-mode t) (mark-active t))
               (set-mark beg)
               (goto-char (line-end-position))
@@ -145,11 +149,8 @@
                   (setq changed t)
                   (pcase action
                     ((or "create" "edit")
-                     (when (plist-member operation :text)
+                     (when (and (equal action "edit") (plist-member operation :text))
                        (mevedel-note-edit (plist-get operation :text) note))
-                     (when (plist-member operation :tags)
-                       (mevedel-note-set-tags
-                        (mapcar #'intern (append (plist-get operation :tags) nil)) note))
                      (when prepared
                        (setq prepared
                              (plist-put prepared :note-extents
@@ -157,7 +158,11 @@
                                                          note prepared)))))
                        (overlay-put note 'mevedel-note-prepared-change prepared)
                        (overlay-put note 'mevedel-note-attention-state 'ready))
-                     (mevedel-notes--render note))
+                     (if (plist-member operation :tags)
+                         (mevedel-note-set-tags
+                          (mapcar #'intern (append (plist-get operation :tags) nil)) note)
+                       (when (equal action "create")
+                         (mevedel-notes--render note))))
                     ((or "close" "done") (mevedel-note-done note))
                     ("delete" (mevedel-note-delete note))
                     ("send" (push note to-send))

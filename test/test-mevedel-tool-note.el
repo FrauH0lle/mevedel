@@ -233,6 +233,83 @@
         (mevedel--clear-instruction-state workspace)
         (should (string-search "Kept finding" (mevedel-tool-note-test--read data-buf address)))))))
 
+(mevedel-deftest mevedel-tool-note-write/guards (:quiet t)
+  ,test
+  (test)
+  :doc "create refuses workspace escapes and absolute external paths without changes"
+  (mevedel-tool-note-test--workspace
+    (let ((outside (make-temp-file "note-outside-" nil ".txt" "outside\n")))
+      (unwind-protect
+          (dolist (path (list (file-relative-name outside root) outside "/etc/hosts"))
+            (let ((before (mevedel-test--read-file (expand-file-name path root)))
+                  (outcome (mevedel-tool-note-test--write
+                            data-buf (vector (list :action "create" :file_path path
+                                                   :start_line 1 :text "Forbidden")))))
+              (should (eq 'error (plist-get outcome :status)))
+              (should (equal before (mevedel-test--read-file (expand-file-name path root))))
+              (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))))
+        (delete-file outside))))
+  :doc "prepared changes refuse protected source paths without writing them"
+  (mevedel-tool-note-test--workspace
+    (let* ((mevedel-protected-paths (list (cons file 'read-only)))
+           (outcome (mevedel-tool-note-test--write
+                     data-buf (vector (list :action "create" :file_path file :start_line 2
+                                            :prepared_change
+                                            "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")))))
+      (should (eq 'error (plist-get outcome :status)))
+      (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))))
+  :doc "prepared resource writes and moves refuse without changing source"
+  (mevedel-tool-note-test--workspace
+    (dolist (patch '("*** Begin Patch\n*** Add File: work://shared/refused.md\n+forbidden\n*** End Patch"
+                     "*** Begin Patch\n*** Update File: source.txt\n*** Move to: work://shared/refused.md\n@@\n-old\n+new\n*** End Patch"))
+      (let ((outcome (mevedel-tool-note-test--write
+                      data-buf (vector (list :action "create" :file_path file
+                                             :start_line 2 :prepared_change patch)))))
+        (should (eq 'error (plist-get outcome :status)))
+        (should (string-search "not resources" (plist-get outcome :result)))
+        (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))))))
+
+(mevedel-deftest mevedel-tool-note-write/line-bounds (:quiet t)
+  ,test
+  (test)
+  :doc "a trailing newline does not create an addressable fourth source line"
+  (mevedel-tool-note-test--workspace
+    (dolist (range '((4 4) (3 4)))
+      (let ((outcome (mevedel-tool-note-test--write
+                      data-buf (vector (list :action "create" :file_path file
+                                             :start_line (car range) :end_line (cadr range))))))
+        (should (eq 'error (plist-get outcome :status)))
+        (should (string-search "beyond source" (plist-get outcome :result)))
+        (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))))))
+
+(mevedel-deftest mevedel-tool-note-write/create-cost (:quiet t)
+  ,test
+  (test)
+  :doc "creating text notes renders twice each without redundant edits, including tags"
+  (mevedel-tool-note-test--workspace
+    (let* ((renders 0) (edits 0)
+           (count-render (lambda (&rest _) (cl-incf renders)))
+           (count-edit (lambda (&rest _) (cl-incf edits))))
+      (advice-add 'mevedel-notes--render :before count-render)
+      (advice-add 'mevedel-note-edit :before count-edit)
+      (unwind-protect
+          (let ((outcome (mevedel-tool-note-test--write
+                          data-buf (vector (list :action "create" :file_path file
+                                                 :start_line 1 :text "Plain")
+                                           (list :action "create" :file_path file
+                                                 :start_line 2 :text "Tagged" :tags ["review"])))))
+            (should (eq 'success (plist-get outcome :status)))
+            (should (= 0 edits))
+            (should (= 4 renders)))
+        (advice-remove 'mevedel-notes--render count-render)
+        (advice-remove 'mevedel-note-edit count-edit)))
+    (with-current-buffer (find-buffer-visiting file)
+      (dolist (label (cl-remove-if-not #'stringp
+                                     (mapcar (lambda (overlay) (overlay-get overlay 'after-string))
+                                             (overlays-in (point-min) (point-max)))))
+        (should (string-match-p "AI" label))
+        (should-not (string-match-p "you" label))))))
+
 (mevedel-deftest mevedel-note-dismiss-agent-notes (:quiet t)
   ,test
   (test)
