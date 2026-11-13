@@ -389,8 +389,12 @@ With prefix argument REVIEW, open the existing detailed ApplyPatch review.
 Confirming a partial selection drops the rest of this waiting change."
   (interactive (list nil current-prefix-arg))
   (setq note (mevedel-note-change--note note))
-  (let ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note))))
+  (let ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note)))
+        (uuid (overlay-get note 'mevedel-uuid)))
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
+      (mevedel-instruction-store-observe workspace)
+      (setq note (or (mevedel-notes--resolve uuid workspace)
+                     (user-error "Note no longer available: %s" uuid)))
       (let ((record (mevedel-note-change--record note))
             (changes (mevedel-note-change--plan note)))
         (if review
@@ -492,7 +496,9 @@ note only after success; do not change the conversation or its history."
                                  (if (and (overlayp note) (overlay-buffer note))
                                      (overlay-buffer note) (current-buffer)))))
   (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
-    (let* ((target (mevedel-note-change--revert-target note workspace))
+    (let* ((uuid (plist-get (mevedel-note-change--revert-target note workspace) :uuid))
+           (_observed (mevedel-instruction-store-observe workspace))
+           (target (mevedel-note-change--revert-target uuid workspace))
            (props (plist-get target :properties))
            (own-id (plist-get props 'mevedel-note-session-id))
            (own-data (and own-id

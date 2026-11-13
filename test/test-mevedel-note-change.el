@@ -381,6 +381,60 @@
       (should-error (call-interactively (key-binding "a")) :type 'user-error))
     (should (equal "external before\nold\nafter\n" (mevedel-test--read-file file)))))
 
+(mevedel-deftest mevedel-note-apply-change/store-sync
+  (:quiet t :doc "a stale client cannot reapply another client's reverted change")
+  (dolist (resume '(t nil))
+    (mevedel-note-change-test--with-note
+      (let ((uuid (overlay-get note 'mevedel-uuid))
+            (store (mevedel-instruction-store-path workspace))
+            waiting applied)
+        (mevedel-note-change-test--propose
+         data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+        (setq waiting (mevedel-session-artifacts-read-file-raw store))
+        (mevedel-note-apply-change note)
+        (mevedel-note-revert-change note 0)
+        (setq applied (mevedel-session-artifacts-read-file-raw store))
+        ;; Replay A's last observation, then B's newer store bytes.
+        (let ((coding-system-for-write 'no-conversion))
+          (write-region waiting nil store nil 'silent)
+          (mevedel--clear-instruction-state workspace)
+          (mevedel-instruction-store-observe workspace)
+          (write-region applied nil store nil 'silent))
+        (setq note (mevedel-notes--resolve uuid workspace))
+        (when resume
+          (mevedel-session-persistence-lock-release (mevedel-session-save-path session) session)
+          (kill-buffer data-buf))
+        (should-error (mevedel-note-apply-change note) :type 'user-error)
+        (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))
+        (setq note (mevedel-notes--resolve uuid workspace))
+        (should (overlay-get note 'mevedel-note-applied-changes))
+        (should-not (overlay-get note 'mevedel-note-prepared-change))))))
+
+(mevedel-deftest mevedel-note-revert-change/store-sync
+  (:quiet t :doc "revert observes another client's done note and reopens that UUID")
+  (mevedel-note-change-test--with-note
+    (let ((uuid (overlay-get note 'mevedel-uuid))
+          (store (mevedel-instruction-store-path workspace))
+          applied closed)
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+      (mevedel-note-apply-change note)
+      (setq applied (mevedel-session-artifacts-read-file-raw store))
+      (mevedel-note-done note)
+      (mevedel-instruction-store-flush t)
+      (setq closed (mevedel-session-artifacts-read-file-raw store))
+      (let ((coding-system-for-write 'no-conversion))
+        (write-region applied nil store nil 'silent)
+        (mevedel--clear-instruction-state workspace)
+        (mevedel-instruction-store-observe workspace)
+        (write-region closed nil store nil 'silent))
+      (setq note (mevedel-notes--resolve uuid workspace))
+      (mevedel-note-revert-change note 0)
+      (mevedel-instruction-store-observe workspace)
+      (should-not (mevedel-notes-closed workspace))
+      (should (mevedel-notes--resolve uuid workspace))
+      (should (equal "before\nold\nafter\n" (mevedel-test--read-file file))))))
+
 (mevedel-deftest mevedel-note-merge-change
   (:quiet t)
   ,test
