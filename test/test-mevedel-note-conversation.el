@@ -68,6 +68,7 @@
           (gptel-stream nil)
           (before (buffer-list))
           (timers (append timer-list timer-idle-list nil))
+          (events (copy-sequence unread-command-events))
           source workspace sent)
      (unwind-protect
          (save-window-excursion
@@ -97,7 +98,22 @@
        (remove-hook 'post-command-hook #'mevedel-instruction-store-flush)
        (mevedel-uninstall)
        (when transport-enabled (mevedel-transport-install))
-       (delete-directory root t))))
+       (delete-directory root t)
+       ;; No command loop runs to consume our frame-focus events.
+       (setq unread-command-events
+             (cl-remove-if (lambda (event)
+                             (and (eq (car-safe event) 'switch-frame)
+                                  (not (memq event events))))
+                           unread-command-events)))))
+
+(mevedel-deftest mevedel-note-conversation-test--with-source
+  (:quiet t :doc "cleanup discards only new frame-switch events, preserving other input")
+  (let* ((existing (list 'switch-frame (selected-frame)))
+         (unread-command-events (list existing ?x)))
+    (mevedel-note-conversation-test--with-source
+      (push ?y unread-command-events)
+      (push (list 'switch-frame (selected-frame)) unread-command-events))
+    (should (equal (list ?y existing ?x) unread-command-events))))
 
 (defun mevedel-note-conversation-test--answer (fsm text)
   "Deliver canned TEXT through FSM's normal insertion and settlement."
