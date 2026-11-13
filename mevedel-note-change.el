@@ -274,59 +274,18 @@ When SELECTED is non-nil, prepare only those reviewed changes."
                    (user-error "Note conversation is unavailable: %s" id)))
          (session (buffer-local-value 'mevedel--session data))
          (turn (plist-get record :turn))
-         (previous (cdr (assq turn (mevedel-session-file-snapshots session))))
-         (pre (make-hash-table :test #'equal))
-         (foreign (not (equal id (overlay-get note 'mevedel-note-session-id))))
-         files)
+         (foreign (not (equal id (overlay-get note 'mevedel-note-session-id)))))
     (mevedel-session-artifacts-assert-new-mutation-authority session)
     (dolist (change changes)
-      (let* ((path (plist-get change :path))
-             (old (cdr (assoc path previous)))
-             (bytes (plist-get (or (plist-get change :history-before)
-                                   (plist-get change :before)) :bytes))
-             (name (plist-get old :pre-backup-name)))
-        (puthash path (cond ((plist-get old :gap) (list :gap (plist-get old :gap)))
-                            ((and old
-                                  (not (equal (and bytes (secure-hash 'sha256 bytes))
-                                              (plist-get old :backup-name))))
-                             (list :gap (format "edited after turn %d" turn)))
-                            (old (and name (mevedel-session-rewind-read-backup session name)))
-                            (t bytes)) pre))
       (when-let* ((buffer (find-buffer-visiting (plist-get change :path))))
         (with-current-buffer buffer (undo-boundary))))
     (mevedel-tool-patch-commit changes)
     (dolist (change changes)
       (when-let* ((buffer (find-buffer-visiting (plist-get change :path))))
         (with-current-buffer buffer (undo-boundary))))
-    (let ((mevedel-session-artifacts--collecting-critical-artifacts-p
-           (mevedel-session-codec-portable-authority-p session))
-          (mevedel-session-artifacts--critical-artifacts nil))
-      (mevedel-session-artifacts-snapshot-modified session turn pre)
-      (when foreign
-        (dolist (change changes)
-          (when-let* ((entry (mevedel-session-artifacts--file-history-maybe-snapshot
-                             session (plist-get change :path)
-                             (plist-get (or (plist-get change :history-before)
-                                            (plist-get change :before)) :bytes))))
-            (cl-remf (cdr entry) :version)
-            (cl-remf (cdr entry) :backup-time)
-            (push entry files))))
-      (when mevedel-session-artifacts--critical-artifacts
-        (mevedel-session-publication-publish
-         session (nreverse mevedel-session-artifacts--critical-artifacts) t)))
-    (let ((cell (assq turn (mevedel-session-file-snapshots session))))
-      (setcdr cell (sort (append (cdr cell)
-                                (cl-remove-if (lambda (entry)
-                                                (not (eq 'absent (gethash (car entry) pre 'absent))))
-                                              previous))
-                        (lambda (a b) (string< (car a) (car b))))))
-    (mevedel-note-change--finish note record files)
-    (with-current-buffer data
-      (when (and mevedel--current-request (= turn (mevedel-request-turn mevedel--current-request)))
-        (maphash (lambda (path bytes)
-                   (puthash path bytes (mevedel-request-file-snapshots mevedel--current-request))) pre))
-      (let ((mevedel--current-request nil))
-        (mevedel-session-artifacts-save session data nil t)))))
+    (mevedel-session-artifacts-record-applied
+     session turn changes :application-backups foreign
+     :then (lambda (files) (mevedel-note-change--finish note record files)))))
 
 (defun mevedel-note-change--finish (note record files)
   "Retain applied RECORD ownership and FILES on NOTE and its batch siblings."

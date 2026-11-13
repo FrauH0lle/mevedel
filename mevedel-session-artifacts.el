@@ -211,6 +211,8 @@
 (autoload 'mevedel-session-publication-read "mevedel-session-publication")
 (autoload 'mevedel-session-publication-uncommitted-artifact
   "mevedel-session-publication")
+(declare-function mevedel-session-rewind-read-backup "mevedel-session-rewind" (session backup-name))
+(autoload 'mevedel-session-rewind-read-backup "mevedel-session-rewind")
 
 ;; `mevedel-session-recovery'
 (declare-function mevedel-session-recovery-refresh "mevedel-session-recovery" (session &optional root-observation))
@@ -3279,6 +3281,73 @@ names written."
                 (cons (cons turn-n entries)
                       (mevedel-session-file-snapshots session)))))
       (sort written #'string<))))
+
+(cl-defun mevedel-session-artifacts-record-applied
+    (session turn changes &key application-backups then)
+  "Record the applied prepared CHANGES under SESSION's TURN, then save.
+Each change is a plist with :path, :before and optionally :history-before, as
+`mevedel-tool-patch-commit' takes.  The source is already written.  TURN's
+previous capture supplies each path's turn pre-content: an existing gap is
+kept, later edits give an `edited after turn N' gap, and a path never captured
+uses the change's before bytes.  Entries for untouched paths stay.
+
+With APPLICATION-BACKUPS also write backups of the change's own before bytes
+and pass their entries (without :version and :backup-time) to THEN.  THEN is
+called once, synchronously, after publication and before the save.  A failure
+leaves THEN uncalled and the session unsaved; the source stays changed."
+  (let ((previous (cdr (assq turn (mevedel-session-file-snapshots session))))
+        (pre (make-hash-table :test #'equal))
+        files)
+    (dolist (change changes)
+      (let* ((path (plist-get change :path))
+             (old (cdr (assoc path previous)))
+             (bytes (plist-get (or (plist-get change :history-before)
+                                   (plist-get change :before))
+                               :bytes))
+             (name (plist-get old :pre-backup-name)))
+        (puthash path (cond ((plist-get old :gap) (list :gap (plist-get old :gap)))
+                            ((and old
+                                  (not (equal (and bytes (secure-hash 'sha256 bytes))
+                                              (plist-get old :backup-name))))
+                             (list :gap (format "edited after turn %d" turn)))
+                            (old (and name (mevedel-session-rewind-read-backup session name)))
+                            (t bytes))
+                 pre)))
+    (let ((mevedel-session-artifacts--collecting-critical-artifacts-p
+           (mevedel-session-codec-portable-authority-p session))
+          (mevedel-session-artifacts--critical-artifacts nil))
+      (mevedel-session-artifacts-snapshot-modified session turn pre)
+      (when application-backups
+        (dolist (change changes)
+          (when-let* ((entry (mevedel-session-artifacts--file-history-maybe-snapshot
+                              session (plist-get change :path)
+                              (plist-get (or (plist-get change :history-before)
+                                             (plist-get change :before))
+                                         :bytes))))
+            (cl-remf (cdr entry) :version)
+            (cl-remf (cdr entry) :backup-time)
+            (push entry files))))
+      (when mevedel-session-artifacts--critical-artifacts
+        (mevedel-session-publication-publish
+         session (nreverse mevedel-session-artifacts--critical-artifacts) t)))
+    (let ((cell (assq turn (mevedel-session-file-snapshots session))))
+      (setcdr cell (sort (append (cdr cell)
+                                 (cl-remove-if
+                                  (lambda (entry)
+                                    (not (eq 'absent (gethash (car entry) pre 'absent))))
+                                  previous))
+                         (lambda (a b) (string< (car a) (car b))))))
+    (when then (funcall then files))
+    (with-current-buffer (mevedel-session-root-buffer session)
+      (when (and mevedel--current-request
+                 (= turn (mevedel-request-turn mevedel--current-request)))
+        (maphash (lambda (path bytes)
+                   (puthash path bytes (mevedel-request-file-snapshots
+                                        mevedel--current-request)))
+                 pre))
+      ;; The live turn would otherwise re-snapshot over the merged cell.
+      (let ((mevedel--current-request nil))
+        (mevedel-session-artifacts-save session (current-buffer) nil t)))))
 
 ;;
 ;;; Segment rotation (split-on-compact)
