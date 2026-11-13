@@ -1,8 +1,37 @@
 # Render directive turns in the shared session view
 
-Status: accepted. Incorporates ADR 0088.
+Status: accepted. Incorporates ADR 0088; directive-specific behavior is replaced
+by [ADR 0132](0132-notes-replace-references-directives-and-buddy-notes.md).
 
 ## Current decision
+
+An isolated note conversation is an ordinary durable session, not a filtered
+scope in another session's transcript. Its own view renders prompts, answers,
+tools, permissions, agents and interactions, with the ordinary composer and one
+turn identity per accepted request. The note frame displays that real view;
+there is no second renderer, execution-session rebinding or sticky directive
+composer scope. Notes retain only conversation links in the workspace store.
+
+Each conversation owns its provider history. Claude Code note sessions follow
+the ordinary resumable session path, not a fresh isolated native invocation for
+every note request. Follow-ups use that session's history and permissions.
+Old saved directive turns resume as ordinary turns, visible in chat and model
+context; no marker-based exclusion, directive fold or legacy inspector remains.
+
+The rejected-session objection below depended on whole-file snapshot restores.
+[ADR 0131](0131-rewind-reverts-recorded-changes.md)'s checked reversal preserves
+disjoint later edits and refuses conflicts, allowing independent note sessions
+without silently overwriting each other's work. ADR 0132 owns their lifecycle;
+the [view manual](../view.md) owns presentation and actions.
+
+## Decision history
+
+### Original shared-session directive decision
+
+The following describes the retired design. Sharing one renderer removed
+duplicated streaming and interaction ownership, but directive-local context,
+binding and follow-up assembly remained special mechanisms. Ordinary note
+sessions now provide that isolation structurally, enabled by checked Rewind.
 
 Directive requests remain conversationally isolated while rendering their full
 prompt, answer, tools, permissions, agents, and interactions as ordinary turns
@@ -41,7 +70,7 @@ State-dependent revision remains the decision of
 [ADR 0089](0089-make-revision-state-dependent-implementation.md).
 The [view manual](../view.md) owns the user actions and presentation details.
 
-## Rationale and consequences
+### Historical rationale and consequences
 
 A single render and interaction owner keeps directive turns in the session's
 chronological undo chain without making them ordinary-chat context. Exact attempt
@@ -54,13 +83,16 @@ later changes from another. Reusing whichever workspace session was most recentl
 active would silently split a directive's execution history, hence explicit
 binding and warned rebinding.
 
-## Decision history
+### Earlier decisions, including ADR 0088
 
 **ADR 0088 placed full responses and follow-up discussion in a workspace-owned
 activity surface with a local composer.** The execution session kept only a
 compact event linking to that surface. It established conversational isolation,
 first-request session binding, warned rebinding, and complete local-discussion
-feedback for implementation; those boundaries remain.
+feedback for implementation. [ADR 0132](0132-notes-replace-references-directives-and-buddy-notes.md)
+replaces this directive workflow with isolated note conversations. The later
+removal of old-data compatibility also removes its historical rendering and
+context-exclusion path.
 
 **ADR 0091 replaced the separate activity renderer and compact-event proxy with
 complete turns in the bound session view.** Streaming into the session and then

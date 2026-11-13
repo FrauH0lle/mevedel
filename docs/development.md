@@ -664,9 +664,9 @@ from that snapshot's bytecode; the report records source/dependency hashes,
 loaded hot paths, baseline commit and working-tree status. No checkout bytecode
 or Git worktree is created. Temporary state is removed on completion.
 
-The fixed fixture has 2,000 lines and N three-line references spaced ten lines
+The fixed fixture has 2,000 lines and N three-line notes spaced ten lines
 apart, for N=1, 50 and 200. Each sample inserts 2,000 single characters strictly
-inside the first reference, with an undo boundary after each insertion. Five
+inside the first note, with an undo boundary after each insertion. Five
 fresh-fixture warmups precede five fresh-fixture measured samples per N/build.
 Setup, garbage collection, and exact text/overlay assertions are untimed. Output
 includes median microseconds per key, all samples' function-undo-entry counts,
@@ -937,7 +937,7 @@ must not need a load-order recipe.
   through caller entry points in a fresh isolated Emacs, including code
   byte-compiled in one process as package managers do; preloaded fixtures can
   hide missing dependencies. `test/test-mevedel-loading.el` runs installation,
-  first composer send, session resume, directive commands and M-x
+  first composer send, session resume, note commands and M-x
   reachability this way. Check that optional
   features remain unloaded or inactive until needed. Measure package load,
   installation, first use, and steady-state work separately before claiming

@@ -1,4 +1,4 @@
-;;; test-mevedel-directive-source-replacement.el --- Command replacement tests -*- lexical-binding: t; -*-
+;;; test-mevedel-note-source-replacement.el --- Command replacement tests -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 
@@ -8,11 +8,10 @@
 
 (require 'delsel)
 (require 'rect)
-(require 'mevedel-directive-source)
-(require 'mevedel-directive)
-(require 'mevedel-directive-request)
+(require 'mevedel-note-source)
 (require 'mevedel-instruction-undo)
 (require 'mevedel-overlays)
+(require 'mevedel-notes)
 (require 'mevedel-persistence)
 (require 'helpers
          (file-name-concat
@@ -43,11 +42,11 @@
    :quiet t)
   ,test
   (test)
-  :doc "delete-selection typing recovers character and line references through the command loop"
+  :doc "delete-selection typing recovers character and line notes through the command loop"
   (dolist (span '(char line))
     (with-temp-buffer
       (insert "before\nselected\nafter\n")
-      (let ((overlay (mevedel--create-reference-in (current-buffer) 8 17 span))
+      (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 8 17 span))
             (transient-mark-mode t)
             (pre-command-hook pre-command-hook)
             (delete-selection-mode delete-selection-mode))
@@ -76,11 +75,11 @@
         (should (equal "before\nXafter\n" (buffer-string)))
         (should (= (if (eq span 'line) 14 9) (overlay-end overlay)))
         (mevedel--delete-instruction overlay))))
-  :doc "delete-selection replacement of the first line retains the multiline reference and undo geometry"
+  :doc "delete-selection replacement of the first line retains the multiline note and undo geometry"
   (dolist (finish '(8 9))
     (with-temp-buffer
       (insert "one\ntwo\nthree\nfour\n")
-      (let* ((overlay (mevedel--create-reference-in (current-buffer) 5 15 'line))
+      (let* ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 5 15 'line))
              (transient-mark-mode t)
              (pre-command-hook pre-command-hook)
              (delete-selection-mode delete-selection-mode)
@@ -108,10 +107,10 @@
         (should (equal "TWO\nthree\n" (buffer-substring-no-properties
                                         (overlay-start overlay) (overlay-end overlay))))
         (mevedel--delete-instruction overlay))))
-  :doc "a deletion command ends before a later insertion can reclaim its reference"
+  :doc "a deletion command leaves an empty note rather than reclaiming later text"
   (with-temp-buffer
     (insert "before\nselected\nafter\n")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 8 17))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 8 17))
           (transient-mark-mode t)
           (pre-command-hook pre-command-hook)
           (delete-selection-mode delete-selection-mode))
@@ -120,17 +119,19 @@
       (set-mark 17)
       (setq mark-active t)
       (mevedel-replacement-test--keys (kbd "DEL"))
-      (should-not (overlay-buffer overlay))
+      (should (eq (current-buffer) (overlay-buffer overlay)))
+      (should (= (overlay-start overlay) (overlay-end overlay)))
       (should-not mevedel--instruction-replacements)
       (mevedel-replacement-test--keys "X")
-      (should-not (overlay-buffer overlay))))
+      (should (eq (current-buffer) (overlay-buffer overlay)))
+      (should (= (overlay-start overlay) (overlay-end overlay)))))
   :doc "commands finalize full deletions in other buffers too"
   (with-temp-buffer
     (let ((other (generate-new-buffer " *replacement other*")))
       (unwind-protect
           (let* ((overlay (with-current-buffer other
                             (insert "selected")
-                            (mevedel--create-reference-in other 1 9)))
+                            (mevedel-instruction-test--create-note-in other 1 9)))
                  (map (make-sparse-keymap)))
             (define-key map (kbd "<f11>")
                         (lambda ()
@@ -138,66 +139,28 @@
                           (with-current-buffer other (delete-region 1 9))))
             (use-local-map map)
             (mevedel-replacement-test--keys (kbd "<f11>"))
-            (should-not (overlay-buffer overlay))
+            (should (eq other (overlay-buffer overlay)))
+            (should (= (overlay-start overlay) (overlay-end overlay)))
             (should-not mevedel--instruction-replacement-buffers))
         (kill-buffer other))))
-  :doc "delete-selection directive replacement preserves the original record and its activity"
-  (let* ((fixture (mevedel-instruction-test--source-fixture))
-         (overlay (nth 4 fixture))
-         (record (nth 5 fixture)))
-    (unwind-protect
-        (with-current-buffer (nth 3 fixture)
-          (let ((transient-mark-mode t)
-                (pre-command-hook pre-command-hook)
-                (delete-selection-mode delete-selection-mode))
-            (delete-selection-mode 1)
-            (setf (mevedel-directive-attempts record)
-                  (list (mevedel-instruction-test--attempt)))
-            (buffer-enable-undo)
-            (setq buffer-undo-list nil)
-            (goto-char 8)
-            (set-mark 14)
-            (setq mark-active t)
-            (mevedel-replacement-test--keys "X")
-            (should (= 8 (overlay-start overlay)))
-            (should (= 9 (overlay-end overlay)))
-            (should (eq record (mevedel--directive-record overlay)))
-            (should (eq 'attached (plist-get (mevedel-directive-anchor record) :state)))
-            (undo-boundary)
-            (undo-only 2)
-            (should (= 14 (overlay-end overlay)))
-            (undo-boundary)
-            (undo-redo 1)
-            (should (equal "before X after\n" (buffer-string)))
-            (should (= 9 (overlay-end overlay)))
-            (should (= 1 (length (mevedel-directive-attempts record))))))
-      (mevedel-instruction-test--discard-source fixture)))
-  :doc "one command can detach two active directives without intermediate congruence cleanup"
-  (let* ((fixture (mevedel-instruction-test--source-fixture))
-         (first (nth 4 fixture))
-         (first-record (nth 5 fixture)))
-    (unwind-protect
-        (with-current-buffer (nth 3 fixture)
-          (let* ((second (mevedel--create-directive-in
-                          (current-buffer) 16 19 nil "Second"))
-                 (second-record (mevedel--directive-record second))
-                 (map (make-sparse-keymap)))
-            (dolist (record (list first-record second-record))
-              (setf (mevedel-directive-attempts record)
-                    (list (mevedel-instruction-test--attempt))))
-            (define-key map (kbd "<f11>")
-                        (lambda () (interactive) (delete-region 8 19)))
-            (use-local-map map)
-            (mevedel-replacement-test--keys (kbd "<f11>"))
-            (dolist (record (list first-record second-record))
-              (should (eq 'detached (plist-get (mevedel-directive-anchor record) :state)))
-              (should (= 1 (length (mevedel-directive-attempts record)))))
-            (should (= 2 (length (mevedel-workspace-directives (nth 1 fixture)))))))
-      (mevedel-instruction-test--discard-source fixture)))
+  :doc "one command can empty two notes without intermediate congruence cleanup"
+  (with-temp-buffer
+    (insert "before target after\n")
+    (let ((first (mevedel-instruction-test--create-note-in (current-buffer) 8 14 'char))
+          (second (mevedel-instruction-test--create-note-in (current-buffer) 16 19 'char))
+          (map (make-sparse-keymap)))
+      (define-key map (kbd "<f11>")
+                  (lambda () (interactive) (delete-region 8 19)))
+      (use-local-map map)
+      (mevedel-replacement-test--keys (kbd "<f11>"))
+      (dolist (overlay (list first second))
+        (should (eq (current-buffer) (overlay-buffer overlay)))
+        (should (= 8 (overlay-start overlay) (overlay-end overlay))))
+      (should-not mevedel--instruction-replacements)))
   :doc "aborted interactive commands do not leave an unheld replacement scope open"
   (with-temp-buffer
     (insert "selected")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 1 9))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 1 9))
           (map (make-sparse-keymap))
           failure timeout timer reached)
       (define-key map (kbd "<f11>")
@@ -228,12 +191,13 @@
       (should-not timeout)
       (should reached)
       (should (equal failure '(error "Abort edit")))
-      (should-not (overlay-buffer overlay))
+      (should (eq (current-buffer) (overlay-buffer overlay)))
+      (should (= (overlay-start overlay) (overlay-end overlay)))
       (should-not mevedel--instruction-replacements)))
   :doc "minibuffer commands do not settle the outer command's pending replacement"
   (with-temp-buffer
     (insert "before selected after\n")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 8 16 'char))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 8 16 'char))
           (map (make-sparse-keymap))
           resumed-active resumed-pending)
       (define-key map (kbd "<f11>")
@@ -259,7 +223,7 @@
   :doc "string-rectangle prompting before mutation preserves outer replacement inference"
   (with-temp-buffer
     (insert "before selected after\n")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 8 16 'char))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 8 16 'char))
           (map (make-sparse-keymap))
           (rectangle-preview nil))
       (define-key map (kbd "<f11>") #'string-rectangle)
@@ -289,8 +253,8 @@
   (with-temp-buffer
     (insert "before selected after\nother\n")
     (let* ((source (current-buffer))
-           (outer (mevedel--create-reference-in source 8 16 'char))
-           (inner (mevedel--create-reference-in source 23 28 'char))
+           (outer (mevedel-instruction-test--create-note-in source 8 16 'char))
+           (inner (mevedel-instruction-test--create-note-in source 23 28 'char))
            (map (make-sparse-keymap))
            resumed-inner resumed-outer)
       (define-key map (kbd "<f11>")
@@ -316,7 +280,8 @@
                       (insert text))))
       (use-local-map map)
       (mevedel-replacement-test--keys (kbd "<f11> <f10> N E W RET"))
-      (should-not resumed-inner)
+      (should (eq source resumed-inner))
+      (should (= (overlay-start inner) (overlay-end inner)))
       (should resumed-outer)
       (should (equal "before NEW after\n\n" (buffer-string)))
       (should (= 8 (overlay-start outer)))
@@ -333,10 +298,10 @@
    :quiet t)
   ,test
   (test)
-  :doc "held deletion survives commands and same-point insertion recovers the original reference"
+  :doc "held deletion survives commands and same-point insertion recovers the original note"
   (with-temp-buffer
     (insert "before\nselected\nafter\n")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 8 17)))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 8 17)))
       (mevedel-instruction-replacement-hold)
       (mevedel-instruction-replacement-hold)
       (delete-region 8 17)
@@ -350,12 +315,12 @@
       (should (= 8 (overlay-start overlay)))
       (should (= 20 (overlay-end overlay)))
       (should-not mevedel--instruction-replacements)
-      (should (overlay-get overlay 'evaporate))
+      (should-not (overlay-get overlay 'evaporate))
       (mevedel-instruction-replacement-end)))
   :doc "held character replacements grow through the entire multi-command insertion session"
   (with-temp-buffer
     (insert "before selected after\n")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 8 16 'char)))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 8 16 'char)))
       (mevedel-instruction-replacement-hold)
       (delete-region 8 16)
       (goto-char 8)
@@ -368,7 +333,7 @@
   :doc "held character replacements include typing before an inserted placeholder newline"
   (with-temp-buffer
     (insert "before selected after\n")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 8 16 'char)))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 8 16 'char)))
       (mevedel-instruction-replacement-hold)
       (delete-region 8 16)
       (goto-char 8)
@@ -383,7 +348,7 @@
   :doc "opening an adjacent line before the selected trailing newline excludes the opened line"
   (with-temp-buffer
     (insert "before\nx\nafter\n")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 8 10 'line)))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 8 10 'line)))
       (buffer-enable-undo)
       (setq buffer-undo-list nil)
       (goto-char 9)
@@ -401,15 +366,17 @@
       (undo-redo 1)
       (should (equal "before\nx\nNEW\nafter\n" (buffer-string)))
       (should (= 10 (overlay-end overlay)))))
-  :doc "direct noninteractive primitives retain immediate full-deletion semantics"
+  :doc "direct noninteractive full deletion retains an empty note"
   (with-temp-buffer
     (insert "before\nselected\nafter\n")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 8 17)))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 8 17)))
       (delete-region 8 17)
-      (should-not (overlay-buffer overlay))
+      (should (eq (current-buffer) (overlay-buffer overlay)))
+      (should (= (overlay-start overlay) (overlay-end overlay)))
       (goto-char 8)
       (insert "replacement\n")
-      (should-not (overlay-buffer overlay))
+      (should (eq (current-buffer) (overlay-buffer overlay)))
+      (should (= (overlay-start overlay) (overlay-end overlay)))
       (should-not mevedel--instruction-replacements))))
 
 (mevedel-deftest mevedel-instruction-replacement-end
@@ -421,41 +388,44 @@
    :quiet t)
   ,test
   (test)
-  :doc "unreplaced held references finalize and replay undo/redo without reviving the scope"
+  :doc "unreplaced held notes finalize and replay undo/redo without reviving the scope"
   (with-temp-buffer
     (insert "before\nselected\nafter\n")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 8 17)))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 8 17)))
       (buffer-enable-undo)
       (setq buffer-undo-list nil)
       (mevedel-instruction-replacement-hold)
       (delete-region 8 17)
       (mevedel-instruction-replacement-end)
-      (should-not (overlay-buffer overlay))
+      (should (eq (current-buffer) (overlay-buffer overlay)))
+      (should (= (overlay-start overlay) (overlay-end overlay)))
       (undo-boundary)
       (undo-only 1)
       (should (= 8 (overlay-start overlay)))
       (should (= 17 (overlay-end overlay)))
       (undo-boundary)
       (undo-redo 1)
-      (should-not (overlay-buffer overlay))
+      (should (eq (current-buffer) (overlay-buffer overlay)))
+      (should (= (overlay-start overlay) (overlay-end overlay)))
       (should-not mevedel--instruction-replacements)
       (undo-boundary)
       (undo-only 1)
       (should (= 17 (overlay-end overlay)))))
-  :doc "insertion elsewhere cannot recover a collapsed reference"
+  :doc "insertion elsewhere leaves a collapsed note empty"
   (with-temp-buffer
     (insert "before\nselected\nafter\n")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 8 17)))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 8 17)))
       (mevedel-instruction-replacement-hold)
       (delete-region 8 17)
       (goto-char 2)
       (insert "elsewhere")
       (mevedel-instruction-replacement-end)
-      (should-not (overlay-buffer overlay))))
-  :doc "rejected deletions release suppressed evaporation when the scope ends"
+      (should (eq (current-buffer) (overlay-buffer overlay)))
+      (should (= (overlay-start overlay) (overlay-end overlay)))))
+  :doc "rejected deletions keep notes non-evaporating when the scope ends"
   (with-temp-buffer
     (insert "before\nselected\nafter\n")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 8 17))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 8 17))
           (reject (lambda (&rest _) (error "Reject edit"))))
       (mevedel-instruction-replacement-hold)
       (add-hook 'before-change-functions reject 90 t)
@@ -464,16 +434,17 @@
       (mevedel-instruction-replacement-end)
       (should (= 8 (overlay-start overlay)))
       (should (= 17 (overlay-end overlay)))
-      (should (overlay-get overlay 'evaporate))
+      (should-not (overlay-get overlay 'evaporate))
       (should-not (overlay-get overlay 'mevedel-replacement-pending))))
   :doc "major-mode teardown finalizes pending deletions before losing buffer-local scope state"
   (with-temp-buffer
     (insert "selected")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 1 9)))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 1 9)))
       (mevedel-instruction-replacement-hold)
       (delete-region 1 9)
       (text-mode)
-      (should-not (overlay-buffer overlay))
+      (should (eq (current-buffer) (overlay-buffer overlay)))
+      (should (= (overlay-start overlay) (overlay-end overlay)))
       (should-not mevedel--instruction-replacement-buffers))))
 
 (mevedel-deftest mevedel--instruction-replacement-settle-undo
@@ -488,7 +459,7 @@
   :doc "undo and redo inside an open scope retain pending geometry until replacement"
   (with-temp-buffer
     (insert "before\nselected\nafter\n")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 8 17)))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 8 17)))
       (buffer-enable-undo)
       (setq buffer-undo-list nil)
       (mevedel-instruction-replacement-hold)
@@ -507,7 +478,7 @@
   :doc "undoing only replacement insertion after scope end finalizes the prior pending deletion"
   (with-temp-buffer
     (insert "before\nselected\nafter\n")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 8 17)))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 8 17)))
       (buffer-enable-undo)
       (setq buffer-undo-list nil)
       (mevedel-instruction-replacement-hold)
@@ -518,7 +489,8 @@
       (mevedel-instruction-replacement-end)
       (undo-boundary)
       (undo-only 1)
-      (should-not (overlay-buffer overlay))
+      (should (eq (current-buffer) (overlay-buffer overlay)))
+      (should (= (overlay-start overlay) (overlay-end overlay)))
       (should-not mevedel--instruction-replacements)
       (undo-boundary)
       (undo-redo 1)
@@ -527,7 +499,7 @@
   :doc "undo before scope end cannot reopen old pending deletion during a new hold"
   (with-temp-buffer
     (insert "before\nselected\nafter\n")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 8 17)))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 8 17)))
       (buffer-enable-undo)
       (setq buffer-undo-list nil)
       (mevedel-instruction-replacement-hold)
@@ -538,16 +510,18 @@
       (mevedel-instruction-replacement-hold)
       (undo-boundary)
       (undo-redo 1)
-      (should-not (overlay-buffer overlay))
+      (should (eq (current-buffer) (overlay-buffer overlay)))
+      (should (= (overlay-start overlay) (overlay-end overlay)))
       (goto-char 8)
       (insert "new\n")
       (mevedel-instruction-replacement-end)
-      (should-not (overlay-buffer overlay))))
+      (should (eq (current-buffer) (overlay-buffer overlay)))
+      (should (= (overlay-start overlay) (overlay-end overlay)))))
   :doc "undo and redo after recovery retain trailing growth for the rest of the held session"
   (dolist (redo '(nil t))
     (with-temp-buffer
       (insert "before selected after\n")
-      (let ((overlay (mevedel--create-reference-in (current-buffer) 8 16 'char)))
+      (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 8 16 'char)))
         (buffer-enable-undo)
         (setq buffer-undo-list nil)
         (mevedel-instruction-replacement-hold)
@@ -580,135 +554,47 @@
    :quiet t)
   ,test
   (test)
-  :doc "directive replacement and final deletion preserve newer activity through undo and redo"
-  (dolist (replace '(nil t))
-    (let* ((fixture (mevedel-instruction-test--source-fixture))
-           (buffer (nth 3 fixture))
-           (overlay (nth 4 fixture))
-           (record (nth 5 fixture)))
-      (unwind-protect
-          (with-current-buffer buffer
-            (buffer-enable-undo)
-            (setq buffer-undo-list nil)
-            (mevedel-instruction-replacement-hold)
-            (delete-region 8 14)
-            (should (= 8 (overlay-start overlay) (overlay-end overlay)))
-            (setf (mevedel-directive-attempts record)
-                  (list (mevedel-instruction-test--attempt)))
-            (when replace
-              (goto-char 8)
-              (insert "new"))
-            (mevedel-instruction-replacement-end)
-            (should (eq (if replace 'attached 'detached)
-                        (plist-get (mevedel-directive-anchor record) :state)))
-            (undo-boundary)
-            (undo-only 1)
-            (should (eq (current-buffer) (overlay-buffer overlay)))
-            (should (= 8 (overlay-start overlay)))
-            (should (= 14 (overlay-end overlay)))
-            (should (= 1 (length (mevedel-directive-attempts record))))
-            (undo-boundary)
-            (undo-redo 1)
-            (should (eq (if replace 'attached 'detached)
-                        (plist-get (mevedel-directive-anchor record) :state)))
-            (should (= 1 (length (mevedel-directive-attempts record)))))
-        (mevedel-instruction-test--discard-source fixture))))
-  :doc "whole-tree replacement retains durable details and undo restores nested geometry IDs and links"
-  (let* ((fixture (mevedel-instruction-test--source-fixture))
-         (buffer (nth 3 fixture))
-         (parent (nth 4 fixture))
-         (record (nth 5 fixture)))
-    (unwind-protect
-        (with-current-buffer buffer
-          (let* ((child (mevedel--create-directive-in buffer 9 12 nil "Detail"))
-                 (detail (mevedel--subdirective-record child))
-                 (reference (mevedel--create-reference-in buffer 10 11 'char))
-                 (partner (mevedel--create-reference-in buffer 16 19 'char))
-                 (child-id (overlay-get child 'mevedel-id))
-                 (reference-id (overlay-get reference 'mevedel-id))
-                 (partner-id (overlay-get partner 'mevedel-id)))
-            (mevedel-link-instructions (list child-id reference-id) (list partner-id))
-            (buffer-enable-undo)
-            (setq buffer-undo-list nil)
-            (mevedel-instruction-replacement-hold)
-            (delete-region 8 14)
-            (goto-char 8)
-            (insert "new")
-            (mevedel-instruction-replacement-end)
-            (should (= 8 (overlay-start parent)))
-            (should (= 11 (overlay-end parent)))
-            (should-not (overlay-buffer child))
-            (should-not (overlay-buffer reference))
-            (should (equal (list detail) (mevedel-directive-subdirectives record)))
-            (undo-boundary)
-            (undo-only 1)
-            (should (= 9 (overlay-start child)))
-            (should (= 12 (overlay-end child)))
-            (should (= 10 (overlay-start reference)))
-            (should (= 11 (overlay-end reference)))
-            (should (= child-id (overlay-get child 'mevedel-id)))
-            (should (= reference-id (overlay-get reference 'mevedel-id)))
-            (should (equal (list partner-id) (mevedel--instruction-outlinks child)))
-            (should (equal (list partner-id) (mevedel--instruction-outlinks reference)))
-            (should (equal (sort (list child-id reference-id) #'<)
-                           (sort (mevedel--instruction-inlinks partner) #'<)))
-            (undo-boundary)
-            (undo-redo 1)
-            (should-not (overlay-buffer child))
-            (should-not (overlay-buffer reference))
-            (should (equal (list detail) (mevedel-directive-subdirectives record)))))
-      (mevedel-instruction-test--discard-source fixture))))
-
-(mevedel-deftest mevedel--refresh-directive-anchor
-  (:vars ((mevedel--instruction-states (make-hash-table :test #'equal))
-          (mevedel--instruction-current-state-key :global)
-          (mevedel--instruction-command-active nil)
-          (mevedel--instruction-replacement-buffers nil)
-          (last-command nil))
-   :quiet t)
-  ,test
-  (test)
-  :doc "terminal settlement during a pending replacement retains identity and last attached evidence"
-  (dolist (implementation '(nil t))
-    (dolist (replace '(nil t))
-      (let* ((fixture (mevedel-instruction-test--source-fixture))
-             (workspace (nth 1 fixture))
-             (overlay (nth 4 fixture))
-             (record (nth 5 fixture))
-             (anchor (copy-tree (mevedel-directive-anchor record))))
-        (unwind-protect
-            (with-current-buffer (nth 3 fixture)
-              (buffer-enable-undo)
-              (setq buffer-undo-list nil)
-              (mevedel-instruction-replacement-hold)
-              (delete-region 8 14)
-              (setf (mevedel-directive-state record) 'implemented
-                    (mevedel-directive-attempts record)
-                    (list (mevedel-instruction-test--attempt)))
-              (mevedel--settle-directive-presentation
-               overlay record workspace implementation nil nil)
-              (should (eq (current-buffer) (overlay-buffer overlay)))
-              (should (overlay-get overlay 'mevedel-replacement-pending))
-              (should (equal anchor (mevedel-directive-anchor record)))
-              (when replace
-                (goto-char 8)
-                (insert "NEW"))
-              (mevedel-instruction-replacement-end)
-              (should (eq (if replace 'attached 'detached)
-                          (plist-get (mevedel-directive-anchor record) :state)))
-              (unless replace
-                (should (equal (plist-get anchor :evidence)
-                               (plist-get (mevedel-directive-anchor record) :evidence))))
-              (undo-boundary)
-              (undo-only 1)
-              (should (= 14 (overlay-end overlay)))
-              (should (= 1 (length (mevedel-directive-attempts record))))
-              (undo-boundary)
-              (undo-redo 1)
-              (should (eq (if replace 'attached 'detached)
-                          (plist-get (mevedel-directive-anchor record) :state)))
-              (should (= 1 (length (mevedel-directive-attempts record)))))
-          (mevedel-instruction-test--discard-source fixture))))))
+  :doc "whole-tree replacement keeps nested notes and undo restores their geometry IDs and links"
+  (with-temp-buffer
+    (insert "before target after\n")
+    (let* ((buffer (current-buffer))
+           (parent (mevedel-instruction-test--create-note-in buffer 8 14 'char))
+           (child (mevedel-instruction-test--create-note-in buffer 9 12 'char))
+           (note (mevedel-instruction-test--create-note-in buffer 10 11 'char))
+           (partner (mevedel-instruction-test--create-note-in buffer 16 19 'char))
+           (child-id (overlay-get child 'mevedel-id))
+           (note-id (overlay-get note 'mevedel-id))
+           (partner-id (overlay-get partner 'mevedel-id)))
+      (mevedel-link-instructions (list child-id note-id) (list partner-id))
+      (buffer-enable-undo)
+      (setq buffer-undo-list nil)
+      (mevedel-instruction-replacement-hold)
+      (delete-region 8 14)
+      (goto-char 8)
+      (insert "new")
+      (mevedel-instruction-replacement-end)
+      (should (= 8 (overlay-start parent)))
+      (should (= 11 (overlay-end parent)))
+      (dolist (nested (list child note))
+        (should (eq buffer (overlay-buffer nested)))
+        (should (= (overlay-start nested) (overlay-end nested))))
+      (undo-boundary)
+      (undo-only 1)
+      (should (= 9 (overlay-start child)))
+      (should (= 12 (overlay-end child)))
+      (should (= 10 (overlay-start note)))
+      (should (= 11 (overlay-end note)))
+      (should (= child-id (overlay-get child 'mevedel-id)))
+      (should (= note-id (overlay-get note 'mevedel-id)))
+      (should (equal (list partner-id) (mevedel--instruction-outlinks child)))
+      (should (equal (list partner-id) (mevedel--instruction-outlinks note)))
+      (should (equal (sort (list child-id note-id) #'<)
+                     (sort (mevedel--instruction-inlinks partner) #'<)))
+      (undo-boundary)
+      (undo-redo 1)
+      (dolist (nested (list child note))
+        (should (eq buffer (overlay-buffer nested)))
+        (should (= (overlay-start nested) (overlay-end nested)))))))
 
 (mevedel-deftest mevedel--instruction-adjust-edit
   (:vars ((mevedel--instruction-states (make-hash-table :test #'equal))
@@ -723,7 +609,7 @@
   (dolist (finish '(8 9))
     (with-temp-buffer
       (insert "one\ntwo\nthree\nfour\n")
-      (let ((overlay (mevedel--create-reference-in (current-buffer) 5 15 'line))
+      (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 5 15 'line))
             (map (make-sparse-keymap)))
         (define-key map (kbd "<f11>")
                     (lambda ()
@@ -742,7 +628,7 @@
   (dolist (edge '(front rear))
     (with-temp-buffer
       (insert "0123456789")
-      (let ((overlay (mevedel--create-reference-in (current-buffer) 3 8 'char)))
+      (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 3 8 'char)))
         (mevedel-instruction-replacement-hold)
         (delete-region (if (eq edge 'front) 3 7) (if (eq edge 'front) 4 8))
         (goto-char (if (eq edge 'front) (overlay-end overlay) (overlay-start overlay)))
@@ -766,7 +652,7 @@
   :doc "front-line deletion intent does not absorb an unrelated adjacent line below"
   (with-temp-buffer
     (insert "one\ntwo\nthree\nfour\n")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 5 15 'line)))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 5 15 'line)))
       (mevedel-instruction-replacement-hold)
       (delete-region 5 9)
       (goto-char (overlay-end overlay))
@@ -782,7 +668,7 @@
   (dolist (both '(nil t))
     (with-temp-buffer
       (insert "0123456789")
-      (let ((overlay (mevedel--create-reference-in (current-buffer) 3 8 'char)))
+      (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 3 8 'char)))
         (buffer-enable-undo)
         (setq buffer-undo-list nil)
         (mevedel-instruction-replacement-hold)
@@ -815,7 +701,7 @@
   :doc "partial deletion after full recovery preserves the already granted both-edge growth"
   (with-temp-buffer
     (insert "0123456789")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 3 8 'char)))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 3 8 'char)))
       (buffer-enable-undo)
       (setq buffer-undo-list nil)
       (mevedel-instruction-replacement-hold)
@@ -842,7 +728,7 @@
   :doc "rejected partial-edge deletion does not authorize a later adjacent insertion"
   (with-temp-buffer
     (insert "0123456789")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 3 8 'char))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 3 8 'char))
           (reject (lambda (&rest _) (error "Reject edit")))
           calls)
       (add-hook 'before-change-functions
@@ -862,7 +748,7 @@
   :doc "stale capture is discarded when only the actual change beginning differs"
   (with-temp-buffer
     (insert "0123456789")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 3 8 'char))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 3 8 'char))
           (reject (lambda (&rest _) (error "Reject edit")))
           notification)
       (add-hook 'after-change-functions
@@ -882,7 +768,7 @@
       (should (= 1 (length (nth 1 mevedel--pending-instruction-edit))))
       (should mevedel--pending-instruction-undo)
       ;; Native recovery reports the same old length, but a different start.
-      ;; No source geometry belongs to this deletion outside the reference.
+      ;; No source geometry belongs to this deletion outside the note.
       (delete-region 9 10)
       (should (equal '(9 1 3 1) notification))
       (should (equal "012345679" (buffer-string)))
@@ -892,39 +778,27 @@
       (should-not mevedel--pending-instruction-undo)
       (should-not (cl-find 'apply buffer-undo-list :key #'car-safe))
       (mevedel-instruction-replacement-end)))
-  :doc "discarding stale directive capture releases its marker and presentation undo token"
-  (let* ((fixture (mevedel-instruction-test--source-fixture))
-         (overlay (nth 4 fixture))
-         (record (nth 5 fixture)))
-    (unwind-protect
-        (with-current-buffer (nth 3 fixture)
-          (let ((reject (lambda (&rest _) (error "Reject edit"))))
-            (buffer-enable-undo)
-            (setq buffer-undo-list nil)
-            (add-hook 'before-change-functions reject 90 t)
-            (should-error (delete-region 8 14))
-            (remove-hook 'before-change-functions reject t)
-            (let ((marker (plist-get (car mevedel--pending-directive-detachments) :marker)))
-              (should (markerp marker))
-              (should (eq (current-buffer) (marker-buffer marker)))
-              (should mevedel--pending-instruction-undo)
-              (goto-char 14)
-              (insert "X")
-              (should-not (marker-buffer marker))
-              (should-not mevedel--pending-directive-detachments)
-              (should-not mevedel--pending-instruction-edit)
-              (should-not mevedel--pending-instruction-undo)
-              (should-not (cl-find 'apply buffer-undo-list :key #'car-safe))
-              (should (= 8 (overlay-start overlay)))
-              (should (= 14 (overlay-end overlay)))
-              (should (eq record (mevedel--directive-record overlay)))
-              (should (eq 'attached (plist-get (mevedel-directive-anchor record) :state)))
-              (should (equal "before targetX after\n" (buffer-string))))))
-      (mevedel-instruction-test--discard-source fixture)))
+  :doc "a whole-buffer replacement that rewrites the text keeps the note on its line"
+  (with-temp-buffer
+    (insert "before\nnote body\nafter\n")
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 8 18 'line))
+          (source (generate-new-buffer " *replacement*")))
+      ;; `replace-region-contents' reports one change over the whole region
+      ;; it replaces, so the captured range covers the note although its
+      ;; text survives.
+      (unwind-protect
+          (progn
+            (with-current-buffer source
+              (insert "before\nnote BODY\nafter\n"))
+            (replace-region-contents (point-min) (point-max) source))
+        (kill-buffer source))
+      (should (eq (current-buffer) (overlay-buffer overlay)))
+      (should (equal "note BODY\n" (buffer-substring-no-properties
+                                    (overlay-start overlay) (overlay-end overlay))))))
   :doc "unchanged announced edge context does not authorize a later adjacent insertion"
   (with-temp-buffer
     (insert "0123456789")
-    (let ((overlay (mevedel--create-reference-in (current-buffer) 3 8 'char)))
+    (let ((overlay (mevedel-instruction-test--create-note-in (current-buffer) 3 8 'char)))
       (mevedel-instruction-replacement-hold)
       (combine-change-calls 3 6
         (delete-region 4 5))
@@ -934,5 +808,5 @@
       (should (equal "2456" (buffer-substring-no-properties
                               (overlay-start overlay) (overlay-end overlay)))))))
 
-(provide 'test-mevedel-directive-source-replacement)
-;;; test-mevedel-directive-source-replacement.el ends here
+(provide 'test-mevedel-note-source-replacement)
+;;; test-mevedel-note-source-replacement.el ends here

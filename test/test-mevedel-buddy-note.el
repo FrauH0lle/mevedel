@@ -21,31 +21,62 @@
 (defvar mevedel-test--note-buffers nil
   "Buffers created by the note tests, killed in teardown.")
 
+(defvar mevedel-test--note-directory nil
+  "Private workspace shared by the current case's source files.")
+
+(defvar mevedel-test--note-workspace nil
+  "Workspace owning the current case's source files.")
+
 (defun mevedel-test--note-buffer (name content)
   "Return a new buffer NAME holding CONTENT, in scope for notes."
-  (let ((buf (generate-new-buffer name)))
+  (unless mevedel-test--note-directory
+    (setq mevedel-test--note-directory (make-temp-file "mevedel-buddy-note-" t)
+          mevedel-test--note-workspace
+          (mevedel-workspace--create
+           :type 'file :id mevedel-test--note-directory
+           :root mevedel-test--note-directory :name "buddy-note"))
+    (make-directory (file-name-concat mevedel-test--note-directory ".mevedel")))
+  (let* ((file (make-temp-file
+                (file-name-concat mevedel-test--note-directory "source-")))
+         (_ (write-region content nil file nil 'silent))
+         (buf (find-file-noselect file)))
     (push buf mevedel-test--note-buffers)
-    (with-current-buffer buf (insert content))
+    (with-current-buffer buf
+      (rename-buffer name t)
+      (setq-local mevedel--workspace mevedel-test--note-workspace))
     (push (cons name buf) mevedel-buddy-note--scope-buffers)
     buf))
 
 (defun mevedel-test--note-cleanup ()
   "Kill note test buffers and discard every note."
-  (mevedel-buddy-note-clear-all)
-  (setq mevedel-buddy-note--scope-buffers nil)
+  (when mevedel-test--note-workspace
+    (mevedel--clear-instruction-state mevedel-test--note-workspace))
+  (mevedel-buddy-note-release-markers)
+  (setq mevedel-buddy-note--scope-buffers nil
+        mevedel-buddy-note--notes nil
+        mevedel-buddy-note--changed-workspaces nil
+        mevedel-instruction-store--dirty nil)
+  (remove-hook 'post-command-hook #'mevedel-instruction-store-flush)
   (dolist (buf mevedel-test--note-buffers)
-    (when (buffer-live-p buf) (kill-buffer buf)))
-  (setq mevedel-test--note-buffers nil))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf (set-buffer-modified-p nil))
+      (kill-buffer buf)))
+  (when mevedel-test--note-directory (delete-directory mevedel-test--note-directory t))
+  (setq mevedel-test--note-buffers nil
+        mevedel-test--note-workspace nil
+        mevedel-test--note-directory nil))
 
 (defun mevedel-test--note-overlays (buffer)
   "Return BUFFER's note overlays."
   (with-current-buffer buffer
-    (seq-filter (lambda (ov) (overlay-get ov 'mevedel-buddy-note))
+    (seq-filter (lambda (ov) (eq 'buddy (overlay-get ov 'mevedel-note-author)))
                 (overlays-in (point-min) (point-max)))))
 
 (defun mevedel-test--note-text (buffer)
   "Return the concatenated note text visible in BUFFER."
-  (mapconcat (lambda (ov) (or (overlay-get ov 'after-string) ""))
+  (mapconcat (lambda (ov)
+               (or (when-let* ((label (overlay-get ov 'mevedel-label-overlay)))
+                     (overlay-get label 'after-string)) ""))
              (mevedel-test--note-overlays buffer)
              "\n"))
 
@@ -177,19 +208,12 @@
                        (overlay-start
                         (car (mevedel-test--note-overlays buf))))))))
 
-  :doc "`mevedel-buddy-note-update' measures in the note's own buffer"
-  ;; A tool call runs in the buffer the review started from, which under a
-  ;; workspace-wide scope is often not the one holding the note.  Measuring
-  ;; the line in whatever buffer happens to be current lays the note out to
-  ;; the wrong width.
+  :doc "`mevedel-buddy-note-update' renders the same label from another buffer"
   (let* ((long-line (concat "(" (make-string 40 ?x) ")"))
          (target (mevedel-test--note-buffer
                   "measure-target" (concat "one\n" long-line "\n")))
          (elsewhere (mevedel-test--note-buffer "measure-elsewhere" "x\n"))
          (note (string-join (make-list 20 "word") " "))
-         (mevedel-buddy-note-width 60)
-         (mevedel-buddy-note-current-line-style 'eol)
-         (mevedel-buddy-note-other-lines-style 'eol)
          (id (mevedel-test--add-note target 2 note))
          (from-own-buffer
           (with-current-buffer target
@@ -219,19 +243,6 @@
 
 
 ;;
-;;; Severity
-
-(mevedel-deftest mevedel-buddy-note--face
-  (:doc "`mevedel-buddy-note--face' maps each severity to its own face")
-  (should (equal ,face (mevedel-buddy-note--face ,severity)))
-  (severity face)
-  "trivial"     'mevedel-buddy-note-trivial-face
-  "significant" 'mevedel-buddy-note-significant-face
-  "critical"    'mevedel-buddy-note-critical-face
-  "nonsense"    'mevedel-buddy-note-significant-face)
-
-
-;;
 ;;; Lifecycle
 
 (mevedel-deftest mevedel-buddy-note--lifecycle
@@ -252,18 +263,20 @@
   :doc "editing an annotated line marks the note for review"
   (let* ((buf (mevedel-test--note-buffer "note-review" "one\ntwo\nthree\n"))
          (id (mevedel-test--add-note buf 2 "about two")))
-    (should-not (plist-get (mevedel-buddy-note--find id) :review-needed))
+    (should-not (string-match-p "changed since" (mevedel-buddy-note-serialize)))
     (with-current-buffer buf
       (goto-char (point-min))
       (forward-line 1)
       (end-of-line)
       (insert " changed"))
-    (should (plist-get (mevedel-buddy-note--find id) :review-needed)))
+    (should (mevedel-buddy-note--find id))
+    (should (string-match-p "changed since" (mevedel-buddy-note-serialize))))
 
   :doc "dismissing a note deletes its overlay and keeps the record"
   (let* ((buf (mevedel-test--note-buffer "note-dismiss" "one\ntwo\n"))
          (id (mevedel-test--add-note buf 1 "dismiss me")))
-    (mevedel-buddy-note-dismiss id "user")
+    (mevedel-buddy-note--dismiss-overlay
+     (plist-get (mevedel-buddy-note--find id) :overlay) "user")
     (should (null (mevedel-test--note-overlays buf)))
     (should (eq 'dismissed (plist-get (mevedel-buddy-note--find id) :status))))
 
@@ -296,7 +309,8 @@
   :doc "`mevedel-buddy-note-serialize' keeps dismissed notes, labelled"
   (let* ((buf (mevedel-test--note-buffer "note-ser-dismissed" "one\n"))
          (id (mevedel-test--add-note buf 1 "rejected advice")))
-    (mevedel-buddy-note-dismiss id "user")
+    (mevedel-buddy-note--dismiss-overlay
+     (plist-get (mevedel-buddy-note--find id) :overlay) "user")
     (let ((text (mevedel-buddy-note-serialize)))
       (should (string-match-p "dismissed" text))
       (should (string-match-p "rejected advice" text))))
@@ -315,9 +329,9 @@
   (let ((buf (mevedel-test--note-buffer "note-cap" "one\n"))
         (mevedel-buddy-note-serialize-limit 3))
     (dotimes (index 10)
-      (mevedel-buddy-note-dismiss
-       (mevedel-test--add-note buf 1 (format "note number %d" index))
-       "user"))
+      (let ((id (mevedel-test--add-note buf 1 (format "note number %d" index))))
+        (mevedel-buddy-note--dismiss-overlay
+         (plist-get (mevedel-buddy-note--find id) :overlay) "user")))
     (let ((text (mevedel-buddy-note-serialize)))
       (should (= 3 (length (seq-filter (lambda (line)
                                          (string-prefix-p "- note_id" line))
@@ -329,15 +343,17 @@
 ;;
 ;;; Instruction isolation
 
-(mevedel-deftest mevedel-buddy-note--not-an-instruction
+(mevedel-deftest mevedel-buddy-note--shared-instruction
   (:after-each (mevedel-test--note-cleanup)
-   :doc "note overlays are invisible to instruction enumeration")
+   :doc "Buddy remarks are ordinary notes in instruction enumeration")
   (let ((buf (mevedel-test--note-buffer "note-instr" "one\ntwo\n")))
-    (mevedel-test--add-note buf 1 "not an instruction")
+    (mevedel-test--add-note buf 1 "a shared note")
     (with-current-buffer buf
-      (should (null (seq-filter
-                     (lambda (ov) (overlay-get ov 'mevedel-instruction))
-                     (overlays-in (point-min) (point-max))))))))
+      (let ((notes (seq-filter
+                    (lambda (ov) (overlay-get ov 'mevedel-instruction))
+                    (overlays-in (point-min) (point-max)))))
+        (should (= 1 (length notes)))
+        (should (eq 'note (overlay-get (car notes) 'mevedel-instruction-type)))))))
 
 ;;
 ;;; Commands
@@ -361,8 +377,10 @@
       (should-error (mevedel-buddy-dismiss-note) :type 'user-error))))
 
 (mevedel-deftest mevedel-buddy-dismiss-notes
-  (:after-each (mevedel-test--note-cleanup) :quiet t
-   :doc "`mevedel-buddy-dismiss-notes' clears this buffer's notes only")
+  (:after-each (mevedel-test--note-cleanup) :quiet t)
+  ,test
+  (test)
+  :doc "dismiss-all clears Buddy remarks across this workspace"
   (let* ((here (mevedel-test--note-buffer "cmd-here" "one\ntwo\n"))
          (elsewhere (mevedel-test--note-buffer "cmd-elsewhere" "one\n"))
          (kept (mevedel-test--add-note elsewhere 1 "stays")))
@@ -370,7 +388,29 @@
     (mevedel-test--add-note here 2 "also goes")
     (with-current-buffer here (mevedel-buddy-dismiss-notes))
     (should (null (mevedel-test--note-overlays here)))
-    (should (eq 'active (plist-get (mevedel-buddy-note--find kept) :status)))))
+    (should (eq 'dismissed (plist-get (mevedel-buddy-note--find kept) :status))))
+  :doc "dismiss-all includes unopened files after reload and leaves authored notes alone"
+  (let* ((here (mevedel-test--note-buffer "cmd-current" "one\ntwo\n"))
+         (elsewhere (mevedel-test--note-buffer "cmd-unopened" "one\n"))
+         (other-file (buffer-file-name elsewhere)))
+    (mevedel-test--add-note here 1 "First concern")
+    (mevedel-test--add-note elsewhere 1 "Other concern")
+    (with-current-buffer here
+      (goto-char (point-min))
+      (mevedel-note-create "Keep this user note"))
+    (mevedel-instruction-store-flush t)
+    (kill-buffer elsewhere)
+    (mevedel--clear-instruction-state mevedel-test--note-workspace)
+    (with-current-buffer here
+      (should (= 2 (mevedel-buddy-dismiss-notes))))
+    (push (find-buffer-visiting other-file) mevedel-test--note-buffers)
+    (mevedel--clear-instruction-state mevedel-test--note-workspace)
+    (mevedel-instruction-store-observe mevedel-test--note-workspace)
+    (should (= 2 (length (mevedel-notes-closed mevedel-test--note-workspace))))
+    (with-current-buffer here
+      (should (cl-some (lambda (note)
+                         (equal "Keep this user note" (overlay-get note 'mevedel-note-text)))
+                       (overlays-in (point-min) (point-max)))))))
 
 ;;
 ;;; Scope isolation
@@ -696,7 +736,7 @@
 
   :doc "builds named tools with typed, described, required arguments"
   (let ((tools (mevedel-buddy-note-tools (lambda () t))))
-    (should (equal '("read_buffer" "add_note" "update_note" "remove_note")
+    (should (equal '("read_buffer" "add_note" "update_note" "remove_note" "note_looks_done")
                    (mapcar #'gptel-tool-name tools)))
     (dolist (tool tools)
       (dolist (arg (gptel-tool-args tool))
@@ -722,202 +762,6 @@
                             (funcall (gptel-tool-function remove) id)))
     (should (mevedel-buddy-note--find id))
     (should (mevedel-test--note-overlays buf))))
-
-;;
-;;; Layout
-
-(mevedel-deftest mevedel-buddy-note--wrap
-  (:doc "`mevedel-buddy-note--wrap' fills text to the given width")
-  ,test
-  (test)
-
-  :doc "long text becomes several lines, none over the width"
-  (let ((lines (mevedel-buddy-note--wrap
-                (string-join (make-list 20 "word") " ") 30)))
-    (should (> (length lines) 1))
-    (should (seq-every-p (lambda (line) (<= (length line) 30)) lines)))
-
-  :doc "short text stays one line"
-  (should (equal '("short enough")
-                 (mevedel-buddy-note--wrap "short enough" 30))))
-
-(mevedel-deftest mevedel-buddy-note--eol-string
-  (:doc "`mevedel-buddy-note--eol-string' shortens a note to the room left")
-  ,test
-  (test)
-
-  :doc "a note that fits is shown whole"
-  (let ((mevedel-buddy-note-width 72))
-    (should (string-match-p "typo here"
-                            (mevedel-buddy-note--eol-string
-                             "typo here" "significant" 10))))
-
-  :doc "a note that does not fit is shortened"
-  (let* ((mevedel-buddy-note-width 40)
-         (note (concat (string-join (make-list 20 "word") " ") " caboose"))
-         (shown (mevedel-buddy-note--eol-string note "significant" 10)))
-    (should (< (length shown) (length note)))
-    (should-not (string-match-p "caboose" shown)))
-
-  :doc "a long code line still leaves a readable minimum"
-  (let* ((mevedel-buddy-note-width 40)
-         (shown (mevedel-buddy-note--eol-string
-                 "a note about something" "significant" 200)))
-    (should (> (length shown) 10)))
-
-  :doc "newlines in a note are collapsed so it stays one line"
-  (let ((mevedel-buddy-note-width 72))
-    (should-not (string-match-p
-                 "\n" (mevedel-buddy-note--eol-string
-                       "first\nsecond" "significant" 0)))))
-
-(mevedel-deftest mevedel-buddy-note--below-string
-  (:doc "`mevedel-buddy-note--below-string' lays a note out under the code")
-  ,test
-  (test)
-
-  :doc "the note starts on its own line"
-  (should (string-prefix-p
-           "\n" (mevedel-buddy-note--below-string
-                 "a note" "significant" 4)))
-
-  :doc "every line is indented to the code"
-  (let* ((mevedel-buddy-note-width 40)
-         (shown (mevedel-buddy-note--below-string
-                 (string-join (make-list 20 "word") " ") "significant" 6))
-         (lines (cdr (split-string shown "\n"))))
-    (should (> (length lines) 1))
-    (should (seq-every-p (lambda (line) (string-prefix-p "      " line))
-                         lines)))
-
-  :doc "the full text survives the layout"
-  (let ((shown (mevedel-buddy-note--below-string
-                "accumulator is never updated" "significant" 2)))
-    (should (string-match-p "accumulator" shown))
-    (should (string-match-p "updated" shown))))
-
-(mevedel-deftest mevedel-buddy-note--style-for
-  (:after-each (mevedel-test--note-cleanup))
-  ,test
-  (test)
-
-  :doc "the line at point uses the current-line style"
-  (let* ((buf (mevedel-test--note-buffer "style-here" "one\ntwo\nthree\n"))
-         (_id (mevedel-test--add-note buf 2 "about two"))
-         (mevedel-buddy-note-current-line-style 'below)
-         (mevedel-buddy-note-other-lines-style 'eol))
-    (with-current-buffer buf
-      (goto-char (point-min))
-      (forward-line 1)
-      (should (eq 'below (mevedel-buddy-note--style-for
-                          (car (mevedel-test--note-overlays buf))))))) 
-
-  :doc "any other line uses the other-lines style"
-  (let* ((buf (mevedel-test--note-buffer "style-other" "one\ntwo\nthree\n"))
-         (_id (mevedel-test--add-note buf 2 "about two"))
-         (mevedel-buddy-note-current-line-style 'below)
-         (mevedel-buddy-note-other-lines-style 'eol))
-    (with-current-buffer buf
-      (goto-char (point-min))
-      (should (eq 'eol (mevedel-buddy-note--style-for
-                        (car (mevedel-test--note-overlays buf))))))))
-
-(mevedel-deftest mevedel-buddy-note--relayout
-  (:after-each (mevedel-test--note-cleanup))
-  ,test
-  (test)
-
-  :doc "moving onto a note's line lays it out in full"
-  (let* ((buf (mevedel-test--note-buffer "relayout" "one\ntwo\nthree\n"))
-         (note (string-join (make-list 20 "word") " "))
-         (mevedel-buddy-note-width 40)
-         (mevedel-buddy-note-current-line-style 'below)
-         (mevedel-buddy-note-other-lines-style 'eol))
-    (mevedel-test--add-note buf 2 note)
-    (with-current-buffer buf
-      (goto-char (point-min))
-      (mevedel-buddy-note--relayout)
-      ;; Off the line: one shortened line, no newline in the layout.
-      (should-not (string-match-p "\n" (mevedel-test--note-text buf)))
-      (forward-line 1)
-      (mevedel-buddy-note--relayout)
-      ;; On the line: the whole note, across several lines.
-      (should (string-match-p "\n" (mevedel-test--note-text buf)))))
-
-  :doc "a note is hidden when its style is nil"
-  (let* ((buf (mevedel-test--note-buffer "relayout-nil" "one\ntwo\n"))
-         (mevedel-buddy-note-current-line-style 'below)
-         (mevedel-buddy-note-other-lines-style nil))
-    (mevedel-test--add-note buf 2 "about two")
-    (with-current-buffer buf
-      (goto-char (point-min))
-      (mevedel-buddy-note--relayout)
-      (should (string-empty-p (mevedel-test--note-text buf)))))
-
-  :doc "`mevedel-buddy-note--relayout' stops the hook once notes are gone"
-  (let* ((buf (mevedel-test--note-buffer "relayout-hook" "one\ntwo\n"))
-         (id (mevedel-test--add-note buf 1 "goes away")))
-    (with-current-buffer buf
-      (should (memq #'mevedel-buddy-note--relayout post-command-hook))
-      (mevedel-buddy-note-remove id)
-      (should-not (memq #'mevedel-buddy-note--relayout post-command-hook)))))
-
-(mevedel-deftest mevedel-buddy-note-clear-all
-  (:after-each (mevedel-test--note-cleanup)
-   :doc "`mevedel-buddy-note-clear-all' drops the layout hooks too")
-  (let ((buf (mevedel-test--note-buffer "clear-hook" "one\ntwo\n")))
-    (mevedel-test--add-note buf 1 "a note")
-    (with-current-buffer buf
-      (should (memq #'mevedel-buddy-note--relayout post-command-hook)))
-    (mevedel-buddy-note-clear-all)
-    (with-current-buffer buf
-      (should-not (memq #'mevedel-buddy-note--relayout post-command-hook)))))
-
-(mevedel-deftest mevedel-buddy-note--render
-  (:after-each (mevedel-test--note-cleanup))
-  ,test
-  (test)
-
-  :doc "`mevedel-buddy-note--render' measures the line in display columns"
-  ;; A tab is one character and eight columns.  Two lines that occupy the
-  ;; same columns must leave the note the same room, however they are
-  ;; indented; counting characters instead makes the tabbed line look
-  ;; short and overflows the budget the fixed width exists to hold.
-  (let* ((tab-width 8)
-         (note (string-join (make-list 20 "word") " "))
-         (mevedel-buddy-note-width 60)
-         (mevedel-buddy-note-current-line-style 'eol)
-         (mevedel-buddy-note-other-lines-style 'eol)
-         (tabbed (mevedel-test--note-buffer "tabbed" "\t\t\tcode\n"))
-         (spaced (mevedel-test--note-buffer
-                  "spaced" (concat (make-string 24 ?\s) "code\n"))))
-    (mevedel-test--add-note tabbed 1 note)
-    (mevedel-test--add-note spaced 1 note)
-    (should (equal (substring-no-properties (mevedel-test--note-text spaced))
-                   (substring-no-properties
-                    (mevedel-test--note-text tabbed)))))
-
-  :doc "a note keeps its full layout when updated from another buffer"
-  ;; `update_note' runs as a tool call from the buffer the review started
-  ;; in.  Deciding the style there would flip a note the user is sitting on
-  ;; to the truncated style, and `--relayout' would not restore it until
-  ;; point left the line and came back.
-  (let* ((target (mevedel-test--note-buffer "style-target" "one\ntwo\n"))
-         (elsewhere (mevedel-test--note-buffer "style-elsewhere" "x\n"))
-         (note (string-join (make-list 20 "word") " "))
-         (mevedel-buddy-note-width 40)
-         (mevedel-buddy-note-current-line-style 'below)
-         (mevedel-buddy-note-other-lines-style 'eol)
-         (id (mevedel-test--add-note target 2 note)))
-    (with-current-buffer target
-      (goto-char (point-min))
-      (forward-line 1)
-      (mevedel-buddy-note--relayout)
-      (should (string-match-p "\n" (mevedel-test--note-text target))))
-    (with-current-buffer elsewhere
-      (mevedel-buddy-note-update id note))
-    ;; Point never moved, so the note is still laid out in full.
-    (should (string-match-p "\n" (mevedel-test--note-text target)))))
 
 (provide 'test-mevedel-buddy-note)
 ;;; test-mevedel-buddy-note.el ends here

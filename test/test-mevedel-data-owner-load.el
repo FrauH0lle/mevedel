@@ -24,7 +24,6 @@
          (compiled-root (make-temp-file "mevedel-data-owner-" t))
          (emacs (expand-file-name invocation-name invocation-directory))
          (owners '("mevedel-workspace.el"
-                   "mevedel-directive.el"
                    "mevedel-turn.el"
                    "mevedel-instruction-registry.el"
                    "mevedel-permission-persistence.el"
@@ -47,23 +46,6 @@
                                      'defun)
                         ""))
                  (error "Workspace behavior has the wrong owner"))))
-            (directive
-             (progn
-               (require 'mevedel-structs)
-               (require 'mevedel-directive)
-               (let ((directive
-                      (mevedel-directive--create
-                       :id "cold" :request "before")))
-                 (mevedel-directive-set-request directive "after")
-                 (unless (equal "after"
-                                (mevedel-directive-request directive))
-                   (error "Directive owner did not mutate its record")))
-               (unless
-                   (string-suffix-p
-                    "mevedel-directive.elc"
-                    (or (symbol-file 'mevedel-directive-set-request 'defun)
-                        ""))
-                 (error "Directive behavior has the wrong owner"))))
             (turn
              (progn
                (require 'mevedel-turn)
@@ -83,9 +65,7 @@
                (require 'mevedel-structs)
                (require 'mevedel-instruction-registry)
                (mevedel--clear-instruction-state
-                (mevedel-workspace--create :type 'file :id "cold"))
-               (unless (featurep 'mevedel-directive)
-                 (error "Instruction consumer did not load Directive"))))
+                (mevedel-workspace--create :type 'file :id "cold"))))
             (permission-persistence-consumer
              (progn
                (require 'mevedel-structs)

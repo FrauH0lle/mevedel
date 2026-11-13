@@ -24,6 +24,7 @@ are not filesystem paths.
 | `history://saved[/SESSION[/SEGMENT]]` | Yes | Yes | Yes | Filtered saved workspace conversations, including archives |
 | `memory://root` | Yes | Yes | Yes | Configured memory index/roots |
 | `memory://journal/` | Yes | Yes | Yes | Validated published workspace journal records |
+| `notes://[UUID.md]` | Yes | Yes | Yes | Read-only marked-code notes in the session's workspace |
 | `shared://` | Yes | No | Text views | Shared whiteboards and documents; a remote HTML artifact's files |
 | `mevedel://` | Yes | Yes | Yes | Installed Markdown documentation |
 | `mcp://` | Yes | No | No | Connected servers' advertised resources |
@@ -42,6 +43,21 @@ search. Read of a selected segment and Grep use the same filtered line numbers.
 Saved sources exclude unsaved conversation changes and hidden internal notes.
 History operations are read-only and can be cancelled during preparation or
 search.
+
+`Read(notes://)` lists workspace note addresses with their display numbers,
+authors and states, including retained recently closed notes and close reasons.
+Use a returned `notes://UUID.md` to read its full text, tags, author, state,
+source location and current marked code. `Glob` matches these logical Markdown
+names; `Grep` searches the same documents and line numbers as Read. A UUID from
+another workspace cannot select a note here. Missing selections fail rather
+than falling back to a display number.
+
+Note reads do not send notes, start conversations, or include conversation
+history. Source Read permission is checked separately; denied, missing or
+unresolved code is explicitly unavailable while note metadata remains readable.
+Unopened sources are read without visiting buffers; live sources include
+unsaved edits. This read-only family is distinct from working files under
+`work://shared/` and cannot be an ApplyPatch target.
 
 `work://RELATIVE-PATH` belongs to the root session; `work://shared/RELATIVE-PATH`
 belongs to the workspace and persists across sessions. Search before creating

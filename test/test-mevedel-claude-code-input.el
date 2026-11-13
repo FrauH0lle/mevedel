@@ -352,53 +352,5 @@
 		      (when (and record (buffer-live-p (mevedel-agent-record-conversation-buffer record)))
 			(kill-buffer (mevedel-agent-record-conversation-buffer record)))))))
 
-(mevedel-deftest mevedel--start-directive-discussion/claude-image (:quiet t)
-		 (mevedel-engine-test--with-claude-session
-		  (mevedel-request-end)
-		  (let* ((mevedel-show-chat-buffer nil)
-			 (inhibit-interaction t)
-			 (gptel--known-presets (copy-tree gptel--known-presets))
-			 (mevedel-preset--registry (copy-tree mevedel-preset--registry))
-			 (source (find-file-noselect (file-name-concat root "subject.txt")))
-			 (file (file-name-concat root "sample.png"))
-			 (data "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS1sAAAAASUVORK5CYII=")
-			 directive record done)
-		    (unwind-protect
-			(progn
-			  (mevedel-tools-register)
-			  (mevedel--define-presets)
-			  (with-temp-buffer
-			    (set-buffer-multibyte nil)
-			    (insert (base64-decode-string data))
-			    (let ((coding-system-for-write 'no-conversion))
-			      (write-region (point-min) (point-max) file nil 'silent)))
-			  (setq-local gptel-system-prompt "Describe the image" gptel-tools nil)
-			  (with-current-buffer source
-			    (setq-local mevedel--workspace workspace)
-			    (insert "subject\n") (save-buffer)
-			    (setq directive (mevedel--create-directive-in
-					     source (point-min) (1- (point-max)) nil
-					     (format "Describe @file:{%s}" file))
-				  record (mevedel--directive-record directive))
-			    (setf (mevedel-directive-session-id record) (mevedel-session-session-id session)))
-			  (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-				     (mevedel-engine-test--claude-launch
-                                      (lambda (_system mcp _model _effort &optional id _hook)
-				        (should-not id)
-				        (list :meta `((expectedImage . ,data)))))))
-			    (with-current-buffer source
-			      (mevedel--start-directive-discussion
-			       directive (lambda (err _owner) (should-not err) (setq done t))))
-			    (mevedel-test--await 5 "Image directive did not settle"
-                              (not (mevedel-turn-busy-p buffer))))
-			  (should done)
-			  (should (string-search "Image accepted"
-						 (mevedel-directive-discussion-turn-result
-						  (car (mevedel-directive-discussion record)))))
-			  (should (= 0 (hash-table-count (mevedel-session-mentions-shown session)))))
-		      (when (buffer-live-p source)
-			(with-current-buffer source (set-buffer-modified-p nil))
-			(kill-buffer source))))))
-
 (provide 'test-mevedel-claude-code-input)
 ;;; test-mevedel-claude-code-input.el ends here

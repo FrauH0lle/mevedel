@@ -181,7 +181,7 @@ Each callback preserves fresh reader/composer state and validates its source
 generation. Losing focus pauses the job; source changes replace it and release
 retained private preparation buffers. Session-level history replacements
 (resume, rewind, segment rollover, control-transfer acquire and follow),
-directive-request setup rollback, an interrupted side answer, and Source's
+an interrupted side answer, and Source's
 refresh after a Session Fork use this scheduler: they only change what is displayed, and nothing after them reads
 view positions. In-flight reconciliation, explicit immediate refreshes, callers
 that read rendered positions, and other writers' correctness fallbacks remain
@@ -1259,8 +1259,9 @@ Regression coverage includes typing between callbacks, source replacement,
 reentrant writers, failure rollback, focus recovery, and expanded disclosures.
 That coverage also exposed ordinary manually collapsed turns losing their fold
 on a full rebuild. Those summaries now retain source identity, and ordinary turn
-folds participate in disclosure-state restoration. Directive folds keep their
-existing separate policy.
+folds participate in disclosure-state restoration. Directive folds kept their
+then-separate policy; ADR 0132's removal of old-data compatibility removes those
+folds rather than retaining another rendering path.
 
 This does not establish a hard responsiveness bound: source preparation and each
 turn remain synchronous. The archived 9.6 MB metadata span still dominates its
@@ -1285,6 +1286,11 @@ job (agent capture: 326 versus 109 ms; small control capture: 141 versus
 projection stays visible until the job's reader-anchored turns install, and
 tests that inspect the view after these operations flush the scheduled
 render synchronously.
+
+The notes redesign later removes directive-request setup rollback as an entry
+point: independent note sessions use the ordinary session lifecycle. Historical
+directive cards and their inspector are also removed, not compatibility clients
+of the scheduler. The scheduling and preservation contract is unchanged.
 
 A trial that moved chat prompts out of publication into the first callbacks
 lowered the warm root replay's worst key delay from 139 to about 100 ms. It

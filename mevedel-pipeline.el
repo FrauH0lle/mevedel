@@ -114,7 +114,6 @@
   "mevedel-session-persistence")
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-directive-uuid "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-ephemeral-p "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-file-snapshots "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-id "mevedel-structs" (cl-x))
@@ -1223,7 +1222,8 @@ Missing files are stored as nil; unreadable paths retain a diagnostic gap."
         (condition-case err
             (let ((original (when (file-exists-p abs-path)
                               (with-temp-buffer
-                                (insert-file-contents abs-path)
+                                (set-buffer-multibyte nil)
+                                (insert-file-contents-literally abs-path)
                                 (buffer-string)))))
               (puthash abs-path original snapshots))
           (error
@@ -1240,12 +1240,10 @@ Missing files are stored as nil; unreadable paths retain a diagnostic gap."
       (member (mevedel-tool-name tool) '("Agent" "SendMessage"))))
 
 (defun mevedel-pipeline--step-capture-coverage (context next _fail)
-  "Record untracked directive filesystem effects from CONTEXT, then call NEXT."
+  "Record untracked filesystem effects from CONTEXT for Rewind, then call NEXT."
   (let ((tool (plist-get context :tool))
         (request (plist-get context :request)))
-    (when (and request
-               (mevedel-request-directive-uuid request)
-               (mevedel-pipeline--untracked-filesystem-effects-p tool))
+    (when (and request (mevedel-pipeline--untracked-filesystem-effects-p tool))
       (mevedel-request-note-untracked-effect
        request
        (mevedel-tool-name tool)
@@ -1792,7 +1790,7 @@ Returns a list of step functions based on TOOL's behavioral flags:
   3. normalize-paths     -- canonicalizes `path'-typed args for authorization
   4. prepare-resources   -- parses addressed operands before permission
   5. permission          -- always included
-  6. capture-coverage    -- records mutation paths without exact snapshots
+  6. capture-coverage    -- records effects Rewind cannot revert
   7. snapshot            -- included when snapshot-p
   8. handler             -- always included
   9. render-transform    -- always included; no-op when tool has none

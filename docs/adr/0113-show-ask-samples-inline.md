@@ -27,7 +27,7 @@ with its answer, rather than only the most recently inspected sample.
 
 The sample belongs to one question and must never cover other content. Inside
 the buffer, the panel scrolls, wraps and reflows with the form, and works the
-same in a terminal, in a directive frame and in a shared view. It needs no
+same in a terminal, in a note frame and in a shared view. It needs no
 window, geometry or lifecycle code.
 
 A child frame cannot meet the no-occlusion requirement on its own. Beside the
@@ -64,9 +64,9 @@ line count, moving the next question by as much on an 80-column window.
 ## Decision history
 
 The sample originally rendered in a child frame parented to the top-level
-Emacs frame, never to a directive frame, because a child frame is clipped at
-its parent's edges and a directive frame would have left it about eight usable
-lines. Placement translated anchor coordinates through nested child frames using
+Emacs frame, never to the note frame (then called the directive frame), because
+a child frame is clipped at its parent's edges and that frame would have left
+it about eight usable lines. Placement translated anchor coordinates through nested child frames using
 native and outer edges, after a PGTK run showed child-frame display origins can
 be unavailable.
 

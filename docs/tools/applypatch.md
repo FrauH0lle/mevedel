@@ -86,7 +86,7 @@ outside Plan mode, subject to normal edit permissions and review. Bare, root-onl
 and union addresses are invalid targets; other resource families are read-only.
 Standalone/sticky Plan mode permits only session-owned `work://` descendants for
 every source and destination. `work://shared/...`, memory, and ordinary paths do
-not receive that exception. Directive Planning permits no patches.
+not receive that exception. Note conversations use the same Plan boundary.
 
 ## Failure and review
 

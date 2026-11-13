@@ -21,8 +21,8 @@
   "mevedel-agent-persistence")
 
 (defconst mevedel-session-checkpoint--root-keys
-  '(:current-segment :total-turn-count :prompt-index :file-snapshots :chapters
-    :first-user-message :latest-user-message)
+  '(:current-segment :total-turn-count :prompt-index :file-snapshots
+    :untracked-effects :chapters :first-user-message :latest-user-message)
   "Root fields that advance only with a matching transcript commit.")
 
 (cl-defstruct (mevedel-session-checkpoint--state
@@ -167,7 +167,7 @@ this ledger; only removal in favor of a transcript row requires deferral."
 (defun mevedel-session-checkpoint-capture
     (session conversation &optional root-projection)
   "Freeze SESSION's pending identities for CONVERSATION.
-ROOT-PROJECTION, when supplied, is a raw sidecar whose seven root fields
+ROOT-PROJECTION, when supplied, is a raw sidecar whose root fields
 describe the frozen root transcript.  Otherwise attach them later using
 `mevedel-session-checkpoint-with-root'.  Capture neither commits state nor
 retires records.  Store the opaque result on the final artifact's `:checkpoint'."

@@ -109,6 +109,10 @@
 (autoload 'mevedel-journal-store-read "mevedel-journal-store")
 (autoload 'mevedel-journal-store-recall-p "mevedel-journal-store")
 
+;; `mevedel-note-resource'
+(declare-function mevedel-note-resource-execute "mevedel-note-resource" (operation components session))
+(autoload 'mevedel-note-resource-execute "mevedel-note-resource")
+
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-handler-resumable "mevedel-pipeline" (function))
 (autoload 'mevedel-pipeline-handler-resumable "mevedel-pipeline")
@@ -169,7 +173,7 @@
 (autoload 'mevedel-working-note-files-listing "mevedel-working-note-files")
 
 (defconst mevedel-resource-supported-schemes
-  '(work artifact skill agent history memory mcp shared mevedel)
+  '(work artifact skill agent history memory mcp shared mevedel notes)
   "Closed set of resource address schemes understood by mevedel.")
 
 (defconst mevedel-resource--unreserved
@@ -752,6 +756,9 @@ SCHEME is nil, include metadata for every scheme."
           :saved-history-p
           (and (memq scheme '(nil history))
                (mevedel-resource--workspace context session) t)
+          :notes-p
+          (and (memq scheme '(nil notes)) session
+               (mevedel-session-workspace session) t)
           :safe-path #'mevedel-resource--safe-path
           :skills
           (delq nil
@@ -949,6 +956,17 @@ Physical resolution is intentionally not performed here."
                   (mevedel-resource--parse-components tail)))
                 ('memory (mevedel-resource--parse-memory-tail tail))
                 ('mcp (mevedel-resource--parse-mcp-tail tail))
+                ('notes
+                 (let ((parts (mevedel-resource--parse-components tail)))
+                   (unless (or (null parts)
+                               (and (= (length parts) 1)
+                                    (string-match-p
+                                     "\\`[0-9a-f]\\{8\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{12\\}\\.md\\'"
+                                     (car parts))))
+                     (signal 'mevedel-resource-error
+                             '("Notes use notes:// or notes://UUID.md from discovery")))
+                   (list :components parts :dynamic-p (null parts)
+                         :locator-class (and parts 'workspace-relative))))
                 (_ (list :components (mevedel-resource--parse-components tail)
                          :dynamic-p (string-empty-p tail)))))
              (components (plist-get specific :components))
@@ -1582,6 +1600,7 @@ the union index read, which already tolerates missing roots."
            (mevedel-resource--agent-list-result session)
          (mevedel-resource--agent-read
           (plist-get data :record) parsed)))
+      ('notes (mevedel-note-resource-execute operation components session))
       ('history
        (cond
         ((equal (car components) "saved")
@@ -1863,7 +1882,7 @@ errors before any content or handler is reached."
       (unless (or (eq operation 'read)
                   (and (eq operation 'grep) (eq scheme 'shared))
                   (and (memq operation '(glob grep))
-                       (or (memq scheme '(work artifact skill memory mevedel))
+                       (or (memq scheme '(work artifact skill memory mevedel notes))
                            (and (eq scheme 'history)
                                 (or (equal (car components) "saved")
                                     (and (eq operation 'grep)
@@ -1991,6 +2010,8 @@ errors before any content or handler is reached."
                     physical (mevedel-resource--safe-path
                               root (cdr components))
                     data (plist-put data :memory-root memory-root))))))
+       ((eq scheme 'notes)
+        (setq logical-p t))
        ((eq scheme 'mcp)
         (setq logical-p t))
        ((eq scheme 'shared)
@@ -2023,6 +2044,9 @@ errors before any content or handler is reached."
         (path (plist-get data :physical-path))
         (unavailable (plist-get data :unavailable-p)))
     (cond
+     ((eq scheme 'notes)
+      (unless (and session (mevedel-session-workspace session))
+        "Note resources require a session workspace"))
      ((and (eq scheme 'work) (mevedel-resource--shared-work-p components))
       (unless root "Shared working files require a workspace"))
      ((and (eq scheme 'history) (equal (car components) "saved"))
@@ -2194,6 +2218,10 @@ executor."
                                 (plist-get data :root)
                                 (when-let* ((session (plist-get data :session)))
                                   (mevedel-session-save-path session))
+                                (when-let* (((eq (plist-get data :scheme) 'notes))
+                                            (session (plist-get data :session))
+                                            (workspace (mevedel-session-workspace session)))
+                                  (mevedel-workspace-root workspace))
                                 (when (eq (plist-get data :scheme) 'work)
                                   (mevedel-resource-work-shared-directory
                                    (plist-get data :workspace)))))))))

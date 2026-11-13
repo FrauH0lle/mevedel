@@ -29,7 +29,6 @@
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace-instruction-hashes "mevedel-structs" (cl-x) t)
-(defvar mevedel--current-directive-uuid)
 (defvar mevedel--session)
 
 ;; `mevedel-tool-fs-read'
@@ -179,7 +178,7 @@ Use the recipient's selected components; never give a worker the root Goal."
                (names (if invocation
                           (mevedel-agent-context-components
                            (mevedel-agent-invocation-agent invocation))
-                        mevedel-system-retained-components))
+                        (mevedel-system-context-components mevedel--session)))
                (context (mevedel-system--make-context
                          (mevedel-session-workspace mevedel--session)
                          (mevedel-conversation-working-directory mevedel--session)
@@ -202,8 +201,6 @@ Use the recipient's selected components; never give a worker the root Goal."
           ;; Engine transfer invalidates delivery, but keeps known paths so
           ;; startup failure/reopen cannot silently discard nested guidance.
           (when (and (not invocation)
-                     ;; Fresh directives own request-local instruction hashes.
-                     (not mevedel--current-directive-uuid)
                      (cl-some (lambda (entry)
                                 (and (equal "/root" (caar entry)) (null (cdr entry))))
                               (mevedel-session-workspace-instruction-hashes mevedel--session)))

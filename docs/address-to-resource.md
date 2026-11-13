@@ -29,6 +29,7 @@ resource URI.
 | Saved workspace conversations | `history://saved[/SESSION[/SEGMENT]]` | yes | yes | yes | no |
 | Persistent memory | `memory://root`, `memory://ROOT-KEY/RELATIVE-PATH` | yes | yes | yes | explicit file descendants |
 | Workspace journal | `memory://journal/`, `memory://journal/FILE` | yes | yes | yes | no |
+| Workspace notes | `notes://`, `notes://UUID.md` | yes | yes | yes | no |
 | MCP resource | `mcp://`, `mcp://ENCODED-SERVER`, `mcp://ENCODED-SERVER/ENCODED-URI` | yes | no | no | no |
 | Shared item | `shared://`, `shared://ID[/PART]`, `shared://library[/NAME][/sheet.png]` | yes | no | text views | no |
 | Packaged documentation | `mevedel://`, `mevedel://RELATIVE-PATH` | yes | yes | yes | no |
@@ -44,6 +45,8 @@ an existing save path. The remaining families are advertised only when the
 current resource metadata has a usable surface:
 
 - `skill://` requires at least one enabled, discoverable skill;
+- `notes://` requires the session's workspace; discovery advertises the family
+  without observing the instruction store or reading note contents;
 - `agent://` requires at least one retained agent record;
 - live `history://root[/PATH]` requires a live root conversation or a retained
   agent conversation; `history://saved` requires the request's workspace;
@@ -66,7 +69,7 @@ invocation, or mutation.
 
 ## Canonical addresses and locator classes
 
-Only the eight `scheme://` prefixes above are internal addresses. An
+Only the `scheme://` prefixes above are internal addresses. An
 unknown `scheme://` prefix, malformed known address, traversal, or containment
 failure is a validation error and is not treated as a filesystem path. Other
 strings containing a colon remain ordinary tool input.
@@ -137,6 +140,10 @@ The address forms have these identity rules:
   fragments, percent signs, spaces, and Unicode are encoded.
 - `mevedel://RELATIVE-PATH` names a packaged Markdown document relative to the
   installed `docs/` root. Bare `mevedel://` is a dynamic documentation listing.
+- `notes://UUID.md` names a note by its lowercase UUID in the session's
+  workspace, not by its display number or a source-file path. It is a
+  workspace-relative locator; bare `notes://` is dynamic discovery. There
+  are no workspace selectors, nested paths or numeric aliases.
 
 Exact locators may be atomically bound and later resolve current content.
 Session-relative locators are stable only within their owning root session.
@@ -224,7 +231,7 @@ Shared files survive session rename, fork, rewind and deletion, because they
 are workspace-owned. They are mutable, machine-local and temporary working
 material (the directory is not tracked in Git), distinct from curated
 `memory://` and immutable dated `memory://journal/` evidence. Neither scope participates
-in source snapshots, touched-file tracking, diagnostics or directive patch
+in source snapshots, touched-file tracking, diagnostics or source patch
 capture. Shared writes use the real backing path for normal filesystem edit
 permissions; they receive no session scratch exception in Plan mode.
 
@@ -359,9 +366,10 @@ published journal entries and shared-item text views) run over authorized
 client-local snapshots. Selecting that local helper target preserves the
 caller's permission context throughout asynchronous preparation; it does not
 substitute the global permission mode for the session's mode. Actual authority
-changes during preparation still refuse launch. A directive or shared-item conversation can
-retrieve relevant parent decisions this way without including the entire room
-in every request. The resource catalog advertises availability; the model
+changes during preparation still refuse launch. A shared-item conversation can
+retrieve relevant room decisions this way without including the entire room
+in every request. A note conversation has its own session root; saved-history
+search can retrieve other workspace conversations explicitly. The resource catalog advertises availability; the model
 chooses a search or read when the task needs it. Addresses grant neither new
 permissions nor cross-session access.
 
@@ -463,6 +471,42 @@ every use, so an observation does not extend the ordinary recall period. An init
 composer can still insert `memory://journal/`; request-time discovery populates its
 descendants. Authorized operations always validate current storage, independently
 of the discovery observation and whether automatic capture is enabled.
+
+### `notes://`
+
+This family exposes marked-code notes, not shared working files. It supports
+Read, Glob and Grep only. The session's workspace is the sole owner, including
+when a retained agent supplies the call; an explicit alternative workspace
+cannot redirect it. A session without a workspace is unavailable.
+
+Bare Read returns note addresses with display numbers, authors and lifecycle
+states. Each `notes://UUID.md` reads a Markdown document with its number and
+address, complete text, tags, author, lifecycle state, source location and current
+marked code. Recently closed notes remain discoverable and readable within the
+existing closed-note retention policy, with their close reason. Expired or
+unknown UUIDs fail with discovery guidance. Empty discovery succeeds without
+creating storage, a session or a note.
+
+Glob matches the logical `UUID.md` names without reading source contents.
+Grep searches the same Markdown documents Read returns, using the ordinary
+search filters, bounds and canonical address projection. A content match's
+line number addresses the note document, not the source file. Authorized
+operations observe current note state; preparation does not capture note text
+or source bytes.
+
+Code access checks ordinary Read authority for each source before reading it.
+Live sources include unsaved edits; unopened sources are re-anchored in private
+buffers without visiting files or creating source overlays. Each unopened file
+is read at most once per operation, and temporary buffers and search snapshots
+are discarded on settlement. Denied code and missing or unresolved source
+anchors are explicit unavailable annotations, never old anchor text represented
+as current code. The note's own text and metadata remain readable.
+
+Discovery advertises only the family and its capabilities, never note contents.
+Completion offers its prefix without loading notes or observing their store;
+Read and Glob discover individual UUID addresses. Reading never sends a note,
+starts a conversation or imports conversation history. ApplyPatch is unsupported
+in every permission mode; note mutation belongs to dedicated note actions.
 
 ### `shared://`
 
@@ -617,9 +661,8 @@ pipeline denies any proposal with an ordinary, shared, memory, or bare endpoint:
 mixed local/ordinary and ordinary-only proposals are denied tree-wide, and no
 local directory or ordinary target is touched. Permission mode and allow rules
 cannot widen that boundary. Other edit tools and `Eval` remain unavailable;
-resource recognition does not reopen those capabilities. Directive Planning
-has a separate strictly read-only boundary and does not allow `ApplyPatch`,
-including session-only proposals, or `Eval`.
+resource recognition does not reopen those capabilities. Note conversations
+use this same Plan boundary; there is no separate directive Planning workflow.
 
 See [`tools.md`](tools.md#resource-addresses-in-filesystem-shaped-tools),
 [`mentions.md`](mentions.md#atomic-binding-lifecycle),

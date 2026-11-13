@@ -262,12 +262,8 @@ When SOURCE-POS is non-nil, verify its prompt before replacing the view."
              (turn (plist-get context :turn)))
         (when (and (eq (plist-get context :data) buffer)
                    (eq (plist-get turn :role) 'user)
-                   (or (and (<= (plist-get turn :start) source-pos)
-                            (< source-pos (plist-get turn :end)))
-                       ;; A directive's indexed position is its boundary,
-                       ;; before the user body and thus before the turn start.
-                       (eql source-pos
-                            (plist-get (plist-get turn :directive) :start)))
+                   (<= (plist-get turn :start) source-pos)
+                   (< source-pos (plist-get turn :end))
                    (memq (get-text-property pos 'mevedel-view-type)
                          '(turn-header turn-summary)))
           (setq found pos)))

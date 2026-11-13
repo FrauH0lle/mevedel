@@ -595,41 +595,12 @@
             (mevedel-compact-evidence-tail-turns 2)
             (mevedel-compact-evidence-tail-budget 0.25))
         (should (= (mevedel-compact-evidence-tail-start (point-max) nil)
-                   u2-start)))))
-
-  :doc "retains a directive boundary pair when its turn enters the tail"
-  (with-temp-buffer
-    (insert "u1\n")
-    (let ((response-start (point)))
-      (insert "a1\n")
-      (put-text-property response-start (point) 'gptel 'response))
-    (let ((boundary-start (point)))
-      (insert (mevedel--format-hook-audit-record
-               '(:type directive-turn-boundary :edge start
-                 :directive-id "d1" :action discuss :turn 2)))
-      (insert "directive prompt\n")
-      (let ((response-start (point)))
-        (insert "directive answer\n")
-        (put-text-property response-start (point) 'gptel 'response))
-      (insert (mevedel--format-hook-audit-record
-               '(:type directive-turn-boundary :edge end
-                 :directive-id "d1" :action discuss :turn 2
-                 :outcome success :sequence 1)))
-      (insert "u3\n")
-      (let ((response-start (point)))
-        (insert "a3\n")
-        (put-text-property response-start (point) 'gptel 'response))
-      (let ((mevedel-model-context-limit 200000)
-            (gptel-model nil)
-            (mevedel-compact-evidence-tail-turns 2)
-            (mevedel-compact-evidence-tail-budget 0.25))
-        (should (= boundary-start
-                   (mevedel-compact-evidence-tail-start (point-max) nil)))))))
+                   u2-start))))))
 
 (mevedel-deftest mevedel-compact-evidence-rebuild-prompt-buffer ()
   ,test
   (test)
-  :doc "reapplies directive context projection after rebuilding the prompt"
+  :doc "keeps old directive turns model-visible after rebuilding the prompt"
   (let ((source (generate-new-buffer " *compact-source*"))
         (prompt (generate-new-buffer " *compact-prompt*")))
     (unwind-protect
@@ -650,8 +621,7 @@
             (goto-char (point-min))
             (should-not (get-text-property (point) 'gptel))
             (search-forward "directive body")
-            (should (eq 'ignore (get-text-property (match-beginning 0)
-                                                    'gptel)))))
+            (should-not (get-text-property (match-beginning 0) 'gptel))))
       (kill-buffer source)
       (kill-buffer prompt))))
 

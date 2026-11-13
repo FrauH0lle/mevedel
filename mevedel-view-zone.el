@@ -8,7 +8,7 @@
 ;;; Commentary:
 
 ;; Owns the fixed fragment-backed regions of view chrome: status,
-;; interaction, progress, and directive activity.  Producers supply
+;; interaction, and progress.  Producers supply
 ;; complete fragment sets; this module owns region identity, overlay lifetime,
 ;; marker behavior,
 ;; preservation, reconciliation, recovery, collapse, and navigation.
@@ -68,7 +68,7 @@
   "Managed region overlays keyed by fixed zone name.")
 
 (defconst mevedel-view-zone--names
-  '(status interaction progress directive-inspector)
+  '(status interaction progress)
   "Fixed names of fragment-backed view zones.")
 
 (defconst mevedel-view-zone-owned-properties
@@ -626,7 +626,6 @@ Stale text, such as text that outlived lost local state, still needs one."
 (defun mevedel-view-zone--composer-live-p ()
   "Return non-nil when the current view has an editable composer."
   (and (not mevedel-view--agent-transcript-p)
-       (not (derived-mode-p 'mevedel-directive-activity-mode))
        (boundp 'mevedel-view--input-marker)
        (markerp mevedel-view--input-marker)
        (eq (marker-buffer mevedel-view--input-marker) (current-buffer))))

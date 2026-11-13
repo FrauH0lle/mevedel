@@ -1,8 +1,24 @@
 # Make revision state-dependent implementation
 
-Status: accepted. Composer placement follows [ADR 0091](0091-render-directive-turns-in-the-shared-session-view.md).
+Status: superseded by [ADR 0132](0132-notes-replace-references-directives-and-buddy-notes.md).
 
 ## Current decision
+
+Notes have no Discuss, Implement, Request changes or Retry actions. Sending opens
+an isolated ordinary session; revisions, alternatives and checks are user requests
+in its composer under session permissions and Plan mode. A prepared change retains
+base bytes, preserves disjoint later edits and refuses conflicting or unsaved
+edits when applied. A newer proposal replaces the waiting one; earlier proposals
+remain in the conversation history. ADR 0132 owns that lifecycle.
+
+## Decision history
+
+The state-dependent directive actions below reused implementation behavior rather
+than adding a revision mode. They still required special context assembly and
+attempt ownership. Independent note sessions supply ordinary follow-up history
+without that action/state matrix, so the notes redesign removes it.
+
+### Original directive revision decision
 
 Discuss and Implement are the initial directive intents. Request changes after
 success and Retry after failure/abort are further implementation attempts, using
@@ -26,15 +42,14 @@ Each accepted attempt retains its exact submitted request, outcome, available
 answer/error, captured patch, completeness, and execution checkpoint. Capture
 distinguishes known no-change, captured changes, and gaps from unsnapshotted
 effects. The reusable diff viewer projects one selected attempt and owns neither
-history nor revision context. [Directive views](../view.md#directive-turns-and-inspector)
-provide the interaction entry points.
+history nor revision context. Directive views provided the interaction entry points.
 
 Batch processing starts only initial implementations: Ready directives directly,
 Discussed directives with matching discussion. It skips directives with an
 implementation attempt, never infers revision/retry, and stops at the first
 failed or aborted attempt.
 
-## Rationale and consequences
+### Historical rationale and consequences
 
 Available actions follow lifecycle state and preserve authored intent. A separate
 revision identity duplicated implementation behavior whose only difference was
@@ -42,7 +57,7 @@ historical context. Keeping attempts immutable makes failures and partial effect
 inspectable instead of overwriting one directive-level answer. A state-dependent
 batch cannot silently reinterpret failed work as permission to retry it.
 
-## Decision history
+### Earlier amendments
 
 ADR 0089 removed Revise as a peer action/processing mode in favor of Request
 changes and Retry. Its separate composer placement was subsequently replaced by

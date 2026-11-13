@@ -6,6 +6,14 @@
 
 ;;; Code:
 
+(require 'mevedel-notes)
+(require 'mevedel-persistence)
+(require 'mevedel-instruction-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-instruction-test-support"))
+
 (require 'mevedel-session-test-support
          (file-name-concat
           (file-name-directory
@@ -1681,7 +1689,7 @@
             (setq source-buf (find-file-noselect source-file))
             (with-current-buffer source-buf
               (setq-local mevedel--workspace workspace)
-              (mevedel--create-reference-in source-buf (point-min) (point-max)))
+              (mevedel-instruction-test--create-note-in source-buf (point-min) (point-max)))
             (setq session (mevedel-session-create "main" workspace))
             (setf (mevedel-session-turn-count session) 1)
             (setq data-buf (generate-new-buffer "*test-data-buf*"))
@@ -1753,7 +1761,7 @@
             (setq source-buf (find-file-noselect source-file))
             (with-current-buffer source-buf
               (setq-local mevedel--workspace workspace)
-              (mevedel--create-reference-in source-buf (point-min) (point-max)))
+              (mevedel-instruction-test--create-note-in source-buf (point-min) (point-max)))
             (setq session (mevedel-session-create "main" workspace))
             (setf (mevedel-session-turn-count session) 1)
             (setq data-buf (generate-new-buffer "*test-data-buf*"))
@@ -1784,17 +1792,19 @@
           (session nil))
       (unwind-protect
           (let* ((source-file (file-name-concat tempdir "source.el"))
-                 (directive-text (copy-sequence "Fix beta")))
+                 (note-text (copy-sequence "Fix beta")))
             (test-mevedel-session-persistence--reset-instructions)
             (write-region "(defun beta () t)\n" nil source-file nil 'silent)
             (setq source-buf (find-file-noselect source-file))
-            (add-text-properties 0 (length directive-text)
+            (add-text-properties 0 (length note-text)
                                  `(tabulated-list-id ,source-buf)
-                                 directive-text)
+                                 note-text)
             (with-current-buffer source-buf
               (setq-local mevedel--workspace workspace)
-              (mevedel--create-directive-in
-               source-buf (point-min) (point-max) nil directive-text))
+              (mevedel-note-edit
+               note-text
+               (mevedel-instruction-test--create-note-in
+                source-buf (point-min) (point-max))))
             (setq session (mevedel-session-create "main" workspace))
             (setq data-buf (generate-new-buffer "*test-data-buf*"))
             (with-current-buffer data-buf
@@ -1809,90 +1819,21 @@
                    (save-file (with-temp-buffer
                                 (insert-file-contents current-path)
                                 (read (current-buffer))))
-                   (directive
-                    (car (plist-get save-file :directives)))
-                   (request (plist-get directive :request)))
-              (should (equal "Fix beta" request))
-              (should-not (text-properties-at 0 request)))
+                   (instruction
+                    (car (plist-get (cdr (assoc "source.el" (plist-get save-file :files)))
+                                    :instructions)))
+                   (text (plist-get (plist-get instruction :properties)
+                                    'mevedel-note-text)))
+              (should (equal "Fix beta" text))
+              (should-not (text-properties-at 0 text)))
             (with-current-buffer data-buf
               (mevedel--clear-instruction-state workspace)
               (mevedel-session-artifacts-load-instructions session data-buf))
             (mevedel--instruction-activate-workspace workspace)
             (let* ((ov (car (alist-get source-buf (mevedel--instruction-alist))))
-                   (request (mevedel--directive-text ov)))
-              (should (equal "Fix beta" request))
-              (should-not (text-properties-at 0 request))))
-        (when (and data-buf (buffer-live-p data-buf))
-          (test-mevedel-session-persistence--release-and-kill data-buf session))
-        (when (buffer-live-p source-buf)
-          (with-current-buffer source-buf (set-buffer-modified-p nil))
-          (kill-buffer source-buf))
-        (delete-directory tempdir t)
-        (test-mevedel-session-persistence--reset-instructions)
-        (mevedel-workspace-clear-registry))))
-  :doc "loads historical presentations without replacing current directive records"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-session-persistence--make-tempdir-workspace)
-    (let ((source-buf nil)
-          (data-buf nil)
-          (session nil))
-      (unwind-protect
-          (let ((source-file (file-name-concat tempdir "source.el")))
-            (test-mevedel-session-persistence--reset-instructions)
-            (write-region "EARLY\nLATER\n" nil source-file nil 'silent)
-            (setq source-buf (find-file-noselect source-file))
-            (with-current-buffer source-buf
-              (setq-local mevedel--workspace workspace)
-              (goto-char (point-min))
-              (search-forward "EARLY")
-              (mevedel--create-directive-in
-               source-buf (match-beginning 0) (match-end 0) nil "Early"))
-            (setq session (mevedel-session-create "main" workspace)
-                  data-buf (generate-new-buffer "*test-data-buf*"))
-            (setf (mevedel-session-turn-count session) 1)
-            (with-current-buffer data-buf
-              (setq-local mevedel--workspace workspace)
-              (setq-local mevedel--session session)
-              (org-mode)
-              (insert "First turn\n")
-              (mevedel-session-artifacts-save session data-buf))
-            (let ((early (car (mevedel-workspace-directives workspace))))
-              (setf (mevedel-directive-attempts early)
-                    (list
-                     (mevedel-directive-attempt--create
-                      :directive-request "Early" :request "Early prompt"
-                      :result "Done" :outcome 'success :patch ""
-                      :capture 'complete :captured-at "2026-08-02T03:00:00+0200"
-                      :checkpoint '(:session-id "session" :turn 1))))
-              (mevedel-directive-set-request early "Current early edit")
-              (with-current-buffer source-buf
-                (goto-char (point-min))
-                (search-forward "LATER")
-                (mevedel--create-directive-in
-                 source-buf (match-beginning 0) (match-end 0) nil "Later"))
-              (let* ((later (car (mevedel-workspace-directives workspace)))
-                     (records (copy-sequence
-                               (mevedel-workspace-directives workspace))))
-                (setf (mevedel-directive-attempts later)
-                      (list
-                       (mevedel-directive-attempt--create
-                        :directive-request "Later" :outcome 'success
-                        :checkpoint '(:session-id "session" :turn 2))))
-                (with-current-buffer data-buf
-                  (mevedel-session-artifacts-load-instructions
-                   session data-buf 1 records))
-                (should (equal records
-                               (mevedel-workspace-directives workspace)))
-                (should (equal "Current early edit"
-                               (mevedel-directive-request early)))
-                (should (= 1 (length (mevedel-directive-attempts early))))
-                (should (= 1 (length (mevedel-directive-attempts later))))
-                (dolist (record records)
-                  (should
-                   (eq record
-                       (mevedel--directive-record
-                        (mevedel--instruction-with-uuid
-                         (mevedel-directive-id record) workspace))))))))
+                   (text (overlay-get ov 'mevedel-note-text)))
+              (should (equal "Fix beta" text))
+              (should-not (text-properties-at 0 text))))
         (when (and data-buf (buffer-live-p data-buf))
           (test-mevedel-session-persistence--release-and-kill data-buf session))
         (when (buffer-live-p source-buf)
@@ -1922,14 +1863,13 @@
               (make-directory (file-name-directory path) t)
               (write-region "(:files ((\"source.el\" . #<marker>)))"
                             nil path nil 'silent)
-              ;; Only a workspace without an instruction store restores the
-              ;; session snapshot: remove the store the save created and
-              ;; restart, so the session's own snapshot is the source again.
-              (delete-file (mevedel-instruction-store-path workspace))
+              (when (file-exists-p (mevedel-instruction-store-path workspace))
+                (delete-file (mevedel-instruction-store-path workspace)))
               (test-mevedel-session-persistence--reset-instructions)
-              (should-not
-               (mevedel-session-artifacts-load-instructions
-                session data-buf))))
+              (should (equal '(:store nil)
+                             (mevedel-session-artifacts-load-instructions
+                              session data-buf)))
+              (should-not (file-exists-p (mevedel-instruction-store-path workspace)))))
         (when (and data-buf (buffer-live-p data-buf))
           (test-mevedel-session-persistence--release-and-kill data-buf session))
         (delete-directory tempdir t)
@@ -1999,7 +1939,7 @@
                             t)))
                       (should
                        (mevedel-session-artifacts-load-instructions
-                        session data-buffer)))
+                        session data-buffer nil t)))
                     (should-not (file-remote-p observed-source))
                     (should-not (equal observed-source instruction-path))
                     (should (equal published observed-content))
@@ -2034,7 +1974,7 @@
               (setq-local mevedel--workspace workspace)
               (goto-char (point-min))
               (search-forward "TARGET\n")
-              (mevedel--create-reference-in
+              (mevedel-instruction-test--create-note-in
                source-buf (match-beginning 0) (match-end 0)))
             (setq session (mevedel-session-create "main" workspace))
             (setf (mevedel-session-turn-count session) 1)
@@ -2083,11 +2023,11 @@
               (goto-char (point-min))
               (let ((parent-start (point)))
                 (search-forward "END\n")
-                (mevedel--create-reference-in
+                (mevedel-instruction-test--create-note-in
                  source-buf parent-start (point)))
               (goto-char (point-min))
               (search-forward "child")
-              (mevedel--create-reference-in
+              (mevedel-instruction-test--create-note-in
                source-buf (match-beginning 0) (match-end 0)))
             (setq session (mevedel-session-create "main" workspace))
             (setf (mevedel-session-turn-count session) 1)
@@ -2146,7 +2086,7 @@
               (setq-local mevedel--workspace workspace)
               (goto-char (point-min))
               (search-forward "dup\n")
-              (mevedel--create-reference-in
+              (mevedel-instruction-test--create-note-in
                source-buf (match-beginning 0) (match-end 0)))
             (setq session (mevedel-session-create "main" workspace))
             (setf (mevedel-session-turn-count session) 1)
@@ -2173,54 +2113,6 @@
           (with-current-buffer source-buf (set-buffer-modified-p nil))
           (kill-buffer source-buf))
         (setq mevedel-instruction-anchor-context-chars old-context)
-        (delete-directory tempdir t)
-        (test-mevedel-session-persistence--reset-instructions)
-        (mevedel-workspace-clear-registry))))
-  :doc "reanchors a bodyless directive by surrounding context"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-session-persistence--make-tempdir-workspace)
-    (let ((source-buf nil)
-          (data-buf nil)
-          (session nil))
-      (unwind-protect
-          (let ((source-file (file-name-concat tempdir "source.el")))
-            (test-mevedel-session-persistence--reset-instructions)
-            (write-region "before TARGET after\n" nil source-file nil 'silent)
-            (setq source-buf (find-file-noselect source-file))
-            (with-current-buffer source-buf
-              (setq-local mevedel--workspace workspace)
-              (goto-char (point-min))
-              (search-forward "TARGET")
-              (mevedel--create-directive-in
-               source-buf (match-beginning 0) (match-beginning 0)
-               t "Do it"))
-            (setq session (mevedel-session-create "main" workspace))
-            (setf (mevedel-session-turn-count session) 1)
-            (setq data-buf (generate-new-buffer "*test-data-buf*"))
-            (with-current-buffer data-buf
-              (setq-local mevedel--workspace workspace)
-              (setq-local mevedel--session session)
-              (org-mode)
-              (insert "Explain bodyless target\n")
-              (mevedel-session-artifacts-save session data-buf)
-              (mevedel--clear-instruction-state workspace)
-              (with-current-buffer source-buf
-                (goto-char (point-min))
-                (insert "inserted\n"))
-              (mevedel-session-artifacts-load-instructions
-               session data-buf 1))
-            (mevedel--instruction-activate-workspace workspace)
-            (let ((ov (car (alist-get source-buf (mevedel--instruction-alist)))))
-              (should ov)
-              (should (= (overlay-start ov) (overlay-end ov)))
-              (with-current-buffer source-buf
-                (goto-char (overlay-start ov))
-                (should (looking-at-p "TARGET")))))
-        (when (and data-buf (buffer-live-p data-buf))
-          (test-mevedel-session-persistence--release-and-kill data-buf session))
-        (when (buffer-live-p source-buf)
-          (with-current-buffer source-buf (set-buffer-modified-p nil))
-          (kill-buffer source-buf))
         (delete-directory tempdir t)
         (test-mevedel-session-persistence--reset-instructions)
         (mevedel-workspace-clear-registry)))))
@@ -4400,26 +4292,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
         (should (= prompt-start (plist-get (car prompts) :pos)))
         (should (equal "#+begin_src emacs-lisp"
                        (plist-get (car prompts) :preview))))))
-  :doc "indexes a directive prompt at its paired boundary"
-  (with-temp-buffer
-    (insert "ordinary\n" (propertize "answer\n" 'gptel 'response))
-    (let ((boundary-start (point)))
-      (insert (mevedel--format-hook-audit-record
-               '(:type directive-turn-boundary :edge start
-                 :directive-id "directive-123" :action discuss :turn 2)))
-      (insert "directive prompt\n")
-      (insert (propertize "directive answer\n" 'gptel 'response))
-      (insert (mevedel--format-hook-audit-record
-               '(:type directive-turn-boundary :edge end
-                 :directive-id "directive-123" :action discuss :turn 2
-                 :outcome success :sequence 1)))
-      (let ((prompt (nth 1 (mevedel-session-artifacts-collect-prompts
-                            (current-buffer)))))
-        (should (= boundary-start (plist-get prompt :pos)))
-        (should (eq 'directive (plist-get prompt :kind)))
-        (should (equal "directive-123" (plist-get prompt :directive-id)))
-        (should (= 2 (plist-get prompt :reserved-turn))))))
-  :doc "keeps mixed chat and directive follow-ups in one chronology"
+  :doc "indexes old directive turns as ordinary prompts in one chronology"
   (with-temp-buffer
     (insert "ordinary one\n" (propertize "answer one\n" 'gptel 'response))
     (insert (mevedel--format-hook-audit-record
@@ -4446,19 +4319,17 @@ rotation never saves through a rebound temporary visited filename or prompts"
       (should (equal '(1 2 3 4) (mapcar (lambda (entry)
                                          (plist-get entry :turn))
                                        prompts)))
-      (should (equal '(nil directive nil directive)
-                     (mapcar (lambda (entry) (plist-get entry :kind))
+      (should (equal '("ordinary one" "directive one"
+                       "ordinary two" "directive follow-up")
+                     (mapcar (lambda (entry) (plist-get entry :preview))
                              prompts)))
-      (should (equal '(2 4)
-                     (delq nil
-                           (mapcar (lambda (entry)
-                                     (plist-get entry :reserved-turn))
-                                   prompts)))))))
+      (should-not (cl-some (lambda (entry) (plist-get entry :kind))
+                           prompts)))))
 
 
 (defun test-mevedel-prompt-cache--turn (n &optional directive)
   "Insert turn N: prompt, tool block, response and fork point.
-With DIRECTIVE, wrap the turn in directive boundary records."
+With DIRECTIVE, wrap the turn in old directive boundary records."
   (when directive
     (insert (mevedel--format-hook-audit-record
              (list :type 'directive-turn-boundary :edge 'start
@@ -4576,7 +4447,7 @@ With DIRECTIVE, wrap the turn in directive boundary records."
       (funcall edit)
       (should (equal (test-mevedel-prompt-cache--oracle)
                      (mevedel-session-artifacts--prompt-derive (current-buffer))))))
-  :doc "directive boundaries and an unpaired audit opener that later closes"
+  :doc "old directive boundaries and an unpaired audit opener that later closes"
   (with-temp-buffer
     (test-mevedel-prompt-cache--turn 1)
     (test-mevedel-prompt-cache--turn 2 t)
@@ -4729,16 +4600,7 @@ With DIRECTIVE, wrap the turn in directive boundary records."
   (test)
   :doc "builds an ordinary prompt entry"
   (should (equal '(:turn 2 :pos 10 :preview "hello")
-                 (mevedel-session-artifacts--prompt-record 2 10 "hello" nil)))
-  :doc "places a directive prompt at its boundary and carries its identity"
-  (let ((record (mevedel-session-artifacts--prompt-record
-                 3 50 "run"
-                 '(:start 40 :directive-id "d" :action discuss
-                   :outcome success :sequence 1 :turn 3))))
-    (should (= 40 (plist-get record :pos)))
-    (should (eq 'directive (plist-get record :kind)))
-    (should (equal "d" (plist-get record :directive-id)))
-    (should (= 3 (plist-get record :reserved-turn)))))
+                 (mevedel-session-artifacts--prompt-record 2 10 "hello"))))
 
 (mevedel-deftest mevedel-session-artifacts--prompt-cache-eligible-p ()
   ,test
@@ -4938,21 +4800,18 @@ With DIRECTIVE, wrap the turn in directive boundary records."
 (mevedel-deftest mevedel-session-artifacts--prompts-from-units ()
   ,test
   (test)
-  :doc "numbers only units with prompts and links the enclosing directive"
+  :doc "numbers only units with prompts"
   (let* ((units (list (vector 0 5 0 0 0 nil nil)
                       (vector 5 20 5 0 0 8 "first")
                       (vector 20 40 20 0 0 30 "second")
                       (vector 40 60 40 0 0 50 "third")))
-         (prompts (mevedel-session-artifacts--prompts-from-units
-                   units 100
-                   (list (list :start 125 :body-start 128 :body-end 135
-                               :directive-id "d" :action 'discuss :turn 2)))))
+         (prompts (mevedel-session-artifacts--prompts-from-units units 100)))
     (should (equal '(1 2 3) (mapcar (lambda (prompt) (plist-get prompt :turn))
                                     prompts)))
-    (should (equal '(108 125 150) (mapcar (lambda (prompt) (plist-get prompt :pos))
+    (should (equal '(108 130 150) (mapcar (lambda (prompt) (plist-get prompt :pos))
                                           prompts)))
-    (should (equal '(nil directive nil)
-                   (mapcar (lambda (prompt) (plist-get prompt :kind))
+    (should (equal '("first" "second" "third")
+                   (mapcar (lambda (prompt) (plist-get prompt :preview))
                            prompts)))))
 
 
@@ -5016,27 +4875,7 @@ With DIRECTIVE, wrap the turn in directive boundary records."
             (mevedel-session-artifacts-update-prompt-index
              fresh (current-buffer)))
           (should (equal (mevedel-session-prompt-index fresh)
-                         (mevedel-session-prompt-index incremental)))))))
-  :doc "uses the directive boundary as the canonical cumulative turn"
-  (let ((session (mevedel-session--create :current-segment 1)))
-    (with-temp-buffer
-      (insert "ordinary\n" (propertize "answer\n" 'gptel 'response))
-      (insert (mevedel--format-hook-audit-record
-               '(:type directive-turn-boundary :edge start
-                 :directive-id "directive-123" :action discuss :turn 2)))
-      (insert "directive prompt\n")
-      (insert (propertize "directive answer\n" 'gptel 'response))
-      (insert (mevedel--format-hook-audit-record
-               '(:type directive-turn-boundary :edge end
-                 :directive-id "directive-123" :action discuss :turn 2
-                 :outcome success :sequence 1)))
-      (mevedel-session-artifacts-update-prompt-index
-       session (current-buffer))
-      (let ((prompt (nth 1 (cdr (assoc 1
-                                       (mevedel-session-prompt-index
-                                        session))))))
-        (should (= 2 (plist-get prompt :cum-turn)))
-        (should (= 2 (plist-get prompt :reserved-turn)))))))
+                         (mevedel-session-prompt-index incremental))))))))
 
 
 (mevedel-deftest mevedel-session-artifacts--ensure-latest-fork-point ()

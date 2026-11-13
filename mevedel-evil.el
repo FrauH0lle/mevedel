@@ -24,12 +24,12 @@
 (defvar evil-normal-state-map)
 (defvar evil-state)
 
-;; `mevedel-directive-source'
-(declare-function mevedel-instruction-replacement-end "mevedel-directive-source" (&optional buffer))
-(declare-function mevedel-instruction-replacement-hold "mevedel-directive-source" (&optional buffer))
+;; `mevedel-note-source'
+(declare-function mevedel-instruction-replacement-end "mevedel-note-source" (&optional buffer))
+(declare-function mevedel-instruction-replacement-hold "mevedel-note-source" (&optional buffer))
 
 ;; `mevedel-overlays'
-(declare-function mevedel--create-instruction "mevedel-overlays" (type &optional span))
+
 
 ;; `mevedel-view'
 (defvar mevedel-view-mode-map)
@@ -52,8 +52,7 @@
 (defconst mevedel-evil--map-features
   '((mevedel-report mevedel-report-mode-map)
     (mevedel-journal-jobs mevedel-journal-jobs-mode-map)
-    (mevedel-directive-activity mevedel-directive-activity-mode-map)
-    (mevedel-directive-frame mevedel-directive-frame-mode-map)
+    (mevedel-note-frame mevedel-note-frame-mode-map)
     (mevedel-subscription-usage mevedel-subscription-usage-mode-map)
     (mevedel-collaboration-share mevedel-collaboration--share-map)
     (mevedel-view mevedel-view-mode-map mevedel-view--display-map)
@@ -180,7 +179,7 @@ conflicting native actions, preserving vanilla behavior in other states."
               (eq symbol 'mevedel-collaboration--share-map))
           (mevedel-evil--adapt-map
            (symbol-value symbol)
-           (memq symbol '(mevedel-view-mode-map mevedel-directive-frame-mode-map)))
+           (memq symbol '(mevedel-view-mode-map mevedel-note-frame-mode-map)))
         (mevedel-evil--overlay-map (symbol-value symbol))))))
 
 (defun mevedel-evil--fragment-maps (&rest maps)
@@ -222,22 +221,6 @@ the ordinary view action outside the composer."
   "Move past a read-only composer prompt when entering an editing state."
   (when (mevedel-evil--in-composer-p)
     (goto-char (max (point) (mevedel-view--input-start)))))
-
-(defun mevedel-evil--source-maps ()
-  "Offer RET for source actions only in Evil normal state.
-The existing dispatch key and all vanilla bindings remain available."
-  (dolist (symbol '(mevedel-reference-actions-map mevedel-directive-actions-map
-                    mevedel-directive-processing-actions-map
-                    mevedel-directive-succeeded-actions-map
-                    mevedel-directive-failed-actions-map))
-    (dolist (key '("RET" "<return>"))
-      (define-key (symbol-value symbol) (kbd key)
-                  '(menu-item "" mevedel--ov-actions-dispatch
-                              :filter mevedel-evil--source-action)))))
-
-(defun mevedel-evil--source-action (command)
-  "Return source action COMMAND only in normal state."
-  (and (mevedel-evil--normal-p) command))
 
 (defun mevedel-evil--selection (function &rest args)
   "Call selection FUNCTION with ARGS using Evil's explicit visual range.
@@ -302,7 +285,6 @@ is harmless.  No evil-collection dependency is needed."
     (evil-set-initial-state 'mevedel-surface-mode 'insert)
     (dolist (mode (append mevedel-evil--cockpit-modes
                           '(mevedel-view-mode mevedel-report-mode
-                            mevedel-directive-activity-mode
                             mevedel-worktree-setup-mode)))
       (evil-set-initial-state mode 'normal))
     (dolist (entry mevedel-evil--map-features)
@@ -319,11 +301,8 @@ is harmless.  No evil-collection dependency is needed."
                    :before #'mevedel-evil--fragment-maps))
     (eval-after-load 'mevedel-view
       '(eval-after-load 'mevedel-view-composer '(mevedel-evil--composer-keys)))
-    (eval-after-load 'mevedel-overlay-ui '(mevedel-evil--source-maps))
-    (dolist (command '(mevedel-create-reference mevedel-create-directive
-                       mevedel-delete-instructions))
+    (dolist (command '(mevedel-delete-instructions))
       (evil-set-command-property command :keep-visual t))
-    (advice-add 'mevedel--create-instruction :around #'mevedel-evil--selection)
     (advice-add 'mevedel-delete-instructions :around #'mevedel-evil--selection)
     (dolist (command '(evil-change evil-enter-replace-state))
       (advice-add command :around #'mevedel-evil--replacement))

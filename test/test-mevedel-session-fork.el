@@ -166,8 +166,7 @@
       (should (= 0 (hash-table-count
                     (mevedel-session-mentions-shown candidate))))
       (dolist (value
-               (list (mevedel-session-directive-planning candidate)
-                     (mevedel-session-pending-reminders candidate)
+               (list (mevedel-session-pending-reminders candidate)
                      (mevedel-session-agent-reservations candidate)
                      (mevedel-session-agent-root-waiter candidate)
                      (mevedel-session-pending-steering candidate)

@@ -431,10 +431,6 @@ mailbox cards as the caller scans in display order."
                       ((memq vtype '(turn-header turn-summary)) 'turn-summary)
                       (t vtype))))
     (cond
-     ;; Directives retain their explicit collapse policy, including the newest
-     ;; settled turn.  Ordinary manual turn folds use source identity instead.
-     ((and (eq state-type 'turn-summary)
-           (get-text-property position 'mevedel-view-directive)) nil)
      ((or (mevedel-view-disclosure--in-flight-source-p source)
           (mevedel-view-disclosure--in-flight-key-p source-key)
           (and (markerp (car-safe source))

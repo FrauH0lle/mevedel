@@ -2,39 +2,43 @@
 
 Status: accepted
 
+The default file policy is defined by
+[ADR 0131: Rewind reverts recorded changes](0131-rewind-reverts-recorded-changes.md).
+Whole-file restoration is available only through its explicit force path.
+
 ## Current decision
 
-Rewind truncates the current session and transactionally restores captured files
-in its current checkout. It creates no child session or parallel checkout.
+Rewind truncates the current session and transactionally reverses discarded
+turns' recorded file changes in its current checkout, preserving unrelated edits.
+It creates no child session or parallel checkout.
 Conversation Fork preserves an alternative conversation; Worktree Fork also
 provides isolated file coexistence. [Sessions](../sessions.md#rewind) owns the
 commands, impact display, restoration procedure, and recovery contract.
 
 Every accepted model turn, including the first, has a pre-turn checkpoint.
-Ordinary chat and directive turns share one chronological undo chain even though
-directive content is excluded from ordinary-chat model context. Entry points
-choose a boundary appropriate to the object the user names:
+Each session, including an isolated note conversation, owns its chronological
+undo chain. Entry points choose a boundary appropriate to the object named:
 
 - Rewind at an assistant response keeps that response's turn.
 - The prompt picker returns to before the selected prompt, discarding its answer
   too; selecting the first prompt can empty the session.
-- **Rewind before this implementation...** discards the directive attempt and
-  every later chat or directive turn.
 
 One candidate state determines the surviving turn count, transcript cutoff,
-activity pruning, and file checkpoints. Confirmation names both sides of the
-boundary and every known capture gap. Rewind can overwrite external changes to
-captured files after approval; it cannot restore uncaptured effects, Git HEAD,
-or the index. Failure before commit rolls back the session/file transaction;
+note reconciliation, and file changes. Confirmation names both sides of the
+boundary and every known capture gap. A conflicting file refuses the whole
+Rewind; cancel, staged smerge resolution and explicit force snapshot restoration
+are the choices. Only force may overwrite newer edits after warning and approval.
+Rewind cannot restore uncaptured effects, Git HEAD or the index.
+Failure before commit rolls back the session/file transaction;
 rollback failures remain visible for recovery.
 
-Current session configuration and user-authored workspace directive records
+Current session configuration and user-authored workspace notes
 survive. Rewind clears live workflow ownership whose tasks, Goals, agents, and
-handoffs have no reliable per-turn journal. Discarded directive attempts lose
-their answers, feedback, and patches; consumed subdirectives return. Surviving
-activity and the current authored request determine the directive's state, and
-restored files determine anchor reattachment. A changed request can therefore
-leave a directive Ready even when older activity survives. Success starts a
+handoffs have no reliable per-turn journal. Discarded turns lose their waiting
+prepared changes; rewinding a note conversation to zero turns returns its sent
+notes to unsent. Text, anchors and conversation links remain, reconciled through
+the workspace store's durable Rewind intent
+([ADR 0130](0130-keep-instructions-in-a-workspace-store.md)). Success starts a
 `SessionStart(rewind)` context epoch without ending the live session; cancelled
 or rolled-back operations start no epoch.
 
@@ -42,7 +46,7 @@ Portable project sessions expose Redo by republishing a selected immutable head
 as a new head. It restores the head's conversation artifacts, sidecar state,
 instruction snapshots, retained agent transcripts, persisted tool results, and
 captured working-tree files. It neither recovers uncaptured effects nor
-resurrects workspace directive records pruned by Rewind. File sessions using
+replaces current workspace notes with historical snapshots. File sessions using
 PID locks have no published heads and no Redo.
 
 Redo preparation and confirmation read immutable bytes without reserving the
@@ -77,9 +81,9 @@ the previous durable state when a save fails.
 
 An in-place operation makes one checkout and its conversation return to one
 boundary. Creating an apparently recoverable conversation variant while changing
-its shared checkout gave two histories incompatible file states. Directive
-patches remain review evidence rather than a selective undo stack, avoiding
-restoration that silently clobbers intervening work from other directives.
+its shared checkout gave two histories incompatible file states. Checked reversal
+now lets independent note sessions share files without silently undoing another
+session's unrelated edits; overlapping changes still require a user decision.
 
 Rewind and Redo share user vocabulary, but use different evidence: Rewind derives
 turn-exact boundaries from prompt/checkpoint history, while Redo selects stored
@@ -93,9 +97,15 @@ manifests can retain bytes in older generation directories.
 
 ## Decision history
 
-All revisions below belong to ADR 0072. Directive transcript representation was
-subsequently replaced by [ADR 0091](0091-render-directive-turns-in-the-shared-session-view.md);
-its shared chronology and workspace-owned identity constraints remain.
+All revisions below belong to ADR 0072.
+
+- **Notes and checked reversal, 2026-11-12:** the earlier decision restored
+  whole captured files and rejected selective directive undo for fear of losing
+  intervening work. ADR 0131 replaces the default with conflict-checked reversal;
+  snapshots capture no additional filesystem effects. ADR 0132 replaces shared
+  directive execution turns, activity pruning and returned subdirectives with
+  independent note sessions and post-commit note lifecycle reconciliation.
+  Whole-file restoration remains explicit force, and Redo remains snapshot-based.
 
 - **Publication-driven collection, 2026-10-19:** a 2.5-hour session retained
   2,850 generations, about 7.3 GB, with 2,819 published before its first root

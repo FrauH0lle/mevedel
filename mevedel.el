@@ -28,10 +28,7 @@
 ;;; Commentary:
 
 ;; Main entry point for mevedel.  Provides the `mevedel' command,
-;; installation/uninstallation of hooks and presets, and the
-;; directive-processing commands (`mevedel-implement-directive',
-;; `mevedel-discuss-directive', `mevedel-request-directive-changes',
-;; and `mevedel-retry-directive').
+;; installation/uninstallation of hooks and presets.
 ;;
 ;; Loads foundational data and exposes autoloaded feature entry points.
 ;; Installation registers the complete tool catalog and integration hooks.
@@ -64,11 +61,15 @@
 (autoload 'mevedel-buddy-abort "mevedel-buddy" nil t)
 (autoload 'mevedel-buddy-clear-changes "mevedel-buddy" nil t)
 (autoload 'mevedel-buddy-dismiss-note "mevedel-buddy-note" nil t)
+(autoload 'mevedel-buddy-keep-note "mevedel-buddy-note" nil t)
 (autoload 'mevedel-buddy-dismiss-notes "mevedel-buddy-note" nil t)
 (autoload 'mevedel-buddy-global-mode "mevedel-buddy" nil t)
 (autoload 'mevedel-buddy-guide "mevedel-buddy" nil t)
 (autoload 'mevedel-buddy-mode "mevedel-buddy" nil t)
 (autoload 'mevedel-buddy-review "mevedel-buddy" nil t)
+(autoload 'mevedel-buddy-set-level "mevedel-buddy" nil t)
+(autoload 'mevedel-note-take "mevedel-notes" nil t)
+(autoload 'mevedel-note-drop "mevedel-notes" nil t)
 (autoload 'mevedel-claude-code-install-adapter "mevedel-claude-code" nil t)
 (autoload 'mevedel-claude-code-recover-history "mevedel-claude-code-session" nil t)
 (autoload 'mevedel-claude-code-setup "mevedel-claude-code" nil t)
@@ -83,9 +84,7 @@
 (autoload 'mevedel-collaboration-stop-all "mevedel-collaboration" nil t)
 (autoload 'mevedel-collaboration-view "mevedel-collaboration" nil t)
 (autoload 'mevedel-compact "mevedel-compact" nil t)
-(autoload 'mevedel-delete-all-directives "mevedel-overlays" nil t)
 (autoload 'mevedel-delete-all-instructions "mevedel-overlays" nil t)
-(autoload 'mevedel-delete-all-references "mevedel-overlays" nil t)
 (autoload 'mevedel-diff-apply-buffer "mevedel-diff-apply" nil t)
 (autoload 'mevedel-evil-setup "mevedel-evil" nil t)
 (autoload 'mevedel-gptel-bridge-open "mevedel-gptel-bridge" nil t)
@@ -99,12 +98,25 @@
 (autoload 'mevedel-journal-inspect "mevedel-journal-jobs" nil t)
 (autoload 'mevedel-journal-jobs "mevedel-journal-jobs" nil t)
 (autoload 'mevedel-journal-retry "mevedel-journal-jobs" nil t)
-(autoload 'mevedel-list-archived-directives "mevedel-directive-activity" nil t)
-(autoload 'mevedel-list-directives "mevedel-directive-activity" nil t)
 (autoload 'mevedel-memory-list-open "mevedel-memory-list" nil t)
+(autoload 'mevedel-note-apply-change "mevedel-note-change" nil t)
+(autoload 'mevedel-note-create "mevedel-notes" nil t)
+(autoload 'mevedel-note-delete "mevedel-notes" nil t)
+(autoload 'mevedel-note-dismiss "mevedel-notes" nil t)
+(autoload 'mevedel-note-dismiss-agent-notes "mevedel-notes" nil t)
+(autoload 'mevedel-note-done "mevedel-notes" nil t)
+(autoload 'mevedel-note-edit "mevedel-notes" nil t)
+(autoload 'mevedel-note-menu "mevedel-notes" nil t)
+(autoload 'mevedel-note-merge-change "mevedel-note-merge" nil t)
+(autoload 'mevedel-note-reask "mevedel-note-conversation" nil t)
+(autoload 'mevedel-note-send "mevedel-note-conversation" nil t)
+(autoload 'mevedel-note-send-batch "mevedel-note-conversation" nil t)
+(autoload 'mevedel-note-restore "mevedel-notes" nil t)
+(autoload 'mevedel-note-revert-change "mevedel-note-change" nil t)
+(autoload 'mevedel-note-set-tags "mevedel-notes" nil t)
+(autoload 'mevedel-notes-list "mevedel-notes-list" nil t)
 (autoload 'mevedel-menu "mevedel-menu" nil t)
 (autoload 'mevedel-menu-open "mevedel-menu" nil t)
-(autoload 'mevedel-open-directive-activity "mevedel-directive-activity" nil t)
 (autoload 'mevedel-pending-inputs-clear "mevedel-pending-inputs" nil t)
 (autoload 'mevedel-pending-inputs-drop-at-point "mevedel-pending-inputs" nil t)
 (autoload 'mevedel-pending-inputs-edit "mevedel-pending-inputs" nil t)
@@ -139,7 +151,7 @@
 (autoload 'mevedel-view-abort "mevedel-view-composer" nil t)
 (autoload 'mevedel-view-arm-conversation-fork "mevedel-view-composer" nil t)
 (autoload 'mevedel-view-arm-worktree-fork "mevedel-view-composer" nil t)
-(autoload 'mevedel-view-back-to-chat "mevedel-view-composer" nil t)
+
 (autoload 'mevedel-view-close-agent-transcript "mevedel-view-agent" nil t)
 (autoload 'mevedel-view-cycle-permission-mode "mevedel-view-composer" nil t)
 (autoload 'mevedel-view-go-to-chat "mevedel-view-segments" nil t)
@@ -170,19 +182,18 @@
 
 ;; Integration callbacks load their owners at the corresponding lifecycle.
 (autoload 'mevedel--active-chat-buffer "mevedel-chat")
-(autoload 'mevedel--attach-directive-skills "mevedel-directive-request")
+
 (autoload 'mevedel--compact-transform-auto "mevedel-compact")
 (autoload 'mevedel--define-presets "mevedel-presets")
-(autoload 'mevedel--directive-bound-session-buffer "mevedel-directive-request")
-(autoload 'mevedel--dispatch-directive-implementation "mevedel-directive-request")
+
+
 (autoload 'mevedel--display-chat-buffer "mevedel-chat")
-(autoload 'mevedel--implement-directive-prompt "mevedel-directive-request")
-(autoload 'mevedel--implement-discussion "mevedel-directive-request")
-(autoload 'mevedel--implement-discussion-prompt "mevedel-directive-request")
+
+
 (autoload 'mevedel--normalize-session-directory "mevedel-chat")
 (autoload 'mevedel--read-session-directory "mevedel-chat")
 (autoload 'mevedel--start-chat "mevedel-chat")
-(autoload 'mevedel--start-directive-discussion "mevedel-directive-request")
+
 (autoload 'mevedel--transform-expand-mentions "mevedel-mentions")
 ;; The bundled artifact skill resolves the store path while it is invoked.
 (autoload 'mevedel-artifact-store-directory "mevedel-artifact-store")
@@ -215,13 +226,12 @@
 (autoload 'mevedel-tool-repair-install-shape-adapter "mevedel-tool-repair-gptel")
 (autoload 'mevedel-tool-repair-uninstall-shape-adapter "mevedel-tool-repair-gptel")
 (autoload 'mevedel-tools-register "mevedel-tools")
-(autoload 'mevedel-transcript-exclude-directive-turns "mevedel-transcript-audit")
 (autoload 'mevedel-transport-install "mevedel-transport")
 (autoload 'mevedel-transport-uninstall "mevedel-transport")
 (autoload 'mevedel-view--refresh-animation-on-face "mevedel-view-stream")
 (autoload 'mevedel-view--resume-attended-views "mevedel-view")
 (autoload 'mevedel-view--transform-model-input "mevedel-view-composer")
-(autoload 'mevedel-view-enter-directive-scope "mevedel-view-composer")
+
 (autoload 'mevedel-view-stream-handle-execution-event "mevedel-view-stream")
 (autoload 'mevedel-worktree-install-slash-command "mevedel-worktree")
 (autoload 'mevedel-worktree-uninstall-slash-command "mevedel-worktree")
@@ -271,23 +281,6 @@
 (declare-function mevedel--compact-transform-auto
                   "mevedel-compact" (continue fsm))
 
-;; `mevedel-directive'
-(declare-function mevedel-directive-actions "mevedel-directive" (directive))
-
-;; `mevedel-directive-request'
-(declare-function mevedel--attach-directive-skills
-                  "mevedel-directive-request" (prompt record chat-buffer))
-(declare-function mevedel--directive-bound-session-buffer
-                  "mevedel-directive-request" (record workspace))
-(declare-function mevedel--dispatch-directive-implementation
-                  "mevedel-directive-request"
-                  (directive record action prompt-fn callback))
-(declare-function mevedel--implement-directive-prompt "mevedel-directive-request" (content))
-(declare-function mevedel--implement-discussion "mevedel-directive-request"
-                  (directive &optional callback))
-(declare-function mevedel--implement-discussion-prompt "mevedel-directive-request"
-                  (content directive))
-
 ;; `mevedel-gptel-bridge'
 (declare-function mevedel-gptel-bridge-install "mevedel-gptel-bridge" ())
 (declare-function mevedel-gptel-bridge-uninstall "mevedel-gptel-bridge" ())
@@ -331,13 +324,6 @@
 (declare-function mevedel-sleep-stop "mevedel-sleep" ())
 
 ;; `mevedel-structs'
-(declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-skills "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-tool-render-data'
@@ -393,301 +379,13 @@ If nil, no keybinding is set for dispatch actions."
                (keymap-set (symbol-value map) new-val #'mevedel--ov-actions-dispatch))))))
 
 (defcustom mevedel-default-chat-preset 'implement
-  "Default preset for the chat buffer from `mevedel' command.
-
-Can be one of the symbols:
-- \\='implement
-- \\='discuss"
+  "Default action preset for the chat buffer from `mevedel' command."
   :group 'mevedel
-  :type '(choice
-          (const :tag "Implement" implement)
-          (const :tag "Discuss" discuss)))
+  :type 'symbol)
 
 
 ;;
 ;;; Commands
-
-;;;###autoload
-(defun mevedel-implement-directive (&optional callback)
-  "Propose a patch to implement directive at point.
-
-If CALLBACK is provided, it will be called when the implementation
-process completes.  The callback will receive two arguments: ERROR (nil
-on success, a string error description on failure, or the symbol
-\\='abort if the request was aborted) and FSM (the gptel-fsm object for
-the request)."
-  (interactive)
-  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope (mevedel-workspace))
-				  (if-let* ((directive (mevedel--directive-at-point)))
-				      (progn
-					(unless (memq 'implement
-						      (mevedel-directive-actions
-						       (mevedel--directive-record directive)))
-					  (user-error "Implement requires a Ready directive"))
-					(mevedel--dispatch-directive-implementation
-					 directive (mevedel--directive-record directive) 'implement
-					 #'mevedel--implement-directive-prompt callback))
-				    (user-error "No directive found at point"))))
-
-;;;###autoload
-(defun mevedel-request-directive-changes ()
-  "Open Request changes for the implemented directive at point."
-  (interactive)
-  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope (mevedel-workspace))
-				  (if-let* ((directive (mevedel--directive-at-point)))
-				      (progn
-					(unless (memq 'request-changes
-						      (mevedel-directive-actions
-						       (mevedel--directive-record directive)))
-					  (user-error "Request changes requires an implemented directive"))
-					(mevedel-view-enter-directive-scope directive 'request-changes))
-				    (user-error "No directive found at point"))))
-
-;;;###autoload
-(defun mevedel-retry-directive ()
-  "Open Retry for the failed or aborted directive at point."
-  (interactive)
-  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope (mevedel-workspace))
-				  (if-let* ((directive (mevedel--directive-at-point)))
-				      (progn
-					(unless (memq 'retry
-						      (mevedel-directive-actions
-						       (mevedel--directive-record directive)))
-					  (user-error "Retry requires a failed or aborted directive"))
-					(mevedel-view-enter-directive-scope directive 'retry))
-				    (user-error "No directive found at point"))))
-
-;;;###autoload
-(defun mevedel-discuss-directive ()
-  "Discuss the directive at point.
-Submit a Ready directive immediately; otherwise focus its follow-up composer."
-  (interactive)
-  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope (mevedel-workspace))
-				  (if-let* ((directive (mevedel--directive-at-point)))
-				      (progn
-					(let ((actions
-					       (mevedel-directive-actions
-						(mevedel--directive-record directive))))
-					  (unless (cl-intersection
-						   actions '(discuss continue-discussion discuss-result))
-					    (user-error "Discussion is unavailable while processing"))
-					  (mevedel-view-enter-directive-scope directive 'discuss)
-					  (when (memq 'discuss actions)
-					    (mevedel--start-directive-discussion directive))))
-				    (user-error "No directive found at point"))))
-
-;;;###autoload
-(defun mevedel-implement-discussion-directive (&optional callback)
-  "Implement the directive at point using its complete local discussion.
-CALLBACK receives the ordinary directive terminal arguments."
-  (interactive)
-  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope (mevedel-workspace))
-				  (if-let* ((directive (mevedel--directive-at-point)))
-				      (mevedel--implement-discussion directive callback)
-				    (user-error "No directive found at point"))))
-
-;;;###autoload
-(defun mevedel-process-directives (&optional process-all)
-  "Process initial directive implementations sequentially in source order.
-
-Collects directives based on context:
-
-- If a region is selected, collect all directives in that region
-- If no region is selected but point is on a directive, collect that
-  directive
-- If no region and no directive at point, collect all directives in
-  buffer
-
-Presents directives to user via `completing-read-multiple' for filtering.
-
-Without prefix argument, only selected directives are processed.
-
-With PROCESS-ALL or prefix argument (\\[universal-argument]), all
-top-level directives are processed without prompting.  Nested directives
-remain details of their topmost parent."
-  (interactive "P")
-  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope (mevedel-workspace))
-				  (let (found-directives)
-				    ;; Collect directives based on context
-				    (cond ((region-active-p)
-					   (when-let* ((toplevel-directives
-							(cl-remove-duplicates
-							 (mapcar (lambda (instr)
-								   (mevedel--topmost-instruction instr 'directive))
-								 (mevedel--instructions-in (region-beginning)
-											   (region-end)
-											   'directive)))))
-					     (setq found-directives toplevel-directives)))
-					  (t
-					   (if-let* ((directive (mevedel--directive-at-point)))
-					       (setq found-directives (list directive))
-					     (when-let* ((toplevel-directives (cl-remove-duplicates
-									       (mapcar (lambda (instr)
-											 (mevedel--topmost-instruction instr 'directive))
-										       (without-restriction
-											 (mevedel--instructions-in (point-min)
-														   (point-max)
-														   'directive))))))
-					       (setq found-directives toplevel-directives)))))
-
-				    (setq found-directives
-					  (sort
-					   found-directives
-					   (lambda (a b)
-					     (let* ((a-record (mevedel--directive-record a))
-						    (b-record (mevedel--directive-record b))
-						    (a-anchor (mevedel-directive-anchor a-record))
-						    (b-anchor (mevedel-directive-anchor b-record))
-						    (a-order (or (plist-get a-anchor :source-order)
-								 (list (overlay-start a) (overlay-end a))))
-						    (b-order (or (plist-get b-anchor :source-order)
-								 (list (overlay-start b) (overlay-end b)))))
-					       (or (< (car a-order) (car b-order))
-						   (and (= (car a-order) (car b-order))
-							(or (< (cadr a-order) (cadr b-order))
-							    (and (= (cadr a-order) (cadr b-order))
-								 (string-lessp
-								  (mevedel-directive-id a-record)
-								  (mevedel-directive-id b-record))))))))))
-				    (if (null found-directives)
-					(user-error "No directives found")
-				      (let* ((ov-strings (cl-loop for ov in found-directives
-								  collect (format "#%d: %s"
-										  (overlay-get ov 'mevedel-id)
-										  (mevedel--directive-text ov))))
-					     (ov-map (cl-loop for str in ov-strings
-							      for ov in found-directives
-							      collect (cons str ov)))
-					     (selected-strings
-					      (unless process-all
-						(completing-read-multiple
-						 "Select directives to process (source order, leave empty for all): "
-						 ov-strings)))
-					     (selected-directives
-					      (mapcar (lambda (str) (cdr (assoc str ov-map)))
-						      selected-strings))
-					     (directives-to-process
-					      (if (or process-all (null selected-strings))
-						  found-directives
-						(cl-remove-if-not
-						 (lambda (directive)
-						   (memq directive selected-directives))
-						 found-directives)))
-					     (workspace (mevedel-workspace))
-					     ;; Records without a live overlay (Source missing) are
-					     ;; invisible to the buffer scan above; a process-all batch
-					     ;; still owes them an attempt.
-					     (records (append
-						       (mapcar #'mevedel--directive-record
-							       directives-to-process)
-						       (when (and workspace
-								  (or process-all (null selected-strings)))
-							 (cl-remove-if-not
-							  (lambda (record)
-							    (eq 'source-missing
-								(plist-get (mevedel-directive-anchor record)
-									   :state)))
-							  (mevedel-workspace-directives workspace)))))
-					     (total-count (length records)))
-
-					(if (zerop total-count)
-					    (message "mevedel: no directives to process")
-					  (message "mevedel: processing %d directive%s..." total-count (if (= total-count 1) "" "s"))
-					  (mevedel--process-directives-sequentially
-					   records workspace 1 total-count)))))))
-
-(defun mevedel--process-directives-sequentially
-    (records workspace current total)
-  "Process directive RECORDS in WORKSPACE sequentially, showing progress.
-
-CURRENT is the current directive number (1-indexed).
-TOTAL is the total number of directives."
-  (if (null records)
-      (message "mevedel: completed processing %d directive%s"
-               total (if (= total 1) "" "s"))
-    (let* ((record (car records))
-           (remaining (cdr records))
-           (actions (mevedel-directive-actions record))
-           (implementation-action
-            (cond ((memq 'implement-this actions) 'implement-this)
-                  ((memq 'implement actions) 'implement))))
-      (cond
-       ((mevedel-directive-attempts record)
-        (message "mevedel: skipping directive %d/%d: existing implementation activity"
-                 current total)
-        (mevedel--process-directives-sequentially
-         remaining workspace (1+ current) total))
-       ((not implementation-action)
-        (message "mevedel: skipping directive %d/%d: ineligible lifecycle state %s"
-                 current total
-                 (capitalize
-                  (symbol-name
-                   (or (mevedel-directive-state record) 'ready))))
-        (mevedel--process-directives-sequentially
-         remaining workspace (1+ current) total))
-       (t
-        (let ((context
-               (condition-case err
-                   (let ((context
-                          (mevedel--directive-action-context
-                           record workspace)))
-                     (if (eq implementation-action 'implement-this)
-                         (mevedel--implement-discussion-prompt
-                          (plist-get context :prompt) record)
-                       (mevedel--implement-directive-prompt
-                        (plist-get context :prompt)))
-                     ;; Pre-validate selected skills in the same session
-                     ;; dispatch will use (bound first) so a stale
-                     ;; selection skips this directive instead of
-                     ;; stopping the batch at dispatch.  With no live
-                     ;; session buffer, dispatch validates alone.
-                     (when-let* (((mevedel-directive-skills record))
-                                 (chat-buffer
-                                  (or (mevedel--directive-bound-session-buffer
-                                       record workspace)
-                                      (mevedel--active-chat-buffer workspace)))
-                                 ((buffer-live-p chat-buffer)))
-                       (mevedel--attach-directive-skills
-                        "" record chat-buffer))
-                     context)
-                 (error
-                  (mevedel-diagnostic-message (mevedel-diagnostic-scope workspace)
-                                              "%s (Skipping directive %d/%d)"
-                                              (error-message-string err) current total)
-                  nil))))
-          (if (null context)
-              (mevedel--process-directives-sequentially
-               remaining workspace (1+ current) total)
-            (let* ((directive (plist-get context :directive))
-                   (scope (mevedel-diagnostic-scope workspace))
-                   (callback
-                    (lambda (err _fsm)
-                      (if err
-                          (mevedel-diagnostic-message
-                           scope "%s (Stopped processing at directive %d/%d; implementation %s)"
-                           (if (eq err 'abort) "Aborted" (format "%s" err))
-                           current total (if (eq err 'abort) "aborted" "failed"))
-                        ;; Terminal handlers clear the active request before
-                        ;; this zero-delay continuation runs.
-                        (run-at-time
-                         0 nil
-                         #'mevedel--process-directives-sequentially
-                         remaining workspace (1+ current) total)))))
-              (message "mevedel: processing directive %d/%d: #%s %s"
-                       current total
-                       (or (overlay-get directive 'mevedel-id)
-                           (mevedel-directive-id record))
-                       (mevedel-directive-request record))
-              (condition-case err
-                  (if (eq implementation-action 'implement-this)
-                      (mevedel--implement-discussion directive callback)
-                    (mevedel--dispatch-directive-implementation
-                     directive record 'implement
-                     #'mevedel--implement-directive-prompt callback))
-                (error
-                 (mevedel-diagnostic-message
-                  scope "%s (Stopped processing at directive %d/%d)"
-                  (error-message-string err) current total)))))))))))
 
 ;;;###autoload
 (defun mevedel-instruction-count ()
@@ -709,40 +407,6 @@ buffers."
                    count (if (/= count 1) "s" "")
                    buffers (if (/= buffers 1) "s" ""))))
       count)))
-
-;;;###autoload
-(defun mevedel-create-reference ()
-  "Create a reference instruction within the selected region.
-
-If a region is selected but partially covers an existing reference, then
-the command will resize the reference in the following manner:
-
-  - If the mark is located INSIDE the reference (i.e., the point is
-    located OUTSIDE the reference) then the reference will be expanded
-    to the point.
-  - If the mark is located OUTSIDE the reference (i.e., the point is
-    located INSIDE the reference) then the reference will be shrunk to
-    the point."
-  (interactive)
-  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope (mevedel-workspace))
-    (mevedel--create-instruction 'reference)))
-
-;;;###autoload
-(defun mevedel-create-directive ()
-  "Create a directive instruction within the selected region.
-
-If a region is selected but partially covers an existing directive, then
-the command will resize the directive in the following manner:
-
-  - If the mark is located INSIDE the directive (i.e., the point is
-    located OUTSIDE the directive) then the directive will be expanded
-    to the point.
-  - If the mark is located OUTSIDE the directive (i.e., the point is
-    located INSIDE the directive) then the directive will be shrunk to
-    the point."
-  (interactive)
-  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope (mevedel-workspace))
-    (mevedel--create-instruction 'directive)))
 
 ;;;###autoload
 (defun mevedel (&optional arg)
@@ -865,11 +529,6 @@ always prompt for the session name."
   ;; Inject system reminders after mention expansion but before the request fires
   (add-hook 'gptel-prompt-transform-functions #'mevedel-reminders--transform -80)
 
-  ;; Keep directive turns visible in the stored transcript while excluding
-  ;; them from ordinary request copies before provider parsing.
-  (add-hook 'gptel-prompt-transform-functions
-            #'mevedel-transcript-exclude-directive-turns -79)
-
   ;; Auto-compact after mevedel's synchronous prompt transforms so an
   ;; auto-compact send preserves the transformed pending prompt when it
   ;; rebuilds the temporary request buffer.
@@ -946,7 +605,7 @@ always prompt for the session name."
             #'mevedel-tool-exec-handle-execution-event)
     (setq mevedel-execution-mailbox-delivery-function nil))
   ;; Remove presets
-  (dolist (preset '(mevedel-discuss mevedel-implement))
+  (dolist (preset '(mevedel-implement mevedel-note))
     (setf (alist-get preset gptel--known-presets nil 'remove) nil))
 
   ;; Remove mention expansion from gptel
@@ -967,9 +626,6 @@ always prompt for the session name."
   ;; Remove reminder injection
   (remove-hook 'gptel-prompt-transform-functions #'mevedel-reminders--transform)
 
-  ;; Remove directive context projection
-  (remove-hook 'gptel-prompt-transform-functions
-               #'mevedel-transcript-exclude-directive-turns)
   (remove-hook 'gptel-prompt-transform-functions
                #'mevedel-shared-conversation-transform)
 

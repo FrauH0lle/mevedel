@@ -69,9 +69,7 @@ Other tool names are unaffected.  Apply this to native and discovered tools."
                  (pcase name
                    ("GetGoal" t)
                    ("CreateGoal"
-                    (not (or (and mevedel--current-request
-                                  (mevedel-request-directive-uuid mevedel--current-request))
-                             (mevedel-goal--start-blocker session))))
+                    (not (mevedel-goal--start-blocker session)))
                    ("UpdateGoal"
                     (and goal (eq (mevedel-goal-status goal) 'active)
                          (equal (plist-get info :mevedel-goal-id)

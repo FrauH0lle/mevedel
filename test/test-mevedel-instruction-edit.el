@@ -6,6 +6,8 @@
 
 ;;; Code:
 
+(require 'mevedel-notes)
+
 (require 'mevedel-instruction-edit)
 (require 'mevedel-overlays)
 (require 'helpers
@@ -13,6 +15,11 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-instruction-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-instruction-test-support"))
 
 (mevedel-deftest mevedel-instruction-replace-buffer-contents
   (:vars ((mevedel--instruction-states (make-hash-table :test #'equal))
@@ -36,7 +43,7 @@
       (unwind-protect
           (with-current-buffer target
             (insert "before\nselected\nafter\n")
-            (let ((overlay (mevedel--create-reference-in target 8 17)))
+            (let ((overlay (mevedel-instruction-test--create-note-in target 8 17)))
               (with-current-buffer source (insert (car case)))
               (mevedel-instruction-replace-buffer-contents source)
               (should (equal (car case) (buffer-string)))
@@ -44,14 +51,15 @@
                   (should (equal (cadr case)
                                  (buffer-substring-no-properties
                                   (overlay-start overlay) (overlay-end overlay))))
-                (should-not (overlay-buffer overlay)))))
+                (should (eq target (overlay-buffer overlay)))
+                (should (= 8 (overlay-start overlay) (overlay-end overlay))))))
         (kill-buffer target)
         (kill-buffer source))))
   :doc "line mapped deletion supports native undo and redo"
   (with-temp-buffer
     (insert "before\nselected\nafter\n")
     (let* ((target (current-buffer))
-           (overlay (mevedel--create-reference-in target 8 17)))
+           (overlay (mevedel-instruction-test--create-note-in target 8 17)))
       (buffer-enable-undo)
       (setq buffer-undo-list nil)
       (with-temp-buffer
@@ -59,19 +67,21 @@
         (let ((source (current-buffer)))
           (with-current-buffer target
             (mevedel-instruction-replace-buffer-contents source))))
-      (should-not (overlay-buffer overlay))
+      (should (eq target (overlay-buffer overlay)))
+      (should (= 8 (overlay-start overlay) (overlay-end overlay)))
       (undo-boundary)
       (undo-only 1)
       (should (= 8 (overlay-start overlay)))
       (should (= 17 (overlay-end overlay)))
       (undo-boundary)
       (undo-redo 1)
-      (should-not (overlay-buffer overlay))))
+      (should (eq target (overlay-buffer overlay)))
+      (should (= 8 (overlay-start overlay) (overlay-end overlay)))))
   :doc "undo and redo retain the unequal-run line mapping"
   (with-temp-buffer
     (insert "before\nselected\nafter\n")
     (let* ((target (current-buffer))
-           (overlay (mevedel--create-reference-in target 8 17)))
+           (overlay (mevedel-instruction-test--create-note-in target 8 17)))
       (buffer-enable-undo)
       (setq buffer-undo-list nil)
       (with-temp-buffer

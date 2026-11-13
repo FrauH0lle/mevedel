@@ -202,7 +202,7 @@
 	   (should (mevedel-session-artifacts-save session buffer))
 	   (mevedel-session-enqueue-pending-input session 'follow-up '(:input "commit once"))
 	   (cl-letf (((symbol-function 'mevedel-view--dispatch-follow-up-entry)
-		      (lambda (_kind _entry input _session data _before after _release)
+		      (lambda (_kind _entry input data _before after _release)
 			(with-current-buffer data (insert input))
 			(funcall after))))
 	     (mevedel-view--drain-follow-up buffer))

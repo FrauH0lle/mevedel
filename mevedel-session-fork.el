@@ -151,6 +151,7 @@
                   "mevedel-structs" (session body))
 (declare-function mevedel-session-execution-target "mevedel-structs" (cl-x))
 (declare-function mevedel-session-file-snapshots "mevedel-structs" (cl-x))
+(declare-function mevedel-session-untracked-effects "mevedel-structs" (cl-x))
 (declare-function mevedel-session-fork-type "mevedel-structs" (cl-x))
 (declare-function mevedel-session-forked-from-fork-point-id "mevedel-structs" (cl-x))
 (declare-function mevedel-session-forked-from-session-id "mevedel-structs" (cl-x))
@@ -252,7 +253,7 @@ only through PICKED-CUM-TURN.  Entries with non-integer
   '(name naming-state naming-input workspace execution-target authority-mode working-directory
     tasks task-status-notes last-task-write-turn touched-files
     permission-rules resource-grants permission-mode sandbox-mode plan-mode
-    directive-planning preset-name model-provider external-conversations
+    preset-name model-provider external-conversations
     last-outcome recovery-issues
     reasoning-effort turn-count reminders last-observed-date
     agent-types-snapshot pending-reminders
@@ -275,6 +276,7 @@ only through PICKED-CUM-TURN.  Entries with non-integer
     current-segment forked-from-session-id forked-from-turn fork-type
     forked-from-fork-point-id worktree-source-root worktree-directory
     worktree-branch worktree-base-commit prompt-index chapters file-snapshots
+    untracked-effects
     ptc-checkpoints durable-tree-ensured
     agent-transcripts invoked-skills permission-queue permission-absence
     pending-plan-approval
@@ -339,7 +341,6 @@ The identity and timestamp keywords describe the new materialized child."
            :permission-mode (mevedel-session-permission-mode session)
            :sandbox-mode (mevedel-session-sandbox-mode session)
            :plan-mode (mevedel-session-plan-mode session)
-           :directive-planning nil
            :preset-name (mevedel-session-preset-name session)
            :model-provider (mevedel-session-model-provider session)
            :external-conversations nil
@@ -459,6 +460,13 @@ The identity and timestamp keywords describe the new materialized child."
                 (mevedel-session-rewind-reduce-file-snapshots
                  (mevedel-session-file-snapshots session) turn)
               (mevedel-session-file-snapshots session))
+            t)
+           :untracked-effects
+           (copy-tree
+            (if fork-p
+                (mevedel-session-rewind-reduce-file-snapshots
+                 (mevedel-session-untracked-effects session) turn)
+              (mevedel-session-untracked-effects session))
             t)
            :ptc-checkpoints nil
            :checkpoint-state nil

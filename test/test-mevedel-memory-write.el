@@ -200,7 +200,7 @@
                    (before (list :path path :exists nil))
                    (after (list :path path :exists t :bytes "Owner content.\n" :mode #o640)))
               (mevedel-memory-write--mutate claim before after)
-              (should (mevedel-tool-patch--same-snapshot-p
+              (should (mevedel-change-same-p
                        after (mevedel-tool-patch--snapshot path)))
               (should (mevedel-journal-claim--finish claim 'expired ""))
               (let* ((successor (mevedel-journal-claim-acquire claims 180))
@@ -210,7 +210,7 @@
                 ;; an old mutation after takeover has settled its claim.
                 (should-error (mevedel-memory-write--mutate claim new after))
                 (should-error (mevedel-memory-write--mutate claim new before))
-                (should (mevedel-tool-patch--same-snapshot-p
+                (should (mevedel-change-same-p
                          new (mevedel-tool-patch--snapshot path)))
                 (mevedel-memory-write--mutate successor new before)
                 (should-not (file-exists-p path))
@@ -266,7 +266,7 @@
             (ert-info ((with-current-buffer (process-buffer process) (buffer-string)))
               (should-not (process-live-p process))
               (should (= 0 (process-exit-status process)))))
-          (should (mevedel-tool-patch--same-snapshot-p after (mevedel-tool-patch--snapshot path)))
+          (should (mevedel-change-same-p after (mevedel-tool-patch--snapshot path)))
           (should (eq 'expired (plist-get (mevedel-journal-claim-outcome claim) :status)))
           (should-error (mevedel-memory-write--mutate claim after before)))
       (write-region "continue" nil (concat pause ".continue") nil 'silent)

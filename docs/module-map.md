@@ -6,12 +6,11 @@ Memory and journal modules below implement the [curated-memory](memory-curated.m
 
 ```
 Entry point
-  mevedel.el                  foundational data, command autoloads, install/uninstall, directives
+  mevedel.el                  foundational data, command autoloads, install/uninstall, notes
   mevedel-evil.el             opt-in Evil states, surface bindings, visual selection and replacement scope bridge
 
 Data model
   mevedel-structs.el          passive workspace/session/request/task data shapes, invariants and shared buffer-local state
-  mevedel-directive.el        directive mutation, lifecycle, plan invalidation, rewind
   mevedel-instruction-edit.el line-mapped visited source buffer synchronization
   mevedel-instruction-undo.el source geometry and deletion undo/redo without activity rewind
   mevedel-turn.el             request admission/cancellation and terminal settlement
@@ -114,11 +113,9 @@ Data model
 
 Chat / view
   mevedel-chat.el             session lifecycle
-  mevedel-directive-request.el  directive prompts, dispatch, and settlement
+  mevedel-session-rewind-merge.el staged smerge resolutions for atomic Rewind
   mevedel-side-conversation.el  ephemeral /btw conversation lifecycle
-  mevedel-directive-activity.el  read-only workspace directive inspector
-  mevedel-directive-frame.el  directive-anchored child frame and transcript filter
-  mevedel-directive-plan.el   directive-owned planning and approval workflow
+  mevedel-note-frame.el  note-anchored conversation child frame and side-window fallback
   mevedel-transcript.el       transcript span classification for view/persistence/compaction
   mevedel-transcript-source.el per-consumer hook-proven transcript change frontiers
   mevedel-transcript-audit.el hidden audit record encoding and structural parsing
@@ -195,11 +192,19 @@ Chat / view
   mevedel-worktree.el         Git worktrees, status/list surfaces, fork plumbing
   mevedel-instruction-registry.el workspace instruction buckets, IDs, links
   mevedel-overlays.el         instruction geometry, tags, context, prompts
-  mevedel-directive-source.el directive anchor/presentation lifecycle and command-scoped instruction replacement
+  mevedel-note-source.el note anchor/presentation lifecycle and command-scoped replacement
   mevedel-overlay-ui.el       instruction overlay actions and rendering
-  mevedel-mentions.el         @ref and @file mention expansion
-  mevedel-directive-persistence.el  workspace directive record codec
-  mevedel-persistence.el      workspace instruction store, export/import, restore
+  mevedel-notes.el            source note actions, labels and entry hints
+  mevedel-notes-activation.el autoloaded file-visit restoration and roots-only remote note discovery
+  mevedel-note-conversation.el isolated durable note send/batch/reopen, composer controls and sent-input inspection
+  mevedel-note-change.el      nonblocking prepared source changes, checked apply, detailed review and actual per-turn application history
+  mevedel-note-merge.el       separate localized three-way smerge editor with checked explicit confirmation
+  mevedel-notes-list.el       workspace notes grouped by attention, visit/edit/tag/send/close/restore actions
+  mevedel-note-mentions.el    explicit note number/tag attachments, current code and UUID lookup
+  mevedel-note-resource.el    read-only workspace note documents for Read, Glob and Grep
+  mevedel-note-write.el       model note mutations, read-only authority and batched store sync
+  mevedel-mentions.el         @note, @ref and @file mention expansion
+  mevedel-persistence.el      workspace note store, export/import, restore and Rewind lifecycle reconciliation
   mevedel-session-codec.el    closed session sidecar codec and validation
   mevedel-session-checkpoint.el committed root projection, conversation consumption, and deferred ToolCall retirement
   mevedel-session-artifacts.el  paths, artifacts, snapshots, and segment writes
@@ -255,7 +260,7 @@ Turn engines (Claude Code through ACP and MCP)
   mevedel-acp-compaction.el   native summary lifecycle, transcript rotation and retained tails
   mevedel-claude-code-backend.el provider type, model catalog, installation settings (executable/adapter/directory), minimum CLI/adapter versions and version parser, autoloaded engine dispatch
   mevedel-claude-code.el      guided setup, launch preflight and isolated ACP launch
-  mevedel-claude-code-session.el root, directive and shared-item sends and persisted external conversation references
+  mevedel-claude-code-session.el root/note and shared-item sends, historical turn exclusion and external conversation references
   mevedel-claude-code-btw.el  ephemeral native history fork, side dispatch and deletion lifecycle
   mevedel-claude-code-agent.el retained-child subscription dispatch, sample limits and native history references
   mevedel-claude-code-history.el native history state, divergence and excerpt recovery
@@ -271,6 +276,7 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-fs-search.el   Glob/Grep execution and resource-output privacy
   mevedel-tool-patch-registration.el ApplyPatch catalog and callback autoloads
   mevedel-tool-patch.el       ApplyPatch parse/match/apply engine and rendering
+  mevedel-tool-note.el        NoteWrite catalog and handler autoloads
   mevedel-tool-code.el        XrefReferences, XrefDefinitions, Imenu, Treesitter
   mevedel-tool-exec-permission.el Bash/Eval authority and prompt adapters
   mevedel-tool-exec-registration.el Bash/Eval/execution-control catalog and callback autoloads
@@ -290,11 +296,12 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-usage.el       SubscriptionUsage: plain quota readings across subscription backends
   mevedel-buddy.el            edit recording, diff assembly, briefs, review requests
   mevedel-buddy-feed.el       /buddy: feed a session's plan, Goal, or exchange to Buddy
-  mevedel-buddy-note.el       ephemeral note overlays and their model tools
+  mevedel-buddy-note.el       Buddy-authored workspace notes and review-local tools
   mevedel-tools.el            complete tool registration + stable discovery catalog
   mevedel-tools-list.el       native tools cockpit list
 
 Support
+  mevedel-change.el           recorded byte-change preparation, hunk conflicts, strict rollback
   mevedel-file-state.el       LRU file cache
   mevedel-diff-apply.el       transactional unified diff staging/application
   mevedel-theme-faces.el      active-theme-derived face registration and refresh

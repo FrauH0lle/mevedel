@@ -38,8 +38,7 @@
                   "mevedel-session-artifacts" (session buffer))
 (declare-function mevedel-session-artifacts-load-instructions
                   "mevedel-session-artifacts"
-                  (session buffer &optional turn directive-records
-                           preserve-directives-p))
+                  (session buffer &optional turn snapshot-only))
 (declare-function mevedel-session-artifacts-read-artifact
                   "mevedel-session-artifacts"
                   (session logical &optional committed-only))

@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Real directive-frame display redirection must restore the parent's layout
+;; Real note-frame display redirection must restore the parent's layout
 ;; without replacing or losing the invoking child-frame composer.  Batch runs
 ;; skip these cases; frame-parent stubs cannot exercise cross-frame selection.
 
@@ -13,7 +13,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
-(require 'mevedel-directive-frame)
+(require 'mevedel-note-frame)
 (require 'mevedel-menu)
 (require 'mevedel-recovery)
 (require 'mevedel-report)
@@ -45,7 +45,7 @@ Bind parent, child, origin, parent-before and child-before for assertions."
                           :name "window-graphical" :root default-directory))
               (session (mevedel-session-create "window-graphical" workspace))
               (other (generate-new-buffer " *window-graphical-other*"))
-              (mevedel-directive-frame--frame nil)
+              (mevedel-note-frame--frame nil)
               child)
          (unwind-protect
              (progn
@@ -69,13 +69,13 @@ Bind parent, child, origin, parent-before and child-before for assertions."
                                 (left . 20) (top . 20) (minibuffer . nil))
                               mevedel--child-frame-parameters)))
                (should (eq parent (frame-parent child)))
-               (setq mevedel-directive-frame--frame child)
+               (setq mevedel-note-frame--frame child)
                (let ((origin (frame-root-window child)))
                  (set-window-buffer origin view-buf)
                  (set-window-dedicated-p origin t)
                  (with-current-buffer view-buf
-                   (mevedel-directive-frame-mode 1)
-                   (should (eq 'mevedel-directive-frame--display-in-parent
+                   (mevedel-note-frame-mode 1)
+                   (should (eq 'mevedel-note-frame--display-in-parent
                                (car display-buffer-overriding-action))))
                  (select-frame-set-input-focus child)
                  (select-window origin)
@@ -102,10 +102,10 @@ Bind parent, child, origin, parent-before and child-before for assertions."
                               (- (point) (mevedel-view--input-start)))))))
            (transient--emergency-exit)
            (when (buffer-live-p view-buf)
-             (with-current-buffer view-buf (mevedel-directive-frame-mode -1)))
-           ;; This fixture owns its frame directly, not the directive overlay
+             (with-current-buffer view-buf (mevedel-note-frame-mode -1)))
+           ;; This fixture owns its frame directly, not the note overlay
            ;; lifecycle.  Do not invoke that lifecycle's source restoration.
-           (setq mevedel-directive-frame--frame nil)
+           (setq mevedel-note-frame--frame nil)
            (when (frame-live-p child) (delete-frame child t))
            (when (frame-live-p parent) (select-frame-set-input-focus parent))
            (when (buffer-live-p other) (kill-buffer other)))))))
@@ -162,64 +162,41 @@ Bind parent, child, origin, parent-before and child-before for assertions."
             (execute-kbd-macro (kbd "C-g"))
             (should-not transient--prefix)))))))
 
-;;; Directive frame pinned prompt
+;;; Note frame pinned prompt
 
 (defmacro mevedel-window-graphical-test--with-frame (exchanges &rest body)
-  "Run BODY with a real directive frame over a view of EXCHANGES.
-EXCHANGES is a list of (PROMPT DIRECTIVE-ID); each answer is long enough to
+  "Run BODY with a real note frame over a view of EXCHANGES.
+EXCHANGES is a list of prompts; each answer is long enough to
 scroll its prompt away.  The frame is built by the production chrome owner.
 Bind parent, frame and window for BODY, which runs in the view buffer."
   (declare (indent 1) (debug t))
   `(save-window-excursion
      (mevedel-view-test--with-buffers
        (dolist (exchange ,exchanges)
-         (mevedel-view-test--insert-data data-buf (format "%s\n" (car exchange)) nil)
+         (mevedel-view-test--insert-data data-buf (format "%s\n" exchange) nil)
          (mevedel-view-test--insert-data
           data-buf
-          (mapconcat (lambda (n) (format "Line %d answering %s.\n" n (car exchange)))
+          (mapconcat (lambda (n) (format "Line %d answering %s.\n" n exchange))
                      (number-sequence 1 15) "")
           'response))
        (with-current-buffer view-buf
          (mevedel-view--full-rerender)
-         (mevedel-window-graphical-test--tag-directives ,exchanges)
          (mevedel-view-test--insert-composer-draft "> frame draft\nsecond line"))
        (let* ((parent (selected-frame))
-              (mevedel-directive-frame--frame nil)
-              (mevedel-directive-frame--view-buffer view-buf)
-              (mevedel-directive-frame--directive-id "d1")
-              (mevedel-directive-frame--filtered-p nil)
-              (frame (mevedel-directive-frame--make view-buf parent))
+              (mevedel-note-frame--frame nil)
+              (mevedel-note-frame--view-buffer view-buf)
+              (mevedel-note-frame--note-id "Note 1")
+              (frame (mevedel-note-frame--make view-buf parent))
               (window (frame-root-window frame)))
-         (setq mevedel-directive-frame--frame frame)
+         (setq mevedel-note-frame--frame frame)
          (unwind-protect
              (progn
                (set-frame-position frame 40 40)
                (make-frame-visible frame)
                (with-current-buffer view-buf ,@body))
-           (with-current-buffer view-buf
-             (mevedel-directive-frame--clear-filter view-buf))
-           (setq mevedel-directive-frame--frame nil)
+           (setq mevedel-note-frame--frame nil)
            (when (frame-live-p frame) (delete-frame frame t))
            (select-frame-set-input-focus parent))))))
-
-(defun mevedel-window-graphical-test--tag-directives (exchanges)
-  "Tag each rendered exchange with its directive id from EXCHANGES.
-An exchange runs from its prompt's header to the next prompt's header."
-  (let* ((limit (mevedel-view--input-marker-position))
-         (starts (mapcar (lambda (exchange)
-                           (save-excursion
-                             (goto-char (point-min))
-                             (search-forward (car exchange))
-                             (search-backward "You\n")))
-                         exchanges)))
-    (with-silent-modifications
-      (let ((inhibit-read-only t))
-        (cl-loop for (start next) on starts
-                 for exchange in exchanges
-                 when (cadr exchange)
-                 do (put-text-property
-                     start (or next limit) 'mevedel-view-directive
-                     (list :directive-id (cadr exchange))))))))
 
 (defun mevedel-window-graphical-test--size (frame columns lines)
   "Size FRAME to COLUMNS by LINES of its parent's canonical character cells."
@@ -260,14 +237,14 @@ body height and composer draft."
       (set-window-point window (point))
       (line-beginning-position))))
 
-(mevedel-deftest mevedel-directive-frame-pinned-prompt-graphical ()
+(mevedel-deftest mevedel-note-frame-pinned-prompt-graphical ()
   ,test
   (test)
   :doc "narrow and short frames keep the condensed header above the pinned prompt"
   (progn
     (skip-unless (display-graphic-p))
     (mevedel-window-graphical-test--with-frame
-        (mapcar (lambda (n) (list (format "Prompt %d asks" n) "d1"))
+        (mapcar (lambda (n) (format "Prompt %d asks" n))
                 (number-sequence 0 5))
       (dolist (geometry '((40 8) (66 12) (24 8)))
         (ert-info ((format "Geometry: %S" geometry))
@@ -277,7 +254,7 @@ body height and composer draft."
           (let ((away (mevedel-window-graphical-test--rows window)))
             (ert-info ((format "Scrolled away: %S" away))
               (should (string-prefix-p "◆ " (plist-get away :tab)))
-              (should (string-search "d1" (plist-get away :tab)))
+              (should (string-search "Note 1" (plist-get away :tab)))
               (should (string-search "Prompt 4" (plist-get away :header)))
               (should (string-prefix-p "Prompt  " (plist-get away :header)))
               (should (<= (string-width (plist-get away :header))
@@ -310,7 +287,7 @@ body height and composer draft."
   (progn
     (skip-unless (display-graphic-p))
     (mevedel-window-graphical-test--with-frame
-        '(("Prompt 0 asks" "d1") ("Prompt 1 asks" "d1"))
+        '("Prompt 0 asks" "Prompt 1 asks")
       (mevedel-window-graphical-test--size frame 40 10)
       (let ((main (frame-selected-window parent)))
         (set-window-buffer main view-buf)
@@ -328,7 +305,7 @@ body height and composer draft."
   (progn
     (skip-unless (display-graphic-p))
     (mevedel-window-graphical-test--with-frame
-        '(("Directive prompt" "d1"))
+        '("Note prompt")
       (mevedel-window-graphical-test--size frame 50 10)
       (mevedel-view-test--insert-data data-buf "Follow-up question\n" nil)
       (mevedel-view-test--insert-data
@@ -336,10 +313,8 @@ body height and composer draft."
                            (number-sequence 1 15) "")
        'response)
       (mevedel-view--full-rerender)
-      (mevedel-window-graphical-test--tag-directives
-       '(("Directive prompt" "d1") ("Follow-up question" "d1")))
-      (mevedel-window-graphical-test--start-at window "Line 9 answering Directive")
-      (should (string-search "Directive prompt"
+      (mevedel-window-graphical-test--start-at window "Line 9 answering Note")
+      (should (string-search "Note prompt"
                              (plist-get (mevedel-window-graphical-test--rows window)
                                         :header)))
       (mevedel-window-graphical-test--start-at window "Follow-up line 6.")
@@ -351,7 +326,7 @@ body height and composer draft."
   (progn
     (skip-unless (display-graphic-p))
     (mevedel-window-graphical-test--with-frame
-        (mapcar (lambda (n) (list (format "Prompt %d asks" n) "d1"))
+        (mapcar (lambda (n) (format "Prompt %d asks" n))
                 (number-sequence 0 3))
       (mevedel-window-graphical-test--size frame 50 10)
       (let ((main (frame-selected-window parent))
@@ -377,71 +352,6 @@ body height and composer draft."
             (should (equal "" (plist-get rows :header)))
             (should (equal "> frame draft\nsecond line" (plist-get rows :draft))))
           (should (= main-start (window-start main)))))))
-
-  :doc "a filtered frame never pins a hidden turn's prompt"
-  (progn
-    (skip-unless (display-graphic-p))
-    (mevedel-window-graphical-test--with-frame
-        '(("Framed first prompt" "d1") ("Hidden chat prompt" nil)
-          ("Framed second prompt" "d1"))
-      (mevedel-window-graphical-test--size frame 50 10)
-      (mevedel-directive-frame--apply-filter)
-      (should mevedel-directive-frame--filtered-p)
-      (let ((hidden (save-excursion
-                      (goto-char (point-min))
-                      (search-forward "Line 5 answering Hidden chat")
-                      (line-beginning-position))))
-        (should (invisible-p hidden))
-        ;; A window start inside a hidden answer displays the next framed
-        ;; header at the top: nothing is pinned, least of all the hidden one.
-        (set-window-start window hidden t)
-        (set-window-point window (save-excursion
-                                   (goto-char (point-min))
-                                   (search-forward "Framed second prompt")))
-        (let ((rows (mevedel-window-graphical-test--rows window)))
-          (ert-info ((format "Hidden start: %S" rows))
-            (should (= hidden (plist-get rows :start)))
-            (should (equal "" (plist-get rows :header)))))
-        (mevedel-window-graphical-test--start-at
-         window "Line 7 answering Framed second")
-        (should (string-search "Framed second prompt"
-                               (plist-get (mevedel-window-graphical-test--rows window)
-                                          :header))))))
-
-  :doc "a trailing hidden turn never pins its prompt above the composer"
-  (progn
-    (skip-unless (display-graphic-p))
-    (mevedel-window-graphical-test--with-frame
-        '(("Framed only prompt" "d1") ("Hidden trailing prompt" nil))
-      (mevedel-window-graphical-test--size frame 50 10)
-      (mevedel-directive-frame--apply-filter)
-      (should mevedel-directive-frame--filtered-p)
-      (let ((hidden (save-excursion
-                      (goto-char (point-min))
-                      (search-forward "Line 5 answering Hidden trailing")
-                      (line-beginning-position))))
-        (should (invisible-p hidden))
-        ;; Only the composer follows the hidden turn, so the visible top is
-        ;; the composer and the last visible prompt above it is the framed one.
-        ;; Scrolling to the end forces such a start.  The view's composer
-        ;; anchoring may move it during redisplay, so read the frame's own
-        ;; header format at that start first, then the settled display.
-        (set-window-start window hidden)
-        (set-window-point window (mevedel-view--input-start))
-        (let ((top (mevedel-view--window-top window)))
-          (should (> top hidden))
-          (should-not (invisible-p top))
-          (should-not (text-property-not-all
-                       top (mevedel-view--input-start) 'mevedel-view-prompt-preview nil)))
-        (let ((header (with-selected-window window
-                        (format-mode-line header-line-format nil window))))
-          (ert-info ((format "Header at the hidden start: %S" header))
-            (should-not (string-search "Hidden trailing" header))
-            (should (string-search "Framed only prompt" header))))
-        (let ((rows (mevedel-window-graphical-test--rows window)))
-          (ert-info ((format "Settled: %S" rows))
-            (should-not (string-search "Hidden trailing" (plist-get rows :header)))
-            (should (equal "> frame draft\nsecond line" (plist-get rows :draft))))))))
 
   :doc "compaction keeps the originating prompt in the frame; /clear drops it"
   (progn

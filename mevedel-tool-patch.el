@@ -22,6 +22,7 @@
   (require 'mevedel-tool-registry)
   (require 'subr-x))
 
+(require 'mevedel-change)
 (require 'mevedel-edit-diagnostics)
 (require 'mevedel-execution-target)
 (require 'mevedel-file-state)
@@ -45,16 +46,6 @@
 (declare-function mevedel-artifact-store-note-writes
                   "mevedel-artifact-store" (session changes &optional request))
 (autoload 'mevedel-artifact-store-note-writes "mevedel-artifact-store")
-
-;; `mevedel-directive'
-(declare-function mevedel-directive-set-anchor
-                  "mevedel-directive" (directive anchor))
-
-;; `mevedel-directive-source'
-(declare-function mevedel--directive-record
-                  "mevedel-directive-source" (directive))
-(declare-function mevedel--mark-buffer-source-missing
-                  "mevedel-directive-source" (buffer))
 
 ;; `mevedel-edit-diagnostics'
 (declare-function mevedel-edit-diagnostics-after-edit
@@ -80,6 +71,13 @@
                   "mevedel-instruction-registry" ())
 (declare-function mevedel--set-instruction-alist-value
                   "mevedel-instruction-registry" (value))
+
+;; `mevedel-note-change'
+(autoload 'mevedel-note-prepare-change "mevedel-note-change")
+
+;; `mevedel-note-source'
+(declare-function mevedel--mark-buffer-source-missing
+                  "mevedel-note-source" (buffer))
 
 ;; `mevedel-patch-review'
 (declare-function mevedel-patch-review-start
@@ -115,7 +113,6 @@
                   "mevedel-session-persistence" (session buffer))
 
 ;; `mevedel-structs'
-(declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-ephemeral-p "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-one-shot-mutations-p
                   "mevedel-structs" (cl-x) t)
@@ -1121,14 +1118,27 @@ A remote artifact's file is checked by its origin when it is written."
         (puthash path t seen)))))
 
 (defun mevedel-tool-patch-planned-changes (proposal)
-  "Validate PROPOSAL and return its selected filesystem changes."
-  (let ((operations (plist-get proposal :operations))
-        (mevedel-tool-patch--remote (plist-get proposal :remote-artifact))
-        (checks (cl-mapcan (lambda (operation)
+  "Validate PROPOSAL and return its selected filesystem changes.
+Prepared note reviews select changes against their captured source snapshots."
+  (let* ((operations (plist-get proposal :operations))
+         (snapshots (plist-get proposal :prepared-snapshots))
+         (read-source
+          (lambda (path)
+            (if-let* ((snapshot (cl-find path snapshots :test #'equal
+                                        :key (lambda (item) (plist-get item :path)))))
+                (progn
+                  (unless (plist-get snapshot :exists)
+                    (error "File does not exist: %s" path))
+                  (let* ((last-coding-system-used nil)
+                         (text (decode-coding-string (plist-get snapshot :bytes) 'undecided)))
+                    (cons text last-coding-system-used)))
+              (mevedel-tool-patch--read-file path t))))
+         (mevedel-tool-patch--remote (plist-get proposal :remote-artifact))
+         (checks (cl-mapcan (lambda (operation)
                              (delq nil (list (plist-get operation :resource-check-path)
-                                             (plist-get operation :resource-check-move-path))))
+                                            (plist-get operation :resource-check-move-path))))
                            (plist-get proposal :operations)))
-        changes)
+         changes)
     (mevedel-tool-patch--validate-distinct-paths operations)
     (mapc #'funcall checks)
     (dolist (operation operations)
@@ -1137,7 +1147,8 @@ A remote artifact's file is checked by its origin when it is written."
          (let ((path (mevedel-tool-patch-physical-path operation)))
            (when (plist-get operation :selected)
              ;; A remote file's origin refuses to create an existing one.
-             (when (and (not (mevedel-tool-patch-remote-p path)) (file-exists-p path))
+             (when (and (not snapshots)
+                        (not (mevedel-tool-patch-remote-p path)) (file-exists-p path))
                (error "Cannot add existing file: %s" path))
              (push (append (list :action 'write :path path)
                            (and (plist-get operation :resource-path-p)
@@ -1150,7 +1161,7 @@ A remote artifact's file is checked by its origin when it is written."
            (when (plist-get operation :selected)
              (if (mevedel-tool-patch-remote-p path)
                  (mevedel-tool-patch--remote-entry path)
-               (mevedel-tool-patch--read-file path))
+               (funcall read-source path))
              (push (append (list :action 'delete :path path)
                            (and (plist-get operation :resource-path-p)
                                 '(:resource-p t))
@@ -1170,7 +1181,7 @@ A remote artifact's file is checked by its origin when it is written."
                                  (mevedel-tool-patch-hunk-changes-p hunk)))
                           hunks)
              (pcase-let* ((`(,content . ,coding)
-                           (mevedel-tool-patch--read-file path t))
+                           (funcall read-source path))
                           (updated
                            (mevedel-tool-patch-apply-hunks
                             content hunks (or (plist-get operation :rel-path) path))))
@@ -1188,8 +1199,9 @@ A remote artifact's file is checked by its origin when it is written."
                 (mevedel-tool-patch--physical-move-path operation)))
            (when (plist-get operation :selected)
              (pcase-let ((`(,content . ,coding)
-                          (mevedel-tool-patch--read-file path t)))
-               (when (and (not (mevedel-tool-patch-remote-p destination))
+                          (funcall read-source path)))
+               (when (and (not snapshots)
+                          (not (mevedel-tool-patch-remote-p destination))
                           (file-exists-p destination))
                  (error "Cannot move to existing file: %s" destination))
                (push (append (list :action 'delete :path path)
@@ -1209,7 +1221,11 @@ A remote artifact's file is checked by its origin when it is written."
                                       content)))
                                (append
                                 (unless (mevedel-tool-patch-remote-p path)
-                                  (list :mode (file-modes path)))
+                                  (list :mode (if snapshots
+                                                  (plist-get (cl-find path snapshots :test #'equal
+                                                                      :key (lambda (item) (plist-get item :path)))
+                                                             :mode)
+                                                (file-modes path))))
                                 (list :content updated
                                       :bytes
                                       (encode-coding-string updated coding)))))
@@ -1242,39 +1258,25 @@ When LITERAL-P is non-nil, write CONTENT as literal bytes."
   (mevedel-pin-write-file-atomically
    path content (and literal-p 'no-conversion) mode))
 
-(defun mevedel-tool-patch--same-snapshot-p (left right)
-  "Return non-nil when LEFT and RIGHT name the same bytes, absence, and mode."
-  (and left right
-       (cl-every (lambda (key) (equal (plist-get left key) (plist-get right key)))
-                 '(:path :exists :bytes :mode))))
-
 (defun mevedel-tool-patch--assert-current (currentp)
   "Signal unless CURRENTP, when non-nil, still confirms the caller's authority."
   (when (and currentp (not (funcall currentp)))
     (error "Patch ownership is unavailable")))
 
 (defun mevedel-tool-patch--restore-snapshots (snapshots expected &optional currentp mutate)
-  "Restore SNAPSHOTS only from their transaction-owned EXPECTED after-state.
-Return failed path/error pairs. Skip unattempted paths and already restored
-files. CURRENTP, when supplied, must still authorize each rollback mutation.
-MUTATE, when supplied, performs each before/after snapshot replacement."
-  (let (failures)
-    (dolist (snapshot snapshots (nreverse failures))
-      (let* ((path (plist-get snapshot :path))
-             (after (seq-find (lambda (item) (equal path (plist-get item :path))) expected)))
-        (when after
-          (condition-case err
-              (unless (mevedel-tool-patch--same-snapshot-p snapshot (mevedel-tool-patch--snapshot path))
-                (mevedel-tool-patch--assert-current currentp)
-                (unless (mevedel-tool-patch--same-snapshot-p after (mevedel-tool-patch--snapshot path))
-                  (error "File changed after the transaction write: %s" path))
-                (if mutate
-                    (funcall mutate after snapshot)
-                  (if (plist-get snapshot :exists)
-                    (mevedel-tool-patch--write-file
-                     path (plist-get snapshot :bytes) (plist-get snapshot :mode) t)
-                    (mevedel-pin-delete-file path))))
-            (error (push (cons path err) failures))))))))
+  "Restore SNAPSHOTS from EXPECTED using checked transaction rollback.
+CURRENTP guards authority.  MUTATE may supply a target-fenced writer instead
+of the default pinned filesystem writer.  Return failed path/error pairs."
+  (mevedel-change-rollback
+   snapshots expected #'mevedel-tool-patch--snapshot
+   (or mutate
+       (lambda (_before after)
+         (let ((path (plist-get after :path)))
+           (if (plist-get after :exists)
+               (mevedel-tool-patch--write-file
+                path (plist-get after :bytes) (plist-get after :mode) t)
+             (mevedel-pin-delete-file path)))))
+   (lambda () (mevedel-tool-patch--assert-current currentp))))
 
 (defun mevedel-tool-patch-missing-parent-directories (path)
   "Return missing parent directories for PATH, outermost first."
@@ -1301,8 +1303,7 @@ before/after snapshots and must check freshness and fence the replacement on
 the target; the same callback handles rollback. Buffer synchronization stays
 inside this transaction.
 Rollback never overwrites an intervening edit; it reports incomplete recovery."
-  (require 'mevedel-directive)
-  (require 'mevedel-overlays)
+    (require 'mevedel-overlays)
   (let ((owner-current-p currentp)
         (checks (delete-dups (delq nil (mapcar (lambda (change) (plist-get change :resource-check))
                                                changes)))))
@@ -1328,16 +1329,7 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
               (let* ((overlays (append (car (overlay-lists))
                                        (cdr (overlay-lists))))
                      (entry (assq buffer
-                                  (mevedel--instruction-alist-value)))
-                     anchors)
-                (dolist (overlay overlays)
-                  (when (eq (overlay-get overlay 'mevedel-instruction-type)
-                            'directive)
-                    (when-let* ((record (mevedel--directive-record overlay)))
-                      (push (cons record
-                                  (copy-tree
-                                   (mevedel-directive-anchor record)))
-                            anchors))))
+                                  (mevedel--instruction-alist-value))))
                 (list :buffer buffer
                       :group (prepare-change-group)
                       :minimum minimum
@@ -1348,7 +1340,6 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
                       :content (buffer-substring (point-min) (point-max))
                       :instruction-present (and entry t)
                       :instructions (and entry (copy-sequence (cdr entry)))
-                      :anchors anchors
                       :overlays
                       (mapcar
                        (lambda (overlay)
@@ -1391,8 +1382,6 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
                             (plist-get snapshot :instructions))
                     (setq alist (assq-delete-all buffer alist)))
                   (mevedel--set-instruction-alist-value alist))
-                (dolist (anchor (plist-get snapshot :anchors))
-                  (mevedel-directive-set-anchor (car anchor) (cdr anchor)))
                 (narrow-to-region (plist-get snapshot :minimum)
                                   (plist-get snapshot :maximum))
                 (goto-char (plist-get snapshot :point))
@@ -1424,7 +1413,7 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
                    changes))))
       (cl-loop for change in changes for snapshot in snapshots do
                (when (and (plist-member change :before)
-                          (not (mevedel-tool-patch--same-snapshot-p (plist-get change :before) snapshot)))
+                          (not (mevedel-change-same-p (plist-get change :before) snapshot)))
                  (error "File changed before the transaction: %s" (plist-get change :path))))
       (dolist (snapshot buffer-snapshots)
         (when-let* ((group (plist-get snapshot :group)))
@@ -1434,7 +1423,7 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
           (progn
             (cl-loop for change in changes for snapshot in snapshots do
               (mevedel-tool-patch--assert-current currentp)
-              (unless (mevedel-tool-patch--same-snapshot-p snapshot (mevedel-tool-patch--snapshot (plist-get change :path)))
+              (unless (mevedel-change-same-p snapshot (mevedel-tool-patch--snapshot (plist-get change :path)))
                 (error "File changed before its transaction write: %s" (plist-get change :path)))
               (push (list :path (plist-get change :path) :exists (eq (plist-get change :action) 'write)
                           :bytes (when (eq (plist-get change :action) 'write)
@@ -1486,7 +1475,7 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
                           (kill-buffer source))))))))
             (mevedel-tool-patch--assert-current currentp)
             (dolist (after expected)
-              (unless (mevedel-tool-patch--same-snapshot-p after (mevedel-tool-patch--snapshot (plist-get after :path)))
+              (unless (mevedel-change-same-p after (mevedel-tool-patch--snapshot (plist-get after :path)))
                 (error "File changed during the transaction: %s" (plist-get after :path))))
             (dolist (snapshot buffer-snapshots)
               (when-let* ((group (plist-get snapshot :group)))
@@ -1495,7 +1484,7 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
         ((error quit)
          (let* ((inhibit-quit t)
                 (rollback-failures
-                (mevedel-tool-patch--restore-snapshots snapshots expected currentp mutate)))
+                 (mevedel-tool-patch--restore-snapshots snapshots expected currentp mutate)))
            (dolist (snapshot buffer-snapshots)
              (when-let* ((buffer (plist-get snapshot :buffer)) ((buffer-live-p buffer)))
                (let ((path (plist-get snapshot :path))
@@ -1987,7 +1976,19 @@ matches fails as it does for a local file."
                  (mevedel-tool-patch--capture-baseline proposal)
                  (let ((changes (mevedel-tool-patch-planned-changes proposal)))
                    (mevedel-tool-patch-assert-baseline proposal)
-                   (if (memq mode '(edits full-auto))
+                   (cond
+                    ((and mevedel--session
+                          (eq (mevedel-session-preset-name mevedel--session) 'mevedel-note)
+                          (not (cl-some
+                                (lambda (operation)
+                                  (or (mevedel-tool-patch-resource-address-p
+                                       (plist-get operation :rel-path))
+                                      (and (plist-get operation :move-rel-path)
+                                           (mevedel-tool-patch-resource-address-p
+                                            (plist-get operation :move-rel-path)))))
+                                (plist-get proposal :operations))))
+                     (funcall callback (mevedel-note-prepare-change proposal changes data-buffer)))
+                    ((memq mode '(edits full-auto))
                        (let ((result (mevedel-tool-patch-result proposal changes)))
                          (mevedel-tool-patch-apply
                           data-buffer changes (lambda () (funcall callback result))
@@ -1995,9 +1996,10 @@ matches fails as it does for a local file."
                             (if (and (> retries 0)
                                      (eq (car err) 'mevedel-tool-patch-remote-stale))
                                 (fetch (lambda () (proceed (1- retries))))
-                              (fail err)))))
+                              (fail err))))))
+                    (t
                      (require 'mevedel-patch-review)
-                     (mevedel-patch-review-start proposal callback data-buffer))))
+                     (mevedel-patch-review-start proposal callback data-buffer)))))
              (error (fail err)))))
       (condition-case err
           (let ((prepared mevedel-tool-patch-prepared-proposal))

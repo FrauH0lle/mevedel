@@ -9,7 +9,9 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'cl-lib))
+(eval-when-compile
+  (require 'cl-lib)
+  (require 'tramp-sh))
 
 ;; Every control operation both refuses to nest and runs with timers
 ;; suspended, and the latter is a macro, so this is a load-time dependency
@@ -934,6 +936,17 @@ writes preserve the existing framing and the caller's remote-operation guard."
         (process-send-region process start end)
         (setq start end)))))
 
+(defun mevedel-session-control-fs--send-eof (process)
+  "Close PROCESS's input, accepting a child that finished meanwhile."
+  (when (process-live-p process)
+    (condition-case err
+        (process-send-eof process)
+      (error
+       (unless (and (not (process-live-p process))
+                    (string-match-p "\\`Process .* not running:"
+                                    (error-message-string err)))
+         (signal (car err) (cdr err)))))))
+
 (defun mevedel-session-control-fs--run-over-pipe
     (remote bash request output flags)
   "Run the program for REMOTE with BASH, streaming REQUEST's buffer on stdin.
@@ -968,7 +981,7 @@ as one remote operation for `mevedel-transport-busy-p'."
                (mevedel-session-control-fs--send-request-buffer process))
              (with-current-buffer request
                (mevedel-session-control-fs--send-request-buffer process))
-             (process-send-eof process)
+             (mevedel-session-control-fs--send-eof process)
              (while (or (process-live-p process)
                         (accept-process-output process 0 nil 1))
                (accept-process-output process 0.05 nil 1))
@@ -1517,6 +1530,34 @@ Each failure is reported and does not stop the rest."
 
 (add-hook 'kill-emacs-hook #'mevedel-session-control-fs--exit-cleanup 90)
 
+(defun mevedel-session-control-fs--connected-ssh-command (remote)
+  "Return a local SSH argv reusing REMOTE's live master, or nil.
+Only direct SSH targets with TRAMP-managed connection sharing qualify.
+ProxyCommand=false makes a vanished master fail instead of reconnecting."
+  ;; REMOTE must include an absolute localname.  Even `file-remote-p' on
+  ;; a bare TRAMP prefix expands the remote home with a target command.
+  (when (and remote (file-remote-p remote nil t)
+             mevedel-transport-remote-direct-async
+             (member (file-remote-p remote 'method) '("ssh" "scp"))
+             (not (file-remote-p remote 'hop)))
+    (require 'tramp-sh)
+    (when (eq tramp-use-connection-share t)
+      (let* ((vec (tramp-dissect-file-name remote))
+             (options (tramp-ssh-or-plink-options vec))
+             (temporary (tramp-get-connection-property
+                         (tramp-get-connection-process vec) "temp-file")))
+        (when (and (stringp temporary)
+                   (string-match-p "ControlPath=[^ ]+" options)
+                   (not (string-match-p "ControlPath=none\\(?: \\|$\\)" options)))
+          (append
+           (list (tramp-get-method-parameter vec 'tramp-login-program)
+                 "-o" "ControlMaster=no" "-o" "ProxyCommand=false"
+                 "-o" "ProxyJump=none" "-o" "BatchMode=yes")
+           (split-string-and-unquote (format-spec options `((?t . ,temporary))))
+           (when-let* ((user (tramp-file-name-user vec))) (list "-l" user))
+           (when-let* ((port (tramp-file-name-port vec))) (list "-p" port))
+           (list (tramp-file-name-host vec))))))))
+
 (defun mevedel-session-control-fs-async-busy-p (directory)
   "Return non-nil while a local asynchronous program addresses DIRECTORY.
 Include completed programs awaiting callback delivery: their continuations may
@@ -1529,8 +1570,8 @@ still mutate storage after the target process has exited.  No target I/O runs."
                           (nth 2 job)))
               mevedel-session-control-fs--async-jobs)))
 
-(defun mevedel-session-control-fs-run-program-async
-    (operations callback &optional scope lock-directory)
+(cl-defun mevedel-session-control-fs-run-program-async
+    (operations callback &optional scope lock-directory connected-only)
   "Run OPERATIONS as one control program, then call CALLBACK.
 
 CALLBACK receives RESULTS, as `mevedel-session-control-fs-run-program'
@@ -1558,25 +1599,42 @@ process when the program runs asynchronously, and nil otherwise.
 SCOPE is the captured diagnostic root, or `unavailable' for ownerless work.
 LOCK-DIRECTORY serializes the whole program with synchronous and asynchronous
 programs using that same physical directory, exactly as in the synchronous API.
-Without it callers must serialize programs touching the same files."
-  (let ((remote (file-remote-p (plist-get (car operations) :path))))
+Without it callers must serialize programs touching the same files.
+CONNECTED-ONLY requires a live remote SSH master; never reconnect or use a
+synchronous fallback.  An unavailable carrier delivers a `file-error'.
+It carries bounded requests entirely in argv, so a stalled master cannot
+block Emacs writing the program to a pipe.  Oversized requests fail closed."
+  (let* ((remote (file-remote-p (plist-get (car operations) :path)))
+         (ssh (and connected-only
+                   (not mevedel-session-control-fs--async-wait)
+                   (ignore-errors
+                     (mevedel-session-control-fs--connected-ssh-command
+                      (plist-get (car operations) :path))))))
     (when lock-directory
       (setq lock-directory (mevedel-session-control-fs-physical-path lock-directory))
       (unless (equal remote (file-remote-p lock-directory))
         (error "Control lock crosses execution targets")))
+    (when (and connected-only (not ssh))
+      (funcall callback nil '(file-error "Connected-only SSH carrier unavailable"))
+      (cl-return-from mevedel-session-control-fs-run-program-async nil))
     (if (or mevedel-session-control-fs--async-wait
             (null operations)
-            (and remote (not (mevedel-session-control-fs--pipe-capable-p remote))))
+            (and (not ssh) remote
+                 (not (mevedel-session-control-fs--pipe-capable-p remote))))
         (let (results failure)
           (condition-case err
               (setq results (mevedel-session-control-fs-run-program operations lock-directory))
             (error (setq failure err)))
           (funcall callback results failure)
           nil)
-      (mevedel-session-control-fs--assert-idle (or remote "/"))
+      ;; A connected-only child never touches TRAMP's shared shell.
+      (unless ssh
+        (mevedel-session-control-fs--assert-idle
+         (or (plist-get (car operations) :path) "/")))
       (let* ((default-directory
-              (mevedel-session-control-fs--connection-directory (or remote "/")))
-             (bash (car (mevedel-session-control-fs--programs remote)))
+              (if ssh temporary-file-directory
+                (mevedel-session-control-fs--connection-directory (or remote "/"))))
+             (bash (if ssh "bash" (car (mevedel-session-control-fs--programs remote))))
              (path (plist-get (car operations) :path))
              (output (generate-new-buffer " *mevedel-control-fs-async*"))
              (stderr (generate-new-buffer " *mevedel-control-fs-async-stderr*"))
@@ -1686,11 +1744,13 @@ Without it callers must serialize programs touching the same files."
                                                operations)
                                      (mevedel-session-control-fs--stage-payloads
                                       operations staged))))
-                   ;; A local request that fits rides as arguments, with
-                   ;; nothing to write; the rest streams over stdin.
-                   (arguments (and (not remote)
+                   ;; Connected-only and small local requests ride as
+                   ;; arguments.  Only ordinary carriers may stream stdin.
+                   (arguments (and (or ssh (not remote))
                                    (mevedel-session-control-fs--program-arguments
                                     fields))))
+              (when (and ssh (not arguments))
+                (error "Connected-only request exceeds argument limits"))
               ;; Writing the request can run process filters, as it does in the
               ;; synchronous carrier: counting the dispatch as a remote operation
               ;; makes whatever they start defer instead of nesting in it.
@@ -1698,26 +1758,39 @@ Without it callers must serialize programs touching the same files."
                (lambda ()
                  (setq process
                        (mevedel-transport-call-with-spawn-channel
-                        remote t
+                        (unless ssh remote) t
                         (lambda ()
                           (make-process
                            :name "mevedel-control-fs-async" :buffer output
                            :stderr stderr
                            :command
-                           (if arguments
+                           (cond
+                            (ssh
+                             (append ssh
+                                     (list
+                                      (mapconcat
+                                       #'shell-quote-argument
+                                       (append
+                                        (list bash "-p" "-c"
+                                              mevedel-session-control-fs--program-script
+                                              "mevedel-session-control-fs"
+                                              (or mevedel-session-control-fs--test-pause-file "")
+                                              (if lock-directory (file-local-name lock-directory) "") "0")
+                                        arguments) " "))))
+                            (arguments
                                (append
                                 (list bash "-p" "-c"
                                       mevedel-session-control-fs--program-script
                                       "mevedel-session-control-fs"
                                       (or mevedel-session-control-fs--test-pause-file "")
                                       (if lock-directory (file-local-name lock-directory) "") "0")
-                                arguments)
-                             (list bash "-p" "-c"
+                                arguments))
+                            (t (list bash "-p" "-c"
                                    mevedel-session-control-fs--pipe-bootstrap
                                    bash (or mevedel-session-control-fs--test-pause-file "")
-                                   (if lock-directory (file-local-name lock-directory) "") "0"))
+                                   (if lock-directory (file-local-name lock-directory) "") "0")))
                            :connection-type 'pipe :coding 'no-conversion
-                           :file-handler t :noquery t
+                           :file-handler (not ssh) :noquery t
                            :sentinel
                            (lambda (process _event)
                              (unless (or settled (process-live-p process))
@@ -1749,7 +1822,7 @@ Without it callers must serialize programs touching the same files."
                    (with-temp-buffer
                      (mevedel-session-control-fs--insert-program-request fields)
                      (mevedel-session-control-fs--send-request-buffer process))
-                   (process-send-eof process))
+                   (mevedel-session-control-fs--send-eof process))
                  process)))
           ((error quit)
            (unless settled

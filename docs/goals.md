@@ -122,8 +122,8 @@ The permission override follows the common permission resolver and is inherited
 by child implementation turns, including nested delegation. Current hard
 denies, shared rules, resource grants, and workflow restrictions remain live.
 Children keep their own model workload policies; unrelated child, summary,
-control, and directive work does not inherit an ambient root implementation
-policy. Directive settings remain separately request-local.
+control, and other sessions' note conversations do not inherit an ambient root
+implementation policy.
 
 `/goal edit <objective>` revises the live objective and rotates the Goal ID
 while retaining status, budget, accounting, accepted-plan reference,
@@ -294,7 +294,7 @@ heuristic.
 All mevedel-admitted native gptel backends first use
 [bounded sample recovery](architecture.md#bounded-native-gptel-sample-recovery):
 10 retries plus the initial attempt per model sample, independently for root
-and child requests, including directive and shared-item requests, without
+and child requests, including note and shared-item requests, without
 rerunning preparation, replaying completed tools, or charging extra Goal turns.
 Claude Code/ACP remains separate and self-retrying; unadmitted background
 gptel retry policies are unchanged. An exhausted controller marks its terminal
@@ -329,9 +329,8 @@ schedules none, so stopping unrelated work never starts Goal work.
 ## Goal tools
 
 `CreateGoal`, `GetGoal`, and `UpdateGoal` use the ordinary tool pipeline and
-are discoverable through `ToolSearch` and `ToolCall` in both the discuss and
-implement presets. Goal turns keep the session's tools, so a Goal started in
-read-only discussion can only investigate. They are session control
+are discoverable through `ToolSearch` and `ToolCall` in the implementation and
+note presets. Goal turns keep the session's tools and permissions. They are session control
 tools; creating a Goal never raises execution permissions. Native schemas and
 the callable catalog use the same visibility checks, and handlers recheck the
 owning root request before acting. An external engine's native roster is fixed
@@ -339,7 +338,7 @@ for its whole turn, so it keeps both `CreateGoal` and `UpdateGoal` while either
 is visible; one can enable the other before that turn ends. Child-agent, context-summary, ephemeral,
 and cancelled requests cannot call them.
 
-Creation is unavailable in Plan mode, directive requests, while an unfinished
+Creation is unavailable in Plan mode, while an unfinished
 Goal exists, or while accepted Plan implementation is reserved. An inactive
 Goal remains inspectable in the root conversation. A failed creation save
 restores the previous in-memory Goal and schedules no continuation.

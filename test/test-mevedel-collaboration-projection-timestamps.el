@@ -132,27 +132,21 @@
                               "failure" "Assistant request failed. Down" 0)
                              (mevedel-collaboration--stable-record-id
                               "failure" "Assistant request failed. Down" 1)))))))
-  :doc "summaries and failures inherit directive and shared-item scopes"
-  (dolist (scope '((:directive "dir-1") (:item "item-1")))
-    (with-temp-buffer
-      (mevedel-projection-timestamps-test--insert-turn
-       "Answer." (append '(:outcome error)
-                         mevedel-projection-timestamps-test--summary-data))
-      (let ((end (1+ (point-max))))
-        (cl-letf (((symbol-function 'mevedel-collaboration--directive-ranges)
-                   (lambda ()
-                     (when (plist-get scope :directive)
-                       (list (list :start 1 :end end :directive-id "dir-1")))))
-                  ((symbol-function 'mevedel-shared-conversation-ranges)
-                   (lambda ()
-                     (when (plist-get scope :item)
-                       (list (list :start 1 :end end
-                                   :shared (list :itemId "item-1")))))))
-          (let ((records (mevedel-collaboration--canonical-records
-                          (current-buffer))))
-            (should (= 4 (length records)))
-            (dolist (record (cddr records))
-              (should (equal (plist-get record (car scope)) (cadr scope)))))))))
+  :doc "summaries and failures inherit shared-item scopes"
+  (with-temp-buffer
+    (mevedel-projection-timestamps-test--insert-turn
+     "Answer." (append '(:outcome error)
+                       mevedel-projection-timestamps-test--summary-data))
+    (let ((end (1+ (point-max))))
+      (cl-letf (((symbol-function 'mevedel-shared-conversation-ranges)
+                 (lambda ()
+                   (list (list :start 1 :end end
+                               :shared (list :itemId "item-1"))))))
+        (let ((records (mevedel-collaboration--canonical-records
+                        (current-buffer))))
+          (should (= 4 (length records)))
+          (dolist (record (cddr records))
+            (should (equal (plist-get record :item) "item-1")))))))
   :doc "closing lines stay outside activity groups and split activity runs"
   (let* ((mevedel-view-tool-group-collapse-threshold 1)
          (tool (lambda (id)

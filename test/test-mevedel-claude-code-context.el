@@ -298,58 +298,6 @@
           (when (buffer-live-p (mevedel-agent-record-conversation-buffer record))
             (kill-buffer (mevedel-agent-record-conversation-buffer record))))))))
 
-(mevedel-deftest mevedel--start-directive-discussion/claude-path-scope (:quiet t)
-  (mevedel-engine-test--with-claude-session
-    (let* ((gptel--known-presets (copy-tree gptel--known-presets))
-           (mevedel-preset--registry (copy-tree mevedel-preset--registry))
-           (mevedel-show-chat-buffer nil) (inhibit-interaction t)
-           (directory (file-name-concat root "lib"))
-           (private-directory (file-name-concat root "private"))
-           (file (file-name-concat directory "evidence.txt"))
-           (private-file (file-name-concat private-directory "evidence.txt"))
-           (source (find-file-noselect (file-name-concat root "directive.txt")))
-           directive outcome)
-      (unwind-protect
-          (progn
-            (dolist (dir (list directory private-directory)) (make-directory dir))
-            (dolist (path (list file private-file)) (write-region "Evidence" nil path nil 'silent))
-            (write-region "DIRECTIVE-PATH-4361" nil (file-name-concat directory "AGENTS.md") nil 'silent)
-            (write-region "ROOT-ONLY-PATH-6372" nil (file-name-concat private-directory "AGENTS.md") nil 'silent)
-            (mevedel-tools-register)
-            (mevedel--define-presets)
-            (setq-local gptel-system-prompt "Root instructions"
-                        gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
-            (with-current-buffer source
-              (setq-local mevedel--workspace workspace)
-              (insert "alpha\n") (save-buffer)
-              (setq directive (mevedel--create-directive-in source (point-min) (1- (point-max)) nil "Inspect the scoped file"))
-              (setf (mevedel-directive-session-id (mevedel--directive-record directive)) (mevedel-session-session-id session)))
-            (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                       (mevedel-engine-test--claude-launch
-                        (lambda (_system mcp _model _effort &optional id hook)
-                          (let ((scoped (mevedel-request-directive-uuid mevedel--current-request)))
-                            (list :meta `((hookCommand . ,hook) (fixtureSessionId . ,(if scoped "directive" "root"))
-                                          (compactBeforeBatch . ,(when scoped 1)) (responseText . "Completed")
-                                          (toolBatches . ,(if scoped
-                                                              (vector (vector `((name . "Read") (id . "directive-read") (args . ((file_path . ,file)))))
-                                                                      (vector `((name . "Read") (id . "directive-again") (args . ((file_path . ,file))))))
-                                                            (vector (vector `((name . "Read") (id . "root-read") (args . ((file_path . ,file))))
-                                                                            `((name . "Read") (id . "root-private") (args . ((file_path . ,private-file)))))))))))))))
-              (insert "Read the root's assigned files")
-              (mevedel--send-request "Read the root's assigned files")
-              (mevedel-test--await 5 "Root path preparation did not settle"
-                (not (mevedel-turn-busy-p buffer)))
-              (with-current-buffer source
-                (mevedel--start-directive-discussion directive (lambda (err _owner) (setq outcome (if err err 'success)))))
-              (mevedel-test--await 5 "Directive path context did not settle"
-                (not (mevedel-turn-busy-p buffer)))
-              (should (eq 'success outcome))
-              (should (= 3 (mevedel-engine-test--count-evidence "DIRECTIVE-PATH-4361")))
-              (should (= 1 (mevedel-engine-test--count-evidence "ROOT-ONLY-PATH-6372")))))
-        (when (buffer-live-p source)
-          (with-current-buffer source (set-buffer-modified-p nil))
-          (kill-buffer source))))))
-
 ;;; Direct delivery seams
 
 (defun mevedel-claude-code-context-test--hook-receipt (body)

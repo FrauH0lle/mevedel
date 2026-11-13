@@ -14,21 +14,16 @@
 ;; `eval-when-compile' degrades to `progn' in interpreted code.
 (require 'cl-lib)
 
-;; `mevedel-directive'
-(declare-function mevedel-workspace-set-directives
-                  "mevedel-directive" (workspace directives))
-(autoload 'mevedel-workspace-set-directives "mevedel-directive")
-
-;; `mevedel-directive-source'
-(declare-function mevedel--delete-instruction
-                  "mevedel-directive-source"
-                  (instruction &optional buffer))
-(autoload 'mevedel--delete-instruction "mevedel-directive-source")
-
 ;; `mevedel-instruction-registry'
 (declare-function mevedel--instruction-with-id
                   "mevedel-instruction-registry"
                   (target-id &optional workspace))
+
+;; `mevedel-note-source'
+(declare-function mevedel--delete-instruction
+                  "mevedel-note-source"
+                  (instruction &optional buffer))
+(autoload 'mevedel--delete-instruction "mevedel-note-source")
 
 ;; `mevedel-overlay-ui'
 (declare-function mevedel--update-instruction-overlay
@@ -37,8 +32,6 @@
 (autoload 'mevedel--update-instruction-overlay "mevedel-overlay-ui")
 
 ;; `mevedel-overlays'
-(declare-function mevedel--directivep "mevedel-overlays" (instruction))
-(autoload 'mevedel--directivep "mevedel-overlays")
 (defvar mevedel--highlighted-instruction)
 
 ;; `mevedel-persistence'
@@ -48,10 +41,8 @@
 (autoload 'mevedel--restore-file-instructions "mevedel-persistence")
 
 ;; `mevedel-structs'
-(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
-(autoload 'mevedel-workspace-directives "mevedel-structs")
 (autoload 'mevedel-workspace-id "mevedel-structs")
 (autoload 'mevedel-workspace-type "mevedel-structs")
 
@@ -64,7 +55,7 @@
 
 Each value is a plist with keys `:instructions', `:id-counter',
 `:id-usage-map', and `:retired-ids', plus the instruction store's
-`:store-observation' and `:store-pending' once the store is used.")
+`:store-observation' once the store is used.")
 
 (defvar-local mevedel--instruction-current-state-key nil
   "Workspace key selected for this buffer's instruction operations.")
@@ -179,7 +170,6 @@ Each value is a plist with keys `:instructions', `:id-counter',
          (state (copy-tree (mevedel--instruction-state key)))
          (current-key mevedel--instruction-current-state-key)
          (highlighted mevedel--highlighted-instruction)
-         (directives (copy-sequence (mevedel-workspace-directives workspace)))
          overlays)
     (dolist (entry (plist-get state :instructions))
       (when (bufferp (car entry))
@@ -195,12 +185,18 @@ Each value is a plist with keys `:instructions', `:id-counter',
       (puthash key state mevedel--instruction-states)
       (setq mevedel--instruction-current-state-key current-key
             mevedel--highlighted-instruction highlighted)
-      (mevedel-workspace-set-directives workspace directives)
       (dolist (snapshot overlays)
         (when (buffer-live-p (nth 1 snapshot))
           (move-overlay (nth 0 snapshot)
                         (nth 2 snapshot) (nth 3 snapshot)
                         (nth 1 snapshot)))))))
+
+(defun mevedel--delete-instruction-overlay (instruction)
+  "Remove INSTRUCTION and its auxiliary label presentation."
+  (when-let* ((label (overlay-get instruction 'mevedel-label-overlay)))
+    (delete-overlay label)
+    (overlay-put instruction 'mevedel-label-overlay nil))
+  (delete-overlay instruction))
 
 (defun mevedel--clear-instruction-state (&optional workspace)
   "Delete all visible instruction overlays in WORKSPACE and clear its state."
@@ -210,20 +206,22 @@ Each value is a plist with keys `:instructions', `:id-counter',
       (when (bufferp (car entry))
         (dolist (instr (cdr entry))
           (when (overlayp instr)
-            (delete-overlay instr)))))
+            (mevedel--delete-instruction-overlay instr)))))
     (setf (mevedel--instruction-alist) nil)
     (setq mevedel--highlighted-instruction nil)
     (setf (mevedel--instruction-id-counter) 0)
     (setf (mevedel--instruction-id-usage-map) (make-hash-table))
     (setf (mevedel--instruction-retired-ids) nil)
+    (setf (plist-get (mevedel--instruction-state
+                      (mevedel--instruction-operation-state-key))
+                     :closed-notes)
+          nil)
     ;; Cleared state no longer matches the last observed instruction store,
     ;; so the next store write merges instead of overwriting it.
     (setf (plist-get (mevedel--instruction-state
                       (mevedel--instruction-operation-state-key))
                      :store-observation)
-          nil)
-    (when workspace
-      (mevedel-workspace-set-directives workspace nil))))
+          nil)))
 
 (defmacro mevedel--foreach-instruction (binding &rest body)
   "Iterate over `(mevedel--instruction-alist)' with BINDING as the binding.
@@ -461,15 +459,6 @@ that have no workspace context."
 (defun mevedel--instruction-id (instruction)
   "Return unique identifier for INSTRUCTION overlay."
   (overlay-get instruction 'mevedel-id))
-
-(defun mevedel--find-directive-by-uuid (uuid)
-  "Find directive overlay with UUID.
-Returns the overlay, or nil if not found."
-  (when uuid
-    (mevedel--foreach-instruction instr
-      when (and (mevedel--directivep instr)
-                (equal (overlay-get instr 'mevedel-uuid) uuid))
-      return instr)))
 
 (defun mevedel--create-id ()
   "Create a unique identifier for an instruction.

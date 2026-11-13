@@ -2,11 +2,10 @@
 
 ;;; Commentary:
 
-;; Saves and restores source-bound references and workspace-owned directives
+;; Saves and restores source-bound notes
 ;; across Emacs sessions.  The workspace instruction store at the end of this
 ;; file is their durable record; session snapshots and exported save files
-;; share its shape.  The format records directive identity and authored state
-;; separately from file-specific overlay presentations.  When instructions
+;; share its shape.  When instructions
 ;; are restored against a buffer whose contents have changed, native buffer
 ;; replacement reconciles overlay positions.  Exported save files must match
 ;; the current mevedel version; the store carries its own format version.
@@ -22,40 +21,21 @@
 (require 'cl-lib)
 (require 'subr-x)
 
-(require 'mevedel-directive-source)
+(require 'mevedel-note-source)
 (require 'mevedel-instruction-registry)
 (require 'mevedel-overlays)
 (require 'mevedel-utilities)
-
-;; `mevedel-directive'
-(declare-function mevedel-workspace-set-directives "mevedel-directive"
-                  (workspace directives))
-(declare-function mevedel-directive-in-flight-p "mevedel-directive" (directive))
-(autoload 'mevedel-directive-in-flight-p "mevedel-directive")
-(declare-function mevedel-workspace-rewind-directives "mevedel-directive"
-                  (workspace session-id target-turn))
-(autoload 'mevedel-workspace-rewind-directives "mevedel-directive")
-
-;; `mevedel-directive-persistence'
-(declare-function mevedel--deserialize-directives
-                  "mevedel-directive-persistence"
-                  (serialized base-directory))
-(declare-function mevedel--serialize-directives
-                  "mevedel-directive-persistence"
-                  (workspace base-directory))
-(autoload 'mevedel--deserialize-directives "mevedel-directive-persistence")
-(autoload 'mevedel--serialize-directives "mevedel-directive-persistence")
-
-;; `mevedel-directive-source'
-(declare-function mevedel--mark-buffer-source-missing
-                  "mevedel-directive-source" (buffer))
-(declare-function mevedel--reconcile-directive-sources
-                  "mevedel-directive-source" (workspace))
-(declare-function mevedel--restore-source-missing-directives
-                  "mevedel-directive-source" (buffer))
+(require 'mevedel-notes-activation)
+(require 'mevedel-workspace)
 
 ;; `mevedel-instruction-edit'
 (autoload 'mevedel-instruction-replace-buffer-contents "mevedel-instruction-edit")
+
+;; `mevedel-note-source'
+(declare-function mevedel--mark-buffer-source-missing
+                  "mevedel-note-source" (buffer))
+(declare-function mevedel--reconcile-note-sources
+                  "mevedel-note-source" (workspace))
 
 ;; `mevedel-overlay-ui'
 (declare-function mevedel--update-instruction-overlay
@@ -63,43 +43,29 @@
                   (instruction &optional update-children))
 (autoload 'mevedel--update-instruction-overlay "mevedel-overlay-ui")
 
-;; `mevedel-session-artifacts'
-(declare-function mevedel-session-artifacts-sessions-dir
-                  "mevedel-session-artifacts" (workspace))
-(autoload 'mevedel-session-artifacts-sessions-dir "mevedel-session-artifacts")
-
 ;; `mevedel-session-control-fs'
 (declare-function mevedel-session-control-fs-file-hash
                   "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-program-value
                   "mevedel-session-control-fs" (result))
+(declare-function mevedel-session-control-fs-read-file
+                  "mevedel-session-control-fs" (path &optional coding-system max-bytes))
 (declare-function mevedel-session-control-fs-run-program
                   "mevedel-session-control-fs" (operations &optional lock-directory))
+(declare-function mevedel-session-control-fs-run-program-async
+                  "mevedel-session-control-fs" (operations callback &optional scope lock-directory connected-only))
 (autoload 'mevedel-session-control-fs-program-value "mevedel-session-control-fs")
+(autoload 'mevedel-session-control-fs-read-file "mevedel-session-control-fs")
 (autoload 'mevedel-session-control-fs-run-program "mevedel-session-control-fs")
+(autoload 'mevedel-session-control-fs-run-program-async "mevedel-session-control-fs")
 (autoload 'mevedel-session-control-fs-file-hash "mevedel-session-control-fs")
 
 ;; `mevedel-structs'
-(declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempt-checkpoint "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-discussion "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-discussion-turn-checkpoint
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-plan "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-planning "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-subdirectives
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-subdirective-anchor "mevedel-structs" (cl-x) t)
-(declare-function mevedel-subdirective-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace--create "mevedel-structs" (&rest slots))
-(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
 
@@ -129,13 +95,69 @@
 This is sometimes necessary to prevent various hooks from interfering with the
 instruction restoration process.")
 
-(defvar mevedel--inhibit-source-missing-restore nil
-  "Non-nil while a historical instruction snapshot is being installed.")
-
-(defconst mevedel-instruction-store-format-version 1
+(defconst mevedel-instruction-store-format-version 2
   "Format of the workspace instruction store and instruction exports.
 Independent of the package version, so two installations of different
 versions can share one workspace and import each other's exports.")
+
+(defcustom mevedel-notes-closed-max-count 100
+  "Maximum number of done and deleted notes retained in recently closed.
+Dismissed notes do not count.  Nil disables the count limit; zero expires
+done and deleted notes immediately on closure."
+  :type '(choice (const :tag "No count limit" nil) natnum)
+  :group 'mevedel)
+
+(defcustom mevedel-notes-closed-max-age-days 30
+  "Maximum age in elapsed days of ordinary recently closed notes.
+Nil disables the age limit.  Expiry is checked on access and store writes;
+it never removes open notes or undoes file changes."
+  :type '(choice (const :tag "No age limit" nil) natnum)
+  :group 'mevedel)
+
+(defun mevedel-instruction-store--retained-closed (instructions)
+  "Return a UUID table of retained closed INSTRUCTIONS, newest first."
+  (let ((keep (make-hash-table :test #'equal))
+        (now (float-time))
+        (count 0))
+    (dolist (instruction (sort (copy-sequence instructions)
+                               (lambda (a b)
+                                 (> (or (plist-get a :closed-at) 0)
+                                    (or (plist-get b :closed-at) 0)))))
+      (when (and (or (eq (plist-get instruction :closed-reason) 'dismissed)
+                     (null mevedel-notes-closed-max-count)
+                     (< count mevedel-notes-closed-max-count))
+                 (or (null mevedel-notes-closed-max-age-days)
+                     (< (- now (or (plist-get instruction :closed-at) 0))
+                        (* 86400 mevedel-notes-closed-max-age-days))))
+        (unless (eq (plist-get instruction :closed-reason) 'dismissed)
+          (cl-incf count))
+        (puthash (plist-get (plist-get instruction :properties) 'mevedel-uuid)
+                 t keep)))
+    keep))
+
+(defun mevedel-instruction-store-prune-closed (workspace)
+  "Enforce WORKSPACE's recently-closed retention limits in memory.
+The next ordinary store write persists expiry; no timer or remote read runs."
+  (let* ((mevedel--instruction-state-key-override
+          (mevedel--instruction-workspace-key workspace))
+         (state (mevedel--instruction-state
+                 (mevedel--instruction-operation-state-key)))
+         (entries (plist-get state :closed-notes))
+         (keep (mevedel-instruction-store--retained-closed
+                (mapcar (lambda (entry) (plist-get entry :instruction)) entries)))
+         expired)
+    (setf (plist-get state :closed-notes)
+          (cl-remove-if
+           (lambda (entry)
+             (let ((props (plist-get (plist-get entry :instruction) :properties)))
+               (unless (gethash (plist-get props 'mevedel-uuid) keep)
+                 ;; Do not recycle expired numbers: surviving mentions/links
+                 ;; must never silently point to a different note.
+                 (remhash (plist-get props 'mevedel-id)
+                          (mevedel--instruction-id-usage-map))
+                 (setq expired t))))
+           entries))
+    (when expired (mevedel-instruction-store-touch workspace))))
 
 ;;;###autoload
 (defun mevedel-save-instructions (path)
@@ -180,10 +202,11 @@ file names are serialized relative to it; otherwise absolute names are
 used.  When INCLUDE-ORIGINAL-CONTENT is non-nil, include full buffer
 contents for position patching if the file changes before restore."
   (mevedel--instruction-activate-buffer)
-  (mevedel--reconcile-directive-sources
+  (mevedel--reconcile-note-sources
+   (mevedel--instruction-buffer-workspace (current-buffer)))
+  (mevedel-instruction-store-prune-closed
    (mevedel--instruction-buffer-workspace (current-buffer)))
   (let ((file-alist ())
-        (workspace (mevedel--instruction-buffer-workspace (current-buffer)))
         (base-directory (and base-directory
                              (file-name-as-directory
                               (expand-file-name base-directory)))))
@@ -204,7 +227,10 @@ contents for position patching if the file changes before restore."
                                    (point-min) (point-max))))
                                (entry
                                 (mevedel--instruction-entry-with-metadata
-                                 (list :instructions instrs)
+                                 (list :instructions instrs
+                                       :source-missing
+                                       (buffer-local-value
+                                        'mevedel--buffer-source-missing buffer))
                                  content)))
                           (when include-original-content
                             (setq entry
@@ -228,14 +254,29 @@ contents for position patching if the file changes before restore."
                (unless (or include-original-content
                            (not (listp (cdr cons))))
                  (cl-remf entry :original-content))
-               (push (cons (car cons) entry)
+               (push (cons (if base-directory
+                               (mevedel--file-relative-name-or-absolute
+                                (car cons) base-directory)
+                             (expand-file-name (car cons)))
+                           entry)
                      file-alist)))
+    (dolist (closed (plist-get (mevedel--instruction-state
+                               (mevedel--instruction-operation-state-key))
+                              :closed-notes))
+      (let* ((path (plist-get closed :file))
+             (file (if base-directory
+                       (mevedel--file-relative-name-or-absolute path base-directory)
+                     path))
+             (cell (assoc file file-alist)))
+        (unless cell
+          (setq cell (cons file (list :instructions nil)))
+          (push cell file-alist))
+        (setcdr cell (plist-put (cdr cell) :instructions
+                               (append (plist-get (cdr cell) :instructions)
+                                       (list (plist-get closed :instruction)))))))
     (list :format mevedel-instruction-store-format-version
           :version (mevedel-version)
           :ids (mevedel--instruction-id-state-plist)
-          :directives (and workspace
-                           (mevedel--serialize-directives
-                            workspace base-directory))
           :files file-alist)))
 
 
@@ -287,8 +328,7 @@ Returns the number of saved instructions."
 (defun mevedel-load-instructions (path)
   "Load instruction overlays from a file specified by PATH.
 The loaded instructions replace the workspace instruction store, after
-the confirmation the load asks for.  This also gives a workspace waiting
-for its store, such as one whose migration staged candidates, its store."
+the confirmation the load asks for."
   (interactive (list (read-file-name "Instruction list file: ")))
   (let ((confirm (called-interactively-p 'any))
         (workspace (mevedel--instruction-buffer-workspace (current-buffer))))
@@ -305,57 +345,16 @@ for its store, such as one whose migration staged candidates, its store."
     (insert-file-contents path)
     (read (current-buffer))))
 
-(defun mevedel--reset-instructions-preserving-directives
-    (workspace directives)
-  "Clear WORKSPACE presentations while retaining authored DIRECTIVES."
-  (let ((mevedel--instruction-state-key-override
-         (mevedel--instruction-workspace-key workspace)))
-    (dolist (entry (copy-sequence (mevedel--instruction-alist)))
-      (when (and (bufferp (car entry))
-                 (buffer-live-p (car entry)))
-        (mevedel--mark-buffer-source-missing (car entry))))
-    (mevedel--clear-instruction-state workspace)
-    (mevedel-workspace-set-directives workspace directives)))
-
-(defun mevedel--restore-preserved-directives (workspace)
-  "Safely restore Source missing directive presentations in WORKSPACE."
-  (dolist (file
-           (delete-dups
-            (cl-loop
-             for directive in (mevedel-workspace-directives workspace)
-             for anchor = (mevedel-directive-anchor directive)
-             append
-             (append
-              (when-let* (((eq 'source-missing (plist-get anchor :state)))
-                          (file (plist-get anchor :file))
-                          ((stringp file))
-                          ((file-exists-p file)))
-                (list file))
-              (cl-loop
-               for subdirective in
-               (mevedel-directive-subdirectives directive)
-               for file = (plist-get
-                           (mevedel-subdirective-anchor subdirective) :file)
-               when (and (stringp file) (file-exists-p file))
-               collect file)))))
-    (let ((buffer (find-file-noselect file)))
-      (with-current-buffer buffer
-        (setq-local mevedel--workspace workspace))
-      (mevedel--restore-source-missing-directives buffer))))
-
 (defun mevedel--load-instructions-file
-    (path &optional base-directory confirm quiet workspace directive-records
-          preserve-directives-p)
+    (path &optional base-directory confirm quiet workspace)
   "Load instruction overlays from PATH into WORKSPACE.
 
 BASE-DIRECTORY resolves relative file names in PATH.  CONFIRM prompts
-before replacing existing instructions.  QUIET suppresses messages.
-DIRECTIVE-RECORDS retains current authored records; PRESERVE-DIRECTIVES-P
-enables that mode for an empty record list."
+before replacing existing instructions.  QUIET suppresses messages."
   (let ((save-file (mevedel--read-instructions-file path)))
-    ;; The shared format version lets another installation's export, such
-    ;; as a candidate staged on the other machine, load here.  Files written
-    ;; before they carried it load only on the version that wrote them.
+    ;; The shared format version lets another installation's export load
+    ;; here.  Files written before they carried it load only on the version
+    ;; that wrote them.
     (unless (or (eql (plist-get save-file :format)
                      mevedel-instruction-store-format-version)
                 (and (not (plist-member save-file :format))
@@ -365,17 +364,16 @@ enables that mode for an empty record list."
                       (plist-get save-file :version) "missing")))
     (mevedel--install-instructions
      save-file (or base-directory (file-name-parent-directory path))
-     confirm quiet workspace directive-records preserve-directives-p
+     confirm quiet workspace
      (expand-file-name path))))
 
 (defun mevedel--install-instructions
-    (save-file base-directory &optional confirm quiet workspace
-               directive-records preserve-directives-p source lazy)
+    (save-file base-directory &optional confirm quiet workspace source lazy)
   "Install instruction snapshot SAVE-FILE into WORKSPACE.
 
 SAVE-FILE is an already read snapshot plist; its version or format is the
 caller's to check.  BASE-DIRECTORY resolves relative file names.  CONFIRM,
-QUIET, DIRECTIVE-RECORDS and PRESERVE-DIRECTIVES-P are as for
+and QUIET are as for
 `mevedel--load-instructions-file'.  SOURCE names the snapshot in messages.
 LAZY restores presentations only in files already visited; the others
 restore when their file is visited."
@@ -390,23 +388,10 @@ restore when their file is visited."
     (unless (y-or-n-p "Discard existing mevedel instructions? ")
       (user-error "Aborted")))
   (let* ((file-alist (copy-tree (plist-get save-file :files)))
-         (serialized-directives (plist-get save-file :directives))
-         (id-counter-plist (plist-get save-file :ids))
-         directives)
+         (id-counter-plist (plist-get save-file :ids)))
     (unless (listp file-alist)
       (user-error "Malformed mevedel instruction list"))
-    (unless (and (plist-member save-file :directives)
-                 (listp serialized-directives))
-      (user-error "Malformed mevedel directive list"))
-    ;; Decode before clearing: a malformed snapshot must leave live state.
-    (unless (or preserve-directives-p directive-records)
-      (setq directives (mevedel--deserialize-directives
-                        serialized-directives base-directory)))
-    (if (or preserve-directives-p directive-records)
-        (mevedel--reset-instructions-preserving-directives
-         workspace directive-records)
-      (mevedel--clear-instruction-state workspace)
-      (mevedel-workspace-set-directives workspace directives))
+    (mevedel--clear-instruction-state workspace)
     (cl-destructuring-bind (&key id-counter used-ids retired-ids) id-counter-plist
       (let ((hm (make-hash-table)))
         (cl-loop for used-id in used-ids
@@ -414,7 +399,28 @@ restore when their file is visited."
         (setf (mevedel--instruction-id-counter) (or id-counter 0)
               (mevedel--instruction-id-usage-map) hm
               (mevedel--instruction-retired-ids) retired-ids)))
-    (setf (mevedel--instruction-alist) file-alist)
+    (let (closed)
+      (dolist (entry file-alist)
+        (setcdr entry
+                (plist-put
+                 (cdr entry) :instructions
+                 (cl-remove-if
+                  (lambda (instruction)
+                    (when (eq (plist-get (plist-get instruction :properties)
+                                         'mevedel-note-state)
+                              'closed)
+                      (push (list :file (expand-file-name (car entry) base-directory)
+                                  :instruction instruction)
+                            closed)
+                      t))
+                  (plist-get (cdr entry) :instructions)))))
+      (setf (plist-get (mevedel--instruction-state
+                        (mevedel--instruction-operation-state-key))
+                       :closed-notes)
+            (nreverse closed)))
+    (setf (mevedel--instruction-alist)
+          (cl-remove-if-not (lambda (entry) (plist-get (cdr entry) :instructions))
+                            file-alist))
     (cl-loop for cons in (mevedel--instruction-alist)
              do (when (stringp (car cons))
                   (setf (car cons)
@@ -425,15 +431,14 @@ restore when their file is visited."
           (total-kia 0)
           (total (mevedel--instructions-saved-count
                   (mevedel--instruction-alist))))
-      (let ((mevedel--inhibit-source-missing-restore t))
+      (progn
         (cl-loop for (file . _) in (mevedel--instruction-alist)
-                 when (or (not lazy) (find-buffer-visiting file))
+                 for visited = (and lazy (get-file-buffer file))
+                 when (or (not lazy) visited)
                  do (cl-multiple-value-bind (_ restored kia)
-                        (mevedel--restore-file-instructions file t workspace)
+                        (mevedel--restore-file-instructions file t workspace visited)
                       (cl-incf total-restored restored)
                       (cl-incf total-kia kia))))
-      (when (or preserve-directives-p directive-records)
-        (mevedel--restore-preserved-directives workspace))
       (when (and (not quiet) confirm)
         (message "Restored %d out of %d instructions from %s%s"
                  total-restored
@@ -476,12 +481,16 @@ It must be one named function registered once: a per-buffer closure
 per instruction buffer grows the global hook without bound and runs
 every closure on every kill in Emacs.
 
-A buffer with no file is left alone before anything else happens.  This
+A buffer with no file or instruction overlays is left alone before anything
+else happens.  This
 hook sees every buffer Emacs kills, including internal ones such as
 ` *Compiler Input*', and instructions are stashed by file: resolving a
 workspace for a buffer that has none can only cost time or fail."
   (let ((buffer (current-buffer)))
-    (when-let* ((file (buffer-file-name buffer)))
+    (when-let* ((file (buffer-file-name buffer))
+                ((save-restriction
+                   (widen)
+                   (mevedel--instructions-in (point-min) (point-max)))))
       (mevedel--instruction-activate-buffer buffer)
       (when (mevedel--buffer-has-instructions-p buffer)
         (if (file-exists-p file)
@@ -490,7 +499,19 @@ workspace for a buffer that has none can only cost time or fail."
                      (insert-file-contents file)
                      (buffer-substring-no-properties (point-min) (point-max)))))
               (mevedel--stash-buffer buffer file-contents))
-          (mevedel--mark-buffer-source-missing buffer))))))
+          (mevedel--mark-buffer-source-missing buffer)
+          (save-restriction
+            (widen)
+            (mevedel--stash-buffer buffer))
+          (when-let* ((entry (assoc file (mevedel--instruction-alist))))
+            (setcdr entry (plist-put (cdr entry) :source-missing t))))))))
+
+(defun mevedel--clear-buffer-source-missing ()
+  "Clear the cached missing-source observation after a successful save/restore."
+  (when mevedel--buffer-source-missing
+    (setq mevedel--buffer-source-missing nil)
+    (mevedel-instruction-store-touch
+     (mevedel--instruction-buffer-workspace (current-buffer)))))
 
 (defun mevedel--setup-buffer-hooks (buffer)
   "Set up buffer hooks for instruction restoration on kill/revert.
@@ -500,6 +521,7 @@ reverted, and restores them afterward."
   (add-hook 'kill-buffer-hook #'mevedel--stash-instructions-on-kill)
   (with-current-buffer buffer
     (unless mevedel--buffer-hooks-setup
+      (add-hook 'after-save-hook #'mevedel--clear-buffer-source-missing nil t)
       (add-hook 'post-command-hook
                 (lambda ()
                   ;; Remote files are skipped: this runs after every command,
@@ -509,9 +531,11 @@ reverted, and restores them afterward."
                   ;; source is still caught by the revert and save hooks.
                   (when-let* ((file (buffer-file-name buffer))
                               ((not (file-remote-p file)))
-                              ((not (file-exists-p file)))
-                              ((mevedel--buffer-has-instructions-p buffer)))
-                    (mevedel--mark-buffer-source-missing buffer)))
+                              ((or mevedel--buffer-source-missing
+                                   (mevedel--buffer-has-instructions-p buffer))))
+                    (if (file-exists-p file)
+                        (mevedel--clear-buffer-source-missing)
+                      (mevedel--mark-buffer-source-missing buffer))))
                 nil t)
       (add-hook 'before-revert-hook
                 (lambda ()
@@ -687,7 +711,10 @@ Return the restored overlay, or nil when unresolved."
               (puthash uuid bounds parent-ranges))
             ov))))))
 
-(cl-defun mevedel--restore-file-instructions (file &optional message workspace)
+(defvar mevedel-instructions-restored-hook nil
+  "Functions called with the source buffer after its instructions are restored.")
+
+(cl-defun mevedel--restore-file-instructions (file &optional message workspace visited)
   "Restore FILE and its INSTRUCTIONS.
 
 Returns tree values: restored buffer, the amount of instructions restored, and
@@ -695,26 +722,24 @@ the amount of instructions lost to the patching process, if any.
 
 If MESSAGE is non-nil, message the intent of patching outdated files.
 When WORKSPACE is non-nil, associate the restored buffer with it before
-restoring overlays."
+restoring overlays.  VISITED is an already-read source buffer: restore
+from it without checking or reading FILE on disk."
   (let ((mevedel--inhibit-file-patching t))
-    (when-let* (((not mevedel--inhibit-source-missing-restore))
-                (buffer (find-buffer-visiting file)))
-      (mevedel--instruction-activate-buffer buffer)
-      (mevedel--restore-source-missing-directives buffer))
-    (unless (and (file-exists-p file)
-                 (assoc file (mevedel--instruction-alist)))
+    (unless (and (assoc file (mevedel--instruction-alist))
+                 (or visited (file-exists-p file)))
       (cl-return-from mevedel--restore-file-instructions (cl-values nil 0 0)))
     (cl-destructuring-bind
         (&key original-content instructions content-hash &allow-other-keys)
         (alist-get file (mevedel--instruction-alist) nil nil #'equal)
       (when (null instructions)
         (error "Malformed file given for restoration"))
-      (let ((buffer (find-file-noselect file))
+      (let ((buffer (or visited (find-file-noselect file)))
             (restored 0)
             (kia 0))
         (with-current-buffer buffer
           (when workspace
             (setq-local mevedel--workspace workspace))
+          (mevedel--clear-buffer-source-missing)
           (mevedel--setup-buffer-hooks buffer)
           (cl-labels ((restore-overlays
                        (dstbuf instr-maybe-plists &optional raw-position-ok)
@@ -740,7 +765,11 @@ restoring overlays."
                           ovs)))
             (if (and original-content
                      mevedel-patch-outdated-instructions
-                     (mevedel--file-outdated-p file))
+                     (if visited
+                         (not (string= original-content
+                                       (buffer-substring-no-properties
+                                        (point-min) (point-max))))
+                       (mevedel--file-outdated-p file)))
                 (progn
                   (when message
                     (message "Patching outdated instructions in buffer '%s'..."
@@ -774,6 +803,7 @@ restoring overlays."
                        kia (if (= kia 1) "" "s") file)
                :warning))))
         (setf (car (assoc file (mevedel--instruction-alist))) buffer)
+        (run-hook-with-args 'mevedel-instructions-restored-hook buffer)
         (cl-values buffer restored kia)))))
 
 
@@ -807,7 +837,7 @@ binds t while it installs its own records, so they are not echoed back.")
   "Workspaces whose instruction changes the next flush writes.")
 
 (defvar mevedel-instruction-store--warned nil
-  "Workspace keys already warned about a pending or unreadable store.")
+  "Workspace keys already warned about an unreadable store.")
 
 (defconst mevedel-instruction-store--retry-seconds 30
   "Retry delay for a failed flush before session persistence is loaded.")
@@ -824,18 +854,9 @@ passed since TIME.")
 Concurrent clients editing the same file move positions without
 changing what was authored, so these never decide a conflict.")
 
-(defconst mevedel-instruction-store--activity-keys
-  '(:attempts :discussion :planning)
-  "Directive record keys holding append-only model activity.")
-
 (defun mevedel-instruction-store-path (workspace)
   "Return WORKSPACE's instruction store file."
   (file-name-concat (mevedel-workspace-state-dir workspace) "instructions.el"))
-
-(defun mevedel-instruction-store-migration-directory (workspace)
-  "Return the directory where migration stages WORKSPACE's instructions."
-  (file-name-concat (mevedel-workspace-state-dir workspace)
-                    "instruction-migration"))
 
 (defun mevedel-instruction-store--applicable-p (workspace)
   "Return non-nil when WORKSPACE keeps its instructions in a store.
@@ -857,7 +878,7 @@ A workspace keeps its store under its root, beside its sessions."
 
 ;;;; Record codec
 
-(defun mevedel-instruction-store--validate (data workspace)
+(defun mevedel-instruction-store--validate (data _workspace)
   "Signal unless DATA is a well-formed store record for WORKSPACE."
   (let ((ids (plist-get data :ids))
         (files (plist-get data :files)))
@@ -875,9 +896,6 @@ A workspace keeps its store under its root, beside its sessions."
                                   (natnump (plist-get intent :to))))
                            (plist-get data :rewinds)))
       (error "Malformed instruction store record"))
-    ;; The directive codec is the schema; decoding proves the records.
-    (mevedel--deserialize-directives (plist-get data :directives)
-                                     (mevedel-instruction-store--root workspace))
     data))
 
 (defun mevedel-instruction-store--decode (bytes workspace)
@@ -897,7 +915,7 @@ or `corrupt'."
           (list :status 'corrupt :reason "Not an instruction store record"))
          ((not (eql (plist-get form :format)
                     mevedel-instruction-store-format-version))
-          (list :status 'unsupported
+          (list :status 'unsupported :data form
                 :reason (format "Unsupported store format %S"
                                 (plist-get form :format))))
          (t
@@ -929,6 +947,46 @@ bytes read, the precondition a later write names."
           (append (list :hash (secure-hash 'sha256 bytes))
                   (mevedel-instruction-store--decode bytes workspace)))))))
 
+(defun mevedel-instruction-store-note-session-ids (workspace)
+  "Return WORKSPACE's retained note session IDs, or t when uncertain.
+Inspect live, stashed and closed records without changing dirty state.
+An unloaded workspace or remote root retains everything.
+For a loaded local workspace, one bounded read checks the current store
+as well, without installing it."
+  (condition-case nil
+      (let* ((state (gethash (mevedel--instruction-workspace-key workspace)
+                             mevedel--instruction-states))
+             (observed (plist-get state :store-observation)))
+        (if (or (file-remote-p (mevedel-workspace-root workspace))
+                (null (plist-get observed :data)))
+            t
+          (let* ((limit (* 16 1024 1024))
+                 (bytes (mevedel-session-control-fs-read-file
+                         (mevedel-instruction-store-path workspace)
+                         'no-conversion (1+ limit)))
+                 (decoded (and (<= (length bytes) limit)
+                               (mevedel-instruction-store--decode bytes workspace)))
+                 ids)
+            (if (not (eq (plist-get decoded :status) 'ok))
+                t
+              (cl-labels
+                  ((retain (properties)
+                     (when-let* ((id (plist-get properties 'mevedel-note-session-id)))
+                       (cl-pushnew id ids :test #'equal))))
+                (dolist (entry (plist-get state :instructions))
+                  (if (bufferp (car entry))
+                      (dolist (note (cdr entry))
+                        (retain (overlay-properties note)))
+                    (dolist (note (plist-get (cdr entry) :instructions))
+                      (retain (plist-get note :properties)))))
+                (dolist (closed (plist-get state :closed-notes))
+                  (retain (plist-get (plist-get closed :instruction) :properties)))
+                (dolist (entry (plist-get (plist-get decoded :data) :files))
+                  (dolist (note (plist-get (cdr entry) :instructions))
+                    (retain (plist-get note :properties)))))
+              ids))))
+    (error t)))
+
 (defun mevedel-instruction-store--write (workspace expected data)
   "Replace WORKSPACE's store with DATA while it still has hash EXPECTED.
 EXPECTED nil requires the store to be absent.  Return the new hash, or
@@ -959,7 +1017,6 @@ same files from every client of the workspace."
                          (sort (copy-sequence (plist-get ids :used-ids)) #'<)))
     (list :format mevedel-instruction-store-format-version
           :ids ids
-          :directives (plist-get snapshot :directives)
           :files (mapcar (lambda (entry)
                            (cons (if (file-name-absolute-p (car entry))
                                      (mevedel--file-relative-name-or-absolute
@@ -971,59 +1028,13 @@ same files from every client of the workspace."
 
 (defun mevedel-instruction-store--install (workspace data &optional lazy)
   "Make store record DATA WORKSPACE's in-memory instructions.
-LAZY restores presentations only in files already visited.  Directive
-records keep their identity: a record already live under the same UUID
-takes the installed fields in place, so a running request, an open
-listing or Rewind holding it sees the merged state."
-  (let ((mevedel-instruction-store--inhibit t)
-        (live (mevedel-workspace-directives workspace)))
+LAZY restores presentations only in files already visited."
+  (let ((mevedel-instruction-store--inhibit t))
     (with-temp-buffer
       (setq-local mevedel--workspace workspace)
       (mevedel--install-instructions
        data (mevedel-instruction-store--root workspace) nil t workspace
-       nil nil nil lazy))
-    ;; A record absent from DATA is dropped from the list, as removal does.
-    (mevedel-workspace-set-directives
-     workspace
-     (mapcar (lambda (fresh)
-               (if-let* ((old (cl-find (mevedel-directive-id fresh) live
-                                       :key #'mevedel-directive-id :test #'equal)))
-                   (mevedel-instruction-store--adopt old fresh)
-                 fresh))
-             (mevedel-workspace-directives workspace)))))
-
-(defun mevedel-instruction-store--adopt (live fresh)
-  "Copy directive record FRESH's fields into LIVE and return LIVE.
-Subdirectives keep their identity the same way.  While LIVE has a
-request in flight, its transient state and Plan stay: the store holds
-neither the running status nor the Plan's live chat buffer."
-  (let ((running (mevedel-directive-in-flight-p live))
-        (state (mevedel-directive-state live))
-        (plan (mevedel-directive-plan live)))
-    (setf (mevedel-directive-subdirectives fresh)
-          (mapcar (lambda (sub)
-                    (if-let* ((old (cl-find (mevedel-subdirective-id sub)
-                                            (mevedel-directive-subdirectives live)
-                                            :key #'mevedel-subdirective-id
-                                            :test #'equal)))
-                        (mevedel-instruction-store--copy-slots
-                         'mevedel-subdirective old sub)
-                      sub))
-                  (mevedel-directive-subdirectives fresh)))
-    (mevedel-instruction-store--copy-slots 'mevedel-directive live fresh)
-    (when running
-      (setf (mevedel-directive-state live) state
-            (mevedel-directive-plan live) plan))
-    live))
-
-(defun mevedel-instruction-store--copy-slots (type live fresh)
-  "Copy every slot of struct TYPE from FRESH into LIVE and return LIVE."
-  (dolist (slot (cl-struct-slot-info type))
-    (unless (eq (car slot) 'cl-tag-slot)
-      (setf (cl-struct-slot-value type (car slot) live)
-            (cl-struct-slot-value type (car slot) fresh))))
-  live)
-
+       nil lazy))))
 
 ;;;; Merging a stale write
 
@@ -1046,15 +1057,10 @@ neither the running status nor the Plan's live chat buffer."
 
 (defun mevedel-instruction-store--units (data)
   "Return (TABLE . ORDER) for store record DATA.
-TABLE maps each instruction UUID to (:record RECORD :file FILE
-:instr INSTRUCTION): a directive's record and its source presentation
-share one UUID.  ORDER lists the UUIDs in record order."
+TABLE maps each instruction UUID to (:file FILE :instr INSTRUCTION).
+ORDER lists the UUIDs in record order."
   (let ((table (make-hash-table :test #'equal))
         order)
-    (dolist (record (plist-get data :directives))
-      (let ((id (plist-get record :id)))
-        (unless (gethash id table) (push id order))
-        (puthash id (plist-put (gethash id table) :record record) table)))
     (dolist (entry (plist-get data :files))
       (dolist (instruction (plist-get (cdr entry) :instructions))
         (when-let* ((id (mevedel-instruction-store--instruction-uuid
@@ -1071,53 +1077,9 @@ share one UUID.  ORDER lists the UUIDs in record order."
   (cl-loop for (key value) on plist by #'cddr
            unless (memq key keys) append (list key value)))
 
-(defun mevedel-instruction-store--append-activity (base mine theirs)
-  "Return THEIRS with the activity MINE appended since BASE, or nil.
-Apply only when MINE changed nothing but activity and the directive is
-still bound to the same execution session.  An identical entry already
-in THEIRS counts as appended; the same sequence with different contents
-is a conflict."
-  (let ((rb (plist-get base :record))
-        (rm (plist-get mine :record))
-        (rt (plist-get theirs :record))
-        (skip (cons :plan mevedel-instruction-store--activity-keys)))
-    (when (and rb rm rt
-               (equal (mevedel-instruction-store--authored
-                       (mevedel-instruction-store--without rb skip))
-                      (mevedel-instruction-store--authored
-                       (mevedel-instruction-store--without rm skip)))
-               (equal (plist-get rt :session-id) (plist-get rm :session-id)))
-      (catch 'conflict
-        (let ((record (copy-sequence rt))
-              sequences)
-          (dolist (key mevedel-instruction-store--activity-keys)
-            (let ((entries (copy-sequence (plist-get rt key))))
-              (dolist (entry (plist-get rm key))
-                (unless (member entry (plist-get rb key))
-                  (let ((existing (cl-find (plist-get entry :sequence) entries
-                                           :key (lambda (item)
-                                                  (plist-get item :sequence)))))
-                    (cond ((null existing)
-                           (setq entries (append entries (list entry))))
-                          ((not (equal existing entry))
-                           (throw 'conflict nil))))))
-              (dolist (entry entries)
-                (when (memql (plist-get entry :sequence) sequences)
-                  (throw 'conflict nil))
-                (push (plist-get entry :sequence) sequences))
-              (setq record
-                    (plist-put record key
-                               (sort entries
-                                     (lambda (a b)
-                                       (< (plist-get a :sequence)
-                                          (plist-get b :sequence))))))))
-          (when (equal (plist-get rt :plan) (plist-get rb :plan))
-            (setq record (plist-put record :plan (plist-get rm :plan))))
-          (plist-put (copy-sequence theirs) :record record))))))
-
 (defun mevedel-instruction-store--request-text (unit)
   "Return the authored request text UNIT carries, or nil."
-  (plist-get (plist-get unit :record) :request))
+  (plist-get (plist-get (plist-get unit :instr) :properties) 'mevedel-note-text))
 
 (defun mevedel-instruction-store--file-metadata (file instructions data)
   "Return DATA's metadata for FILE when it holds every one of INSTRUCTIONS.
@@ -1128,12 +1090,12 @@ Raw positions are only valid against the content they were saved with."
                          instructions)))
     (mevedel-instruction-store--without entry '(:instructions))))
 
-(defun mevedel-instruction-store--assign-ids (units origins mine theirs)
+(defun mevedel-instruction-store--assign-ids (units origins mine theirs base their-units)
   "Return merged id state for UNITS, renumbering colliding new ids.
 UNITS is a list of (UUID . UNIT); ORIGINS maps UUIDs to `mine' or
 `theirs'.  MINE and THEIRS are the two records' id state.  A display id
 two instructions share is reassigned on the one this client contributed,
-above every used and retired id."
+above every used and retired id.  BASE and THEIR-UNITS map known UUIDs to units."
   (let* ((mine-ids (plist-get mine :ids))
          (theirs-ids (plist-get theirs :ids))
          (retired (delete-dups (append (plist-get mine-ids :retired-ids)
@@ -1156,8 +1118,12 @@ above every used and retired id."
                            units)))
       (when-let* ((instruction (plist-get (cdr unit) :instr))
                   (id (plist-get (plist-get instruction :properties) 'mevedel-id)))
-        (if (and (gethash id owners)
-                 (not (equal (gethash id owners) (car unit))))
+        (if (or (and (gethash id owners)
+                     (not (equal (gethash id owners) (car unit))))
+                (and (eq 'mine (gethash (car unit) origins))
+                     (not (gethash (car unit) base))
+                     (not (gethash (car unit) their-units))
+                     (<= id (or (plist-get theirs-ids :id-counter) 0))))
             (let ((fresh (cl-incf counter)))
               (setcdr unit
                       (plist-put (copy-sequence (cdr unit)) :instr
@@ -1198,9 +1164,6 @@ LIST holding (UUID . REQUEST-TEXT) for each change of MINE refused."
                   (cons th 'theirs)))
                ((equal at ab) (cons m 'mine))
                ((equal am at) (cons m 'mine))
-               ((when-let* ((appended (mevedel-instruction-store--append-activity
-                                       b m th)))
-                  (cons appended 'theirs)))
                (t (push (cons id (mevedel-instruction-store--request-text m))
                         refused)
                   (cons th 'theirs)))))
@@ -1223,7 +1186,20 @@ LIST holding (UUID . REQUEST-TEXT) for each change of MINE refused."
                              (mevedel-instruction-store--request-text (cdr unit)))
                        refused))))
            units))
-    (let ((ids (mevedel-instruction-store--assign-ids units origins mine theirs))
+    (let ((keep (mevedel-instruction-store--retained-closed
+                 (cl-loop for unit in units
+                          for instruction = (plist-get (cdr unit) :instr)
+                          when (eq (plist-get (plist-get instruction :properties)
+                                               'mevedel-note-state) 'closed)
+                          collect instruction))))
+      (setq units (cl-remove-if
+                   (lambda (unit)
+                     (let* ((instruction (plist-get (cdr unit) :instr))
+                            (props (plist-get instruction :properties)))
+                       (and (eq (plist-get props 'mevedel-note-state) 'closed)
+                            (not (gethash (car unit) keep)))))
+                   units)))
+    (let ((ids (mevedel-instruction-store--assign-ids units origins mine theirs bt tt))
           files)
       (dolist (unit units)
         (when-let* ((instruction (plist-get (cdr unit) :instr)))
@@ -1235,9 +1211,6 @@ LIST holding (UUID . REQUEST-TEXT) for each change of MINE refused."
        :data
        (list :format mevedel-instruction-store-format-version
              :ids ids
-             :directives (delq nil (mapcar (lambda (unit)
-                                             (plist-get (cdr unit) :record))
-                                           units))
              :files
              (mapcar (lambda (cell)
                        (let ((instructions (reverse (cdr cell))))
@@ -1280,73 +1253,6 @@ LIST holding (UUID . REQUEST-TEXT) for each change of MINE refused."
       (push key mevedel-instruction-store--warned)
       (mevedel-diagnostic-warning (mevedel-diagnostic-scope workspace) 'mevedel text :warning))))
 
-(defun mevedel-instruction-store--pending-p (workspace observed own-save-path)
-  "Return non-nil when WORKSPACE, whose store is absent, awaits migration.
-A staged migration's report, or any session other than OWN-SAVE-PATH,
-means instructions may exist only in session snapshots, so creating an
-empty store would hide them.  An absolute sessions directory holds every
-workspace's sessions, so only those whose sidecar names WORKSPACE count.
-OBSERVED with a hash means this client saw a store that has since been
-removed; it writes a new one."
-  (and (not (plist-get observed :hash))
-       (or (file-exists-p
-            (file-name-concat (mevedel-instruction-store-migration-directory
-                               workspace)
-                              "report.el"))
-           (let ((sessions (mevedel-session-artifacts-sessions-dir workspace))
-                 (own (and own-save-path
-                           (directory-file-name (expand-file-name own-save-path)))))
-             (if (file-name-absolute-p mevedel-sessions-directory)
-                 (mevedel-instruction-store--shared-session-p workspace own)
-               (and (file-directory-p sessions)
-                    (cl-some (lambda (directory)
-                               (and (file-directory-p directory)
-                                    (not (equal (directory-file-name directory)
-                                                own))))
-                             (directory-files sessions t "\\`[^.]"))))))))
-
-(declare-function mevedel-session-persistence--enumerate-sessions
-                  "mevedel-session-persistence" (workspace &optional cached))
-
-(defun mevedel-instruction-store--shared-session-p (workspace own)
-  "Return non-nil when a session other than OWN may belong to WORKSPACE.
-An absolute sessions directory holds every workspace's sessions, so a
-compatible session counts only when its authoritative sidecar, as session
-discovery reads it for the workspace's authority mode, names WORKSPACE's
-identity.  An incompatible (older-format or unreadable) session cannot be
-attributed and may hold this workspace's instructions, so it counts too."
-  (require 'mevedel-session-persistence)
-  (when-let* ((identity (mevedel-workspace-identity-read
-                         (mevedel-workspace-root workspace))))
-    (let ((found (mevedel-session-persistence--enumerate-sessions workspace)))
-      (or (cl-some (lambda (session)
-                     (and (equal identity
-                                 (plist-get (plist-get (plist-get session :summary)
-                                                       :workspace)
-                                            :workspace-id))
-                          (not (equal (directory-file-name
-                                       (plist-get session :save-path))
-                                      own))))
-                   (plist-get found :sessions))
-          (cl-some (lambda (session)
-                     (not (equal (directory-file-name (plist-get session :save-path))
-                                 own)))
-                   (plist-get found :incompatible))))))
-
-(defun mevedel-instruction-store--export-unsynced (workspace)
-  "Export WORKSPACE's in-memory instructions before the store replaces them.
-Return the export path."
-  (let ((path (file-name-concat
-               (mevedel-instruction-store-migration-directory workspace)
-               (format "unsynced-%s-%s-%d.el"
-                       (format-time-string "%Y%m%dT%H%M%S")
-                       (system-name) (emacs-pid)))))
-    (make-directory (file-name-directory path) t)
-    (with-temp-buffer
-      (setq-local mevedel--workspace workspace)
-      (mevedel--write-instructions-file path (file-name-directory path) t t t))
-    path))
-
 (defun mevedel-instruction-store--unreadable (workspace observation)
   "Signal that WORKSPACE's store in OBSERVATION cannot be read.
 Nothing is cleared or written: the store must be repaired or replaced
@@ -1358,37 +1264,38 @@ with `mevedel-load-instructions'."
 
 (defun mevedel-instruction-store--observe (workspace hash data)
   "Record that WORKSPACE's store holds DATA with HASH."
+  (mevedel-notes-remember-remote-root
+   (mevedel-workspace-root workspace)
+   (cl-some (lambda (entry)
+              (cl-some (lambda (instruction)
+                         (eq (plist-get (plist-get instruction :properties)
+                                        'mevedel-instruction-type)
+                             'note))
+                       (plist-get (cdr entry) :instructions)))
+            (plist-get data :files)))
   (let ((key (mevedel--instruction-workspace-key workspace)))
-    (setf (plist-get (mevedel--instruction-state key) :store-pending) nil
-          (plist-get (mevedel--instruction-state key) :store-observation)
+    (setf (plist-get (mevedel--instruction-state key) :store-observation)
           (list :hash hash :data data))))
 
 (defun mevedel-instruction-store--observation (workspace)
   "Return WORKSPACE's last store observation.
 The plist holds :hash and :data of the record this client last read or
-wrote, and :pending while the workspace awaits its store.  Clearing
-instruction state drops the record, so a client whose state no longer
-matches it merges its next write instead of overwriting.  The pending
-mark survives that: a pending workspace's instructions come from a
-session snapshot load that clears state, yet the store appearing later
-must still be noticed."
-  (let ((state (mevedel--instruction-state
-                (mevedel--instruction-workspace-key workspace))))
-    (append (plist-get state :store-observation)
-            (and (plist-get state :store-pending) (list :pending t)))))
+wrote.  Clearing instruction state drops the record, so a client whose
+state no longer matches it merges its next write instead of overwriting."
+  (plist-get (mevedel--instruction-state
+              (mevedel--instruction-workspace-key workspace))
+             :store-observation))
 
 
 ;;;; Public interface
 
-(defun mevedel-instruction-store-sync (workspace &optional own-save-path)
+(defun mevedel-instruction-store-sync (workspace)
   "Write WORKSPACE's in-memory instructions to its store; return the outcome.
-OWN-SAVE-PATH is a session that may be WORKSPACE's first and so does not
-make the workspace pending.  The outcome is nil when WORKSPACE keeps no
-store or writes are inhibited, `pending' when it awaits migration,
-`unchanged', `written', `merged', `replaced' after the store appeared
-while this client was pending, `none' when WORKSPACE has no `.mevedel/'
+The outcome is nil when WORKSPACE keeps no store or writes are inhibited,
+`unchanged', `written', `merged', `none' when WORKSPACE has no `.mevedel/'
 state directory yet, or (refused . LIST) when some changes were refused.
-An unreadable store signals without writing.
+An absent store is created from memory; instruction snapshots of older
+sessions are not consulted.  An unreadable store signals without writing.
 
 A store is created only where mevedel already keeps workspace state:
 creating `.mevedel/' merely because an instruction was added to a file in
@@ -1405,11 +1312,19 @@ resolve as a workspace.  The first session saved there creates both."
     (if (not (file-directory-p (mevedel-workspace-state-dir workspace)))
         ;; No store can exist here, so there is nothing to serialize or read.
         'none
-      (let* ((key (mevedel--instruction-workspace-key workspace))
-             (observed (mevedel-instruction-store--observation workspace))
+      (let* ((observed (mevedel-instruction-store--observation workspace))
              (mine (mevedel-instruction-store--serialize workspace))
              (tries 0)
-             outcome)
+             (outcome
+              (and (stringp (plist-get observed :hash))
+                   (equal (plist-put (copy-sequence mine) :rewinds
+                                     (plist-get (plist-get observed :data) :rewinds))
+                          (plist-get observed :data))
+                   (condition-case nil
+                       (equal (plist-get observed :hash)
+                              (mevedel-instruction-store--current-hash workspace))
+                     (error nil))
+                   'unchanged)))
         (while (null outcome)
           (let* ((theirs (mevedel-instruction-store--read workspace))
                  (data (plist-get theirs :data))
@@ -1419,40 +1334,13 @@ resolve as a workspace.  The first session saved there creates both."
               ((or 'corrupt 'unsupported)
                (mevedel-instruction-store--unreadable workspace theirs))
               ('absent
-               (cond
-                ((not (file-directory-p (mevedel-workspace-state-dir workspace)))
-                 (setq outcome 'none))
-                ((mevedel-instruction-store--pending-p workspace observed own-save-path)
-                 (setf (plist-get (mevedel--instruction-state key) :store-pending) t)
-                 (mevedel-instruction-store--warn
-                  workspace 'pending
-                  (format (concat "Workspace %s has no instruction store yet; "
-                                  "instructions stay in session snapshots.  "
-                                  "Run scripts/migrate-sessions.el, or resolve its "
-                                  "staged candidates in %s with M-x mevedel-load-instructions.")
-                          (mevedel-workspace-root workspace)
-                          (mevedel-instruction-store-migration-directory workspace)))
-                 (setq outcome 'pending))
-                (t
+               (if (not (file-directory-p (mevedel-workspace-state-dir workspace)))
+                   (setq outcome 'none)
                  (when-let* ((hash (mevedel-instruction-store--write workspace nil mine)))
                    (setq stored (cons hash mine)
-                         outcome 'written)))))
+                         outcome 'written))))
               ('ok
                (cond
-                ((plist-get observed :pending)
-                 ;; Another client created the store while this one was
-                 ;; pending.  Keep this client's state as an export.
-                 (let ((path (mevedel-instruction-store--export-unsynced workspace)))
-                   (mevedel-instruction-store--install workspace data)
-                   (mevedel-instruction-store--observe
-                    workspace (plist-get theirs :hash) data)
-                   (mevedel-diagnostic-warning
-                    (mevedel-diagnostic-scope workspace) 'mevedel
-                    (format (concat "The instruction store for %s now exists; it replaced "
-                                    "this Emacs's instructions, which were exported to %s")
-                            (mevedel-workspace-root workspace) path)
-                    :warning)
-                   (setq outcome 'replaced)))
                 ((equal (plist-get theirs :hash) (plist-get observed :hash))
                  (let ((record (plist-put (copy-sequence mine)
                                           :rewinds (plist-get data :rewinds))))
@@ -1520,15 +1408,14 @@ installs are not recorded."
 (defun mevedel-instruction-store-flush (&optional force)
   "Write every workspace with unwritten instruction changes to its store.
 Runs after each command while changes are pending, and at exit.  While a
-minibuffer is active it waits: editing a directive request in the
+minibuffer is active it waits: editing a note in the
 minibuffer changes it on every keystroke, and the command that read it
 writes once when it returns.  FORCE writes even then, as at exit.  A
 failure is reported and the workspace
 stays pending, but is not retried by a non-forced flush until
 `mevedel-session-checkpoint-interval' seconds have passed, so a lasting
 failure does not repeat after every command.  An unreadable store is
-reported once and left to the next observation point, so it is not re-read
-after every command."
+reported once and retried on the same interval or by a forced flush."
   (unless (and (> (minibuffer-depth) 0) (not force))
     (dolist (workspace mevedel-instruction-store--dirty)
       (let ((failed (alist-get workspace mevedel-instruction-store--failed)))
@@ -1544,8 +1431,9 @@ after every command."
                                  nil t)
                       nil))
             (mevedel-instruction-store-unreadable
-             (setq mevedel-instruction-store--dirty
-                   (delq workspace mevedel-instruction-store--dirty))
+             (cl-pushnew workspace mevedel-instruction-store--dirty)
+             (setf (alist-get workspace mevedel-instruction-store--failed)
+                   (current-time))
              (mevedel-instruction-store--warn workspace 'unreadable
                                               (error-message-string err)))
             (error
@@ -1592,7 +1480,7 @@ session's turn count would move past it."
                ((eql turn (plist-get intent :to))
                 (setq record (mevedel-instruction-store--prune
                               workspace record session-id
-                              (plist-get intent :prune-from))))
+                              (plist-get intent :prune-from) turn)))
                ((eql turn (plist-get intent :from)))
                (t (user-error "Rewind of session %s from turn %d to %d does not match its committed turn %s"
                               session-id (plist-get intent :from)
@@ -1602,6 +1490,9 @@ session's turn count would move past it."
                                                        intents :test #'equal)))
             (when-let* ((hash (mevedel-instruction-store--write
                                workspace (plist-get theirs :hash) record)))
+              (dolist (intent intents)
+                (when (eql turn (plist-get intent :to))
+                  (mevedel-instruction-store--rewind-live-notes workspace session-id turn)))
               (mevedel-instruction-store--settled workspace theirs hash record)
               (mevedel-instruction-store--owe workspace session-id nil)
               (setq result 'resolved))))))
@@ -1614,49 +1505,88 @@ session's turn count would move past it."
 A client in step with BEFORE pruned its in-memory records the same way
 when it rewound, so RECORD becomes its merge base.  The base carries no
 hash: memory is not exactly RECORD, so the next write must merge rather
-than overwrite.  Installing RECORD instead would replace the directive
-records live code still holds."
+than overwrite.  Installing RECORD would replace held-back edits in memory."
   (ignore hash)
   (let ((observed (mevedel-instruction-store--observation workspace)))
     (when (equal (plist-get observed :hash) (plist-get before :hash))
       (mevedel-instruction-store--observe workspace nil record))))
 
-(defun mevedel-instruction-store--prune (workspace data session-id target-turn)
-  "Return WORKSPACE's DATA without SESSION-ID's activity from TARGET-TURN on.
-Only directives holding such activity go through the Rewind prune, which
-also returns consumed subdirectives and re-derives the Plan; applying it
-to records without that activity could change their Plan."
-  (let* ((root (mevedel-instruction-store--root workspace))
-         (records (mevedel--deserialize-directives (plist-get data :directives) root))
-         (affected
-          (cl-remove-if-not
-           (lambda (record)
-             (cl-some (lambda (checkpoint)
-                        (and (equal session-id (plist-get checkpoint :session-id))
-                             (>= (or (plist-get checkpoint :turn) 0) target-turn)))
-                      (append
-                       (mapcar #'mevedel-directive-attempt-checkpoint
-                               (mevedel-directive-attempts record))
-                       (mapcar #'mevedel-directive-discussion-turn-checkpoint
-                               (mevedel-directive-discussion record))
-                       (mapcar (lambda (turn) (plist-get turn :checkpoint))
-                               (mevedel-directive-planning record)))))
-           records)))
-    (if (null affected)
-        data
-      (let ((scratch (mevedel-workspace--create
-                      :type 'project :id "instruction-store-prune" :root root)))
-        (mevedel-workspace-set-directives scratch affected)
-        (mevedel-workspace-rewind-directives scratch session-id target-turn)
-        (let ((pruned (cl-mapcar #'cons
-                                 (mapcar (lambda (record) (plist-get record :id))
-                                         (mevedel--serialize-directives scratch root))
-                                 (mevedel--serialize-directives scratch root))))
-          (plist-put (copy-sequence data) :directives
-                     (mapcar (lambda (record)
-                               (or (cdr (assoc (plist-get record :id) pruned))
-                                   record))
-                             (plist-get data :directives))))))))
+(defun mevedel-instruction-store-applied-backups (session)
+  "Return SESSION's note backup names, or t for an unloaded existing store."
+  (let* ((workspace (mevedel-session-workspace session))
+         (state (mevedel--instruction-state (mevedel--instruction-workspace-key workspace)))
+         names)
+    (if (and workspace (null (plist-get (plist-get state :store-observation) :data))
+             (file-exists-p (mevedel-instruction-store-path workspace)))
+        t
+      (cl-labels ((retain (props)
+                    (dolist (pair (plist-get props 'mevedel-note-applied-changes))
+                      (when (equal (mevedel-session-session-id session) (plist-get pair :session-id))
+                        (dolist (file (plist-get pair :files))
+                          (dolist (key '(:pre-backup-name :backup-name))
+                            (when-let* ((name (plist-get (cdr file) key)))
+                              (cl-pushnew name names :test #'equal))))))))
+        (dolist (file (plist-get state :instructions))
+          (if (bufferp (car file))
+              (dolist (note (cdr file))
+                (when (overlay-buffer note) (retain (overlay-properties note))))
+            (dolist (note (plist-get (cdr file) :instructions))
+              (retain (plist-get note :properties)))))
+        (dolist (closed (plist-get state :closed-notes))
+          (retain (plist-get (plist-get closed :instruction) :properties))))
+      names)))
+
+(defun mevedel-instruction-store--rewind-note (instruction session-id surviving-turn)
+  "Rewind INSTRUCTION's note activity owned by SESSION-ID past SURVIVING-TURN.
+Mutate only lifecycle properties; preserve its text, anchor and session link."
+  (let* ((props (plist-get instruction :properties))
+         (change (plist-get props 'mevedel-note-prepared-change)))
+    (when (equal session-id (plist-get props 'mevedel-note-session-id))
+      (when (zerop surviving-turn)
+        (when (eq 'sent (plist-get props 'mevedel-note-state))
+          (plist-put props 'mevedel-note-state 'unsent))
+        (when (eq 'sent (plist-get instruction :open-state))
+          (plist-put instruction :open-state 'unsent))))
+    (when (and (equal session-id (plist-get change :session-id))
+               (> (or (plist-get change :turn) 0) surviving-turn))
+      (plist-put props 'mevedel-note-prepared-change nil)
+      (plist-put props 'mevedel-note-attention-state nil))
+    (when-let* ((pairs (plist-get props 'mevedel-note-applied-changes)))
+      (plist-put props 'mevedel-note-applied-changes
+                 (cl-remove-if (lambda (pair)
+                                 (and (equal session-id (plist-get pair :session-id))
+                                      (> (plist-get pair :turn) surviving-turn))) pairs))))
+  instruction)
+
+(defun mevedel-instruction-store--rewind-live-notes (workspace session-id turn)
+  "Apply committed SESSION-ID Rewind to TURN to WORKSPACE's current notes.
+Keep memory in step with the new merge base, including crash recovery."
+  (let ((state (mevedel--instruction-state (mevedel--instruction-workspace-key workspace))))
+    (dolist (file (plist-get state :instructions))
+      (if (bufferp (car file))
+          (dolist (note (cdr file))
+            (let* ((before (overlay-properties note))
+                   (instruction (list :properties (copy-sequence before)))
+                   (after (plist-get (mevedel-instruction-store--rewind-note
+                                      instruction session-id turn) :properties)))
+              (unless (equal before after)
+                (dolist (key '(mevedel-note-state mevedel-note-prepared-change
+                              mevedel-note-applied-changes mevedel-note-attention-state))
+                  (overlay-put note key (plist-get after key)))
+                (mevedel--update-instruction-overlay note t))))
+        (dolist (instruction (plist-get (cdr file) :instructions))
+          (mevedel-instruction-store--rewind-note instruction session-id turn))))
+    (dolist (closed (plist-get state :closed-notes))
+      (mevedel-instruction-store--rewind-note (plist-get closed :instruction) session-id turn))))
+
+(defun mevedel-instruction-store--prune (_workspace data session-id _target-turn surviving-turn)
+  "Discard note activity in DATA owned by SESSION-ID past SURVIVING-TURN.
+Preserve note text and anchors."
+  (setq data (copy-tree data))
+  (dolist (file (plist-get data :files))
+    (dolist (instruction (plist-get (cdr file) :instructions))
+      (mevedel-instruction-store--rewind-note instruction session-id surviving-turn)))
+  data)
 
 (defun mevedel-instruction-store-settle-session (session)
   "Resolve SESSION's pending Rewind intents from its committed turn count.
@@ -1701,8 +1631,7 @@ OWED non-nil adds the record, nil removes it."
 
 (defun mevedel-instruction-store-restore (session)
   "Load SESSION's workspace instructions from its store at resume.
-Return `pending' when the workspace has no store yet, so the caller
-restores the session snapshot as before; otherwise the install result.
+An absent store stays absent until a note is written.
 An unreadable store signals without clearing or writing."
   (let ((workspace (mevedel-session-workspace session)))
     (when (mevedel-instruction-store--applicable-p workspace)
@@ -1710,12 +1639,7 @@ An unreadable store signals without clearing or writing."
       (mevedel-instruction-store--owe
        workspace (mevedel-session-session-id session) t)
       (mevedel-instruction-store-settle-session session)
-      (let ((outcome (mevedel-instruction-store-sync workspace)))
-        ;; Without a store, the session snapshot is still where its
-        ;; instructions live.
-        (if (memq outcome '(pending none))
-            'pending
-          (list :store outcome))))))
+      (list :store (mevedel-instruction-store-observe workspace)))))
 
 (defvar mevedel-instruction-store--activating nil
   "Non-nil while a workspace's activation observes its store.")
@@ -1731,10 +1655,9 @@ The bytes are hashed on the execution target and never transferred."
 
 (defun mevedel-instruction-store--memory-empty-p (workspace)
   "Return non-nil when WORKSPACE holds no instructions in memory."
-  (and (null (mevedel-workspace-directives workspace))
-       (null (plist-get (mevedel--instruction-state
-                         (mevedel--instruction-workspace-key workspace))
-                        :instructions))))
+  (null (plist-get (mevedel--instruction-state
+                    (mevedel--instruction-workspace-key workspace))
+                   :instructions)))
 
 (defun mevedel-instruction-store-observe (workspace)
   "Bring WORKSPACE's in-memory instructions up to date with its store.
@@ -1834,9 +1757,8 @@ the intent cannot be recorded, which aborts the Rewind."
   "Resolve SESSION's Rewind intent after its outcome is known.
 COMMITTED non-nil means the Rewind passed its commit point: prune the
 session's discarded activity from the store, then reinstall source
-presentations from the store, keeping the directive records Rewind
-already pruned in memory.  The session's historical snapshot is not the
-workspace's current set.  Otherwise drop the intent."
+presentations with held-back writes replayed over that store.  The historical
+snapshot is not the workspace's current set.  Otherwise drop the intent."
   (let ((workspace (mevedel-session-workspace session)))
     (when (mevedel-instruction-store--applicable-p workspace)
       (if committed
@@ -1849,20 +1771,24 @@ workspace's current set.  Otherwise drop the intent."
                                           workspace)
                                          :data)))
                     (when (eq 'ok (plist-get current :status))
-                      (let ((mevedel-instruction-store--inhibit t))
+                      (let ((merge (mevedel-instruction-store--merge
+                                    base
+                                    (mevedel-instruction-store--serialize workspace)
+                                    (plist-get current :data)))
+                            (mevedel-instruction-store--inhibit t))
+                        ;; Replay held-back writes over the pruned store.
+                        (mevedel-instruction-store--report-refused
+                         workspace (plist-get merge :refused))
                         (with-temp-buffer
                           (setq-local mevedel--workspace workspace)
                           (mevedel--install-instructions
-                           (plist-get current :data)
+                           (plist-get merge :data)
                            (mevedel-instruction-store--root workspace)
-                           nil t workspace
-                           (mevedel-workspace-directives workspace) t)))
-                      ;; Presentations now match the store; directive records
-                      ;; match the base memory was in step with.
+                           nil t workspace)))
+                      ;; Keep the store as base so held-back edits flush later;
                       (mevedel-instruction-store--observe
                        workspace nil
-                       (plist-put (copy-sequence (plist-get current :data))
-                                  :directives (plist-get base :directives)))
+                       (plist-get current :data))
                       (setq settled t))))
               (unless settled
                 ;; Memory may hold the historical snapshot's presentations.
@@ -1888,8 +1814,7 @@ client's edits and delete other sessions' instructions."
 
 (defun mevedel-instruction-store-replacing (workspace load)
   "Call LOAD to replace WORKSPACE's instructions, then replace its store.
-Used by `mevedel-load-instructions': the explicit import that also gives
-a pending workspace its store.  Where no `.mevedel/' exists, only LOAD
+Used by `mevedel-load-instructions'.  Where no `.mevedel/' exists, only LOAD
 runs, as for a store created automatically.  Before LOAD changes
 anything, refuse unless this client last observed exactly the store's
 current record, so an import cannot discard instructions it never saw;
@@ -1904,7 +1829,7 @@ check.  Return LOAD's value."
            (expected (plist-get theirs :hash)))
       (when (and (eq 'ok (plist-get theirs :status))
                  (not (equal expected (plist-get observed :hash))))
-        (user-error "The instruction store holds instructions this Emacs has not loaded; list the directives or resume a session to load them, then import again"))
+        (user-error "The instruction store holds instructions this Emacs has not loaded; list the notes or resume a session to load them, then import again"))
       (prog1 (funcall load)
         (let ((record (plist-put (mevedel-instruction-store--serialize workspace)
                                  :rewinds (plist-get (plist-get theirs :data)
@@ -1913,11 +1838,70 @@ check.  Return LOAD's value."
               (mevedel-instruction-store--observe workspace hash record)
             (user-error "The instruction store changed while importing; load the file again")))))))
 
-(add-hook 'find-file-hook
-          (lambda ()
-            (unless mevedel--inhibit-file-patching
-              (mevedel--instruction-activate-buffer (current-buffer))
-              (mevedel--restore-file-instructions (buffer-file-name (current-buffer))))))
+(defun mevedel-instruction-store-read-connected (root)
+  "Read indexed remote ROOT once without waiting for target I/O.
+Only a live SSH master may carry the read.  A failed carrier leaves state
+untouched until an explicit workspace operation observes it normally."
+  (let* ((mevedel-instruction-store--activating t)
+         (workspace (mevedel-workspace-get-or-create
+                     'project root root
+                     (file-name-nondirectory (directory-file-name root))))
+         timer)
+    (cl-labels
+        ((failed (reason)
+           (mevedel-diagnostic-warning
+            root 'mevedel (format "Background note restore skipped: %s" reason) :debug))
+         (fresh-p ()
+           (and (null (plist-get (mevedel-instruction-store--observation workspace) :data))
+                (mevedel-instruction-store--memory-empty-p workspace))))
+      (when (fresh-p)
+        (condition-case err
+            (let ((process
+                   (mevedel-session-control-fs-run-program-async
+                    (list (list :op 'read :path (mevedel-instruction-store-path workspace)
+                                :coding 'no-conversion :optional t))
+                    (lambda (results failure)
+                      (when timer (cancel-timer timer))
+                      (condition-case err
+                          (cond
+                           (failure (failed (error-message-string failure)))
+                           ;; An explicit operation may have changed notes while
+                           ;; the read was in flight.  Its newer state wins.
+                           ((not (fresh-p)))
+                           ((eq (plist-get (car results) :status) 'absent)
+                            (mevedel-notes-remember-remote-root root nil))
+                           (t
+                            (let* ((bytes (mevedel-session-control-fs-program-value (car results)))
+                                   (decoded (mevedel-instruction-store--decode bytes workspace)))
+                              (if (eq (plist-get decoded :status) 'ok)
+                                  (progn
+                                    (mevedel-instruction-store--install
+                                     workspace (plist-get decoded :data) t)
+                                    (mevedel-instruction-store--observe
+                                     workspace (secure-hash 'sha256 bytes) (plist-get decoded :data)))
+                                (failed (plist-get decoded :reason))))))
+                        (error (failed (error-message-string err)))))
+                    root nil t)))
+              (when (process-live-p process)
+                (setq timer (run-at-time 15 nil #'delete-process process))))
+          (error (failed (error-message-string err))))))))
+
+(defun mevedel-instruction-store-visit (file &optional key root)
+  "Restore visited FILE from cached KEY or the local store at ROOT.
+Only the local discovery path may register and observe a workspace."
+  (let* ((workspace
+          (if root
+              (mevedel-workspace-get-or-create
+               'project root root (mevedel-workspace--project-name root))
+            (gethash key mevedel-workspace--registry)))
+         (mevedel--instruction-state-key-override
+          (or key (mevedel--instruction-workspace-key workspace))))
+    ;; Discovering an ancestor's store does not give it ownership of an
+    ;; unnoted file in a nested project.  Cache ownership only for a match.
+    (when (assoc file (mevedel--instruction-alist))
+      (when workspace
+        (setq-local mevedel--workspace workspace))
+      (mevedel--restore-file-instructions file nil workspace (current-buffer)))))
 
 (provide 'mevedel-persistence)
 

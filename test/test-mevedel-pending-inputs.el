@@ -13,15 +13,18 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-agent-control)
 (require 'mevedel-chat)
 (require 'mevedel-cockpit)
 (require 'mevedel-file-state)
 (require 'mevedel-pending-inputs)
 (require 'mevedel-prompt-submission)
+(require 'mevedel-recovery)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-telemetry)
 (require 'mevedel-transport)
+(require 'mevedel-turn)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-interaction)
@@ -1034,15 +1037,14 @@
 (mevedel-deftest mevedel-pending-inputs-make-follow-up ()
   ,test
   (test)
-  :doc "requeues failed follow-up at the tail without losing guest or directive metadata"
+  :doc "requeues failed follow-up at the tail without losing guest metadata"
   (mevedel-pending-inputs-test--with-session
     (let* ((failed (mevedel-session-enqueue-pending-input
                     session 'follow-up
                     '(:input "retry me" :state failed-turn :blocked t
                       :request-id "lost" :guest-id "guest" :guest-name "Guest"
                       :guest-role full :guest-paths ("/tmp/attachment")
-                      :inert-skills t :guest-skills ("review")
-                      :scope (:directive-id "directive" :action discuss))))
+                      :inert-skills t :guest-skills ("review"))))
            (later (mevedel-session-enqueue-pending-input
                    session 'follow-up '(:input "later"))))
       (mevedel-session-set-pending-input-failure-paused session t)
@@ -1059,7 +1061,7 @@
         (should-not (plist-member replacement :blocked))
         (should-not (plist-member replacement :request-id))
         (dolist (key '(:id :input :guest-id :guest-name :guest-role :guest-paths
-                        :inert-skills :guest-skills :scope))
+                        :inert-skills :guest-skills))
           (should (equal (plist-get failed key) (plist-get replacement key)))))
       (should (mevedel-session-pending-input-failure-paused session))))
 
@@ -1542,36 +1544,6 @@
 ;;
 ;;; Queue and delivery helpers
 
-(mevedel-deftest mevedel-view--queue-follow-up
-  (:quiet t)
-  ,test
-  (test)
-  :doc "stores directive scope on queued follow-ups"
-  (mevedel-view-test--with-buffers
-    (let* ((workspace (mevedel-workspace--create
-                       :type 'file :id "queue-scope" :root (mevedel-test--placeholder-root)
-                       :name "queue-scope"))
-           (session (mevedel-session-create "main" workspace)))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session))
-      (with-current-buffer view-buf
-        (setq-local mevedel--session session
-                    mevedel-view--composer-scope
-                    '(:directive-id "directive-1" :action discuss
-                      :attempt-index 2))
-        (cl-letf (((symbol-function 'mevedel-view--interaction-rebuild)
-                   #'ignore)
-                  ((symbol-function
-                    'mevedel-pending-inputs-schedule-held-input-delivery)
-                   #'ignore))
-          (mevedel-view--queue-follow-up "follow up"))
-        (let ((scope
-               (plist-get (car (mevedel-session-pending-follow-ups session))
-                          :scope)))
-          (should (equal "directive-1" (plist-get scope :directive-id)))
-          (should (eq 'discuss (plist-get scope :action)))
-          (should (= 2 (plist-get scope :attempt-index))))))))
-
 (defmacro test-pending-inputs--with-held-session (&rest body)
   "Run BODY in a view whose session waits for a user message after expiry."
   (declare (indent 0))
@@ -1709,19 +1681,6 @@
                                              :guest-name "Guest")
     (should-not (mevedel-permission-absence-held-p session)))
 
-  :doc "a directive-scoped composer message clears the hold"
-  (test-pending-inputs--with-held-session
-    (setq-local mevedel-view--composer-scope
-                '(:directive-id "directive-1" :action discuss))
-    (cl-letf (((symbol-function 'mevedel-view--dispatch-directive-input)
-               #'ignore)
-              ((symbol-function 'mevedel-view-history-add) #'ignore)
-              ((symbol-function 'mevedel-view--clear-input) #'ignore))
-      (mevedel-view--send-directive-input "about the directive"))
-    (should-not (mevedel-permission-absence-held-p session)))
-
-  :doc "a directive message that fails to dispatch keeps the hold"
-
   :doc "a background-event wake waits while held and runs once a message clears it"
   (test-pending-inputs--with-held-session
     (cl-letf (((symbol-function 'mevedel-agent-control-wake-pending-p) #'always)
@@ -1732,16 +1691,6 @@
       (should-not (mevedel-pending-inputs--event-wake-view data-buf))
       (mevedel-permission-absence-clear session)
       (should (eq view-buf (mevedel-pending-inputs--event-wake-view data-buf)))))
-
-  :doc "a directive message that fails to dispatch keeps the hold"
-  (test-pending-inputs--with-held-session
-    (setq-local mevedel-view--composer-scope
-                '(:directive-id "directive-1" :action discuss))
-    (cl-letf (((symbol-function 'mevedel-view--dispatch-directive-input)
-               (lambda (&rest _) (user-error "Directive gone"))))
-      (should-error (mevedel-view--send-directive-input "about the directive")
-                    :type 'user-error))
-    (should (mevedel-permission-absence-held-p session)))
 
   :doc "the hold stops queued follow-ups from draining until it clears"
   (test-pending-inputs--with-held-session
@@ -1772,21 +1721,18 @@
       (should (string-match-p (format "message %d with extra" n) body)))
     (should-not (string-match-p "message 4" body))
     (should (string-match-p "2 more" body)))
-  :doc "expanded steering and follow-ups retain scope without repeating input"
+  :doc "expanded steering and follow-ups show input lines without repeating them"
   (dolist (label '("Steering" "Follow-ups"))
-    (dolist (scope '(nil (:directive-id "abc" :action discuss)))
-      (let* ((session (mevedel-session--create :name "preview"))
-             (entry (list :id 1 :input "first line\nsecond line" :scope scope))
-             (header (concat "  1. [-]"
-                             (when scope " [◆ directive abc/discuss]")))
-             (body (mevedel-view--pending-input-category-body
-                    label (list entry) session 1)))
-        (should (equal (concat "\n" label "\n" header
-                               "\n    first line\n    second line\n")
-                       (substring-no-properties body)))
-        (should (equal (cons session 1)
-                       (get-text-property (string-search "[-]" body)
-                                          'mevedel-pending-input-target body)))))))
+    (let* ((session (mevedel-session--create :name "preview"))
+           (entry (list :id 1 :input "first line\nsecond line"))
+           (body (mevedel-view--pending-input-category-body
+                  label (list entry) session 1)))
+      (should (equal (concat "\n" label "\n  1. [-]"
+                             "\n    first line\n    second line\n")
+                     (substring-no-properties body)))
+      (should (equal (cons session 1)
+                     (get-text-property (string-search "[-]" body)
+                                        'mevedel-pending-input-target body))))))
 
 (mevedel-deftest mevedel-view--steering-request-context-supported-p ()
   ,test
@@ -1816,22 +1762,6 @@
                    :pending-follow-ups (list first '(:input "second")))))
     (should (eq first (mevedel-view--next-follow-up session)))
     (setf (mevedel-session-pending-follow-ups session) nil)
-    (should-not (mevedel-view--next-follow-up session)))
-  :doc "selects only the owning directive's first Plan entry"
-  (let* ((first (list :input "first revision"
-                      :scope '(:directive-id "d1" :action plan)))
-         (queue (list '(:input "ordinary")
-                      '(:input "other" :scope (:directive-id "d2" :action plan))
-                      '(:input "discuss" :scope (:directive-id "d1" :action discuss))
-                      first
-                      '(:input "second revision"
-                        :scope (:directive-id "d1" :action plan))))
-         (session (mevedel-session--create
-                   :directive-planning '(:directive-id "d1")
-                   :pending-follow-ups queue)))
-    (should (eq first (mevedel-view--next-follow-up session)))
-    (should (eq queue (mevedel-session-pending-follow-ups session)))
-    (setf (mevedel-session-directive-planning session) '(:directive-id "absent"))
     (should-not (mevedel-view--next-follow-up session))))
 
 (mevedel-deftest mevedel-view--follow-up-auto-drain-blocked-p ()
@@ -1880,22 +1810,7 @@
   (let ((session (mevedel-session--create
                   :authority-mode 'pid-lock
                   :name "failed" :pending-input-failure-paused t)))
-    (should (mevedel-view--follow-up-auto-drain-blocked-p session)))
-  :doc "holds ordinary input but permits the owning directive Plan follow-up"
-  (let ((session
-         (mevedel-session--create
-          :authority-mode 'pid-lock
-          :name "directive-plan"
-          :directive-planning '(:directive-id "d1" :phase approval)
-          :pending-follow-ups
-          '((:input "ordinary")
-            (:input "other plan" :scope (:directive-id "d2" :action plan))
-            (:input "discussion" :scope (:directive-id "d1" :action discuss))))))
-    (should (mevedel-view--follow-up-auto-drain-blocked-p session))
-    (setf (mevedel-session-pending-follow-ups session)
-          '((:input "ordinary")
-            (:input "revise" :scope (:directive-id "d1" :action plan))))
-    (should-not (mevedel-view--follow-up-auto-drain-blocked-p session))))
+    (should (mevedel-view--follow-up-auto-drain-blocked-p session))))
 
 (mevedel-deftest mevedel-pending-inputs--idle-work ()
   ,test
@@ -2236,10 +2151,6 @@ BODY sees SUBMITTED, a list of (PROMPT DISPLAY ATTRIBUTION) per turn."
                   (lambda (session _data _view)
                     (setf (mevedel-session-pending-plan-approval session)
                           (list :id "plan"))))
-            (cons "directive planning"
-                  (lambda (session _data _view)
-                    (setf (mevedel-session-directive-planning session)
-                          (list :directive-id "d1"))))
             (cons "compaction"
                   (lambda (_session data _view)
                     (with-current-buffer data

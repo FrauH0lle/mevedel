@@ -617,6 +617,13 @@ present."
             lines))
     (when retained
       (push "- `agent://` - retained agent results for this session." lines))
+    (when (plist-get metadata :notes-p)
+      (push (concat "- `notes://` - read-only marked-code notes in this session's workspace. "
+                    "Use Read to list display numbers and UUID addresses; "
+                    "Read, Glob and Grep accept returned notes://UUID.md addresses. "
+                    "These are distinct from working files under work://shared/; "
+                    "reading a note does not send it or start a conversation.")
+            lines))
     (when (or (plist-get metadata :saved-history-p)
               (seq-some (lambda (entry) (plist-get entry :history-p))
                         (plist-get metadata :agents)))
@@ -756,6 +763,18 @@ catalog rather than its root session's."
   '(workspace-config memory journal environment tools skills active-goal goal-policy resources)
   "Named observations delivered in conversation history for retained requests.")
 
+(defconst mevedel-system-note-context-components
+  '(workspace-config memory environment tools skills resources)
+  "Automatic observations included in independent note conversations.
+Journal, active-goal and goal-policy belong to other conversation context.")
+
+(defun mevedel-system-context-components (&optional session)
+  "Return automatic context components for SESSION, defaulting to this session."
+  (if (and (setq session (or session mevedel--session))
+           (eq (mevedel-session-preset-name session) 'mevedel-note))
+      mevedel-system-note-context-components
+    mevedel-system-retained-components))
+
 (mevedel-define-prompt-component resources
   :producer #'mevedel-system--resource-roster)
 
@@ -808,6 +827,12 @@ catalog rather than its root session's."
 (mevedel-define-prompt-profile permission-review
   :workspace-aware nil
   :components '(permission-review-role))
+
+(mevedel-define-prompt-profile note
+  :workspace-aware t
+  :components '(main-role task-policy main-tone memory-policy memory-save-policy
+                tool-orchestration resources skill-policy
+                workspace-config memory environment tools skills))
 
 (mevedel-define-prompt-profile buddy
   :workspace-aware t
@@ -991,7 +1016,8 @@ to conversation delivery, leaving only the stable system contract."
 (defun mevedel-system--prompt-profile-for-preset (preset)
   "Return the built-in prompt profile for PRESET, or nil."
   (pcase preset
-    ((or 'mevedel-discuss 'mevedel-implement) 'main)
+    ('mevedel-implement 'main)
+    ('mevedel-note 'note)
     (_ nil)))
 
 (defun mevedel-system--effective-system-prompt ()

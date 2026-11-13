@@ -148,14 +148,12 @@
     (unwind-protect
         (progn
           (with-temp-file input (insert "one\none\ntwo\n"))
-          (dolist (directive '(nil t))
+          (dolist (captured '(nil t))
             (let* ((session (mevedel-session--create
                              :authority-mode 'pid-lock :name "uniq-inspection"
-                             :plan-mode (not directive)
-                             :directive-planning
-                             (when directive '(:directive-id "d1" :phase planning))))
+                             :plan-mode (not captured)))
                    (mevedel--current-request
-                    (when directive
+                    (when captured
                       (mevedel-request--create :session session :plan-read-only t))))
               (dolist (mode '(ask edits full-auto))
                 (let ((context (list :mode mode :session session :buckets nil
@@ -199,16 +197,14 @@
 (mevedel-deftest mevedel-bash-policy-plan-inspection ()
   ,test
   (test)
-  :doc "inspection families and compositions work in standalone and directive Plan"
-  (dolist (directive '(nil t))
+  :doc "inspection families and compositions work in sticky and captured Plan"
+  (dolist (captured '(nil t))
     (let* ((mevedel-permission-rules nil)
            (session (mevedel-session--create
                      :authority-mode 'pid-lock :name "inspection"
-                     :plan-mode (not directive)
-                     :directive-planning
-                     (when directive '(:directive-id "d1" :phase planning))))
+                     :plan-mode (not captured)))
            (mevedel--current-request
-            (when directive
+            (when captured
               (mevedel-request--create :session session :plan-read-only t))))
       (dolist (mode '(ask edits full-auto))
         (let ((context (list :mode mode :session session :buckets nil
@@ -475,13 +471,12 @@
     (should (eq 'allow
                 (mevedel-bash-policy-check-permission
                  "pwd" :permission-context context))))
-  :doc "directive planning denies effectful Bash even in Full-auto"
+  :doc "a captured Plan request denies effectful Bash even in Full-auto"
   (let* ((mevedel-permission-rules nil)
          (session
           (mevedel-session--create
            :authority-mode 'pid-lock
-           :name "directive-plan"
-           :directive-planning '(:directive-id "d1" :phase planning)))
+           :name "captured-plan"))
          (mevedel--current-request
           (mevedel-request--create :session session :plan-read-only t))
          (context (list :mode 'full-auto :session session :buckets nil)))

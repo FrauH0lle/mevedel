@@ -24,7 +24,7 @@
         (compiled-root (make-temp-file "mevedel-instruction-owners-" t))
         (emacs (expand-file-name invocation-name invocation-directory))
         (owners '("mevedel-instruction-registry.el"
-                  "mevedel-directive-source.el"
+                  "mevedel-note-source.el"
                   "mevedel-overlays.el"
                   "mevedel-overlay-ui.el"))
         (cases
@@ -35,26 +35,20 @@
                 (error "Registry did not construct instruction state"))))
            (source
             (progn
-              (require 'mevedel-structs)
-              (require 'mevedel-directive-source)
-              (let* ((record
-                      (mevedel-directive--create
-                       :id "cold" :request "request"
-                       :anchor '(:state source-missing :file "missing")
-                       :attempts '(attempt)))
-                     (workspace
-                      (mevedel-workspace--create
-                       :type 'file :id "cold" :root default-directory
-                       :name "cold" :directives (list record))))
-                (unless (eq record
-                            (mevedel-archive-directive record workspace))
-                  (error "Source owner did not archive its record")))))
+              (require 'mevedel-note-source)
+              (with-temp-buffer
+                (insert "source")
+                (let ((overlay (mevedel--create-instruction-overlay-in
+                                (current-buffer) 1 7 'char)))
+                  (unless (and (eq (current-buffer) (overlay-buffer overlay))
+                               (integerp (overlay-get overlay 'mevedel-id)))
+                    (error "Source owner did not register its instruction"))))))
            (core
             (progn
               (require 'mevedel-overlays)
               (mevedel-delete-all-instructions)
-              (unless (null (mevedel--filter-references nil))
-                (error "Empty core registry returned references"))
+              (unless (null (mevedel--all-instructions))
+                (error "Empty core registry returned instructions"))
               (with-temp-buffer
                 (insert "source")
                 (let* ((workspace
@@ -66,9 +60,9 @@
                   (setq-local mevedel--workspace workspace)
                   (overlay-put instruction 'mevedel-instruction t)
                   (overlay-put instruction 'mevedel-instruction-type
-                               'reference)
+                               'note)
                   (overlay-put instruction 'mevedel-id 1)
-                  (overlay-put instruction 'mevedel-uuid "cold-reference")
+                  (overlay-put instruction 'mevedel-uuid "cold-note")
                   (mevedel--instruction-activate-buffer (current-buffer))
                   (mevedel--set-instruction-alist-value
                    (list (list (current-buffer) instruction)))
@@ -81,9 +75,9 @@
             (progn
               (require 'mevedel-overlay-ui)
               (condition-case nil
-                  (mevedel--ov-actions-abort)
+                  (mevedel--ov-actions-dispatch)
                 (error nil))
-              (unless (featurep 'mevedel-chat)
+              (unless (featurep 'mevedel-notes)
                 (error "UI action did not load its target owner")))))))
     (unwind-protect
         (progn

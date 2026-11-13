@@ -486,6 +486,35 @@ streams over stdin."
           (should-not mevedel-session-control-fs--async-jobs))
       (delete-directory root t)))
 
+  :doc "a child finishing before EOF keeps its process, output and exit status"
+  (dolist (target '(make-process process-send-eof))
+    (let* ((root (make-temp-file "mevedel-control-async-finished-" t))
+           (file (file-name-concat root "input"))
+           (calls 0)
+           (finish (lambda (process)
+                     (when (string-prefix-p "mevedel-control-fs-async" (process-name process))
+                       (while (process-live-p process)
+                         (accept-process-output process 0.05)))
+                     process)))
+      (unwind-protect
+          (progn
+            (write-region "x" nil file nil 'silent)
+            (advice-add target (if (eq target 'make-process) :filter-return :before) finish)
+            (let ((process
+                   (mevedel-session-control-fs-run-program-async
+                    (list (list :op 'read :path file))
+                    (lambda (results error)
+                      (should-not error)
+                      (should (equal "x" (plist-get (car results) :value)))
+                      (cl-incf calls)))))
+              (should (processp process))
+              (should (zerop (process-exit-status process))))
+            (should (mevedel-session-control-fs-wait-async 10))
+            (should (= 1 calls))
+            (should-not mevedel-session-control-fs--async-jobs))
+        (advice-remove target finish)
+        (delete-directory root t))))
+
   :doc "cleanup runs from the delivery timer, never the sentinel, and precedes the callback"
   (let* ((root (make-temp-file "mevedel-control-async-local-" t))
          (path (file-name-concat root "file"))

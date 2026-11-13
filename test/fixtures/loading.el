@@ -111,27 +111,6 @@ Every request receives `mevedel-test-loading--answer', streamed when asked."
       (mevedel-view-send))
     (mevedel-test-loading--settle (1+ answers))))
 
-(defun mevedel-test-loading--directive (command &optional answers)
-  "Run directive COMMAND on a fresh directive in a project file.
-With ANSWERS, wait until the directive session holds that many answers."
-  (call-process "git" nil nil nil "init" "-q")
-  (mevedel-install)
-  (mevedel-test-loading--provider)
-  (write-region "line one\n" nil "a.txt" nil 'silent)
-  (with-current-buffer (find-file-noselect "a.txt")
-    (mevedel--create-directive-in (current-buffer) (point-min) (line-end-position)
-                                  nil "Append the word done")
-    (goto-char (1+ (point-min)))
-    ;; The offer to save rebinds `inhibit-message' and clears the echo area,
-    ;; which batch Emacs prints as a bare newline.
-    (cl-letf (((symbol-function 'save-some-buffers) #'ignore)
-              ((symbol-function 'completing-read) (lambda (&rest _) ""))
-              ((symbol-function 'y-or-n-p) #'always)
-              ((symbol-function 'yes-or-no-p) #'always))
-      (call-interactively command)
-      (when answers (mevedel-test-loading--settle answers)))
-    (set-buffer-modified-p nil)))
-
 (defun mevedel-test-loading--entry-points ()
   "Return documented and `;;;###autoload' command candidates."
   (let (names)
@@ -176,6 +155,22 @@ temporary one."
                              (push symbol stale))))
                (ert-info ((format "Autoloads their file does not define: %S" stale))
                  (should-not stale))))
+            ('notes
+             (call-process "git" nil nil nil "init" "-q")
+             (write-region ".mevedel/\n" nil ".gitignore" nil 'silent)
+             (write-region "noted code\n" nil "source.el" nil 'silent)
+             (should-not (featurep 'mevedel-notes))
+             (let ((source (find-file-noselect "source.el")))
+               (with-current-buffer source (mevedel-note-create "Cold note"))
+               (should (file-exists-p ".mevedel/instructions.el"))
+               (kill-buffer source))
+             (with-current-buffer (find-file-noselect "source.el")
+               (should (seq-some
+                        (lambda (ov)
+                          (string-match-p "Cold note" (or (overlay-get ov 'after-string) "")))
+                        (overlays-in (point-min) (point-max)))))
+             (should-not (featurep 'mevedel-chat))
+             (should-not (featurep 'mevedel-buddy)))
             ('handoff-progress
              (require 'mevedel-plan-handoff)
              (require 'mevedel-view)
@@ -312,15 +307,10 @@ temporary one."
              (mevedel-test-loading--send "resumed cold message")
              (with-current-buffer (mevedel-test-loading--session)
                (should (string-search "first cold message" (buffer-string)))))
-            ('discuss
-             (mevedel-test-loading--directive #'mevedel-discuss-directive 1))
-            ('implement
-             (mevedel-test-loading--directive #'mevedel-implement-directive 1))
             ('installation
              (mevedel-uninstall)
              (dotimes (_ 2)
                (mevedel-install)
-               (should (functionp #'mevedel-create-directive))
                (should (commandp 'mevedel-compact))
                (should (commandp 'mevedel-buddy-mode))
                (should (commandp 'mevedel-buddy-global-mode))
@@ -344,39 +334,6 @@ temporary one."
                  (should-not (advice-member-p (nth 2 spec) (car spec))))
                (dolist (feature mevedel-test-loading--deferred)
                  (should-not (featurep feature)))))
-            ((or 'directive-preview-implement 'directive-preview-discuss
-                 'directive-answer)
-             (mevedel-install)
-             (should-not (featurep 'mevedel-directive-request))
-             (with-temp-buffer
-               (insert "cold directive source")
-               (let* ((workspace (mevedel-workspace))
-                      (directive
-                       (mevedel--create-directive-in
-                        (current-buffer) (point-min) (point-max) nil
-                        "Explain the cold directive")))
-                 (goto-char (point-min))
-                 (if (eq scenario 'directive-answer)
-                     ;; No prior session or answer: load the session owner,
-                     ;; create its view, then report the absent answer.
-                     (should
-                      (equal (list 'user-error
-                                   (format "mevedel [%s]: Directive answer is not in the live transcript"
-                                           (mevedel-workspace-root workspace)))
-                             (should-error
-                              (mevedel--ov-actions-show-answer directive)
-                              :type 'user-error)))
-                   (cl-letf (((symbol-function 'completing-read)
-                              (lambda (&rest _)
-                                (if (eq scenario 'directive-preview-discuss)
-                                    "discuss" "implement"))))
-                     (mevedel-preview-directive-prompt))
-                   (with-current-buffer "*mevedel-directive-preview*"
-                     (should (string-search "Explain the cold directive"
-                                            (buffer-string))))
-                   (kill-buffer "*mevedel-directive-preview*"))
-                 (should (featurep 'mevedel-directive-request))
-                 (should (mevedel-workspace-directives workspace)))))
             ('gptel
              (mevedel-install)
              (with-temp-buffer
@@ -452,6 +409,27 @@ temporary one."
                  (when (listp renderer) (setq renderer (cdr (assq 'success renderer))))
                  (should (plist-get (funcall renderer (car row) (cadr row) "hello" (caddr row))
                                     :header)))))
+            ('worker-teardown
+             (require 'mevedel-journal-worker)
+             ;; A maintenance Emacs can be inside a synchronous control-fs
+             ;; shell.  Killing Emacs does not wait for that shell to finish.
+             (let* ((ready (file-name-concat root "worker-ready"))
+                    (finished (file-name-concat root "worker-finished"))
+                    (process
+                     (make-process
+                      :name "loading-worker" :buffer nil :noquery t
+                      :connection-type 'pipe :sentinel #'ignore
+                      :command
+                      (list (expand-file-name invocation-name invocation-directory)
+                            "--batch" "-Q" "--eval"
+                            (prin1-to-string
+                             `(call-process "sh" nil nil nil "-c"
+                                            "touch \"$1\"; sleep 0.5; touch \"$2\""
+                                            "loading-worker" ,ready ,finished))))))
+               (push process mevedel-journal-worker--processes)
+               (mevedel-test-loading--await (lambda () (file-exists-p ready)))
+               (advice-add 'mevedel-journal-worker-stop-all :before
+                           (lambda () (should (file-exists-p finished))))))
             ('native-btw
              (mevedel-install)
              (setq gptel-backend (mevedel-claude-code-register) gptel-model 'sonnet)
@@ -650,4 +628,15 @@ temporary one."
           (with-current-buffer buffer (set-buffer-modified-p nil))
           (kill-buffer buffer)))
       (mevedel-uninstall)
+      ;; Cancelling a maintenance Emacs can leave its synchronous control-fs
+      ;; shell running.  Let it finish before stopping delivery and removing
+      ;; its workspace; accept only that process, not timers or callbacks.
+      (when (featurep 'mevedel-journal-worker)
+        (dolist (process (copy-sequence mevedel-journal-worker--processes))
+          (let ((deadline (+ (float-time) 15)))
+            (while (process-live-p process)
+              (when (> (float-time) deadline)
+                (ert-fail "Maintenance child did not exit"))
+              (accept-process-output process 0.02 nil 1))))
+        (mevedel-journal-worker-stop-all))
       (unless state (delete-directory root t)))))

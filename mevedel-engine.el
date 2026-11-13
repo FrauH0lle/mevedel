@@ -74,16 +74,14 @@ native gptel state machine.")
 
 (defun mevedel-engine-root-history-p (session)
   "Return whether SESSION has completed root conversational history.
-Directive turns share execution chronology but do not establish root history.
 An external root identity also counts, including interrupted native history."
   (and session
        (or (assoc "root" (mevedel-session-external-conversations session))
            (cl-some
             (lambda (segment)
               (cl-some (lambda (prompt)
-                         (and (not (eq 'directive (plist-get prompt :kind)))
-                              (<= (plist-get prompt :cum-turn)
-                                  (or (mevedel-session-turn-count session) 0))))
+                         (<= (plist-get prompt :cum-turn)
+                             (or (mevedel-session-turn-count session) 0)))
                        (cdr segment)))
             (mevedel-session-prompt-index session)))))
 

@@ -5,29 +5,118 @@ filesystem changes across saves and resumes. Project sessions publish state on
 their execution target; file-backed sessions use their own storage authority.
 Compaction, Rewind, and Fork each preserve different parts of that state.
 
-## Directive session boundaries
+## Note conversations
 
-Settled directive work remains a complete first-class turn in its execution
-session segment. Its canonical user, response, and `(tool . id)` properties are
-saved through the normal transcript/GPTEL_BOUNDS path so resume and MevView use
-the ordinary renderer. Paired hidden directive-boundary audit records retain
-the directive id, action, and canonical turn identity; ordinary-chat request
-assembly finds those boundaries in gptel's temporary prompt copy and marks the
-enclosed body `gptel 'ignore`, including tool spans.
+An explicit note send creates an independent session, not a fork of the active
+chat. A batch of unsent notes shares one session. The workspace instruction
+store links the conversation through each note's `mevedel-note-session-id`; the normal session
+transcript and file-change history own the conversation. Reopening a sent note
+resumes that session. Closing its child frame or terminal side window leaves
+the session and composer draft alive.
 
-The workspace-owned implementation attempt or discussion turn also retains the
-exact submitted request, terminal result, and matching
-`(:session-id ... :turn ...)` checkpoint; implementation attempts additionally
-retain the authored-request snapshot, capture timestamp, capture metadata, and
-patch. Bash/Eval/execution-control or agent activity that may mutate files
-outside the ordinary tool snapshot seam is retained as an explicit capture gap;
-such an attempt is never labeled complete, and Rewind surfaces the gap before
-restoring. This bounded duplication separates durable follow-up/inspection context
-from transcript presentation. Every accepted request reserves its turn identity
-before tools run, and that same identity keys pre-turn snapshots, transcript
-metadata, the prompt/Rewind index, and the workspace record. A directive reuses
-its bound live or persisted session. If that session no longer exists, rebinding
-requires explicit confirmation and does not rewrite historical checkpoints.
+The `mevedel-note` preset is the original note session's fixed identity. Ordinary preset
+changes are refused; model, effort, permission mode and temporary request-only
+presets remain available. It uses ordinary editing tools, with edits governed by
+the session permission mode and Plan restrictions. Its automatic observations
+include project instructions, environment, tools, the skills roster, resource
+descriptions and memory. It excludes journal digests, another chat's history,
+unrelated notes, the workspace-wide changed-file reminder, the active Goal and
+Goal policy. Explicit note/ref mentions in the note text expand once at send time; the
+captured code and attachments cannot expand further mentions after reload.
+Other authored mentions use the ordinary request-time attachment path.
+`C-c C-v` in the note view opens the
+session's retained numbered JSON files under `note-input/`: every assembled API request, or the
+native provider's system text and submitted content, in dispatch order as
+separate JSON documents. This includes re-asks and follow-ups, captured at
+dispatch rather than regenerated from later source edits.
+
+Ordinary filesystem and TRAMP source patches from ApplyPatch become prepared
+changes, not writes or pending provider callbacks. Their preparation-time base
+and proposal persist on the workspace note record. A batch proposal attaches only
+to the notes whose code it changes; auxiliary files travel with that proposal.
+If none of the session's noted code is touched, it attaches to all session notes
+so work such as extraction into a new file remains available. The latest proposal
+replaces those notes' waiting change; the ordinary tool transcript retains earlier proposals.
+Resource-address patches keep the normal ApplyPatch path.
+
+User apply and confirmed manual merge record the actual application-time pair
+in the originating session's existing `:file-snapshots` history, keyed by the turn that
+prepared the change, not whichever turn is current when it is applied. Each
+path entry uses `:version`, `:backup-time`, `:pre-backup-name` and `:backup-name`;
+the names address literal-byte SHA-256 backups under `file-history/`. Manual
+merges use captured visiting text, including unsaved edits, as their pre-image.
+Existing capture gaps remain gaps. Reusing a turn's earlier pre-image requires
+the pre-apply bytes to match that turn's last captured result; intervening edits
+instead leave a gap, so whole-turn reversal cannot claim the user's work.
+A preparation that made no write does not
+claim subsequent user edits as a note change. Confirming a partial detailed
+review records only accepted paths and drops the rest of the waiting proposal.
+Notes retain deduplicated session/turn references to their applied changes.
+For suggestions prepared outside the note's own conversation, each reference
+also names the literal-byte backups just before and after that application.
+Note revert uses only those paths and copies, not the main chat's whole turn,
+so its other edits, including earlier edits to the same file, survive.
+Live and recently closed notes retain these backups across session saves.
+If an existing workspace notes store has not loaded, session saves keep all
+file-history backups until their note references can be checked. An absent
+store has no such references and does not prevent cleanup.
+The references survive closing and restoring a note, but do not extend session retention.
+If the originating chat was deleted or expired, revert refuses clearly without
+touching source files.
+
+Rewind uses only this conversation's applied pairs. Rewinding before its first
+turn leaves its notes unsent, preserving their current text, anchors and session
+links. Sending again starts a new first turn in that same session. Waiting
+proposals and applied-change references from discarded turns are cleared,
+including main-chat NoteWrite suggestions without a note conversation link.
+These changes settle through the
+workspace store's durable Rewind intent, including for unvisited and recently
+closed notes; restoring a closed note then restores its unsent state.
+
+`mevedel-note-revert-change` reverses one selected applied turn using these actual
+before/after pairs and the shared refuse-if-changed engine. It checks every path
+before the ordinary patch transaction writes anything. Disjoint later edits
+survive; overlaps report current file/line ranges and leave all files unchanged.
+Uncaptured changes refuse rather than guessing. Apply and revert use visiting
+buffer text, preserving disjoint unsaved edits in the result written to source.
+If a visiting buffer has characters its file coding cannot write, both commands
+refuse and ask the user to save with a suitable coding first.
+Both commands first observe the workspace store and resolve the note's UUID
+again, so another client's newer waiting, applied or closed state is used.
+File history records bytes, not modes; existing modes survive and a restored
+deleted file uses the default mode. Revert neither discards transcript turns nor
+changes their history. Successful reversal restores a done note from recently
+closed; a refused reversal leaves it closed. Deletion itself never undoes code.
+
+Original note conversations are excluded from ordinary live and saved chat
+selection. Cleanup and saved-session deletion preserve them while any live,
+stashed or recently closed note references them. After the last note leaves the
+store, its conversation becomes eligible for normal age-based cleanup, without
+the newest ordinary-session retention floor. Note conversations never consume
+that floor. Reference checks preserve dirty state and combine loaded records
+with one local store read per sweep, bounded to 16 MiB. An unloaded workspace,
+remote root, absent, oversized, unsupported or unreadable store retains its note
+conversations rather than risking history loss; chooser filtering adds no store I/O.
+Missing or malformed session metadata also requires a reference check, using
+the session directory's stable ID rather than trusting a missing note marker.
+Explicit Conversation and Worktree forks remain ordinary discoverable sessions,
+may change preset, and follow ordinary cleanup rules.
+The notes list's `s` action sends or
+reopens its selected note, and its working state uses cached live session state.
+
+## Historical directive turns
+
+Old saved sessions may contain former directive turns. Resume shows them as
+ordinary turns through the normal transcript/GPTEL_BOUNDS path, and ordinary
+request assembly includes them in model context. There is no special directive
+card, exclusion, frozen-history inspector, or capture-gap reader. Existing hidden
+audit records use ordinary audit rendering, not decoded directive cards.
+
+Every accepted request reserves its turn identity before tools run, and that
+same identity keys pre-turn snapshots, transcript metadata, and the prompt/Rewind
+index. Old reference/directive data is not converted into notes, either on
+resume or by the standalone session migration script. Old instruction snapshots
+are ignored on resume, not imported or deleted.
 
 Sessions materialize lazily and save at turn settlement, including errors and
 aborts. Compaction rotates segments rather than rewriting in place.
@@ -55,7 +144,7 @@ Rewind neither copy nor roll them back. See
 [shared editing](shared-editing.md) for item leases, pending browser drafts,
 operation retries, and native exports.
 
-References and directives likewise live in the workspace's instruction store,
+Notes likewise live in the workspace's instruction store,
 `<workspace>/.mevedel/instructions.el`
 ([ADR 0130](adr/0130-keep-instructions-in-a-workspace-store.md)). A session
 keeps `instructions/turn-NNNNNN.el` snapshots as history and, for now,
@@ -105,9 +194,9 @@ The first accepted model-bound authored prompt starts one asynchronous title
 request using the `naming` workload, which defaults to the `fast` tier. It runs
 as an isolated text request in a private buffer (a short-lived native conversation
 for Claude), with no tools, conversation history, skill/file/hook expansion, or
-context injection. Directive-created sessions use the authored
-directive text. Local commands, rejected submissions, automatic continuations,
-retained agents, and transient conversations do not trigger naming.
+context injection. Local commands, rejected submissions, automatic continuations,
+generated turns such as a note send, retained agents, and transient
+conversations do not trigger naming.
 
 Naming sends at most 2,000 input characters, requests a descriptive title in the
 user's language (1–4 words), and enforces at most four whitespace-separated words
@@ -211,7 +300,7 @@ the live record and its lazy conversation invocation. It does not infer an
 override from a transcript file's location. Save As copies the override with the retained registry. Conversation
 and Worktree forks still discard retained-agent identities under
 [ADR 0062](adr/0062-do-not-clone-live-agents-into-session-forks.md).
-Queued follow-ups retain text, attribution, scope and attachment grants. Live
+Queued follow-ups retain text, attribution and attachment grants. Live
 submission objects are excluded. Steering that still belongs to a request
 reloads as requiring review, with automatic delivery paused; a restart never
 resurrects a submitted request. Ordinary steering deliberately detached by an
@@ -273,7 +362,7 @@ remains busy until that terminal continuation completes or is cancelled. Abort
 stops the provider but preserves the request reservation and file snapshots
 needed by already pending settlement. The pending holds nest and release on
 failure as well as success. Repeated or obsolete callbacks cannot tear down a
-replacement request; captured patch and directive-attempt evidence belongs to
+replacement request; captured patch evidence belongs to
 the old request, not the new request's active presentation.
 
 Emacs's native `auto-save-hook` checkpoints modified root and retained-agent data
@@ -339,7 +428,8 @@ publication does not itself bound this main-thread work.
 Live session state may advance before its corresponding transcript is durable.
 Ordinary sidecar-only writes therefore use the last committed root projection
 for `:current-segment`, `:total-turn-count`, `:prompt-index`, `:file-snapshots`,
-`:chapters`, `:first-user-message`, and `:latest-user-message`. Agent activity,
+`:untracked-effects`, `:chapters`, `:first-user-message`, and
+`:latest-user-message`. Agent activity,
 mail arrival, or another metadata update cannot publish a newer root turn or
 segment without its matching transcript. The committed first-message preview
 is owned by this same projection, not a second cache or a sidecar readback.
@@ -469,7 +559,9 @@ exact or recursive session resource grants, tasks, prompt-index (driving the
 rewind picker
 and latest resume preview), `:file-snapshots` (per-turn pre-turn checkpoints of
 tracked files, including absent markers and known capture gaps; post-turn
-copies remain alongside them for historical Fork), workspace identity,
+copies remain alongside them for historical Fork), optional
+`:untracked-effects` (per-turn tools whose file effects bypass those
+checkpoints, reported by Rewind as gaps), workspace identity,
 `:working-directory`, fork lineage (`:fork-type`, `:forked-from-session-id`,
 `:forked-from-turn`, and `:forked-from-fork-point-id`), and Worktree Fork
 origin (`:worktree-source-root`, `:worktree-directory`, `:worktree-branch`, and
@@ -526,7 +618,8 @@ tool roster, use the ordinary failed-turn settlement. They record the cause,
 release the busy state and sleep inhibitor, and leave the next send available
 as an explicit retry; they do not launch the provider or replay the prompt.
 
-The Claude Code provider routes root and directive submissions through ACP. The
+The Claude Code provider routes root submissions, including note conversations,
+through ACP. The
 session's `:external-conversations` metadata maps conversation scopes to the
 engine, native conversation ID, local installation directory, machine name and
 last known state. The installed Claude agent retains model history; mevedel
@@ -585,8 +678,8 @@ including after save/reopen, by starting a fresh native conversation.
 
 Attachment deduplication is committed only at the prompt receipt described in
 [native context delivery](#native-context-delivery). Canonical transcripts keep
-the submitted references and delivery reminders, without base64 blobs. Directive
-and child inputs expand independently of root mention history; a child follow-up
+the submitted references and delivery reminders, without base64 blobs. Child
+inputs expand independently of root mention history; a child follow-up
 can attach the image again without marking it as delivered to the root.
 
 Before dispatch, the native ID and `in-flight` state are published while the
@@ -594,11 +687,7 @@ session transport is idle. A successful terminal response records `ready`;
 failure or interruption records `uncertain`. Restore also converts a saved
 `in-flight` record to `uncertain`. Opening a session does not start its external
 process. The next root submission creates a process and resumes the stored root
-ID. Each directive request instead starts an isolated native conversation from
-its existing selected prompt: complete local discussion, selected attempt,
-planning feedback, or the implementation handoff. Resuming a previous hidden
-native history would reintroduce evidence that these prompts deliberately
-exclude. Directive identities are therefore never retained.
+ID.
 
 An uncertain conversation receives the same current-state reconciliation guidance
 as an interrupted native request, plus an explicit no-replay instruction, in its
@@ -639,12 +728,8 @@ cancellation or its timeout ends the connection. This preserves the partial
 transcript, terminal accounting and uncertain history marker before admission is
 released for another request.
 
-Before a directive transcript boundary opens, its complete prior transcript is
-published; terminal settlement publishes the closed directive frame and durable
-activity together.
-This works for both portable and PID-lock sessions. Root history guards consult
-root references and completed ordinary prompt entries, not the count of shared
-directive turns. A directive provider override does not switch the root engine.
+Root history guards consult root references and completed ordinary prompt
+entries, including former directive turns in old sessions.
 An installation/machine mismatch or missing native history prevents
 continuation while leaving the transcript readable.
 
@@ -660,9 +745,8 @@ this command. The next normal root send or child follow-up starts a new native
 conversation from labelled current-transcript evidence, never an exact resume.
 Until the replacement native identity is published, a failed startup keeps
 that excerpt continuation for the retry.
-Child recovery uses only that child's private conversation; directive prompts
-already reconstruct their selected context on every turn and need no recovery
-selection. Failed native startup retains the original diagnosis and names this
+Child recovery uses only that child's private conversation. Failed native
+startup retains the original diagnosis and names this
 command as an option when history is unavailable.
 
 Same-machine editor restart preserves the root provider and each retained
@@ -683,7 +767,7 @@ not flattened back into the request.
 
 Sending through Claude after local history starts a new native conversation
 with a labelled excerpt continuation. The excerpt uses current-segment evidence,
-excludes independent directive and shared-item turns, and marks shortened tool
+excludes shared-item turns, and marks shortened tool
 output. Historical calls are evidence, not a replay queue. Subsequent Claude
 turns resume the new native ID. This also applies when a request-only workload
 policy changes engines while the saved selection remains different.
@@ -834,9 +918,9 @@ guidance, active root Plan guidance, eligible accepted-plan references and the
 current contents of path instructions already learned by that conversation,
 broad to narrow with local overrides last. Removed files explicitly withdraw
 their guidance. Compaction clears the selected-context mark, so the next prompt
-re-sends selected images. Root, retained children, fresh directives and isolated
+re-sends selected images. Root, retained children and isolated
 shared-item turns keep separate path-instruction acknowledgements; a child
-never imports sibling or root scopes. Fresh directive and shared-item turns
+never imports sibling or root scopes. Isolated shared-item turns
 also expand mentions independently of the root's delivery history and do not
 acknowledge mention delivery for the root. An oversized restoration takes the
 continuation prompt above.
@@ -852,7 +936,7 @@ It is shared by the root and its retained-agent tree, survives save, resume,
 and rename, and is removed when its owning session is cleaned up. A Conversation
 or Worktree Fork copies it into independent child state; Rewind leaves it
 unchanged. Local files are not workspace snapshots, touched files, instruction
-discovery, LSP inputs, directive patch captures, or Git summary inputs. An
+discovery, LSP inputs, note prepared changes, or Git summary inputs. An
 ephemeral request without durable session ownership cannot create or mutate it.
 
 `local/plans/` is the shared durable plan namespace. The parent and retained
@@ -2194,7 +2278,7 @@ current root-policy selection. Active ordinary root Goal turns and resume use
 that record; new ordinary chat with an inactive Goal uses the baseline.
 Already-admitted turns retain their snapshot through settlement. Child
 implementation turns inherit only the permission-mode override, not the root's
-full model policy; summary, control, directive, and unrelated child work is
+full model policy; summary, control, and unrelated child work is
 excluded.
 
 There is no migration for this Goal shape. Older records without
@@ -2354,17 +2438,19 @@ to continue. Rewind preserves session preset settings but clears Goal state.
 Resume restores the workspace's instructions from its instruction store. It
 first settles any Rewind intent the session left there (see [Rewind](#rewind)),
 then merges the store into the workspace, so instructions created by other
-sessions or Emacs instances stay. Only a workspace still waiting for its store
-restores the session's `current.el`. That is a workspace with sessions but no
-store, or one whose migration staged candidates. While waiting, it never
-creates a store automatically and warns once. An unreadable store is reported;
+sessions or Emacs instances stay. Old per-session instruction snapshots are not
+restored on resume, even when no workspace store exists. New notes may create a
+fresh current store; there is no old-data migration. Restored taken notes remain
+taken but paused until the user takes them again or sets the workspace dial for
+this Emacs session; restoration does not start Buddy or read the saved dial.
+An unreadable store is reported;
 resume continues without clearing the instructions already loaded. The session
 then counts as owing a Rewind resolution, so request admission keeps trying to
 settle and refuses while the store stays unreadable.
 
 Resume is not the only time the store is read. The instructions are available
 as soon as a workspace is first activated in an Emacs, before any session
-resumes. Opening a directive listing observes the store again, costing one
+resumes. Opening or refreshing the notes list observes the store again, costing one
 target-side hash when nothing changed. Activation skips a remote root without
 a live connection.
 
@@ -2378,9 +2464,14 @@ The store is written through the pinned control-file programs under
   instruction another client changed, keeping its request text on the kill
   ring.
 
-A store is created automatically only where `.mevedel/` already exists, and an
-import does not create one either. While a minibuffer is active, writes wait
-until the command that read it returns.
+A first note in a recognized project creates `.mevedel/` and its store. Outside
+a project, automatic persistence requires existing workspace state; otherwise
+notes stay in memory with a notice. Imports do not create workspace state in
+arbitrary directories. While a minibuffer is active, writes wait until the
+command that read it returns.
+Edits held back by an unreadable store remain pending. Flush retries wait for
+the checkpoint interval, except for a forced flush such as Emacs exit; the
+unreadable-store warning is shown only once while the failure lasts.
 
 ### Explicit session migration
 
@@ -2511,39 +2602,11 @@ imports remove their incomplete new item.
 
 #### Workspace instructions
 
-A project run also builds the workspace's
-[instruction store](adr/0130-keep-instructions-in-a-workspace-store.md) from
-every session's instruction snapshots, after the sessions themselves. It never
-changes a session. A workspace that already has a store reports `current` and
-is not read.
-
-Snapshots are merged by instruction UUID; display ids are only numbers:
-
-- Identical copies collapse.
-- A display id two instructions share is renumbered above every used and
-  retired id, and that session's links follow it.
-- An instruction missing from some sessions is kept and reported, since
-  dropping it could not be undone.
-- An activity entry is kept only when its checkpoint session's own turn
-  snapshot holds the same entry. Rewind deletes discarded turn snapshots, so a
-  reused turn number is not evidence.
-
-Portable sessions are read from their published head, never from fixed caches.
-
-These stage the workspace instead of writing a store:
-
-- the same UUID with differing authored fields, since a later session save can
-  carry stale data;
-- one activity sequence with different contents;
-- activity without turn evidence, including any from a deleted session;
-- a missing parent, a cycle, or a subdirective owned twice.
-
-Staging writes `.mevedel/instruction-migration/report.el` and one complete
-`candidate-SESSION.el` per session in the export format, each preferring that
-session's version on conflicts. It reports `staged` with a nonzero exit status.
-Until resolved, the workspace waits for its store as described in the
-[resume contract](#resume-contract). Install a candidate with
-`M-x mevedel-load-instructions`, which creates the store.
+The session migration script does not import old instruction snapshots or
+convert format-1 workspace stores. Notes use the current format-2
+[workspace store](adr/0130-keep-instructions-in-a-workspace-store.md).
+Unsupported stores and exports are refused; old per-session snapshots remain
+untouched and are ignored by ordinary resume.
 
 ### Incompatible session inspection
 
@@ -2653,8 +2716,7 @@ also available as `R` in the session cockpit, names the assistant response at
 point: that turn is the last one **kept**. `mevedel-rewind` picks one of the
 user's own prompts across all segments and returns to just **before** it, so
 the prompt and its answer are discarded and it can be asked again -- which is
-the reason to select a prompt at all. The directive **Rewind before this
-implementation...** action is a `before` boundary for the same reason.
+the reason to select a prompt at all.
 
 Coverage is complementary rather than duplicated: the point route reaches every
 boundary that follows a response but cannot empty a session, since no response
@@ -2669,20 +2731,37 @@ neither transcript nor session state; Rewind remains a separate explicit
 operation.
 
 Rewind is an in-place logical transaction. It discards historical transcript
-and managed session state after the boundary, restores every captured working-tree file
-to the state that boundary owned, and keeps the same session identity, name,
+and managed session state after the boundary, reverts the discarded turns'
+recorded file changes newest first, and keeps the same session identity, name,
 directory, working directory, and lineage. The candidate session state is the
 single place the boundary is decided; the transcript cutoff, instruction
 snapshot pruning, and remote staging pruning all derive their answers from its
-surviving turn count, and the file plan reads a turn's pre-turn checkpoint for a
-`before` boundary and its post-turn checkpoint for `after`.
+surviving turn count. The file plan uses each discarded turn's before/after
+contents. A `before` boundary includes that turn's changes; `after` keeps them.
+Unrelated current edits survive, including edits between discarded turns.
+Preparation computes the complete plan without writing. If any reversal
+conflicts, Rewind refuses as a whole and lists files, lines and turns. Lines for
+older turns refer to the intermediate text after reversing newer changes.
+Cancel leaves files and conversation unchanged. Force selects the old snapshot
+restore and requires a separate confirmation explicitly warning that newer
+edits will be overwritten. Merge opens the existing separate smerge editor;
+upper keeps the current intermediate text, lower takes the state before the
+discarded turn. `C-c C-c` accepts resolved conflicts in memory; older conflicts
+offer cancel, force or merge again. `C-c C-k` cancels without source writes. Once every
+conflict is resolved, the ordinary Rewind confirmation and transaction commit
+all files and the conversation together, rechecking changed sources. Binary
+conflicts cannot be edited in smerge; cancel or explicit force remain available.
+Creation, deletion and binary changes require the
+complete recorded post-state to match, unless the file already equals the
+recorded pre-state and needs no write. See
+[ADR 0131](adr/0131-rewind-reverts-recorded-changes.md) for the revised policy.
 File-workspace sessions stage and swap a session directory with a rollback
 tree.  Portable project sessions leave the directory and control state in
 place and commit one complete replacement manifest through the owned lease
 head.
-The impact lists the discarded prompt suffix in order, including ordinary chat
-and complete directive turns, alongside restored files and every known gap.
-External working-tree changes to captured files are overwritten. Git HEAD and
+The impact lists the discarded prompt suffix in order, alongside affected files
+and every known gap. Former directive turns in old sessions are ordinary turns.
+Only the force path overwrites external working-tree changes. Git HEAD and
 the index are not changed, so the impact identifies staged files whose index
 content will diverge from the restored working tree. Failure before the commit
 point rolls back both session and file changes, including a live transcript
@@ -2693,28 +2772,26 @@ captured manifest. A failed rollback reports every inconsistent path and
 promotes its temporary repair directory to the target-side specialized
 recovery marker and bytes described above; a successful Rewind removes those
 rollback bytes and does not create a recovery tree. Every settled model turn, including the first, owns a durable pre-turn
-checkpoint. The impact marks coverage as complete or lists known gaps; gaps do
-not disable Rewind and are never presented as restored paths. Rewind creates no child session. A portable
+checkpoint. The impact marks coverage as complete or lists known gaps, including
+turns that ran Bash, Eval, Agent or SendMessage. These effects appear once per
+tool, with the number of discarded turns; file capture gaps remain separate.
+Gaps do not disable Rewind and are never presented as restored paths. Rewind creates no child session. A portable
 session's superseded head stays published, so `mevedel-redo` can restore its
 conversation as described below; a PID-lock session has no redo. Existing
 child sessions and worktrees are not removed; children forked after the target
 become detached from the Source's visible history.
 
-Workspace-owned directive identity is not historical session state. Rewind
-retains each authored directive and its current request, removes only model
-activity at or after the target turn in that execution session, and recomputes
-the lifecycle from what survives. A surviving request edit remains Ready with
-a request-changed qualifier. Subdirectives consumed by discarded successful
-attempts return to their parent from immutable attempt snapshots; subdirectives
-authored later remain current, and neither receives independent activity.
-In a workspace with an instruction store, the store changes only after the
-commit point:
+Workspace-owned notes are not historical session state. Rewind keeps every
+note's text, anchor and session link. It clears waiting prepared changes made by
+discarded turns of that session, and a Rewind to before the first turn makes
+that conversation's sent notes unsent (see
+[note conversations](#note-conversations)). In a workspace with an instruction store, the
+store changes only after the commit point:
 
 - Before its first irreversible step, Rewind records an intent in the store:
   session, turn count before, surviving turn count, and first discarded turn.
-- After the commit point it prunes that activity from the fresh store record
-  and takes source presentations from the store. The live directive records
-  stay the ones it pruned in memory.
+- After the commit point it applies those note changes to the fresh store
+  record and to the notes in memory.
 - A rollback drops the intent; the existing in-memory rollback restores the
   records, so nothing needs re-inserting.
 - If the prune does not land, the session's committed turn count settles the
@@ -2727,15 +2804,10 @@ commit point:
   afterwards.
 
 Another client re-reading the store in between still sees the discarded
-activity. Actions that resolve its checkpoint find no such turn, and actions
-that run in the session need its lease, whose acquisition settles the intent
-first. Rewind therefore no longer rolls back references created by other
-sessions. A workspace still waiting for its store restores historical snapshot
-presentations as before. A source file restored by Rewind uses the normal safe
-anchor reattachment path. The
-directive turn or read-only inspector's Rewind action resolves an
-effectful attempt's exact execution session and pre-turn checkpoint, then uses
-this same Rewind transaction and impact confirmation.
+note state. Actions that run in the session need its lease, whose acquisition
+settles the intent first. Rewind does not roll back notes created by other
+sessions. A source file restored by Rewind uses the normal safe anchor
+reattachment path.
 
 Only a committed Rewind emits `SessionStart(rewind)`; it does not emit
 `SessionEnd`. Any context produced by that event belongs to the next accepted
@@ -2796,8 +2868,7 @@ working-tree files in the same transaction. Captured bytes live in published
 `file-history` artifacts indexed by the sidecar's per-turn snapshots: a Rewind
 trims that index while republishing the bytes, so the head being restored still
 names its own captured file state. Coverage is Rewind's coverage -- uncaptured
-filesystem effects remain -- and workspace directive records a Rewind pruned do
-not come back.
+filesystem effects remain -- and note state a Rewind cleared does not come back.
 
 Because files are involved, redo is a two-phase transaction and follows
 Rewind's ordering. Preparation reads only immutable published bytes, so

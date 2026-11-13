@@ -117,6 +117,9 @@
 ;; `mevedel-permission-log'
 (declare-function mevedel-permission-log-flush "mevedel-permission-log" (session))
 
+;; `mevedel-persistence'
+(declare-function mevedel-instruction-store-note-session-ids "mevedel-persistence" (workspace))
+
 ;; `mevedel-ptc-checkpoint'
 (declare-function mevedel-ptc-checkpoint-reconcile
                   "mevedel-ptc-checkpoint" (session))
@@ -138,7 +141,7 @@
 (declare-function mevedel-session-artifacts-find-artifact-noselect "mevedel-session-artifacts" (session logical &optional inspection committed-only))
 (declare-function mevedel-session-artifacts-inhibit-so-long "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-inspect-cold-session "mevedel-session-artifacts" (save-path authority-mode &optional publication scope))
-(declare-function mevedel-session-artifacts-load-instructions "mevedel-session-artifacts" (session buffer &optional turn directive-records preserve-directives-p))
+(declare-function mevedel-session-artifacts-load-instructions "mevedel-session-artifacts" (session buffer &optional turn snapshot-only))
 (declare-function mevedel-session-artifacts-printed-value "mevedel-session-artifacts" (value))
 (declare-function mevedel-session-artifacts-publish-sidecar-state "mevedel-session-artifacts" (session root-buffer &optional token))
 (declare-function mevedel-session-artifacts-publish-text "mevedel-session-artifacts" (session path content &optional coding prepared token))
@@ -435,14 +438,6 @@
 
 ;;
 ;;; Customization
-
-(defcustom mevedel-sessions-directory (file-name-concat ".mevedel" "sessions")
-  "Directory where session persistence files live.
-
-Relative paths resolve against the workspace root at save time;
-absolute paths are used as-is."
-  :type 'directory
-  :group 'mevedel)
 
 (defcustom mevedel-file-history-max-snapshot-bytes (* 1024 1024)
   "Soft size cap (bytes) for individual pre-turn file checkpoints.
@@ -2199,6 +2194,7 @@ mentions-shown reset to empty hash tables on load."
   "Return picker-relevant fields extracted from current SIDECAR."
   (list :session-id (plist-get sidecar :session-id)
         :session-name (plist-get sidecar :session-name)
+        :preset-name (plist-get sidecar :preset-name)
         :workspace (plist-get sidecar :workspace)
         :created-at (plist-get sidecar :created-at)
         :updated-at (plist-get sidecar :updated-at)
@@ -2764,13 +2760,19 @@ at `size unavailable' rather than hiding the chooser."
           (mevedel-session-persistence--incompatible-reason entry)
           (plist-get entry :save-path)))
 
+(defun mevedel-session-persistence--note-p (sidecar)
+  "Return non-nil when SIDECAR describes an original note conversation."
+  (and (eq (plist-get sidecar :preset-name) 'mevedel-note)
+       (not (plist-get sidecar :forked-from-session-id))))
+
 (defun mevedel-session-persistence--dedicated-p (workspace sidecar)
-  "Return non-nil when SIDECAR, or its summary, is an artifact's conversation.
-The session records its artifact and the artifact names it back; one
-whose artifact is gone is an ordinary session again."
-  (when-let* ((id (plist-get sidecar :dedicated-artifact)))
-    (mevedel-artifact-store-dedicated-p
-     workspace (plist-get sidecar :session-id) id)))
+  "Return non-nil when SIDECAR is a note or artifact conversation in WORKSPACE.
+Original note sessions are always hidden from ordinary chat selection.
+An artifact session becomes ordinary when its artifact no longer names it."
+  (or (mevedel-session-persistence--note-p sidecar)
+      (when-let* ((id (plist-get sidecar :dedicated-artifact)))
+        (mevedel-artifact-store-dedicated-p
+         workspace (plist-get sidecar :session-id) id))))
 
 (defun mevedel-session-persistence-without-dedicated (workspace entries)
   "Return listing ENTRIES of WORKSPACE without artifact conversations.
@@ -3326,14 +3328,34 @@ through their owners before deletion; failure may retain approved omissions."
           (error (user-error "Session retained; approved recovery/capture actions may have completed: %s"
                              (error-message-string err))))))))
 
-(defun mevedel-session-persistence--delete-saved
-    (save-path portable max-age-seconds)
+(cl-defun mevedel-session-persistence--delete-saved
+    (workspace save-path portable max-age-seconds
+               &optional (note-session-ids 'unread))
   "Delete saved session SAVE-PATH unless something may still hold it.
 Journal pins always keep it.  PORTABLE storage is deleted only through
 `mevedel-session-durability-delete-abandoned' with MAX-AGE-SECONDS; other
-storage is kept while its PID lock is active.  Return non-nil only when
-the directory was deleted."
+storage is kept while its PID lock is active.  Original note conversations
+require proof that WORKSPACE no longer references them.  NOTE-SESSION-IDS
+is the sweep's reference snapshot, or `unread' to obtain it here.
+Return non-nil only when the directory was deleted."
   (and (not (mevedel-journal-pins-present-p save-path))
+       (let ((sidecar (condition-case nil
+                          (let ((data (mevedel-session-codec-read
+                                       (mevedel-session-artifacts-sidecar-path save-path))))
+                            (and (listp data) data))
+                        (error nil))))
+         (not
+          (when (or (mevedel-session-persistence--note-p sidecar)
+                    (not (and (plist-member sidecar :preset-name)
+                              (symbolp (plist-get sidecar :preset-name)))))
+            (when (eq note-session-ids 'unread)
+              (require 'mevedel-persistence)
+              (setq note-session-ids
+                    (mevedel-instruction-store-note-session-ids workspace)))
+            (or (eq note-session-ids t)
+                (member (plist-get sidecar :session-id) note-session-ids)
+                (member (file-name-nondirectory (directory-file-name save-path))
+                        note-session-ids)))))
        (if portable
            (mevedel-session-durability-delete-abandoned
             save-path max-age-seconds)
@@ -3345,9 +3367,10 @@ the directory was deleted."
   "Delete WORKSPACE's saved session at SAVE-PATH now.
 The safety rules of `mevedel-session-persistence-cleanup-expired' apply
 without its age cap: a session a client may still hold, or whose journal
-captures are pending, is kept.  Return non-nil only when it was deleted."
+captures are pending, is kept.  Referenced note conversations and uncertain
+note stores are kept too.  Return non-nil only when it was deleted."
   (mevedel-session-persistence--delete-saved
-   save-path
+   workspace save-path
    (eq 'portable (mevedel-session-authority-mode-for-workspace workspace))
    0))
 
@@ -3359,7 +3382,9 @@ Scans session directories independently of resume compatibility.  Uses
 time.
 
 The `mevedel-session-keep-recent-count' most-recently-updated sessions are
-never deleted regardless of age.  Pending journal capture pins prevent
+never deleted regardless of age.  Original note conversations do not count
+toward that floor, and are eligible only after their notes leave the store;
+an uncertain reference check retains them.  Pending journal capture pins prevent
 deletion.  PID-lock sessions with an active lock are skipped; cross-host
 locks are active, and same-host locks are stale when their PID is dead or
 when the live process identity proves PID reuse.  Portable sessions open
@@ -3383,7 +3408,9 @@ workspace was swept too recently."
         (let ((threshold-secs (* mevedel-session-max-age-days 24 60 60))
               (now            (float-time))
               (deleted        0)
-              (candidates     nil))
+              (candidates     nil)
+              (note-candidates nil)
+              (note-session-ids 'unread))
           (dolist (save-path
                    (and (file-directory-p sessions-dir)
                         (directory-files sessions-dir t "\\`[^.]")))
@@ -3392,18 +3419,33 @@ workspace was swept too recently."
                       (mevedel-session-artifacts-sidecar-path save-path))
                      (sidecar
                       (condition-case nil
-                          (mevedel-session-codec-read sidecar-path)
+                          (let ((data (mevedel-session-codec-read sidecar-path)))
+                            (and (listp data) data))
                         (error nil)))
                      (parsed-time
                       (mevedel-session-persistence--observed-update-time
                        (plist-get sidecar :updated-at)
                        sidecar-path save-path)))
-                ;; An artifact's conversation lives as long as the artifact.
-                (unless (mevedel-session-persistence--dedicated-p workspace sidecar)
-                  (push (list save-path
-                              (and parsed-time (float-time parsed-time))
-                              (plist-get sidecar :session-id))
-                        candidates)))))
+                (let ((candidate (list save-path
+                                       (and parsed-time (float-time parsed-time))
+                                       (plist-get sidecar :session-id))))
+                  (cond
+                   ((or (mevedel-session-persistence--note-p sidecar)
+                        (not (and (plist-member sidecar :preset-name)
+                                  (symbolp (plist-get sidecar :preset-name)))))
+                    (when (eq note-session-ids 'unread)
+                      (require 'mevedel-persistence)
+                      (setq note-session-ids
+                            (mevedel-instruction-store-note-session-ids workspace)))
+                    (unless (or (eq note-session-ids t)
+                                (member (plist-get sidecar :session-id) note-session-ids)
+                                (member (file-name-nondirectory (directory-file-name save-path))
+                                        note-session-ids))
+                      (if (mevedel-session-persistence--note-p sidecar)
+                          (push candidate note-candidates)
+                        (push candidate candidates))))
+                   ((not (mevedel-session-persistence--dedicated-p workspace sidecar))
+                    (push candidate candidates)))))))
           ;; The newest sessions are exempt regardless of age: the chooser
           ;; sweeps before any lock is taken, so without this floor a
           ;; 30-day absence would delete the session the user came back to
@@ -3415,7 +3457,9 @@ workspace was swept too recently."
           (when mevedel-session-keep-recent-count
             (setq candidates
                   (nthcdr mevedel-session-keep-recent-count candidates)))
-          (pcase-dolist (`(,save-path ,updated-secs ,session-id) candidates)
+          ;; Note conversations never consume the ordinary retention floor.
+          (pcase-dolist (`(,save-path ,updated-secs ,session-id)
+                        (append note-candidates candidates))
             (when (and updated-secs
                        (> (- now updated-secs) threshold-secs)
                        ;; A session open here may outlive its lease after
@@ -3427,7 +3471,7 @@ workspace was swept too recently."
                        ;; the sweep.
                        (condition-case nil
                            (mevedel-session-persistence--delete-saved
-                            save-path portable threshold-secs)
+                            workspace save-path portable threshold-secs note-session-ids)
                          (error nil)))
               (cl-incf deleted)))
           (when (> deleted 0)

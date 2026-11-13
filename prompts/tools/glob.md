@@ -8,7 +8,7 @@ Use Grep for file contents and Read for a known file.
   and parent traversal are rejected; set `path` to the intended search root.
 - Supported resources: `work://`, `artifact://`, a selected `skill://` package, `memory://journal/`,
   `memory://root` or a memory descendant, `history://saved` or its descendants,
-  and `mevedel://` or its descendants.
+  `notes://` or a returned note address, and `mevedel://` or its descendants.
   Live history, agent, and MCP addresses do not support Glob.
   Bare `skill://` is a Read-only discovery root.
 - Results are newline-separated paths or resource addresses, with unspecified

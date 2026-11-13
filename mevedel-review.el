@@ -122,7 +122,6 @@
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-(defvar mevedel--current-directive-uuid)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
@@ -136,7 +135,7 @@
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-begin
-                  "mevedel-turn" (session &optional directive-uuid options))
+                  "mevedel-turn" (session &optional options))
 (declare-function mevedel-request-call-owned
                   "mevedel-turn" (request buffer function &rest args))
 (declare-function mevedel-request-end
@@ -1019,8 +1018,7 @@ Dispatch only while the admitted request still owns DATA-BUFFER."
          mevedel--session)
         (setq request
               (mevedel-request-begin
-               mevedel--session
-               mevedel--current-directive-uuid)))
+               mevedel--session)))
       (goto-char (point-max))
       (mevedel--insert-user-turn display)
       (when dispatch

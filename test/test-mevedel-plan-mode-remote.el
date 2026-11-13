@@ -17,25 +17,6 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
-(mevedel-deftest mevedel-plan-mode--remote-body
-  (:doc "directive rendering discloses instructions without unavailable axes")
-  (let* ((instructions "Keep α intact.\nVerify rollback and retry.")
-         (body (mevedel-plan-mode--remote-body
-                (list :body "# Directive proposal" :directive t
-                      :selection (list :location 'here :context 'current
-                                       :execution 'direct :mode 'edits
-                                       :model-provider "Provider:model"
-                                       :instructions instructions))
-                nil)))
-    (should (string-search instructions body))
-    (should (string-search "Directive implementation" body))
-    (should (string-search "**Model:** Provider:model" body))
-    (should-not (string-search "**Location:**" body))
-    (should-not (string-search "**Context:**" body))
-    (should-not (string-search "**Execution:**" body))
-    (should-not (string-search "**Budget:**" body))
-    (should-not (string-search "RET" body))))
-
 (mevedel-deftest mevedel-plan-mode--render-approval/remote
   (:doc "owner accepts Worktree with a validated branch; full/view cannot accept"
    :quiet t)

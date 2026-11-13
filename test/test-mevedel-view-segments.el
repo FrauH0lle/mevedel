@@ -129,37 +129,6 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
         (push (match-beginning 0) positions))
       (nreverse positions))))
 
-(defun mevedel-view-segments-test--write-directive (path)
-  "Write a persisted directive turn with trusted audit bounds to PATH."
-  (with-temp-buffer
-    (org-mode)
-    (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
-    (insert (mevedel--format-hook-audit-record
-             '(:type directive-turn-boundary :edge start
-               :directive-id "d-1" :action discuss :turn 1)))
-    (insert "Directive prompt\nDirective answer\n")
-    (insert (mevedel--format-hook-audit-record
-             '(:type directive-turn-boundary :edge end
-               :directive-id "d-1" :action discuss :turn 1
-               :outcome success :sequence 1)))
-    (dotimes (_ 8)
-      (let (audits)
-        (goto-char (point-min))
-        (dotimes (_ 2)
-          (search-forward "<!-- mevedel-hook-audit -->")
-          (let ((start (match-beginning 0)))
-            (search-forward "<!-- /mevedel-hook-audit -->")
-            (push (list start (point)) audits)))
-        (goto-char (point-min))
-        (search-forward "Directive answer")
-        (org-entry-put
-         (point-min) "GPTEL_BOUNDS"
-         (prin1-to-string
-          (list (cons 'response (list (list (match-beginning 0)
-                                            (match-end 0))))
-                (cons 'mevedel-hook-audit (nreverse audits)))))))
-    (write-region (point-min) (point-max) path nil 'silent)))
-
 
 ;;
 ;;; State
@@ -504,22 +473,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
                   pos))
       (mevedel-view-return-to-latest-segment)
       (should-not mevedel-view-render--batch)
-      (should-not (mevedel-view-segments-current-number))))
-
-  :doc "lands on a directive indexed at its boundary before the user body"
-  (mevedel-view-segments-test--with-view
-    (mevedel-view-segments-test--write-directive
-     (mevedel-session-artifacts-segment-path directory 1))
-    (let* ((archive (mevedel-session-artifacts-read-segment session 1))
-           (prompt (car (mevedel-session-artifacts-collect-prompts archive))))
-      (unwind-protect
-          (progn
-            (should (eq (plist-get prompt :kind) 'directive))
-            (mevedel-view-segments-jump-to-prompt
-             1 (plist-get prompt :pos))
-            (should (eq 'directive
-                        (get-text-property (point) 'mevedel-view-turn-role))))
-        (kill-buffer archive)))))
+      (should-not (mevedel-view-segments-current-number)))))
 
 (mevedel-deftest mevedel-view-return-to-latest-segment ()
   ,test

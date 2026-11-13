@@ -2,9 +2,7 @@
 
 ;;; Commentary:
 
-;; Defines the three gptel presets that drive a mevedel session:
-;; `mevedel-discuss' (read-only exploration) and `mevedel-implement'
-;; (full edit access, inherits discuss).
+;; Defines the implementation and note-conversation gptel presets.
 ;;
 ;; Each preset assembles tool lists and registers sub-agents buffer-locally at
 ;; request time.  This module builds the request FSM handler chain around the
@@ -50,12 +48,10 @@
                   "mevedel-agents" (&optional preset-name))
 
 ;; `mevedel-chat'
-(declare-function mevedel--directive-capture "mevedel-chat" (request))
 (declare-function mevedel--generate-final-patch
                   "mevedel-chat" (workspace request callback))
 (declare-function mevedel--replace-patch-buffer
                   "mevedel-chat" (patch-content))
-(autoload 'mevedel--directive-capture "mevedel-chat")
 (autoload 'mevedel--generate-final-patch "mevedel-chat")
 
 ;; `mevedel-compact'
@@ -78,15 +74,15 @@
   "mevedel-implementation-policy")
 (defvar mevedel-implementation-policy--admission-preparation)
 
-;; `mevedel-instruction-registry'
-(declare-function mevedel--find-directive-by-uuid
-                  "mevedel-instruction-registry" (uuid))
-
 ;; `mevedel-models'
 (declare-function mevedel-model-merge-tiers
                   "mevedel-models" (additions current))
 (declare-function mevedel-model-merge-workloads
                   "mevedel-models" (additions current))
+
+;; `mevedel-note-conversation'
+(declare-function mevedel-note-conversation-setup "mevedel-note-conversation" ())
+(autoload 'mevedel-note-conversation-setup "mevedel-note-conversation")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-new-mutation-authority
@@ -101,7 +97,7 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
-(defvar mevedel--current-directive-uuid)
+(declare-function mevedel-session-forked-from-session-id "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
@@ -157,7 +153,7 @@
 (declare-function mevedel--turn-hold "mevedel-turn" (fsm))
 (declare-function mevedel--turn-release "mevedel-turn" (fsm))
 (declare-function mevedel-request-begin
-                  "mevedel-turn" (session &optional directive-uuid options))
+                  "mevedel-turn" (session &optional options))
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view-stream-ensure-progress-for-fsm
@@ -170,8 +166,7 @@
 ;;; Presets
 
 (defcustom mevedel-action-preset-alist
-  '((implement . mevedel-implement)
-    (discuss . mevedel-discuss))
+  '((implement . mevedel-implement))
   "Alist mapping actions to presets."
   :group 'mevedel
   :type '(alist :key-type symbol))
@@ -198,10 +193,25 @@ Each value contains the raw parent, agent, tool, and variable settings.")
 (defvar mevedel-preset--temporary-p nil
   "Non-nil while a preset is applied for one dynamic request only.")
 
-(defvar-local mevedel--directive-read-only-request-p nil
-  "Non-nil while the current turn is a read-only directive discussion.
-Directive planning is bounded by its request's Plan read-only stamp instead,
-which lets it delegate to agents that inherit that stamp.")
+(defvar mevedel-preset--applying-p nil
+  "Non-nil inside a preset application, including its parent applications.")
+
+(defun mevedel-preset--guard-note-identity (apply-preset preset &rest args)
+  "Call APPLY-PRESET with PRESET and ARGS without replacing a note's identity."
+  (when (and (not mevedel-preset--applying-p)
+             (not mevedel-preset--temporary-p)
+             mevedel--session
+             (eq (mevedel-session-preset-name mevedel--session) 'mevedel-note)
+             (not (mevedel-session-forked-from-session-id mevedel--session))
+             (not (memq preset '(mevedel-note)))
+             (not (equal preset "mevedel-note")))
+    (mevedel-diagnostic-user-error
+     (mevedel-diagnostic-scope mevedel--session)
+     "The note preset is fixed; change permission mode to govern edits"))
+  (let ((mevedel-preset--applying-p t))
+    (apply apply-preset preset args)))
+
+(advice-add 'gptel--apply-preset :around #'mevedel-preset--guard-note-identity)
 
 (defconst mevedel-preset--structural-keys
   '(:description :parents :pre :post :backend :model :system :tools :agents
@@ -308,7 +318,10 @@ without a cycle check of its own."
         (if mevedel-preset--temporary-p
             (set symbol value)
           (set (make-local-variable symbol) value))))
-    (when (and (not mevedel-preset--temporary-p) mevedel--session)
+    (when (and (not mevedel-preset--temporary-p) mevedel--session
+               (or (not (eq (mevedel-session-preset-name mevedel--session) 'mevedel-note))
+                   (mevedel-session-forked-from-session-id mevedel--session)
+                   (eq name 'mevedel-note)))
       (setf (mevedel-session-preset-name mevedel--session) name)
       ;; Any applied session preset replaces a missing one.
       (mevedel-recovery-clear mevedel--session "preset"))))
@@ -428,7 +441,9 @@ preset is applied."
     (if (assq name mevedel-preset--registry)
         (mevedel-preset-apply name buffer)
       (mevedel-recovery-report session "preset" 'configuration
-                               (format "Preset %s is unavailable; select a replacement" name) t))))
+                               (if (eq name 'mevedel-note)
+                                   "The fixed note preset is unavailable; restore its definition"
+                                 (format "Preset %s is unavailable; select a replacement" name)) t))))
 
 (defmacro mevedel-with-preset (name &rest body)
   "Run BODY with mevedel preset NAME applied for the current request only.
@@ -484,27 +499,9 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
 ;;;###autoload
 (defun mevedel--define-presets ()
   "Define gptel presets for mevedel actions."
-  ;; Read-only preset for discussion/analysis
-  (mevedel-define-preset mevedel-discuss
-    :description "Read-only tools for code analysis and discussion"
-    :tools ((:tool "Read") (:tool "Glob") (:tool "Grep")
-            (:discoverable read) (:tool "ToolCall") (:tool "ToolSearch")
-            (:discoverable code) (:discoverable web)
-            (:discoverable (:tool "CreateGoal"))
-            (:discoverable (:tool "GetGoal"))
-            (:discoverable (:tool "UpdateGoal")))
-    :agents ()
-    :system (lambda ()
-              (mevedel-system-build-prompt
-               'main
-               :retained t
-               :session mevedel--session
-               :refresh-buffer (current-buffer))))
-
   ;; Full editing preset for implementation
   (mevedel-define-preset mevedel-implement
     :description "Full editing capabilities with patch review workflow"
-    :parents (mevedel-discuss)
     :tools ((:tool "Read") (:tool "Glob") (:tool "Grep")
             (:discoverable read)
             (:tool "ApplyPatch") (:discoverable edit) (:tool "Bash")
@@ -515,25 +512,23 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
             (:discoverable (:tool "StopExecution"))
             (:discoverable (:tool "Eval"))
             (:discoverable code) (:discoverable web) (:discoverable elisp)
-            (:discoverable tasks) (:discoverable agents))
+            (:discoverable tasks) (:discoverable agents) (:discoverable notes))
     :agents (worker explorer reviewer verifier)
     :system (lambda ()
               (mevedel-system-build-prompt
                'main
                :retained t
                :session mevedel--session
-               :refresh-buffer (current-buffer)))))
+               :refresh-buffer (current-buffer))))
 
-(defun mevedel-preset--read-only-rules ()
-  "Return request rules denying mutation and mutation-capable delegation."
-  (mapcar
-   (lambda (name) (list name :action 'deny))
-   (delete-dups
-    (append
-     '("Agent" "SendMessage")
-     (mapcar
-      #'mevedel-tool-name
-      (cl-remove-if #'mevedel-tool-read-only-p (mevedel-tool-all)))))))
+  (mevedel-define-preset mevedel-note
+    :description "Independent note conversation; permission mode governs edits"
+    :parents (mevedel-implement)
+    :post (lambda () (mevedel-note-conversation-setup))
+    :system (lambda ()
+              (mevedel-system-build-prompt
+               'note :retained t :session mevedel--session
+               :refresh-buffer (current-buffer)))))
 
 (defun mevedel-preset-prepare-request (request)
   "Capture effective model, pending skills and authority on admitted REQUEST."
@@ -542,11 +537,7 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
       (setf (mevedel-request-model-policy request)
             (list :backend (plist-get info :backend) :model (plist-get info :model)
                   :effort (plist-get info :reasoning-effort)))))
-  (mevedel-skills--drain-pending-context request)
-  (when mevedel--directive-read-only-request-p
-    (setf (mevedel-request-skill-permission-rules request)
-          (append (mevedel-request-skill-permission-rules request)
-                  (mevedel-preset--read-only-rules)))))
+  (mevedel-skills--drain-pending-context request))
 
 
 ;;
@@ -653,24 +644,9 @@ steering still take precedence, so queued steering is delivered first."
                   ((buffer-live-p chat-buffer))
                   (workspace (with-current-buffer chat-buffer
                                (mevedel-workspace))))
-            (let* ((request (or (plist-get info :mevedel-request)
-                                (with-current-buffer chat-buffer
-                                  mevedel--current-request)))
-                   (capture (with-current-buffer chat-buffer
-                              (mevedel--directive-capture request))))
-              (setq info
-                    (plist-put info :mevedel-directive-capture
-                               (plist-get capture :capture)))
-              (setq info
-                    (plist-put info :mevedel-directive-covered-files
-                               (plist-get capture :covered-files)))
-              (setq info
-                    (plist-put info :mevedel-directive-gaps
-                               (plist-get capture :gaps)))
-              (setq info
-                    (plist-put info :mevedel-directive-untracked-effects
-                               (plist-get capture :untracked-effects)))
-              (setf (mevedel-engine-info fsm) info)
+            (let ((request (or (plist-get info :mevedel-request)
+                               (with-current-buffer chat-buffer
+                                 mevedel--current-request))))
               (mevedel-preset--apply-final-patch
                fsm chat-buffer workspace request finish))
           (funcall finish fsm))
@@ -695,7 +671,7 @@ connection that is mid-conversation, and the two cross replies.
 
 `mevedel-transport-run-when-idle' runs the work inline when the transport
 is free.  When it defers, callback invocation and terminal settlement wait
-in CONTINUATION so they cannot persist the directive before the patch exists.
+in CONTINUATION so the turn cannot settle before the patch exists.
 
 REQUEST is captured here, while the turn is still live, and handed to the
 generator.  Deferring moved that work past the point where settlement
@@ -713,11 +689,7 @@ the buffer-local would find nil and signal."
                      (mevedel--safe-fsm-handler
                       (lambda (_machine)
                         (when error (signal (car error) (cdr error)))
-                        ;; Captured evidence belongs to the old request;
-                        ;; presentation belongs only to the current one.
-                        (setf (mevedel-engine-info fsm)
-                              (plist-put (mevedel-engine-info fsm)
-                                         :mevedel-directive-patch patch))
+                        ;; Presentation belongs only to the current request.
                         (when (and (buffer-live-p chat-buffer)
                                    (mevedel--turn-current-p fsm)
                                    patch (> (length patch) 0))
@@ -925,7 +897,6 @@ alist with mevedel-specific handlers added:
                                     ;; step's error must not read as stale.
                                     (mevedel-request-begin
                                      mevedel--session
-                                     mevedel--current-directive-uuid
                                      (list :admitted adopt))))
                                 (when (and mevedel--current-request
                                            (fboundp 'mevedel-request-id))

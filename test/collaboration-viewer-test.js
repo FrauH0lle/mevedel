@@ -847,7 +847,7 @@ function testRequestSummaryRendering() {
   const label = '── Worked for 2m 37s · Thu 29 Oct 14:32 ';
   const details = 'Started: Thu 29 Oct 2026 14:29:43 +0000\nFinished: Thu 29 Oct 2026 14:32:20 +0000\nActive work: 2m 37s';
   const record = {id: 'summary-1', kind: 'request-summary', text: label, details,
-    directive: 'dir-1', activity: {id: 'tool-1', summary: 'Read 1 file', status: 'completed'}};
+    item: 'board-1', activity: {id: 'tool-1', summary: 'Read 1 file', status: 'completed'}};
   const chips = [];
   const turn = renderer.renderRecord(record, scope => { chips.push(scope); return {label: 'Dir'}; });
   assert.equal(turn.dataset.role, 'summary');
@@ -1591,7 +1591,7 @@ async function main() {
   assert.equal(nodes.transcript.children.length, 4);
 
   // The filter strip is visible from connection on, even before any
-  // directive record exists; Main chat is its default tab.
+  // discussion record exists; Main chat is its default tab.
   assert.equal(nodes.filter.hidden, false);
   assert.equal(nodes.filter.children.length, 1);
   assert.match(textOf(nodes.filter.children[0]), /^Main chat/);
@@ -1832,59 +1832,6 @@ async function main() {
   await waitFor(() => first.sent.length === 6, 'sealed abort');
   assert.deepEqual(await unseal(key, first.sent[5]), {t: 'abort'});
 
-  // Directive-tagged records grow the client-side filter; selecting a
-  // directive hides everything outside it, per guest, no round-trips.
-  await deliver({t: 'record', record: {
-    id: 'directive-user', kind: 'user', revision: 0,
-    text: 'Refactor the parser\nwith details', directive: 'dir-1',
-  }});
-  assert.equal(nodes.filter.hidden, false);
-  const labels = nodes.filter.children.map(textOf);
-  assert.equal(labels.length, 3);
-  assert.match(labels[0], /^Main chat/);
-  assert.match(labels[1], /Refactor the parser/);
-  assert.match(labels[2], /^All/);
-  assert.match(nodes.filter.children[2].attributes.title, /every turn/i);
-  assert.match(nodes.filter.children[2].className, /\ball\b/);
-  nodes.filter.children[1].dispatch('click');
-  assert.equal(findByRecordId(nodes.transcript, 'assistant').hidden, true);
-  assert.equal(findByRecordId(nodes.transcript, 'directive-user').hidden, false);
-  nodes.filter.children[0].dispatch('click'); // Main chat
-  assert.equal(findByRecordId(nodes.transcript, 'assistant').hidden, false);
-  assert.equal(findByRecordId(nodes.transcript, 'directive-user').hidden, true);
-  // A prompt sent under a directive filter carries that directive, so
-  // the reply lands in the thread the guest is reading; main chat and
-  // All carry none. The composer says where the prompt will go.
-  nodes.filter.children[1].dispatch('click');
-  assert.match(nodes['composer-input'].placeholder, /Refactor the parser/);
-  // The composer scope pill names the directive the prompt will land in
-  // and disappears for unscoped filters.
-  assert.equal(nodes['composer-scope'].hidden, false);
-  assert.match(textOf(nodes['composer-scope']), /Refactor the parser/);
-  nodes['composer-input'].value = 'and this one?';
-  nodes.composer.dispatch('submit');
-  await waitFor(() => first.sent.length === 7, 'directive-scoped prompt');
-  assert.equal((await unseal(key, first.sent[6])).directive, 'dir-1');
-  nodes.filter.children[0].dispatch('click'); // Main chat
-  assert.equal(nodes['composer-scope'].hidden, true);
-  nodes['composer-input'].value = 'main chat';
-  nodes.composer.dispatch('submit');
-  await waitFor(() => first.sent.length === 8, 'unscoped prompt');
-  assert.equal((await unseal(key, first.sent[7])).directive, undefined);
-
-  // Activity in a thread the guest is not looking at marks its tab with
-  // an unseen dot until the tab is selected.
-  const dirTab = () => nodes.filter.children.find(
-    b => /Refactor/.test(textOf(b)));
-  await deliver({t: 'record', record: {
-    id: 'directive-user', kind: 'user', revision: 1,
-    text: 'Refactor the parser\nwith more details', directive: 'dir-1',
-  }});
-  assert.match(dirTab().className, /unseen/);
-  dirTab().dispatch('click');
-  assert.doesNotMatch(dirTab().className, /unseen/);
-  nodes.filter.children[2].dispatch('click'); // All
-
   // Attachments are not only photos: an allowlisted text type rides the
   // frame verbatim, a disallowed one never leaves the browser, and the
   // extension decides when the browser reports no type at all.
@@ -1928,15 +1875,15 @@ async function main() {
   assert.equal(nodes.attachments.children[1].children[1].attributes['aria-pressed'], 'true');
   nodes['composer-input'].value = 'see the log';
   nodes.composer.dispatch('submit');
-  await waitFor(() => first.sent.length === 10, 'prompt with attachment and its upload');
-  const shared = await unseal(key, first.sent[9]);
+  await waitFor(() => first.sent.length === 8, 'prompt with attachment and its upload');
+  const shared = await unseal(key, first.sent[7]);
   assert.deepEqual({...shared, data: Buffer.from(shared.data, 'base64').toString()},
                    {t: 'file-upload', reqId: 1, data: 'print("hi")\n', dir: '',
                     name: 'tool.py', size: 12, rename: true, final: true});
   await deliver({t: 'file-upload', reqId: 1, ok: true, path: 'tool-2.py'});
   await waitFor(() => /tool-2\.py added to the project/.test(textOf(nodes.notice)),
                 'project share notice');
-  const withFile = await unseal(key, first.sent[8]);
+  const withFile = await unseal(key, first.sent[6]);
   assert.equal(withFile.images.some(image => 'share' in image || 'file' in image), false);
   assert.equal(withFile.images.length, 2);
   assert.equal(withFile.images[0].mime, 'text/plain');
@@ -2000,10 +1947,8 @@ async function main() {
   chooseName('before-wait');
   await waitFor(() => first.sent.length === beforeName + 1, 'sealed name');
   const queuedSendBefore = first.sent.length;
-  nodes.filter.children[1].dispatch('click');
   nodes['composer-input'].value = 'send the queued photo';
   nodes.composer.dispatch('submit');
-  nodes.filter.children[0].dispatch('click');
   // A name chosen while the prompt waits is the host's next, not the prompt's.
   chooseName('after-wait');
   await waitFor(() => first.sent.length === queuedSendBefore + 1, 'sealed name');
@@ -2017,7 +1962,6 @@ async function main() {
   const queuedPhoto = await unseal(key, first.sent[queuedSendBefore + 1]);
   assert.equal(queuedPhoto.images.length, 1);
   assert.equal(queuedPhoto.images[0].mime, 'image/jpeg');
-  assert.equal(queuedPhoto.directive, 'dir-1');
   assert.equal(queuedPhoto.name, 'before-wait');
   assert.equal(nodes['composer-input'].value, '');
   assert.equal(nodes.attachments.children.length, 0);
@@ -3046,10 +2990,16 @@ async function main() {
   assert.match(textOf(boardTab()), /2$/);
   nodes.filter.children.find(b => /^Main chat/.test(textOf(b))).dispatch('click');
   assert.equal(findByRecordId(nodes.transcript, 'board-answer').hidden, true);
+  // Activity in a discussion the guest is not looking at marks its tab
+  // with an unseen dot until the tab is selected.
+  await deliverTo(sockets[1], {t: 'record', record: {
+    id: 'board-answer', kind: 'assistant', item: 'board-1', revision: 1, text: 'Styled it again.'}});
+  assert.match(boardTab().className, /unseen/);
   const boardChip = findByClass(findByRecordId(nodes.transcript, 'board-question'), 'dirchip');
   assert.equal(textOf(boardChip), '◇ Pipeline');
   nodes.transcript.dispatch('click', {target: {closest: () => boardChip}});
   assert.equal(findByRecordId(nodes.transcript, 'board-answer').hidden, false);
+  assert.doesNotMatch(boardTab().className, /unseen/);
   assert.equal(findByRecordId(nodes.transcript, 'artifact-discussion').hidden, true);
   assert.equal(nodes['composer-input'].placeholder, 'Message ◇ Pipeline…');
   assert.match(textOf(nodes['composer-scope']), /its own conversation/);

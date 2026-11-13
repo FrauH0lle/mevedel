@@ -63,7 +63,7 @@ code, pre { font-family: var(--font-mono); }
   font-size: .8rem;
 }
 /* The filter is its own full-width row under the topbar line: it is
-   also the send scope, so it must not hide until a directive exists or
+   also the send scope, so it must not hide until a discussion exists or
    fight the wordmark for space on a phone. */
 .filter {
   flex-basis: 100%;

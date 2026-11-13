@@ -9,7 +9,7 @@
 ;;; Code:
 
 (require 'diff)
-(require 'mevedel-directive-source)
+(require 'mevedel-note-source)
 
 (defun mevedel-instruction-edit--line-mapping (beg end text)
   "Map line instructions intersecting BEG..END onto replacement TEXT.

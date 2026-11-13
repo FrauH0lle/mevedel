@@ -108,6 +108,7 @@
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x))
 (declare-function mevedel-session-execution-target "mevedel-structs" (cl-x))
 (declare-function mevedel-session-file-snapshots "mevedel-structs" (cl-x))
+(declare-function mevedel-session-untracked-effects "mevedel-structs" (cl-x))
 (declare-function mevedel-session-fork-type "mevedel-structs" (cl-x))
 (declare-function mevedel-session-forked-from-fork-point-id "mevedel-structs" (cl-x))
 (declare-function mevedel-session-forked-from-session-id "mevedel-structs" (cl-x))
@@ -647,6 +648,7 @@ The resulting plist is round-trippable via
    :prompt-index           (mevedel-session-prompt-index session)
    :chapters               (copy-tree (mevedel-session-chapters session))
    :file-snapshots         (mevedel-session-file-snapshots session)
+   :untracked-effects      (mevedel-session-untracked-effects session)
    :ptc-checkpoints        (copy-tree (mevedel-session-ptc-checkpoints session) t)
    :agent-transcripts      (mevedel-session-agent-transcripts session)
    :agent-registry         (mevedel-agent-persistence-serialize-registry session)
@@ -1027,6 +1029,7 @@ their hygiene filters."
                      :prompt-index     prompt-index
                      :chapters         (copy-tree (plist-get plist :chapters))
                      :file-snapshots   (plist-get plist :file-snapshots)
+                     :untracked-effects (plist-get plist :untracked-effects)
                      :ptc-checkpoints
                      (mevedel-session-codec--sanitize-ptc-checkpoints
                       (plist-get plist :ptc-checkpoints))

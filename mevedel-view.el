@@ -186,15 +186,13 @@
 (declare-function mevedel-view--input-marker-position
                   "mevedel-view-composer" ())
 (declare-function mevedel-view--input-prompt-string
-                  "mevedel-view-composer" (&optional mode))
+                  "mevedel-view-composer" ())
 (declare-function mevedel-view--propertize-input-prompt
                   "mevedel-view-composer" (start end))
-(declare-function mevedel-view-composer-scope-label
-                  "mevedel-view-composer" (&optional scope))
 (declare-function mevedel-view--permission-mode-display
                   "mevedel-view-composer" (mode))
 (declare-function mevedel-view--plan-mode-p "mevedel-view-composer" ())
-(declare-function mevedel-view--refit-input-prompt "mevedel-view-composer" ())
+
 (declare-function mevedel-view--position-in-input-region-p
                   "mevedel-view-composer" (position))
 (declare-function mevedel-view--sanitize-undo "mevedel-view-composer" ())
@@ -202,7 +200,7 @@
 (declare-function mevedel-view-composer-initialize
                   "mevedel-view-composer" ())
 (defvar mevedel-view--composer-display-overlay)
-(defvar mevedel-view--composer-scope)
+
 (defvar mevedel-view--input-marker)
 
 ;; `mevedel-view-control-transfer'
@@ -370,11 +368,6 @@ durable publication for state that cannot have changed in between.")
 (defface mevedel-view-user-header
   '((t :inherit bold :overline t :extend t))
   "Face for user message headers in the view buffer."
-  :group 'mevedel)
-
-(defface mevedel-view-directive-action
-  '((t :inherit font-lock-keyword-face :weight bold))
-  "Face for directive action labels in the view buffer."
   :group 'mevedel)
 
 (defface mevedel-view-guest-header
@@ -925,7 +918,7 @@ existing `mevedel--view-buffer' binding untouched.  A
     (unless mevedel-view--side-conversation-p
       (add-hook 'kill-buffer-hook #'mevedel-view-history-save nil t))
     ;; A transcript has no line numbers worth counting, and they cost four
-    ;; columns of a directive frame that is already narrow.
+    ;; columns of a note frame that is already narrow.
     (setq-local display-line-numbers nil)
     ;; Agent transcript views supply their own status strip but share the
     ;; pinned prompt row.
@@ -1317,8 +1310,7 @@ while scrolling changes properties only, so it must not invalidate them."
 
 (defun mevedel-view--window-top (window)
   "Return the first visible position at or after WINDOW's start.
-A start inside hidden text, such as another directive's turn in a
-filtered directive frame, displays the next visible text at the top."
+A start inside hidden text displays the next visible text at the top."
   (let ((top (window-start window))
         (limit (or (and (markerp mevedel-view--input-marker)
                         (marker-position mevedel-view--input-marker))
@@ -1330,8 +1322,7 @@ filtered directive frame, displays the next visible text at the top."
 (defun mevedel-view--pinned-prompt (window)
   "Return (POSITION . PREVIEW) for the prompt above WINDOW's top edge.
 Metadata lives on rendered prompt headers, not in the model transcript.
-Hidden headers, such as other directives' in a filtered directive frame,
-are never selected."
+Hidden headers are never selected."
   (when-let* (((window-live-p window))
               ((eq (window-buffer window) (current-buffer)))
               (top (mevedel-view--window-top window))
@@ -1536,8 +1527,6 @@ when one of them changes."
             (vector data-buffer session-name directory
                     (and target (mevedel-execution-target-identity target))
                     pending-publication lease-state permission-mode plan-mode
-                    (plist-get mevedel-view--composer-scope :directive-id)
-                    (plist-get mevedel-view--composer-scope :action)
                     state model (and goal t) goal-status goal-turns
                     preset-name compaction tool-count width
                     (display-graphic-p) (selected-window))))
@@ -1551,7 +1540,6 @@ when one of them changes."
                (mode (if plan-mode
                          (format "Plan/%s" permission-label)
                        permission-label))
-               (scope (mevedel-view-composer-scope-label))
                (model (if model (gptel--model-name model) "model none"))
                (tools (format "%d tool%s"
                               tool-count
@@ -1583,9 +1571,6 @@ when one of them changes."
                                'help-echo "Toggle automatic compaction for this open session"))))
                         (mevedel-view--status-strip-button
                          mode 'mode "Open mode cockpit")
-                        (and scope
-                             (propertize scope
-                                         'face 'mevedel-view-directive-scope))
                         (propertize
                          state 'face (if (string= state "running")
                                          'success
@@ -1836,7 +1821,6 @@ viewport noted before redisplay keeps both point and the composer."
 Size changes run before windows are redisplayed, so their text can
 change here with the usual composer point preservation."
   (when (eq (window-buffer window) (current-buffer))
-    (mevedel-view--refit-input-prompt)
     (mevedel-view--render-request-progress))
   (mevedel-view--resume-on-window-scroll window))
 
@@ -1858,7 +1842,6 @@ still release animation and power observers when it becomes invisible."
       (mevedel-view--resume-render-if-attended (current-buffer))
     (when (fboundp 'mevedel-view--start-spinner-timer)
       (mevedel-view--start-spinner-timer t)))
-  (mevedel-view--refit-input-prompt)
   (mevedel-view--render-request-progress))
 
 (defun mevedel-view--schedule-render (kind data-buffer delay)

@@ -33,6 +33,7 @@
 (require 'mevedel-tool-render-data)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-repair-diagnostics)
+(require 'mevedel-transport)
 (require 'mevedel-transcript-audit)
 (require 'mevedel-view-zone)
 (eval-when-compile (require 'tramp))
@@ -3394,22 +3395,7 @@ turn's later text, live and after reconstruction."
         (with-current-buffer view-buf
           (setq mevedel-view-segments--number nil
                 mevedel-view-segments--buffer nil))
-        (kill-buffer archive))))
-
-  :doc "a directive request's running calls get no Assistant heading"
-  (mevedel-view-stream-test--with-buffers
-    (let ((mevedel-view-tool-boundary-render-delay 0))
-      (with-current-buffer data-buf
-        (setq-local mevedel--current-request
-                    (mevedel-request--create :directive-uuid "directive-1")))
-      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
-      (mevedel-view-stream-test--batch
-       data-buf (list '(:name "Read" :args (:file_path "a"))))
-      (let ((text (mevedel-view-stream-test--history view-buf)))
-        (should (string-match-p "● Read: a" text))
-        (should-not (string-match-p "Assistant" text)))
-      (with-current-buffer data-buf
-        (setq-local mevedel--current-request nil)))))
+        (kill-buffer archive)))))
 
 
 ;;
@@ -5403,9 +5389,9 @@ turn's later text, live and after reconstruction."
       ;; save path, so the directory goes only after them.
       (delete-directory tmp t)))
 
-  :doc "renders ignored directive PROMPT drawer as collapsed user section"
+  :doc "renders an ignored PROMPT drawer as a collapsed user section"
   (mevedel-view-stream-test--with-buffers
-    (mevedel-view-stream-test--insert-data data-buf "Change alpha :implement:\n" nil)
+    (mevedel-view-stream-test--insert-data data-buf "Change alpha\n" nil)
     (mevedel-view-stream-test--insert-data
      data-buf
      ":PROMPT:\n## TASK\nFull hidden prompt.\n:END:\n"
@@ -5415,16 +5401,10 @@ turn's later text, live and after reconstruction."
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "Implement: Change alpha" text))
-        (should-not (string-match-p "Change alpha :implement:" text))
+        (should (string-match-p "Change alpha" text))
         (should (string-match-p "Prompt" text))
         (should-not (string-match-p "Full hidden prompt" text))
         (should (string-match-p "Done" text)))
-      (goto-char (point-min))
-      (search-forward "Implement:")
-      (should (eq 'mevedel-view-directive-action
-                  (get-text-property (match-beginning 0)
-                                     'font-lock-face)))
       (goto-char (point-min))
       (search-forward "Prompt")
       (mevedel-view-toggle-section)
@@ -5559,34 +5539,6 @@ turn's later text, live and after reconstruction."
         (should (string-match-p "Visible model prompt" expanded))
         (should-not (string-match-p ":PROPERTIES:" expanded))
         (should-not (string-match-p "GPTEL_BOUNDS" expanded)))))
-
-  :doc "expanded external Prompt survives in-flight incremental render"
-  (mevedel-view-stream-test--with-buffers
-    (let (data-turn-start)
-      (mevedel-view-stream-test--insert-data data-buf "Change alpha :implement:\n" nil)
-      (mevedel-view-stream-test--insert-data
-       data-buf
-       ":PROMPT:\n## TASK\nFull hidden prompt.\n:END:\n"
-       'ignore)
-      (with-current-buffer data-buf
-        (setq data-turn-start (copy-marker (point) nil)))
-      (with-current-buffer view-buf
-        (mevedel-view--begin-external-turn
-         "Implement: Change alpha" data-turn-start 'directive)
-        (goto-char (point-min))
-        (search-forward "Prompt")
-        (mevedel-view-toggle-section)
-        (should (string-match-p
-                 "Full hidden prompt"
-                 (buffer-substring-no-properties
-                  (point-min) mevedel-view--input-marker))))
-      (mevedel-view-stream-test--insert-data data-buf "Assistant answer.\n" 'response)
-      (with-current-buffer view-buf
-        (mevedel-view-render-live-update data-buf)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "Full hidden prompt" text))
-          (should (string-match-p "Assistant answer" text))))))
 
   :doc "target-native response link opens only through its session target"
   (let* ((host "view-link-target")

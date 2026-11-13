@@ -2,12 +2,42 @@
 
 ;;; Commentary:
 
-;; Real-file reference, directive, and source fixtures shared by owner tests.
+;; Real-file note and store fixtures shared by owner tests.
 
 ;;; Code:
 
-(defun mevedel-instruction-test--make-reference (content workspace)
-  "Create a file buffer containing CONTENT and one reference in WORKSPACE."
+(require 'mevedel-notes)
+
+(defun mevedel-instruction-test--create-note-in (buffer start end &optional span)
+  "Create a note in BUFFER from START to END, with optional explicit SPAN.
+Give unnamed geometry fixtures a real source file until BUFFER is killed."
+  (with-current-buffer buffer
+    (unless buffer-file-name
+      (let ((file (make-temp-file "mevedel-note-source-" nil ".txt")))
+        (write-region (point-min) (point-max) file nil 'silent)
+        (setq-local buffer-file-name file)
+        (add-hook 'kill-buffer-hook
+                  (lambda ()
+                    (unlock-file file)
+                    (when (file-exists-p file) (delete-file file))) t t)))
+    (save-mark-and-excursion
+      (let ((transient-mark-mode t)
+            (mark-active t)
+            (mevedel-notes--unsaved-noticed
+             (copy-sequence mevedel-notes--unsaved-noticed)))
+        (goto-char end)
+        (set-mark start)
+        (mevedel-test--with-captured-diagnostics nil
+          (let ((note (mevedel-note-create "")))
+            (when span
+              (overlay-put note 'mevedel-span span)
+              (move-overlay note start end buffer)
+              (mevedel--instruction-normalize-lines note)
+              (mevedel--update-instruction-overlay note t))
+            note))))))
+
+(defun mevedel-instruction-test--make-note (content workspace)
+  "Create a file buffer containing CONTENT and one note in WORKSPACE."
   (let* ((file (make-temp-file "mevedel-overlay-" nil ".txt" content))
          (buffer (find-file-noselect file)))
     (with-current-buffer buffer
@@ -15,7 +45,7 @@
       (setq-local mevedel--workspace workspace)
       (set-buffer-modified-p nil)
       (cons buffer
-            (mevedel--create-reference-in
+            (mevedel-instruction-test--create-note-in
              buffer (point-min) (1- (point-max)))))))
 
 (defun mevedel-instruction-test--discard (cell)
@@ -33,68 +63,13 @@
       (when (file-exists-p file)
         (delete-file file)))))
 
-(defun mevedel-instruction-test--make-directive (content request workspace)
-  "Create a file buffer containing CONTENT and one directive in WORKSPACE."
-  (let* ((file (make-temp-file "mevedel-directive-" nil ".txt" content))
-         (buffer (find-file-noselect file)))
-    (with-current-buffer buffer
-      (fundamental-mode)
-      (setq-local mevedel--workspace workspace)
-      (set-buffer-modified-p nil)
-      (cons buffer
-            (mevedel--create-directive-in
-             buffer (point-min) (1- (point-max)) nil request)))))
-
-(defun mevedel-instruction-test--source-fixture ()
-  "Return `(DIRECTORY WORKSPACE FILE BUFFER OVERLAY RECORD)' for a source file."
-  (let* ((directory (make-temp-file "mevedel-source-" t))
-         (file (file-name-concat directory "source.el"))
-         (workspace (mevedel-workspace--create
-                     :type 'file :id directory :root directory
-                     :name "source")))
-    (with-temp-file file
-      (insert "before target after\n"))
-    (let ((buffer (find-file-noselect file)))
-      (with-current-buffer buffer
-        (setq-local mevedel--workspace workspace)
-        (let* ((start (progn (goto-char (point-min))
-                             (search-forward "target")
-                             (match-beginning 0)))
-               (end (match-end 0))
-               (overlay (mevedel--create-directive-in
-                         buffer start end nil "Preserve this"))
-               (record (mevedel--directive-record overlay)))
-          (list directory workspace file buffer overlay record))))))
-
-(defun mevedel-instruction-test--attempt ()
-  "Return a complete directive attempt suitable for persistence tests."
-  (mevedel-directive-attempt--create
-   :sequence 1
-   :action 'implement
-   :directive-request "Preserve this"
-   :request "prompt" :result "result" :outcome 'success
-   :patch "patch" :capture 'complete :covered-files nil :gaps nil
-   :captured-at "2026-08-02T00:00:00+0200"
-   :checkpoint '(:session-id "session" :turn 1)))
-
-(defun mevedel-instruction-test--discard-source (fixture)
-  "Discard files and buffers owned by source FIXTURE."
-  (mevedel-instruction-test--discard (cons (nth 3 fixture) nil))
-  (when-let* ((directory (car fixture))
-              ((file-directory-p directory)))
-    (delete-directory directory t)))
-
 (defun mevedel-instruction-test--store-state (workspace)
-  "Return WORKSPACE's store state: `active', `pending', `new' or nil.
+  "Return WORKSPACE's store state: `active', `new' or nil.
 Nil means WORKSPACE keeps no store."
   (when (mevedel-instruction-store--applicable-p workspace)
-    (if (not (eq 'absent (plist-get (mevedel-instruction-store--read workspace)
-                                    :status)))
-        'active
-      (if (mevedel-instruction-store--pending-p
-           workspace (mevedel-instruction-store--observation workspace) nil)
-          'pending
-        'new))))
+    (if (eq 'absent (plist-get (mevedel-instruction-store--read workspace) :status))
+        'new
+      'active)))
 
 (provide 'mevedel-instruction-test-support)
 ;;; mevedel-instruction-test-support.el ends here

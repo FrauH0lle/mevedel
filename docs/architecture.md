@@ -6,7 +6,7 @@ For source-file responsibilities, see the [module map](module-map.md).
 
 ```mermaid
 flowchart TD
-    W[Workspace] -->|shared records| D[Directives and source anchors]
+    W[Workspace] -->|shared records| D[Notes and source anchors]
     W -->|one or more| S[Sessions]
     S -->|owns| T[Canonical transcript in data buffer]
     S -->|admits| R[Request and selected turn engine]
@@ -16,7 +16,7 @@ flowchart TD
     S -->|publishes| P[Durable session state]
 ```
 
-A workspace shares directive records across sessions. Each session owns its
+A workspace shares note records across sessions. Each session owns its
 conversation, execution target, authority and retained agents. The data buffer
 holds the canonical transcript; views project it and submit user actions through
 the owning session. A request has its own admission and settlement boundary.
@@ -53,10 +53,10 @@ catalog, presets, and integration hooks. Focus and theme callbacks act only on
 loaded views. Uninstall skips optional owners that have never loaded.
 
 Chat creation loads its session and view dependencies and wires journal
-scheduling before the session-start event. Pending Plan and directive proposals
-restore from session/workspace state, independent of whether their UI owner was
-previously loaded. Tool execution, saved-lobby startup, and Claude requests have
-separate implementation boundaries; see [tools](tools.md),
+scheduling before the session-start event. Pending Plan proposals and notes'
+prepared changes restore from session/workspace state, independent of whether
+their UI owner was previously loaded. Tool execution, saved-lobby startup, and
+Claude requests have separate implementation boundaries; see [tools](tools.md),
 [collaboration](collaboration.md), and [sessions](sessions.md).
 
 ## Key data structures
@@ -65,47 +65,15 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
 
 `mevedel-structs.el` owns these passive shapes and their shape-local
 invariants.  `mevedel-workspace.el` owns workspace registry and state lookup,
-`mevedel-directive.el` owns directive mutation and derived lifecycle, and
-`mevedel-turn.el` owns request admission, cancellation, and settlement.
+and `mevedel-turn.el` owns request admission, cancellation, and settlement.
+Notes are not structs; see the instruction store below.
 
-- **`mevedel-workspace`**: type, id, root, name, file-cache, and the durable
-  directive records shared by every session in the workspace.
+- **`mevedel-workspace`**: type, id, root, name, and file-cache.
   Its journal and memory observations are disposable UI caches; memory counts
   never authorize a proposal decision or application.
   Additional roots live in `mevedel-workspace-additional-roots`.
   `.mevedel/` is derived by
   `mevedel-workspace-state-dir`, not stored as a slot.
-- **`mevedel-directive`**: stable directive id, current authored request,
-  source-anchor description, lifecycle state, bound execution-session id, and
-  Plan-before-implementation preference and proposal, chronological planning,
-  implementation, and discussion turns, and current parent-owned
-  subdirectives. Source overlays retain the id needed to resolve this record;
-  they do not own another request, status, patch, or attempt copy.
-  Current top-level and nested ids are globally unique within the workspace;
-  durable decode rejects any collision before installing records. Historical
-  consumed-subdirective snapshots are evidence rather than current identities.
-  The lifecycle state is derived from the current authored request and surviving
-  activity whenever the record is loaded or queried; it is not persisted as an
-  independent authority.
-- **`mevedel-subdirective`**: stable id, current authored request, and attached
-  source anchor for one nested detail owned by a top-level directive. It never
-  owns a session, lifecycle state, attempt list, discussion, or Rewind action.
-- **`mevedel-directive-attempt`**: immutable action framing, submitted request,
-  terminal answer or error, authored-request snapshot, outcome, captured patch,
-  capture time and completeness, covered files, explicit gaps, the successful
-  attempt's consumed subdirective snapshots, conservatively detected tool
-  effects outside snapshot coverage, and the session/turn checkpoint
-  that can restore the file state around the attempt, plus any accepted plan
-  and request-local implementation selection. Its directive-local
-  settlement sequence orders it against discussion turns. A complete empty
-  patch means the request observed its covered files and made no changes;
-  incomplete capture never implies complete coverage.
-- **`mevedel-directive-discussion-turn`**: immutable local question, submitted
-  request, authored-request snapshot, terminal answer or error, outcome,
-  optional selected-attempt index, session/turn checkpoint, and directive-local
-  settlement sequence. A settlement sequence identifies one event across
-  all three collections -- planning turns, attempts, and discussion turns
-  -- and the codec rejects a record that repeats one.
 - **`mevedel-session`**: per-chat state: stable name-independent ID, editable
   display name and one-shot title eligibility, workspace, immutable execution target,
   qualified working directory, tasks, touched-files, permission rules/mode,
@@ -138,7 +106,7 @@ invariants.  `mevedel-workspace.el` owns workspace registry and state lookup,
 - **`mevedel-request`**: per-turn state: process-unique request identity,
   owning session and agent origin, its once-reserved session turn identity,
   request start time, accumulated active-work pause time, file-snapshots,
-  directive UUID, immutable Plan read-only authority, cancellers,
+  immutable Plan read-only authority, cancellers,
   skill-scoped permission rules, user-attached skill records, hook rules, and
   transient one-shot-mutation/ephemeral-artifact boundaries. Effective
   backend/model/effort policy is captured at admission, before pending skill
@@ -151,53 +119,44 @@ invariants.  `mevedel-workspace.el` owns workspace registry and state lookup,
   `get-domain`, `get-name`), groups, max-result-size, display argument,
   render transform, renderer, and its provider-facing gptel tool.
 - `mevedel--instruction-states`: workspace-keyed instruction alists and ID state
-- Instruction types: **References** (source-bound context) and **Directives**
-  (workspace-owned prompts with source presentations)
+  for notes, the recently-closed list, and display-number state. The note is
+  the only instruction type: marked code with optional text, kept in the
+  workspace instruction store (`.mevedel/instructions.el`, format 2). Its
+  overlay properties carry the author (user, agent, or Buddy), tags, state
+  (unsent, sent, or taken), the note conversation's session id once sent, and at
+  most one waiting prepared change. Note context reaches a prompt only when the
+  note is sent or explicitly mentioned. Done, deleted, and dismissed notes move
+  to recently closed, bounded by `mevedel-notes-closed-max-count` and
+  `mevedel-notes-closed-max-age-days`. See
+  [note conversations](sessions.md#note-conversations).
 
 Instruction ownership is split at the durable-record/presentation boundary:
 
 - `mevedel-instruction-registry.el` owns workspace buckets, IDs, traversal,
   lookup, and links.
-- `mevedel-directive-source.el` owns anchors and every operation that changes
-  both a durable directive record and its source presentation, including
-  create, detach, reattach, archive, and delete.
+- `mevedel-note-source.el` owns note
+  anchors, source presentations, and command-scoped replacement.
+- `mevedel-notes.el` owns note commands and rendering, including create, edit,
+  take, close, and restore.
 - `mevedel-overlay-ui.el` owns action dispatch, labels, keymaps, styling, and
   redraw.
 - `mevedel-overlays.el` remains the geometry, containment, tag, navigation,
   context, and prompt core.
 
-Callers do not update a directive record and then repair its overlay
-separately. They enter through the source owner, while registry and UI work
-remain presentation-neutral or durable-record-neutral respectively.
+Callers do not update a note record and then repair its overlay separately.
+They enter through the owning commands, while registry and UI work remain
+presentation-neutral or durable-record-neutral respectively.
 
-Directive anchors are either Attached, with a live source range, or Detached,
-with a zero-width source position, former source order, and the last attached
-anchor evidence. Archived and Source-missing anchors keep the last attached
-region. Every stored anchor names a file and an ordered region, in every one
-of those states, and the codec rejects one that does not. Creating a directive
-therefore requires a file-visiting buffer: without a file nothing could
-reattach it, and detaching or archiving it would freeze a fileless anchor into
-a record that no longer loads. Deleting an entire directive range preserves its durable
-record and replaces the evaporated range overlay with a compact detached row.
-Co-located detached rows are ordered
-by their former source positions. References keep their source-bound
-evaporation behavior.
+Note overlays do not evaporate: deleting a
+note's whole source text leaves the note with an empty anchor. A missing file
+is shown as source missing.
 
-Bulk deletion follows the same source-owner cleanup and activity guard as
-single deletion. `mevedel-delete-all-references` and
-`mevedel-delete-all-directives` filter the current workspace's registry without
-resetting its other instruction state; `mevedel-delete-all-instructions` uses
-the same path for both types. Buffers without a workspace share the `:global`
-bucket. Interactive deletion confirms instruction and buffer counts, with a
-separate default-no question for Source-missing directive records. Archived
-records are not selected, and any selected directive with activity blocks the
-operation before deletion begins. Noninteractive calls delete only source
-presentations and their records, without confirmation or Source-missing inclusion.
-Closed sources retain their registry workspace when reopened for bulk deletion,
-including sources reattached outside that workspace's root. Deletion retires
-the removed numeric IDs and prunes their links from both live presentations and
-preserved directive/subdirective anchor properties, so ID reuse cannot redirect
-an old link to an unrelated instruction.
+`mevedel-delete-all-instructions` deletes the current workspace's notes in all
+its buffers through the same cleanup as single deletion. Buffers without a
+workspace share the `:global` bucket. Interactive deletion confirms note and
+buffer counts. Deleted notes remain restorable in recently closed until its
+limits expire them; neither closing nor expiry recycles their displayed
+numbers, so old mentions cannot silently target another note.
 
 Instruction overlays persist `mevedel-span` as `line` or `char`. Creation
 infers line shape from a beginning-of-line start and an end-of-line or
@@ -208,7 +167,7 @@ Line instructions keep whole surviving edge lines after edits. Intersecting
 replacements grow both shapes; adjacent insertions do not grow character spans,
 and adjacent whole lines do not grow line spans. Deleting a boundary newline
 joins the neighboring text into the line instruction. Full deletion still
-evaporates references and detaches directives.
+leaves a note with an empty anchor.
 
 `mevedel-instruction-edit.el` synchronizes visited source buffers by zero-context
 line-diff runs. Equal-sized changed runs map each old line to its corresponding
@@ -231,12 +190,9 @@ no function entries unless normalization or explicit mapping actually moves an
 overlay beyond those shifts. A promoted edit can split a coalesced native
 insertion interval without adding an undo boundary. Full-deletion undo/redo
 restores the original overlay identity,
-source anchors, nested membership, and reciprocal links, without restoring old
-directive activity. Details consumed by a surviving successful implementation
-attempt stay consumed, even when undo restores source from before settlement;
-unconsumed details restore normally. If another instruction reused a deleted
+source anchors, nested membership, and reciprocal links. If another instruction reused a deleted
 numeric ID, the restored instruction receives a fresh ID while retaining its UUID. Explicit
-archive/removal takes precedence over an old source undo. Selective undo is not
+note deletion takes precedence over an old source undo. Selective undo is not
 supported: Emacs currently drops custom function entries when filtering undo
 history to a region.
 
@@ -249,10 +205,8 @@ commands finish their own scopes without settling an enclosing command's pending
 replacement; the outer command can still insert its prompted text. Full-deletion
 candidates keep their original overlay identity collapsed at the deletion point
 until resolution. A same-position insertion recovers the span over the new text;
-line spans normalize to complete lines. Pending directives keep their activity,
-state, and attached anchor evidence rather than temporarily detaching. With no
-replacement, scope completion removes references or detaches directives using
-the existing source-owner semantics. Undo records retain the original scope's
+line spans normalize to complete lines. With no replacement, scope completion
+applies the ordinary full-deletion result. Undo records retain the original scope's
 resolution so undo/redo cannot reopen an already completed replacement session.
 Noninteractive primitive edits outside a command or explicit held scope retain
 immediate full-deletion behavior.
@@ -269,9 +223,7 @@ do not grow the instruction. Scope completion clears this partial-edge intent.
 
 When separate deletion/insertion replaces an entire parent together with nested
 instructions, only the outermost replaced instruction recovers over the new
-text. Nested directive details keep their durable records and history without
-source presentations, as when their parent fully detaches; nested references
-are removed. Arbitrary typed text does not supply a meaningful nested mapping.
+text. Arbitrary typed text does not supply a meaningful nested mapping.
 Undo restores the nested presentations, identities, geometry, and links.
 Single-notification replacements can still produce coextensive presentations;
 equal ranges are never each other's geometric parents, and presentation redraw
@@ -285,84 +237,23 @@ to the integration. `mevedel-evil.el` installs this bridge only through explicit
 session. Loading the optional module does not load Evil or change bindings,
 hooks, or initial states. Setup owns normal-state bindings and visual range/type
 translation; the generic source owner remains independent of Evil. Neither
-replacement resolution nor undo rewinds durable directive activity.
+replacement resolution nor undo changes a note's conversation or state.
 
-Top-level directive presentations may persist an exact provider and
-reasoning-effort override. Nested directives are durable details owned by the
-topmost directive. Acting on any nested presentation resolves that owner, and
-prompt construction includes every current nested detail in stable source
-order. When the top-level range detaches, its nested source presentations may
-disappear, but prompt construction and submission snapshots continue from the
-parent-owned records. Without an override, the directive inherits the main
-session model at dispatch.
+Sending a note (`mevedel-note-send`, or `mevedel-note-send-batch` for several
+notes) creates an ordinary durable session with the `mevedel-note` preset and
+submits one generated turn: the note text, the noted code at send time, and
+the explicitly mentioned notes, with mention syntax in captured text made
+inert. It never forks or reads another chat's history. The conversation then
+runs through ordinary admission, tools, permission mode, Plan mode, and
+settlement; the conversation link is its session id, not a copied transcript.
+Ordinary-path ApplyPatch proposals from that session become the note's
+prepared change instead of writes; resource-address patches keep ordinary
+ApplyPatch behavior. See
+[note conversations](sessions.md#note-conversations).
 
-Directive requests submit an explicit string prompt built from the current
-authored request and freshly resolved references, so request construction never
-reads surrounding ordinary-chat history. Direct implementation-type prompts
-additionally append the record's persisted skill selection as instruction
-mentions, revalidated against the session at every dispatch; accepted-plan
-handoffs instead carry the approval card's selection. Each request streams as a first-class
-turn in the bound execution session's canonical transcript with ordinary user,
-response, tool, and interaction roles. Paired durable boundary records identify
-the directive turn without replacing any of those roles. Before gptel parses an
-ordinary chat request, a synchronous prompt-copy transform marks every enclosed
-directive body `gptel 'ignore`; explicit directive requests continue to use
-only the workspace record and directive-local history.
-
-Starting a Ready discussion submits that request directly as the first
-directive turn. Follow-ups enter a sticky directive scope in the shared
-composer and add only durable discussion turns whose authored-request snapshot
-matches the current directive request. The first accepted request binds the
-directive to its execution session. Each accepted request reserves one session
-turn identity before tools run; snapshots, transcript metadata, prompt/Rewind
-indexing, and directive checkpoint links use that same identity, which terminal
-settlement commits without recomputing it.
-
-Directive startup reserves its request before yielding file preparation or the
-save prompt. Request-local permission mode and Plan read-only authority are
-explicit admission inputs, not shared pending state that another request can
-consume during readiness checks. A busy session refuses a nested submission.
-Cancellation retires provisional startup state while the request still owns it;
-resumed startup and error rollback cannot alter a replacement's transcript,
-directive status, or workflow context, even if the replacement has already
-settled. Once dispatched, ordinary terminal settlement owns that state.
-
-When Plan before implementation is enabled, every implementation-starting
-action first records a read-only planning turn in that same bound session. The
-directive record owns the proposal and approval selection; the session keeps
-only a transient reservation identifying whether the workflow is planning,
-awaiting approval, or implementing. The accepted handoff reuses the ordinary
-directive request path with request-local mode and model policy, and stores the
-accepted plan on the resulting immutable attempt. Standalone Plan and directive
-planning are mutually exclusive session owners.
-
-Terminal settlement keeps the complete turn in the transcript and writes the
-immutable attempt or discussion turn to the workspace record even if the source
-overlay detached while the request was in flight; this bounded duplication
-keeps chronological presentation separate from durable follow-up context.
-The native FSM terminal transition or ACP terminal response captures the final
-patch before a shared terminal callback and publication transaction, including
-on abort. The provider's earlier raw abort callback does not settle the directive.
-Callbacks inspect engine context through the same accessor; external turns own
-that context on their admitted request without a synthetic gptel FSM.
-Overlay updates remain optional presentation work. A successful implementation
-records immutable snapshots of, then consumes, exactly the subdirectives present
-at dispatch. Failure and abort consume none; details authored while a request is
-in flight remain current.
-
-Batch processing queues durable top-level directive records in stable source
-order rather than retaining source overlays. Each item resolves the same live
-prompt context used by an individual action only when its turn begins, so a
-prior implementation may detach or remove later source without corrupting the
-queue. Ready records use Implement and Discussed records without an attempt use
-Implement this. Either action pauses the batch at the directive approval card
-when Plan before implementation is enabled. A Source missing record has
-sufficient context only when it is top-level, bodyless, and has no nested
-details; region-backed records must be
-reattached. Records with any implementation attempt or without sufficient
-current prompt context are reported and skipped; the first failed or aborted
-request stops the batch. A zero-delay continuation starts the next item only
-after terminal request cleanup.
+Old saved sessions may still contain former directive turns. They resume as
+ordinary turns in the view and model context; no directive-specific filter or
+history inspector remains. Old note data is not migrated.
 
 ## Workspace context chain
 
@@ -379,7 +270,7 @@ workspace root through the session working directory. A successful `Read` of a
 deeper file queues any newly applicable instruction files as a host-generated
 same-turn reminder. Content hashes deduplicate unchanged files independently
 for `/root` and each retained agent only while that owner's model-visible
-context remains current. Fresh directive requests own separate hashes. Each
+context remains current. Each
 mevedel `SessionStart` context epoch resets local-history `/root`;
 resume resets local-history owners, and retained-agent compaction resets that
 agent. Native-history owners keep their learned scopes across reopening and
@@ -573,20 +464,20 @@ refresh live row details without creating transcript state.
 Request admission captures the owning request identity. Late fork-skill and
 review preparation/results are ignored after that identity is cancelled,
 replaced, or its buffer dies. Synthetic results keep their original identity
-through post-response hooks. Failed send startup and directive rollback end only
+through post-response hooks. Failed send startup rollback ends only
 their own request; nested replacement requests remain active. Interrupted agent
 startup uses the same rollback as provider errors.
 
 Structured model-not-found recovery may replace only the ordinary root model
-that is still selected. Directive and accepted-implementation failures do not
+that is still selected. Accepted-implementation failures do not
 change the session baseline; a failure from a superseded model likewise leaves
 the user's newer selection intact.
 
 ### Bounded native gptel sample recovery
 
 `mevedel-gptel-retry.el` adds request-local recovery only to mevedel-admitted
-native gptel requests across all backends, not just Codex OAuth: root,
-directive, shared-item, and retained-agent requests.
+native gptel requests across all backends, not just Codex OAuth: root
+(including note conversations), shared-item, and retained-agent requests.
 `mevedel-gptel-retry-max-retries` defaults to 10 retries after the initial
 attempt, at most 11 physical provider calls per
 logical model sample; zero disables this controller. Each successful sample
@@ -669,22 +560,13 @@ order (later parents win, then the child). Ordinary preset keys resolve to
 composition semantics. Persistent application is buffer- and session-local;
 request-only application is dynamically scoped for variables. Its agent roster
 and tool catalog are read by tool calls after dispatch, so they last until the
-request ends, when teardown reinstalls the session preset's. Directive dispatch
-applies the default chat preset only to a session without one. The built-ins are
-`mevedel-discuss`, used by directive Discuss, and `mevedel-implement`.
-Directive planning also uses `mevedel-implement`, bounded by its request's
-Plan read-only stamp. Request changes and Retry use ordinary implementation
-authority and focused prompt context, not another preset. Presets can also merge named model tiers and workload maps.
+request ends, when teardown reinstalls the session preset's. The built-ins are
+`mevedel-implement` and `mevedel-note`, which inherits it for note
+conversations. There is no retired-preset substitution on resume.
+Presets can also merge named model tiers and workload maps.
 Dispatch resolves session values, tier values, workload values, then explicit
 Agent policy or request-owning skill policy. Skill preset entries use
 `$skill-name` workload symbols and are consumed before request realization.
-Directive overrides are validated before processing starts and applied at
-dispatch (as the final prompt transform for gptel). They win for that request and its
-continuations without mutating the session model.
-Ordinary-chat prompt assembly also runs the directive-boundary transform in
-gptel's temporary request copy. It applies `gptel 'ignore` to complete directive
-turns there, including tool spans, while leaving the canonical response and
-`(tool . id)` properties intact for persistence and rendering.
 System prompts are assembled dynamically from ordered profiles in
 `mevedel-system.el`. `mevedel-define-prompt-component` registers reusable
 Markdown, literal text, or dynamic producers.
@@ -784,8 +666,9 @@ the stored locator against current state and permissions at dispatch. Valid
 unavailability annotates only the temporary request and continues the turn;
 malformed live data blocks submission. Input-history persistence rejects and
 quarantines incompatible binding data rather than migrating it. The supported
-kinds are a closed explicit dispatch over skill source path, reference UUID,
-absolute file pathname, and MCP server/URI; there is no resolver registry or
+kinds are a closed explicit dispatch over skill source path, note UUID (with
+reference spellings resolving to note UUIDs), absolute file pathname,
+and MCP server/URI; there is no resolver registry or
 sidecar identity store. See [`mentions.md`](mentions.md#atomic-binding-lifecycle).
 
 `mevedel-turn.el` owns top-level request admission, identity, cancellation, and
@@ -807,7 +690,7 @@ completed one: accounting, journal capture, the checkpoint, queued input, and
 Goal continuation run as usual. Errors and pending same-turn steering take
 precedence, so steering is delivered and the turn ends at the following
 boundary. The request is a transition rule added by
-`mevedel-preset--build-transitions`, which root, agent, directive, and
+`mevedel-preset--build-transitions`, which root, agent, and
 side-conversation machines all use; an agent turn ended this way settles from
 its `DONE` handler. gptel's own
 post-tool `:stop` differs: it records an error and fails the turn. Callers:
@@ -817,10 +700,9 @@ budget-limit, and edit controls, and a tool hook's `:continue nil`
 ([Hooks](hooks.md#pipeline-integration)).
 
 Terminal continuations settle once and recheck request and session ownership
-between lifecycle steps. Old patch and directive-attempt evidence remains tied
-to the captured request; an obsolete continuation cannot replace current patch
-presentation, clear a newer directive, restore its permissions, or end its
-request. Response-end markers bound delayed directive capture to the old answer.
+between lifecycle steps. Old patch evidence remains tied to the captured
+request; an obsolete continuation cannot replace current patch presentation,
+restore its permissions, or end its request.
 
 Main and agent data buffers install buffer-local gptel pre/post-tool hooks.
 The pre-tool hook preserves raw JSON distinctions, validates the call as-is,
@@ -986,9 +868,11 @@ atomic mention bindings preserve locator identity without side effects.
 Standalone/sticky Plan mode keeps session-only `ApplyPatch` available across the
 root and retained-agent tree. Any ordinary, shared, memory, or bare endpoint,
 including mixed and ordinary-only proposals, is rejected before local
-materialization. Other edit tools and `Eval` remain unavailable. Directive
-Planning remains strictly read-only and does not allow `ApplyPatch`, including
-session-only proposals, or `Eval`. The shared `local/plans/` namespace holds
+materialization. Other file-edit tools and `Eval` remain unavailable; NoteWrite
+may create review notes but cannot mutate existing ones. Requests and
+agent invocations stamped Plan read-only, such as forked skills or mail-woken
+agent turns from a Plan session, follow the same rules after Plan ends. The
+shared `local/plans/` namespace holds
 durable plans for the parent and retained agents. `work://shared/` maps to
 workspace-owned, untracked `.mevedel/shared/` for temporary working notes and
 handoffs across sessions, with agent-chosen filenames and folders. Memory

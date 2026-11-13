@@ -12,9 +12,9 @@ compaction. The gptel engine retains its real state machine, while external
 turns carry workflow context on the admitted request rather than manufacturing
 a gptel state machine.
 
-Directive admission precedes yielding file preparation and save prompts. Its
+Session request admission precedes yielding preparation. Its
 permission mode and Plan read-only stamp are explicit request inputs, so nested
-readiness work cannot consume another directive's authority. Provisional startup
+readiness work cannot consume another request's authority. Provisional startup
 cleanup belongs to the reserved request and runs on cancellation before its
 ownership is cleared; stale startup continuations and rollback cannot mutate a
 replacement. This closes the observed save-prompt admission race without adding
@@ -26,9 +26,10 @@ effects. The native conversation identity is persisted before its prompt is
 sent, so process failure leaves an uncertain turn; the next prompt must
 acknowledge current-state reconciliation before further tools. Call identities
 are unique only within the live turn. Root and child histories remain separate
-and resumable; each directive request or shared-item question starts an
-isolated native conversation from its selected context and retains no identity,
-so neither enters root native history nor rotates root segments. Only a
+and resumable, including a note conversation's ordinary session history. Each
+shared-item question starts an isolated native conversation from its selected
+context and retains no identity, so it neither enters root native history nor
+rotates root segments. Only a
 retained native identity restricts local-history operations; unstarted and
 released markers do not. The existing root interaction and agent registry
 decisions remain in
@@ -146,7 +147,7 @@ Provider readiness belongs to the harness, before root input is committed.
 Claude readiness is learned from root turn startup rather than a separate
 probe: every send's own launch is the check, and the next send is the retry. A
 failed startup leaves its cause as an informational issue, because a blocking
-one would also wedge Goal, plan and directive sends; an explicit browser retry
+one would also wedge Goal, plan and note sends; an explicit browser retry
 checks again. Configuration, login and runtime changes forget the result. Saved provider selections may fall back to
 one configured provider or the host default, with a visible notice; explicit
 invalid selections remain errors. A live provider failure moves the session only
@@ -169,8 +170,8 @@ preserves the transcript and effects.
 Bounded sample recovery stays below the admitted turn boundary for all
 mevedel-admitted native gptel backends, not just Codex OAuth. The
 `mevedel-gptel-retry` controller retries a prepared model sample up to 10 times
-after its initial attempt. Success resets that sample allowance; root,
-directive, shared-item and retained-agent requests own independent budgets.
+after its initial attempt. Success resets that sample allowance; session requests
+(including notes), shared-item and retained-agent requests own independent budgets.
 Replay bypasses WAIT preparation, retaining tools/results,
 sample count, request identity, model, effort and permissions. Attempt-local
 provisional output is rolled back and obsolete callbacks are inert. Backoff
@@ -270,6 +271,15 @@ Receipt establishes SDK acceptance, not model understanding or retention
 through later compaction.
 
 ## Decision history
+
+- **Note sessions replace directive requests, 2026-11-12:** directive admission
+  previously reserved authority before file preparation and save prompts, and
+  each directive request used fresh isolated native history without a retained
+  identity. ADR 0132 removes that special request path: a note owns an ordinary
+  session with resumable provider history and the common admission/retry path.
+  Shared-item questions remain selected-context isolated requests. The original
+  save-prompt race established why authority must be reserved before yielding;
+  removing directives does not weaken that ownership rule.
 
 - **Static native prefix, 2026-11-07:** the previous design placed complete
   current observations in the system prompt on every adapter start and restored

@@ -215,31 +215,28 @@
             (should-not (mevedel-recovery-blocker session))))
       (kill-buffer chat-buf)))
 
-  :doc "directive failures and superseded selections never change the session model"
+  :doc "superseded selections never change the session model"
   (let* ((gptel--known-backends nil)
          (backend (gptel-make-openai "Scoped" :key "test" :models '(gone chosen)))
          (fallback (gptel-make-openai "Fallback" :key "test" :models '(kept)))
-         (mevedel-model-fallback-provider "Fallback:kept"))
+         (mevedel-model-fallback-provider "Fallback:kept")
+         (selection "Scoped:chosen"))
     (ignore fallback)
-    (dolist (case '(("directive" gone) (nil chosen)))
-      (with-temp-buffer
-        (let* ((model (cadr case))
-               (selection (format "Scoped:%s" model))
-               (session (mevedel-session--create
-                         :name "scoped-failure" :root-buffer (current-buffer)
-                         :model-provider selection))
-               (request (mevedel-request--create
-                         :session session :directive-uuid (car case))))
-          (setq-local mevedel--session session
-                      gptel-backend backend gptel-model model)
-          (mevedel-test--with-captured-messages nil
-            (mevedel--turn-record-request-failure
-             (gptel-make-fsm
-              :info (list :buffer (current-buffer) :backend backend :model 'gone
-                          :mevedel-request request :position (point-marker)
-                          :http-status "404" :error '(:code "model_not_found")))))
-          (should (equal selection (mevedel-session-model-provider session)))
-          (should (eq model gptel-model)))))))
+    (with-temp-buffer
+      (let* ((session (mevedel-session--create
+                       :name "scoped-failure" :root-buffer (current-buffer)
+                       :model-provider selection))
+             (request (mevedel-request--create :session session)))
+        (setq-local mevedel--session session
+                    gptel-backend backend gptel-model 'chosen)
+        (mevedel-test--with-captured-messages nil
+          (mevedel--turn-record-request-failure
+           (gptel-make-fsm
+            :info (list :buffer (current-buffer) :backend backend :model 'gone
+                        :mevedel-request request :position (point-marker)
+                        :http-status "404" :error '(:code "model_not_found")))))
+        (should (equal selection (mevedel-session-model-provider session)))
+        (should (eq 'chosen gptel-model))))))
 
 (mevedel-deftest mevedel--turn-record-settlement
   ()

@@ -69,13 +69,9 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-agent-path-p "mevedel-structs" (path))
-(declare-function mevedel-request-directive-uuid
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-p "mevedel-structs" (cl-x))
 (declare-function mevedel-request-plan-read-only "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-permission-mode-override
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-directive-planning
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (cl-x) t)
@@ -274,6 +270,8 @@ default role also inherits the caller's effective specialist identities.
 Freezing these explicit specs preserves membership on later invocations."
   (let* ((name (mevedel-agent-name agent))
          (base (mevedel-agent--declared-specs agent)))
+    ;; Restored frozen specs still need their lazy tool groups registered.
+    (mevedel-tool-ensure "NoteWrite")
     (cond
      ((mevedel-agent-frozen-p agent) base)
      ((equal name "default")
@@ -295,7 +293,7 @@ Freezing these explicit specs preserves membership on later invocations."
      (t
       (cl-delete-duplicates
        (append base
-               '((:tool "ToolSearch") (:tool "ToolCall"))
+               '((:tool "ToolSearch") (:tool "ToolCall") (:discoverable notes))
                mevedel-agent--communication-tool-specs
                (when (mevedel-agent--specs-contain-tool-p base "Agent")
                  mevedel-agent--control-tool-specs))
@@ -325,7 +323,7 @@ so without them it would lack workspace guidance and environment facts."
             (mevedel-agent-invocation-agent owner)))
         (cl-remove-if (lambda (name)
                         (memq name mevedel-agent--root-only-components))
-                      mevedel-system-retained-components)))))
+                      (mevedel-system-context-components mevedel--session))))))
 
 (defun mevedel-agent-resolve-role (role)
   "Resolve optional ROLE to an agent definition or signal a user error."
@@ -560,15 +558,6 @@ the ambient agent invocation's root session."
                 (mevedel-agent-invocation-parent-session
                  mevedel--agent-invocation))))))
 
-(defun mevedel-plan-directive-p (&optional session request)
-  "Return non-nil when Plan authority belongs to directive planning."
-  (or (and session (mevedel-session-directive-planning session))
-      (let ((request (or request
-                         (and (boundp 'mevedel--current-request)
-                              mevedel--current-request))))
-        (and (mevedel-request-p request)
-             (mevedel-request-directive-uuid request)))))
-
 (defun mevedel-agent-invocation-require-path (invocation)
   "Return INVOCATION's canonical path, or signal an error."
   (let ((path (mevedel-agent-invocation-path invocation)))
@@ -767,8 +756,7 @@ BUFFER defaults to the current buffer."
 
 If PRESET-NAME is non-nil and declares an `:agents' entry in
 `mevedel-preset--registry', only those agents are registered -- an
-explicit empty declaration registers none, which is what a preset like
-`mevedel-discuss' means by `:agents ()'.  A preset with no `:agents'
+explicit empty declaration registers none.  A preset with no `:agents'
 key at all registers the whole registry.
 
 Populates the request-local role roster and installs its Agent schema.  Must

@@ -45,7 +45,7 @@ test('activity summaries preserve failures, children and disclosure at phone and
           // The request's closing rule follows its activity, outside the group.
           const old = target.querySelector('[data-record-id="summary-1"]');
           const closing = window.mevedelTranscriptRenderer.renderRecord({id: 'summary-1',
-            kind: 'request-summary', text: label, details, directive: 'dir-1'}, () => ({label: 'Dir'}), null, old);
+            kind: 'request-summary', text: label, details, item: 'board-1'}, () => ({label: 'Dir'}), null, old);
           if (old) old.replaceWith(closing); else target.append(closing);
           window.mevedelTranscriptRenderer.groupActivity(target);
           window.mevedelTranscriptRenderer.markContinuations(target);

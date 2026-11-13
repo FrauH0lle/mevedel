@@ -18,9 +18,8 @@ consumes its lifecycle and retained-summary events. It does not request another
 summary from a model. A completed root compaction publishes a successor segment
 with Claude's summary through the ordinary segment transaction. A retained
 child uses its private transcript archive and keeps its task anchor; its
-compaction never replaces root history. Fresh directive conversations do not
-advertise this segment operation, because their selected history cannot replace
-the containing session's root history.
+compaction never replaces root history. Note conversations own their root
+session history and use its normal compaction path.
 
 The boundary follows gptel's insertion marker when compaction starts. Output
 received after that boundary is preserved as a tail after the summary, so a
@@ -119,8 +118,8 @@ it to the already-pending request and resumes that same request without
 rerunning `UserPromptSubmit`. Failed or blocked compaction runs neither event.
 Retained-agent compaction runs `PostCompact` but no start hook.
 
-Rebuilding a root tool continuation also restores the active Plan reminder,
-including directive planning, through the normal reminder injection transaction.
+Rebuilding a root tool continuation also restores the active Plan reminder
+through the normal reminder injection transaction.
 The workflow's proposal format and tool limits therefore remain explicit even
 when the summary omits the reminder delivered earlier in the turn.
 
@@ -550,12 +549,9 @@ not create fake preserved turns.
 Compaction consumes the transcript module's detailed structural types rather
 than maintaining an independent control-form classifier.
 
-Directive boundaries participate in the same structural scan. Directive turns
-are excluded from the ordinary-chat summary request, and any directive turn
-copied into the verbatim tail keeps both boundary records and its canonical
-user, response, and tool roles. The next ordinary request can therefore project
-the retained turn out again without losing MevView rendering or directive turn
-identity.
+Former directive turns in old sessions participate as ordinary conversation
+turns in summary requests and preserved tails. There is no directive-boundary
+filter or special turn identity.
 
 Tool blocks in both the preserved tail and summary request body are made
 structurally safe under character caps: persisted `#+begin_tool` /

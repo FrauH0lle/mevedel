@@ -277,12 +277,7 @@
                           (gptel-make-fsm :info (list :buffer (current-buffer)))
                           mevedel--agent-invocation))
         (let ((mevedel-tools--current-engine owner))
-          (should (equal '("ApplyPatch" "Imenu") (mevedel-tool-ptc--roster)))))
-      ;; Root directive Planning is stricter: no ApplyPatch route either.
-      (setq-local mevedel--agent-invocation nil
-                  mevedel--current-request
-                  (mevedel-request--create :plan-read-only t :directive-uuid "directive"))
-      (should (equal '("Monitor" "Imenu") (mevedel-tool-ptc--roster))))))
+          (should (equal '("ApplyPatch" "Imenu") (mevedel-tool-ptc--roster))))))))
 
 (mevedel-deftest mevedel-tool-ptc--call-template ()
   ,test

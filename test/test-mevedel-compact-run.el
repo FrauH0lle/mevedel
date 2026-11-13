@@ -302,7 +302,7 @@
       (should (eq ready
                   (mevedel-compact-run--state-summary-ready state)))))
 
-  :doc "omits complete directive turns from summarizer history"
+  :doc "keeps old directive turns in summarizer history as ordinary turns"
   (with-temp-buffer
     (insert "ordinary before\n")
     (insert (mevedel--format-hook-audit-record
@@ -324,8 +324,8 @@
       (let ((history (mevedel-compact-run--state-old-content state)))
         (should (string-match-p "ordinary before" history))
         (should (string-match-p "ordinary after" history))
-        (should-not (string-match-p "directive prompt" history))
-        (should-not (string-match-p "directive answer" history))))))
+        (should (string-match-p "directive prompt" history))
+        (should (string-match-p "directive answer" history))))))
 
 (mevedel-deftest mevedel-compact-run-start (:quiet t)
   ,test

@@ -100,8 +100,7 @@
 ;; `mevedel-compact-run'
 (defvar mevedel-compact-run-cancel)
 
-;; `mevedel-directive-plan'
-(autoload 'mevedel-directive-plan-restore-pending "mevedel-directive-plan")
+
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-acknowledge-unknown
@@ -324,20 +323,6 @@ query completes."
 (defvar mevedel--diff-preview-buffer-name "*mevedel-diff-preview*"
   "Name of the `diff' preview buffer.")
 
-(defcustom mevedel-show-chat-buffer 'frame
-  "How a directive request displays its execution-session view.
-
-`frame' opens a directive frame anchored at the directive, without
-taking focus.  `window' displays the view in an ordinary window using
-`gptel-display-buffer-action'.  nil displays nothing.
-
-A directive frame falls back to a window wherever child frames are
-unavailable, so `frame' is safe on a terminal."
-  :type '(choice (const :tag "Directive frame" frame)
-                 (const :tag "Ordinary window" window)
-                 (const :tag "Do not display" nil))
-  :group 'mevedel)
-
 ;;
 ;;; Buffer management
 
@@ -449,8 +434,10 @@ session."
                       (run-hook-wrapped
                        'kill-buffer-hook
                        (lambda (hook)
-                         (let ((kill-buffer-hook nil))
-                           (ignore-errors (funcall hook)))
+                         (when (buffer-live-p buffer)
+                           (with-current-buffer buffer
+                             (let ((kill-buffer-hook nil))
+                               (ignore-errors (funcall hook)))))
                          nil))))))
             (with-current-buffer buffer
               (when discard-modifications (set-buffer-modified-p nil))
@@ -711,7 +698,7 @@ M-x mevedel-retry-plan-implementation resumes it")))
     (require 'mevedel-goal)
     ;; Install the mevedel-augmented FSM handler chain as the buffer-local
     ;; `gptel-send--handlers' so every request from this buffer -- whether
-    ;; driven by `gptel-send', `mevedel--process-directive', or
+    ;; driven by `gptel-send' or
     ;; `mevedel--implement-plan' -- picks up the deferred-tool WAIT handler
     ;; and the terminal-state handlers (patch generation, callbacks,
     ;; cleanup, turn-count increment).  Building once at setup time keeps
@@ -773,8 +760,6 @@ M-x mevedel-retry-plan-implementation resumes it")))
     (mevedel-view--ensure buf)
     (when (mevedel-session-plan-mode mevedel--session)
       (mevedel-plan-mode-restore-pending-approval mevedel--session buf))
-    (when (mevedel-workspace-directives workspace)
-      (mevedel-directive-plan-restore-pending mevedel--session buf))
     (unless inspection-p
       (mevedel--run-session-start-hooks source))))
 
@@ -870,8 +855,10 @@ Dedicated artifact conversations remain reachable through their artifacts;
 each says so itself, so no artifact needs reading."
   (cl-remove-if
    (lambda (entry)
-     (mevedel-session-dedicated-artifact
-      (buffer-local-value 'mevedel--session (cdr entry))))
+     (let ((session (buffer-local-value 'mevedel--session (cdr entry))))
+       (or (mevedel-session-dedicated-artifact session)
+           (and (eq (mevedel-session-preset-name session) 'mevedel-note)
+                (not (mevedel-session-forked-from-session-id session))))))
    (mevedel--workspace-sessions workspace)))
 
 (defun mevedel--pick-session (sessions default)
@@ -895,7 +882,8 @@ Completion labels include identity, because display names need not be unique."
   (with-current-buffer chat-buffer
     (unless (mevedel-session-preset-name mevedel--session)
       (mevedel-preset-apply
-       (alist-get mevedel-default-chat-preset mevedel-action-preset-alist)))))
+       (or (alist-get mevedel-default-chat-preset mevedel-action-preset-alist)
+           'mevedel-implement)))))
 
 (defun mevedel--display-chat-buffer (chat-buffer)
   "Ensure CHAT-BUFFER has a preset and display its view."
@@ -1012,11 +1000,19 @@ One of those settles the turn and clears `mevedel--current-request\'."
       (maphash (lambda (filepath _original) (push filepath paths)) snapshots))
     (dolist (filepath (sort paths #'string<))
       (let* ((original (gethash filepath snapshots))
+             coding
              (current (when (file-regular-p filepath)
                         (with-temp-buffer
                           (insert-file-contents filepath)
+                          (setq coding last-coding-system-used)
                           (buffer-string))))
              (relpath (file-relative-name filepath workspace-root)))
+        ;; Captures are literal bytes for Rewind.  This diff is presentation,
+        ;; like the decoded current file above, not a file-history snapshot.
+        (when (stringp original)
+          (setq original
+                (decode-coding-string
+                 original (or coding (detect-coding-string original t) 'undecided))))
         ;; Generate diff if file changed, was deleted, or was created
         (when (and (not (and (listp original)
                              (plist-get original :gap)))
@@ -1055,26 +1051,6 @@ One of those settles the turn and clears `mevedel--current-request\'."
                 ;; Abort stops producers, not the final review of their effects.
                 nil t)))))
       (next))))
-
-(defun mevedel--directive-capture (request)
-  "Return file coverage metadata captured by REQUEST."
-  (let (covered gaps untracked-effects)
-    (when request
-      (setq untracked-effects
-            (copy-tree (mevedel-request-untracked-effects request)))
-      (maphash
-       (lambda (path original)
-         (if (and (listp original) (plist-get original :gap))
-             (push (cons path (plist-get original :gap)) gaps)
-           (push path covered)))
-       (mevedel-request-file-snapshots request)))
-    (list :capture (if (or gaps untracked-effects) 'incomplete 'complete)
-          :covered-files (sort covered #'string<)
-          :gaps (sort gaps (lambda (left right)
-                             (string< (car left) (car right))))
-          :untracked-effects
-          (sort untracked-effects
-                (lambda (left right) (string< (car left) (car right)))))))
 
 (defun mevedel--replace-patch-buffer (patch-content)
   "Replace patch buffer contents with PATCH-CONTENT.
@@ -1343,7 +1319,7 @@ The effective model and effort apply only to this request, not saved selection."
             (if (and mevedel--session (mevedel-session-audit-session mevedel--session))
                 (mevedel-claude-code-btw-send (or model-input native-input) policy)
               (mevedel-claude-code-send (or model-input native-input) policy))
-          (when (and mevedel--session (not mevedel--current-directive-uuid)
+          (when (and mevedel--session
                      (assoc "root" (mevedel-session-external-conversations mevedel--session)))
             (mevedel-claude-code-release-history mevedel--session))
           (setq-local mevedel--pending-model-input model-input)

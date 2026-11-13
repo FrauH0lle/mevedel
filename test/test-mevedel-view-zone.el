@@ -554,48 +554,42 @@
       (should (eq fragment-action
                   (get-text-property (1+ (point)) 'mevedel-view-zone-activate))))))
 
-(mevedel-deftest mevedel-view-zone-reconcile-read-only-end ()
-  (let ((inspector ,inspector))
-    (require 'mevedel-directive-activity)
-    (mevedel-view-test--with-buffers
-      (save-window-excursion
-        (switch-to-buffer view-buf)
-        (delete-other-windows)
-        (if inspector
-            (mevedel-directive-activity-mode)
-          (setq-local mevedel-view--agent-transcript-p t))
-        ;; Both read-only surfaces keep layout markers at EOF, not a composer.
-        (let ((inhibit-read-only t)
-              (inhibit-modification-hooks t))
-          (erase-buffer)
-          (dotimes (n 100) (insert (format "history %d\n" n)))
-          (setq-local mevedel-view--status-marker (copy-marker (point) t)
-                      mevedel-view--interaction-marker (copy-marker (point) t)
-                      mevedel-view--input-marker (copy-marker (point) nil)))
-        (mevedel-view-zone-reconcile
-         'status mevedel-view--status-marker mevedel-view--status-marker
-         (list (list :namespace 'status :id 'work
-                     :body (mapconcat #'identity
-                                      (make-list 3 (make-string 50 ?x)) "\n"))))
-        (goto-char (point-max))
-        (set-window-start nil (save-excursion (vertical-motion -6) (point)) t)
-        (mevedel-view-zone-clear 'status)
-        ;; Without an editable composer, net-tail shrink fills the last page.
-        ;; Treating the EOF marker as a composer instead preserves six rows.
-        ;; Reserve a row for the empty EOF line too: a start one row too early
-        ;; leaves EOF outside the viewport, despite filling all history rows.
-        (should (= (1- (window-body-height))
-                   (save-excursion
-                     (goto-char (window-start))
-                     (vertical-motion (window-body-height)))))
-        (should (= (window-start)
-                   (save-excursion
-                     (goto-char (point-max))
-                     (vertical-motion (- (1- (window-body-height))))
-                     (point)))))))
-  (inspector)
-  :doc "agent transcript EOF is not an editable composer anchor" nil
-  :doc "directive inspector EOF is not an editable composer anchor" t)
+(mevedel-deftest mevedel-view-zone-reconcile-read-only-end
+  (:doc "agent transcript EOF is not an editable composer anchor")
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (setq-local mevedel-view--agent-transcript-p t)
+      ;; A read-only surface keeps layout markers at EOF, not a composer.
+      (let ((inhibit-read-only t)
+            (inhibit-modification-hooks t))
+        (erase-buffer)
+        (dotimes (n 100) (insert (format "history %d\n" n)))
+        (setq-local mevedel-view--status-marker (copy-marker (point) t)
+                    mevedel-view--interaction-marker (copy-marker (point) t)
+                    mevedel-view--input-marker (copy-marker (point) nil)))
+      (mevedel-view-zone-reconcile
+       'status mevedel-view--status-marker mevedel-view--status-marker
+       (list (list :namespace 'status :id 'work
+                   :body (mapconcat #'identity
+                                    (make-list 3 (make-string 50 ?x)) "\n"))))
+      (goto-char (point-max))
+      (set-window-start nil (save-excursion (vertical-motion -6) (point)) t)
+      (mevedel-view-zone-clear 'status)
+      ;; Without an editable composer, net-tail shrink fills the last page.
+      ;; Treating the EOF marker as a composer instead preserves six rows.
+      ;; Reserve a row for the empty EOF line too: a start one row too early
+      ;; leaves EOF outside the viewport, despite filling all history rows.
+      (should (= (1- (window-body-height))
+                 (save-excursion
+                   (goto-char (window-start))
+                   (vertical-motion (window-body-height)))))
+      (should (= (window-start)
+                 (save-excursion
+                   (goto-char (point-max))
+                   (vertical-motion (- (1- (window-body-height))))
+                   (point)))))))
 
 (mevedel-deftest mevedel-view-zone--anchor-start
   (:doc "returns the start of the anchor run, bounded by the fragment start")

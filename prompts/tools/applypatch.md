@@ -14,11 +14,11 @@ user's feedback asks for a revision.
   Keep authored addresses in patch markers.
 - Standalone or sticky Plan mode permits only session-owned `work://`
   descendants, such as `work://plans/current.md`, for every source/destination.
+  Requests carrying inherited Plan limits follow the same rule.
   Shared, memory, ordinary, malformed, and root-only endpoints are denied before
   materialization. Outside Plan mode, resource and ordinary paths may share one
   atomic proposal, subject to permission/review. `work://shared/...` belongs to
   the workspace and follows normal edit permissions and review.
-- Directive Planning remains read-only even for session working files.
 - Understand the relevant contents before changing them. Unsaved buffer edits
   are rejected; existing user changes must be preserved.
 - The basic grammar is:

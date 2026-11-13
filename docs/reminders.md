@@ -174,13 +174,13 @@ sample boundaries; see [Agents](agents.md) for their sample accounting.
 
 - **Plan-mode workflow:** the first delivered `plan-mode` reminder
   describes read-only project inspection, unavailable Eval, session-only
-  ApplyPatch in standalone/sticky Plan, and no writes in directive Planning.
+  ApplyPatch in standalone/sticky Plan, including note conversations.
   It retains exploration-first behavior,
   replacement semantics, exact proposal tags, and the preferred
   proposal shape. Subsequent turns, including continuation after compaction,
   use a one-line reference with exact tags and a recovery pointer to
   [Proposal guidance](plan-mode.md#proposal-guidance). A new sticky Plan episode
-  or directive planning conversation rearms the template; feedback does not.
+  rearms the template; feedback does not.
 - **Mode constraints:** one advisory on initial delivery and each effective
   permission-mode change, including request overrides and returning to Ask.
   Unchanged modes never repeat it. Full Access, default protected paths,
@@ -281,8 +281,8 @@ or restore. If all selected sections are absent, all are delivered again. Explic
   `AGENTS.local.md` files as turn events, ordered broad to narrow and
   deduplicated by owner, path, and content. Delivery is acknowledged only at
   payload injection or exact native SDK receipt, so cancellation leaves the
-  guidance eligible for retry. Fresh directive requests keep their own hashes;
-  root history cannot suppress their guidance. Local compaction, rewind, and
+  guidance eligible for retry. Each note conversation owns its session's hashes;
+  another chat cannot suppress its guidance. Local compaction, rewind, and
   cold resume reset the relevant local-history delivery acknowledgements.
   Native conversations keep their learned scopes across reopening; prompts
   re-send only changed instructions, and native compaction restores all of

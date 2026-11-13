@@ -42,8 +42,8 @@ Single decision function `mevedel-check-permission`. Decision chain:
 2. Deny rules (across all buckets — see bucket precedence below)
 3. Workflow restrictions: standalone/sticky Plan denies native edit tools and
    Eval, except ApplyPatch whose every operand is a session-owned `work://`
-   descendant. Directive Planning denies all native edits and Eval. These
-   restrictions apply regardless of allow rules or permission mode. An agent
+   descendant. These restrictions apply regardless of allow rules or
+   permission mode. An agent
    turn started under Plan keeps them for its lifetime through its Plan
    read-only stamp.
 4. Full Access bypasses ordinary asks, resource defaults and review; explicit
@@ -168,10 +168,6 @@ session rules, persistent rules, defcustom `mevedel-permission-rules`.
 - Step 2 (deny) is absolute — any bucket's `deny` wins.
 - Step 5 (allow/ask) is innermost-first — the first bucket yielding any
   decision wins.
-- Directive discussion installs request-scoped denies for every registered
-  mutation-capable tool and for mutation-capable delegation. These denies are
-  a hard capability ceiling: broader session, workspace, or global allows
-  cannot enable mutation during that discussion request.
 - Goals use the same tool permission chain as ordinary root conversation turns.
   An accepted-plan Goal may supply a durable implementation mode for its active
   root turns, but neither Goal lifecycle nor that policy changes the session's
@@ -182,8 +178,7 @@ session rules, persistent rules, defcustom `mevedel-permission-rules`.
   Goal resume reuse the accepted policy. Ordinary chat with a paused, blocked,
   budget-limited, or complete Goal uses the baseline. An admitted turn keeps its
   captured override through settlement.
-- Directive implementation selections use the same request-local mode path.
-  Summary, control, unrelated child, and directive requests do not inherit an
+- Summary, control, and unrelated child requests do not inherit an
   ambient Goal implementation policy. No policy snapshot is restored at
   settlement, so concurrent user changes to session defaults are not overwritten.
 
@@ -1390,8 +1385,8 @@ rules still win absolutely.
 Trusted skill expansion cannot create an interactive prompt and therefore
 requires existing authority, typically from the skill's `allowed-tools:
 [Eval]`.
-Standalone/sticky Plan mode withholds Eval regardless of this authority;
-directive Planning also withholds it. Goal turns use ordinary Eval policy. Markers
+Standalone/sticky Plan mode withholds Eval regardless of this authority.
+Goal turns use ordinary Eval policy. Markers
 introduced by argument
 substitution are not trusted literals and are left as text.
 Literal markers may still contain substituted text in their expression

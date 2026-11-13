@@ -259,10 +259,9 @@
     return 'ai';
   }
 
-  // The discussion a record belongs to: a directive id, `item:ID` for a
-  // shared item or artifact conversation, or null for the main chat.
+  // The discussion a record belongs to: `item:ID` for a shared item or
+  // artifact conversation, or null for the main chat.
   function scopeKey(record) {
-    if (record.directive) return record.directive;
     return typeof record.item === 'string' && record.item ? `item:${record.item}` : null;
   }
 
@@ -280,10 +279,8 @@
     } else {
       who.append(el('span', 'name', 'Tool'));
     }
-    // A turn in a directive or item discussion names it; the chip is also
-    // the way to switch the room into that discussion to reply there.  A
-    // view already inside that discussion supplies no chip.  A deleted
-    // item's turns keep their name but have no discussion to switch to.
+    // Chips open an item conversation. A deleted item's turns keep their
+    // name but have no conversation to switch to.
     const scope = scopeKey(record);
     const chip = scope && scopeChip(scope);
     if (chip) {

@@ -608,12 +608,8 @@ a turn, including retained agents awaiting admission or terminal publication.
 A host can wait for it to return nil before restarting a daemon whose rooms
 are idle.
 
-Questions that are only offers are skipped where nobody can be asked: a
-directive turn's offer to save modified file buffers leaves the host's buffers
-alone. The cockpit refuses to open, so a bare `/goal` from a guest is refused
-rather than opening a menu on the host's screen. A guest can scope a message
-only to a directive bound to the room's own session, since another session's
-directive would run, and maybe restore, that session.
+The cockpit refuses to open, so a bare `/goal` from a guest is refused
+rather than opening a menu on the host's screen.
 
 Steps that run without the guard never ask either. Tool calls are confirmed by
 mevedel's permission pipeline, whose prompts room participants can answer, so
@@ -1108,20 +1104,17 @@ trash is their safety net.
 
 ## Scoped prompts and attachments
 
-Directives and shared items are the room's discussions. Records inside a
-directive turn carry its id and records inside a shared-item turn carry the
-item's id, so the filter strip lists **Main chat**, each directive (◆) and
-each whiteboard, document or artifact with turns (◇), with **All** at its far
+Shared items are the room's discussions. Records inside a shared-item turn carry
+the item's id, so the filter strip lists **Main chat** and each whiteboard,
+document or artifact with turns (◇), with **All** at its far
 end. **Main chat** is the default and hides every discussion; a tab whose
 discussion disappears falls back to it. **All** appears only when it shows
 more than **Main chat**. A turn's discussion chip selects that discussion too.
 A deleted item has no tab: its turns stay under **All** with a disabled chip
 marked **deleted** (see [deleting](shared-editing.md#deleting)).
 
-Selecting a directive scopes ordinary guest text to discussion of that directive;
-the host rechecks its workspace identity on receipt. A missing or invalid
-directive selection falls back to ordinary chat. Explicit command/skill
-invocations use their own route instead of inheriting the directive scope.
+Former directive turns in old sessions are ordinary main-chat turns, without
+separate tabs or composer scopes.
 
 Selecting a shared item sends the composer's text to the assistant in that
 item's general [discussion](#discussions), the same way the item's own

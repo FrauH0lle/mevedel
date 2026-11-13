@@ -11,8 +11,10 @@
           "helpers"))
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-conversation)
-(require 'mevedel-directive)
+(require 'mevedel-notes)
+(require 'mevedel-persistence)
 (require 'mevedel-view)
+(require 'mevedel-view-agent)
 (require 'mevedel-view-audit)
 (require 'mevedel-view-render)
 (require 'mevedel-view-segments)
@@ -327,48 +329,6 @@
                        (mapcar (lambda (turn) (plist-get turn :role)) turns)))
         (should (eq 'task-background
                     (caar (plist-get (car turns) :segments))))))))
-
-(mevedel-deftest mevedel-view--directive-ranges ()
-  ,test
-  (test)
-  :doc "caches by buffer tick and request directive without exposing its memo"
-  (with-temp-buffer
-    (setq-local
-     mevedel--current-request
-     (mevedel-request--create :id "request" :directive-uuid "directive-1"))
-    (insert
-     (mevedel--format-hook-audit-record
-      '(:type directive-turn-boundary :edge start
-        :directive-id "directive-1" :action discuss :turn 1))
-     "body"
-     (mevedel--format-hook-audit-record
-      '(:type directive-turn-boundary :edge end
-        :directive-id "directive-1" :action discuss :turn 1
-        :outcome success :sequence 1)))
-    (let* ((first (car (mevedel-view--directive-ranges (current-buffer))))
-           (render-id (plist-get first :render-id))
-           (second (car (mevedel-view--directive-ranges (current-buffer)))))
-      (should (eq render-id (plist-get second :render-id)))
-      (should-not (eq first second))
-      (plist-put first :action 'mutated)
-      (should (eq 'discuss
-                  (plist-get
-                   (car (mevedel-view--directive-ranges (current-buffer)))
-                   :action)))
-      (setf (mevedel-request-directive-uuid mevedel--current-request)
-            "directive-2")
-      (let ((request-invalidated
-             (plist-get
-              (car (mevedel-view--directive-ranges (current-buffer)))
-              :render-id)))
-        (should-not (eq render-id request-invalidated))
-        (goto-char (point-max))
-        (insert "tail")
-        (should-not
-         (eq request-invalidated
-             (plist-get
-              (car (mevedel-view--directive-ranges (current-buffer)))
-              :render-id)))))))
 
 
 (mevedel-deftest mevedel-view--tool-one-liner ()
@@ -1309,7 +1269,7 @@
             (should (search-forward ":fragment-ids" nil t))))
       (when-let* ((buf (get-buffer mevedel-view-render-debug-buffer-name)))
         (kill-buffer buf))))
-  :doc "keeps the newest turn expanded while folding older directive turns"
+  :doc "renders old directive turns as ordinary expanded turns"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
       (insert
@@ -1338,105 +1298,16 @@
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should
-         (string-search
-          "◆ directi… · Discuss · T3 · Discussed · RET: actions"
-          text))
-        (should (string-search "Complete answer." text))
-        (should-not (string-search "Earlier answer." text))
-        (goto-char (point-min))
-        (search-forward "RET: actions")
-        (let ((preview (get-text-property
-                        (match-beginning 0) 'mevedel-view-prompt-preview)))
-          (should (string-match-p "Earlier question" preview))
-          (should-not (string-match-p "Full request" preview)))
-        (let ((face (get-text-property (match-beginning 0) 'face)))
-          (should (eq 'shadow (plist-get face :inherit)))
-          (should
-           (equal (face-attribute 'mevedel-view-user-header
-                                  :foreground nil 'default)
-                  (plist-get face :overline))))
-        (should (eq (get-text-property (line-beginning-position)
-                                       'mouse-face)
-                    'highlight))
-        (should (eq (get-text-property (line-end-position) 'mouse-face)
-                    'highlight))
-        (should-not (get-text-property (1+ (line-end-position))
-                                       'mouse-face))
-        (goto-char (point-min))
-        (search-forward "excluded from model context")
-        (let ((preview (get-text-property
-                        (line-beginning-position) 'mevedel-view-prompt-preview)))
-          (should (string-match-p "Explain this" preview))
-          (should-not (string-match-p "Full request" preview)))
-        (should-not (get-text-property (line-end-position) 'mouse-face)))
-      (goto-char (point-min))
-      (search-forward "T3")
-      (mevedel-view-toggle-section)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
-        (should (string-search "excluded from model context" text))
-        (should (string-search "Prompt" text))
+        (should-not (string-search "RET: actions" text))
+        (should-not (string-search "excluded from model context" text))
+        (should-not (string-search "directive-turn-boundary" text))
+        (should-not (string-search "Full request" text))
         (should (string-search "Earlier answer." text))
         (should (string-search "Complete answer." text))
-        (should-not (string-search "\nAssistant\n" text)))
-      (mevedel-view--full-rerender)
-      (should (string-search "Earlier answer."
-                             (buffer-substring-no-properties
-                              (point-min) mevedel-view--input-marker)))
-      (should (string-search "Complete answer."
-                             (buffer-substring-no-properties
-                              (point-min) mevedel-view--input-marker)))
-      (should-error (mevedel-view-fork-point-at-point)
-                    :type 'user-error)))
-
-  :doc "dispatches state-correct actions from a rendered directive turn"
-  (let* ((attempt
-          (mevedel-directive-attempt--create
-           :sequence 1 :action 'implement
-           :checkpoint '(:session-id "main" :turn 3)))
-         (workspace
-          (mevedel-workspace--create
-           :type 'file :id "directive-actions" :root "/tmp"
-           :name "directive-actions"))
-         (record
-          (mevedel-directive--create
-           :id "directive-1" :request "Explain this" :state 'discussed
-           :anchor '(:state source-missing)
-           :attempts (list attempt)
-           :discussion
-           (list
-            (mevedel-directive-discussion-turn--create
-             :sequence 2 :attempt-index 1))))
-         (session (mevedel-session-create "main" workspace))
-         dispatched)
-    (mevedel-workspace-set-directives workspace (list record))
-    (mevedel-view-test--with-buffers
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session)
-        (insert
-         (mevedel--format-hook-audit-record
-          '(:type directive-turn-boundary :edge start
-            :directive-id "directive-1" :action discuss :turn 4)))
-        (insert "Explain this :discuss:\n:PROMPT:\nFull request\n:END:\n")
-        (insert (propertize "Complete answer.\n" 'gptel 'response))
-        (insert
-         (mevedel--format-hook-audit-record
-          '(:type directive-turn-boundary :edge end
-            :directive-id "directive-1" :action discuss :turn 4
-            :outcome success :activity-kind discussion :sequence 2))))
-      (with-current-buffer view-buf
-        (setq-local mevedel--session session)
-        (cl-letf (((symbol-function 'read-multiple-choice)
-                   (lambda (&rest _) '(?d "continue discussion")))
-                  ((symbol-function 'mevedel-view-enter-directive-scope)
-                   (lambda (&rest args) (setq dispatched args))))
-          (mevedel-view--full-rerender)
-          (goto-char (point-min))
-          (search-forward "◆ directi…")
-          (mevedel-view-activate-at-point)
-          (should (equal (list record 'discuss 1 workspace)
-                         dispatched))))))
+        (should (= 2 (cl-count-if (lambda (line) (equal line "You"))
+                                  (split-string text "\n"))))
+        (should-not (text-property-any (point-min) mevedel-view--input-marker
+                                       'mevedel-view-turn-role 'directive)))))
 
   :doc "suppresses modification hooks while rebuilding rendered transcript"
   (mevedel-view-test--with-buffers
@@ -7200,59 +7071,6 @@
         (should (string-search "Started /root/review" text))
         (should (string-search "No issues." text))))))
 
-(mevedel-deftest mevedel-view-directive-actions ()
-  ,test
-  (test)
-  :doc "rewind resumes the real checkpoint session from a synthetic transcript"
-  (let* ((workspace
-          (mevedel-workspace--create
-           :type 'file :id "directive-rewind" :root "/tmp"
-           :name "directive-rewind"))
-         (attempt
-          (mevedel-directive-attempt--create
-           :sequence 1 :action 'implement
-           :checkpoint '(:session-id "real" :turn 2)))
-         (record
-          (mevedel-directive--create
-           :id "directive-1" :state 'implemented
-           :attempts (list attempt)))
-         captured)
-    (with-temp-buffer
-      (setq-local mevedel--data-buffer (current-buffer)
-                  mevedel--session
-                  (mevedel-session--create :authority-mode 'pid-lock :session-id "synthetic"))
-      (cl-letf (((symbol-function 'mevedel-view--directive-metadata-context)
-                 (lambda (_) (list record workspace attempt 1)))
-                ((symbol-function 'read-multiple-choice)
-                 (lambda (&rest _) '(?w "rewind")))
-                ((symbol-function
-                  'mevedel-session-rewind-rewind-checkpoint)
-                 (lambda (&rest args) (setq captured args))))
-        (mevedel-view-directive-actions
-         '(:activity-kind attempt :sequence 1))
-        (should (equal (list workspace '(:session-id "real" :turn 2) nil)
-                       captured))))))
-
-(mevedel-deftest mevedel-view--directive-turn-summary ()
-  ,test
-  (test)
-  :doc "folded implementation summaries include patch statistics"
-  (let ((attempt
-         (mevedel-directive-attempt--create
-          :patch "--- a/file\n+++ b/file\n-old\n+new\n+second\n")))
-    (with-temp-buffer
-      (insert "tool\n")
-      (put-text-property (point-min) (point-max)
-                         'mevedel-view-type 'tool-summary)
-      (cl-letf (((symbol-function 'mevedel-view--directive-metadata-context)
-                 (lambda (_directive) (list nil nil attempt 1))))
-        (should
-         (equal "◆ directi… · Implement · T2 · Implemented · 1 tool call · +2 −1 · RET: actions"
-                (mevedel-view--directive-turn-summary
-                 (point-min) (point-max)
-                 '(:directive-id "directive-1" :action implement :turn 2
-                   :outcome success :activity-kind attempt))))))))
-
 (mevedel-deftest mevedel-view--scaffolding-only-p ()
   ,test
   (test)
@@ -10276,13 +10094,7 @@
             ;; a delivery after the assistant's heading needs a new one
             (insert (header 'user "You\n") "delivered\n")
             (should (mevedel-view--live-turn-needs-header-p
-                     (point-min) (point-max) data))
-            ;; a directive request never needs one
-            (with-current-buffer data
-              (setq-local mevedel--current-request
-                          (mevedel-request--create :directive-uuid "d")))
-            (should-not (mevedel-view--live-turn-needs-header-p
-                         (point-min) (point-max) data)))
+                     (point-min) (point-max) data)))
         (kill-buffer data)))))
 
 (mevedel-deftest mevedel-view--history-boundary-target ()

@@ -105,16 +105,7 @@
     (mevedel-plan-mode-enter session)
     (should (equal selection
                    (plist-get (mevedel-session-plan-metadata session)
-                              :selection))))
-
-  :doc "rejects ordinary Plan while directive planning owns the session"
-  (let ((session
-         (mevedel-session--create
-          :authority-mode 'pid-lock
-          :name "test"
-          :directive-planning '(:directive-id "d1" :phase approval))))
-    (should-error (mevedel-plan-mode-enter session) :type 'user-error)
-    (should-not (mevedel-session-plan-mode session))))
+                              :selection)))))
 
 (mevedel-deftest mevedel-plan-mode-exit
   (:doc "leaves Plan without changing the underlying permission mode")
@@ -902,40 +893,6 @@
           (should (= (point)
                      (+ (mevedel-view--input-start) point-offset)))))))
 
-  :doc "directive approval shows only request-local controls and preserves the draft"
-  (mevedel-view-test--with-buffers
-    (let* ((session (mevedel-session--create
-                     :authority-mode 'pid-lock
-                     :name "test" :permission-mode 'edits))
-           (selection (mevedel-plan-mode--default-selection session))
-           (entry (mevedel-plan-mode--approval-entry
-                   "# Directive plan" data-buf session selection))
-           (draft "> first line\nsecond line"))
-      (plist-put entry :directive t)
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session))
-      (with-current-buffer view-buf
-        (setq-local mevedel--session session)
-        (mevedel-view-test--insert-composer-draft draft 4))
-      (setf (mevedel-session-pending-plan-approval session) entry)
-      (with-current-buffer data-buf
-        (mevedel-plan-approval-render session))
-      (with-current-buffer view-buf
-        (let* ((descriptor
-                (gethash (plist-get entry :interaction-id)
-                         mevedel-view--interaction-descriptors))
-               (body (plist-get descriptor :body))
-               (keymap (plist-get descriptor :keymap)))
-          (dolist (text '("Directive implementation" "Mode" "Model"
-                          "Skills" "Instructions" "implement" "feedback"
-                          "cancel"))
-            (should (string-search text body)))
-          (dolist (text '("Location" "Context" "Execution" "Budget" "hide"))
-            (should-not (string-search text body)))
-          (should-not (lookup-key keymap (kbd "q")))
-          (call-interactively (lookup-key keymap (kbd "m")))
-          (should (string= draft (mevedel-view--input-text)))))))
-
   :doc "hides, rebuilds, reopens, and cancels a pending approval"
   (mevedel-view-test--with-buffers
     (let* ((selection '(:location here :context current
@@ -1641,11 +1598,12 @@
                 (plist-get (mevedel-session-plan-metadata session) :status)))))
 
 (mevedel-deftest mevedel-plan-mode--next-execution
-  (:doc "toggles only Direct and Goal")
+  (:doc "cycles Direct, Goal and Buddy")
   ,test
   (test)
   (should (eq 'goal (mevedel-plan-mode--next-execution 'direct)))
-  (should (eq 'direct (mevedel-plan-mode--next-execution 'goal))))
+  (should (eq 'buddy (mevedel-plan-mode--next-execution 'goal)))
+  (should (eq 'direct (mevedel-plan-mode--next-execution 'buddy))))
 
 (mevedel-deftest mevedel-plan-mode--execution-description
   (:doc "describes one-turn and durable execution compactly")

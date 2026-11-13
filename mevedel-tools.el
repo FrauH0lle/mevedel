@@ -36,6 +36,7 @@
 (require 'mevedel-transcript-audit)
 (require 'mevedel-tool-skills)
 (require 'mevedel-tool-task)
+(require 'mevedel-tool-note)
 (require 'mevedel-tool-editing)
 (require 'mevedel-tool-ui)
 (require 'mevedel-tool-usage)
@@ -120,6 +121,7 @@
   (mevedel-tool-ui--register)
   (mevedel-tool-skills--register)
   (mevedel-tool-task--register)
+  (mevedel-tool-note-register)
   (mevedel-tool-editing--register)
   (mevedel-tool-ptc--register)
   (mevedel-tool-introspect--register)
@@ -167,8 +169,9 @@ Keep them request-local across temporary removal of all callable tools."
 
 (defun mevedel-tools-visibility (&optional owner)
   "Return a predicate of tool names visible to OWNER's next model sample.
-OWNER is a native gptel FSM or an external turn owner.  Plan and directive
-planning hide editing tools; Goal tools follow their current availability.
+OWNER is a native gptel FSM or an external turn owner.  Plan sessions and
+requests carrying inherited Plan limits hide editing tools except ApplyPatch;
+Goal tools follow availability.
 Monitor is visible only to the root, never to an agent invocation.
 Without OWNER, use the current conversation, including before admission."
   (let* ((info (and owner (mevedel-engine-info owner)))
@@ -191,19 +194,16 @@ Without OWNER, use the current conversation, including before admission."
                    (and (mevedel-request-p request)
                         (mevedel-request-plan-read-only request))
                    (and invocation
-                        (mevedel-agent-invocation-plan-read-only invocation)))))
-         (apply-patch-visible-p
-          (and plan-read-only-p (not (mevedel-plan-directive-p session request)))))
+                        (mevedel-agent-invocation-plan-read-only invocation))))))
     (lambda (name)
       (and (not (and invocation (equal name "Monitor")))
            (mevedel-tool-goal-available-p name owner)
            (not (and plan-read-only-p
                      (when-let* ((registered (or (mevedel-tool-for-call name)
                                                 (mevedel-tool-get name))))
-                       (if (equal name "ApplyPatch")
-                           (not apply-patch-visible-p)
-                         (or (equal name "Eval")
-                             (memq 'edit (mevedel-tool-groups registered)))))))))))
+                       (and (not (equal name "ApplyPatch"))
+                            (or (equal name "Eval")
+                                (memq 'edit (mevedel-tool-groups registered)))))))))))
 
 (defun mevedel-tools-native-roster (owner)
   "Return the registered tools for the current `gptel-tools' offered to OWNER.

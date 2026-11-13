@@ -1,13 +1,27 @@
-# The Directive Frame Is A Child Frame, Not An Overlay
+# The Note Frame Is A Child Frame, Not An Overlay
 
-A directive's answer should be readable and actionable without the session view
-taking over the window layout, so a directive opens a floating child frame at
-its source position showing its bound execution session's view. The frame
+Status: accepted
+
+## Current decision
+
+A note's answer should be readable and actionable without the session view
+taking over the window layout, so a note opens a floating child frame at
+its source position showing its own conversation session's view. The frame
 displays the real view buffer, so permissions, Ask, patch review, streaming,
 and the composer work in it unmodified and no second renderer exists. It takes
-focus when opened explicitly from the directive's actions and stays unfocused
+focus when opened explicitly from the note's actions and stays unfocused
 when a dispatch opens it, since a request the user just started should not move
-point.
+point. Terminals and unavailable child frames use a side window.
+
+`mevedel-note-frame.el` owns this presentation; `mevedel-note-source.el`
+coordinates source anchors and durable note records. Frame options and symbols
+use note names, with no aliases for the retired directive names.
+
+The frame displays the whole note session, including a batch's shared history.
+There is no per-directive turn filter or shared-chat composer scope. Its tab line
+shows note identity and state without taking the pinned prompt's header line.
+
+## Rationale and consequences
 
 An overlay `after-string` was the obvious cheaper surface and cannot work.
 Interactions are point-addressed: `mevedel--prompt--overlay-at-point` resolves
@@ -21,24 +35,25 @@ which is a larger change than the surface is worth. Reading a response never
 needed point, so a read-only peek would have worked; it is omitted because the
 frame subsumes it, not because it was impossible.
 
-Filtering the frame to one directive's turns uses `invisible` text properties
-and the buffer's invisibility spec, which makes the filter a property of the
-buffer rather than of the frame. An indirect buffer would give each display its
-own spec over shared text, but overlays are not shared between an indirect
-buffer and its base, so every interaction overlay would stay behind and the
-frame would show no prompts — the same failure as the overlay, reached from the
-other direction. Rendering a filtered copy into its own buffer is the hybrid
-[0091](0091-render-directive-turns-in-the-shared-session-view.md) already
-rejected for producing two renderers and two interaction owners. The frame
-therefore filters only while it is the sole window showing that view, and
-otherwise displays the full transcript positioned at the directive's turn.
-
 [0105](0105-cockpit-surfaces-follow-three-archetypes.md) does not apply. The
-directive frame is a display geometry for the primary transcript surface, not a
+note frame is a display geometry for the primary transcript surface, not a
 cockpit surface, and it adds no fourth archetype. The shared `q`/`?`/`g` key
 contract is independently impossible here: the view buffer contains an editable
-composer, so single-letter bindings would break typing. The frame binds only a
-dismiss and a filter toggle, both prefixed, and leaves the rest of the keymap to
-the view. Opening the frame enters the directive's composer scope and closing it
-leaves that scope, so a later ordinary-chat message cannot silently become a
-directive follow-up.
+composer, so single-letter bindings would break typing. Prefixed note actions
+leave ordinary characters to the composer. Closing preserves the conversation
+and draft and restores the invoking source position.
+
+## Decision history
+
+The directive frame originally displayed a bound execution session and filtered
+its transcript to one directive only while it was the view's sole window.
+Invisibility belonged to the buffer, not the frame; an indirect buffer would
+lose interaction overlays, while a separately rendered copy would duplicate
+renderers and interaction ownership. Opening entered a sticky directive composer
+scope; closing cleared it to protect ordinary-chat follow-ups.
+
+[ADR 0132](0132-notes-replace-references-directives-and-buddy-notes.md) replaces
+that binding, filter and scope with independent note sessions. Their ordinary
+view already contains exactly the conversation to display, so those mechanisms
+and the filter toggle are removed. Child-frame geometry and the point-addressed
+interaction rationale remain; the module and option rename reflects that owner.

@@ -481,24 +481,6 @@
           "ApplyPatch" :tool-struct tool :session session :mode 'full-auto
           :patch-session-only-p t
           :session-rules '(("ApplyPatch" :action deny))))))
-  :doc "directive planning denies ApplyPatch even over session-owned work descendants"
-  (let* ((mevedel-permission-rules nil)
-         (mevedel-protected-paths nil)
-         (session (mevedel-session--create
-                   :name "directive"
-                   :directive-planning
-                   '(:directive-id "d1" :phase approval)))
-         (request (mevedel-request--create
-                   :plan-read-only t :directive-uuid "d1"))
-         (tool (mevedel-tool--create
-                :name "ApplyPatch" :read-only-p nil
-                :groups '(edit reviewed-edit)))
-         (mevedel--current-request request))
-    (should
-     (eq 'deny
-         (mevedel-check-permission
-          "ApplyPatch" :tool-struct tool :session session :mode 'full-auto
-          :patch-session-only-p t))))
   :doc "read-only tool allowed in ask mode"
   (let ((mevedel-permission-rules nil)
         (mevedel-protected-paths nil)
@@ -1263,27 +1245,6 @@
                       :early-decision)))
       (should (eq 'deny (mevedel-permission-decision-raw-outcome decision)))
       (should (eq 'plan-mode (plist-get decision :via)))))
-
-  :doc "session-only patches use captured directive Plan ownership"
-  (let* ((mevedel-permission-rules nil)
-         (session (mevedel-session--create :authority-mode 'pid-lock))
-         (tool (mevedel-tool--create :name "ApplyPatch" :groups '(edit)))
-         (mevedel--agent-invocation nil))
-    (dolist (directive-p '(nil t))
-      (let* ((mevedel--current-request
-              (mevedel-request--create
-               :session session :plan-read-only t
-               :directive-uuid (unless directive-p "ambient-directive")))
-             (context
-              (mevedel-permission--invocation-context
-               :tool tool :session session :mode 'full-auto
-               :patch-session-only-p t :invocation nil
-               :request (mevedel-request--create
-                         :session session :plan-read-only t
-                         :directive-uuid (and directive-p "captured-directive")))))
-        (should (eq directive-p
-                    (eq 'plan-mode
-                        (plist-get (plist-get context :early-decision) :via)))))))
 
   :doc "resolves a named built-in tool before deriving capability facts"
   (let ((tool (mevedel-tool--create :name "Read" :read-only-p t)))

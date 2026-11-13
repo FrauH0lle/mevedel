@@ -470,7 +470,7 @@ response items, and automatic continuations do not. If an agent task is
 blocked, its additional context remains pending on that retained identity and
 is consumed once by its next accepted task; it cannot enter the root or a
 sibling conversation. Internal root flows that construct their own requests,
-such as directive processing and plan execution, do not currently fire this
+such as note send and plan execution, do not currently fire this
 event.
 
 `SessionStart :additional-context` is pending context for the next request,

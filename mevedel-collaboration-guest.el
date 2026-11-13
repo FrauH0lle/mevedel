@@ -208,7 +208,6 @@
 (autoload 'mevedel-sleep-update "mevedel-sleep")
 
 ;; `mevedel-structs'
-(declare-function mevedel-directive-id "mevedel-structs" (record))
 (declare-function mevedel-session-pending-follow-ups
                   "mevedel-structs" (session))
 (declare-function mevedel-session-set-pending-inputs
@@ -216,7 +215,6 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (session))
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (session))
-(declare-function mevedel-workspace-directives "mevedel-structs" (workspace))
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x))
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x))
@@ -1086,11 +1084,7 @@ with literal text, mutually exclusive with `:invoke'."
                            :paths paths
                            :invoke invoke
                            :skills skills
-                           :guest-role role
-                           :directive-id
-                           (unless (or invoke skills)
-                             (mevedel-collaboration--guest-directive-id
-                              room frame))))
+                           :guest-role role))
                     (when queued
                       (mevedel-collaboration--transport-send
                        (plist-get room :transport) peer
@@ -1108,24 +1102,6 @@ with literal text, mutually exclusive with `:invoke'."
                     (when (file-exists-p path)
                       (ignore-errors (delete-file path)))))))))))))
 
-(defun mevedel-collaboration--guest-directive-id (room frame)
-  "Return the directive id FRAME asks ROOM to scope its prompt to, or nil.
-
-The viewer sends the id its transcript filter is showing, which lists
-directives with activity in this room's session.  An id for a directive
-the workspace no longer has, or one bound to another session, yields
-nil, so the prompt goes to main chat instead of failing.  A room grants
-its own session only: a directive bound elsewhere would run, and maybe
-restore, another session."
-  (when-let* ((id (plist-get frame :directive))
-              ((stringp id))
-              (session (plist-get room :session))
-              (workspace (mevedel-session-workspace session))
-              (directive (cl-find id (mevedel-workspace-directives workspace)
-                                  :key #'mevedel-directive-id :test #'equal))
-              ((equal (mevedel-directive-session-id directive)
-                      (mevedel-session-session-id session))))
-    id))
 
 (defun mevedel-collaboration--utf8-text-p (bytes)
   "Return non-nil when unibyte BYTES are UTF-8 text without NUL bytes."

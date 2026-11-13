@@ -1228,10 +1228,10 @@ this collapses both shapes to the delivered text."
         (should (string-search text body))))))
 
 (mevedel-deftest mevedel-reminders-stage-plan-mode
-  (:doc "restores sticky and directive Plan guidance once, without changing history")
+  (:doc "restores sticky and read-only request Plan guidance once, without changing history")
   ,test
   (test)
-  (dolist (kind '(sticky directive inactive agent))
+  (dolist (kind '(sticky read-only-request inactive agent))
     (with-temp-buffer
       (setq-local mevedel--session
                   (unless (eq kind 'agent)
@@ -1239,7 +1239,7 @@ this collapses both shapes to the delivered text."
                      :authority-mode 'pid-lock :name "plan"
                      :plan-mode (eq kind 'sticky))))
       (setq-local mevedel--current-request
-                  (when (eq kind 'directive)
+                  (when (eq kind 'read-only-request)
                     (mevedel-request--create :plan-read-only t)))
       (insert "Compacted conversation\n")
       (let ((fsm (gptel-make-fsm :info (list :buffer (current-buffer)))))
@@ -1247,7 +1247,7 @@ this collapses both shapes to the delivered text."
         (mevedel-reminders-stage-plan-mode fsm)
         (let ((entries (plist-get (gptel-fsm-info fsm)
                                   :mevedel-reminder-entries)))
-          (if (memq kind '(sticky directive))
+          (if (memq kind '(sticky read-only-request))
               (progn
                 (should (= 1 (length entries)))
                 (should (eq 'plan-mode (plist-get (car entries) :type)))
@@ -1296,7 +1296,7 @@ this collapses both shapes to the delivered text."
     (let ((content (funcall (mevedel-reminder-content reminder) session)))
       (dolist (text '("Eval is unavailable"
                       "session-owned work:// descendants"
-                      "directive Planning permits no file writes"
+                      "requests carrying inherited Plan limits permit ApplyPatch only"
                       "Agents you start inherit these Plan limits"
                       "critique of a draft plan"
                       "Bash is limited"

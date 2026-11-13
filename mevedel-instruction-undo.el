@@ -4,7 +4,7 @@
 
 ;; Text undo does not restore overlays.  Fence edge edits and extra movements
 ;; with paired entries that install geometry after primitive text undo.
-;; Only anchors and presentations are restored, never directive activity.
+;; Only anchors and presentations are restored, never conversation activity.
 
 ;;; Code:
 
@@ -12,28 +12,17 @@
 (require 'mevedel-instruction-registry)
 (require 'mevedel-structs)
 
-;; `mevedel-directive'
-(declare-function mevedel-directive-set-anchor
-                  "mevedel-directive" (directive anchor))
-(declare-function mevedel-subdirective-set-anchor
-                  "mevedel-directive" (directive anchor))
-
-;; `mevedel-directive-source'
+;; `mevedel-note-source'
 (declare-function mevedel--delete-instruction
-                  "mevedel-directive-source" (instruction &optional buffer))
-(declare-function mevedel--directive-source-record
-                  "mevedel-directive-source" (directive))
+                  "mevedel-note-source" (instruction &optional buffer))
 (declare-function mevedel--instruction-persisted-properties
-                  "mevedel-directive-source" (instruction))
+                  "mevedel-note-source" (instruction &optional source-only))
 (declare-function mevedel--instruction-replacement-forget
-                  "mevedel-directive-source" (overlay))
+                  "mevedel-note-source" (overlay))
 (declare-function mevedel--instruction-replacement-restore
-                  "mevedel-directive-source" (overlay entry))
+                  "mevedel-note-source" (overlay entry))
 (declare-function mevedel--instruction-replacement-settle-undo
-                  "mevedel-directive-source" ())
-(declare-function mevedel--subdirective-owner
-                  "mevedel-directive-source" (directive &optional workspace))
-
+                  "mevedel-note-source" ())
 ;; `mevedel-overlay-ui'
 (declare-function mevedel--update-instruction-overlay
                   "mevedel-overlay-ui" (instruction &optional update-children))
@@ -41,18 +30,14 @@
 (defun mevedel-instruction-undo--state (overlay &optional original)
   "Snapshot OVERLAY's source state, retaining ORIGINAL's identity if supplied."
   (let* ((identity (or original overlay))
-         (record (mevedel--directive-source-record overlay))
-         (owner (mevedel--subdirective-owner overlay))
          (links (overlay-get overlay 'mevedel-links)))
     (list :overlay identity
           :start (overlay-start overlay) :end (overlay-end overlay)
-          :properties (mevedel--instruction-persisted-properties overlay)
+          :properties
+          (mevedel--instruction-persisted-properties
+           overlay (eq (overlay-get overlay 'mevedel-instruction-type) 'note))
           :replacement (overlay-get overlay 'mevedel-replacement-pending)
           :replacement-growing (overlay-get overlay 'mevedel-replacement-growing)
-          :record record :owner (car owner)
-          :anchor (copy-tree
-                   (cond ((mevedel-directive-p record) (mevedel-directive-anchor record))
-                         ((mevedel-subdirective-p record) (mevedel-subdirective-anchor record))))
           :edges
           (append
            (mapcar (lambda (id)
@@ -113,13 +98,7 @@ anchors before adjustment, detachment, or redraw changes the presentation."
           (push state before)
           (push (if (and live (overlay-buffer live))
                       (mevedel-instruction-undo--state live old)
-                    (list :overlay old
-                          :record (plist-get state :record)
-                          :owner (plist-get state :owner)
-                          :preserve-record
-                          (when-let* ((owner (plist-get state :owner)))
-                            (eq 'detached
-                                (plist-get (mevedel-directive-anchor owner) :state)))))
+                    (list :overlay old))
                 after)))
       (while (and (consp tail) (not (eq tail (aref token 0))))
         (push (car tail) prefix)
@@ -155,44 +134,18 @@ redo, so surviving overlay coordinates are never installed in the wrong text."
     (dolist (state states)
       (let* ((overlay (plist-get state :overlay))
              (uuid (overlay-get overlay 'mevedel-uuid))
-             (record (plist-get state :record))
-             (owner (plist-get state :owner))
-             ;; Detaching a parent removes nested presentations without
-             ;; retiring their durable records' reserved numeric identities.
-             (owned-id
-              (when (and owner
-                         (memq record (mevedel-directive-subdirectives owner)))
-                (plist-get (plist-get (mevedel-subdirective-anchor record)
-                                      :properties)
-                           'mevedel-id)))
-             (eligible
-              (or (not record)
-                  (and (memq (or owner record) (mevedel-workspace-directives workspace))
-                       (not (memq (plist-get (mevedel-directive-anchor (or owner record)) :state)
-                                  '(archived source-missing)))
-                       ;; Source undo cannot make successfully submitted
-                       ;; details current again.  Rewind removes the owning
-                       ;; attempt, so its restored details remain eligible.
-                       (not (and owner
-                                 (cl-some
-                                  (lambda (attempt)
-                                    (cl-find
-                                     uuid
-                                     (mevedel-directive-attempt-consumed-subdirectives
-                                      attempt)
-                                     :key #'mevedel-subdirective-id :test #'equal))
-                                  (mevedel-directive-attempts owner))))))))
-        ;; An explicit archive/removal after the edit wins over old text undo.
-        (when eligible
+             owned-id)
+        ;; Explicit note deletion wins over old source undo.
+        (when (and
+                   (not (and (eq (overlay-get overlay 'mevedel-instruction-type) 'note)
+                             (overlay-get overlay 'mevedel-marked-for-deletion))))
           (mevedel--instruction-replacement-forget overlay)
           (dolist (live (copy-sequence (alist-get buffer (mevedel--instruction-alist))))
             (when (equal uuid (overlay-get live 'mevedel-uuid))
               (setq owned-id (overlay-get live 'mevedel-id))
-              (if (and (not (plist-get state :start))
-                       (not (plist-get state :preserve-record))
-                       (not (mevedel-directive-p (mevedel--directive-source-record live))))
+              (if (not (plist-get state :start))
                   (mevedel--delete-instruction live buffer)
-                (delete-overlay live))
+                (mevedel--delete-instruction-overlay live))
               (setf (alist-get buffer (mevedel--instruction-alist))
                     (delq live (alist-get buffer (mevedel--instruction-alist))))))
           (when (plist-get state :start)
@@ -218,12 +171,6 @@ redo, so surviving overlay coordinates are never installed in the wrong text."
               (mevedel--instruction-replacement-restore overlay growing)
               (overlay-put overlay 'mevedel-replacement-pending nil)
               (overlay-put overlay 'mevedel-replacement-growing growing))
-            (when record
-              (if owner
-                  (progn
-                    (cl-pushnew record (mevedel-directive-subdirectives owner))
-                    (mevedel-subdirective-set-anchor record (copy-tree (plist-get state :anchor))))
-                (mevedel-directive-set-anchor record (copy-tree (plist-get state :anchor)))))
             (push state installed)
             (cl-pushnew overlay redraw)))))
     (dolist (state installed)

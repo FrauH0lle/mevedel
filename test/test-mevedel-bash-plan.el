@@ -119,10 +119,7 @@
             (make-directory (file-name-concat root "tmp"))
             (setf (mevedel-session-permission-mode session) 'ask
                   (mevedel-session-sandbox-mode session) 'required
-                  (mevedel-session-plan-mode session) (not (eq plan-kind 'directive))
-                  (mevedel-session-directive-planning session)
-                  (when (eq plan-kind 'directive)
-                    '(:directive-id "plan-git" :phase planning)))
+                  (mevedel-session-plan-mode session) t)
             (mevedel-tool-exec--register)
             (with-current-buffer data-buf
               (org-mode)
@@ -130,12 +127,7 @@
                           mevedel--session session
                           mevedel--workspace workspace
                           mevedel--agent-invocation invocation
-                          temporary-file-directory (file-name-concat root "tmp")
-                          mevedel--current-request
-                          (when (eq plan-kind 'directive)
-                            (mevedel-request--create
-                             :session session :directive-uuid "plan-git"
-                             :plan-read-only t))))
+                          temporary-file-directory (file-name-concat root "tmp")))
             (mevedel-view--setup view-buf data-buf)
             (with-current-buffer view-buf
               (mevedel-view-test--insert-composer-draft draft 4))
@@ -254,10 +246,6 @@
   'heuristic 'standalone
   :doc "real Bubblewrap standalone Plan Git inspection uses Tree-sitter"
   'treesit 'standalone
-  :doc "real Bubblewrap directive Plan Git inspection uses the scanner"
-  'heuristic 'directive
-  :doc "real Bubblewrap directive Plan Git inspection uses Tree-sitter"
-  'treesit 'directive
   :doc "real Bubblewrap retained-parent Plan Git inspection uses the scanner"
   'heuristic 'retained
   :doc "real Bubblewrap retained-parent Plan Git inspection uses Tree-sitter"

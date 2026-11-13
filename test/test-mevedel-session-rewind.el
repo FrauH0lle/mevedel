@@ -12,6 +12,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
 (require 'mevedel-chat)
+(require 'mevedel-notes)
 (require 'mevedel-session-rewind)
 
 
@@ -159,15 +160,16 @@
       (should (= 1 (plist-get plist :turn)))
       (should (= 3 (plist-get plist :file-turn))))
     (mevedel-workspace-clear-registry))
-  :doc "labels directive turns by identity and action"
+  :doc "old directive index records appear as ordinary prompt previews"
   (let ((session (mevedel-session--create
                   :prompt-index
                   '((1 . ((:turn 2 :file-turn 2 :cum-turn 2
                            :kind directive :directive-id "abcdef123456"
                            :action request-changes
+                           :preview "Old request"
                            :fork-point-id "directive")))))))
     (should (string-match-p
-             "◆ abcdef12 · Request changes"
+             "S1 T2  Old request"
              (caar (mevedel-session-rewind--prompt-candidates
                     session))))))
 
@@ -307,31 +309,23 @@
         (let ((text (buffer-string)))
           (should (string-match-p "Discarded session events" text))
           (should (< (string-match "Ordinary chat" text)
-                     (string-match "◆ directiv · Discuss" text))))))))
+                     (string-match "Directive two" text))))))))
 
 
 (mevedel-deftest mevedel-session-rewind-rewind-checkpoint
-  (:doc "resumes a cold session without replacing workspace directive records")
-  (let* ((record (mevedel-directive--create
-                  :id "directive" :request "Request"
-                  :anchor '(:state attached)))
-         (workspace (mevedel-workspace--create
+  (:doc "resumes a cold session and rewinds before the checkpoint turn")
+  (let* ((workspace (mevedel-workspace--create
                      :type 'file :id "checkpoint" :root "/tmp"
-                     :name "checkpoint" :directives (list record)))
+                     :name "checkpoint"))
          (session (mevedel-session--create :session-id "cold-session"))
          (buffer (generate-new-buffer " *checkpoint-rewind*"))
-         reset-records resumed restored rewound)
+         resumed rewound)
     (unwind-protect
         (progn
           (with-current-buffer buffer
             (setq-local mevedel--session session))
           (cl-letf
-              (((symbol-function
-                 'mevedel--reset-instructions-preserving-directives)
-                (lambda (_ records) (push records reset-records)))
-               ((symbol-function 'mevedel--restore-preserved-directives)
-                (lambda (_) (setq restored t)))
-               ((symbol-function 'mevedel-session-persistence-resume-id)
+              (((symbol-function 'mevedel-session-persistence-resume-id)
                 (lambda (owner session-id)
                   (setq resumed (list owner session-id))
                   buffer))
@@ -348,10 +342,6 @@
              (mevedel-session-rewind-rewind-checkpoint
               workspace '(:session-id "cold-session" :turn 4))))
           (should (equal (list workspace "cold-session") resumed))
-          (should restored)
-          (should (= 2 (length reset-records)))
-          (should (cl-every (lambda (records) (equal (list record) records))
-                            reset-records))
           (should (eq buffer (car rewound)))
           (should (= 4 (plist-get (cadr rewound) :cum-turn)))
           ;; Rewinding before an implementation discards that attempt.
@@ -579,22 +569,25 @@
              buffer session)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
-  :doc "a rolled-back Rewind keeps another session's activity and deletions"
+  :doc "a rolled-back Rewind keeps another session's note activity and deletions"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (let* ((session (mevedel-session-create "main" workspace))
-           (sid (mevedel-session-session-id session))
            (buffer (generate-new-buffer "*test-rollback-other-session*"))
            (source-file (file-name-concat tempdir "source.el"))
-           (attempt (lambda (owner turn sequence)
-                      (mevedel-directive-attempt--create
-                       :sequence sequence :action 'implement
-                       :directive-request "x" :request "x" :result "done"
-                       :outcome 'success :patch "" :capture 'complete
-                       :captured-at "2026-11-07T00:00:00+0100"
-                       :checkpoint (list :session-id owner :turn turn))))
+           (change '(:id "other-2" :session-id "other-session" :turn 2))
            (restore (symbol-function 'mevedel-session-rewind-execute-restore))
-           source mine theirs doomed)
+           (stored (lambda (uuid key)
+                     (catch 'found
+                       (dolist (file (plist-get (plist-get (mevedel-instruction-store--read
+                                                            workspace)
+                                                           :data)
+                                                :files))
+                         (dolist (instruction (plist-get (cdr file) :instructions))
+                           (let ((properties (plist-get instruction :properties)))
+                             (when (equal uuid (plist-get properties 'mevedel-uuid))
+                               (throw 'found (plist-get properties key)))))))))
+           source notes theirs doomed)
       (unwind-protect
           (progn
             (test-mevedel-session-persistence--reset-instructions)
@@ -605,20 +598,13 @@
               (dolist (line '(1 2 3))
                 (goto-char (point-min))
                 (forward-line (1- line))
-                (mevedel--create-directive-in source (point) (+ 5 (point)) nil
-                                              (format "line %d" line))))
-            (setq mine (cl-find "line 1" (mevedel-workspace-directives workspace)
-                                :key #'mevedel-directive-request :test #'equal)
-                  theirs (cl-find "line 2" (mevedel-workspace-directives workspace)
-                                  :key #'mevedel-directive-request :test #'equal)
-                  doomed (cl-find "line 3" (mevedel-workspace-directives workspace)
-                                  :key #'mevedel-directive-request :test #'equal))
-            (setf (mevedel-directive-session-id mine) sid
-                  (mevedel-directive-attempts mine) (list (funcall attempt sid 1 1))
-                  (mevedel-directive-session-id theirs) "other-session"
-                  (mevedel-directive-attempts theirs)
-                  (list (funcall attempt "other-session" 1 1))
-                  (mevedel-directive-session-id doomed) "other-session")
+                (push (mevedel-note-create (format "line %d" line)) notes)))
+            (setq theirs (overlay-get (nth 1 notes) 'mevedel-uuid)
+                  doomed (overlay-get (nth 0 notes) 'mevedel-uuid))
+            (dolist (note (list (nth 1 notes) (nth 0 notes)))
+              (overlay-put note 'mevedel-note-state 'sent)
+              (overlay-put note 'mevedel-note-session-id "other-session"))
+            (mevedel-instruction-store-sync workspace)
             (with-current-buffer buffer
               (org-mode)
               (setq-local mevedel--workspace workspace)
@@ -639,20 +625,25 @@
                           ((symbol-function 'mevedel-session-rewind-execute-restore)
                            (lambda (&rest args)
                              (prog1 (apply restore args)
-                               ;; Another session settles and deletes meanwhile;
-                               ;; then this Rewind fails and rolls back.
-                               (setf (mevedel-directive-attempts theirs)
-                                     (append (mevedel-directive-attempts theirs)
-                                             (list (funcall attempt "other-session"
-                                                            2 2))))
-                               (mevedel-workspace-remove-directive workspace doomed)
+                               ;; Another session prepares a change and deletes
+                               ;; a note meanwhile; then this Rewind fails and
+                               ;; rolls back.
+                               (let ((note (mevedel--instruction-with-uuid theirs workspace)))
+                                 (overlay-put note 'mevedel-note-prepared-change change)
+                                 (mevedel-instruction-store-touch workspace))
+                               (mevedel-note-delete
+                                (mevedel--instruction-with-uuid doomed workspace))
                                (error "Injected Rewind failure")))))
                   (should-error (mevedel-session-rewind-rewind buffer target)))))
             (should (= 1 (mevedel-session-turn-count session)))
-            (should (memq mine (mevedel-workspace-directives workspace)))
-            (should (= 1 (length (mevedel-directive-attempts mine))))
-            (should (= 2 (length (mevedel-directive-attempts theirs))))
-            (should-not (memq doomed (mevedel-workspace-directives workspace))))
+            (should (equal change
+                           (overlay-get (mevedel--instruction-with-uuid theirs workspace)
+                                        'mevedel-note-prepared-change)))
+            (should-not (mevedel--instruction-with-uuid doomed workspace))
+            ;; The held-back writes reach the store once the Rewind is over.
+            (mevedel-instruction-store-flush)
+            (should (equal change (funcall stored theirs 'mevedel-note-prepared-change)))
+            (should (eq 'closed (funcall stored doomed 'mevedel-note-state))))
         (when-let* ((impact (get-buffer "*mevedel-rewind-impact*")))
           (kill-buffer impact))
         (when (buffer-live-p source)
@@ -971,6 +962,60 @@
           (should-not (get-buffer "*mevedel-rewind-impact*")))
       (when (buffer-live-p buffer)
         (kill-buffer buffer))))
+  :doc "main-chat coverage groups repeated tools and leaves real file gaps visible"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let* ((session (mevedel-session-create "main" workspace))
+           (buffer (generate-new-buffer " *grouped-coverage*"))
+           (file (file-name-concat tempdir "source.txt"))
+           impact)
+      (unwind-protect
+          (with-current-buffer buffer
+            (org-mode)
+            (setq-local mevedel--session session mevedel--workspace workspace)
+            (write-region "unchanged\n" nil file nil 'silent)
+            (dotimes (index 30)
+              (let* ((turn (1+ index))
+                     (effects (append '(("Bash" . "shell changes are not captured"))
+                                      (when (memq turn '(5 25))
+                                        '(("Eval" . "evaluation effects are not captured"))))))
+                (mevedel-request-begin session)
+                (setf (mevedel-request-untracked-effects mevedel--current-request) effects)
+                (when (= turn 15)
+                  (puthash file '(:gap "capture failed")
+                           (mevedel-request-file-snapshots mevedel--current-request)))
+                (goto-char (point-max))
+                (let ((start (point)))
+                  (insert (format "Prompt %d\n" turn))
+                  (put-text-property start (point) 'gptel nil))
+                (insert (propertize "Reply.\n" 'gptel 'response))
+                (setf (mevedel-session-turn-count session) turn)
+                (mevedel-session-artifacts-save session buffer t)
+                (mevedel-request-end)))
+            (cl-letf (((symbol-function 'display-buffer) #'ignore)
+                      ((symbol-function 'completing-read)
+                       (lambda (_prompt choices &rest _)
+                         (or (seq-find (lambda (choice) (string-match-p "T1 " choice))
+                                       (all-completions "" choices))
+                             (ert-fail (format "First turn missing: %S" (all-completions "" choices))))))
+                      ((symbol-function 'yes-or-no-p)
+                       (lambda (&rest _)
+                         (setq impact (with-current-buffer "*mevedel-rewind-impact*" (buffer-string)))
+                         nil)))
+              (mevedel-rewind))
+            (should (string-search "incomplete (3 known gaps)" impact))
+            (should (string-match-p "gap +Bash (30 turns: shell changes are not captured)" impact))
+            (should (string-match-p "gap +Eval (2 turns: evaluation effects are not captured)" impact))
+            (should (string-search (concat file " (capture failed)") impact))
+            (with-temp-buffer
+              (insert impact)
+              (should (= 1 (how-many "^gap +Bash " (point-min) (point-max))))
+              (should (= 1 (how-many "^gap +Eval " (point-min) (point-max)))))
+            (should (= 30 (mevedel-session-turn-count session)))
+            (should (equal "unchanged\n" (mevedel-test--read-file file))))
+        (test-mevedel-session-persistence--release-and-kill buffer session)
+        (delete-directory tempdir t)
+        (mevedel-workspace-clear-registry))))
   :doc "retains the impact buffer when the commit fails"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
@@ -991,12 +1036,18 @@
                      (mevedel-session-rewind--prompt-candidates
                       session)))))
               (setf (mevedel-session-file-snapshots session)
-                    `((1 . ((,missing . (:backup-name "missing"
+                    `((1 . ((,missing . (:backup-name nil
                                          :pre-backup-name "missing"
                                          :version 1))))))
+              (mevedel-session-artifacts--file-history-write-backup
+               (mevedel-session-save-path session) "missing" "original")
               (cl-letf (((symbol-function 'display-buffer) #'ignore)
                         ((symbol-function 'yes-or-no-p)
-                         (lambda (&rest _) t)))
+                         (lambda (&rest _)
+                           (delete-file
+                            (mevedel-session-artifacts-backup-path
+                             (mevedel-session-save-path session) "missing"))
+                           t)))
                 (should-error
                  (mevedel-session-rewind-rewind buffer target)))
               (should (get-buffer "*mevedel-rewind-impact*"))
@@ -1008,15 +1059,25 @@
          buffer session)
         (delete-directory tempdir t)
         (mevedel-workspace-clear-registry))))
-  :doc "preserves serial authored directives and reattaches a restored deleted source"
+  :doc "restores a deleted source and holds back concurrent instruction-store writes"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (let ((session nil)
           (buffer nil)
           (source-buffer nil)
-          consumed-child-id
-          current-child-id
-          (source-file (file-name-concat tempdir "source.el")))
+          (source-file (file-name-concat tempdir "source.el"))
+          (stored-notes
+           (lambda (owner)
+             (sort (cl-loop
+                    for file in (plist-get
+                                 (plist-get (mevedel-instruction-store--read owner)
+                                            :data)
+                                 :files)
+                    append (cl-loop
+                            for instruction in (plist-get (cdr file) :instructions)
+                            collect (plist-get (plist-get instruction :properties)
+                                               'mevedel-note-text)))
+                   #'string<))))
       (unwind-protect
           (progn
             (test-mevedel-session-persistence--reset-instructions)
@@ -1025,278 +1086,130 @@
             (with-current-buffer source-buffer
               (setq-local mevedel--workspace workspace)
               (goto-char (point-min))
-              (search-forward "EARLY")
-              (mevedel--create-directive-in
-               source-buffer (match-beginning 0) (match-end 0) nil "Early"))
+              (mevedel-note-create "Early"))
             (setq session (mevedel-session-create "main" workspace)
-                  buffer (generate-new-buffer "*test-directive-rewind*"))
+                  buffer (generate-new-buffer "*test-note-rewind*"))
             (with-current-buffer buffer
               (org-mode)
               (setq-local mevedel--workspace workspace)
               (setq-local mevedel--session session)
-              (insert "First directive\n")
+              (insert "First note turn\n")
               (insert (propertize "First reply.\n" 'gptel 'response))
               (setf (mevedel-session-turn-count session) 1)
               (mevedel-session-artifacts-save session buffer t))
-            (let ((early (car (mevedel-workspace-directives workspace))))
-              (setf (mevedel-directive-attempts early)
-                    (list
-                     (mevedel-directive-attempt--create
-                      :sequence 1 :action 'implement
-                      :directive-request "Early" :request "Early prompt"
-                      :result "Done" :outcome 'success :patch ""
-                      :capture 'complete
-                      :captured-at "2026-08-02T03:00:00+0200"
-                      :checkpoint
-                      (list :session-id (mevedel-session-session-id session)
-                            :turn 1)))
-                    (mevedel-directive-state early) 'implemented)
-              (mevedel-directive-set-request early "Current early edit")
-              (with-current-buffer source-buffer
-                (goto-char (point-min))
-                (search-forward "LATER")
-                (let* ((start (match-beginning 0))
-                       (later-overlay
-                        (mevedel--create-directive-in
-                         source-buffer start (match-end 0) nil "Later"))
-                       (consumed-child
-                        (mevedel--create-directive-in
-                         source-buffer (1+ start) (+ start 3)
-                         nil "Consumed detail")))
-                  (setq consumed-child-id
-                        (overlay-get consumed-child 'mevedel-uuid))
-                  (overlay-put later-overlay
-                               'mevedel-test-consumed-child
-                               consumed-child)))
-              (let* ((later (car (mevedel-workspace-directives workspace)))
-                     (later-overlay
-                      (mevedel--instruction-with-uuid
-                       (mevedel-directive-id later) workspace))
-                     (consumed-child
-                      (overlay-get later-overlay
-                                   'mevedel-test-consumed-child))
-                     (consumed-snapshot
-                      (mevedel-subdirective-copy
-                       (mevedel--subdirective-record consumed-child)))
-                     (records (copy-sequence
-                               (mevedel-workspace-directives workspace)))
-                     target)
-                (setf (mevedel-directive-attempts later)
-                      (list
-                       (mevedel-directive-attempt--create
-                        :sequence 1 :action 'implement
-                        :directive-request "Later" :request "Later prompt"
-                        :result "Deleted" :outcome 'success
-                        :patch "deleted source.el" :capture 'complete
-                        :captured-at "2026-08-02T03:01:00+0200"
-                        :covered-files (list source-file)
-                        :consumed-subdirectives (list consumed-snapshot)
-                        :checkpoint
-                        (list :session-id
-                              (mevedel-session-session-id session)
-                              :turn 2)))
-                      (mevedel-directive-state later) 'implemented)
-                (with-current-buffer source-buffer
-                  (mevedel--delete-instruction consumed-child)
-                  (setq current-child-id
-                        (overlay-get
-                         (mevedel--create-directive-in
-                          source-buffer
-                          (+ 2 (overlay-start later-overlay))
-                          (1- (overlay-end later-overlay))
-                          nil "Current detail")
-                         'mevedel-uuid)))
-                (with-current-buffer buffer
-                  (mevedel-request-begin session)
-                  (puthash source-file "EARLY\nLATER\n"
-                           (mevedel-request-file-snapshots
-                            mevedel--current-request))
-                  (delete-file source-file)
-                  (goto-char (point-max))
-                  (insert "Second directive\n")
-                  (insert (propertize "Second reply.\n" 'gptel 'response))
-                  (setf (mevedel-session-turn-count session) 2)
-                  (mevedel-session-artifacts-save session buffer t)
-                  (setq target
-                        (copy-sequence
-                         (cdr
-                          (cl-find-if
-                           (lambda (entry)
-                             (= 2 (plist-get (cdr entry) :cum-turn)))
-                           (mevedel-session-rewind--prompt-candidates
-                            session)))))
-                  (mevedel-request-end)
-                  (goto-char (point-max))
-                  (insert "Ordinary later chat\n")
-                  (insert (propertize "Later reply.\n" 'gptel 'response))
-                  (setf (mevedel-session-turn-count session) 3)
-                  (mevedel-session-artifacts-save session buffer t))
-                (when (buffer-live-p source-buffer)
-                  (kill-buffer source-buffer)
-                  (setq source-buffer nil))
-                ;; Meanwhile another workspace records a directive, and
-                ;; another session of this workspace settles a turn; this
-                ;; session's Rewind must keep neither from its store.
-                (let* ((other-root (file-name-as-directory
-                                    (make-temp-file "mevedel-other-ws-" t)))
-                       (other (mevedel-workspace-get-or-create
-                               'file "other-ws" other-root "other-ws"))
-                       (other-file (file-name-concat other-root "other.el"))
-                       (same-file (file-name-concat tempdir "same.el"))
-                       (restore (symbol-function
-                                 'mevedel-session-rewind-execute-restore))
-                       other-buffer same-buffer held-back)
-                  (mevedel-workspace-identity-ensure other-root)
-                  (write-region "(defun other () t)\n" nil other-file nil 'silent)
-                  (write-region "(defun same () t)\n" nil same-file nil 'silent)
-                  (unwind-protect
-                      (progn
-                        (cl-letf (((symbol-function 'display-buffer) #'ignore)
-                                  ((symbol-function 'yes-or-no-p)
-                                   (lambda (&rest _) t))
-                                  ((symbol-function 'mevedel--run-session-start-hooks)
-                                   #'ignore)
-                                  ((symbol-function
-                                    'mevedel-session-rewind-execute-restore)
-                                   (lambda (&rest args)
-                                     (prog1 (apply restore args)
-                                       (setq other-buffer (find-file-noselect other-file))
-                                       (with-current-buffer other-buffer
-                                         (setq-local mevedel--workspace other)
-                                         (mevedel--create-directive-in
-                                          other-buffer 1 6 nil "elsewhere"))
-                                       ;; Another session's turn settles here:
-                                       ;; its directive gets activity and its
-                                       ;; session save writes the store.
-                                       (setq same-buffer (find-file-noselect same-file))
-                                       (with-current-buffer same-buffer
-                                         (setq-local mevedel--workspace workspace)
-                                         (let ((record
-                                                (mevedel--directive-record
-                                                 (mevedel--create-directive-in
-                                                  same-buffer 1 6 nil "same workspace"))))
-                                           (setf (mevedel-directive-session-id record)
-                                                 "other-session"
-                                                 (mevedel-directive-attempts record)
-                                                 (list
-                                                  (mevedel-directive-attempt--create
-                                                   :sequence 1 :action 'implement
-                                                   :directive-request "same workspace"
-                                                   :request "same workspace"
-                                                   :result "done" :outcome 'success
-                                                   :patch "" :capture 'incomplete
-                                                   :captured-at "2026-11-07T00:00:00+0100"
-                                                   :checkpoint
-                                                   '(:session-id "other-session"
-                                                     :turn 1))))))
-                                       (mevedel-instruction-store-sync workspace)
-                                       ;; Control: the Rewind really held it back.
-                                       (setq held-back
-                                             (not (member "same workspace"
-                                                          (mapcar (lambda (record)
-                                                                    (plist-get record :request))
-                                                                  (plist-get
-                                                                   (plist-get
-                                                                    (mevedel-instruction-store--read
-                                                                     workspace)
-                                                                    :data)
-                                                                   :directives)))))))))
-                          (should
-                           (mevedel-session-rewind-rewind buffer target)))
-                        (should other-buffer)
-                        (should held-back)
-                        (should (memq workspace mevedel-instruction-store--dirty))
-                        (mevedel-instruction-store-sync other)
+            (let* ((notes (funcall stored-notes workspace))
+                   target)
+              (should (equal '("Early") notes))
+              (with-current-buffer buffer
+                (mevedel-request-begin session)
+                (puthash source-file "EARLY\nLATER\n"
+                         (mevedel-request-file-snapshots
+                          mevedel--current-request))
+                (delete-file source-file)
+                (goto-char (point-max))
+                (insert "Second note turn\n")
+                (insert (propertize "Second reply.\n" 'gptel 'response))
+                (setf (mevedel-session-turn-count session) 2)
+                (mevedel-session-artifacts-save session buffer t)
+                (setq target
+                      (copy-sequence
+                       (cdr
+                        (cl-find-if
+                         (lambda (entry)
+                           (= 2 (plist-get (cdr entry) :cum-turn)))
+                         (mevedel-session-rewind--prompt-candidates
+                          session)))))
+                (mevedel-request-end)
+                (goto-char (point-max))
+                (insert "Ordinary later chat\n")
+                (insert (propertize "Later reply.\n" 'gptel 'response))
+                (setf (mevedel-session-turn-count session) 3)
+                (mevedel-session-artifacts-save session buffer t))
+              (when (buffer-live-p source-buffer)
+                (kill-buffer source-buffer)
+                (setq source-buffer nil))
+              ;; Meanwhile another workspace and another session of this
+              ;; workspace each write a note; this session's Rewind must
+              ;; keep neither from its store.
+              (let* ((other-root (file-name-as-directory
+                                  (make-temp-file "mevedel-other-ws-" t)))
+                     (other (mevedel-workspace-get-or-create
+                             'file "other-ws" other-root "other-ws"))
+                     (other-file (file-name-concat other-root "other.el"))
+                     (same-file (file-name-concat tempdir "same.el"))
+                     (restore (symbol-function
+                               'mevedel-session-rewind-execute-restore))
+                     other-buffer same-buffer held-back)
+                (mevedel-workspace-identity-ensure other-root)
+                (write-region "(defun other () t)\n" nil other-file nil 'silent)
+                (write-region "(defun same () t)\n" nil same-file nil 'silent)
+                (unwind-protect
+                    (progn
+                      (cl-letf (((symbol-function 'display-buffer) #'ignore)
+                                ((symbol-function 'yes-or-no-p)
+                                 (lambda (&rest _) t))
+                                ((symbol-function 'mevedel--run-session-start-hooks)
+                                 #'ignore)
+                                ((symbol-function
+                                  'mevedel-session-rewind-execute-restore)
+                                 (lambda (&rest args)
+                                   (prog1 (apply restore args)
+                                     (setq other-buffer (find-file-noselect other-file))
+                                     (with-current-buffer other-buffer
+                                       (setq-local mevedel--workspace other)
+                                       (goto-char (point-min))
+                                       (mevedel-note-create "elsewhere"))
+                                     ;; Another session of this workspace
+                                     ;; writes a note and syncs the store.
+                                     (setq same-buffer (find-file-noselect same-file))
+                                     (with-current-buffer same-buffer
+                                       (setq-local mevedel--workspace workspace)
+                                       (goto-char (point-min))
+                                       (mevedel-note-create "same workspace"))
+                                     (mevedel-instruction-store-sync workspace)
+                                     ;; Control: the Rewind really held it back.
+                                     (setq held-back
+                                           (not (member "same workspace"
+                                                        (funcall stored-notes
+                                                                 workspace))))))))
                         (should
-                         (equal '("elsewhere")
-                                (mapcar (lambda (record) (plist-get record :request))
-                                        (plist-get (plist-get (mevedel-instruction-store--read
-                                                               other)
-                                                              :data)
-                                                   :directives)))))
-                    (when (buffer-live-p other-buffer)
-                      (with-current-buffer other-buffer (set-buffer-modified-p nil))
-                      (kill-buffer other-buffer))
-                    (mevedel--clear-instruction-state other)
-                    (delete-directory other-root t)))
-                (should (= 1 (mevedel-session-turn-count session)))
-                (with-current-buffer buffer
-                  (should (string-match-p "First reply" (buffer-string)))
-                  (should-not (string-match-p "Second directive"
-                                              (buffer-string)))
-                  (should-not (string-match-p "Ordinary later chat"
-                                              (buffer-string))))
-                (should (file-exists-p source-file))
-                (should (equal records
-                               ;; Less the other session's directive above.
-                               (cl-remove "same workspace"
-                                          (mevedel-workspace-directives workspace)
-                                          :key #'mevedel-directive-request
-                                          :test #'equal)))
-                ;; The workspace instruction store took the same prune after
-                ;; the commit point, and its Rewind intent is settled.
-                (let ((stored (plist-get (mevedel-instruction-store--read workspace)
-                                         :data)))
-                  (should-not (plist-get stored :rewinds))
-                  (should
-                   (equal '(("Current early edit" 1) ("Later" 0))
-                          (sort (mapcar (lambda (record)
-                                          (list (plist-get record :request)
-                                                (length (plist-get record :attempts))))
-                                        (plist-get stored :directives))
-                                (lambda (a b) (string< (car a) (car b)))))))
-                (should (= 1 (length (mevedel-directive-attempts early))))
-                (should-not (mevedel-directive-state early))
-                (should-not (mevedel-directive-attempts later))
-                (should-not (mevedel-directive-state later))
-                (should
-                 (equal
-                  (list consumed-child-id current-child-id)
-                  (mapcar #'mevedel-subdirective-id
-                          (mevedel-directive-subdirectives later))))
-                (should
-                 (eq 'attached
-                     (plist-get (mevedel-directive-anchor later) :state)))
-                (let ((overlay
-                       (mevedel--instruction-with-uuid
-                        (mevedel-directive-id later) workspace)))
-                  (should overlay)
-                  (should (eq later (mevedel--directive-record overlay)))
-                  (let ((consumed-restored
-                         (mevedel--instruction-with-uuid
-                          consumed-child-id workspace))
-                        (current-restored
-                         (mevedel--instruction-with-uuid
-                          current-child-id workspace)))
-                    (should (overlayp consumed-restored))
-                    (should (overlayp current-restored))
-                    (should (eq overlay
-                                (mevedel--topmost-instruction
-                                 consumed-restored 'directive)))
-                    (should (eq overlay
-                                (mevedel--topmost-instruction
-                                 current-restored 'directive))))
-                  (should
-                   (equal "LATER"
-                          (with-current-buffer (overlay-buffer overlay)
-                            (buffer-substring-no-properties
-                             (overlay-start overlay) (overlay-end overlay)))))
-                ;; The other session's activity, held back during the
-                ;; Rewind, reaches the store once the Rewind is over.
-                (mevedel-instruction-store-flush)
-                (let ((same (cl-find "same workspace"
-                                     (plist-get (plist-get (mevedel-instruction-store--read
-                                                            workspace)
-                                                           :data)
-                                                :directives)
-                                     :key (lambda (record) (plist-get record :request))
-                                     :test #'equal)))
-                  (should same)
-                  (should (= 1 (length (plist-get same :attempts)))))
-                (when-let* ((same-buffer (find-buffer-visiting
-                                          (file-name-concat tempdir "same.el"))))
-                  (with-current-buffer same-buffer (set-buffer-modified-p nil))
-                  (kill-buffer same-buffer))))))
+                         (mevedel-session-rewind-rewind buffer target)))
+                      (should other-buffer)
+                      (should held-back)
+                      (should (memq workspace mevedel-instruction-store--dirty))
+                      (mevedel-instruction-store-sync other)
+                      (should
+                       (equal '("elsewhere")
+                              (funcall stored-notes other))))
+                  (when (buffer-live-p other-buffer)
+                    (with-current-buffer other-buffer (set-buffer-modified-p nil))
+                    (kill-buffer other-buffer))
+                  (mevedel--clear-instruction-state other)
+                  (delete-directory other-root t)))
+              (should (= 1 (mevedel-session-turn-count session)))
+              (with-current-buffer buffer
+                (should (string-match-p "First reply" (buffer-string)))
+                (should-not (string-match-p "Second note turn"
+                                            (buffer-string)))
+                (should-not (string-match-p "Ordinary later chat"
+                                            (buffer-string))))
+              (should (file-exists-p source-file))
+              ;; The Rewind neither drops nor duplicates this workspace's note.
+              (should (equal notes (funcall stored-notes workspace)))
+              ;; The workspace instruction store's Rewind intent is settled.
+              (should-not
+               (plist-get (plist-get (mevedel-instruction-store--read workspace)
+                                     :data)
+                          :rewinds))
+              ;; The other session's activity, held back during the
+              ;; Rewind, reaches the store once the Rewind is over.
+              (mevedel-instruction-store-flush)
+              (should (equal '("Early" "same workspace")
+                             (funcall stored-notes workspace)))
+              (when-let* ((same-buffer (find-buffer-visiting
+                                        (file-name-concat tempdir "same.el"))))
+                (with-current-buffer same-buffer (set-buffer-modified-p nil))
+                (kill-buffer same-buffer))))
         (when (and buffer (buffer-live-p buffer))
           (test-mevedel-session-persistence--release-and-kill buffer session))
         (setq source-buffer (or source-buffer
@@ -1349,7 +1262,9 @@
                         (append
                          (mevedel-session-file-snapshots session)
                          `((2 . ((,path . (:backup-name ,backup
-                                         :pre-backup-name ,backup
+                                         :pre-backup-name
+                                         ,(mevedel-session-artifacts--file-history-backup-name
+                                           "first")
                                          :version 2))))))))
                 (write-region "second" nil path nil 'silent)
                 (mevedel-session-codec-write
@@ -1462,7 +1377,7 @@
                (buf (generate-new-buffer "*test-rewind-rollback*"))
                (path-a (file-name-concat tempdir "a.el"))
                (path-b (file-name-concat tempdir "b.el"))
-               target record)
+               target)
           (unwind-protect
               (with-current-buffer buf
                 (org-mode)
@@ -1500,42 +1415,9 @@
                  (mevedel-session-artifacts-sidecar-path
                   (mevedel-session-save-path session))
                  (mevedel-session-artifacts-build-sidecar session buf))
-                (setq record
-                      (mevedel-directive--create
-                       :id "rollback-directive" :request "Keep me"
-                       :anchor '(:state source-missing) :state 'failed
-                       :subdirectives
-                       (list
-                        (mevedel-subdirective--create
-                         :id "current-child" :request "Current"
-                         :anchor '(:state attached)))
-                       :attempts
-                       (list
-                        (mevedel-directive-attempt--create
-                         :directive-request "Keep me" :outcome 'success
-                         :checkpoint
-                         (list :session-id
-                               (mevedel-session-session-id session)
-                               :turn 1))
-                        (mevedel-directive-attempt--create
-                         :directive-request "Keep me" :outcome 'error
-                         :consumed-subdirectives
-                         (list
-                          (mevedel-subdirective--create
-                           :id "consumed-child" :request "Consumed"
-                           :anchor '(:state attached)))
-                         :checkpoint
-                         (list :session-id
-                               (mevedel-session-session-id session)
-                               :turn 2)))))
-                (mevedel-workspace-add-directive workspace record)
                 (let* ((plan
                         (mevedel-session-rewind-restore-plan session 1 t))
                        (before-buffer (buffer-string))
-                       (before-attempts
-                        (mevedel-directive-attempts record))
-                       (before-subdirectives
-                        (mevedel-directive-subdirectives record))
                        (before-state
                         (mevedel-session-codec-serialize session))
                        (sidecar-path
@@ -1563,14 +1445,7 @@
                           (mevedel-session-artifacts--file-text path-a)))
                   (should
                    (equal "new-b"
-                          (mevedel-session-artifacts--file-text path-b)))
-                  (should (equal (list record)
-                                 (mevedel-workspace-directives workspace)))
-                  (should (eq before-attempts
-                              (mevedel-directive-attempts record)))
-                  (should (eq before-subdirectives
-                              (mevedel-directive-subdirectives record)))
-                  (should (eq 'failed (mevedel-directive-state record)))))
+                          (mevedel-session-artifacts--file-text path-b)))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)))
       (delete-directory tempdir t)
@@ -1673,12 +1548,8 @@
                  ((symbol-function
                    'mevedel-session-artifacts-load-instructions)
                   (lambda (&rest _) t))
-                 ((symbol-function 'mevedel-workspace-rewind-directives)
-                  #'ignore)
                  ((symbol-function
                    'mevedel-session-artifacts-save-instructions)
-                  #'ignore)
-                 ((symbol-function 'mevedel--restore-preserved-directives)
                   #'ignore)
                  ((symbol-function
                    'mevedel-session-rewind--refresh-restored-buffers)
@@ -1810,10 +1681,6 @@
                      ((symbol-function
                        'mevedel-session-artifacts-load-instructions)
                       (lambda (&rest _) t))
-                     ((symbol-function 'mevedel-workspace-rewind-directives)
-                      #'ignore)
-                     ((symbol-function 'mevedel--restore-preserved-directives)
-                      #'ignore)
                      ((symbol-function
                        'mevedel-session-rewind--refresh-restored-buffers)
                       #'ignore))
@@ -1919,10 +1786,6 @@
                      ((symbol-function
                        'mevedel-session-artifacts-load-instructions)
                       (lambda (&rest _) (push 'instructions followed) t))
-                     ((symbol-function 'mevedel-workspace-rewind-directives)
-                      (lambda (&rest _) (push 'directives followed)))
-                     ((symbol-function 'mevedel--restore-preserved-directives)
-                      #'ignore)
                      ((symbol-function
                        'mevedel-session-rewind--refresh-restored-buffers)
                       (lambda (&rest _) (push 'buffers followed))))
@@ -1940,7 +1803,7 @@
                 (should (equal generation
                                (plist-get (mevedel-session-lease session)
                                           :generation)))
-                (should (equal '(instructions directives buffers)
+                (should (equal '(instructions buffers)
                                (nreverse followed)))
                 (should (string-match-p "did not install" warning))
                 (should (string-match-p "Beginning of buffer" warning))
@@ -1978,7 +1841,8 @@
                              (file-name-directory session-dir) "tracked.el"))
                    (target '(:segment 1 :turn 1 :cum-turn 1
                              :fork-point-id "remote-point"))
-                   (plan (list (list :path tracked :action 'overwrite)))
+                   (plan (list (list :path tracked :action 'overwrite
+                                     :bytes "rewound project bytes\n")))
                    (reserve-function
                     (symbol-function
                      'mevedel-session-durability-call-with-reserved-lease))
@@ -2021,12 +1885,6 @@
                      ((symbol-function
                        'mevedel-session-rewind-restore-plan)
                       (lambda (&rest _) plan))
-                     ((symbol-function
-                       'mevedel-session-rewind-execute-restore)
-                      (lambda (_session _plan)
-                        (write-region "rewound project bytes\n" nil
-                                      tracked nil 'silent)
-                        '(:succeeded 1 :failed nil :total 1)))
                      ((symbol-function 'mevedel-session-publication-publish)
                       (lambda (actual-session _artifacts)
                         (setf (mevedel-session-pending-publication
@@ -2600,7 +2458,7 @@
                 (funcall function)))
              ((symbol-function
                'mevedel-session-rewind--rollback-restore-files)
-              (lambda (actual-backups)
+              (lambda (actual-backups _written)
                 (setq rolled-back actual-backups)
                 nil))
              ((symbol-function
@@ -2632,21 +2490,26 @@
   ,test
   (test)
   :doc "reports every file whose rollback fails"
-  (let* ((path-a "/tmp/rewind-a")
-         (path-b "/tmp/rewind-b")
-         (backups
-          `((:path ,path-a :existed t :backup "/tmp/backup-a")
-            (:path ,path-b :existed t :backup "/tmp/backup-b")))
-         (failures
-          (cl-letf (((symbol-function 'make-directory) #'ignore)
-                    ((symbol-function 'copy-file)
-                     (lambda (_source target &rest _)
-                       (error "Cannot restore %s" target))))
-            (mevedel-session-rewind--rollback-restore-files
-             backups))))
-    (should (= 2 (length failures)))
-    (should (string-match-p (regexp-quote path-a) (nth 0 failures)))
-    (should (string-match-p (regexp-quote path-b) (nth 1 failures)))))
+  (let* ((directory (make-temp-file "rewind-rollback-" t))
+         (path-a (file-name-concat directory "a"))
+         (path-b (file-name-concat directory "b"))
+         (backup (file-name-concat directory "backup")))
+    (unwind-protect
+        (progn
+          (write-region "before" nil backup nil 'silent)
+          (dolist (path (list path-a path-b)) (write-region "after" nil path nil 'silent))
+          (let ((failures
+                 (cl-letf (((symbol-function 'copy-file)
+                            (lambda (_source target &rest _)
+                              (error "Cannot restore %s" target))))
+                   (mevedel-session-rewind--rollback-restore-files
+                    (mapcar (lambda (path) (list :path path :existed t :backup backup))
+                            (list path-a path-b))
+                    (mapcar #'mevedel-session-rewind--file-state (list path-a path-b))))))
+            (should (= 2 (length failures)))
+            (should (string-match-p (regexp-quote path-a) (nth 0 failures)))
+            (should (string-match-p (regexp-quote path-b) (nth 1 failures)))))
+      (delete-directory directory t))))
 
 
 ;;
@@ -3035,27 +2898,6 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
-
-(mevedel-deftest mevedel-session-rewind--directive-capture-gaps
-  (:doc "reports untracked effects belonging to discarded directive attempts")
-  (let* ((workspace
-          (mevedel-workspace--create
-           :type 'file :id "capture-gaps" :root "/tmp" :name "capture-gaps"))
-         (session (mevedel-session-create "main" workspace))
-         (attempt
-          (mevedel-directive-attempt--create
-           :checkpoint '(:session-id "session" :turn 3)
-           :untracked-effects '(("Bash" . "untracked command effects"))))
-         (directive
-          (mevedel-directive--create :id "directive" :attempts (list attempt))))
-    (setf (mevedel-session-session-id session) "session")
-    (mevedel-workspace-set-directives workspace (list directive))
-    (should
-     (equal '((:path "Directive directive via Bash"
-               :reason "untracked command effects"))
-            (mevedel-session-rewind--directive-capture-gaps session 3)))
-    (should-not
-     (mevedel-session-rewind--directive-capture-gaps session 4))))
 
 (provide 'test-mevedel-session-rewind)
 ;;; test-mevedel-session-rewind.el ends here

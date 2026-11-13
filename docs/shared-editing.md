@@ -678,7 +678,8 @@ its turns and sends room messages into its conversation as whole-item questions
 about the committed content (see [scoped prompts](collaboration.md#scoped-prompts-and-attachments)).
 This is context selection, not a privacy boundary or a separate execution agent.
 Questions keep the session's permissions, tools, queue, and checkpoints, so they
-can edit content. Directive discussions retain their separate read-only contract.
+can edit content. Note conversations instead own separate sessions, using
+normal session permissions and Plan mode.
 
 When broader context matters, the assistant can search `history://root` with
 Grep and read the matching line range with Read. This includes unsaved room

@@ -83,6 +83,8 @@
                   "mevedel-file-state" (cache changes))
 (declare-function mevedel-file-cache-detect-external-changes
                   "mevedel-file-state" (cache))
+(autoload 'mevedel-file-cache-consume-external-changes "mevedel-file-state")
+(autoload 'mevedel-file-cache-detect-external-changes "mevedel-file-state")
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-consume-session-context
@@ -901,7 +903,7 @@ The delivery observation changes only when the payload reaches the request."
        (if (and reminder (mevedel-reminder-last-fired reminder))
            "Plan mode remains active. Follow the earlier contract; if unavailable, read `mevedel://plan-mode.md` (Proposal guidance). Finish with one <proposed_plan>...</proposed_plan> block replacing the prior proposal."
          (concat
-          "Plan mode is active: inspect and discuss, not implement. Bash is limited to read-only-classified commands; Eval is unavailable. Standalone/sticky Plan permits ApplyPatch only for session-owned work:// descendants; directive Planning permits no file writes. Agents you start inherit these Plan limits. Delegate independent investigation or critique of a draft plan supplied in the task when useful. An implementation request means produce or revise the plan. Explore available evidence before asking about genuine user preferences it cannot resolve. Every new <proposed_plan> block replaces the previous proposal completely. Do not ask whether you should proceed with implementation. Finish with exactly one line-oriented block:\n\n"
+          "Plan mode is active: inspect and discuss, not implement. Bash is limited to read-only-classified commands; Eval is unavailable. Standalone/sticky Plan and requests carrying inherited Plan limits permit ApplyPatch only for session-owned work:// descendants. Agents you start inherit these Plan limits. Delegate independent investigation or critique of a draft plan supplied in the task when useful. An implementation request means produce or revise the plan. Explore available evidence before asking about genuine user preferences it cannot resolve. Every new <proposed_plan> block replaces the previous proposal completely. Do not ask whether you should proceed with implementation. Finish with exactly one line-oriented block:\n\n"
           "<proposed_plan>\n"
           "# Concrete Plan Title\n\n"
           "## Summary\n"
@@ -1546,7 +1548,9 @@ reminder names its own type, so the guard needs no second list."
                         #'mevedel-reminders-make-plan-reference
                         #'mevedel-reminders-make-fork-provenance))
       (let ((reminder (funcall make)))
-        (unless (memq (mevedel-reminder-type reminder) existing)
+        (unless (or (memq (mevedel-reminder-type reminder) existing)
+                    (and (eq (mevedel-session-preset-name session) 'mevedel-note)
+                         (eq (mevedel-reminder-type reminder) 'edited-file)))
           (mevedel-session-add-reminder session reminder)))))
   session)
 

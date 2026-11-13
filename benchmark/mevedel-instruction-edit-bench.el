@@ -3,8 +3,8 @@
 ;;; Commentary:
 
 ;; Run with python3 scripts/bench-instruction-edits.py, not in a live editor.
-;; Match the user fixture: 2000 lines, 3-line references every 10 lines,
-;; and 2000 single-character inserts inside the first reference, each followed
+;; Match the user fixture: 2000 lines, 3-line notes every 10 lines,
+;; and 2000 single-character inserts inside the first note, each followed
 ;; by an undo boundary.  Setup, GC, and assertions are outside the timer.
 ;; Five fresh-fixture warmups precede five fresh-fixture samples for each N.
 ;; This measures batch text mutation and hooks, not interactive redisplay.
@@ -14,7 +14,8 @@
 (require 'cl-lib)
 (require 'json)
 (require 'mevedel)
-(require 'mevedel-directive-source)
+(require 'mevedel-note-source)
+(require 'mevedel-notes)
 
 (defconst mevedel-instruction-bench--keys 2000
   "Number of interior inserts per fixture.")
@@ -26,7 +27,7 @@
     (undo-boundary)))
 
 (defun mevedel-instruction-bench--sample (count)
-  "Time one fresh fixture with COUNT references, asserting its final state."
+  "Time one fresh fixture with COUNT notes, asserting its final state."
   (let ((mevedel--instruction-states (make-hash-table :test #'equal))
         (mevedel-workspace--registry (make-hash-table :test #'equal))
         (undo-limit most-positive-fixnum)
@@ -35,6 +36,10 @@
     (with-temp-buffer
       (dotimes (line 2000)
         (insert (format "line %d some text here\n" line)))
+      (setq-local buffer-file-name (make-temp-file "mevedel-edit-bench-" nil ".txt"))
+      (write-region (point-min) (point-max) buffer-file-name nil 'silent)
+      (let ((file buffer-file-name))
+        (add-hook 'kill-buffer-hook (lambda () (delete-file file)) t t))
       (buffer-enable-undo)
       (let (references bounds)
         (dotimes (index count)
@@ -42,8 +47,9 @@
           (forward-line (* index 10))
           (let ((start (point)))
             (forward-line 3)
-            (let ((overlay (mevedel--create-reference-in
-                            (current-buffer) start (point))))
+            (let* ((transient-mark-mode t)
+                   (mark-active t)
+                   (overlay (progn (set-mark start) (mevedel-note-create ""))))
               (unless (= (count-lines (overlay-start overlay) (overlay-end overlay)) 3)
                 (error "Fixture reference does not cover three lines"))
               (push overlay references)
@@ -98,7 +104,7 @@
   (let ((symbols '(mevedel-instruction-bench--type
                    mevedel-instruction-bench--sample
                    mevedel-instruction-bench-run
-                   mevedel--create-reference-in
+                   mevedel-note-create
                    mevedel--instruction-before-change
                    mevedel--instruction-after-change
                    mevedel--instructions-in

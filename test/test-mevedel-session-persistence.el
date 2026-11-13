@@ -6,6 +6,13 @@
 
 ;;; Code:
 
+(require 'mevedel-notes)
+(require 'mevedel-instruction-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-instruction-test-support"))
+
 ;; `gptel'
 (defvar gptel--known-presets)
 
@@ -293,10 +300,10 @@
             (setq buf-b (find-file-noselect file-b))
             (with-current-buffer buf-a
               (setq-local mevedel--workspace ws-a)
-              (mevedel--create-reference-in buf-a (point-min) (point-max)))
+              (mevedel-instruction-test--create-note-in buf-a (point-min) (point-max)))
             (with-current-buffer buf-b
               (setq-local mevedel--workspace ws-b)
-              (mevedel--create-reference-in buf-b (point-min) (point-max)))
+              (mevedel-instruction-test--create-note-in buf-b (point-min) (point-max)))
             (mevedel--instruction-activate-workspace ws-a)
             (should (= 1 (length (alist-get buf-a (mevedel--instruction-alist)))))
             (should-not (assoc buf-b (mevedel--instruction-alist)))

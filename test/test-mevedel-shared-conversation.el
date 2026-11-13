@@ -61,27 +61,27 @@
       (should (= 2 (length ranges)))
       (should-not (cl-some (lambda (range) (plist-get range :last-user)) ranges))))
 
-  :doc "ordered item ranges stop at intervening directive boundaries"
+  :doc "ordered item ranges end at the next prompt; old directive boundaries are ordinary"
   (with-temp-buffer
     (org-mode)
-    (let (expected)
-      (dotimes (index 20)
-        (mevedel-shared-conversation-test--turn
-         (format "Item %d" index) "Item answer" "doc" (format "q%d" index))
-        (let ((start (point)))
-          (insert (mevedel--format-hook-audit-record
-                   (list :type 'directive-turn-boundary :edge 'start
-                         :directive-id "directive" :turn index)))
-          (push start expected))
-        (mevedel-shared-conversation-test--turn "Directive question" "Directive answer")
-        (insert (mevedel--format-hook-audit-record
-                 (list :type 'directive-turn-boundary :edge 'end
-                       :directive-id "directive" :turn index)))
-        (mevedel-shared-conversation-test--turn "Room question" "Room answer"))
-      (let ((ranges (mevedel-shared-conversation-ranges)))
-        (should (= 20 (length ranges)))
-        (should (equal (reverse expected) (mapcar (lambda (range) (plist-get range :end)) ranges)))
-        (should-not (cl-some (lambda (range) (plist-get range :last-user)) ranges))))))
+    (dotimes (index 20)
+      (mevedel-shared-conversation-test--turn
+       (format "Item %d" index) "Item answer" "doc" (format "q%d" index))
+      (insert (mevedel--format-hook-audit-record
+               (list :type 'directive-turn-boundary :edge 'start
+                     :directive-id "directive" :turn index)))
+      (mevedel-shared-conversation-test--turn "Directive question" "Directive answer")
+      (insert (mevedel--format-hook-audit-record
+               (list :type 'directive-turn-boundary :edge 'end
+                     :directive-id "directive" :turn index)))
+      (mevedel-shared-conversation-test--turn "Room question" "Room answer"))
+    (let ((ranges (mevedel-shared-conversation-ranges)))
+      (should (= 20 (length ranges)))
+      (dolist (range ranges)
+        (let ((text (buffer-substring (plist-get range :start) (plist-get range :end))))
+          (should (string-search "Item answer" text))
+          (should-not (string-search "Directive question" text))))
+      (should-not (cl-some (lambda (range) (plist-get range :last-user)) ranges)))))
 
 (mevedel-deftest mevedel-shared-conversation-request ()
   ,test

@@ -174,6 +174,12 @@ that is ambiguous with prose."
                  (string-match-p "\\`@ref:[0-9]+\\'" token)
                  (mevedel-mention-bindings--nonempty-string-p
                   (plist-get binding :reference-uuid))))
+           ('note
+            (and (mevedel-mention-bindings--plist-shape-p
+                  binding '(:kind :token :note-uuid))
+                 (string-match-p "\\`@note:[0-9]+\\'" token)
+                 (mevedel-mention-bindings--nonempty-string-p
+                  (plist-get binding :note-uuid))))
            ('file
             (and (mevedel-mention-bindings--plist-shape-p
                   binding '(:kind :token :path))
@@ -218,7 +224,7 @@ that is ambiguous with prose."
            ('skill
             (mevedel-mention-bindings--skill-range-valid-p
              text start token))
-           ('ref
+           ((or 'ref 'note)
             (or (= end (length text))
                 (not (string-match-p
                       "[[:alnum:]_]"

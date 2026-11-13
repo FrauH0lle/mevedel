@@ -129,7 +129,6 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-id "mevedel-structs" (cl-x))
-(defvar mevedel--current-directive-uuid)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
@@ -154,7 +153,7 @@
 ;; `mevedel-turn'
 (declare-function mevedel--complete-turn "mevedel-turn" (fsm))
 (declare-function mevedel-request-begin
-                  "mevedel-turn" (session &optional directive-uuid options))
+                  "mevedel-turn" (session &optional options))
 (autoload 'mevedel--complete-turn "mevedel-turn")
 (autoload 'mevedel-request-begin "mevedel-turn")
 
@@ -638,8 +637,7 @@ observe the completed response."
          mevedel--session)
         (setq request
               (mevedel-request-begin
-               mevedel--session
-               mevedel--current-directive-uuid))))
+               mevedel--session))))
     (goto-char (point-max))
     (when-let* ((synthetic (plist-get outcome :synthetic-user-message)))
       (let ((user-turn-start (point)))

@@ -166,7 +166,7 @@ can name local paths or providers; other readers see their category instead."
 
 (defconst mevedel-recovery--input-keys
   '(:id :category :input :guest-name :guest-id :guest-paths :guest-invoke
-    :guest-skills :guest-role :shared-question :inert-skills :scope
+    :guest-skills :guest-role :shared-question :inert-skills
     :dropped-file-grants :queued-at-time :queued-at-turn :queued-at-goal-id
     :state :request-id)
   "Durable input fields; prepared submissions and callbacks are never serialized.")

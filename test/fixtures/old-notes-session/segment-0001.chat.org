@@ -1,0 +1,24 @@
+:PROPERTIES:
+:GPTEL_BOUNDS: ((response (147 171) (433 453) (737 759)) (mevedel-hook-audit (171 362) (453 712)))
+:END:
+
+ORDINARY-EARLIER-QUESTION
+
+ORDINARY-EARLIER-ANSWER
+
+<!-- mevedel-hook-audit -->
+KDp0eXBlIGRpcmVjdGl2ZS10dXJuLWJvdW5kYXJ5IDplZGdlIHN0YXJ0IDpkaXJlY3RpdmUtaWQgInJldGlyZWQtbm90ZSIgOmFjdGlvbiBpbXBsZW1lbnQgOnR1cm4gMik=
+<!-- /mevedel-hook-audit -->
+Historical directive :implement:
+:PROMPT:
+OLD-DIRECTIVE-REQUEST
+:END:
+
+OLD-DIRECTIVE-REPLY
+
+<!-- mevedel-hook-audit -->
+KDp0eXBlIGRpcmVjdGl2ZS10dXJuLWJvdW5kYXJ5IDplZGdlIGVuZCA6ZGlyZWN0aXZlLWlkICJyZXRpcmVkLW5vdGUiIDphY3Rpb24gaW1wbGVtZW50IDp0dXJuIDIgOm91dGNvbWUgc3VjY2VzcyA6YWN0aXZpdHkta2luZCBhdHRlbXB0IDpzZXF1ZW5jZSAxKQ==
+<!-- /mevedel-hook-audit -->
+ORDINARY-LATER-QUESTION
+
+ORDINARY-LATER-ANSWER
