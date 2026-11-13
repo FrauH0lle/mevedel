@@ -238,6 +238,14 @@ cancellation releases the fence and leaves the machine retryable.
   with the counts above 200, 500 and 1000 ms, the maximum, and how many had
   input pending. Wait time the CPU profiler cannot see, such as a blocking
   remote command, shows up here;
+- `memory-sample` at most every five minutes from the same heartbeat, into
+  one watched session: the process's resident memory `:rss-kb`, `:buffers`
+  and `:buffer-chars-total`, the largest buffer's size, major mode, whether
+  it has a process, and a 16-character SHA-256 prefix of its name (never the
+  name), `:image-cache-bytes`, and the counts of frames, threads and
+  processes. Garbage-collection timing cannot see buffer text or C-side
+  allocations, so resident memory growing without matching buffer or image
+  growth points outside both;
 - `session-save` (`:kind full` or `agent-registry`), `session-publication`
   (`:artifact-count`, `:input-bytes`), and `control-program` (`:kind`, the
   first operation's verb, and `:operation-count`) for synchronous

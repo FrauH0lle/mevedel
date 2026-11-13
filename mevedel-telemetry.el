@@ -196,16 +196,17 @@ profile file larger and cost a little more per sample."
     :dirty-content-hash :dirty-file-count :dirty-state-hash :duration-ms
     :effective-wait-ms :effort :emacs-version :enqueue-goal-id
     :error-class :estimate :estimate-source :eval-mode :execution-id :exit-code
-    :exit-status :failure-class :failure-stage :fallback :filesystem :first-byte-seen
+    :exit-status :failure-class :failure-stage :fallback :filesystem :first-byte-seen :frames
     :fresh-visible-prompt-estimate
     :gc-count :gc-ms :git-head :goal-id
     :gptel-commit :gptel-file-hash :gptel-version :handler-count
-    :handler-id :handler-source :handler-type :hook-event
+    :handler-id :handler-source :handler-type :hook-event :image-cache-bytes
     :ineligible-reason :input-bytes :input-p :input-pending :input-tokens
     :investigation :investigation-command :investigation-notes :investigation-notes-omitted
     :investigation-path :investigation-pattern :investigation-root
     :interaction-id :issue-count
-    :kind :lane :limit
+    :kind :lane :largest-buffer-chars :largest-buffer-hash :largest-buffer-mode
+    :largest-buffer-process :limit
     :max-ms :message-chars :message-hash :mode :model :model-context-source :model-context-window :modes
     :native-resource-capture :native-resource-report-bytes :nested-call-count
     :network
@@ -218,7 +219,7 @@ profile file larger and cost a little more per sample."
     :permission-mode-base
     :permission-mode-effective :permission-via :preexisting-count
     :preparation-duration-ms :preparation-recovery-duration-ms :preparation-state
-    :previous-owner :previous-status :proc :profile :profile-bytes-total
+    :previous-owner :previous-status :proc :processes :profile :profile-bytes-total
     :profile-file-names :prompt-chars :prompt-function :prompt-hash :proposed-count
     :protected-path-count :provider-call-count :provider-context-model :provider-context-status
     :provider-context-tokens :provider-context-usage
@@ -229,14 +230,14 @@ profile file larger and cost a little more per sample."
     :report-bytes-total :report-file-names
     :request-id :requested-yield-time-ms :resolved-count :resource-access
     :restored :result-bytes :result-chars :result-hash :retained :retained-count :retirement-duration-ms
-    :review-request-duration-ms :reviewed-count :roster-chars :rounds
+    :review-request-duration-ms :reviewed-count :roster-chars :rounds :rss-kb
     :sandbox :sandbox-mode :sandbox-permissions :scope :settled :settlement-source
     :skill-count :skill-name :skill-names :skip-gates :span-id
     :specifier-key :stage :status :step :summary-context-source :summary-context-window
     :summary-model :summary-reserve-tokens :summary-threshold :summary-usable-tokens
     :system-configuration :target-model :target-origin :target-pressure
     :target-reserve-tokens :target-threshold :target-truncated :target-usable-tokens
-    :termination :test-scope :threshold :threshold-ms :threshold-ratio
+    :termination :test-scope :threads :threshold :threshold-ms :threshold-ratio
     :timed-out :timeout-ms :timer-callback :timer-gc-count :timer-gc-ms :timer-ms :token-source :tokens-after :tokens-before
     :tokens-used :tool-call-bytes :tool-call-count :tool-name :tool-use-id
     :trigger :truncated :tty :turns-run :updated-file-count :usage-status :via
@@ -654,6 +655,13 @@ a whole-second one.  Timer callbacks still time their own run time.")
 
 (defconst mevedel-telemetry--lag-count-threshold 0.2
   "Event-loop delay, in seconds, counted in a request's lag summary.")
+
+(defconst mevedel-telemetry--memory-interval 300
+  "Seconds between `memory-sample' events while the heartbeat watches a session.")
+
+(defvar mevedel-telemetry--memory-due nil
+  "Time the next `memory-sample' is due, or nil for the next heartbeat.
+Kept across heartbeat restarts, so short requests do not sample more often.")
 
 (defconst mevedel-telemetry--lag-tail 120
   "Seconds the heartbeat keeps watching a session after its request settles.
@@ -1217,7 +1225,36 @@ never reports settling."
            batch)))
       (unless (or mevedel-telemetry--lag-windows
                   mevedel-telemetry--lag-pass-windows)
-        (mevedel-telemetry--lag-stop))))))
+        (mevedel-telemetry--lag-stop))
+      (when (and mevedel-telemetry--lag-windows
+                 (>= now (or mevedel-telemetry--memory-due 0)))
+        (setq mevedel-telemetry--memory-due (+ now mevedel-telemetry--memory-interval))
+        (mevedel-telemetry--memory-sample (caar mevedel-telemetry--lag-windows)))))))
+
+(defun mevedel-telemetry--memory-sample (session)
+  "Record a `memory-sample' of this Emacs process for SESSION.
+Separates resident memory into buffer text, image cache and the rest, which
+garbage-collection timing cannot see.  Buffer names can carry titles and
+paths, so the largest buffer is identified by mode and a name hash only."
+  (let ((largest nil) (largest-size -1) (total 0) (count 0)
+        ;; `process-attributes' follows a remote directory to its host.
+        (default-directory temporary-file-directory))
+    (dolist (buffer (buffer-list))
+      (let ((size (buffer-size buffer)))
+        (setq total (+ total size) count (1+ count))
+        (when (> size largest-size)
+          (setq largest buffer largest-size size))))
+    (mevedel-telemetry-record
+     session 'memory-sample
+     :rss-kb (alist-get 'rss (process-attributes (emacs-pid)))
+     :buffers count :buffer-chars-total total
+     :largest-buffer-chars (max largest-size 0)
+     :largest-buffer-mode (and largest (buffer-local-value 'major-mode largest))
+     :largest-buffer-process (and largest (get-buffer-process largest) t)
+     :largest-buffer-hash (and largest (substring (secure-hash 'sha256 (buffer-name largest)) 0 16))
+     :image-cache-bytes (and (fboundp 'image-cache-size) (image-cache-size))
+     :frames (length (frame-list)) :threads (length (all-threads))
+     :processes (length (process-list)))))
 
 
 ;;
