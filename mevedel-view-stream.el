@@ -80,6 +80,7 @@
                   "mevedel-view" (kind data-buffer delay))
 (declare-function mevedel-view--tool-status-string "mevedel-view" (tool-name args))
 (declare-function mevedel-view--unattended-p "mevedel-view" (&optional buffer))
+(declare-function mevedel-view--window-attended-p "mevedel-view" (window))
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 (defvar mevedel-view--display-map)
 (defvar mevedel-view--pending-render-kind)
@@ -847,18 +848,6 @@ whether to animate must cost less than the decorative update itself."
        (< start (or (window-end window) (point-min)))
        (> end (window-start window))))
 
-(defun mevedel-view--animation-window-attended-p (window)
-  "Return non-nil when WINDOW can show animation to an attentive reader.
-Unlike the transcript's buffer-wide attention gate, this check must apply
-to the same window as the target's on-screen position."
-  (let* ((frame (window-frame window))
-         (top frame))
-    (while (frame-parent top)
-      (setq top (frame-parent top)))
-    (and (eq (frame-visible-p frame) t)
-         (or (not (display-graphic-p top))
-             (frame-focus-state top)))))
-
 (defun mevedel-view--animation-target-visible-p (target property &optional any-value)
   "Return non-nil when TARGET is a visible span marked PROPERTY.
 If ANY-VALUE is non-nil, accept any non-nil PROPERTY value, not just t."
@@ -869,7 +858,7 @@ If ANY-VALUE is non-nil, accept any non-nil PROPERTY value, not just t."
                    (get-text-property pos property)
                  (eq (get-text-property pos property) t))))
     (cl-some (lambda (window)
-               (and (mevedel-view--animation-window-attended-p window)
+               (and (mevedel-view--window-attended-p window)
                     (mevedel-view--animation-span-in-window-p
                      pos (marker-position (cdr target)) window)))
              (get-buffer-window-list (current-buffer) nil t))))
@@ -1082,7 +1071,7 @@ a window resize."
     (when (and (mevedel-view--spinner-active-p)
                (cl-some #'car-safe targets)
                (not (equal targets mevedel-view--spinner-probed-targets))
-               (cl-some #'mevedel-view--animation-window-attended-p
+               (cl-some #'mevedel-view--window-attended-p
                         (get-buffer-window-list (current-buffer) nil t)))
       (setq mevedel-view--spinner-probed-targets targets)
       (mevedel-view--recheck-spinner-after-redisplay))))

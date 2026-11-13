@@ -208,7 +208,8 @@ already shows -- session name, workspace root, execution target, preset
        (propertize (or state "idle") 'face 'shadow)
        (propertize " · " 'face 'shadow)
        (propertize (or model "model none") 'face 'shadow)
-       (propertize (format " · %d tool%s" tools (if (= tools 1) "" "s"))
+       (propertize (format " · %d tool%s · C-c C-z close"
+                           tools (if (= tools 1) "" "s"))
                    'face 'shadow)))))
 
 

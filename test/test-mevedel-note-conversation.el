@@ -10,6 +10,7 @@
 (require 'mevedel)
 (require 'mevedel-chat)
 (require 'mevedel-claude-code)
+(require 'mevedel-note-frame)
 (require 'mevedel-notes)
 (require 'mevedel-notes-list)
 (require 'mevedel-models)
@@ -102,7 +103,9 @@
        ;; No command loop runs to consume our frame-focus events.
        (setq unread-command-events
              (cl-remove-if (lambda (event)
-                             (and (eq (car-safe event) 'switch-frame)
+                             (and (eq (car-safe (if (eq (car-safe event) t)
+                                                     (cdr event) event))
+                                      'switch-frame)
                                   (not (memq event events))))
                            unread-command-events)))))
 
@@ -112,6 +115,7 @@
          (unread-command-events (list existing ?x)))
     (mevedel-note-conversation-test--with-source
       (push ?y unread-command-events)
+      (push (list t 'switch-frame (selected-frame)) unread-command-events)
       (push (list 'switch-frame (selected-frame)) unread-command-events))
     (should (equal (list ?y existing ?x) unread-command-events))))
 
@@ -125,6 +129,85 @@
     (gptel--fsm-transition fsm)
     (mevedel-test--await 5 "Note answer did not settle"
       (not (mevedel-turn-busy-p (plist-get info :buffer))))))
+
+(mevedel-deftest mevedel-note-send/streaming-frame
+  (:quiet t)
+  (cl-flet ((wait (seconds)
+              (let ((timer (run-at-time seconds nil #'exit-recursive-edit)))
+                (unwind-protect (recursive-edit) (cancel-timer timer)))))
+    (when (display-graphic-p)
+      (mevedel-note-conversation-test--with-source
+        (let* ((gptel-stream t)
+               (gptel-backend (gptel-make-openai
+                               "Streaming notes" :key "test" :models '(test-model)
+                               :stream t))
+               (mevedel-view-spinner-style 'braille)
+               (mevedel-view-spinner-animate t)
+               (mevedel-note-frame-min-height 20)
+               (mevedel-note-frame-height 20)
+               (draft "> active draft\nsecond line")
+               (source-window (selected-window))
+               (view (mevedel-note-send (mevedel-note-create "Explain this code")))
+               (frame mevedel-note-frame--frame)
+               (window (frame-selected-window frame))
+               (info (gptel-fsm-info (car sent))))
+          (unwind-protect
+              (progn
+                (should (frame-parent frame))
+                (should (plist-get info :stream))
+                (wait 0.2)
+                (let ((target (if ,source-selected source-window window)))
+                  (select-frame-set-input-focus (window-frame target))
+                  (select-window target))
+                (wait 0.2)
+                (let ((selected (selected-window))
+                      (source-start (window-start source-window))
+                      view-point view-row)
+                  (should (eq selected (if ,source-selected source-window window)))
+                  (with-current-buffer view
+                    (mevedel-view-test--insert-composer-draft draft)
+                    (set-window-point window (point)))
+                  (wait 0.1)
+                  (with-current-buffer view
+                    (setq view-point (copy-marker (window-point window))))
+                  (plist-put info :http-status "200")
+                  (plist-put info :status "HTTP/1.1 200 OK")
+                  (gptel--fsm-transition (car sent))
+                  (dolist (chunk '("First streamed sentence.\n" "Second streamed sentence.\n"
+                                   "Third streamed sentence.\n"))
+                    (gptel-curl--stream-insert-response (copy-sequence chunk) info)
+                    ;; Run real timers and redisplay without selecting the child.
+                    (wait 0.6)
+                    (with-current-buffer view
+                      (should (string-search chunk (buffer-string)))
+                      (let ((sample (get-char-property
+                                     (car mevedel-view--spinner-label-target) 'display window)))
+                        (should sample)
+                        (should
+                         (cl-loop repeat 12
+                                  do (wait 0.04)
+                                  thereis (not (equal sample
+                                                      (get-char-property
+                                                       (car mevedel-view--spinner-label-target)
+                                                       'display window))))))
+                      (should (equal draft (mevedel-view--input-text)))
+                      (should (= view-point (window-point window)))
+                      ;; The first response consumes blank space; later chunks
+                      ;; keep the filled composer viewport (ADR 0126).
+                      (let ((row (cdr (posn-col-row (posn-at-point view-point window)))))
+                        (when view-row (should (= view-row row)))
+                        (setq view-row row)))
+                    (should (eq selected (selected-window)))
+                    (should (= source-start (window-start source-window))))
+                  (gptel--fsm-transition (car sent))
+                  (mevedel-test--await 5 "Streaming note did not settle"
+                    (not (mevedel-turn-busy-p (plist-get info :buffer))))))
+            (when (frame-live-p frame) (mevedel-note-frame-close)))))))
+  (source-selected)
+  :doc "child-selected note frame renders chunks and animates between chunks"
+  nil
+  :doc "source-selected note frame renders chunks and animates between chunks"
+  t)
 
 (mevedel-deftest mevedel-note-conversation-attention-state
   (:quiet t)

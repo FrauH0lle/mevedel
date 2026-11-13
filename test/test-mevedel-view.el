@@ -487,11 +487,12 @@
             (should (mevedel-view--unattended-p view-buf)))
         (set-window-buffer window original))))
 
-  :doc "a child frame reports the focus of its top-level ancestor"
+  :doc "a child frame accepts its own focus or its top-level ancestor's"
   (mevedel-view-test--with-buffers
     (let ((window (selected-window))
           (original (window-buffer (selected-window)))
           (parent-focused nil)
+          (child-focused nil)
           asked)
       (unwind-protect
           (cl-letf (((symbol-function 'frame-parent)
@@ -501,10 +502,14 @@
                     ((symbol-function 'frame-focus-state)
                      (lambda (&optional frame)
                        (push frame asked)
-                       (and (eq frame 'parent) parent-focused))))
+                       (if (eq frame 'parent) parent-focused child-focused))))
             (set-window-buffer window view-buf)
             (should (mevedel-view--unattended-p view-buf))
-            (should (equal '(parent) (delete-dups asked)))
+            (should (memq 'parent asked))
+            (should (memq (window-frame window) asked))
+            (setq child-focused t)
+            (should-not (mevedel-view--unattended-p view-buf))
+            (setq child-focused nil)
             (setq parent-focused t)
             (should-not (mevedel-view--unattended-p view-buf)))
         (set-window-buffer window original)))))

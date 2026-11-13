@@ -1676,13 +1676,25 @@ otherwise keep stale progress until something else redrew it."
         (mevedel-view--schedule-render
          'tools data-buffer mevedel-view-rerender-debounce)))))
 
+(defun mevedel-view--window-attended-p (window)
+  "Return non-nil when WINDOW is visible on a focused frame family."
+  (let* ((frame (window-frame window))
+         (top frame))
+    (while (frame-parent top)
+      (setq top (frame-parent top)))
+    (and (eq (frame-visible-p frame) t)
+         (or (not (display-graphic-p top))
+             ;; PGTK can focus the child without focusing its parent.
+             (frame-focus-state frame)
+             (and (not (eq frame top)) (frame-focus-state top))))))
+
 (defun mevedel-view--unattended-p (&optional buffer)
   "Return non-nil when nobody can be watching BUFFER's view.
 
 BUFFER defaults to the current buffer.  A view is unattended when no
 window shows it, or when every window showing it sits on a frame that is
 invisible or iconified, or on a graphical frame without input focus; a
-child frame reports the focus of its top-level ancestor.  A view on a
+child frame accepts its own focus or its top-level ancestor's.  A view on a
 terminal frame counts as attended, since focus is unknowable there, and
 so does a view without windows in a batch Emacs, where tests run views
 undisplayed.  The window-change hook resumes a view when it reappears.
@@ -1691,16 +1703,7 @@ spinner frames and live rows nobody saw."
   (let ((windows (get-buffer-window-list (or buffer (current-buffer)) nil t)))
     (if (null windows)
         (not noninteractive)
-      (cl-every
-       (lambda (window)
-         (let* ((frame (window-frame window))
-                (top frame))
-           (while (frame-parent top)
-             (setq top (frame-parent top)))
-           (or (not (eq (frame-visible-p frame) t))
-               (and (display-graphic-p top)
-                    (null (frame-focus-state top))))))
-       windows))))
+      (not (cl-some #'mevedel-view--window-attended-p windows)))))
 
 (defun mevedel-view--flush-scheduled-render (view-buffer &optional synchronous)
   "Run VIEW-BUFFER's pending transcript render once.

@@ -433,8 +433,10 @@ shown in no window is unattended too; one on a terminal frame is attended,
 since focus is unknowable there, and so is an undisplayed view in batch Emacs,
 which keeps test behavior unchanged. While unattended, a render request only
 records its kind: it arms no timer that would wake the editor merely to defer
-again. Child frames use their top-level ancestor's focus
-state. The rendering measurements are recorded in
+again. Transcript rendering and animation share the same window attention
+check: a child frame accepts either its own focus or its top-level ancestor's.
+PGTK can report a focused child with an unfocused parent. The rendering
+measurements are recorded in
 [ADR 0119](adr/0119-keep-views-reconstructable-and-rendering-bounded.md#decision-history).
 
 Animation checks whether each registered indicator's buffer span overlaps the

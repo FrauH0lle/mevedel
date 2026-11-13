@@ -350,7 +350,8 @@ its own parent"
                       (format "Note %s" (overlay-get note 'mevedel-id)))))
             (let ((header (substring-no-properties (mevedel-note-frame--header))))
               (should (string-search "Note 1234" header))
-              (should (string-search "tool" header))))
+              (should (string-search "tool" header))
+              (should (string-search "C-c C-z close" header))))
         (when (buffer-live-p source) (kill-buffer source))))))
 
 (mevedel-deftest mevedel-note-frame--display-in-parent

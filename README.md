@@ -270,8 +270,9 @@ Choose **send** in that menu, or use `M-x mevedel-note-send`, to open the note's
 own conversation beside the code. Graphical Emacs uses an anchored child frame;
 terminal Emacs uses a side window. Type below the prompt and press `C-c C-c`
 to reply. The transcript above is read-only. `C-c C-v` shows the retained initial
-provider input, including its instructions and tool definitions. `C-c C-q` closes
-the frame/window without losing the conversation or draft. Sending a sent note
+provider input, including its instructions and tool definitions. `C-c C-z` closes
+the child frame (`C-c C-q` also closes the conversation window) without losing
+the conversation or draft. Sending a sent note
 reopens its conversation without making another request.
 
 Source-file ApplyPatch changes in a note conversation wait as **change ready**;

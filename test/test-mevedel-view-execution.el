@@ -1702,7 +1702,7 @@ mouse events in them, which later interactive calls would read."
           (let ((before (buffer-modified-tick)))
             (mevedel-view--spinner-tick)
             (should (= before (buffer-modified-tick)))))
-        (cl-letf (((symbol-function 'mevedel-view--animation-window-attended-p)
+        (cl-letf (((symbol-function 'mevedel-view--window-attended-p)
                    (lambda (_) nil)))
           (mevedel-view--start-spinner-timer)
           (should-not mevedel-view--spinner-timer))
