@@ -1506,11 +1506,12 @@ than overwrite.  Installing RECORD would replace held-back edits in memory."
       (mevedel-instruction-store--observe workspace nil record))))
 
 (defun mevedel-instruction-store-applied-backups (session)
-  "Return SESSION's applied-note backup names, or t when notes are not loaded."
+  "Return SESSION's note backup names, or t for an unloaded existing store."
   (let* ((workspace (mevedel-session-workspace session))
          (state (mevedel--instruction-state (mevedel--instruction-workspace-key workspace)))
          names)
-    (if (and workspace (null (plist-get (plist-get state :store-observation) :data)))
+    (if (and workspace (null (plist-get (plist-get state :store-observation) :data))
+             (file-exists-p (mevedel-instruction-store-path workspace)))
         t
       (cl-labels ((retain (props)
                     (dolist (pair (plist-get props 'mevedel-note-applied-changes))

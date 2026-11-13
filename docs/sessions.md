@@ -57,8 +57,9 @@ also names the literal-byte backups just before and after that application.
 Note revert uses only those paths and copies, not the main chat's whole turn,
 so its other edits, including earlier edits to the same file, survive.
 Live and recently closed notes retain these backups across session saves.
-If workspace notes have not loaded, session saves keep all file-history backups
-until their note references can be checked.
+If an existing workspace notes store has not loaded, session saves keep all
+file-history backups until their note references can be checked. An absent
+store has no such references and does not prevent cleanup.
 The references survive closing and restoring a note, but do not extend session retention.
 If the originating chat was deleted or expired, revert refuses clearly without
 touching source files.

@@ -558,6 +558,27 @@ Return the new workspace struct."
 
 ;;; Flushing and store creation
 
+(mevedel-deftest mevedel-instruction-store-applied-backups
+  (:quiet t :doc "session save prunes unused file history when the workspace has no notes store")
+  (test-mevedel-instruction-store--with-workspace (workspace source)
+    (let* ((mevedel-sessions-directory (file-name-concat (file-name-directory file) "sessions"))
+           (session (mevedel-session-create "without-notes" workspace)))
+      (unwind-protect
+          (with-temp-buffer
+            (org-mode)
+            (insert "Hello\n")
+            (mevedel-session-artifacts-save session (current-buffer) nil t)
+            (delete-file (mevedel-instruction-store-path workspace))
+            (mevedel--clear-instruction-state workspace)
+            (let ((stale (mevedel-session-artifacts-backup-path
+                          (mevedel-session-save-path session) (secure-hash 'sha256 "stale"))))
+              (make-directory (file-name-directory stale) t)
+              (write-region "stale" nil stale nil 'silent)
+              (should-not (file-exists-p (mevedel-instruction-store-path workspace)))
+              (mevedel-session-artifacts-save session (current-buffer) nil t)
+              (should-not (file-exists-p stale))))
+        (mevedel-session-persistence-lock-release (mevedel-session-save-path session) session)))))
+
 (mevedel-deftest mevedel-instruction-store-flush (:quiet t)
   ,test
   (test)
