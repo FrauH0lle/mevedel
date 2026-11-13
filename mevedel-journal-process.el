@@ -120,16 +120,23 @@ RECOVER requests abandoned-capture recovery before this processing opportunity."
                                    :warning)))))))))))
 
 (defun mevedel-journal-process-stop-all ()
-  "Cancel this client's queued and active digest work without awaiting a model."
+  "Cancel this client's queued and active digest work without awaiting a model.
+Attempt all work before re-signalling the first cancellation error."
   (mevedel-transport-cancel-idle mevedel-journal-process--pending 'journal-process)
   (clrhash mevedel-journal-process--recover-requested)
-  (let (workers)
+  (let (workers failure)
     (maphash (lambda (_key process) (push process workers)) mevedel-journal-process--workers)
     (clrhash mevedel-journal-process--workers)
     (dolist (process workers)
-      (mevedel-journal-worker-cancel process)))
-  (maphash (lambda (_key state) (mevedel-journal-process-cancel (plist-get state :workspace)))
-           mevedel-journal-process--running))
+      (condition-case err
+          (mevedel-journal-worker-cancel process t)
+        (error (unless failure (setq failure err)))))
+    (maphash (lambda (_key state)
+               (condition-case err
+                   (mevedel-journal-process-cancel (plist-get state :workspace))
+                 (error (unless failure (setq failure err)))))
+             mevedel-journal-process--running)
+    (when failure (signal (car failure) (cdr failure)))))
 
 (defun mevedel-journal-process--with-admission (workspace function &optional busy-message)
   "Call FUNCTION with WORKSPACE's digest-run admission claim, then settle it.

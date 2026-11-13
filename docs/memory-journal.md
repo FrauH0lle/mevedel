@@ -178,7 +178,19 @@ no backend or authentication objects are serialized to maintenance children. Rec
 processing opportunity resumes. Remote workspaces retain transport-aware editor
 scheduling. Live-buffer artifact retention remains in the editor, where active
 buffers and gptel context can protect references. Interrupted workers leave durable
-claims and evidence for later recovery; exit stops this client's children.
+claims and evidence for later recovery. Explicit worker cancellation, stop-all
+and the exit hook freeze each local worker before stopping its synchronous
+filesystem subprocess groups. Successful cancellation returns only after those
+groups have no running members, so they cannot publish a staged claim or other
+write afterwards. Shutdown has a two-second deadline per worker; it does not
+finish queued storage work or wait for a model. If quiescence cannot be
+established, single-owner cancellation warns with the workspace scope and
+returns nil so the owner can still retire its claim and callback. Bulk stop-all
+attempts every worker before re-signalling its first shutdown error. Only a
+successful cancellation return establishes quiescence. Failure to delete the
+batch worker itself still signals and preserves its handle and exchange for
+retry. Claims published before cancellation remain subject to their existing
+settlement and recovery rules.
 
 Capture discovery observes marker directories in batches and omits fully retired
 records whose evidence descriptor has already been removed. Retired records with

@@ -31,6 +31,10 @@
 ;; `mevedel-memory-pass'
 (defvar mevedel-memory-pass--inhibit-scheduling)
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-warning "mevedel-utilities" (scope type message &optional level buffer-name))
+(autoload 'mevedel-diagnostic-warning "mevedel-utilities")
+
 ;; `subr'
 (defvar read-eval)
 
@@ -178,6 +182,7 @@ owners must first fence mutation claims.  Unsolicited signals report errors."
                                (fallback)))))))))
             (push process mevedel-journal-worker--processes)
             (process-put process 'mevedel-journal-worker-directory directory)
+            (process-put process 'mevedel-journal-worker-root root)
             (when owner (plist-put owner :worker process)))
           ;; Interpreted code need not deliver a pending quit at this binding's
           ;; exit.  Deliver it inside the setup handler, after ownership handoff,
@@ -196,25 +201,95 @@ owners must first fence mutation claims.  Unsolicited signals report errors."
          (when (file-directory-p directory) (delete-directory directory t)))
        (signal (car err) (cdr err))))))
 
-(defun mevedel-journal-worker-cancel (process)
-  "Cancel PROCESS and any queued delivery, then discard its exchange files.
+(defun mevedel-journal-worker--stop (process)
+  "Stop PROCESS and its synchronous subprocess groups before returning.
+Local `process-file' children lead separate groups, so deleting only the
+worker (or signalling only its group) leaves their filesystem work alive."
+  (when (process-live-p process)
+    (let ((inhibit-quit t)
+          (pid (process-id process))
+          (until (+ (float-time) 2))
+          groups)
+      (unwind-protect
+          (progn
+            ;; Freeze launch/reaping before observing direct children.  Their
+            ;; non-job-control shells keep all shell descendants in one group.
+            (signal-process pid 'SIGSTOP)
+            (while (and (process-live-p process)
+                        (not (member (alist-get 'state (process-attributes pid)) '("T" "Z")))
+                        (< (float-time) until))
+              (accept-process-output process .01 nil 1))
+            (when (and (process-live-p process)
+                       (not (member (alist-get 'state (process-attributes pid)) '("T" "Z"))))
+              (error "Journal worker did not stop"))
+            (dolist (child (list-system-processes))
+              (let ((attributes (process-attributes child)))
+                (when (eql pid (alist-get 'ppid attributes))
+                  ;; Both synchronous and pipe children are group leaders.
+                  ;; Never signal a group we cannot prove is this child's.
+                  (unless (eql child (alist-get 'pgrp attributes))
+                    (error "Journal subprocess is not a group leader"))
+                  (push child groups)
+                  (signal-process (- child) 'SIGKILL))))
+            ;; SIGKILL can still be waiting on a syscall.  Establish quiescence,
+            ;; not merely signal delivery; zombies cannot publish anything.
+            (cl-labels ((running-p ()
+                          (cl-some
+                           (lambda (child)
+                             (let ((attributes (process-attributes child)))
+                               (and (memq (alist-get 'pgrp attributes) groups)
+                                    (not (equal "Z" (alist-get 'state attributes))))))
+                           (list-system-processes))))
+              (while (and (running-p) (< (float-time) until))
+                (accept-process-output process .01 nil 1))
+              (when (running-p) (error "Journal subprocesses did not stop"))))
+        (when (process-live-p process) (delete-process process))))))
+
+(defun mevedel-journal-worker-cancel (process &optional signal-errors)
+  "Cancel PROCESS and queued delivery after stopping its filesystem children.
+Return t only when its synchronous subprocess groups cannot publish late writes.
+A two-second shutdown deadline reports a scoped warning and returns nil instead
+of interrupting owner retirement.  Internal bulk callers use SIGNAL-ERRORS to
+collect errors and re-signal the first after attempting every worker.
+Retire the private exchange and launcher registration once the worker is dead.
+Failure to delete a still-live worker signals and retains its state for retry.
 Owners must fence mutation claims before calling this function.  Cancellation
 is explicit: an unsolicited process signal remains a deferred error reply."
   (process-put process 'mevedel-journal-worker-cancelled t)
-  (when (process-live-p process) (delete-process process))
-  (when-let* ((directory (process-get process 'mevedel-journal-worker-directory))
-              ((file-directory-p directory)))
-    (delete-directory directory t))
-  (setq mevedel-journal-worker--processes (delq process mevedel-journal-worker--processes)))
+  (let (failure)
+    (condition-case err (mevedel-journal-worker--stop process)
+      (error (setq failure err)))
+    ;; A live worker still needs its retry handle.  Do not turn a failed
+    ;; parent deletion into a quiescence warning or discard its exchange.
+    (when (and failure (process-live-p process))
+      (signal (car failure) (cdr failure)))
+    (when-let* ((directory (process-get process 'mevedel-journal-worker-directory))
+                ((file-directory-p directory)))
+      (delete-directory directory t))
+    (setq mevedel-journal-worker--processes (delq process mevedel-journal-worker--processes))
+    (cond
+     ((not failure) t)
+     (signal-errors (signal (car failure) (cdr failure)))
+     (t
+       (mevedel-diagnostic-warning
+        (or (process-get process 'mevedel-journal-worker-root) 'unavailable)
+        'mevedel (error-message-string failure) :warning)
+       nil))))
 
 (defun mevedel-journal-worker-stop-all ()
-  "Stop this editor's maintenance children without waiting for storage work."
+  "Stop this editor's maintenance children and their filesystem subprocesses.
+Do not finish queued work or wait for a model; use bounded forced shutdown.
+Attempt every worker before re-signalling the first shutdown error."
   (let ((mevedel-journal-process--inhibit-scheduling t)
         (mevedel-journal-cleanup--inhibit-scheduling t)
         (mevedel-memory-pass--inhibit-scheduling t)
-        (mevedel-journal-worker--stopping t))
+        (mevedel-journal-worker--stopping t)
+        failure)
     (dolist (process (copy-sequence mevedel-journal-worker--processes))
-      (mevedel-journal-worker-cancel process))))
+      (condition-case err
+          (mevedel-journal-worker-cancel process t)
+        (error (unless failure (setq failure err)))))
+    (when failure (signal (car failure) (cdr failure)))))
 
 (defun mevedel-journal-worker--run (request reply)
   "Execute private REQUEST in a batch child, writing a bounded REPLY."
