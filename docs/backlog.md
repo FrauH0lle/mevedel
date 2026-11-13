@@ -14,6 +14,19 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 
 ## Execution
 
+### Live Emacs out of memory during long orchestration
+
+On 2026-11-12 the kernel OOM killer twice killed the user's live Emacs hosting
+a long implement-spec orchestration with about 40–60 retained sub-agent
+conversations, at about 57.9 GB and 56.5 GB anonymous RSS. Before the second
+kill, RSS stayed near 1.3 GB for about six hours, then reached about 57 GB
+within roughly two hours. Both kills occurred during long `WaitAgent` calls
+that ended with `Connection closed`; the test processes were not killed.
+Investigate retained conversations/transcripts, the long-wait path
+(`WaitAgent` and the MCP connection), and many concurrent full test suites
+(the user's suspicion). Reproduce a similar orchestration load with
+`memory-report` or periodic RSS sampling to locate the growth.
+
 ### Harness-enforced Bash timeouts
 
 Managed Bash commands run until they exit or are stopped. `145c66a` removed
