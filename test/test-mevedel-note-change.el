@@ -969,5 +969,58 @@
       (should (string-search "pre-turn capture unavailable" (error-message-string err))))
     (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))))
 
+(mevedel-deftest mevedel-note-revert-change/note-write
+  (:quiet t :doc "an applied NoteWrite suggestion remains reversible after closing and reloading")
+  (mevedel-note-change-test--with-note
+    (setf (mevedel-session-preset-name session) 'mevedel-implement)
+    (with-current-buffer data-buf
+      (setq result
+            (mevedel-tool-note-write
+             (list :operations
+                   (vector (list :action "create" :file_path "source.txt" :start_line 2
+                                 :text "AI suggestion" :prepared_change
+                                 "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch"))))))
+    (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get result :result)))
+    (let* ((uuid (match-string 1 (plist-get result :result)))
+           (suggestion (mevedel-notes--resolve uuid workspace)))
+      (should-not (overlay-get suggestion 'mevedel-note-session-id))
+      (mevedel-note-apply-change suggestion)
+      (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))
+      (mevedel-note-done suggestion)
+      (mevedel-instruction-store-flush t)
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-instruction-store-observe workspace)
+      (mevedel-note-revert-change uuid nil workspace)
+      (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))
+      (should-not (mevedel-notes-closed workspace)))))
+
+(mevedel-deftest mevedel-note-revert-change/deleted-origin
+  (:quiet t :doc "a deleted originating main chat refuses revert without touching source or reopening the note")
+  (mevedel-note-change-test--with-note
+    (setf (mevedel-session-preset-name session) 'mevedel-implement)
+    (with-current-buffer data-buf
+      (setq result
+            (mevedel-tool-note-write
+             (list :operations
+                   (vector (list :action "create" :file_path "source.txt" :start_line 2
+                                 :text "AI suggestion" :prepared_change
+                                 "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch"))))))
+    (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get result :result)))
+    (let* ((uuid (match-string 1 (plist-get result :result)))
+           (suggestion (mevedel-notes--resolve uuid workspace)))
+      (mevedel-note-apply-change suggestion)
+      (mevedel-note-done suggestion)
+      (mevedel-session-persistence-lock-release (mevedel-session-save-path session) session)
+      (kill-buffer data-buf)
+      (delete-directory (mevedel-session-save-path session) t)
+      (let ((before (mevedel-session-artifacts-read-file-raw file))
+            (text (with-current-buffer source (buffer-string)))
+            (err (should-error (mevedel-note-revert-change uuid nil workspace) :type 'user-error)))
+        (should (string-search "conversation that made this change no longer exists"
+                               (error-message-string err)))
+        (should (equal before (mevedel-session-artifacts-read-file-raw file)))
+        (should (equal text (with-current-buffer source (buffer-string))))
+        (should (= 1 (length (mevedel-notes-closed workspace))))))))
+
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here

@@ -1347,9 +1347,10 @@
   :doc "a suggestion created during the active note request belongs to its discarded turn"
   (mevedel-note-conversation-test--with-source
     (let* ((note (mevedel-note-create "Review this code and leave a suggestion"))
+           (note-uuid (overlay-get note 'mevedel-uuid))
            (view (mevedel-note-send note))
            (data (buffer-local-value 'mevedel--data-buffer view))
-           outcome)
+           outcome suggestion)
       (should (mevedel-turn-busy-p data))
       (with-current-buffer data
         (mevedel-pipeline-run-tool-outcome
@@ -1362,9 +1363,9 @@
       (ert-info ((format "%S" outcome))
         (should (eq 'success (plist-get outcome :status))))
       (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get outcome :result)))
-      (let ((suggestion (mevedel-notes--resolve (match-string 1 (plist-get outcome :result)) workspace)))
-        (mevedel-note-conversation-test--answer (car sent) "The suggestion is ready.")
-        (mevedel-note-apply-change suggestion))
+      (setq suggestion (mevedel-notes--resolve (match-string 1 (plist-get outcome :result)) workspace))
+      (mevedel-note-conversation-test--answer (car sent) "The suggestion is ready.")
+      (mevedel-note-apply-change suggestion)
       (should (equal "outside-before\nsuggested code\noutside-after\n"
                      (mevedel-test--read-file file)))
       (with-current-buffer view
@@ -1373,7 +1374,63 @@
                   ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
           (mevedel-rewind)))
       (should (equal "outside-before\nselected code\noutside-after\n"
+                     (mevedel-test--read-file file)))
+      (setq note (mevedel-notes--resolve note-uuid workspace)
+            suggestion (mevedel-notes--resolve (overlay-get suggestion 'mevedel-uuid) workspace))
+      (mevedel-note-send note)
+      (with-current-buffer data
+        (mevedel-tool-patch-handler
+         #'ignore
+         '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-selected code\n+new turn code\n*** End Patch")))
+      (mevedel-note-conversation-test--answer (car sent) "A different change in the reused turn.")
+      (mevedel-note-apply-change (mevedel-notes--resolve note-uuid workspace))
+      (should (equal "outside-before\nnew turn code\noutside-after\n"
+                     (mevedel-test--read-file file)))
+      (should-error (mevedel-note-revert-change (overlay-get suggestion 'mevedel-uuid) nil workspace)
+                    :type 'user-error)
+      (should (equal "outside-before\nnew turn code\noutside-after\n"
                      (mevedel-test--read-file file))))))
+
+(mevedel-deftest mevedel-tool-note-write/rewind-waiting (:quiet t)
+  ,test
+  (test)
+  :doc "Rewind clears a main chat's waiting suggestion without a note conversation link"
+  (dolist (closed '(nil t))
+    (mevedel-note-conversation-test--with-source
+      (let* ((main (mevedel--chat-buffer "main" t workspace))
+             (view (buffer-local-value 'mevedel--view-buffer main))
+             outcome)
+        (with-current-buffer view
+          (goto-char (point-max))
+          (insert "Suggest a fix")
+          (mevedel-view-send))
+        (with-current-buffer main
+          (mevedel-pipeline-run-tool-outcome
+           (mevedel-tool-ensure "NoteWrite") (lambda (value) (setq outcome value))
+           (list :operations
+                 (vector (list :action "create" :file_path file :start_line 2
+                               :text "Main chat suggestion" :prepared_change
+                               "*** Begin Patch\n*** Update File: source.el\n@@\n-selected code\n+suggested code\n*** End Patch"))))
+          (mevedel-test--await 5 "NoteWrite did not settle" outcome))
+        (should (eq 'success (plist-get outcome :status)))
+        (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get outcome :result)))
+        (let* ((uuid (match-string 1 (plist-get outcome :result)))
+               (suggestion (mevedel-notes--resolve uuid workspace)))
+          (should-not (overlay-get suggestion 'mevedel-note-session-id))
+          (should (eq 'ready (mevedel-notes-attention-state suggestion)))
+          (mevedel-note-conversation-test--answer (car sent) "The suggestion is ready.")
+          (when closed (mevedel-note-done suggestion))
+          (with-current-buffer view
+            (cl-letf (((symbol-function 'completing-read)
+                       (lambda (_prompt collection &rest _) (car (all-completions "" collection))))
+                      ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+              (mevedel-rewind)))
+          (when closed (mevedel-note-restore uuid workspace))
+          (setq suggestion (mevedel-notes--resolve uuid workspace))
+          (should-not (eq 'ready (mevedel-notes-attention-state suggestion)))
+          (should-error (mevedel-note-apply-change suggestion) :type 'user-error)
+          (should (equal "outside-before\nselected code\noutside-after\n"
+                         (mevedel-test--read-file file))))))))
 
 (mevedel-deftest mevedel-tool-note-write/send (:quiet t)
   ,test
