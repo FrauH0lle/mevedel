@@ -361,7 +361,32 @@ COMMAND defaults to guidance; it may also be the recorded-edit review command."
       (forward-line 1) (mevedel-buddy-keep-note)
       (mevedel-remarks-test--review
        (lambda (prompt _tools)
+         (should (string-match-p "\\[active\\].*Open concern" prompt))
          (should (string-match-p "\\[dismissed\\].*Rejected concern" prompt))
+         (should (< (string-match "\\[active\\].*Open concern" prompt)
+                    (string-match "\\[dismissed\\].*Rejected concern" prompt)))
+         (should (= 2 (with-temp-buffer
+                        (insert prompt) (how-many "^- note_id" (point-min) (point-max))))))))))
+
+(mevedel-deftest mevedel-buddy-remarks/open-before-dismissed
+  (:quiet t :doc "a full dismissed group cannot crowd open remarks out of the review")
+  (mevedel-remarks-test--with-source
+    (let ((name (buffer-name))
+          (mevedel-buddy-note-serialize-limit 2))
+      (mevedel-remarks-test--review
+       (lambda (_prompt tools)
+         (mevedel-remarks-test--tool tools "add_note" name 1 "Rejected one" "significant")
+         (mevedel-remarks-test--tool tools "add_note" name 2 "Rejected two" "significant")
+         (mevedel-remarks-test--tool tools "add_note" name 3 "Open concern" "significant")))
+      (goto-char (point-min)) (mevedel-buddy-dismiss-note)
+      (forward-line 1) (mevedel-buddy-dismiss-note)
+      (forward-line 1) (insert "edited ") (save-buffer)
+      (mevedel-remarks-test--review
+       (lambda (prompt _tools)
+         (should (string-match-p "\\[active\\].*Open concern.*annotated line changed" prompt))
+         (should (string-match-p "\\[dismissed\\]" prompt))
+         (should (< (string-match "\\[active\\]" prompt)
+                    (string-match "\\[dismissed\\]" prompt)))
          (should (= 2 (with-temp-buffer
                         (insert prompt) (how-many "^- note_id" (point-min) (point-max))))))))))
 

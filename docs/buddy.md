@@ -154,8 +154,8 @@ source anchor, author, text and severity. A new review restores existing remarks
 before building its bounded note context, so a restart does not erase earlier
 advice. An exact repeated live remark on the same line reuses its identity;
 dismissed remarks match by buffer and text even after lines move. Dismissed
-remarks take priority in the bounded prompt so open and kept notes cannot
-crowd out the advice already rejected.
+remarks follow open remarks and precede kept notes in the bounded prompt, so
+current concerns remain maintainable before rejected advice and kept context.
 The first file-backed remark in a recognized project creates `.mevedel/`, like
 an ordinary note. Outside a project, an existing workspace state directory is
 needed for persistence; otherwise remarks stay in memory with a one-time notice.
