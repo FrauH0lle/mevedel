@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'mevedel)
+(require 'mevedel-buddy-note)
 (require 'mevedel-persistence)
 (require 'mevedel-session-artifacts)
 (defvar mevedel-notes-closed-max-count)
@@ -568,6 +569,26 @@
       (mevedel-note-restore 3 workspace)
       (should (string-match-p "Second" (string-join (mevedel-notes-test--labels))))
       (should (string-match-p "Third" (string-join (mevedel-notes-test--labels))))))
+  :doc "150 dismissed remarks leave the newest 100 done or deleted notes restorable"
+  (mevedel-notes-test--with-source
+    (dotimes (i 101)
+      (let ((note (mevedel-note-create (format "Closed %s" i) :defer-write t)))
+        (if (cl-evenp i) (mevedel-note-done note) (mevedel-note-delete note))))
+    (dotimes (i 150)
+      (let ((note (mevedel-note-create (format "Remark %s" i) :defer-write t)))
+        (overlay-put note 'mevedel-note-author 'buddy)
+        (mevedel-buddy-dismiss-note note)))
+    (let ((note (mevedel-note-create "Agent note" :defer-write t)))
+      (overlay-put note 'mevedel-note-author 'agent)
+      (mevedel-note-dismiss note))
+    (mevedel-instruction-store-sync workspace)
+    (mevedel--clear-instruction-state workspace)
+    (mevedel-instruction-store-observe workspace)
+    (should (= 251 (length (mevedel-notes-closed workspace))))
+    (should-error (mevedel-note-restore 1 workspace) :type 'user-error)
+    (dotimes (i 100)
+      (should (overlay-buffer (mevedel-note-restore (+ i 2) workspace))))
+    (should (= 100 (length (mevedel-notes-test--labels)))))
   :doc "custom age limit expires at the boundary and cannot be bypassed by restore"
   (mevedel-notes-test--with-source
     (let ((mevedel-notes-closed-max-count nil)
@@ -591,6 +612,33 @@
         (let ((mevedel-notes-closed-max-age-days nil))
           (should-not (mevedel-notes-closed workspace))
           (should-error (mevedel-note-restore 1 workspace) :type 'user-error)))))
+  :doc "dismissed Buddy and agent notes ignore zero count but still expire at 30 days"
+  (mevedel-notes-test--with-source
+    (let ((mevedel-notes-closed-max-count 0)
+          (clock (float-time))
+          (real-time (symbol-function 'float-time)))
+      (cl-letf (((symbol-function 'float-time)
+                 (lambda (&optional time)
+                   (if time (funcall real-time time) clock))))
+        (let ((buddy (mevedel-note-create "Buddy" :defer-write t))
+              (agent (mevedel-note-create "Agent" :defer-write t)))
+          (overlay-put buddy 'mevedel-note-author 'buddy)
+          (overlay-put agent 'mevedel-note-author 'agent)
+          (mevedel-buddy-dismiss-note buddy)
+          (mevedel-note-dismiss agent))
+        (mevedel-instruction-store-sync workspace)
+        (mevedel--clear-instruction-state workspace)
+        (mevedel-instruction-store-observe workspace)
+        (setq clock (+ clock (* 30 86400) -1))
+        (should (= 2 (length (mevedel-notes-closed workspace))))
+        (setq clock (1+ clock))
+        (dolist (id '(1 2))
+          (should-error (mevedel-note-restore id workspace) :type 'user-error))
+        (mevedel-instruction-store-sync workspace)
+        (mevedel--clear-instruction-state workspace)
+        (mevedel-instruction-store-observe workspace)
+        (let ((mevedel-notes-closed-max-age-days nil))
+          (should-not (mevedel-notes-closed workspace))))))
   :doc "a closed import without a timestamp cannot block later store writes"
   (mevedel-notes-test--with-source
     (dolist (text '("Undated" "Recent"))

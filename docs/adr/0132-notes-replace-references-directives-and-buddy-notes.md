@@ -83,8 +83,10 @@ Sending or taking a Buddy remark first
 keeps it as the user's note, so an older review cannot retract it.
 
 **Closing replaces archive.** Done, deleted and dismissed notes share one
-recently-closed list, bounded by count and age (100 notes and 30 days by
-default), restorable with their conversation link. Deleting or expiring a note
+recently-closed list, restorable with their conversation link. Done and deleted
+notes share a count limit (100 by default); dismissed Buddy remarks and agent
+notes do not count against it. All closed notes expire by age (30 days by
+default). Deleting or expiring a note
 never undoes file changes. Reverting a done note's change reopens it. Note
 sessions in their original form stay out of the ordinary chat chooser. Cleanup retains them while
 notes still reference them; after expiry, safe local reference checks allow
@@ -144,6 +146,11 @@ clobbering another conversation's later edits.
   is retained.
 
 ## Decision history
+
+**Dismissed notes originally shared the count limit.** High-volume remark
+dismissals could evict the user's done or deleted notes and release their
+conversations for cleanup. Dismissed notes now retain only the age limit, so
+dismissing advice does not consume that restoration budget.
 
 **ADR 0087 kept directive identity outside source overlays.** Activity-bearing
 directives survived source deletion and could be archived but not removed.

@@ -346,7 +346,9 @@ tags and attachments. Restore follows the old code when it can find it; if the
 code changed, it falls back to the old line and column, clamped to the file.
 Notes never close merely because their code was edited.
 
-Recently closed keeps the newest 100 notes for up to 30 elapsed days by default.
+Recently closed keeps the newest 100 done or deleted notes for up to 30 elapsed
+days by default. Dismissed notes do not count against that limit, but still
+expire by age.
 Customize `mevedel-notes-closed-max-count` and
 `mevedel-notes-closed-max-age-days`; nil disables either limit. Limits are checked
 when closing, listing or restoring closed notes and when writing the store, not
