@@ -78,6 +78,8 @@ before the ordinary patch transaction writes anything. Disjoint later edits
 survive; overlaps report current file/line ranges and leave all files unchanged.
 Uncaptured changes refuse rather than guessing. Apply and revert use visiting
 buffer text, preserving disjoint unsaved edits in the result written to source.
+If a visiting buffer has characters its file coding cannot write, both commands
+refuse and ask the user to save with a suitable coding first.
 Both commands first observe the workspace store and resolve the note's UUID
 again, so another client's newer waiting, applied or closed state is used.
 File history records bytes, not modes; existing modes survive and a restored

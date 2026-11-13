@@ -187,6 +187,9 @@ Return an ordinary tool result immediately; no tool callback is retained."
                       (plist-get disk :path)))
         (save-restriction
           (widen)
+          (when (unencodable-char-position (point-min) (point-max) buffer-file-coding-system)
+            (user-error "Save %s first: its coding cannot write some characters"
+                        (plist-get disk :path)))
           (setq snapshot (plist-put snapshot :exists t))
           (setq snapshot
                 (plist-put snapshot :bytes

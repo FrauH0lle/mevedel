@@ -381,6 +381,31 @@
       (should-error (call-interactively (key-binding "a")) :type 'user-error))
     (should (equal "external before\nold\nafter\n" (mevedel-test--read-file file)))))
 
+(mevedel-deftest mevedel-note-apply-change/unencodable
+  (:quiet t :doc "apply and revert refuse lossy encoding without changing disk or unsaved text")
+  (dolist (revert '(nil t))
+    (mevedel-note-change-test--with-note
+      (let* ((file (file-name-concat root "other.txt"))
+             (source (progn
+                       (write-region "before\nold\nafter\n" nil file nil 'silent)
+                       (find-file-noselect file))))
+        (mevedel-note-change-test--propose
+         data-buf "*** Begin Patch\n*** Update File: other.txt\n@@\n-old\n+new\n*** End Patch")
+        (when revert (mevedel-note-apply-change note))
+        (let ((before (if revert "before\nnew\nafter\n" "before\nold\nafter\n")))
+          (with-current-buffer source
+            (set-buffer-file-coding-system 'iso-latin-1-unix)
+            (goto-char (point-max))
+            (insert "5\u20ac\n")
+            (let ((err (should-error
+                        (if revert (mevedel-note-revert-change note 0)
+                          (mevedel-note-apply-change note))
+                        :type 'user-error)))
+              (should (string-search "coding cannot write" (error-message-string err))))
+            (should (equal (concat before "5\u20ac\n") (buffer-string)))
+            (should (buffer-modified-p)))
+          (should (equal before (mevedel-session-artifacts-read-file-raw file))))))))
+
 (mevedel-deftest mevedel-note-apply-change/store-sync
   (:quiet t :doc "a stale client cannot reapply another client's reverted change")
   (dolist (resume '(t nil))
