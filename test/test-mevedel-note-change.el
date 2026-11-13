@@ -68,7 +68,8 @@
                (setq note (mevedel-note-create "Improve this"))
                (overlay-put note 'mevedel-note-state 'sent)
                (overlay-put note 'mevedel-note-session-id (mevedel-session-session-id session)))
-             (setf (mevedel-session-preset-name session) 'mevedel-note)
+             (setf (mevedel-session-preset-name session) 'mevedel-implement
+                   (mevedel-session-note-conversation session) t)
              (with-current-buffer data-buf
                (setq-local default-directory (file-name-as-directory root)
                            mevedel--workspace workspace
@@ -290,7 +291,7 @@
       (save-buffer)
       (should (eq 'stale (mevedel-notes-attention-state note)))
       (let ((err (should-error (mevedel-note-apply-change note) :type 'user-error)))
-        (should (string-search "re-ask" (error-message-string err)))
+        (should (string-search "ask in the conversation" (error-message-string err)))
         (should (string-search "merge" (error-message-string err))))
       (should (equal "bmy efore\nold\nafter\n" (buffer-string))))
     (should (equal "bmy efore\nold\nafter\n" (mevedel-test--read-file file))))
@@ -1286,9 +1287,7 @@
       (mevedel-note-apply-change suggestion)
       (should-not (overlay-get suggestion 'mevedel-note-session-id))
       (with-current-buffer source
-        (cl-letf (((symbol-function 'read-multiple-choice)
-                   (lambda (_prompt choices &rest _)
-                     (or (assq ?u choices) (ert-fail "Applied suggestion offers no revert action")))))
+        (cl-letf (((symbol-function 'read-key) (lambda (&rest _) ?r)))
           (mevedel-note-menu suggestion)))
       (should (equal "before\nold\nafter\n" (mevedel-test--read-file file))))))
 

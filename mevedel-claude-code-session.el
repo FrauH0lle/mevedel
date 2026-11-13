@@ -210,7 +210,7 @@ An omitted policy resolves through the common request model resolver."
        (let ((input (mevedel-claude-code-context-prompt
                      request (vconcat (when excerpt (vector `((type . "text") (text . ,excerpt))))
                                       (mevedel-claude-code-context-input request prompt)) history)))
-         (when (eq (mevedel-session-preset-name session) 'mevedel-note)
+         (when (mevedel-session-note-conversation session)
            (mevedel-note-conversation-record-input
             session (list :system system-prompt :input input)))
          input))

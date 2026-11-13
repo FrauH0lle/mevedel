@@ -771,7 +771,7 @@ Journal, active-goal and goal-policy belong to other conversation context.")
 (defun mevedel-system-context-components (&optional session)
   "Return automatic context components for SESSION, defaulting to this session."
   (if (and (setq session (or session mevedel--session))
-           (eq (mevedel-session-preset-name session) 'mevedel-note))
+           (mevedel-session-note-conversation session))
       mevedel-system-note-context-components
     mevedel-system-retained-components))
 
@@ -827,12 +827,6 @@ Journal, active-goal and goal-policy belong to other conversation context.")
 (mevedel-define-prompt-profile permission-review
   :workspace-aware nil
   :components '(permission-review-role))
-
-(mevedel-define-prompt-profile note
-  :workspace-aware t
-  :components '(main-role task-policy main-tone memory-policy memory-save-policy
-                tool-orchestration resources skill-policy
-                workspace-config memory environment tools skills))
 
 (mevedel-define-prompt-profile buddy
   :workspace-aware t
@@ -1017,7 +1011,6 @@ to conversation delivery, leaving only the stable system contract."
   "Return the built-in prompt profile for PRESET, or nil."
   (pcase preset
     ('mevedel-implement 'main)
-    ('mevedel-note 'note)
     (_ nil)))
 
 (defun mevedel-system--effective-system-prompt ()

@@ -29,6 +29,9 @@
 (autoload 'mevedel-note-revert-change "mevedel-note-change" nil t)
 (autoload 'mevedel-note-merge-change "mevedel-note-merge" nil t)
 
+;; `mevedel-note-settings'
+(declare-function mevedel-note-settings-apply "mevedel-note-settings" (settings data))
+
 ;; `gptel'
 (defvar gptel--known-presets)
 
@@ -37,10 +40,8 @@
   "C-c C-c" #'mevedel-view-send
   "C-c C-a" #'mevedel-note-apply-change
   "C-c C-b" #'mevedel-note-revert-change
-  "C-c C-n" #'mevedel-note-reask
   "C-c C-g" #'mevedel-note-merge-change
   "C-c C-v" #'mevedel-note-show-sent
-  "C-c C-q" #'mevedel-note-conversation-close
   "C-c C-z" #'mevedel-note-conversation-close)
 
 (define-key mevedel-note-conversation-mode-map
@@ -88,7 +89,7 @@
 (defun mevedel-note-conversation-record-input (session data)
   "Retain each fully assembled provider input DATA for SESSION's inspection.
 DATA contains request text and tool schemas, never transport credentials."
-  (when (eq (mevedel-session-preset-name session) 'mevedel-note)
+  (when (mevedel-session-note-conversation session)
     (mevedel-session-artifacts-assert-new-mutation-authority session)
     (let ((directory (file-name-concat (mevedel-session-save-path session) "note-input")))
       (make-directory directory t)
@@ -113,7 +114,37 @@ DATA contains request text and tool schemas, never transport credentials."
                      :key #'mevedel-reminder-type)))
   (add-hook 'gptel-post-request-hook #'mevedel-note-conversation--record-gptel-input nil t)
   (when (buffer-live-p mevedel--view-buffer)
-    (with-current-buffer mevedel--view-buffer (mevedel-note-conversation-mode 1))))
+    (with-current-buffer mevedel--view-buffer (mevedel-note-conversation-mode 1)))
+  (mevedel-note-conversation-refresh-hint))
+
+(defun mevedel-note-conversation-refresh-hint (&optional note)
+  "Refresh the cached composer hint when NOTE's prepared-change state changes.
+Without NOTE, restore this session's hint during note conversation setup."
+  (let* ((id (and note (overlay-get note 'mevedel-note-session-id)))
+         (data (if id (mevedel-session-control-transfer-root-buffer-for-id id)
+                 (and mevedel--session
+                      (mevedel-session-note-conversation mevedel--session)
+                      (current-buffer))))
+         (session (and data (buffer-local-value 'mevedel--session data)))
+         (view (and data (buffer-local-value 'mevedel--view-buffer data))))
+    (when (and session (mevedel-session-note-conversation session)
+               (buffer-live-p view))
+      (let* ((waiting
+              (or (and note (overlay-get note 'mevedel-note-prepared-change))
+                (cl-some
+                 (lambda (entry)
+                   (let ((properties (plist-get entry :properties)))
+                     (and (equal (mevedel-session-session-id session)
+                                 (plist-get properties 'mevedel-note-session-id))
+                          (plist-get properties 'mevedel-note-prepared-change))))
+                 (mevedel-notes--entries (mevedel-session-workspace session)))))
+             (hint (propertize
+                    (if waiting "C-c C-z close · C-c C-a apply · C-c C-g merge"
+                      "C-c C-z close") 'face 'shadow)))
+        (with-current-buffer view
+          (unless (equal hint mevedel-view--input-hint)
+            (setq-local mevedel-view--input-hint hint)
+            (mevedel-view-refresh-input-prompt)))))))
 
 (defun mevedel-note-show-sent ()
   "Show every exact provider input retained for this note conversation."
@@ -176,6 +207,7 @@ ordinary request-time transform, where media has an active request owner."
 NO-DISPLAY leaves windows and focus alone.  DEFER-WRITE leaves the store
 sync to the caller's batch."
   (unless notes (user-error "Choose at least one note"))
+  (require 'mevedel-note-settings)
   (let* ((note (car notes))
          (workspace (mevedel--instruction-buffer-workspace (overlay-buffer note))))
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
@@ -207,7 +239,11 @@ sync to the caller's batch."
             (with-current-buffer data
               (if id
                   (mevedel-note-conversation-setup)
-                (mevedel-preset-apply 'mevedel-note data)
+                (setf (mevedel-session-note-conversation session) t)
+                (let ((settings (overlay-get note 'mevedel-note-settings)))
+                  (unless (plist-member settings :preset)
+                    (mevedel-preset-apply 'mevedel-implement data))
+                  (mevedel-note-settings-apply settings data))
                 (let ((mevedel-instruction-store--inhibit
                        (if defer-write t mevedel-instruction-store--inhibit)))
                   (mevedel-session-artifacts-save session data nil t)))
@@ -227,7 +263,8 @@ sync to the caller's batch."
             (unless id
               (overlay-put item 'mevedel-note-session-id (mevedel-session-session-id session)))
             (overlay-put item 'mevedel-note-state 'sent)
-            (mevedel-notes--render item))
+            (mevedel-notes--render item)
+            (mevedel-note-conversation-refresh-hint item))
           (mevedel-instruction-store-touch workspace)
           (unless defer-write (mevedel-instruction-store-flush t)))
         (let ((view (buffer-local-value 'mevedel--view-buffer data)))
@@ -248,36 +285,6 @@ NO-DISPLAY leaves focus alone; DEFER-WRITE lets a batch caller sync the store."
   (interactive)
   (mevedel-note-conversation--send-notes (list (or note (mevedel-notes--at-point)))
                                        :no-display no-display :defer-write defer-write))
-
-;;;###autoload
-(defun mevedel-note-reask (&optional note)
-  "Ask NOTE's conversation again using the batch's current marked code."
-  (interactive)
-  (require 'mevedel-note-change)
-  (setq note (mevedel-note-change--note note))
-  (let* ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note)))
-         (id (overlay-get note 'mevedel-note-session-id)))
-    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
-      (unless id (user-error "Send the note before re-asking"))
-      (let* ((notes (cl-loop for entry in (mevedel-notes--entries workspace)
-                             when (equal id (plist-get (plist-get entry :properties)
-                                                       'mevedel-note-session-id))
-                             collect (or (mevedel-notes--resolve (plist-get entry :uuid) workspace)
-                                         (user-error "Source unavailable for note %s"
-                                                     (plist-get (plist-get entry :properties)
-                                                                'mevedel-id)))))
-             (data (or (mevedel-session-control-transfer-root-buffer-for-id id)
-                       (mevedel-session-persistence-resume-id workspace id)
-                       (user-error "Note conversation is unavailable: %s" id))))
-        (with-current-buffer data
-          (when (or (mevedel-turn-busy-p) mevedel-compact-run-in-flight)
-            (user-error "Note conversation is still working"))
-          (when (or buffer-read-only mevedel-session--read-only-mode)
-            (user-error "Note conversation is read-only"))
-          (mevedel--submit-generated-turn
-           (concat "Reconsider the request on the current code below. Replace the waiting change; do not apply it.\n\n"
-                   (mapconcat (lambda (item) (mevedel-note-conversation--prompt item mevedel--session))
-                              notes "\n\n"))))))))
 
 ;;;###autoload
 (cl-defun mevedel-note-send-batch (notes &key no-display defer-write)

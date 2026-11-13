@@ -2015,7 +2015,7 @@ just before sending it."
            session target))
     (mevedel-session-rewind-assert-stable-source
      session buffer "rewinding")
-    (when (eq (mevedel-session-preset-name session) 'mevedel-note)
+    (when (mevedel-session-note-conversation session)
       (mevedel-instruction-store-sync (mevedel-session-workspace session)))
     (let* ((selection (mevedel-session-rewind--prepare-rewind-files
                        session target boundary))

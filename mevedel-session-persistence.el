@@ -2195,6 +2195,7 @@ mentions-shown reset to empty hash tables on load."
   (list :session-id (plist-get sidecar :session-id)
         :session-name (plist-get sidecar :session-name)
         :preset-name (plist-get sidecar :preset-name)
+        :note-conversation (plist-get sidecar :note-conversation)
         :workspace (plist-get sidecar :workspace)
         :created-at (plist-get sidecar :created-at)
         :updated-at (plist-get sidecar :updated-at)
@@ -2762,7 +2763,8 @@ at `size unavailable' rather than hiding the chooser."
 
 (defun mevedel-session-persistence--note-p (sidecar)
   "Return non-nil when SIDECAR describes an original note conversation."
-  (and (eq (plist-get sidecar :preset-name) 'mevedel-note)
+  (and (or (plist-get sidecar :note-conversation)
+           (eq (plist-get sidecar :preset-name) 'mevedel-note))
        (not (plist-get sidecar :forked-from-session-id))))
 
 (defun mevedel-session-persistence--dedicated-p (workspace sidecar)

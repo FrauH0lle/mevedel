@@ -22,10 +22,16 @@
 ;; `mevedel-note-conversation'
 (autoload 'mevedel-note-send "mevedel-note-conversation" nil t)
 (autoload 'mevedel-note-send-batch "mevedel-note-conversation" nil t)
-(autoload 'mevedel-note-reask "mevedel-note-conversation" nil t)
 (autoload 'mevedel-note-apply-change "mevedel-note-change" nil t)
 (autoload 'mevedel-note-revert-change "mevedel-note-change" nil t)
 (autoload 'mevedel-note-merge-change "mevedel-note-merge" nil t)
+
+;; `mevedel-note-settings'
+(autoload 'mevedel-note-settings "mevedel-note-settings" nil t)
+
+;; `mevedel-session-control-transfer'
+(autoload 'mevedel-session-control-transfer-root-buffer-for-id
+  "mevedel-session-control-transfer")
 
 ;; `mevedel-persistence'
 (defvar mevedel-instructions-restored-hook)
@@ -50,6 +56,9 @@
 ;; `mevedel-view-composer'
 (declare-function mevedel-view-call-preserving-window-configuration
                   "mevedel-view-composer" (thunk))
+
+;; `rmc'
+(declare-function rmc--add-key-description "rmc" (elem))
 
 (defcustom mevedel-note-labels 'collapsed
   "Initial display of note labels in source buffers.
@@ -750,57 +759,78 @@ Return its live source overlay, retaining its text, tags and attachments."
 (defun mevedel-note-menu (&optional note)
   "Show the actions menu for NOTE, defaulting to the note at point."
   (interactive)
+  (require 'rmc)
   (let ((workspace (mevedel--instruction-buffer-workspace
                     (if note (overlay-buffer note) (current-buffer)))))
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
       (setq note (or note (mevedel-notes--at-point)))
-      (pcase (car (read-multiple-choice
-                   (format "Note %s: " (overlay-get note 'mevedel-id))
-                   (append '((?s "send" "Send or reopen the note conversation")
-                             (?i "edit" "Edit note text")
-                             (?w "copy text" "Copy full note text to the kill ring")
-                             (?x "done" "Mark note done"))
+      (let* ((choices
+              (append '((?s "send" "Send or reopen the note conversation")
+                        (?i "edit" "Edit note text")
+                        (?w "copy text" "Copy full note text to the kill ring")
+                        (?x "done" "Mark note done"))
+                      (if (eq 'expanded (overlay-get note 'mevedel-note-labels))
+                          '((?e "collapse" "Hide the note label"))
+                        '((?e "expand" "Show the full note label")))
+                      (if (mevedel-note-watching-p note)
+                          '((?t "drop" "Stop watching this note"))
+                        '((?t "take" "Implement yourself with Buddy watching")))
+                      (if (eq 'buddy (overlay-get note 'mevedel-note-author))
+                          '((?k "dismiss" "Dismiss this remark")
+                            (?b "keep" "Keep as your own note"))
+                        (if (eq 'agent (overlay-get note 'mevedel-note-author))
+                            '((?k "dismiss" "Dismiss this agent finding"))
+                          '((?k "delete" "Delete note without changing code"))))
+                      (when (or (overlay-get note 'mevedel-note-applied-changes)
+                                (when-let* ((id (overlay-get note 'mevedel-note-session-id))
+                                            (data (mevedel-session-control-transfer-root-buffer-for-id id))
+                                            (session (buffer-local-value 'mevedel--session data)))
+                                  (cl-some #'cdr (mevedel-session-file-snapshots session))))
+                        '((?r "revert" "Revert an applied change, preserving later edits")))
+                      (when (overlay-get note 'mevedel-note-prepared-change)
+                        '((?a "apply" "Apply prepared change")
+                          (?m "merge" "Resolve in a three-way view")))
+                      '((?g "tags" "Edit note tags")
+                        (?S "settings" "Configure this note conversation"))))
+             (label (overlay-get note 'mevedel-label-overlay))
+             (original (overlay-get label 'after-string))
+             (menu (concat original "\n  "
+                           (propertize "Actions: " 'face 'shadow)
+                           (mapconcat (lambda (entry)
+                                        (cdr (rmc--add-key-description entry)))
+                                      choices ", ")))
+             choice)
+        (unwind-protect
+            (progn
+              (overlay-put label 'after-string menu)
+              (let ((key (read-key)))
+                (setq choice (and (assq key choices) key))))
+          (when (eq menu (overlay-get label 'after-string))
+            (overlay-put label 'after-string original)))
+        (pcase choice
+          (?s (mevedel-note-send note))
+          (?a (mevedel-note-apply-change note))
+          (?r (mevedel-note-revert-change note))
+          (?m (mevedel-note-merge-change note))
+          (?t (if (mevedel-note-watching-p note)
+                  (mevedel-note-drop note)
+                (mevedel-note-take note)))
+          (?e (overlay-put note 'mevedel-note-labels
                            (if (eq 'expanded (overlay-get note 'mevedel-note-labels))
-                               '((?e "collapse" "Hide the note label"))
-                             '((?e "expand" "Show the full note label")))
-                           (if (mevedel-note-watching-p note)
-                               '((?t "drop" "Stop watching this note"))
-                             '((?t "take" "Implement yourself with Buddy watching")))
-                           (if (eq 'buddy (overlay-get note 'mevedel-note-author))
-                               '((?d "dismiss" "Dismiss this remark")
-                                 (?k "keep" "Keep as your own note"))
-                             (if (eq 'agent (overlay-get note 'mevedel-note-author))
-                                 '((?d "dismiss" "Dismiss this agent finding"))
-                               '((?d "delete" "Delete note without changing code"))))
-                           (when (or (overlay-get note 'mevedel-note-session-id)
-                                     (overlay-get note 'mevedel-note-applied-changes))
-                             '((?u "revert" "Revert an applied change, preserving later edits")))
-                           (when (overlay-get note 'mevedel-note-prepared-change)
-                             '((?a "apply" "Apply prepared change")
-                               (?r "re-ask" "Ask again on current code")
-                               (?m "merge" "Resolve in a three-way view"))))))
-        (?s (mevedel-note-send note))
-        (?a (mevedel-note-apply-change note))
-        (?u (mevedel-note-revert-change note))
-        (?r (mevedel-note-reask note))
-        (?m (mevedel-note-merge-change note))
-        (?t (if (mevedel-note-watching-p note)
-                (mevedel-note-drop note)
-              (mevedel-note-take note)))
-        (?e (overlay-put note 'mevedel-note-labels
-                         (if (eq 'expanded (overlay-get note 'mevedel-note-labels))
-                             'collapsed 'expanded))
-            (mevedel-notes--render note))
-        (?i (mevedel-note-edit
-             (read-string "Note: " (overlay-get note 'mevedel-note-text)) note))
-        (?w (kill-new (or (overlay-get note 'mevedel-note-text) ""))
-            (message "mevedel: note text copied"))
-        (?x (mevedel-note-done note))
-        (?d (pcase (overlay-get note 'mevedel-note-author)
-              ('buddy (mevedel-buddy-dismiss-note note))
-              ('agent (mevedel-note-dismiss note))
-              (_ (mevedel-note-delete note))))
-        (?k (mevedel-buddy-keep-note note))))))
+                               'collapsed 'expanded))
+              (mevedel-notes--render note))
+          (?i (mevedel-note-edit
+               (read-string "Note: " (overlay-get note 'mevedel-note-text)) note))
+          (?w (kill-new (or (overlay-get note 'mevedel-note-text) ""))
+              (message "mevedel: note text copied"))
+          (?x (mevedel-note-done note))
+          (?g (mevedel-note-set-tags (mevedel-notes--read-tags note) note))
+          (?S (mevedel-note-settings note))
+          (?k (pcase (overlay-get note 'mevedel-note-author)
+                ('buddy (mevedel-buddy-dismiss-note note))
+                ('agent (mevedel-note-dismiss note))
+                (_ (mevedel-note-delete note))))
+          (?b (mevedel-buddy-keep-note note)))))))
 
 (defun mevedel-notes--ensure-workspace (workspace)
   "Prepare the current file's WORKSPACE for note storage, without syncing.

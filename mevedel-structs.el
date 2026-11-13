@@ -273,7 +273,8 @@ workspace."
   ;; Id of the artifact whose own conversation this session is, or nil.  The
   ;; artifact's metadata names the session back; only when both agree is the
   ;; session hidden from lists, kept from expiry and deleted with it.
-  dedicated-artifact)
+  dedicated-artifact
+  note-conversation) ; non-nil for an isolated note session, independent of preset
 
 (defun mevedel-session-authority-mode-for-workspace (workspace)
   "Return the durable authority mode required by WORKSPACE.

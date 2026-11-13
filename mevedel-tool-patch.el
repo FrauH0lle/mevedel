@@ -1978,7 +1978,7 @@ matches fails as it does for a local file."
                    (mevedel-tool-patch-assert-baseline proposal)
                    (cond
                     ((and mevedel--session
-                          (eq (mevedel-session-preset-name mevedel--session) 'mevedel-note)
+                          (mevedel-session-note-conversation mevedel--session)
                           (not (cl-some
                                 (lambda (operation)
                                   (or (mevedel-tool-patch-resource-address-p

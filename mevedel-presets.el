@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Defines the implementation and note-conversation gptel presets.
+;; Defines the implementation gptel preset and composable preset setup.
 ;;
 ;; Each preset assembles tool lists and registers sub-agents buffer-locally at
 ;; request time.  This module builds the request FSM handler chain around the
@@ -196,22 +196,16 @@ Each value contains the raw parent, agent, tool, and variable settings.")
 (defvar mevedel-preset--applying-p nil
   "Non-nil inside a preset application, including its parent applications.")
 
-(defun mevedel-preset--guard-note-identity (apply-preset preset &rest args)
-  "Call APPLY-PRESET with PRESET and ARGS without replacing a note's identity."
-  (when (and (not mevedel-preset--applying-p)
-             (not mevedel-preset--temporary-p)
-             mevedel--session
-             (eq (mevedel-session-preset-name mevedel--session) 'mevedel-note)
-             (not (mevedel-session-forked-from-session-id mevedel--session))
-             (not (memq preset '(mevedel-note)))
-             (not (equal preset "mevedel-note")))
-    (mevedel-diagnostic-user-error
-     (mevedel-diagnostic-scope mevedel--session)
-     "The note preset is fixed; change permission mode to govern edits"))
-  (let ((mevedel-preset--applying-p t))
-    (apply apply-preset preset args)))
+(defun mevedel-preset--apply-note-layer (apply-preset preset &rest args)
+  "Call APPLY-PRESET with PRESET and ARGS, keeping note isolation on top."
+  (let ((outer (not mevedel-preset--applying-p))
+        (mevedel-preset--applying-p t))
+    (prog1 (apply apply-preset preset args)
+      (when (and outer mevedel--session
+                 (mevedel-session-note-conversation mevedel--session))
+        (mevedel-note-conversation-setup)))))
 
-(advice-add 'gptel--apply-preset :around #'mevedel-preset--guard-note-identity)
+(advice-add 'gptel--apply-preset :around #'mevedel-preset--apply-note-layer)
 
 (defconst mevedel-preset--structural-keys
   '(:description :parents :pre :post :backend :model :system :tools :agents
@@ -318,10 +312,7 @@ without a cycle check of its own."
         (if mevedel-preset--temporary-p
             (set symbol value)
           (set (make-local-variable symbol) value))))
-    (when (and (not mevedel-preset--temporary-p) mevedel--session
-               (or (not (eq (mevedel-session-preset-name mevedel--session) 'mevedel-note))
-                   (mevedel-session-forked-from-session-id mevedel--session)
-                   (eq name 'mevedel-note)))
+    (when (and (not mevedel-preset--temporary-p) mevedel--session)
       (setf (mevedel-session-preset-name mevedel--session) name)
       ;; Any applied session preset replaces a missing one.
       (mevedel-recovery-clear mevedel--session "preset"))))
@@ -441,9 +432,7 @@ preset is applied."
     (if (assq name mevedel-preset--registry)
         (mevedel-preset-apply name buffer)
       (mevedel-recovery-report session "preset" 'configuration
-                               (if (eq name 'mevedel-note)
-                                   "The fixed note preset is unavailable; restore its definition"
-                                 (format "Preset %s is unavailable; select a replacement" name)) t))))
+                               (format "Preset %s is unavailable; select a replacement" name) t))))
 
 (defmacro mevedel-with-preset (name &rest body)
   "Run BODY with mevedel preset NAME applied for the current request only.
@@ -519,15 +508,6 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
                'main
                :retained t
                :session mevedel--session
-               :refresh-buffer (current-buffer))))
-
-  (mevedel-define-preset mevedel-note
-    :description "Independent note conversation; permission mode governs edits"
-    :parents (mevedel-implement)
-    :post (lambda () (mevedel-note-conversation-setup))
-    :system (lambda ()
-              (mevedel-system-build-prompt
-               'note :retained t :session mevedel--session
                :refresh-buffer (current-buffer)))))
 
 (defun mevedel-preset-prepare-request (request)

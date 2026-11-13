@@ -280,7 +280,7 @@ only through PICKED-CUM-TURN.  Entries with non-integer
     ptc-checkpoints durable-tree-ensured
     agent-transcripts invoked-skills permission-queue permission-absence
     pending-plan-approval
-    plan-metadata goal attached-artifacts dedicated-artifact)
+    plan-metadata goal attached-artifacts dedicated-artifact note-conversation)
   "Every `mevedel-session' slot decided by the logical clone constructor.")
 
 (defun mevedel-session-fork--assert-clone-slot-completeness ()
@@ -342,6 +342,7 @@ The identity and timestamp keywords describe the new materialized child."
            :sandbox-mode (mevedel-session-sandbox-mode session)
            :plan-mode (mevedel-session-plan-mode session)
            :preset-name (mevedel-session-preset-name session)
+           :note-conversation (unless fork-p (mevedel-session-note-conversation session))
            :model-provider (mevedel-session-model-provider session)
            :external-conversations nil
            :last-outcome nil

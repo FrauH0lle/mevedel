@@ -587,9 +587,14 @@ their distinct labels."
                   'font-lock-face 'mevedel-view-plan-mode))
      (t (propertize (format "[%s]" label) 'font-lock-face face)))))
 
+(defvar-local mevedel-view--input-hint nil
+  "Cached hint line above the composer prompt, or nil.")
+
 (defun mevedel-view--input-prompt-string ()
   "Return the read-only input prompt below the permanent composer rail."
-  (propertize mevedel-view--input-prompt
+  (propertize (if mevedel-view--input-hint
+                 (concat mevedel-view--input-hint "\n" mevedel-view--input-prompt)
+               mevedel-view--input-prompt)
               'font-lock-face 'mevedel-view-input-prompt))
 
 

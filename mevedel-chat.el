@@ -857,8 +857,7 @@ each says so itself, so no artifact needs reading."
    (lambda (entry)
      (let ((session (buffer-local-value 'mevedel--session (cdr entry))))
        (or (mevedel-session-dedicated-artifact session)
-           (and (eq (mevedel-session-preset-name session) 'mevedel-note)
-                (not (mevedel-session-forked-from-session-id session))))))
+           (mevedel-session-note-conversation session))))
    (mevedel--workspace-sessions workspace)))
 
 (defun mevedel--pick-session (sessions default)

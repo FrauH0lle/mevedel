@@ -60,6 +60,7 @@
           (mevedel-journal-enabled nil)
           (gptel--known-tools (copy-tree gptel--known-tools))
           (gptel--known-presets (copy-tree gptel--known-presets))
+          (mevedel-preset--registry (copy-tree mevedel-preset--registry))
           (gptel-prompt-transform-functions (copy-tree gptel-prompt-transform-functions))
           (transport-enabled mevedel-transport--enabled-p)
           (gptel--known-backends nil)
@@ -293,7 +294,7 @@
       (with-current-buffer view
         (goto-char (point-max))
         (insert "Draft still here")
-        (call-interactively (key-binding (kbd "C-c C-q"))))
+        (call-interactively (key-binding (kbd "C-c C-z"))))
       (should (buffer-live-p view))
       (should (eq source (window-buffer (selected-window))))
       (should (= origin (window-point (selected-window))))
@@ -307,8 +308,7 @@
   (mevedel-note-conversation-test--with-source
     (mevedel-note-create "Menu question?")
     (should (eq #'self-insert-command (key-binding "s")))
-    (cl-letf (((symbol-function 'read-multiple-choice)
-               (lambda (_prompt choices &rest _) (assq ?s choices))))
+    (cl-letf (((symbol-function 'read-key) (lambda (&rest _) ?s)))
       (call-interactively #'mevedel-note-menu))
     (should (= 1 (length sent)))
     (mevedel-note-conversation-test--answer (car sent) "Sent through the menu."))
@@ -345,6 +345,103 @@
       (with-current-buffer view
         (should (string-search "A prepared improvement." (buffer-string)))))))
 
+(mevedel-deftest mevedel-note-send/base-preset
+  (:quiet t :doc "notes use the implementation base and keep isolation after a preset change")
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Explain this code"))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view))
+           (session (buffer-local-value 'mevedel--session data)))
+      (should (eq 'mevedel-implement (mevedel-session-preset-name session)))
+      (mevedel-note-conversation-test--answer (car sent) "An answer.")
+      (with-current-buffer data
+        (mevedel-define-preset note-test-base
+          :description "Custom base" :system "CUSTOM-BASE-SYSTEM"
+          :tools ((:tool "Read")))
+        (mevedel-preset-apply 'note-test-base)
+        (should (equal "CUSTOM-BASE-SYSTEM" gptel-system-prompt))
+        (should (equal '("Read") (mapcar #'gptel-tool-name gptel-tools)))
+        (should-not gptel-use-context)
+        (should (equal '(workspace-config memory environment tools skills resources)
+                       (mevedel-system-context-components session))))
+      (with-current-buffer view
+        (should mevedel-note-conversation-mode)
+        (goto-char (point-max))
+        (insert "Follow up")
+        (mevedel-view-send))
+      (should (= 2 (length sent)))
+      (should (string-search "CUSTOM-BASE-SYSTEM"
+                             (gptel--json-encode (plist-get (gptel-fsm-info (car sent)) :data))))
+      (mevedel-note-conversation-test--answer (car sent) "Custom answer.")
+      (should (= 2 (length (directory-files
+                            (file-name-concat (mevedel-session-save-path session) "note-input")
+                            nil "\\.json\\'")))))))
+
+(mevedel-deftest mevedel-note-send/composer-hints
+  (:quiet t :doc "state changes update dimmed hints without moving or editing the composer")
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Improve this code"))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view))
+           (draft "> active draft\nsecond line"))
+      (mevedel-note-conversation-test--answer (car sent) "An answer.")
+      (with-current-buffer view
+        (should (string-search "C-c C-z close\n> " (buffer-string)))
+        (mevedel-view-test--insert-composer-draft draft))
+      (let ((selected (selected-window))
+            (position (with-current-buffer view (copy-marker (point))))
+            (start (window-start (selected-window))))
+        (with-current-buffer data
+          (mevedel-tool-patch-handler
+           #'ignore
+           '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-selected code\n+improved code\n*** End Patch")))
+        (with-current-buffer view
+          (should (string-search "C-c C-z close · C-c C-a apply · C-c C-g merge\n> "
+                                 (buffer-string)))
+          (should (equal draft (mevedel-view--input-text)))
+          (should (= position (point))))
+        (should (eq selected (selected-window)))
+        (should (= start (window-start selected))))
+      (mevedel-note-apply-change note)
+      (with-current-buffer view
+        (should (string-search "C-c C-z close\n> " (buffer-string)))
+        (should-not (string-search "C-c C-a apply" (buffer-string)))
+        (should (equal draft (mevedel-view--input-text)))))))
+
+(mevedel-deftest mevedel-note-send/saved-settings
+  (:quiet t :doc "the first real send uses the note's persisted choices, not the chat defaults")
+  (mevedel-note-conversation-test--with-source
+    (cl-letf (((symbol-plist 'note-reasoner)
+               '(:reasoning-effort (member low high))))
+      (gptel-make-openai "Other" :key "test" :models '(note-reasoner))
+      (mevedel-define-preset note-test-base
+        :description "Custom note base" :system "CUSTOM-FIRST-SYSTEM"
+        :tools ((:tool "Read")))
+      (let ((note (mevedel-note-create "Explain this code")))
+        (overlay-put note 'mevedel-note-settings
+                     '(:preset note-test-base :provider "Other:note-reasoner"
+                       :effort high :permission-mode edits))
+        (mevedel-instruction-store-touch workspace)
+        (mevedel-instruction-store-flush t)
+        (mevedel--clear-instruction-state workspace)
+        (mevedel-instruction-store-observe workspace)
+        (with-current-buffer source
+          (goto-char (point-min)) (forward-line 1)
+          (setq note (mevedel-notes--at-point)))
+        (let* ((view (mevedel-note-send note))
+               (data (buffer-local-value 'mevedel--data-buffer view))
+               (session (buffer-local-value 'mevedel--session data)))
+          (should (eq 'note-test-base (mevedel-session-preset-name session)))
+          (should (eq 'high (mevedel-session-reasoning-effort session)))
+          (should (eq 'edits (mevedel-session-permission-mode session)))
+          (with-current-buffer data
+            (should (eq 'note-reasoner gptel-model))
+            (should (equal "Other" (gptel-backend-name gptel-backend))))
+          (should (string-search "CUSTOM-FIRST-SYSTEM"
+                                 (gptel--json-encode
+                                  (plist-get (gptel-fsm-info (car sent)) :data))))
+          (mevedel-note-conversation-test--answer (car sent) "Custom first answer."))))))
+
 (mevedel-deftest mevedel-note-show-sent
   (:quiet t :doc "inputs are separate immutable files shown in dispatch order after reopening")
   (mevedel-note-conversation-test--with-source
@@ -379,7 +476,7 @@
     (dolist (condition '(error quit))
       (let ((note (mevedel-note-create "Explain this code"))
             (existing (buffer-list)))
-        (setf (plist-get (alist-get 'mevedel-note gptel--known-presets) :pre)
+        (setf (plist-get (alist-get 'mevedel-implement gptel--known-presets) :pre)
               (lambda () (signal condition '("Preset refused first send"))))
         (condition-case err
             (progn (mevedel-note-send note) (ert-fail "First send did not fail"))
@@ -389,94 +486,6 @@
         (dolist (buffer (cl-set-difference (buffer-list) existing))
           (should-not (buffer-local-value 'mevedel--session buffer))
           (should-not (buffer-local-value 'mevedel--data-buffer buffer)))))))
-
-(mevedel-deftest mevedel-note-reask
-  (:quiet t)
-  ,test
-  (test)
-  :doc "re-ask sends current noted code and a fresh change can be applied"
-  (mevedel-note-conversation-test--with-source
-    (let* ((mevedel-note-labels 'expanded)
-           (note (mevedel-note-create "Improve this code"))
-           (view (mevedel-note-send note))
-           (data (buffer-local-value 'mevedel--data-buffer view)))
-      (mevedel-note-conversation-test--answer (car sent) "I can improve it.")
-      (with-current-buffer data
-        (mevedel-tool-patch-handler
-         #'ignore
-         '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-selected code\n+first proposal\n*** End Patch")))
-      (with-current-buffer source
-        (goto-char (+ 9 (overlay-start note)))
-        (insert "current ")
-        (save-buffer))
-      (should (eq 'stale (mevedel-notes-attention-state note)))
-      (should (string-search "change stale"
-                             (overlay-get (overlay-get note 'mevedel-label-overlay) 'after-string)))
-      (with-current-buffer view
-        (call-interactively (key-binding (kbd "C-c C-n"))))
-      (should (= 2 (length sent)))
-      (should (string-search "selected current code"
-                             (gptel--json-encode
-                              (plist-get (gptel-fsm-info (car sent)) :data))))
-      (with-current-buffer view
-        (let ((report (call-interactively (key-binding (kbd "C-c C-v")))))
-          (with-current-buffer report
-            (dolist (request sent)
-              (should (string-search
-                       (gptel--json-encode (plist-get (gptel-fsm-info request) :data))
-                       (buffer-string)))))))
-      (mevedel-note-conversation-test--answer (car sent) "Here is a fresh change.")
-      (with-current-buffer data
-        (mevedel-tool-patch-handler
-         #'ignore
-         '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-selected current code\n+fresh proposal\n*** End Patch")))
-      (should (eq 'ready (mevedel-notes-attention-state note)))
-      (with-current-buffer view
-        (call-interactively (key-binding (kbd "C-c C-a"))))
-      (with-current-buffer source
-        (should (equal "outside-before\nfresh proposal\noutside-after\n" (buffer-string)))))))
-(mevedel-deftest mevedel-note-reask/unavailable-source
-  (:quiet t :doc "re-ask identifies a deleted batch source without submitting another request")
-  (mevedel-note-conversation-test--with-source
-    (let* ((note (mevedel-note-create "First question"))
-           (other-file (file-name-concat root "other.txt"))
-           (other (progn (write-region "other code\n" nil other-file nil 'silent)
-                         (find-file-noselect other-file)))
-           (second (with-current-buffer other
-                     (setq-local mevedel--workspace workspace)
-                     (mevedel-note-create "Second question")))
-           (number (overlay-get second 'mevedel-id))
-           (view (mevedel-note-send-batch (list note second))))
-      (mevedel-note-conversation-test--answer (car sent) "One answer.")
-      (kill-buffer other)
-      (delete-file other-file)
-      (with-current-buffer view
-        (let ((err (should-error (mevedel-note-reask note) :type 'user-error)))
-          (should (string-search (format "Source unavailable for note %s" number)
-                                 (error-message-string err)))))
-      (should (= 1 (length sent))))))
-
-(mevedel-deftest mevedel-note-reask/admission
-  (:quiet t :doc "re-ask refuses busy, settling, compacting and read-only sessions without changing the transcript")
-  (dolist (state '(working settling compacting read-only))
-    (mevedel-note-conversation-test--with-source
-      (let* ((note (mevedel-note-create "Improve this code"))
-             (view (mevedel-note-send note))
-             (data (buffer-local-value 'mevedel--data-buffer view)))
-        (unless (eq state 'working)
-          (mevedel-note-conversation-test--answer (car sent) "An answer."))
-        (with-current-buffer source
-          (goto-char (overlay-start note))
-          (insert "current "))
-        (with-current-buffer data
-          (let ((before (buffer-string))
-                (mevedel--turn-settlements-pending (and (eq state 'settling) '(pending)))
-                (mevedel-compact-run-in-flight (eq state 'compacting))
-                (mevedel-session--read-only-mode (eq state 'read-only)))
-            (when (eq state 'read-only) (setq buffer-read-only t))
-            (should-error (mevedel-note-reask note) :type 'user-error)
-            (should (equal before (buffer-string)))))
-        (should (= 1 (length sent)))))))
 
 (mevedel-deftest mevedel-rewind/note-session
   (:quiet t)
@@ -535,6 +544,9 @@
                      (car (all-completions "" collection))))
                   ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
           (mevedel-rewind)))
+      (with-current-buffer view
+        (should (string-search "C-c C-z close\n> " (buffer-string)))
+        (should-not (string-search "C-c C-a apply" (buffer-string))))
       (mevedel--clear-instruction-state workspace)
       (mevedel-instruction-store-observe workspace)
       (with-current-buffer source
@@ -657,7 +669,7 @@
       (mevedel-note-conversation-test--answer (car sent) "An answer.")
       (with-current-buffer view
         (with-current-buffer (mevedel-inspect-effective-prompt)
-          (should (string-search "Profile: note" (buffer-string)))
+          (should (string-search "Profile: main" (buffer-string)))
           (should (string-search "** workspace-config" (buffer-string)))
           (should-not (string-search "component breakdown unavailable" (buffer-string))))))))
 
@@ -974,7 +986,7 @@
       (with-current-buffer data (mevedel-session-persistence-release-on-kill))
       (mevedel-chat-discard-buffers data t)
       (dolist (contents '("(" "(:version \"unknown\")"
-                         "(:preset-name \"mevedel-note\")" nil))
+                         "(:note-conversation t)" nil))
         (if contents
             (write-region contents nil sidecar nil 'silent)
           (delete-file sidecar))
@@ -1070,38 +1082,6 @@
                 (should-not (invisible-p (1- (point)))))))
         (when (frame-live-p mevedel-note-frame--frame)
           (mevedel-note-frame-close)))))))
-
-(mevedel-deftest mevedel-preset-apply/note-identity
-  (:quiet t)
-  ,test
-  (test)
-  :doc "fixed note identity refuses preset changes but retains model, effort and permission controls"
-  (mevedel-note-conversation-test--with-source
-    (let* ((view (mevedel-note-send (mevedel-note-create "A question")))
-           (data (buffer-local-value 'mevedel--data-buffer view)))
-      (mevedel-note-conversation-test--answer (car sent) "An answer")
-      (with-current-buffer data
-        (let ((system gptel-system-prompt)
-              (tools gptel-tools))
-          (should-error (mevedel-preset-apply 'mevedel-implement) :type 'user-error)
-          (should-error (gptel-preset 'mevedel-implement) :type 'user-error)
-          (should (eq system gptel-system-prompt))
-          (should (eq tools gptel-tools)))
-        (cl-letf (((symbol-plist 'note-reasoner)
-                   '(:reasoning-effort (member low high))))
-          (let ((backend (gptel-make-openai "Other" :key "test" :models '(note-reasoner))))
-            (mevedel-model-set-session-provider
-             mevedel--session (list :backend backend :model 'note-reasoner) data)
-            (mevedel-model-set-session-effort mevedel--session 'high data)
-            (mevedel-permission-mode-transition 'edits)
-            (mevedel-with-preset 'mevedel-implement
-              (should (eq 'mevedel-note (mevedel-session-preset-name mevedel--session))))
-            (mevedel-preset-apply 'mevedel-note)
-            (should (eq 'note-reasoner gptel-model))
-            (should (eq 'high gptel-reasoning-effort))
-            (should (eq 'edits (mevedel-session-permission-mode mevedel--session)))
-            (should (eq 'mevedel-note gptel--preset))
-            (should (eq 'mevedel-note (mevedel-session-preset-name mevedel--session)))))))))
 
 (mevedel-deftest mevedel-note-send/edited-file-isolation
   (:quiet t)

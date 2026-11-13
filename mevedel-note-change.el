@@ -20,6 +20,10 @@
 
 (declare-function mevedel-patch-review-start "mevedel-patch-review" (proposal callback data-buffer))
 
+;; `mevedel-note-conversation'
+(declare-function mevedel-note-conversation-refresh-hint "mevedel-note-conversation" (&optional note))
+(autoload 'mevedel-note-conversation-refresh-hint "mevedel-note-conversation")
+
 ;; `mevedel-session-rewind'
 (declare-function mevedel-session-rewind-read-backup "mevedel-session-rewind" (session backup-name))
 (autoload 'mevedel-session-rewind-read-backup "mevedel-session-rewind")
@@ -135,14 +139,15 @@ Return an ordinary tool result immediately; no tool callback is retained."
     (dolist (note notes)
       (overlay-put note 'mevedel-note-prepared-change record)
       (overlay-put note 'mevedel-note-attention-state 'ready)
-      (mevedel-notes--render note))
+      (mevedel-notes--render note)
+      (mevedel-note-conversation-refresh-hint note))
     (mevedel-instruction-store-touch workspace)
     (mevedel-instruction-store-flush t)
     (let* ((result (mevedel-tool-patch-result proposal changes))
            (text (plist-get result :result)))
       (plist-put result :result
                  (concat "Prepared change ready; source files are unchanged. "
-                         "The user can apply, review, or re-ask later.\n\n" text))
+                         "The user can apply, review, or merge later.\n\n" text))
       result)))
 
 (defun mevedel-note-change--note (&optional note)
@@ -212,7 +217,7 @@ When SELECTED is non-nil, prepare only those reviewed changes."
                         (eq 'stale (plist-get props 'mevedel-note-attention-state)))))
                (mevedel-notes--entries
                 (mevedel--instruction-buffer-workspace (overlay-buffer note)))))
-      (user-error "Change stale; re-ask on current code or merge"))
+      (user-error "Change stale; ask in the conversation or merge"))
     (dolist (before (plist-get record :before))
       (let* ((path (plist-get before :path))
              (extents (cl-remove-if-not
@@ -263,7 +268,7 @@ When SELECTED is non-nil, prepare only those reviewed changes."
     (when conflicts
       (overlay-put note 'mevedel-note-attention-state 'stale)
       (mevedel-notes--render note)
-      (user-error "Change stale at %s; re-ask on current code or merge"
+      (user-error "Change stale at %s; ask in the conversation or merge"
                   (mapconcat (lambda (conflict)
                                (format "%s:%d-%d" (plist-get conflict :path)
                                        (plist-get conflict :start-line)
@@ -351,7 +356,8 @@ When SELECTED is non-nil, prepare only those reviewed changes."
                                   :test #'equal))
           (overlay-put item 'mevedel-note-prepared-change nil)
           (overlay-put item 'mevedel-note-attention-state nil)
-          (mevedel-notes--render item))))
+          (mevedel-notes--render item)
+          (mevedel-note-conversation-refresh-hint item))))
     (mevedel-instruction-store-touch workspace)
     (mevedel-instruction-store-flush t)))
 

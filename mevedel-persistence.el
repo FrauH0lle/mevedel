@@ -31,6 +31,10 @@
 ;; `mevedel-instruction-edit'
 (autoload 'mevedel-instruction-replace-buffer-contents "mevedel-instruction-edit")
 
+;; `mevedel-note-conversation'
+(declare-function mevedel-note-conversation-refresh-hint "mevedel-note-conversation" (&optional note))
+(autoload 'mevedel-note-conversation-refresh-hint "mevedel-note-conversation")
+
 ;; `mevedel-note-source'
 (declare-function mevedel--mark-buffer-source-missing
                   "mevedel-note-source" (buffer))
@@ -1573,7 +1577,8 @@ Keep memory in step with the new merge base, including crash recovery."
                 (dolist (key '(mevedel-note-state mevedel-note-prepared-change
                               mevedel-note-applied-changes mevedel-note-attention-state))
                   (overlay-put note key (plist-get after key)))
-                (mevedel--update-instruction-overlay note t))))
+                (mevedel--update-instruction-overlay note t)
+                (mevedel-note-conversation-refresh-hint note))))
         (dolist (instruction (plist-get (cdr file) :instructions))
           (mevedel-instruction-store--rewind-note instruction session-id turn))))
     (dolist (closed (plist-get state :closed-notes))

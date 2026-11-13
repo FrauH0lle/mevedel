@@ -138,8 +138,7 @@ AUTOMATIC exercises the idle review policy without waiting for idle time."
   :doc "source menu and list toggle Take and drop without source-letter bindings"
   (mevedel-take-test--with-source
     (let ((note (mevedel-note-create "Implement the goal")))
-      (cl-letf (((symbol-function 'read-multiple-choice)
-                 (lambda (_prompt choices &rest _) (assq ?t choices))))
+      (cl-letf (((symbol-function 'read-key) (lambda (&rest _) ?t)))
         (mevedel-note-menu note))
       (should (eq 'taken (mevedel-notes-attention-state note)))
       (should (eq 'self-insert-command (key-binding "t")))

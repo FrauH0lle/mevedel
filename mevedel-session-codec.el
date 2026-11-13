@@ -658,6 +658,7 @@ The resulting plist is round-trippable via
                              (mevedel-session-codec--goal-to-plist goal))
    :attached-artifacts     (mevedel-session-attached-artifacts session)
    :dedicated-artifact     (mevedel-session-dedicated-artifact session)
+   :note-conversation      (mevedel-session-note-conversation session)
    ;; Root's reverse-order unread queue.  Child queues live on their explicit
    ;; registry records and all queues become FIFO only at delivery time.
    :messages
@@ -962,7 +963,13 @@ their hygiene filters."
                      :permission-mode  (plist-get plist :permission-mode)
                      :sandbox-mode     (plist-get plist :sandbox-mode)
                      :plan-mode        (plist-get plist :plan-mode)
-                     :preset-name      (plist-get plist :preset-name)
+                     :preset-name      (if (eq (plist-get plist :preset-name) 'mevedel-note)
+                                           'mevedel-implement
+                                         (plist-get plist :preset-name))
+                     :note-conversation
+                     (and (not (plist-get plist :forked-from-session-id))
+                          (or (plist-get plist :note-conversation)
+                              (eq (plist-get plist :preset-name) 'mevedel-note)))
                      :recovery-issues  (copy-tree (plist-get plist :recovery-issues))
                      :pending-follow-ups (mapcar (lambda (entry)
                                                    (let ((copy (copy-tree entry)))

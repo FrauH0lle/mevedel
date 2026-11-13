@@ -37,7 +37,7 @@
 
   :doc "covers every session slot and isolates both clone policies"
   (progn
-    (should (= 103
+    (should (= 104
                (length
                 (cdr (cl-struct-slot-info 'mevedel-session)))))
     (should (mevedel-session-fork--assert-clone-slot-completeness))
@@ -137,7 +137,8 @@
            :plan-metadata '(:status accepted :nested source)
            :goal goal
            :attached-artifacts (list "board")
-           :dedicated-artifact "board"))
+           :dedicated-artifact "board"
+           :note-conversation t))
          (fork
           (mevedel-session-fork-clone-session
            source 'fork
@@ -157,6 +158,8 @@
            :created-at "copy-created"
            :updated-at "copy-updated"
            :forked-from-session-id "source")))
+    (should-not (mevedel-session-note-conversation fork))
+    (should (mevedel-session-note-conversation save-as))
     (dolist (candidate (list fork save-as))
       (should-not (mevedel-session-checkpoint-state candidate))
       (should (eq workspace (mevedel-session-workspace candidate)))

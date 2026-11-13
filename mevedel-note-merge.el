@@ -132,7 +132,7 @@ COMMIT receives resolved changes and owns closing the editor on success."
                                   (decode-coding-string (plist-get change :bytes) 'undecided))
                              "")))
           (when (cl-some (lambda (text) (string-search "\0" text)) (list yours seen proposed))
-            (user-error "Cannot merge binary source; re-ask on current code"))
+            (user-error "Cannot merge binary source; ask in the conversation"))
           (push (list :path path :disk disk :coding coding :yours yours :seen seen
                       :proposed proposed :change change) sections)))
       (let ((merge (mevedel-note-merge-open
