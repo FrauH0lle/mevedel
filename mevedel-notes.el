@@ -606,7 +606,10 @@ The caller validates RECORD and computes its :note-extents."
     (overlay-put note 'mevedel-note-prepared-change record)
     (overlay-put note 'mevedel-note-attention-state 'ready)
     (mevedel-notes--render note)
-    (mevedel-note-conversation-refresh-hint note))
+    ;; An unlinked suggestion has no conversation; without an id the hint
+    ;; would fall back to the current one and advertise changes it cannot apply.
+    (when (overlay-get note 'mevedel-note-session-id)
+      (mevedel-note-conversation-refresh-hint note)))
   (when notes (mevedel-instruction-store-touch (mevedel-notes--workspace notes))))
 
 (defun mevedel-note-record-applied (record files workspace)

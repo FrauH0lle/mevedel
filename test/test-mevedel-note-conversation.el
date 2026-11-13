@@ -1620,5 +1620,38 @@
                  (should-not states))
         (advice-remove 'mevedel-instruction-store-flush spy)))))
 
+(mevedel-deftest mevedel-note-conversation/hint-after-transitions (:quiet t)
+  ,test
+  (test)
+  :doc "the composer hint follows hold-change and record-applied, and ignores an unlinked suggestion"
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Review this code and leave a suggestion"))
+           (view (mevedel-note-send note))
+           (data (buffer-local-value 'mevedel--data-buffer view))
+           (sid (overlay-get note 'mevedel-note-session-id))
+           (record (list :id "r" :session-id sid :turn 1))
+           outcome)
+      (cl-flet ((hint () (substring-no-properties
+                          (buffer-local-value 'mevedel-view--input-hint view)))
+                (label () (overlay-get (overlay-get note 'mevedel-label-overlay)
+                                       'after-string)))
+        (should (equal "C-c C-z close" (hint)))
+        ;; A suggestion made from inside the conversation has no session link.
+        (with-current-buffer data
+          (mevedel-pipeline-run-tool-outcome
+           (mevedel-tool-ensure "NoteWrite") (lambda (value) (setq outcome value))
+           (list :operations
+                 (vector (list :action "create" :file_path file :start_line 2
+                               :text "A suggested fix" :prepared_change
+                               "*** Begin Patch\n*** Update File: source.el\n@@\n-selected code\n+suggested code\n*** End Patch")))))
+        (should (equal "C-c C-z close" (hint)))
+        (overlay-put note 'mevedel-note-labels 'expanded)
+        (mevedel-note-hold-change (list note) record)
+        (should (string-search "C-c C-a apply" (hint)))
+        (should (string-search "change ready" (label)))
+        (mevedel-note-record-applied record nil workspace)
+        (should (equal "C-c C-z close" (hint)))
+        (should-not (string-search "change ready" (or (label) "")))))))
+
 (provide 'test-mevedel-note-conversation)
 ;;; test-mevedel-note-conversation.el ends here
