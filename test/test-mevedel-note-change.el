@@ -488,6 +488,31 @@
       (should (mevedel-notes--resolve uuid workspace))
       (should (equal "before\nold\nafter\n" (mevedel-test--read-file file))))))
 
+(mevedel-deftest mevedel-note-revert-change/unseen-uuid
+  (:quiet t :doc "revert observes the store before looking up a UUID first seen by another client")
+  (mevedel-note-change-test--with-note
+    (let* ((store (mevedel-instruction-store-path workspace))
+           (before (mevedel-session-artifacts-read-file-raw store))
+           (sibling (with-current-buffer source
+                      (goto-char (overlay-start note))
+                      (let ((item (mevedel-note-create "Other client's note")))
+                        (overlay-put item 'mevedel-note-state 'sent)
+                        (overlay-put item 'mevedel-note-session-id
+                                     (mevedel-session-session-id session))
+                        item)))
+           (uuid (overlay-get sibling 'mevedel-uuid)))
+      (mevedel-note-change-test--propose
+       data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+      (mevedel-note-apply-change sibling)
+      (let ((applied (mevedel-session-artifacts-read-file-raw store))
+            (coding-system-for-write 'no-conversion))
+        (write-region before nil store nil 'silent)
+        (mevedel--clear-instruction-state workspace)
+        (mevedel-instruction-store-observe workspace)
+        (write-region applied nil store nil 'silent))
+      (mevedel-note-revert-change uuid 0 workspace)
+      (should (equal "before\nold\nafter\n" (mevedel-test--read-file file))))))
+
 (mevedel-deftest mevedel-note-merge-change
   (:quiet t)
   ,test

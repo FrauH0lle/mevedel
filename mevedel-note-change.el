@@ -499,9 +499,12 @@ note only after success; do not change the conversation or its history."
                                  (if (and (overlayp note) (overlay-buffer note))
                                      (overlay-buffer note) (current-buffer)))))
   (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
-    (let* ((uuid (plist-get (mevedel-note-change--revert-target note workspace) :uuid))
-           (_observed (mevedel-instruction-store-observe workspace))
-           (target (mevedel-note-change--revert-target uuid workspace))
+    (setq note (or note (mevedel--highest-priority-instruction
+                        (mevedel--instructions-at (point) 'note))))
+    (when (overlayp note)
+      (setq note (overlay-get note 'mevedel-uuid)))
+    (mevedel-instruction-store-observe workspace)
+    (let* ((target (mevedel-note-change--revert-target note workspace))
            (props (plist-get target :properties))
            (own-id (plist-get props 'mevedel-note-session-id))
            (own-data (and own-id
