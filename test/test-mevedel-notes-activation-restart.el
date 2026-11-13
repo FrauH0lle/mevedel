@@ -212,7 +212,7 @@
                                               (let ((text (overlay-get overlay 'after-string)))
                                                 (when (and text
                                                            (string-match
-                                                            " · you · not sent · [^\n]*\n  \\(.*\\)\\'" text))
+                                                            "Note [0-9]+ · You  \\(.*\\)\\'" text))
                                                   (match-string 1 text))))
                                             (overlays-in (point-min) (point-max))))))
                                  buffers))

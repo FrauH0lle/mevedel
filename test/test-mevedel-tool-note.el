@@ -317,6 +317,71 @@
         (should (string-search "beyond source" (plist-get outcome :result)))
         (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))))))
 
+(mevedel-deftest mevedel-tool-note-write/tint (:quiet t)
+  ,test
+  (test)
+  :doc "eol-ending line notes tint the newline without moving their code or label"
+  (mevedel-tool-note-test--workspace
+    (let* ((mevedel-note-labels 'collapsed)
+           (id (mevedel-tool-note-test--create data-buf file :end_line 3))
+           (note (mevedel-notes--resolve id workspace)))
+      (with-current-buffer (overlay-buffer note)
+        (should (= 8 (overlay-start note)))
+        (should (= 17 (overlay-end note)))
+        (should (= 17 (overlay-end (overlay-get note 'mevedel-label-overlay))))
+        (should (eq 'mevedel-note-agent (get-char-property 17 'face)))
+        (should-not (cl-some (lambda (overlay) (overlay-get overlay 'face))
+                             (overlays-at 18))))))
+  :doc "newline tint follows edits and undo in both label modes and is removed on close"
+  (mevedel-tool-note-test--workspace
+    (let* ((id (mevedel-tool-note-test--create data-buf file))
+           (note (mevedel-notes--resolve id workspace)))
+      (with-current-buffer (overlay-buffer note)
+        (buffer-enable-undo)
+        (dolist (display '(collapsed expanded))
+          (mevedel-notes-toggle-labels)
+          (should (eq display (overlay-get note 'mevedel-note-labels)))
+          (setq buffer-undo-list nil)
+          (goto-char 9)
+          (insert "new\n")
+          (undo-boundary)
+          (should (= 15 (overlay-end note)))
+          (should (= 15 (overlay-end (overlay-get note 'mevedel-label-overlay))))
+          (should (equal (if (eq display 'expanded)
+                             'default
+                           'mevedel-note-agent)
+                         (get-char-property 15 'face)))
+          (undo-only 1)
+          (should (equal "before\nold\nafter\n" (buffer-string)))
+          (should (= 11 (overlay-end note)))
+          (should (= 11 (overlay-end (overlay-get note 'mevedel-label-overlay))))
+          (should (equal (if (eq display 'expanded)
+                             'default
+                           'mevedel-note-agent)
+                         (get-char-property 11 'face))))
+        (mevedel-note-done note)
+        (should-not (overlays-in (point-min) (point-max))))))
+  :doc "a final line without a newline gains and loses the extra tint with source undo"
+  (mevedel-tool-note-test--workspace
+    (write-region "before\nold\nafter" nil file nil 'silent)
+    (let* ((id (mevedel-tool-note-test--create data-buf file :end_line 3))
+           (note (mevedel-notes--resolve id workspace)))
+      (with-current-buffer (overlay-buffer note)
+        (buffer-enable-undo)
+        (setq buffer-undo-list nil)
+        (goto-char (point-max))
+        (should-not (cl-some (lambda (overlay) (overlay-get overlay 'face))
+                             (overlays-at (point))))
+        (insert "\n")
+        (undo-boundary)
+        (should (= 17 (overlay-end note)))
+        (should (eq 'default (get-char-property 17 'face)))
+        (undo-only 1)
+        (should-not (cl-some (lambda (overlay) (overlay-get overlay 'face))
+                             (overlays-at (point-max))))
+        (mevedel--clear-instruction-state workspace)
+        (should-not (overlays-in (point-min) (point-max)))))))
+
 (mevedel-deftest mevedel-tool-note-write/create-cost (:quiet t)
   ,test
   (test)
@@ -343,7 +408,7 @@
                                      (mapcar (lambda (overlay) (overlay-get overlay 'after-string))
                                              (overlays-in (point-min) (point-max)))))
         (should (string-match-p "AI" label))
-        (should-not (string-match-p "you" label))))))
+        (should-not (string-match-p "You" label))))))
 
 (mevedel-deftest mevedel-note-dismiss-agent-notes (:quiet t)
   ,test

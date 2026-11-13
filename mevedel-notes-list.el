@@ -65,7 +65,7 @@ and q to return to the invoking window."
                              (plist-get note :file)
                              (mevedel-workspace-root mevedel-notes-list--workspace))
                    (plist-get note :line))
-           (format "%s" (plist-get props 'mevedel-note-author))
+           (mevedel-notes--author-name (plist-get props 'mevedel-note-author))
            (replace-regexp-in-string "[\n\r\t]+" " "
                                      (or (plist-get props 'mevedel-note-text) ""))
            (format "%s%s%s" (or (plist-get note :closed-reason)

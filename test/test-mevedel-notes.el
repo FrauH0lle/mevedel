@@ -131,12 +131,51 @@
   (:quiet t)
   ,test
   (test)
+  :doc "whole-line regions keep their original geometry and newline tint"
+  (mevedel-notes-test--with-source
+    (let ((transient-mark-mode t) (mevedel-note-labels 'collapsed))
+      (set-mark (point))
+      (forward-line 1)
+      (activate-mark)
+      (let ((note (mevedel-note-create "Whole line")))
+        (should (= 8 (overlay-start note)))
+        (should (= 22 (overlay-end note)))
+        (should (= 21 (overlay-end (overlay-get note 'mevedel-label-overlay))))
+        (should (equal (list note) (overlays-at 21)))
+        (should (eq 'mevedel-note-you (overlay-get note 'face))))))
+  :doc "partial-line regions ending at eol tint only the marked text"
+  (mevedel-notes-test--with-source
+    (let ((transient-mark-mode t))
+      (forward-char 9)
+      (set-mark (point))
+      (end-of-line)
+      (activate-mark)
+      (let ((note (mevedel-note-create "One word")))
+        (should (equal "code" (buffer-substring-no-properties
+                                (overlay-start note) (overlay-end note))))
+        (should (eq 'mevedel-note-you (overlay-get note 'face)))
+        (should-not (cl-some (lambda (overlay) (overlay-get overlay 'face))
+                             (overlays-at (line-end-position)))))))
+  :doc "expanded line labels tint the source newline but not the label's trailing margin"
+  (dolist (whole-region '(nil t))
+    (mevedel-notes-test--with-source
+      (let* ((transient-mark-mode t)
+             (note (progn
+                     (when whole-region
+                       (set-mark (point))
+                       (forward-line 1)
+                       (activate-mark))
+                     (mevedel-note-create "Expanded")))
+             (label (car (mevedel-notes-test--labels))))
+        (should (eq 'mevedel-note-you (get-text-property 0 'face label)))
+        (should (eq 'default (get-char-property 21 'face)))
+        (should (= 21 (overlay-end (overlay-get note 'mevedel-label-overlay)))))))
   :doc "current-line note shows a colored header and normal text without idle state or menu"
   (mevedel-notes-test--with-source
     (mevedel-note-create "Check this")
     (should (equal "before\nselected code\nafter\n" (buffer-string)))
     (let ((label (string-join (mevedel-notes-test--labels))))
-      (should (equal "\n▍ Note 1 · you  Check this" label))
+      (should (equal "\n▍ Note 1 · You  Check this" label))
       (should (eq 'mevedel-note-label-you
                   (get-text-property (string-search "▍" label) 'face label)))
       (should (eq 'default
@@ -229,7 +268,7 @@
            (note (mevedel-note-create text)))
       (let* ((label (car (mevedel-notes-test--labels)))
              (lines (split-string label "\n" t)))
-        (should (equal "    ▍ Note 1 · you  First paragraph has several words." (car lines)))
+        (should (equal "    ▍ Note 1 · You  First paragraph has several words." (car lines)))
         (dolist (line lines)
           (should (string-prefix-p "    ▍ " line))
           (should (<= (string-width line) fill-column)))
@@ -341,14 +380,14 @@
         (mevedel-note-edit "Goal" note)
         (let* ((label (car (mevedel-notes-test--labels)))
                (status (cdr entry)))
-          (should (equal (concat "\n▍ Note 1 · you"
+          (should (equal (concat "\n▍ Note 1 · You"
                                  (and status (concat " · " status)) "  Goal") label))
           (when status
             (should (eq 'shadow (get-text-property (string-search status label) 'face label))))
           (should (eq 'default (get-text-property (string-search "Goal" label) 'face label)))))
       (puthash (overlay-get note 'mevedel-uuid) t mevedel-notes--taken-watches)
       (mevedel-note-edit "Goal" note)
-      (should (string-search "you · Buddy watches  Goal" (car (mevedel-notes-test--labels))))))
+      (should (string-search "You · Buddy watches  Goal" (car (mevedel-notes-test--labels))))))
   :doc "explicit note target persists to its own workspace from another buffer"
   (mevedel-notes-test--with-source
     (let* ((note (mevedel-note-create "Before"))
@@ -369,6 +408,27 @@
   (:quiet t)
   ,test
   (test)
+  :doc "overlapping notes offer stable nonempty descriptions even when collapsed"
+  (dolist (display '(collapsed expanded))
+    (mevedel-notes-test--with-source
+      (let* ((mevedel-note-labels display)
+             (child (mevedel-note-create "Child\nSecond line"))
+             (transient-mark-mode t)
+             (kill-ring nil)
+             (kill-ring-yank-pointer nil))
+        (goto-char (point-max))
+        (set-mark (point-min))
+        (activate-mark)
+        (mevedel-note-create "Parent")
+        (goto-char (1+ (overlay-start child)))
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (_prompt candidates &rest _)
+                     (should (equal '("Note 1 · You  Child" "Note 2 · You  Parent")
+                                    (sort (copy-sequence candidates) #'string-lessp)))
+                     "Note 1 · You  Child"))
+                  ((symbol-function 'read-key) (lambda (&rest _) ?w)))
+          (call-interactively (key-binding (kbd "M-m"))))
+        (should (equal "Child\nSecond line" (current-kill 0))))))
   :doc "one key selects below-label actions without a minibuffer; quit and error restore the label"
   (mevedel-notes-test--with-source
     (let* ((note (mevedel-note-create "Inline menu"))
@@ -537,7 +597,7 @@
     (let (messages)
       (mevedel-test--with-captured-messages messages
         (run-hooks 'post-command-hook))
-      (should (string-match-p "Note 1.*Review the boundary.*M-m.*edit.*delete"
+      (should (string-match-p "Note 1 · You.*Review the boundary.*M-m.*edit.*delete"
                               messages))
       (mevedel-test--with-captured-messages messages
         (run-hooks 'post-command-hook))
@@ -681,7 +741,7 @@
     (mevedel-instruction-store-observe workspace)
     (should-not (mevedel-notes-test--labels))
     (mevedel-note-restore 1 workspace)
-    (should (string-match-p "▍ Note 1 · you  Finish this"
+    (should (string-match-p "▍ Note 1 · You  Finish this"
                             (car (mevedel-notes-test--labels)))))
   :doc "closing a parent note refreshes the surviving nested presentation"
   (mevedel-notes-test--with-source

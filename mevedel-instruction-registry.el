@@ -192,10 +192,11 @@ Each value is a plist with keys `:instructions', `:id-counter',
                         (nth 1 snapshot)))))))
 
 (defun mevedel--delete-instruction-overlay (instruction)
-  "Remove INSTRUCTION and its auxiliary label presentation."
-  (when-let* ((label (overlay-get instruction 'mevedel-label-overlay)))
-    (delete-overlay label)
-    (overlay-put instruction 'mevedel-label-overlay nil))
+  "Remove INSTRUCTION and its auxiliary presentation overlays."
+  (dolist (property '(mevedel-label-overlay mevedel-note-tint-overlay))
+    (when-let* ((overlay (overlay-get instruction property)))
+      (delete-overlay overlay)
+      (overlay-put instruction property nil)))
   (delete-overlay instruction))
 
 (defun mevedel--clear-instruction-state (&optional workspace)

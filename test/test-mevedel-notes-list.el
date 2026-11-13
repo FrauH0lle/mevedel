@@ -122,9 +122,9 @@
     (should-not (find-buffer-visiting second))
     (with-current-buffer list-buffer
       (should (string-match-p "Unsent" (buffer-string)))
-      (should (string-match-p "first.el:1.*user.*First thought.*unsent"
+      (should (string-match-p "first.el:1.*You.*First thought.*unsent"
                               (buffer-string)))
-      (should (string-match-p "second.el:2.*user.*Second thought.*unsent"
+      (should (string-match-p "second.el:2.*You.*Second thought.*unsent"
                               (buffer-string)))
       (goto-char (point-min))
       (search-forward "Second thought")

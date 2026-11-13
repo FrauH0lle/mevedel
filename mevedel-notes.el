@@ -314,6 +314,10 @@ Refuse unavailable sources before a caller starts mutating the notes."
                   (pcase (and note (overlay-get note 'mevedel-note-author))
                     ('buddy "dismiss, keep") ('agent "dismiss") (_ "delete")))))
 
+(defun mevedel-notes--author-name (author)
+  "Return AUTHOR's display name without changing its stored symbol."
+  (pcase author ('buddy "Buddy") ('agent "AI") (_ "You")))
+
 (defun mevedel-notes--entry-hint ()
   "Announce the note and its next actions when point enters it."
   (unless (or (bound-and-true-p isearch-mode) executing-kbd-macro
@@ -323,8 +327,9 @@ Refuse unavailable sources before a caller starts mutating the notes."
       (unless (eq note mevedel-notes--last-hinted)
         (setq mevedel-notes--last-hinted note)
         (when note
-          (message "Note %s · %s · %s"
+          (message "Note %s · %s · %s · %s"
                    (overlay-get note 'mevedel-id)
+                   (mevedel-notes--author-name (overlay-get note 'mevedel-note-author))
                    (mevedel-notes--display-text note)
                    (mevedel-notes--actions-hint note)))))))
 
@@ -381,6 +386,7 @@ Refuse unavailable sources before a caller starts mutating the notes."
              (code-face (pcase author
                           ('buddy 'mevedel-note-buddy) ('agent 'mevedel-note-agent)
                           (_ 'mevedel-note-you)))
+             (tint (overlay-get note 'mevedel-note-tint-overlay))
              (face (cond ((eq note mevedel--highlighted-instruction) 'highlight)
                          ((eq author 'buddy) 'mevedel-note-label-buddy)
                          ((eq author 'agent) 'mevedel-note-label-agent)
@@ -391,8 +397,7 @@ Refuse unavailable sources before a caller starts mutating the notes."
                        (propertize
                         (format "Note %s · %s"
                                 (overlay-get note 'mevedel-id)
-                                (pcase author
-                                  ('buddy "Buddy") ('agent "AI") (_ "you")))
+                                (mevedel-notes--author-name author))
                         'face face)
                        (let* ((paused (and (eq 'taken (overlay-get note 'mevedel-note-state))
                                            (not (mevedel-note-watching-p note))))
@@ -413,6 +418,25 @@ Refuse unavailable sources before a caller starts mutating the notes."
         (overlay-put note 'keymap mevedel-note-actions-map)
         (unless (eq code-face (overlay-get note 'face))
           (overlay-put note 'face code-face))
+        ;; Tint the source row's virtual newline, not the label's last row.
+        (when (and text (eq 'line (overlay-get note 'mevedel-span)))
+          (put-text-property 0 1 'face code-face text))
+        ;; The label tracks edits; this sibling only gives the newline its face.
+        (if (and (eq 'line (overlay-get note 'mevedel-span))
+                 (or text (= end (overlay-end note)))
+                 (eq (char-after end) ?\n))
+            (progn
+              (unless tint
+                (setq tint (make-overlay end (1+ end) nil t nil))
+                (overlay-put note 'mevedel-note-tint-overlay tint))
+              (move-overlay tint end (1+ end))
+              (overlay-put tint 'priority (1+ (or (overlay-get note 'priority) 0)))
+              (let ((tint-face (if text 'default code-face)))
+                (unless (eq tint-face (overlay-get tint 'face))
+                  (overlay-put tint 'face tint-face))))
+          (when tint
+            (delete-overlay tint)
+            (overlay-put note 'mevedel-note-tint-overlay nil)))
         (move-overlay label (overlay-start note) end)
         (unless (equal-including-properties text (overlay-get label 'after-string))
           (overlay-put label 'after-string text))))
@@ -454,7 +478,7 @@ Refuse unavailable sources before a caller starts mutating the notes."
               (overlay-put note 'mevedel-note-attention-state 'stale))
             (overlay-put note 'mevedel-note-buddy-looks-done nil)
             (mevedel-notes--render note))
-        (delete-overlay overlay)))))
+        (mevedel--delete-instruction-overlay note)))))
 
 (defun mevedel-notes--at-point ()
   "Return the note at point, or refuse when there is none."

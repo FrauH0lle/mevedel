@@ -176,7 +176,7 @@ COMMAND defaults to guidance; it may also be the recorded-edit review command."
          (should (string-match-p "no longer owned"
                                  (mevedel-remarks-test--tool
                                   tools "update_note" id "Must not replace")))))
-      (should (string-match-p "▍ Note [0-9]+ · you  Check this" (mevedel-remarks-test--labels)))
+      (should (string-match-p "▍ Note [0-9]+ · You  Check this" (mevedel-remarks-test--labels)))
       (should-not (string-match-p "Buddy\\|Must not replace"
                                   (mevedel-remarks-test--labels)))))
   :doc "a multi-remark review writes once, including update and retraction"

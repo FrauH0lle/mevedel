@@ -248,10 +248,12 @@ to mark the active region, or the current line when no region is active. The
 text is optional: submitting an empty answer keeps a code-only note. A label
 is collapsed by default (`mevedel-note-labels` is `collapsed`): the code stays
 tinted, but no label is shown. Expanded labels sit below the complete source
-line at the code's indentation: `▍ Note N · author  note text`. The bar and
-header use the author's label face; the full note text uses the normal face,
-filled to `fill-column` bounded by the window width. Each continuation line
-starts with the bar; Buddy remarks use `┆` instead. Only states needing
+line at the code's indentation: `▍ Note N · You  note text` (or `AI` / `Buddy`).
+The bar and header use the author's label face; the full note text uses the
+normal face, filled to `fill-column` bounded by the window width. Each
+continuation line starts with the bar; Buddy remarks use `┆` instead.
+Whole-line notes tint to the window edge; partial selections tint only their
+marked text. Expanded label rows remain untinted. Only states needing
 attention appear after the header, dimmed: `change ready`, `change stale`,
 `working…`, `Buddy watches`, `looks done`, or `paused` for a paused take.
 Labels show neither sent/unsent status nor menu instructions.
@@ -261,6 +263,8 @@ deleted or dismissed). Its context reaches a prompt only when you send or
 mention it.
 
 Inside a note, `M-m` (or `mevedel-ov-dispatch-key`) opens an inline **Actions** row.
+Overlapping notes offer their number, author and first text line even when
+their labels are collapsed.
 Its keys are `s` send/reopen, `t` take/drop, `i` edit, `g` tags, `x` done,
 `k` delete/dismiss, `b` keep a Buddy remark, `w` copy text, `S` settings and
 `e` expand/collapse. `a` apply and `m` merge appear only for a prepared change;
