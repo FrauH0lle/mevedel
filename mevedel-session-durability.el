@@ -1531,16 +1531,86 @@ lease, including on nonlocal exit; never publish a new session head."
               (mevedel-session-durability-call-with-reserved-lease session function))
           (mevedel-session-durability-lease-release session-dir session))))))
 
+(defun mevedel-session-durability--observed-head (record names)
+  "Return RECORD when the listed NAMES alone prove it is the lease head.
+That holds when it is not aborted and no newer generation is listed; nil
+means the head must be read."
+  (and record
+       (not (eq 'aborted (plist-get record :status)))
+       (eql (plist-get record :generation)
+            (mevedel-session-durability--newest-generation names))
+       record))
+
+(defun mevedel-session-durability--update-decline
+    (existing head now accepted-status &optional expected-head-p expected-head)
+  "Return the first reason EXISTING may not be updated in place, or nil.
+HEAD is the lease head and NOW the target clock.  EXISTING must be this
+client's valid, unexpired head in one of ACCEPTED-STATUS; with
+EXPECTED-HEAD-P its publication head must also equal EXPECTED-HEAD.  The
+reason is a key of `mevedel-session-durability--lease-declines'."
+  (cond
+   ((not (mevedel-session-durability--valid-lease-p existing)) 'record)
+   ((not (memq (plist-get existing :status) accepted-status)) 'status)
+   ((not (equal mevedel-session-durability--client-id
+                (plist-get existing :client-id)))
+    'client)
+   ((not (equal existing head)) 'head)
+   ((and expected-head-p
+         (not (equal expected-head (plist-get existing :publication-head))))
+    'publication-head)
+   ((not (> (plist-get existing :expires-at) now)) 'expired)))
+
+(defun mevedel-session-durability--updated-record
+    (existing status seconds publication-head now)
+  "Return EXISTING renewed at NOW for SECONDS in STATUS.
+A non-nil PUBLICATION-HEAD replaces its preserved head."
+  (let ((mevedel-session-lease-seconds seconds))
+    (mevedel-session-durability--lease-record
+     (plist-get existing :buffer)
+     (plist-get existing :generation)
+     status
+     (or publication-head (plist-get existing :publication-head))
+     (plist-get existing :unsettled-mutation)
+     now
+     (plist-get existing :transfer-generation))))
+
+(defun mevedel-session-durability--update-committed (committed generation)
+  "Classify COMMITTED, the commit result of an update of GENERATION.
+`adopt' when the write landed with no newer generation listed, `check-head'
+when a newer one appeared beside it (it won only if it is not aborted), and
+nil when the write did not land."
+  (cond
+   ((null committed) nil)
+   ((or (not (listp committed))
+        (= generation
+           (mevedel-session-durability--newest-generation committed)))
+    'adopt)
+   (t 'check-head)))
+
+(defun mevedel-session-durability--bind-latest (session latest directory now)
+  "Bind LATEST, the lease head read after a declined update, to SESSION.
+Return the state bound: `owned' while it is this client's live authority at
+NOW, `contested' for a claim that has not activated and so has not won
+\(the heartbeat keeps running), otherwise `lost'.  DIRECTORY is the lease
+directory."
+  (let ((state
+         (cond
+          ((mevedel-session-durability--owned-lease-record-p
+            latest directory now)
+           'owned)
+          ((eq 'claiming (plist-get latest :status)) 'contested)
+          (t 'lost))))
+    (mevedel-session-durability--bind-lease session latest state)
+    state))
+
 (defun mevedel-session-durability--update-owned-lease
     (session accepted-status status seconds
              &optional publication-head expected-publication-head-p
-             expected-publication-head unsettled-mutation-p
-             unsettled-mutation)
+             expected-publication-head)
   "Update SESSION's owned lease from ACCEPTED-STATUS to STATUS for SECONDS.
 Replace its preserved head with non-nil PUBLICATION-HEAD.  When
 EXPECTED-PUBLICATION-HEAD-P is non-nil, require the current head to equal
-EXPECTED-PUBLICATION-HEAD.  When UNSETTLED-MUTATION-P is non-nil, replace the
-preserved unsettled-mutation flag with UNSETTLED-MUTATION."
+EXPECTED-PUBLICATION-HEAD."
   (when-let* ((session-dir (mevedel-session-save-path session)))
     (let* ((remote-file-name-inhibit-cache t)
            (directory (mevedel-session-durability--lease-path session-dir))
@@ -1572,111 +1642,57 @@ preserved unsettled-mutation flag with UNSETTLED-MUTATION."
            (existing-bytes (if assumed
                                (plist-get assumed :bytes)
                              (plist-get observed :bytes)))
-           (names (plist-get observed :names))
            ;; The bound generation is the head whenever no newer record was
            ;; allocated, which is the steady state; only a foreign claim costs
            ;; the extra reads to derive the head.
            (head
-            (if (or assumed
-                    (and existing
-                         (natnump generation)
-                         (= generation
-                            (mevedel-session-durability--newest-generation
-                             names))))
-                existing
-              (condition-case nil
-                  (mevedel-session-durability--lease-head directory)
-                (error nil)))))
-      (if (and (mevedel-session-durability--valid-lease-p existing)
-               (memq (plist-get existing :status) accepted-status)
-               (equal mevedel-session-durability--client-id
-                      (plist-get existing :client-id))
-               (equal existing head)
-               (or (not expected-publication-head-p)
-                   (equal expected-publication-head
-                          (plist-get existing :publication-head)))
-               (> (plist-get existing :expires-at) now))
-          (let* ((record
-                  (let ((mevedel-session-lease-seconds seconds))
-                    (mevedel-session-durability--lease-record
-                     (plist-get existing :buffer)
-                     (plist-get existing :generation)
-                     status
-                     (or publication-head
-                         (plist-get existing :publication-head))
-                     (if unsettled-mutation-p
-                         unsettled-mutation
-                       (plist-get existing :unsettled-mutation))
-                     now
-                     (plist-get existing :transfer-generation))))
-                 (committed
+            (or (and assumed existing)
+                (mevedel-session-durability--observed-head
+                 existing (plist-get observed :names))
+                (condition-case nil
+                    (mevedel-session-durability--lease-head directory)
+                  (error nil))))
+           (decline (mevedel-session-durability--update-decline
+                     existing head now accepted-status
+                     expected-publication-head-p expected-publication-head))
+           (record (unless decline
+                     (mevedel-session-durability--updated-record
+                      existing status seconds publication-head now)))
+           (verdict
+            (and record
+                 (mevedel-session-durability--update-committed
                   (mevedel-session-durability--commit-lease
                    directory (plist-get existing :generation)
                    existing-bytes record
                    (min (plist-get existing :expires-at)
-                        (plist-get record :expires-at)))))
-            (cond
-             ((and committed
-                   ;; A newer generation appearing means another client won,
-                   ;; unless that record is itself aborted.
-                   (or (not (listp committed))
-                       (= (plist-get existing :generation)
-                          (mevedel-session-durability--newest-generation
-                           committed))
-                       (equal record
-                              (mevedel-session-durability--lease-head
-                               directory))))
-              (mevedel-session-durability--bind-lease
-               session record 'owned
-               (mevedel-session-durability--record-bytes record))
-              t)
-             ;; An assumed precondition that no longer holds is not a lost
-             ;; lease: drop the assumption and decide from the target.
-             ((and (null committed) assumed)
-              (mevedel-session-durability--bind-lease
-               session (mevedel-session-durability--strip-assumption bound)
-               (plist-get bound :state))
-              (mevedel-session-durability--update-owned-lease
-               session accepted-status status seconds
-               publication-head expected-publication-head-p
-               expected-publication-head unsettled-mutation-p
-               unsettled-mutation))
-             (t
-              (let ((latest
-                     (mevedel-session-durability--lease-head directory)))
-                (mevedel-session-durability--bind-lease
-                 session latest
-                 (cond
-                  ((mevedel-session-durability--owned-lease-record-p
-                    latest directory now)
-                   'owned)
-                  ;; The write landed; a generation appearing beside it that
-                  ;; has not activated has not won, and it aborts once its
-                  ;; own precondition check reads this record.  The next
-                  ;; heartbeat reconverges, so keep it running.
-                  ((eq 'claiming (plist-get latest :status))
-                   'contested)
-                  (t 'lost))))
-              nil)))
-        (if assumed
-            ;; The assumption was the only reason this looked unusable.
-            (progn
-              (mevedel-session-durability--bind-lease
-               session (mevedel-session-durability--strip-assumption bound)
-               (plist-get bound :state))
-              (mevedel-session-durability--update-owned-lease
-               session accepted-status status seconds
-               publication-head expected-publication-head-p
-               expected-publication-head unsettled-mutation-p
-               unsettled-mutation))
-          (let ((latest (or head existing)))
-            (mevedel-session-durability--bind-lease
-             session latest
-             (if (mevedel-session-durability--owned-lease-record-p
-                  latest directory now)
-                 'owned
-               'lost)))
-          nil)))))
+                        (plist-get record :expires-at)))
+                  (plist-get existing :generation))))
+           (latest (cond ((eq verdict 'adopt) record)
+                         ;; Retried below without reading anything.
+                         ((and assumed (null verdict)) nil)
+                         (decline (or head existing))
+                         (t (mevedel-session-durability--lease-head
+                             directory)))))
+      (cond
+       ;; An assumed precondition that no longer holds is not a lost lease:
+       ;; drop the assumption and decide from the target.
+       ((and assumed (null verdict))
+        (mevedel-session-durability--bind-lease
+         session (mevedel-session-durability--strip-assumption bound)
+         (plist-get bound :state))
+        (mevedel-session-durability--update-owned-lease
+         session accepted-status status seconds
+         publication-head expected-publication-head-p
+         expected-publication-head))
+       ;; A newer generation beside the write won unless it is aborted.
+       ((and verdict (equal record latest))
+        (mevedel-session-durability--bind-lease
+         session record 'owned
+         (mevedel-session-durability--record-bytes record))
+        t)
+       (t
+        (mevedel-session-durability--bind-latest session latest directory now)
+        nil)))))
 
 (defun mevedel-session-durability--gate (session token &optional reentrant)
   "Serialize a lease-changing operation on SESSION behind its async publication.
@@ -1722,23 +1738,21 @@ Return non-nil only when the current owned lease generation commits VALUE."
                   (mevedel-session-durability--target-time directory)))
            (existing (plist-get observed :record))
            (head
-            (if (and existing
-                     (not (eq 'aborted (plist-get existing :status)))
-                     (equal (plist-get existing :generation)
-                            (mevedel-session-durability--newest-generation
-                             (plist-get observed :names))))
-                existing
-              (mevedel-session-durability--lease-head
-               directory
-               (mevedel-session-durability--observed-names observed))))
-           (status (plist-get existing :status)))
-      (if (and (equal existing head)
-               (mevedel-session-durability--owned-lease-record-p
-                existing directory now))
+            (or (mevedel-session-durability--observed-head
+                 existing (plist-get observed :names))
+                (mevedel-session-durability--lease-head
+                 directory
+                 (mevedel-session-durability--observed-names observed)))))
+      (if (mevedel-session-durability--update-decline
+           existing head now '(active publishing))
+          (progn
+            (mevedel-session-durability--bind-latest
+             session (or head existing) directory now)
+            nil)
           (if-let* ((successor
                     (mevedel-session-durability--claim-next
                      directory existing (plist-get existing :buffer)
-                     status t value nil
+                     (plist-get existing :status) t value nil
                      ;; Its listing is only a predecessor universe when
                      ;; the observation actually listed the directory.
                      (and (plist-get observed :listed) observed))))
@@ -1749,17 +1763,10 @@ Return non-nil only when the current owned lease generation commits VALUE."
                  session successor 'owned
                  (mevedel-session-durability--record-bytes successor))
                 t)
-            (let ((latest (mevedel-session-durability--lease-head directory)))
-              (mevedel-session-durability--bind-lease
-               session latest
-               (if (mevedel-session-durability--owned-lease-record-p
-                    latest directory now)
-                   'owned
-                 'lost))
-              nil))
-        (mevedel-session-durability--bind-lease
-         session (or head existing) 'lost)
-        nil))))
+            (mevedel-session-durability--bind-latest
+             session (mevedel-session-durability--lease-head directory)
+             directory now)
+            nil)))))
 
 (defun mevedel-session-durability-unsettled-mutation-p (session)
   "Return non-nil when SESSION's bound lease records unsettled mutation."
@@ -2421,8 +2428,9 @@ NAMES is an observed listing, as for `mevedel-session-durability--lease-head'."
     (head . "Portable session has a newer lease generation")
     (publication-head . "Portable session publication head changed")
     (expired . "Portable session lease has expired")
-    (lost . "Portable session lease was taken by another client"))
-  "Named causes of an asynchronous lease update's decline.
+    ;; Only the change is observed, not who made it.
+    (changed . "Portable session lease changed before this update committed"))
+  "Named causes of a lease update's decline.
 Messages name the condition only, never paths or lease bytes.")
 
 (defun mevedel-session-durability--lease-decline (cause)
@@ -2467,8 +2475,7 @@ JOB and CONTEXT are as for `mevedel-session-durability--async-program'."
                          (existing-bytes
                           (if assumed
                               (plist-get assumed :bytes)
-                            (plist-get observed :bytes)))
-                         (names (plist-get observed :names)))
+                            (plist-get observed :bytes))))
                     (unless now
                       (error "Portable session target clock unavailable"))
                     (mevedel-session-durability--update-async-decide
@@ -2476,11 +2483,8 @@ JOB and CONTEXT are as for `mevedel-session-durability--async-program'."
                      expected-head-p expected-head job context
                      directory assumed now existing existing-bytes
                      (and (not assumed)
-                          (not (and existing
-                                    (natnump generation)
-                                    (= generation
-                                       (mevedel-session-durability--newest-generation
-                                        names)))))
+                          (not (mevedel-session-durability--observed-head
+                                existing (plist-get observed :names))))
                      retry)))))
           (if assumed-now
               (funcall decide nil)
@@ -2503,58 +2507,30 @@ assumption that no longer held.  The rest is as for
          (bound (mevedel-session-lease session))
          (settle-lost
           (lambda (latest)
-            (mevedel-session-durability--bind-lease
-             session latest
-             (cond
-              ((mevedel-session-durability--owned-lease-record-p
-                latest directory now)
-               'owned)
-              ;; The write landed; a generation beside it that has not
-              ;; activated has not won.  See the synchronous update.
-              ((eq 'claiming (plist-get latest :status)) 'contested)
-              (t 'lost)))
+            (mevedel-session-durability--bind-latest
+             session latest directory now)
             (funcall finish nil (mevedel-session-durability--lease-decline
-                                 'lost))))
+                                 'changed))))
          (drop-assumption
           (lambda ()
             (mevedel-session-durability--bind-lease
              session (mevedel-session-durability--strip-assumption bound)
              (plist-get bound :state))
             (funcall retry)))
-         (cause nil)
          (proceed
           (lambda (head)
-            (if (null (setq cause
-                            ;; The first unmet condition, in the order observed.
-                            (cond
-                             ((not (mevedel-session-durability--valid-lease-p
-                                    existing))
-                              'record)
-                             ((not (memq (plist-get existing :status)
-                                         accepted-status))
-                              'status)
-                             ((not (equal mevedel-session-durability--client-id
-                                          (plist-get existing :client-id)))
-                              'client)
-                             ((not (equal existing head)) 'head)
-                             ((not (or (not expected-head-p)
-                                       (equal expected-head
-                                              (plist-get existing
-                                                         :publication-head))))
-                              'publication-head)
-                             ((not (> (plist-get existing :expires-at) now))
-                              'expired))))
+            (if-let* ((cause (mevedel-session-durability--update-decline
+                              existing head now accepted-status
+                              expected-head-p expected-head)))
+                (if assumed
+                    (funcall drop-assumption)
+                  (mevedel-session-durability--bind-latest
+                   session (or head existing) directory now)
+                  (funcall finish nil
+                           (mevedel-session-durability--lease-decline cause)))
                 (let* ((record
-                        (let ((mevedel-session-lease-seconds seconds))
-                          (mevedel-session-durability--lease-record
-                           (plist-get existing :buffer)
-                           (plist-get existing :generation)
-                           status
-                           (or publication-head
-                               (plist-get existing :publication-head))
-                           (plist-get existing :unsettled-mutation)
-                           now
-                           (plist-get existing :transfer-generation))))
+                        (mevedel-session-durability--updated-record
+                         existing status seconds publication-head now))
                        (plan
                         (mevedel-session-durability--commit-lease-plan
                          directory (plist-get existing :generation)
@@ -2572,44 +2548,27 @@ assumption that no longer held.  The rest is as for
                    (lambda (results error)
                      (if error
                          (funcall finish nil error)
-                       (let ((committed
-                              (mevedel-session-durability--commit-lease-settle
-                               directory plan results)))
-                         (cond
-                          ((and committed
-                                (or (not (listp committed))
-                                    (= (plist-get existing :generation)
-                                       (mevedel-session-durability--newest-generation
-                                        committed))))
-                           (funcall adopt))
-                          ;; A newer generation appearing means another
-                          ;; client won, unless that record is aborted.
-                          (committed
-                           (mevedel-session-durability--lease-head-async
-                            directory nil job context
-                            (lambda (latest)
-                              (if (equal record latest)
-                                  (funcall adopt)
-                                (funcall settle-lost latest)))))
-                          ;; An assumed precondition that no longer holds is
-                          ;; not a lost lease: decide from the target.
-                          (assumed (funcall drop-assumption))
-                          (t
-                           (mevedel-session-durability--lease-head-async
-                            directory nil job context
-                            settle-lost))))))))
-              (if assumed
-                  (funcall drop-assumption)
-                (let ((latest (or head existing)))
-                  (mevedel-session-durability--bind-lease
-                   session latest
-                   (if (mevedel-session-durability--owned-lease-record-p
-                        latest directory now)
-                       'owned
-                     'lost))
-                  (funcall finish nil
-                           (mevedel-session-durability--lease-decline
-                            cause))))))))
+                       (pcase (mevedel-session-durability--update-committed
+                               (mevedel-session-durability--commit-lease-settle
+                                directory plan results)
+                               (plist-get existing :generation))
+                         ('adopt (funcall adopt))
+                         ;; A newer generation beside the write won unless
+                         ;; it is aborted.
+                         ('check-head
+                          (mevedel-session-durability--lease-head-async
+                           directory nil job context
+                           (lambda (latest)
+                             (if (equal record latest)
+                                 (funcall adopt)
+                               (funcall settle-lost latest)))))
+                         ;; An assumed precondition that no longer holds is
+                         ;; not a lost lease: decide from the target.
+                         (_ (if assumed
+                                (funcall drop-assumption)
+                              (mevedel-session-durability--lease-head-async
+                               directory nil job context
+                               settle-lost))))))))))))
     (if read-head
         (mevedel-session-durability--lease-head-async
          directory nil job context proceed)
@@ -2719,11 +2678,8 @@ an uncertain commit: nothing is rolled back from a head this has not read."
                                       (mevedel-session-durability--owned-lease-record-p
                                        head directory now)))
                            nil))))
-                  (if (and record
-                           (not (eq 'aborted (plist-get record :status)))
-                           (equal (plist-get record :generation)
-                                  (mevedel-session-durability--newest-generation
-                                   (plist-get observed :names))))
+                  (if (mevedel-session-durability--observed-head
+                       record (plist-get observed :names))
                       (funcall report record)
                     (mevedel-session-durability--lease-head-async
                      directory
