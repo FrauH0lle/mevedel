@@ -127,7 +127,10 @@ COMMIT receives resolved changes and owns closing the editor on success."
                              (cdr (mevedel-tool-patch--read-file path t)) 'utf-8-unix)))
                (yours (mevedel-note-merge--text path coding))
                (seen (decode-coding-string (or (plist-get base :bytes) "") coding))
-               (proposed (or (plist-get change :content) "")))
+               (proposed (or (plist-get change :content)
+                             (and (plist-get change :bytes)
+                                  (decode-coding-string (plist-get change :bytes) 'undecided))
+                             "")))
           (when (cl-some (lambda (text) (string-search "\0" text)) (list yours seen proposed))
             (user-error "Cannot merge binary source; re-ask on current code"))
           (push (list :path path :disk disk :coding coding :yours yours :seen seen

@@ -23,13 +23,21 @@
 (defun mevedel-note-change-record (proposal changes data-buffer)
   "Capture prepared PROPOSAL and CHANGES owned by DATA-BUFFER's current turn."
   (with-current-buffer data-buffer
-    (let ((session mevedel--session))
+    (let ((session mevedel--session)
+          (proposal (copy-tree proposal))
+          (changes (copy-tree changes)))
+      (cl-remf proposal :baseline)
+      (dolist (operation (plist-get proposal :operations))
+        (cl-remf operation :baseline-content))
+      (dolist (change changes)
+        (when (plist-get change :bytes)
+          (cl-remf change :content)))
       (list :id (mevedel--create-uuid)
             :session-id (mevedel-session-session-id session)
             :turn (if mevedel--current-request
                       (mevedel-current-turn session)
                     (or (mevedel-session-turn-count session) 0))
-            :proposal (copy-tree proposal) :changes (copy-tree changes)
+            :proposal proposal :changes changes
             :before (mapcar (lambda (change)
                               (mevedel-tool-patch--snapshot (plist-get change :path)))
                             changes)))))
@@ -143,12 +151,17 @@ Return an ordinary tool result immediately; no tool callback is retained."
           (or note
               (mevedel--highest-priority-instruction (mevedel--instructions-at (point) 'note))
               (when session
-                (when-let* ((entry (cl-find-if
-                                   (lambda (entry)
-                                     (equal (mevedel-session-session-id session)
-                                            (plist-get (plist-get entry :properties)
-                                                       'mevedel-note-session-id)))
-                                   (mevedel-notes--entries workspace))))
+                (when-let* ((entries (cl-remove-if-not
+                                     (lambda (entry)
+                                       (equal (mevedel-session-session-id session)
+                                              (plist-get (plist-get entry :properties)
+                                                         'mevedel-note-session-id)))
+                                     (mevedel-notes--entries workspace)))
+                            (entry (or (cl-find-if
+                                        (lambda (entry)
+                                          (plist-get (plist-get entry :properties)
+                                                     'mevedel-note-prepared-change)) entries)
+                                       (car entries))))
                   (mevedel-notes--resolve (plist-get entry :uuid) workspace)))))
     (unless (and (overlayp note) (overlay-buffer note)
                  (eq (overlay-get note 'mevedel-instruction-type) 'note))
@@ -323,7 +336,14 @@ When SELECTED is non-nil, prepare only those reviewed changes."
                    (mevedel-session-persistence-resume-id workspace id)
                    (user-error "Note conversation is unavailable: %s" id)))
          (proposal (copy-tree (plist-get record :proposal))))
-    (mevedel-tool-patch-assert-baseline proposal)
+    (plist-put proposal :prepared-snapshots (copy-tree (plist-get record :before)))
+    (dolist (operation (plist-get proposal :operations))
+      (when-let* ((before (cl-find (mevedel-tool-patch-physical-path operation)
+                                  (plist-get proposal :prepared-snapshots) :test #'equal
+                                  :key (lambda (snapshot) (plist-get snapshot :path))))
+                  ((plist-get before :exists)))
+        (plist-put operation :baseline-content
+                   (decode-coding-string (plist-get before :bytes) 'undecided))))
     (plist-put proposal :commit
                (lambda (_data selected done _failed)
                  (unless (equal (plist-get record :id)
