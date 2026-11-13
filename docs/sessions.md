@@ -300,7 +300,7 @@ the live record and its lazy conversation invocation. It does not infer an
 override from a transcript file's location. Save As copies the override with the retained registry. Conversation
 and Worktree forks still discard retained-agent identities under
 [ADR 0062](adr/0062-do-not-clone-live-agents-into-session-forks.md).
-Queued follow-ups retain text, attribution, scope and attachment grants. Live
+Queued follow-ups retain text, attribution and attachment grants. Live
 submission objects are excluded. Steering that still belongs to a request
 reloads as requiring review, with automatic delivery paused; a restart never
 resurrects a submitted request. Ordinary steering deliberately detached by an

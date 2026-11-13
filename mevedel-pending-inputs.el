@@ -1121,16 +1121,6 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                   (not (buffer-local-value 'mevedel-compact-run-in-flight
                                            data-buffer)))
          (with-current-buffer view-buffer
-           ;; Retired scoped input must never acquire ordinary chat authority.
-           (when-let* ((entry (cl-find-if
-                              (lambda (item) (plist-get item :scope))
-                              (mevedel-session-pending-follow-ups session))))
-             (unless (and (eq (plist-get entry :state) 'failed-turn)
-                          (mevedel-session-pending-input-failure-paused session))
-               (plist-put entry :state 'failed-turn)
-               (mevedel-session-set-pending-input-failure-paused session t)
-               (mevedel-recovery-save session)
-               (mevedel-view--interaction-rebuild)))
            (when (and (not mevedel-view--agent-transcript-p)
                       (not mevedel-view--prompt-hook-pending)
                       (not mevedel-view--pending-skill-submission)
@@ -1581,8 +1571,6 @@ a real draft."
         ('failed-turn "Needs review")
         (state (capitalize (symbol-name state))))
       (concat
-       (when (plist-get entry :scope)
-         "[Retired directive: retract or discard] ")
        (when-let* ((guest (plist-get entry :guest-name)))
          (format "[⇄ %s] " guest))
        (mevedel-view--pending-input-preview
@@ -1970,8 +1958,6 @@ a real draft."
     (mevedel-session-artifacts-assert-new-mutation-authority session)
     (unless (eq (plist-get item :category) 'follow-up)
       (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Pending input is already steering"))
-     (when (plist-get entry :scope)
-       (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Directive inputs are retired; retract or discard this input"))
     ;; The follow-up drain owns both the delivery-time allowlist recheck
     ;; and the command dispatch a guest invocation needs; steering
     ;; delivery has neither.
@@ -2074,8 +2060,8 @@ again."
     :queued-at-turn
     (or (mevedel-session-turn-count session) 0)
     :state 'pending)
-   ;; Keep guest attribution, attachment ownership, directive scope,
-   ;; and skill restrictions when retrying retained input.
+   ;; Keep guest attribution, attachment ownership, and skill restrictions
+   ;; when retrying retained input.
    (cl-loop for key in mevedel-recovery--input-keys
             unless (memq key '(:id :category :input :dropped-file-grants
                                :queued-at-time :queued-at-goal-id
