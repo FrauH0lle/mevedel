@@ -468,15 +468,32 @@
               ((symbol-function 'mevedel-instruction-store-flush)
                (lambda () (error "Flush failed"))))
       (should-error (mevedel-buddy--settle "scope" nil)))
+     (should-not (mevedel-buddy--current-generation-p generation))
      ;; The settled review's own tool call must be refused.
      (should (string-match-p
-              "not in the review scope"
+              "has ended"
               (funcall (gptel-tool-function read-tool) (buffer-name buf) 1 1))))
     (should-not mevedel-buddy-note--scope-buffers)
     (should-not mevedel-buddy--running)
     (should-not mevedel-buddy--running-automatic)
     (should-not mevedel-buddy-note--markers)
-    (should-not (marker-buffer marker))))
+    (should-not (marker-buffer marker)))
+
+  :doc "`mevedel-buddy--settle' persists remarks when killing the request buffer fails"
+  (let ((request (generate-new-buffer " *buddy-request*"))
+        (finished nil))
+    (with-current-buffer request
+      (add-hook 'kill-buffer-hook (lambda () (error "Kill failed")) nil t))
+    (setq mevedel-buddy--request-buffer request
+          mevedel-buddy--running "scope")
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-buddy-note-finish-review)
+                   (lambda () (setq finished t))))
+          (should-error (mevedel-buddy--settle "scope" nil))
+          (should finished)
+          (should-not mevedel-buddy--running))
+      (with-current-buffer request (setq-local kill-buffer-hook nil))
+      (kill-buffer request))))
 
 (mevedel-deftest mevedel-buddy-review
   (:after-each (mevedel-test--buddy-cleanup))
