@@ -712,6 +712,93 @@
         (delete-directory tempdir t)
         (mevedel-workspace-clear-registry))))
 
+  :doc "without a store file, Rewind prunes the discarded turn's note activity in memory"
+  ;; The store file is gone when the Rewind runs (deleted, or a failed
+  ;; sync), so the notes live only in memory.
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let* ((session (mevedel-session-create "main" workspace))
+           (sid (mevedel-session-session-id session))
+           (data-buf (generate-new-buffer " *test-no-store-rewind*"))
+           (source-file (file-name-concat tempdir "source.el"))
+           (change (lambda (turn) (list :id (format "c%d" turn)
+                                        :session-id sid :turn turn)))
+           (prepared (lambda (note)
+                       (overlay-get note 'mevedel-note-prepared-change)))
+           source kept pruned)
+      (unwind-protect
+          (progn
+            (test-mevedel-session-persistence--reset-instructions)
+            (write-region "AAAAA\nBBBBB\n" nil source-file nil 'silent)
+            (setq source (find-file-noselect source-file))
+            (with-current-buffer source
+              (setq-local mevedel--workspace workspace)
+              (goto-char (point-min))
+              (setq kept (mevedel-note-create "kept"))
+              (forward-line 1)
+              (setq pruned (mevedel-note-create "pruned")))
+            (mevedel-note-mark-sent (list kept pruned) sid)
+            (with-current-buffer data-buf
+              (org-mode)
+              (setq-local mevedel--session session)
+              (setq-local mevedel--workspace workspace)
+              (setq-local gptel-backend
+                          (test-mevedel-session-persistence--agent-backend))
+              (setq-local gptel-model 'test-model)
+              (gptel-mode 1)
+              (progn
+                (mevedel-session-artifacts-save session data-buf)
+                (goto-char (point-max))
+                (insert "First prompt\n")
+                (let ((start (point)))
+                  (insert "First reply.\n")
+                  (put-text-property start (point) 'gptel 'response))
+                (overlay-put kept 'mevedel-note-prepared-change (funcall change 1))
+                (setf (mevedel-session-turn-count session) 1)
+                (mevedel-session-artifacts-save session data-buf t)
+                (goto-char (point-max))
+                (insert "Second prompt\n")
+                (let ((start (point)))
+                  (insert "Second reply.\n")
+                  (put-text-property start (point) 'gptel 'response))
+                (overlay-put pruned 'mevedel-note-prepared-change (funcall change 2))
+                (setf (mevedel-session-turn-count session) 2)
+                (mevedel-session-artifacts-save session data-buf t)))
+            (when (file-exists-p (mevedel-instruction-store-path workspace))
+              (delete-file (mevedel-instruction-store-path workspace)))
+            (let ((target
+                   (copy-sequence
+                    (cdr (cl-find-if
+                          (lambda (entry)
+                            (= 2 (plist-get (cdr entry) :cum-turn)))
+                          (mevedel-session-rewind--prompt-candidates
+                           session))))))
+              (should target)
+              (cl-letf (((symbol-function 'display-buffer) #'ignore)
+                        ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                        ((symbol-function 'mevedel--run-session-start-hooks)
+                         #'ignore))
+                (should (mevedel-session-rewind-rewind data-buf target))))
+            (should (= 1 (mevedel-session-turn-count session)))
+            (let ((kept (mevedel--instruction-with-uuid
+                         (overlay-get kept 'mevedel-uuid) workspace))
+                  (pruned (mevedel--instruction-with-uuid
+                           (overlay-get pruned 'mevedel-uuid) workspace)))
+              ;; Turn 2's activity goes; turn 1's activity and both notes stay.
+              (should-not (funcall prepared pruned))
+              (should (equal (funcall change 1) (funcall prepared kept)))
+              (should (eq 'sent (overlay-get kept 'mevedel-note-state)))
+              (should (eq 'sent (overlay-get pruned 'mevedel-note-state)))))
+        (when (buffer-live-p source)
+          (with-current-buffer source (set-buffer-modified-p nil))
+          (kill-buffer source))
+        (when-let* ((impact (get-buffer "*mevedel-rewind-impact*")))
+          (kill-buffer impact))
+        (test-mevedel-session-persistence--release-and-kill data-buf session)
+        (delete-directory tempdir t)
+        (test-mevedel-session-persistence--reset-instructions)
+        (mevedel-workspace-clear-registry))))
+
   :doc "rewinds before a saved first gptel turn without exposing metadata"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
