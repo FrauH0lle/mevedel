@@ -9,10 +9,18 @@
 
 ;;; Code:
 
+;; `gptel-request'
+(declare-function gptel-abort "ext:gptel-request" (buf))
+(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+(defvar gptel--request-alist)
+
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-active-turn-p
                   "mevedel-agent-control" (session))
+(declare-function mevedel-agent-control-interrupt-user
+                  "mevedel-agent-control" (session path))
 (autoload 'mevedel-agent-control-active-turn-p "mevedel-agent-control")
+(autoload 'mevedel-agent-control-interrupt-user "mevedel-agent-control")
 
 ;; `mevedel-engine'
 (declare-function mevedel-engine-assert-local-history "mevedel-engine"
@@ -22,9 +30,11 @@
 ;; `mevedel-execution'
 (declare-function mevedel-execution-session-live-p
                   "mevedel-execution" (session))
+(declare-function mevedel-execution-teardown-session "mevedel-execution" (session))
 (declare-function mevedel-execution-unsettled-mutation-p
                   "mevedel-execution" (session))
 (autoload 'mevedel-execution-session-live-p "mevedel-execution")
+(autoload 'mevedel-execution-teardown-session "mevedel-execution")
 (autoload 'mevedel-execution-unsettled-mutation-p "mevedel-execution")
 
 ;; `mevedel-instruction-registry'
@@ -32,6 +42,16 @@
                   "mevedel-instruction-registry" (workspace))
 (autoload 'mevedel--instruction-state-rollback
   "mevedel-instruction-registry")
+
+;; `mevedel-permission-queue'
+(declare-function mevedel-permission-queue-abort-all
+                  "mevedel-permission-queue" (&optional session))
+(autoload 'mevedel-permission-queue-abort-all "mevedel-permission-queue")
+
+;; `mevedel-plan-mode'
+(declare-function mevedel-plan-approval-abort
+                  "mevedel-plan-mode" (&optional session outcome))
+(autoload 'mevedel-plan-approval-abort "mevedel-plan-mode")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-check-target-incarnation
@@ -67,11 +87,15 @@
 (autoload 'mevedel-session-codec-deserialize "mevedel-session-codec")
 
 ;; `mevedel-session-durability'
+(declare-function mevedel-session-durability--cancel-renewal
+                  "mevedel-session-durability" (session))
 (declare-function mevedel-session-durability--gate
                   "mevedel-session-durability" (session token &optional reentrant))
+(declare-function mevedel-session-durability-call-outside-transaction
+                  "mevedel-session-durability" (function))
 (declare-function mevedel-session-durability-lease-acquire
                   "mevedel-session-durability"
-                  (session-dir buffer-name &optional session))
+                  (session-dir buffer-name &optional session token force))
 (declare-function mevedel-session-durability-lease-release
                   "mevedel-session-durability"
                   (session-dir &optional session))
@@ -79,6 +103,7 @@
                   "mevedel-session-durability" (session-dir &optional names))
 (defvar mevedel-session-durability--heartbeat-inhibit)
 (autoload 'mevedel-session-durability--gate "mevedel-session-durability")
+(autoload 'mevedel-session-durability-call-outside-transaction "mevedel-session-durability")
 (autoload 'mevedel-session-durability-lease-acquire
   "mevedel-session-durability")
 (autoload 'mevedel-session-durability-lease-release
@@ -91,16 +116,29 @@
                   "mevedel-session-persistence" (buf &optional reason))
 (declare-function mevedel-session-persistence-load-sidecar
                   "mevedel-session-persistence" (path &optional scope))
+(defvar mevedel-session--checkpoint-pending)
 (autoload 'mevedel-session-persistence-apply-read-only-mode
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-load-sidecar
   "mevedel-session-persistence")
 
 ;; `mevedel-session-publication'
+(declare-function mevedel-session-publication-busy-p
+                  "mevedel-session-publication" (session))
+(declare-function mevedel-session-publication-clear-transient
+                  "mevedel-session-publication" (session))
+(declare-function mevedel-session-publication-finishing-p
+                  "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-read
                   "mevedel-session-publication"
                   (session-dir &optional head names))
+(declare-function mevedel-session-publication-settle-taken-over
+                  "mevedel-session-publication" (session))
+(autoload 'mevedel-session-publication-busy-p "mevedel-session-publication")
+(autoload 'mevedel-session-publication-clear-transient "mevedel-session-publication")
+(autoload 'mevedel-session-publication-finishing-p "mevedel-session-publication")
 (autoload 'mevedel-session-publication-read "mevedel-session-publication")
+(autoload 'mevedel-session-publication-settle-taken-over "mevedel-session-publication")
 
 ;; `mevedel-session-rewind'
 (declare-function mevedel-session-rewind-copy-session-state
@@ -132,6 +170,7 @@
                   (session workspace save-path lease lease-renewal-timer
                            publication control-transfer control-transfer-drains
                            root-buffer))
+(declare-function mevedel-session-agent-registry "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-control-transfer
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-control-transfer-drains
@@ -176,6 +215,7 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (cl-x) t)
+(defvar mevedel--current-request)
 (defvar mevedel--session)
 (defvar mevedel-session--read-only-mode)
 
@@ -193,8 +233,11 @@
 ;; `mevedel-turn'
 (declare-function mevedel-request-active-p
                   "mevedel-turn" (&optional buffer))
+(declare-function mevedel-request-cancel "mevedel-turn"
+                  (request &optional abort-plan-approval))
 (declare-function mevedel-turn-busy-p "mevedel-turn" (&optional buffer))
 (autoload 'mevedel-request-active-p "mevedel-turn")
+(autoload 'mevedel-request-cancel "mevedel-turn")
 (autoload 'mevedel-turn-busy-p "mevedel-turn")
 
 ;; `mevedel-utilities'
@@ -395,6 +438,75 @@ with the transfer read inside the caller's durable transaction."
     (mevedel-session-set-control-transfer
      session (or state (mevedel-session-control-transfer session)))
     (mevedel-session-control-transfer session)))
+
+(defun mevedel-session-control-transfer-taken-over (session lease)
+  "Stop SESSION's unpublished work after another client activated LEASE.
+Storage is already fenced.  An active publication must finish before agent
+interrupts can run; the existing poll retries this transition, not a queued
+interrupt that publication cleanup could discard."
+  (when-let* ((buffer (mevedel-session-control-transfer-root-buffer session))
+              ((not (eq 'owned (plist-get (mevedel-session-lease session) :state)))))
+    (unless (buffer-local-value 'mevedel-session--read-only-mode buffer)
+      (mevedel-session-set-control-transfer session (list :state 'taken-over))
+      (mevedel-session-persistence-apply-read-only-mode
+       buffer
+       (format "control taken over by %s at %s; unpublished changes here were not kept"
+               (plist-get lease :host)
+               (format-time-string "%FT%T%z"
+                                   (seconds-to-time (plist-get lease :renewed-at))))))
+    (when (and (eq 'taken-over
+                   (plist-get (mevedel-session-control-transfer session) :state))
+               (not (mevedel-session-publication-active-p session))
+               (not (mevedel-session-publication-busy-p session))
+               (not (mevedel-session-publication-finishing-p session))
+               (not (mevedel-transport-busy-p (mevedel-session-save-path session))))
+      (mevedel-session-durability-call-outside-transaction
+       (lambda ()
+         (let ((stopped t))
+           ;; A failed canceller must not leave the other producers running.
+           (dolist (stop
+                    (append
+                     (list (lambda ()
+                             (with-current-buffer buffer
+                               (mevedel-request-cancel mevedel--current-request t)))
+                           (lambda ()
+                             (mevedel-permission-queue-abort-all session)
+                             (mevedel-plan-approval-abort session))
+                           (lambda ()
+                             (let ((inhibit-message t))
+                               (while (cl-find-if
+                                       (lambda (entry)
+                                         (eq buffer (plist-get
+                                                     (gptel-fsm-info (cadr entry))
+                                                     :buffer)))
+                                       gptel--request-alist)
+                                 (gptel-abort buffer)))))
+                     (mapcar (lambda (entry)
+                               (lambda ()
+                                 (if (or (mevedel-session-publication-active-p session)
+                                         (mevedel-session-publication-busy-p session)
+                                         (mevedel-session-publication-finishing-p session))
+                                     (setq stopped nil)
+                                   (mevedel-agent-control-interrupt-user session (car entry)))))
+                             (mevedel-session-agent-registry session))
+                     (list (lambda () (mevedel-execution-teardown-session session)))))
+             (condition-case err
+                 (funcall stop)
+               (error
+                (setq stopped nil)
+                (mevedel-diagnostic-message
+                 (mevedel-diagnostic-scope session)
+                 "Could not stop work after control loss: %s" (error-message-string err)))))
+           (when stopped
+             (mevedel-session-publication-clear-transient session)
+             (with-current-buffer buffer
+               (setq mevedel--current-request nil
+                     mevedel-session--checkpoint-pending nil)
+               (set-buffer-modified-p nil))
+             (unless (eq 'owned (plist-get (mevedel-session-lease session) :state))
+               (mevedel-session-durability--cancel-renewal session))
+             (mevedel-session-set-control-transfer session (list :state 'following)))
+           (mevedel-session-control-transfer-notify session 'rerender)))))))
 
 (defun mevedel-session-control-transfer--poll-owner (session)
   "Poll owner-side state, save drained work, and release the granted lease."
@@ -705,14 +817,15 @@ session, including its native history, rather than a cooperative transfer."
           (mevedel-session-control-transfer--adopt-control
            session buffer)))))))
 
-(defun mevedel-session-control-transfer-acquire (session buffer)
+(defun mevedel-session-control-transfer-acquire (session buffer &optional force)
   "Take SESSION's unheld lease directly into BUFFER.
 
 For a lease nobody holds there is no owner to request control from, and for
 an expired one the lease layer's own takeover confirmation is the whole
 negotiation.  Both reduce to acquiring and adopting committed state, which is
 also what a granted transfer ends with.  Native history is preserved just as
-on ordinary resume; the engine validates its installation on the next send."
+on ordinary resume; the engine validates its installation on the next send.
+FORCE also offers confirmation to take over from a live holder."
   (unless (buffer-live-p buffer)
     (error "Session buffer is not live"))
   (unless (mevedel-session-save-path session)
@@ -721,9 +834,13 @@ on ordinary resume; the engine validates its installation on the next send."
     (user-error "Read-only session changed locally; refresh before taking control"))
   (mevedel-session-control-transfer-register-root-buffer session buffer)
   (if (mevedel-session-durability-lease-acquire
-       (mevedel-session-save-path session) (buffer-name buffer) session)
+       (mevedel-session-save-path session) (buffer-name buffer) session nil force)
       (mevedel-session-control-transfer--adopt-control session buffer t)
     (user-error "Another client took this session's lease first")))
+
+(defun mevedel-session-control-transfer-take-over (session buffer)
+  "Confirm forced takeover of SESSION into read-only BUFFER."
+  (mevedel-session-control-transfer-acquire session buffer t))
 
 (defun mevedel-session-control-transfer-poll (session buffer read-only-p)
   "Poll SESSION's durable transfer state for BUFFER.
@@ -740,7 +857,15 @@ owner poll may itself publish.  The poll therefore performs no target I/O
 while another TRAMP operation is in progress, or while a publication owns the
 bounded window; the next tick observes the same durable state once the
 transport is free."
+  (unless (mevedel-transport-busy-p (mevedel-session-save-path session))
+    (mevedel-session-publication-settle-taken-over session)
+    (when (eq 'taken-over
+              (plist-get (mevedel-session-control-transfer session) :state))
+      (mevedel-session-control-transfer-taken-over
+       session (mevedel-session-lease session))))
   (unless (or (mevedel-session-publication-active-p session)
+              (eq 'taken-over
+                  (plist-get (mevedel-session-control-transfer session) :state))
               (mevedel-transport-busy-p (mevedel-session-save-path session)))
     (if read-only-p
         (or (mevedel-session-control-transfer--poll-requester session buffer)
@@ -800,26 +925,28 @@ the owner can see what a handoff is still waiting for."
             :action 'status
             :title "Control requested"
             :detail "The owner grants automatically if it does not answer."
+            :keys '(("b" . "take over"))
             :help-echo "Waiting for the owner to answer or time out"))
      ((eq state 'quiescing)
       (list :kind 'control-transfer
             :action 'status
             :title "Control granted"
             :detail "Waiting for the owner to finish its current work."
+            :keys '(("b" . "take over"))
             :help-echo "Control arrives once the owner has drained its work"))
      ((eq state 'rejected)
       (list :kind 'control-transfer
             :action 'request
             :attention t
             :title "Control request was declined"
-            :keys '(("r" . "take control"))
+            :keys '(("r" . "take control") ("b" . "take over"))
             :help-echo "Acquire an available lease or request cooperative control"))
      (t
       (list :kind 'control-transfer
             :action 'request
             :title "This session is read-only here"
             :detail "Take control to acquire its lease or ask its current owner."
-            :keys '(("r" . "take control"))
+            :keys '(("r" . "take control") ("b" . "take over"))
             :help-echo "Acquire an available lease or request cooperative control")))))
 
 (provide 'mevedel-session-control-transfer)

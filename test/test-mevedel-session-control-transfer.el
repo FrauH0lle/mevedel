@@ -182,7 +182,7 @@
     ;; owner's prompt on its screen offers a choice it does not have.
     (let ((requester (mevedel-session-control-transfer-descriptor session t)))
       (should (eq 'status (plist-get requester :action)))
-      (should-not (plist-get requester :keys))
+      (should (equal '(("b" . "take over")) (plist-get requester :keys)))
       (should-not (plist-get requester :attention)))
     (setf (mevedel-session-control-transfer session)
           '(:state quiescing :request (:requester-label "Laptop")))
@@ -206,7 +206,7 @@
       ;; A permanent banner in the same colour as a live decision teaches
       ;; the user to stop seeing both.
       (should-not (plist-get idle :attention))
-      (should (equal '("r") (mapcar #'car (plist-get idle :keys)))))
+      (should (equal '("r" "b") (mapcar #'car (plist-get idle :keys)))))
     ;; A writable session with no request has nothing to say.
     (should-not
      (mevedel-session-control-transfer-descriptor session nil))))

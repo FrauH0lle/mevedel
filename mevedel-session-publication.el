@@ -455,6 +455,40 @@ ABANDONED explicitly discards recovery instead of retaining a failed checkpoint.
         ;; finalizer.  Also wake a last job's offers without waiting for backoff.
         (mevedel-session-publication--schedule session)))))
 
+(defun mevedel-session-publication--foreign-successor-p (job lease)
+  "Return non-nil when activated foreign LEASE irreversibly fences JOB."
+  (let ((origin (mevedel-session-publication--job-expected-lease job)))
+    (and (mevedel-session-durability--valid-lease-p lease)
+         (memq (plist-get lease :status) '(active publishing released))
+         (not (equal mevedel-session-durability--client-id
+                     (plist-get lease :client-id)))
+         (natnump (plist-get origin :generation))
+         (> (plist-get lease :generation) (plist-get origin :generation)))))
+
+(defun mevedel-session-publication--job-superseded (job observation)
+  "Discard irreversibly fenced JOB using its foreign lease OBSERVATION."
+  (let ((session (mevedel-session-publication--job-session job)))
+    ;; The successor may include this mail: neither roll it back nor
+    ;; acknowledge it again from the fenced client.
+    (mevedel-session-publication-clear-transient session)
+    (setf (mevedel-session-publication-preparations session) nil
+          (mevedel-session-publication--job-acknowledge job) #'ignore)
+    (mevedel-session-durability-bind-observed-lease session observation)
+    (mevedel-session-publication--job-complete job nil nil t)))
+
+(defun mevedel-session-publication-settle-taken-over (session)
+  "Retire SESSION's unresolved job if its bound lease proves supersession.
+An existing poll tick calls this after an observation error.  A validated
+newer foreign generation is an irreversible fence, so no target read,
+rollback, acknowledgement or retry is needed."
+  (when-let* ((job (mevedel-session-publication-job session))
+              ((eq 'unresolved (mevedel-session-publication--job-phase job)))
+              (lease (mevedel-session-lease session))
+              ((eq 'lost (plist-get lease :state)))
+              ((mevedel-session-publication--foreign-successor-p job lease)))
+    (mevedel-session-publication--job-superseded job (list :lease lease))
+    t))
+
 (defun mevedel-session-publication--job-failed (job err)
   "Roll JOB back after a definitive pre-head failure ERR.
 Normalize a reserved lease asynchronously before releasing the mutation gate."
@@ -468,10 +502,7 @@ Normalize a reserved lease asynchronously before releasing the mutation gate."
   (when (eq job (mevedel-session-publication-job
                  (mevedel-session-publication--job-session job)))
     (setf (mevedel-session-publication--job-waiting-p job) nil
-          (mevedel-session-publication--job-process job) nil
-          (mevedel-session-publication--job-expected-lease job)
-          (copy-sequence
-           (mevedel-session-lease (mevedel-session-publication--job-session job))))
+          (mevedel-session-publication--job-process job) nil)
     (if (and success (not err))
         (progn
           (setf (mevedel-session-publication--job-phase job) next)
@@ -644,6 +675,10 @@ Optional operations do not stop the program; skipped results follow its cause."
                     (setf (mevedel-session-pending-publication session) nil)
                     (mevedel-session-publication--job-failed
                      job (mevedel-session-publication--job-error job)))
+                   ((and (not (plist-get observation :owned))
+                         (mevedel-session-publication--foreign-successor-p
+                          job (plist-get observation :lease)))
+                    (mevedel-session-publication--job-superseded job observation))
                    (t
                     ;; Another head may have inherited the candidate's mail.
                     ;; Without proof, rollback could acknowledge the same

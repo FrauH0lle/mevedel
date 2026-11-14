@@ -46,6 +46,8 @@
                   "mevedel-session-durability" (value))
 (declare-function mevedel-session-durability--bind-lease
                   "mevedel-session-durability" (session lease state))
+(declare-function mevedel-session-durability--bind-latest
+                  "mevedel-session-durability" (session latest directory now))
 (declare-function mevedel-session-durability--claim-next
                   "mevedel-session-durability"
                   (directory expected buffer-name
@@ -626,6 +628,13 @@ transaction; the ordinary mutation gate consumes those proofs afterward."
           (when pid-lock
             (mevedel-session-durability--settle-pid-lock session-dir (pop results)))
           (mevedel-session-recovery-refresh session (car results)))))
+    (when (and current bound
+               (or (equal mevedel-session-durability--client-id
+                          (plist-get bound :client-id))
+                   (eq 'claiming (plist-get bound :status)))
+               (not (equal mevedel-session-durability--client-id
+                           (plist-get current :client-id))))
+      (mevedel-session-durability--bind-latest session current directory now))
     (when (and session-dir session-id
                (mevedel-session-durability--valid-lease-p current)
                (equal mevedel-session-durability--client-id

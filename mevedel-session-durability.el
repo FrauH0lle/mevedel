@@ -59,6 +59,12 @@
                   "mevedel-session-control-fs"
                   (path content &optional coding-system))
 
+;; `mevedel-session-control-transfer'
+(declare-function mevedel-session-control-transfer-taken-over
+                  "mevedel-session-control-transfer" (session lease))
+(autoload 'mevedel-session-control-transfer-taken-over
+  "mevedel-session-control-transfer")
+
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication--record-pending
                   "mevedel-session-publication" (session batches err))
@@ -80,6 +86,8 @@
 (declare-function mevedel-session-publication-barrier
                   "mevedel-session-publication" (session &optional token))
 (declare-function mevedel-session-publication-busy-p
+                  "mevedel-session-publication" (session))
+(declare-function mevedel-session-publication-settle-taken-over
                   "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication--schedule
                   "mevedel-session-publication" (session))
@@ -1020,13 +1028,15 @@ BYTES is the exact content LEASE occupies on the target when that is known.
 A later renewal states it as the precondition of its own write, which saves
 re-reading a record this client just wrote.
 
-An `owned' state runs the renewal heartbeat and a `lost' one stops it.
+An `owned' state runs the renewal heartbeat and a `lost' one stops it,
+except while takeover still needs to stop producers: ticks retry that stop.
 A `contested' state keeps it: another client has a generation outstanding
 but has not activated it, and that claim aborts if this client's write
 landed first, so stopping the heartbeat here would let a lease this client
 still holds expire for real."
   (when session
-    (let ((live (and lease (copy-sequence lease)))
+    (let ((previous (mevedel-session-lease session))
+          (live (and lease (copy-sequence lease)))
           (release-pending
            (plist-get (mevedel-session-lease session) :release-pending)))
       (when live
@@ -1039,18 +1049,33 @@ still holds expire for real."
       ;; are provisional: neither timers nor collection belong to that object.
       (unless (when-let* ((job (mevedel-session-lease-renewal-job session)))
                 (eq session (mevedel-session-durability--heartbeat-shadow job)))
-	(cond
-	 ((eq state 'owned)
+        (when (and (memq state '(lost foreign))
+                   (mevedel-session-durability--valid-lease-p lease)
+                   (memq (plist-get lease :status) '(active publishing released))
+                   (not (equal mevedel-session-durability--client-id
+                               (plist-get lease :client-id)))
+                   (natnump (plist-get previous :generation))
+                   (or (and (equal mevedel-session-durability--client-id
+                                   (plist-get previous :client-id))
+                            (> (plist-get lease :generation)
+                               (plist-get previous :generation)))
+                       (and (eq 'claiming (plist-get previous :status))
+                            (= (plist-get lease :generation)
+                               (plist-get previous :generation)))))
+          (mevedel-session-control-transfer-taken-over session lease))
+        (cond
+         ((or (eq state 'owned)
+              (eq 'taken-over
+                  (plist-get (mevedel-session-control-transfer session) :state)))
           (unless (timerp (mevedel-session-lease-renewal-timer session))
             (setf (mevedel-session-lease-renewal-timer session)
                   (run-at-time
                    mevedel-session-lease-renewal-seconds
                    mevedel-session-lease-renewal-seconds
                    #'mevedel-session-durability-heartbeat session))))
-	 ;; Contested keeps the timer: see this function's docstring.
-	 ((eq state 'contested))
-	 (t
-          (mevedel-session-durability--cancel-renewal session)))))))
+         ;; Contested keeps the timer: see this function's docstring.
+         ((eq state 'contested))
+         (t (mevedel-session-durability--cancel-renewal session)))))))
 
 (defun mevedel-session-durability--finite-nonnegative-number-p (value)
   "Return non-nil when VALUE is a finite nonnegative number.
@@ -1295,7 +1320,7 @@ already taken for the surrounding operation."
          (> (plist-get lease :expires-at) now))))
 
 (defun mevedel-session-durability-lease-acquire
-    (session-dir buffer-name &optional session token)
+    (session-dir buffer-name &optional session token force)
   "Acquire SESSION-DIR's portable lease for BUFFER-NAME.
 
 Return non-nil when this client owns mutation authority and nil when another
@@ -1304,7 +1329,9 @@ except from a holder that provably died on this host, which is reclaimed at
 once even before expiry (see `mevedel-session-durability--holder-dead-p').
 When SESSION is non-nil, record the resulting lease state on it, after
 serializing behind its asynchronous publication: see
-`mevedel-session-durability--gate' for TOKEN."
+`mevedel-session-durability--gate' for TOKEN.
+FORCE offers explicit confirmation even for an unexpired foreign holder.
+Only an explicit user takeover command should pass FORCE."
   (require 'mevedel-session-publication)
   (when (and session
              (not (mevedel-session-durability--portable-session-p session)))
@@ -1353,7 +1380,8 @@ serializing behind its asynchronous publication: see
             existing)
            ((and (memq (plist-get existing :status)
                        '(claiming active publishing))
-                 (> (plist-get existing :expires-at) now))
+                 (> (plist-get existing :expires-at) now)
+                 (not force))
             ;; A holder that provably died on this host protects no write in
             ;; flight.  A publishing holder's child writer may outlive it, so
             ;; only expiry ends that lease.
@@ -1394,8 +1422,25 @@ serializing behind its asynchronous publication: see
                      "%FT%T%z"
                      (seconds-to-time
                       (plist-get existing :expires-at)))))
-               (y-or-n-p
-                (if (eq 'publishing (plist-get existing :status))
+               (funcall
+                (if force #'yes-or-no-p #'y-or-n-p)
+                (if force
+                    (format
+                     (concat
+                      "Take over portable session held by %s, buffer %s, "
+                      "last renewal %s, status %s? "
+                      "%sUnpublished changes on that client will not be kept. ")
+                     (plist-get existing :host)
+                     (plist-get existing :buffer)
+                     (format-time-string
+                      "%FT%T%z" (seconds-to-time
+                                   (plist-get existing :renewed-at)))
+                     (plist-get existing :status)
+                     (if (eq 'publishing (plist-get existing :status))
+                         (concat "A critical write may still be in flight; "
+                                 "confirm that the prior client is stopped. ")
+                       ""))
+                  (if (eq 'publishing (plist-get existing :status))
                     (format
                      (concat
                       "Portable session publishing lease expired at %s. "
@@ -1404,7 +1449,7 @@ serializing behind its asynchronous publication: see
                      expired-at)
                   (format
                    "Portable session lease expired at %s; take it over? "
-                   expired-at)))))
+                   expired-at))))))
             nil)
            (t
             (mevedel-session-durability--claim-next
@@ -2393,7 +2438,8 @@ process function are all nil, so arbitrary code called back from inside a
 job or a timer opens its own transactions.  Callers, to audit whenever these
 cells change: the publication acknowledgement in
 `mevedel-session-publication--job-complete', and
-`mevedel-agent-control-notify' and `mevedel-agent-control--flush-notifications'."
+`mevedel-agent-control-notify', `mevedel-agent-control--flush-notifications',
+and `mevedel-session-control-transfer-taken-over'."
   (dlet ((mevedel-session-durability--transaction-clock nil)
          (mevedel-session-durability--asserted-directories nil)
          (mevedel-session-durability--commit-riders nil)
@@ -3178,53 +3224,65 @@ abort follow `mevedel-session-durability--claim-next', using real programs."
   "Renew SESSION from its timer without waiting for target programs.
 Single-flight ownership shares the publication gate.  Explicit mutation and
 teardown drain it; subsequent ticks never drain.  Unsupported remote carriers
-and synchronous-drain contexts skip a tick instead of blocking the editor."
-  (let ((path (mevedel-session-save-path session)))
-    (unless (or (null path) mevedel-session-durability--heartbeat-inhibit
-                mevedel-session-control-fs--async-wait
-                (plist-get (mevedel-session-lease session) :release-pending)
-                (mevedel-session-publication-stopping-p session)
-                (mevedel-session-publication-active-p session)
-                (mevedel-transport-busy-p path)
-                (not (mevedel-session-durability--heartbeat-carrier-p path)))
-      (unless (mevedel-session-publication-busy-p session)
-        (let* ((job (mevedel-session-durability--heartbeat-create
-                     :session session :path path :lease (mevedel-session-lease session)
-                     :buffer (mevedel-session-root-buffer session)))
-               (shadow (mevedel-session--create
-                        :save-path path :lease (copy-sequence (mevedel-session-lease session))
-                        :lease-renewal-job job))
-               (mevedel-session-durability--async-valid-p
-                (lambda () (mevedel-session-durability--heartbeat-valid-p job))))
-          (setf (mevedel-session-durability--heartbeat-shadow job) shadow
-                (mevedel-session-lease-renewal-job session) job)
-          ;; A timer may interrupt another session's publisher.  Its cells,
-          ;; riders and process owner must never become this job's context.
-          (dlet ((mevedel-session-durability--transaction-clock (list nil))
-                 (mevedel-session-durability--asserted-directories (list nil))
-                 (mevedel-session-recovery--mutation-cache (list nil))
-                 (mevedel-session-durability--observed-time nil)
-                 (mevedel-session-durability--commit-riders nil)
-                 (mevedel-session-durability--final-commit nil)
-                 (mevedel-session-durability-async-process-function nil))
-            (let* ((verify (lambda ()
-                             (mevedel-session-durability--heartbeat-verify
-                              shadow (lambda (error)
-                                       (mevedel-session-durability--heartbeat-finish job error)))))
-                   (finish (lambda (success error)
-                             ;; A named decline is a lost lease, not a failure.
-                             (if (and error
-                                      (not (mevedel-session-durability--lease-decline-p
-                                            error)))
-                                 (mevedel-session-durability--heartbeat-finish job error)
-                               (if success (funcall verify)
-                                 (mevedel-session-durability--heartbeat-reclaim
-                                  shadow (lambda (_reclaimed failure)
-                                           (if failure
-                                               (mevedel-session-durability--heartbeat-finish job failure)
-                                             (funcall verify)))))))))
-              (mevedel-session-durability--update-owned-lease-async
-               shadow '(active publishing) 'active mevedel-session-lease-seconds finish))))))))
+and synchronous-drain contexts skip a tick instead of blocking the editor.
+After takeover, retry stopping producers instead of renewing lost authority."
+  (if (eq 'taken-over
+          (plist-get (mevedel-session-control-transfer session) :state))
+      (unless (or mevedel-session-durability--heartbeat-inhibit
+                  (eq 'owned (plist-get (mevedel-session-lease session) :state))
+                  (mevedel-transport-busy-p (mevedel-session-save-path session)))
+        (if (buffer-live-p (mevedel-session-root-buffer session))
+            (progn
+              (mevedel-session-publication-settle-taken-over session)
+              (mevedel-session-control-transfer-taken-over
+               session (mevedel-session-lease session)))
+          (mevedel-session-durability--cancel-renewal session)))
+    (let ((path (mevedel-session-save-path session)))
+      (unless (or (null path) mevedel-session-durability--heartbeat-inhibit
+                  mevedel-session-control-fs--async-wait
+                  (plist-get (mevedel-session-lease session) :release-pending)
+                  (mevedel-session-publication-stopping-p session)
+                  (mevedel-session-publication-active-p session)
+                  (mevedel-transport-busy-p path)
+                  (not (mevedel-session-durability--heartbeat-carrier-p path)))
+        (unless (mevedel-session-publication-busy-p session)
+          (let* ((job (mevedel-session-durability--heartbeat-create
+                       :session session :path path :lease (mevedel-session-lease session)
+                       :buffer (mevedel-session-root-buffer session)))
+                 (shadow (mevedel-session--create
+                          :save-path path :lease (copy-sequence (mevedel-session-lease session))
+                          :lease-renewal-job job))
+                 (mevedel-session-durability--async-valid-p
+                  (lambda () (mevedel-session-durability--heartbeat-valid-p job))))
+            (setf (mevedel-session-durability--heartbeat-shadow job) shadow
+                  (mevedel-session-lease-renewal-job session) job)
+            ;; A timer may interrupt another session's publisher.  Its cells,
+            ;; riders and process owner must never become this job's context.
+            (dlet ((mevedel-session-durability--transaction-clock (list nil))
+                   (mevedel-session-durability--asserted-directories (list nil))
+                   (mevedel-session-recovery--mutation-cache (list nil))
+                   (mevedel-session-durability--observed-time nil)
+                   (mevedel-session-durability--commit-riders nil)
+                   (mevedel-session-durability--final-commit nil)
+                   (mevedel-session-durability-async-process-function nil))
+              (let* ((verify (lambda ()
+                               (mevedel-session-durability--heartbeat-verify
+                                shadow (lambda (error)
+                                         (mevedel-session-durability--heartbeat-finish job error)))))
+                     (finish (lambda (success error)
+                               ;; A named decline is a lost lease, not a failure.
+                               (if (and error
+                                        (not (mevedel-session-durability--lease-decline-p
+                                              error)))
+                                   (mevedel-session-durability--heartbeat-finish job error)
+                                 (if success (funcall verify)
+                                   (mevedel-session-durability--heartbeat-reclaim
+                                    shadow (lambda (_reclaimed failure)
+                                             (if failure
+                                                 (mevedel-session-durability--heartbeat-finish job failure)
+                                               (funcall verify)))))))))
+                (mevedel-session-durability--update-owned-lease-async
+                 shadow '(active publishing) 'active mevedel-session-lease-seconds finish)))))))))
 
 (defun mevedel-session-durability-adopt-owned-lease (session source &optional token)
   "Move SOURCE's verified owned lease and path into SESSION.

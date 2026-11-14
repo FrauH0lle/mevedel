@@ -98,8 +98,11 @@ crash after it but before the acknowledgement leaves committed mail that
 restore finds, and durable mail identities with hidden transcript receipts
 keep delivery at-least-once. An uncertain head outcome is decided by reading
 the authoritative head, not by guessing: the candidate head means adopt, the
-prior head means roll back, anything else, or an unreadable head, retains the
-job as pending publication for explicit retry or abandonment. Checkpoints
+prior head means roll back. A newer activated foreign lease generation supersedes
+the old job without rollback or acknowledgement, as described in
+[ADR 0100](0100-portable-project-session-authority.md#2026-11-14-confirmed-takeover-replaces-the-pid-break).
+Other head changes, or an unreadable head without that validated fence, retain
+the job as pending publication for explicit retry or abandonment. Checkpoints
 retain definitive pre-head failures as frozen recovery too; later automatic
 opportunities do not retry them blindly. Their opaque checkpoint candidate
 installs only after head adoption, and their success-only finish clears a

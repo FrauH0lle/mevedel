@@ -1176,7 +1176,9 @@ not, when that PID is gone or reused.  This assumes the process list is
 complete for one's own user; `hidepid` and `ProtectProc` hide only other
 users' processes, so another user's holder never qualifies.  A record from
 another host, an unavailable process list or missing holder evidence is
-uncertain liveness and waits for expiry.  A `publishing` lease never
+uncertain liveness and ordinary acquisition waits for expiry. Explicit forced
+takeover is available from the read-only follower as described below.
+A `publishing` lease never
 qualifies, because the dead
 holder's child writer may still run.  Journal recovery and cleanup assessment
 treat such a lease as abandoned and expired respectively.  The renewal
@@ -1385,20 +1387,49 @@ against a busy owner sits in `quiescing` until the work it is waiting on
 finishes. Only the owner can say what that work is, so the owner's surface
 names the blocker and the requester's says just that it is waiting.
 
-`mevedel-take-control`, also bound to the read-only interaction's `r` key, is
-the one command for the requester's side. It routes
+`mevedel-take-control`, also bound to the read-only interaction's `r` key,
+routes
 on lease state: an unheld or expired lease is acquired directly, because
 there is no owner to ask and the lease layer's own confirmation is the whole
 negotiation; a held one is requested. `mevedel-release-control` is the
 reverse, saving and publishing before the lease goes and leaving the buffer
 read-only and following.
 
+The read-only interaction's `b` key, including while a request is waiting,
+offers **take over** through `mevedel-view-control-transfer-take-over`. It can
+replace a live, unexpired holder that is frozen or not answering. The full
+yes/no confirmation names the holder's host, buffer, last renewal and status,
+and warns that its unpublished work will not be kept. A publishing holder
+requires the stronger confirmation that the prior client is stopped, since a
+critical write may still be in flight. Declining leaves ownership unchanged;
+concurrent claims elect only one winner. No chooser row changes are needed:
+opening held state remains read-only, closing it aborts, and `b` is the break.
+
+The successor generation fences old commits, renewals and releases immediately.
+When the old holder next observes that generation, it becomes read-only, stops
+its request, agent turns and executions once its publication gate is clear, and
+discards unpublished state so it can follow the new owner. Stop work is derived
+again on the existing view poll or retained session heartbeat, never queued behind
+a publication that could drop the interrupt. The heartbeat retries stopping even
+with no view open, does not renew lost authority and ends once producers stop.
+Project-file edits already performed remain; an old holder can still run until
+it observes ownership loss and the publication gate permits stopping. If its
+async publication reconciles against the successor's newer head, it drops its
+pending local batches without rollback, acknowledgement or
+retry, then releases its publication gate. Unexplained head changes still keep
+unresolved recovery rather than guessing whether execution mail was committed.
+If reconciliation itself errors after a newer foreign generation was already
+validated and bound, that irreversible fence lets the next retry tick retire the
+unresolved job without another target read. Ordinary same-client uncertainty
+still stays unresolved.
+
 Entering read-only mode reports itself as a message rather than a warning.
 The buffer states its own authority in the interaction zone and the cockpit
 header for as long as it holds, so a warning window would repeat durably
 visible state and take the frame at the moment the user is watching the
-handoff. A lease that fails to renew or is lost still warns: that is a
-problem, not a transition. Neither side is privileged: the machine that just
+handoff. A renewal failure still warns; an observed takeover names the new host
+and time and says that unpublished changes here were not kept. Neither side is
+privileged: the machine that just
 handed control away is a non-owner like any other and can ask for it back.
 
 ### Following a session owned elsewhere
@@ -1418,7 +1449,8 @@ observation and no artifact reads. When it has advanced, the follower reloads
 the committed sidecar and segment through the same path a granted transfer
 ends with, minus the lease and the write enable. A locally modified buffer is
 never advanced: those edits are exactly what the transfer path refuses to
-discard.
+discard, except for unpublished old-holder state explicitly superseded by a
+confirmed takeover.
 Like lease renewal, that poll performs no target I/O while another TRAMP
 operation is in progress or while a publication owns the bounded window: Emacs
 runs timers and process filters wherever the main loop waits, including inside

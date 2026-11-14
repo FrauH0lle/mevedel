@@ -16,9 +16,23 @@ Every lease record names its holder by host identity (boot ID, machine ID,
 PID namespace), user ID, PID and process start ticks.  A client of the same
 user on the same host reclaims an `active` or `claiming` lease at once when
 that process is provably gone or reused; any other or uncertain evidence
-waits for expiry, and a `publishing` lease always does.
-Forced takeover of an unexpired live or foreign holder is unavailable; this
-dead-holder reclaim is not a general forced-break operation.
+waits for expiry under ordinary acquisition, as does a `publishing` lease.
+An explicit forced takeover can replace an unexpired live or foreign holder
+after a full yes/no confirmation naming the host, buffer, last renewal and
+status. Publishing additionally requires confirmation that the prior client is
+stopped because a critical write may still be in flight. Ordinary acquisition
+never forces. Exclusive generation creation elects the winner, and the exact
+publishing-generation/head compare-and-set fences the old holder's commits,
+renewals and releases. Already committed state remains authoritative.
+
+On observing a newer activated foreign generation, the old holder stops its
+request, retained agent turns and live executions, becomes read-only and follows
+committed publications. Unpublished work here is discarded. A superseded async
+publication whose head has advanced under that foreign generation is completed
+without rollback, acknowledgement or retry; its pending local batches are
+dropped. An unexplained head change still retains unresolved recovery. Project
+file effects cannot be undone by the session lease: old-holder producers may
+continue until ownership loss is observed and the publication gate permits stopping.
 
 All authority operations receive the session's explicit profile.  Path
 remoteness is only a transport/path concern and cannot choose lock acquisition,
@@ -75,6 +89,33 @@ standalone migration does not change the runtime authority or codec contract. Se
 
 ## Decision history
 
+### 2026-11-14: Confirmed takeover replaces the PID break
+
+Roland required parity with the PID lock's live-holder break before removing
+that implementation. The portable lease now offers the read-only follower a
+separate confirmed takeover, shared by project and file-workspace sessions.
+Unlike a PID break, the successor generation fences later storage commits by
+the old holder. No new authority capability or on-disk format is needed: whoever
+can write the session directory could already create a successor generation.
+
+Implementation review exposed an additional async reconciliation case: if the
+successor had already published, the old holder retained an unresolved job and
+its active-publication gate blocked following forever. A newer activated
+foreign generation proves supersession, so that case drops unpublished batches
+without rollback or acknowledgement that might duplicate inherited execution
+mail. Same-client and otherwise unexplained head changes keep the existing
+unresolved behavior.
+
+Agent interruption itself waits behind publication, so enqueueing it during the
+old job could let that job's cleanup discard the interrupt. Demotion is immediate
+but stopping waits for the publication gate and is re-derived on the existing
+view poll or retained session heartbeat, with no extra timer kind. The heartbeat
+only retries stopping, never renews lost authority, and ends after producers stop;
+closing all views cannot strand a running agent. If reconciliation errors after
+a validated newer foreign generation was bound, the next tick can retire the job
+from that irreversible fence without a fresh target read. Dropped checkpoint callbacks
+also relinquish their buffer-local pending identity before later control reuse.
+
 On 2026-11-14 Roland decided to keep one session-ownership implementation:
 file-workspace sessions moved from the PID-lock profile to the portable
 lease, replacing the earlier decision that kept both profiles. A matched
@@ -89,9 +130,9 @@ and 20.0 ms to 42.7 and 49.4 ms in one block, resume from 36.2 and 45.7 ms to
 are the costs project sessions already paid. Immediate reclaim of a proven
 same-host dead holder moved into the lease as described above, so those
 `active` and `claiming` leases no longer wait for the 90 s expiry and a
-confirmation. This does not reproduce the PID lock's forced-break option:
-forced takeover of an unexpired foreign or live holder remains unavailable.
-Uncertain holders and `publishing` leases still wait for expiry and the
+confirmation. That first step did not reproduce the PID lock's forced break;
+the confirmed-takeover amendment above adds it. Without that explicit command,
+uncertain holders and `publishing` leases still wait for expiry and the
 applicable confirmation. Existing PID-lock file sessions convert through the
 migration script.
 
