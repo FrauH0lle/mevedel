@@ -505,6 +505,10 @@ BOUNDARY returns reminder text, or nil, after each completed tool batch."
         (setq info (plist-put info :mevedel-usage-pending t))
         (setf (mevedel-engine-info owner) (plist-put info :mevedel-claude-sample-usage nil)))
       (setq outcome (plist-put outcome :next-prompt content))))
+  (setq outcome (plist-put outcome :queued-handover
+                           (and (plist-get (plist-get (mevedel-engine-info owner) :mevedel-claude-context-pending)
+                                           :steering-text)
+                                t)))
   outcome)
 
 (defun mevedel-claude-code--outcome (outcome)

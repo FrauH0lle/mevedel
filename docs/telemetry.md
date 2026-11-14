@@ -169,6 +169,12 @@ cancellation releases the fence and leaves the machine retryable.
   correlated with the owning turn and carrying only reply kind, request ID,
   and child agent path when applicable, never the reply payload;
 - queued user messages with enqueue/dequeue events and dwell time;
+- `acp-prompt-send` for every physical `session/prompt` sent to an ACP adapter,
+  flagging a continuation, whether it hands over a queued user message, and an
+  automatic resend, with
+  milliseconds since the previous genuine `end_turn` and since the last send, and
+  `acp-process-exit` when the adapter process ends, with its exit code or
+  signal number and the same two timings; never prompt text or output;
 - `event-wake-refused` when an idle root's background-event wake for waking
   mail is held, with `:reason` naming the first refusing gate: `busy`,
   `drain-blocked-queued` (queued follow-ups or another delivery hold),

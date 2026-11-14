@@ -424,6 +424,8 @@ immediately."
                       process (lambda (process event)
                                 (funcall sentinel process event)
                                 (unless (process-live-p process)
+                                  (when-let* ((observer (plist-get launch :exit-observer)))
+                                    (ignore-errors (funcall observer process)))
                                   (mevedel-acp--fail connection "ACP agent process exited"))))))))))
         ;; Start at once: preparation (version and login checks) overlaps the
         ;; agent's own startup, and admission waits for both.
@@ -541,6 +543,8 @@ failure (see `mevedel-acp-open')."
              (plist-put turn :acted t))
            (funcall event notification))
          (send ()
+           (when-let* ((observer (plist-get (mevedel-acp-launch connection) :send-observer)))
+             (ignore-errors (funcall observer (plist-get turn :retried))))
            (mevedel-acp--send connection request #'settle #'failed))
          (settle (response)
            (let ((reason (alist-get 'stopReason response)))
