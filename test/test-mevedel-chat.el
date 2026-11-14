@@ -1359,6 +1359,32 @@
 (mevedel-deftest mevedel--send-request ()
   ,test
   (test)
+  :doc "sends the session id as the Codex prompt_cache_key in the realized payload"
+  (let* ((gptel--known-backends nil)
+         (backend (gptel-make-openai-oauth "Chat Codex"))
+         (gptel--openai-oauth-token-file (make-temp-file "mev-token-"))
+         (orig (symbol-function 'gptel-request))
+         key)
+    ;; A current token, so the real readiness guard passes.
+    (with-temp-file gptel--openai-oauth-token-file
+      (prin1 (list :access_token "current" :expires_at (+ (float-time) 3600))
+             (current-buffer)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local gptel-backend backend gptel-model 'gpt-5.5
+                      gptel-use-tools nil gptel-stream nil
+                      mevedel--session (mevedel-session--create :session-id "root-id"))
+          ;; Real send path; :dry-run stops gptel after it realizes the payload.
+          (cl-letf (((symbol-function 'gptel-request)
+                     (lambda (_prompt &rest args)
+                       (let ((fsm (apply orig "hi" :dry-run t args)))
+                         (setq key (plist-get (plist-get (gptel-fsm-info fsm) :data)
+                                              :prompt_cache_key))
+                         fsm))))
+            (mevedel--send-request "derived prompt"))
+          (should (equal "root-id" key)))
+      (delete-file gptel--openai-oauth-token-file)))
+
   :doc "returns the FSM for a standard transformed streaming request"
   (with-temp-buffer
     (setq-local gptel-prompt-transform-functions '(transform)
@@ -1375,7 +1401,8 @@
           (should fsm)
           (should (eq fsm (plist-get request-args :fsm)))
           (should (equal "derived prompt" model-input))
-          (should (equal '(transform) (plist-get request-args :transforms)))
+          (should (equal '(mevedel-auth-codex-cache-key-transform transform)
+                         (plist-get request-args :transforms)))
           (should (plist-get request-args :stream)))
         (should-not mevedel--pending-model-input)))))
 
@@ -1406,7 +1433,8 @@
       (should (string-match-p "Planning prompt" (buffer-string)))
       (should (string-match-p "hook-context" (buffer-string)))
       (should (string-match-p "hook-context" model-input))
-      (should (equal '(transform) (plist-get request-args :transforms)))))
+      (should (equal '(mevedel-auth-codex-cache-key-transform transform)
+                         (plist-get request-args :transforms)))))
 
   :doc "stores the generated prompt while sending prepared skill context"
   (with-temp-buffer

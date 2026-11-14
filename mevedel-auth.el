@@ -31,6 +31,39 @@
 (defvar-local mevedel-auth--managed nil
   "Non-nil when provider requests in this buffer use asynchronous renewal.")
 
+;; `mevedel-structs' and `mevedel-agents'
+(declare-function mevedel-session-session-id "mevedel-structs" (cl-x))
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x))
+(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+(defvar mevedel--session)
+(defvar mevedel--agent-invocation)
+(defvar gptel--request-params)
+
+(defun mevedel-auth-codex-cache-key-apply (source)
+  "Set Codex's `prompt_cache_key' in the current prompt buffer from SOURCE.
+SOURCE is the conversation buffer the request belongs to.  Gptel's prompt
+buffer does not copy mevedel's variables, so every request realization
+mevedel performs calls this: the transform below and the compaction
+rebuild.  The root conversation sends its session id; a spawned agent's
+prefix differs, so it sends the session id plus its own agent id, as the
+Codex CLI keys sub-agents separately.  Other backends are untouched."
+  (when (and (gptel-openai-oauth-p gptel-backend) (buffer-live-p source))
+    (let* ((session (buffer-local-value 'mevedel--session source))
+           (id (and session (mevedel-session-session-id session)))
+           (inv (buffer-local-value 'mevedel--agent-invocation source)))
+      (when (stringp id)
+        (setq-local gptel--request-params
+                    (plist-put (copy-sequence gptel--request-params)
+                               :prompt_cache_key
+                               (if (mevedel-agent-invocation-p inv)
+                                   (format "%s:%s" id (mevedel-agent-invocation-agent-id inv))
+                                 id)))))))
+
+(defun mevedel-auth-codex-cache-key-transform (fsm)
+  "Apply `mevedel-auth-codex-cache-key-apply' for FSM's source buffer."
+  (mevedel-auth-codex-cache-key-apply (plist-get (gptel-fsm-info fsm) :buffer)))
+
 (defvar mevedel-auth--operations (make-hash-table :test #'equal))
 (defvar mevedel-auth-changed-hook nil
   "Functions called with BACKEND and safe STATE after an authentication change.")
