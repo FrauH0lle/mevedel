@@ -120,6 +120,23 @@ With DEFERRED, transports answer from a timer.  Return (IMMEDIATE . RESULT)."
                      ((quota . "Codex") (window . "7 days") (used_percent . 30) (resets)))
                    (alist-get 'readings (cadr entries))))
     (should-not mevedel-tool-usage-test--cancelled))
+  :doc "the pipeline result is multibyte text, so non-ASCII quota names are valid JSON text"
+  (let* ((gptel--known-backends (list (cons "Claude Code" claude)))
+         context)
+    (mevedel-tool-usage-test--with-transports
+     t
+     (lambda ()
+       (with-temp-buffer
+         (setq-local gptel-backend claude gptel-model 'test-model)
+         (mevedel-pipeline--step-handler
+          (list :tool (mevedel-tool-ensure "SubscriptionUsage") :args nil
+                :cancel-cell (list #'ignore))
+          (lambda (ctx) (setq context ctx))
+          #'ignore)
+         (mevedel-test--await 5 "SubscriptionUsage did not answer" context))))
+    (let ((text (plist-get context :result)))
+      (should (multibyte-string-p text))
+      (should (string-match-p "Weekly · all models" text))))
   :doc "readings carry only allowlisted fields and no account, plan, session or credential"
   (let ((text (cdr (mevedel-tool-usage-test--call (list codex claude) codex))))
     (should-not (string-match-p "SECRET\\|plus\\|max\\|Cost\\|session\\|credit\\|account\\|Bearer" text))

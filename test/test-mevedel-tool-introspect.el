@@ -331,6 +331,22 @@ Return the delivered text; omitted optional arguments are nil."
         (unless (memq buffer before) (kill-buffer buffer))))))
 
 
+(mevedel-deftest mevedel-tool-introspect/non-ascii
+  (:before-each (mevedel-tool-introspect--register))
+  ,test
+  (test)
+  :doc "non-ASCII manual node names reach the pipeline result as multibyte text"
+  (let (context)
+    (cl-letf (((symbol-function 'Info-build-node-completions)
+               (lambda (_manual) (list (cons "Café — node" nil)))))
+      (mevedel-pipeline--step-handler
+       (list :tool (mevedel-tool-get "EmacsManual" "mevedel")
+             :args '(:manual "elisp") :cancel-cell (list #'ignore))
+       (lambda (ctx) (setq context ctx)) #'ignore))
+    (let ((text (plist-get context :result)))
+      (should (multibyte-string-p text))
+      (should (string-match-p "Café — node" text)))))
+
 (ert-deftest mevedel-tool-introspect--manual-preserves-existing-info ()
   "Reading a node leaves an existing Info reader and the caller unchanged."
   (let ((before (buffer-list))

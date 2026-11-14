@@ -1280,7 +1280,10 @@ explicit `:status' must be `success' or `error'."
 (defun mevedel-pipeline--normalize-tool-string (value)
   "Return VALUE as JSON-safe model text when VALUE is a string."
   (if (stringp value)
-      (mevedel--normalize-message-text value)
+      ;; Handlers using `json-serialize' return unibyte UTF-8, which the
+      ;; normalizer would otherwise treat as plain ASCII-width text.
+      (mevedel--normalize-message-text
+       (if (multibyte-string-p value) value (decode-coding-string value 'utf-8)))
     value))
 
 (defun mevedel-pipeline--step-handler (context next fail)
