@@ -336,7 +336,11 @@ nil, so such leases wait for expiry."
          (equal host (plist-get holder :host))
          (eql (user-uid) (plist-get holder :uid))
          (natnump pid) (> pid 0)
+         ;; Malformed identity evidence cannot prove reuse of a live PID.
          (stringp process)
+         (let ((case-fold-search nil))
+           (string-match-p mevedel-session-durability--process-identity-regexp
+                           process))
          (or (not (mevedel-session-durability--pid-alive-p pid))
              (let ((current (mevedel-session-durability--pid-identity pid)))
                (and current (not (equal current process))))))))

@@ -772,6 +772,34 @@ holder identity is recorded by an owner lease acquired before the call."
      (let ((mevedel-session-durability--client-id (make-string 64 ?b)))
        (should-not (mevedel-session-durability-lease-acquire root "*new*")))))
 
+  :doc "reclaims a lease whose live PID now belongs to another process"
+  (test-mevedel-session-durability--with-holder
+   (lambda (root process)
+     (should (process-live-p process))
+     (let* ((directory (mevedel-session-durability--lease-path root))
+            (head (mevedel-session-durability--lease-head directory))
+            (holder (copy-sequence (plist-get head :holder))))
+       ;; Well-formed start ticks that differ from the live PID's: reuse.
+       (mevedel-session-durability--write-generation
+        directory (plist-put (copy-sequence head) :holder
+                             (plist-put holder :process
+                                        (concat (plist-get holder :process) "0")))))
+     (let ((mevedel-session-durability--client-id (make-string 64 ?b)))
+       (should (mevedel-session-durability-lease-acquire root "*new*")))))
+
+  :doc "keeps a live holder whose recorded identity is malformed"
+  (test-mevedel-session-durability--with-holder
+   (lambda (root process)
+     (should (process-live-p process))
+     (let* ((directory (mevedel-session-durability--lease-path root))
+            (head (mevedel-session-durability--lease-head directory)))
+       (mevedel-session-durability--write-generation
+        directory (plist-put (copy-sequence head) :holder
+                             (plist-put (copy-sequence (plist-get head :holder))
+                                        :process ""))))
+     (let ((mevedel-session-durability--client-id (make-string 64 ?b)))
+       (should-not (mevedel-session-durability-lease-acquire root "*new*")))))
+
   :doc "never reclaims a dead holder recorded by another host"
   (test-mevedel-session-durability--with-holder
    (lambda (root process)
