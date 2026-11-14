@@ -7,6 +7,7 @@
                            "mevedel-session-test-support"))
 (require 'mevedel-turn)
 (require 'mevedel-agent-persistence)
+(require 'mevedel-session-checkpoint)
 
 (defun test-mevedel-checkpoint-ordering--restore (route phase)
   "Assert root checkpoint consistency after ROUTE in PHASE."

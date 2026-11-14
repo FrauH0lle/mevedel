@@ -14,6 +14,8 @@
 (require 'mevedel-chat)
 (require 'mevedel-notes)
 (require 'mevedel-session-rewind)
+(require 'mevedel-persistence)
+(require 'mevedel-session-recovery)
 
 
 (mevedel-deftest mevedel-session-rewind--refresh-restored-buffers ()

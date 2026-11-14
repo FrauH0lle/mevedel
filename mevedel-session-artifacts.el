@@ -3466,7 +3466,8 @@ a private copy, so a failed preparation leaves SESSION unchanged."
 
 OLD-SEGMENT receives already finalized and indexed OLD-TEXT.
 NEW-SEGMENT receives NEW-TEXT.
-The sidecar joins the same batch as its commit marker.  REQUIRE-COMMIT rejects reentrant publication.
+The sidecar joins the same batch as its commit marker.
+REQUIRE-COMMIT rejects reentrant publication.
 CHECKPOINT carries the identities and root fields frozen with these segments."
   (with-current-buffer buffer
     (let ((coding buffer-file-coding-system))

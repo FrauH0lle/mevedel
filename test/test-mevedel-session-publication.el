@@ -13,6 +13,7 @@
           "mevedel-session-test-support"))
 (require 'mevedel-journal-pins)
 (require 'mevedel-session-checkpoint)
+(require 'mevedel-session-artifacts)
 
 (mevedel-deftest mevedel-session-publication--files-sha256 ()
   ,test

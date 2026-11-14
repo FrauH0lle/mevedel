@@ -10,6 +10,7 @@
           (file-name-directory (or buffer-file-name load-file-name))
           "mevedel-session-test-support"))
 (require 'mevedel-turn)
+(require 'mevedel-session-checkpoint)
 
 (mevedel-deftest mevedel-session-artifacts-call-with-checkpoint ()
 		 ,test
