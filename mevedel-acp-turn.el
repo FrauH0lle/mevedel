@@ -201,7 +201,7 @@ for it; duplicate or late continuations cannot start a cancelled turn."
          ;; Native identities of calls the adapter announced on stdout.
          (announced (make-hash-table :test #'equal))
          pending draining server connection configuration finished cancellation-held started terminal-pending
-         last-end last-send)
+         last-end last-send send-context)
     (unless (and (buffer-live-p buffer)
                  (if root-p
                      (and (eq request (buffer-local-value 'mevedel--current-request buffer))
@@ -290,9 +290,8 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                       :since-send-ms (and last-send (round (* 1000 (- now last-send))))
                       props))))
          (prompt (input &optional outcome)
-           (note 'acp-prompt-send :continuation (and outcome t)
-                 :queued-handover (and (plist-get outcome :queued-handover) t))
-           (setq last-send (float-time))
+           (setq send-context (list :continuation (and outcome t)
+                                    :queued-handover (and (plist-get outcome :queued-handover) t)))
            (setf (mevedel-engine-info request)
                  (plist-put (mevedel-engine-info request) :mevedel-acp-prompted t))
            (mevedel-acp-prompt
@@ -311,7 +310,9 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                  (mevedel-acp-turn--event request event))
                t))
             (lambda (outcome)
-              (setq last-end (float-time))
+              ;; Only a genuine end_turn: failures and the adapter's exit also complete.
+              (when (equal "end_turn" (plist-get outcome :stop-reason))
+                (setq last-end (float-time)))
               (setq terminal-pending t)
               (enqueue
                (lambda ()
@@ -556,6 +557,14 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                                              (mevedel-mcp-hook-command server)))
                               (unless (plist-get (mevedel-engine-info request) :mevedel-native-isolated)
                                 (setq configuration (plist-put configuration :compaction t)))
+                              (setq configuration
+                                    (plist-put configuration :send-observer
+                                               (lambda (resend)
+                                                 ;; Every physical session/prompt, including the
+                                                 ;; automatic OAuth-contention resend.
+                                                 (apply #'note 'acp-prompt-send :resend (and resend t)
+                                                        send-context)
+                                                 (setq last-send (float-time)))))
                               (setq configuration
                                     (plist-put configuration :exit-observer
                                                (lambda (process)

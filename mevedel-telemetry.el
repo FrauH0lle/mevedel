@@ -179,7 +179,7 @@ profile file larger and cost a little more per sample."
   "Schema version written into every telemetry event.")
 
 (defconst mevedel-telemetry--allowed-keys
-  '(:adapter-exit-code :adapter-signal :queued-handover :since-end-turn-ms
+  '(:adapter-exit-code :adapter-signal :queued-handover :resend :since-end-turn-ms
     :since-send-ms
     :abort-plan-approval :active-work-paused :additional-read-count
     :additional-write-count :admitted :allocated-kb :approval-lifetime

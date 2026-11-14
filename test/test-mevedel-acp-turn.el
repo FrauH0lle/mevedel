@@ -769,6 +769,7 @@ BODY delivers the receipt and a Read call through `connection', `content' and
                :complete-prompt
                (lambda (_owner outcome)
                  (if (> (cl-incf sent) 1) outcome
+                   (sleep-for 0.2)
                    (append outcome '(:queued-handover t
                                      :next-prompt [((type . "text") (text . "crash"))]))))))
        [((type . "text") (text . "report-effort"))] nil)
@@ -788,10 +789,41 @@ BODY delivers the receipt and a Read call through `connection', `content' and
         (should (plist-get (cadr sends) :continuation))
         (should (plist-get (cadr sends) :queued-handover))
         (should (integerp (plist-get (cadr sends) :since-end-turn-ms)))
+        (should (>= (plist-get (cadr sends) :since-end-turn-ms) 200))
         (should (= 7 (plist-get exit :adapter-exit-code)))
-        (should (integerp (plist-get exit :since-end-turn-ms)))
-        (should (integerp (plist-get exit :since-send-ms)))
+        ;; The failure that the exit triggers must not restart the end_turn clock.
+        (should (>= (plist-get exit :since-end-turn-ms)
+                    (+ 200 (plist-get exit :since-send-ms))))
         (should-not (cl-some (lambda (e) (plist-get e :dropped-keys)) events))))))
+
+(mevedel-deftest mevedel-acp-turn-start/resend-telemetry (:quiet t)
+  ,test
+  (test)
+
+  :doc "the automatic resend of a refused prompt is recorded as its own send"
+  (mevedel-engine-test--with-session
+    (let ((mevedel-telemetry-enabled t))
+      (mevedel-acp-turn-start
+       request
+       (lambda (mcp _hook)
+         (list :command (executable-find "python3") :args (list mevedel-test--acp-peer)
+               :cwd root :mcp mcp
+               :prompt-retry-delay (lambda (failure)
+                                     (and (string-search "refreshing it" (alist-get 'message failure))
+                                          0.05))))
+       [((type . "text") (text . "refresh-race"))] nil)
+      (mevedel-test--await 5 "Turn did not settle" (not (mevedel-turn-busy-p buffer)))
+      (let* ((events (with-temp-buffer
+                       (insert-file-contents (mevedel-telemetry-path session))
+                       (let (entries)
+                         (condition-case nil (while t (push (read (current-buffer)) entries))
+                           (end-of-file))
+                         (nreverse entries))))
+             (sends (seq-filter (lambda (e) (eq 'acp-prompt-send (plist-get e :event))) events)))
+        (should (= 2 (length sends)))
+        (should-not (plist-get (car sends) :resend))
+        (should (plist-get (cadr sends) :resend))
+        (should (>= (plist-get (cadr sends) :since-send-ms) 50))))))
 
 (provide 'test-mevedel-acp-turn)
 ;;; test-mevedel-acp-turn.el ends here

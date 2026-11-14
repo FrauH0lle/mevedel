@@ -543,6 +543,8 @@ failure (see `mevedel-acp-open')."
              (plist-put turn :acted t))
            (funcall event notification))
          (send ()
+           (when-let* ((observer (plist-get (mevedel-acp-launch connection) :send-observer)))
+             (ignore-errors (funcall observer (plist-get turn :retried))))
            (mevedel-acp--send connection request #'settle #'failed))
          (settle (response)
            (let ((reason (alist-get 'stopReason response)))
