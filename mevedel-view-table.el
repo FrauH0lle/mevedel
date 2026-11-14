@@ -982,7 +982,7 @@ surrounding transcript properties."
               (set-window-start win (if success (relocate ws) ws) t))))))))
 
 (defvar-local mevedel-view-table--stale-cache nil
-  "(CHARS-TICK WIDTH . END) for `mevedel-view-table--last-stale-end'.
+  "(CHARS-TICK WIDTH FROM . END) for `mevedel-view-table--last-stale-end'.
 Table rendering resets it: it can update a table's width without changing text.")
 
 (defconst mevedel-view-table--layout-cache-limit 64
@@ -1156,27 +1156,33 @@ Tables in an unfinished streamed response remain raw until terminal projection."
                 (list 'rear-nonsticky
                       (get-text-property beg 'rear-nonsticky)))))))))))
 
-(defun mevedel-view-table--last-stale-end (width)
+(defun mevedel-view-table--last-stale-end (start width)
   "Return the end of the last settled table run lacking layout WIDTH, or nil.
+Only runs ending after START are guaranteed; callers compare with START.
 Scrolling asks on every step whether visible tables need layout.  A table
 ending at or before a window's start cannot be visible in it, so this one
-position, computed once per text change, usually settles the question.
-Fontification while scrolling changes properties only, so it must not
-invalidate the answer."
-  (let ((key (cons (buffer-chars-modified-tick) width)))
-    (if (equal key (cons (car mevedel-view-table--stale-cache)
-                         (cadr mevedel-view-table--stale-cache)))
-        (cddr mevedel-view-table--stale-cache)
-      (let ((pos (point-min)) last)
-        (while pos
-          (let ((next (next-single-property-change pos 'mevedel-view-table-source)))
+position usually settles the question.  Streaming changes text on every
+chunk while the window follows the tail, so scan only from START and extend
+the scanned range when the window scrolls up.  Fontification while
+scrolling changes properties only, so it must not invalidate the answer."
+  (pcase-let* ((tick (buffer-chars-modified-tick))
+               (`(,cached-tick ,cached-width ,from . ,last)
+                mevedel-view-table--stale-cache)
+               (valid (and (eql tick cached-tick) (eql width cached-width))))
+    (unless (and valid (<= from start))
+      ;; A valid entry covers FROM onward; any run it found ends after FROM.
+      (let ((pos start) (limit (if valid from (point-max))) found)
+        (while (< pos limit)
+          (let ((next (next-single-property-change
+                       pos 'mevedel-view-table-source nil limit)))
             (when (and (get-text-property pos 'mevedel-view-table-source)
                        (not (get-text-property pos 'mevedel-view-table-streaming))
                        (not (eql width (get-text-property pos 'mevedel-view-table-width))))
-              (setq last (or next (point-max))))
+              (setq found next))
             (setq pos next)))
-        (setq mevedel-view-table--stale-cache (cons (car key) (cons width last)))
-        last))))
+        (setq last (or (and valid last) found)
+              mevedel-view-table--stale-cache (cons tick (cons width (cons start last))))))
+    last))
 
 (defun mevedel-view-table--visible-stale (window)
   "Return (START END SOURCE) for one visible table needing WINDOW's layout.
@@ -1186,7 +1192,7 @@ source with a nil width is a table awaiting its first prettification."
          (start (window-start window))
          ;; `window-end' with UPDATE simulates display, about a millisecond on
          ;; each scroll step; skip it when no stale table reaches the window.
-         (pos (when-let* ((last (mevedel-view-table--last-stale-end width))
+         (pos (when-let* ((last (mevedel-view-table--last-stale-end start width))
                           ((> last start)))
                 start))
          ;; Reuse completed redisplay; `window-end' also handles variable-height
