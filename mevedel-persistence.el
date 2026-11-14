@@ -175,8 +175,7 @@ Instructions are only saved if they are associated with a buffer that has an
 associated file on disk.  In other words, instructions in ethereal buffers are
 not saved."
   (interactive (list (read-file-name "Save instruction list to file: ")))
-  (funcall #'mevedel--write-instructions-file path (file-name-directory path)
-           nil nil t))
+  (mevedel--write-instructions-file path (file-name-directory path) t))
 
 (defun mevedel--instruction-id-state-plist ()
   "Return the current instruction ID state as a serializable plist."
@@ -301,12 +300,10 @@ would lose all of them at once."
      (prin1-to-string save-file))))
 
 (defun mevedel--write-instructions-file
-    (path &optional base-directory write-empty quiet include-original-content)
-  "Write current workspace instruction snapshot to PATH.
+    (path &optional base-directory include-original-content)
+  "Write the current workspace instruction export to PATH.
 
 BASE-DIRECTORY is passed to `mevedel--serialize-instructions'.
-When WRITE-EMPTY is non-nil, write an empty snapshot instead of
-skipping the file.  When QUIET is non-nil, suppress user messages.
 When INCLUDE-ORIGINAL-CONTENT is non-nil, include full buffer
 contents for position patching if the file changes before restore.
 Returns the number of saved instructions."
@@ -315,21 +312,15 @@ Returns the number of saved instructions."
          (file-alist (plist-get save-file :files))
          (saved-instruction-count
           (mevedel--instructions-saved-count file-alist)))
-    (if (not (zerop saved-instruction-count))
-        (progn
-          (mevedel-persistence--write-save-file path save-file)
-          (unless quiet
-            (let ((file-count (length file-alist)))
-              (message "Wrote %d mevedel instruction%s from %d file%s to %s"
-                       saved-instruction-count
-                       (if (= 1 saved-instruction-count) "" "s")
-                       file-count
-                       (if (= 1 file-count) "" "s")
-                       path))))
-      (when write-empty
-        (mevedel-persistence--write-save-file path save-file))
-      (when (and (not quiet) (called-interactively-p 'any))
-        (message "No mevedel instructions to save")))
+    (unless (zerop saved-instruction-count)
+      (mevedel-persistence--write-save-file path save-file)
+      (let ((file-count (length file-alist)))
+        (message "Wrote %d mevedel instruction%s from %d file%s to %s"
+                 saved-instruction-count
+                 (if (= 1 saved-instruction-count) "" "s")
+                 file-count
+                 (if (= 1 file-count) "" "s")
+                 path)))
     saved-instruction-count))
 
 ;;;###autoload

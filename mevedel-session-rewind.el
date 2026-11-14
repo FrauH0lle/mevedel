@@ -60,15 +60,12 @@
 (declare-function mevedel-session-artifacts-backup-path "mevedel-session-artifacts" (save-path backup-name))
 (declare-function mevedel-session-artifacts-collect-prompts "mevedel-session-artifacts" (buffer &optional preview-length))
 (declare-function mevedel-session-artifacts-fork-point-spans "mevedel-session-artifacts" (buffer))
-(declare-function mevedel-session-artifacts-instructions-current-path "mevedel-session-artifacts" (save-path))
-(declare-function mevedel-session-artifacts-instructions-dir "mevedel-session-artifacts" (save-path))
-(declare-function mevedel-session-artifacts-instructions-turn-path "mevedel-session-artifacts" (save-path turn))
-(declare-function mevedel-session-artifacts-load-instructions "mevedel-session-artifacts" (session buffer &optional turn snapshot-only))
+(declare-function mevedel-session-artifacts-load-instructions "mevedel-session-artifacts" (session))
 (declare-function mevedel-session-artifacts-printed-value "mevedel-session-artifacts" (value))
 (declare-function mevedel-session-artifacts-read-artifact "mevedel-session-artifacts" (session logical &optional committed-only))
 (declare-function mevedel-session-artifacts-read-file-raw "mevedel-session-artifacts" (path))
 (declare-function mevedel-session-artifacts-replace-transcript-contents "mevedel-session-artifacts" (source))
-(declare-function mevedel-session-artifacts-save-instructions "mevedel-session-artifacts" (session buffer &optional current-only))
+(declare-function mevedel-session-artifacts-save-instructions "mevedel-session-artifacts" (session))
 (declare-function mevedel-session-artifacts-segment-path "mevedel-session-artifacts" (save-path n))
 (declare-function mevedel-session-artifacts-sidecar-path "mevedel-session-artifacts" (save-path))
 (declare-function mevedel-session-artifacts-stabilize-gptel-bounds "mevedel-session-artifacts" nil)
@@ -81,12 +78,6 @@
 (autoload 'mevedel-session-artifacts-collect-prompts
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-fork-point-spans
-  "mevedel-session-artifacts")
-(autoload 'mevedel-session-artifacts-instructions-current-path
-  "mevedel-session-artifacts")
-(autoload 'mevedel-session-artifacts-instructions-dir
-  "mevedel-session-artifacts")
-(autoload 'mevedel-session-artifacts-instructions-turn-path
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-load-instructions
   "mevedel-session-artifacts")
@@ -1376,26 +1367,6 @@ portable lease and publication control directories are never copied."
                        staging-path segment)
            when (file-exists-p path)
            do (delete-file path))
-  (let* ((surviving-turn (or (mevedel-session-turn-count candidate) 0))
-         (instructions-dir
-          (mevedel-session-artifacts-instructions-dir staging-path))
-         (target-instructions
-          (mevedel-session-artifacts-instructions-turn-path
-           staging-path surviving-turn))
-         (current-instructions
-          (mevedel-session-artifacts-instructions-current-path
-           staging-path)))
-    (when (file-exists-p target-instructions)
-      (copy-file target-instructions current-instructions t))
-    (when (file-directory-p instructions-dir)
-      (dolist (path (directory-files instructions-dir t
-                                     "\\`turn-\\([0-9]+\\)\\.el\\'"))
-        (let ((name (file-name-nondirectory path)))
-          (when (and (string-match
-                      "\\`turn-\\([0-9]+\\)\\.el\\'" name)
-                     (> (string-to-number (match-string 1 name))
-                        surviving-turn))
-            (delete-file path))))))
   (when publication
     (mevedel-session-rewind--prune-remote-rewind-staging
      candidate target staging-path))
@@ -1546,7 +1517,6 @@ head CAS.  BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
          (staging-buffer
           (generate-new-buffer " *mevedel-remote-rewind-staging*"))
          (mevedel-instruction-store--inhibit workspace)
-         store-intent
          file-backups restore-result
          (mevedel-session-rewind--written-states (list nil))
          project-restore-started
@@ -1561,10 +1531,9 @@ head CAS.  BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
               (with-current-buffer staging-buffer
                 (funcall (buffer-local-value 'major-mode buffer)))
               (make-directory file-backup-dir t)
-              (setq store-intent
-                    (mevedel-instruction-store-rewind-begin
-                     session (or (mevedel-session-turn-count candidate) 0)
-                     (plist-get target :cum-turn)))
+              (mevedel-instruction-store-rewind-begin
+               session (or (mevedel-session-turn-count candidate) 0)
+               (plist-get target :cum-turn))
               ;; Materialization, project backup, recheck, and restore are one
               ;; synchronous target operation.  Timer renewal stays off-target
               ;; until the wrapper proves the same generation still owns it.
@@ -1653,31 +1622,17 @@ head CAS.  BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                       (error-message-string install-error))
                      (and install-backtrace (concat "\n" install-backtrace)))
                     :warning))))
-              (if store-intent
-                  ;; The workspace store owns the current set: prune the
-                  ;; records here and in the store, and take presentations
-                  ;; from the store instead of the historical snapshot.
-                  (condition-case store-error
-                      (mevedel-instruction-store-rewind-end session t)
-                    (error
-                     (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
-                      'mevedel
-                      (format
-                       "Portable project Rewind committed, but the instruction store still holds the discarded activity; it is pruned before the next request or at resume: %s"
-                       (error-message-string store-error))
-                      :warning)))
-                (condition-case instruction-error
-                    (unless
-                        (mevedel-session-artifacts-load-instructions
-                         session buffer nil t)
-                      (error "Published instruction snapshot is unavailable"))
-                  (error
-                   (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
-                    'mevedel
-                    (format
-                     "Portable project Rewind committed, but instructions did not refresh: %s"
-                     (error-message-string instruction-error))
-                    :warning))))
+              ;; The workspace store owns the current set: prune the records
+              ;; here and in the store.
+              (condition-case store-error
+                  (mevedel-instruction-store-rewind-end session t)
+                (error
+                 (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
+                  'mevedel
+                  (format
+                   "Portable project Rewind committed, but the instruction store still holds the discarded activity; it is pruned before the next request or at resume: %s"
+                   (error-message-string store-error))
+                  :warning)))
               (condition-case refresh-error
                   (mevedel-session-rewind--refresh-restored-buffers
                    plan (list :succeeded (length plan)))
@@ -1690,14 +1645,13 @@ head CAS.  BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                   :warning))))
           (error (setq operation-error err)))
       (unless committed
-        (when store-intent
-          (condition-case store-error
-              (mevedel-instruction-store-rewind-end session nil)
-            (error
-             (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
-              'mevedel
-              (format "Rewind rolled back; its instruction store intent is dropped later: %s"
-                      (error-message-string store-error))))))
+        (condition-case store-error
+            (mevedel-instruction-store-rewind-end session nil)
+          (error
+           (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
+            'mevedel
+            (format "Rewind rolled back; its instruction store intent is dropped later: %s"
+                    (error-message-string store-error)))))
         (when project-restore-started
           (condition-case rollback-error
               (setq rollback-failures
@@ -1784,11 +1738,9 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
          (original-buffer-modified
           (with-current-buffer buffer (buffer-modified-p)))
          (original-point (with-current-buffer buffer (point)))
-         (original-turn (mevedel-session-turn-count session))
          ;; The workspace store changes only after the commit point; until
          ;; then a durable intent lets recovery finish or drop the prune.
          (mevedel-instruction-store--inhibit workspace)
-         store-intent
          file-backups restore-result source-moved published session-installed
          (mevedel-session-rewind--written-states (list nil))
          file-restore-started buffer-install-started committed
@@ -1814,10 +1766,9 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                      (mevedel-session-rewind--sorted-file-plan plan)
                      (mevedel-session-rewind--sorted-file-plan rechecked))
               (error "Captured files changed after Rewind confirmation")))
-          (setq store-intent
-                (mevedel-instruction-store-rewind-begin
-                 session (or (mevedel-session-turn-count candidate) 0)
-                 (plist-get target :cum-turn)))
+          (mevedel-instruction-store-rewind-begin
+           session (or (mevedel-session-turn-count candidate) 0)
+           (plist-get target :cum-turn))
           (setq file-restore-started t)
           (setq restore-result (mevedel-session-rewind-execute-restore session plan))
             (when (plist-get restore-result :failed)
@@ -1834,25 +1785,17 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
           (setq buffer-install-started t)
           (mevedel-session-rewind--install-rewind-buffer
            buffer staging-buffer session target)
-          ;; An active store owns current instructions, including held-back writes.
-          (unless store-intent
-            (unless
-                (mevedel-session-artifacts-load-instructions
-                 session buffer (1- (plist-get target :cum-turn)) t)
-              (error "Instruction restore failed during Rewind")))
-          (mevedel-session-artifacts-save-instructions
-           session buffer t)
+          (mevedel-session-artifacts-save-instructions session)
           (delete-directory rollback-path t)
           (setq source-moved nil
                 committed t)
-          (when store-intent
-            (condition-case err
-                (mevedel-instruction-store-rewind-end session t)
-              (error
-               (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
-                'mevedel
-                (format "Rewind committed, but the instruction store still holds the discarded activity; it is pruned before the next request or at resume: %s"
-                        (error-message-string err))))))
+          (condition-case err
+              (mevedel-instruction-store-rewind-end session t)
+            (error
+             (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
+              'mevedel
+              (format "Rewind committed, but the instruction store still holds the discarded activity; it is pruned before the next request or at resume: %s"
+                      (error-message-string err)))))
           (condition-case err
               (mevedel-session-rewind--refresh-restored-buffers
                plan (list :succeeded (length plan)))
@@ -1862,8 +1805,7 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
               (format "Rewind committed, but buffers could not refresh: %s"
                       (error-message-string err)))))
           (condition-case err
-              (mevedel-session-artifacts-save-instructions
-               session buffer t)
+              (mevedel-session-artifacts-save-instructions session)
             (error
              (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
               'mevedel
@@ -1874,16 +1816,15 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
         (when session-installed
           (mevedel-session-rewind-copy-session-state
            original-state session))
-        (when store-intent
-          (condition-case err
-              (mevedel-instruction-store-rewind-end session nil)
-            (error
-             ;; An intent left behind names the original turn count, so
-             ;; the next resolution drops it without pruning anything.
-             (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
-              'mevedel
-              (format "Rewind rolled back; its instruction store intent is dropped later: %s"
-                      (error-message-string err))))))
+        (condition-case err
+            (mevedel-instruction-store-rewind-end session nil)
+          (error
+           ;; An intent left behind names the original turn count, so
+           ;; the next resolution drops it without pruning anything.
+           (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
+            'mevedel
+            (format "Rewind rolled back; its instruction store intent is dropped later: %s"
+                    (error-message-string err)))))
         (when published
           (condition-case err
               (progn
@@ -1917,9 +1858,6 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                      original-buffer)
                     (set-buffer-modified-p original-buffer-modified)
                     (goto-char (min original-point (point-max)))))
-                (unless store-intent
-                  (mevedel-session-artifacts-load-instructions
-                   session buffer original-turn t))
                 (mevedel-session-persistence-notify-session-event
                  session 'rerender))
             (error
@@ -2182,7 +2120,7 @@ captured working-tree state the restored turns owned."
 
 HEAD is an immutable published generation, as returned by
 `mevedel-session-rewind-published-heads'.  Its conversation state --
-transcript, sidecar, instruction snapshots, retained agent transcripts,
+transcript, sidecar, retained agent transcripts,
 and persisted tool results -- is republished as a new head, so the
 restore is itself an ordinary committed publication rather than a
 rollback.  Captured working-tree files are restored from that head's
@@ -2319,8 +2257,9 @@ and the file plan the caller confirmed."
                      (and install-backtrace (concat "\n" install-backtrace)))
                     :warning))))
               (condition-case instruction-error
-                  (mevedel-session-artifacts-load-instructions
-                   session buffer nil t)
+                  ;; The store owns the notes: settle it for the restored turn
+                  ;; count and observe it, instead of loading a historical set.
+                  (mevedel-session-artifacts-load-instructions session)
                 (error
                  (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
                   'mevedel

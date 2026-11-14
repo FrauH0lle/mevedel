@@ -357,8 +357,7 @@
         (mevedel--clear-instruction-state workspace)
         (with-temp-buffer
           (setq-local mevedel--workspace workspace)
-          (should (mevedel-session-artifacts-load-instructions
-                   session (current-buffer))))
+          (should (mevedel-session-artifacts-load-instructions session)))
         (should (= 1 (length (mevedel-notes-test--labels))))
         (should (string-match-p "Shared by sessions"
                                 (car (mevedel-notes-test--labels))))))))

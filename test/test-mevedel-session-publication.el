@@ -93,8 +93,7 @@
     (should (mevedel-session-publication--fixed-artifact-p
              (list :logical logical))))
   (dolist (logical '("segment-0001.chat.org" "agents/a.chat.org"
-                     "file-history/1" "instructions/current.el"
-                     "instructions/turn-000003.el"))
+                     "file-history/1"))
     (should-not (mevedel-session-publication--fixed-artifact-p
                  (list :logical logical))))
   (should-not (mevedel-session-publication--fixed-artifact-p
@@ -822,7 +821,7 @@ and its segment path."
            (workspace (test-mevedel-session-persistence--make-workspace directory))
            (session (mevedel-session-create "main" workspace))
            (buffer (generate-new-buffer " *transition-unread*"))
-           (instructions (symbol-function 'mevedel-session-artifacts--instruction-artifacts))
+           (instructions (symbol-function 'mevedel-session-artifacts--sidecar-artifact))
            entered restored save-path)
       (unwind-protect
           (ert-info ((format "Unread enqueue during %s" transition))
@@ -832,7 +831,7 @@ and its segment path."
               (insert "Question\n\n" (propertize "Answer\n" 'gptel 'response))
               (mevedel-session-artifacts-save session buffer)
               (setq save-path (mevedel-session-save-path session))
-              (cl-letf (((symbol-function 'mevedel-session-artifacts--instruction-artifacts)
+              (cl-letf (((symbol-function 'mevedel-session-artifacts--sidecar-artifact)
                          (lambda (&rest args)
                            (unless entered
                              (setq entered t)
@@ -875,7 +874,7 @@ and its segment path."
                           (test-mevedel-session-persistence--make-workspace directory)))
              (session (mevedel-session-create "main" workspace))
              (buffer (generate-new-buffer " *transition-nested*"))
-             (instructions (symbol-function 'mevedel-session-artifacts--instruction-artifacts))
+             (instructions (symbol-function 'mevedel-session-artifacts--sidecar-artifact))
              (save-instructions (symbol-function 'mevedel-session-artifacts-save-instructions))
              entered restored save-path)
         (unwind-protect
@@ -897,7 +896,7 @@ and its segment path."
                                           (should-error
                                            (mevedel-session-artifacts-save session buffer t))))
                            (should (eq head (mevedel-session-publication session)))))))
-                  (cl-letf (((symbol-function 'mevedel-session-artifacts--instruction-artifacts)
+                  (cl-letf (((symbol-function 'mevedel-session-artifacts--sidecar-artifact)
                              (lambda (&rest args) (attempt) (apply instructions args)))
                             ((symbol-function 'mevedel-session-artifacts-save-instructions)
                              (lambda (&rest args)
@@ -938,13 +937,16 @@ and its segment path."
               (insert "Original question\n\n" (propertize "Answer\n" 'gptel 'response))
               (mevedel-session-artifacts-save session buffer)
               (setq save-path (mevedel-session-save-path session))
-              (let ((head (plist-get (mevedel-session-publication session) :head)))
-                (cl-letf (((symbol-function 'mevedel-session-artifacts--instruction-artifacts)
-                           (lambda (&rest _)
-                             (setq entered t)
-                             (mevedel-agent-control-send-message session "/root" "Surviving unread")
-                             (should-not (equal head (plist-get (mevedel-session-publication session) :head)))
-                             (error "Injected transition preparation failure")))
+              (let ((head (plist-get (mevedel-session-publication session) :head))
+                    (sidecar (symbol-function 'mevedel-session-artifacts--sidecar-artifact)))
+                (cl-letf (((symbol-function 'mevedel-session-artifacts--sidecar-artifact)
+                           (lambda (&rest args)
+                             (if entered
+                                 (apply sidecar args)
+                               (setq entered t)
+                               (mevedel-agent-control-send-message session "/root" "Surviving unread")
+                               (should-not (equal head (plist-get (mevedel-session-publication session) :head)))
+                               (error "Injected transition preparation failure"))))
                           ((symbol-function 'mevedel-journal-capture-checkpoint)
                            (lambda (&rest _) (setq captured t) '(:id "unsealed-capture")))
                           ((symbol-function 'mevedel-journal-capture-seal-and-schedule)

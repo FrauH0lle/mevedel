@@ -38,7 +38,7 @@
           (should (= 1 (mevedel-session-turn-count session)))
           (pcase phase
             ('failed
-             (cl-letf (((symbol-function 'mevedel-session-artifacts--instruction-artifacts)
+             (cl-letf (((symbol-function 'mevedel-session-checkpoint-capture)
                         (lambda (&rest _) (setq entered t) (error "Injected staging failure"))))
                (mevedel-test--with-captured-diagnostics nil (mevedel--turn-save fsm)))
              (should entered)

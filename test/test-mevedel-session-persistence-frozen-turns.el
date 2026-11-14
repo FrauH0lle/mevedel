@@ -59,11 +59,11 @@
                               (expand-file-name "test/fixtures/old-notes-session/instructions.data"
                                                 mevedel-test--worktree-root))
                              (buffer-string))))
+            ;; A session written before snapshots were dropped still has them.
+            (make-directory (file-name-concat save-path "instructions") t)
             (dolist (name '("current.el" "turn-000000.el"))
               (write-region snapshot nil (file-name-concat save-path "instructions" name)
-                            nil 'silent))
-            (should (equal snapshot (mevedel-session-artifacts-read-artifact
-                                     session "instructions/current.el" t))))
+                            nil 'silent)))
           (test-mevedel-session-persistence--release-and-kill owner session)
           (setq owner nil)
           (when (file-exists-p (mevedel-instruction-store-path workspace))

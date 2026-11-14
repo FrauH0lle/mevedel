@@ -1676,78 +1676,6 @@
 (mevedel-deftest mevedel-session-artifacts-instruction-snapshots (:quiet t)
   ,test
   (test)
-  :doc "saves current and per-turn instruction snapshots"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-session-persistence--make-tempdir-workspace)
-    (let ((source-buf nil)
-          (data-buf nil)
-          (session nil))
-      (unwind-protect
-          (let* ((source-file (file-name-concat tempdir "source.el")))
-            (test-mevedel-session-persistence--reset-instructions)
-            (write-region "(defun alpha () t)\n" nil source-file nil 'silent)
-            (setq source-buf (find-file-noselect source-file))
-            (with-current-buffer source-buf
-              (setq-local mevedel--workspace workspace)
-              (mevedel-instruction-test--create-note-in source-buf (point-min) (point-max)))
-            (setq session (mevedel-session-create "main" workspace))
-            (setf (mevedel-session-turn-count session) 1)
-            (setq data-buf (generate-new-buffer "*test-data-buf*"))
-            (with-current-buffer data-buf
-              (setq-local mevedel--workspace workspace)
-              (setq-local mevedel--session session)
-              (org-mode)
-              (insert "Explain alpha\n")
-              (mevedel-session-artifacts-save session data-buf))
-            (let ((current-path
-                   (mevedel-session-artifacts-instructions-current-path
-                    (mevedel-session-save-path session)))
-                  (turn-path
-                   (mevedel-session-artifacts-instructions-turn-path
-                    (mevedel-session-save-path session) 1)))
-              (should (file-exists-p current-path))
-              (should (file-exists-p turn-path))
-              (let* ((current-save (with-temp-buffer
-                                     (insert-file-contents current-path)
-                                     (read (current-buffer))))
-                     (turn-save (with-temp-buffer
-                                  (insert-file-contents turn-path)
-                                  (read (current-buffer))))
-                     (current-file-plist
-                      (cdr (assoc "source.el"
-                                  (plist-get current-save :files))))
-                     (turn-file-plist
-                      (cdr (assoc "source.el"
-                                  (plist-get turn-save :files))))
-                     (instruction
-                      (car (plist-get current-file-plist :instructions)))
-                     (turn-instruction
-                      (car (plist-get turn-file-plist :instructions)))
-                     (properties
-                      (plist-get instruction :properties))
-                     (anchor (plist-get turn-instruction :anchor)))
-                (should (plist-member current-file-plist :original-content))
-                (should-not (plist-member turn-file-plist
-                                          :original-content))
-                (should (= 1 (plist-get turn-file-plist :anchor-schema)))
-                (should (plist-get turn-file-plist :content-hash))
-                (should (= 1 (plist-get anchor :schema)))
-                (should (plist-get anchor :uuid))
-                (should (plist-member anchor :bodyless))
-                (should (plist-get anchor :text-hash))
-                (should (memq 'mevedel-instruction properties))
-                (should-not (memq 'before-string properties))
-                (should-not (memq 'face properties))
-                (should-not (memq 'keymap properties))
-                (should-not (memq 'mevedel-bg-color properties)))))
-        (when (and data-buf (buffer-live-p data-buf))
-          (test-mevedel-session-persistence--release-and-kill data-buf session))
-        (when (buffer-live-p source-buf)
-          (with-current-buffer source-buf (set-buffer-modified-p nil))
-          (kill-buffer source-buf))
-        (delete-directory tempdir t)
-        (test-mevedel-session-persistence--reset-instructions)
-        (mevedel-workspace-clear-registry))))
   :doc "restores instruction overlays after clearing live state"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
@@ -1773,7 +1701,7 @@
               (mevedel-session-artifacts-save session data-buf)
               (mevedel--clear-instruction-state workspace)
               (should-not (mevedel--all-instructions))
-              (mevedel-session-artifacts-load-instructions session data-buf 1))
+              (mevedel-session-artifacts-load-instructions session))
             (mevedel--instruction-activate-workspace workspace)
             (should (= 1 (length (alist-get source-buf (mevedel--instruction-alist))))))
         (when (and data-buf (buffer-live-p data-buf))
@@ -1813,12 +1741,8 @@
               (org-mode)
               (insert "Explain beta\n")
               (mevedel-session-artifacts-save session data-buf))
-            (let* ((current-path
-                    (mevedel-session-artifacts-instructions-current-path
-                     (mevedel-session-save-path session)))
-                   (save-file (with-temp-buffer
-                                (insert-file-contents current-path)
-                                (read (current-buffer))))
+            (let* ((save-file (plist-get (mevedel-instruction-store--read workspace)
+                                         :data))
                    (instruction
                     (car (plist-get (cdr (assoc "source.el" (plist-get save-file :files)))
                                     :instructions)))
@@ -1828,7 +1752,7 @@
               (should-not (text-properties-at 0 text)))
             (with-current-buffer data-buf
               (mevedel--clear-instruction-state workspace)
-              (mevedel-session-artifacts-load-instructions session data-buf))
+              (mevedel-session-artifacts-load-instructions session))
             (mevedel--instruction-activate-workspace workspace)
             (let* ((ov (car (alist-get source-buf (mevedel--instruction-alist))))
                    (text (overlay-get ov 'mevedel-note-text)))
@@ -1842,7 +1766,7 @@
         (delete-directory tempdir t)
         (test-mevedel-session-persistence--reset-instructions)
         (mevedel-workspace-clear-registry))))
-  :doc "ignores unreadable instruction snapshots during session restore"
+  :doc "ignores an old unreadable instruction snapshot during session restore"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (let ((data-buf nil)
@@ -1858,8 +1782,8 @@
               (org-mode)
               (insert "Explain gamma\n")
               (mevedel-session-artifacts-save session data-buf))
-            (let ((path (mevedel-session-artifacts-instructions-current-path
-                         (mevedel-session-save-path session))))
+            (let ((path (file-name-concat (mevedel-session-save-path session)
+                                          "instructions" "current.el")))
               (make-directory (file-name-directory path) t)
               (write-region "(:files ((\"source.el\" . #<marker>)))"
                             nil path nil 'silent)
@@ -1867,93 +1791,13 @@
                 (delete-file (mevedel-instruction-store-path workspace)))
               (test-mevedel-session-persistence--reset-instructions)
               (should (equal '(:store nil)
-                             (mevedel-session-artifacts-load-instructions
-                              session data-buf)))
+                             (mevedel-session-artifacts-load-instructions session)))
               (should-not (file-exists-p (mevedel-instruction-store-path workspace)))))
         (when (and data-buf (buffer-live-p data-buf))
           (test-mevedel-session-persistence--release-and-kill data-buf session))
         (delete-directory tempdir t)
         (test-mevedel-session-persistence--reset-instructions)
-        (mevedel-workspace-clear-registry))))
-  :doc "loads remote instruction bytes from the immutable publication"
-  (let* ((host "instruction-publication")
-         (local-root
-          (file-name-as-directory
-           (make-temp-file "mevedel-instruction-publication-" t)))
-         data-buffer)
-    (unwind-protect
-        (mevedel-test--with-local-shell-tramp (list host)
-          (cl-destructuring-bind (workspace session session-dir _segment)
-              (test-mevedel-session-persistence--make-remote-restore-fixture
-               host local-root "Published transcript\n")
-            (let* ((client-id (make-string 64 ?a))
-                   (mevedel-session-durability--client-id client-id)
-                   (mevedel-session-durability--disclosed-targets
-                    (make-hash-table :test #'equal))
-                   (instruction-path
-                    (mevedel-session-artifacts-instructions-current-path
-                     session-dir))
-                   (published "(:published instruction snapshot)\n")
-                   observed-source
-                   observed-content
-                   observed-base)
-              (puthash
-               (mevedel-execution-target-identity
-                (mevedel-session-execution-target session))
-               t mevedel-session-durability--disclosed-targets)
-              (unwind-protect
-                  (progn
-                    (should
-                     (mevedel-session-durability-lease-acquire
-                      session-dir "*instruction-publisher*" session))
-                    (let* ((publication
-                            (mevedel-session-publication-read
-                             session-dir))
-                           (sidecar
-                            (mevedel-session-persistence-load-sidecar
-                             (plist-get publication :sidecar))))
-                      (mevedel-session-publication-publish
-                       session
-                       (list
-                        (list :path instruction-path :content published)
-                        (list
-                         :path
-                         (mevedel-session-artifacts-sidecar-path session-dir)
-                         :content
-                         (mevedel-session-artifacts-printed-value sidecar)
-                         :commit-marker t))))
-                    (mevedel-session-durability-lease-release
-                     session-dir session)
-                    (make-directory (file-name-directory instruction-path) t)
-                    (write-region "poisoned fixed cache\n" nil
-                                  instruction-path nil 'silent)
-                    (setq data-buffer
-                          (generate-new-buffer " *remote instructions*"))
-                    (cl-letf
-                        (((symbol-function 'mevedel--load-instructions-file)
-                          (lambda (source base &rest _)
-                            (setq observed-source source
-                                  observed-base base
-                                  observed-content
-                                  (mevedel-session-artifacts-read-file-raw source))
-                            t)))
-                      (should
-                       (mevedel-session-artifacts-load-instructions
-                        session data-buffer nil t)))
-                    (should-not (file-remote-p observed-source))
-                    (should-not (equal observed-source instruction-path))
-                    (should (equal published observed-content))
-                    (should
-                     (equal (mevedel-workspace-root workspace)
-                            observed-base)))
-                (when (mevedel-session-durability-lease-owned-p session)
-                  (mevedel-session-durability-lease-release
-                   session-dir session))))))
-      (when (buffer-live-p data-buffer)
-        (kill-buffer data-buffer))
-      (when (file-directory-p local-root)
-        (delete-directory local-root t))
-      (mevedel-workspace-clear-registry))))
+        (mevedel-workspace-clear-registry)))))
 
 
 (mevedel-deftest mevedel-session-artifacts-instruction-anchor-restore (:quiet t)
@@ -1989,8 +1833,7 @@
               (with-current-buffer source-buf
                 (goto-char (point-min))
                 (insert "inserted\n"))
-              (mevedel-session-artifacts-load-instructions
-               session data-buf 1))
+              (mevedel-session-artifacts-load-instructions session))
             (mevedel--instruction-activate-workspace workspace)
             (let ((ov (car (alist-get source-buf (mevedel--instruction-alist)))))
               (should ov)
@@ -2042,8 +1885,7 @@
               (with-current-buffer source-buf
                 (goto-char (point-min))
                 (insert "inserted\n"))
-              (mevedel-session-artifacts-load-instructions
-               session data-buf 1))
+              (mevedel-session-artifacts-load-instructions session))
             (mevedel--instruction-activate-workspace workspace)
             (let* ((ovs (alist-get source-buf (mevedel--instruction-alist)))
                    (child (cl-find-if
@@ -2097,12 +1939,16 @@
               (org-mode)
               (insert "Explain ambiguous target\n")
               (mevedel-session-artifacts-save session data-buf)
+              ;; The installer is shared by the store and the export file;
+              ;; without the original text, bounds cannot be patched.
+              (mevedel--write-instructions-file
+               (file-name-concat tempdir "export.el") tempdir)
               (mevedel--clear-instruction-state workspace)
               (with-current-buffer source-buf
                 (goto-char (point-min))
                 (insert "inserted\n"))
-              (mevedel-session-artifacts-load-instructions
-               session data-buf 1))
+              (mevedel--load-instructions-file
+               (file-name-concat tempdir "export.el") tempdir nil t workspace))
             (mevedel--instruction-activate-workspace workspace)
             (with-current-buffer source-buf
               (should-not (mevedel--instructions-in
@@ -3021,7 +2867,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                             session "segment-0001.chat.org" t))
                     (head (plist-get (mevedel-session-publication session) :head))
                     (failure (if portable
-                                 'mevedel-session-artifacts--instruction-artifacts
+                                 'mevedel-session-checkpoint-capture
                                'mevedel-session-codec-write)))
                 ;; Both failures occur after the finalized index was prepared;
                 ;; the file failure also rolls back finalized predecessor bytes.

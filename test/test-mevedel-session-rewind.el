@@ -1632,9 +1632,6 @@
                    'mevedel-session-rewind--install-rewind-buffer)
                   #'ignore)
                  ((symbol-function
-                   'mevedel-session-artifacts-load-instructions)
-                  (lambda (&rest _) t))
-                 ((symbol-function
                    'mevedel-session-artifacts-save-instructions)
                   #'ignore)
                  ((symbol-function
@@ -1765,9 +1762,6 @@
                        'mevedel-session-rewind-restore-plan)
                       (lambda (&rest _) nil))
                      ((symbol-function
-                       'mevedel-session-artifacts-load-instructions)
-                      (lambda (&rest _) t))
-                     ((symbol-function
                        'mevedel-session-rewind--refresh-restored-buffers)
                       #'ignore))
                   (should
@@ -1870,7 +1864,7 @@
                       (lambda (&rest _)
                         (signal 'beginning-of-buffer nil)))
                      ((symbol-function
-                       'mevedel-session-artifacts-load-instructions)
+                       'mevedel-instruction-store-rewind-end)
                       (lambda (&rest _) (push 'instructions followed) t))
                      ((symbol-function
                        'mevedel-session-rewind--refresh-restored-buffers)
@@ -2088,7 +2082,150 @@
         (should (mevedel-redo)))
       (should (equal (list session (current-buffer) (plist-get entry :head))
                      restored))
-      (should (equal "restore" hook-source)))))
+      (should (equal "restore" hook-source))))
+  :doc "keeps other sessions' notes and later edits, and ignores an old note snapshot"
+  ;; The restored head still carries an `instructions/current.el' written by
+  ;; an older version, holding an earlier text of this session's note and
+  ;; none of the other session's.  The store, not that file, says what the
+  ;; notes are after the restore.
+  (let* ((host "redo-notes")
+         (local-root
+          (file-name-as-directory (make-temp-file "mevedel-redo-notes-" t)))
+         buffer workspace)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (test-mevedel-session-persistence--reset-instructions)
+          (cl-destructuring-bind (ws session session-dir segment)
+              (test-mevedel-session-persistence--make-remote-restore-fixture
+               host local-root "Original transcript\n")
+            (setq workspace ws)
+            (let* ((mevedel-session-durability--client-id (make-string 64 ?a))
+                   (mevedel-session-durability--disclosed-targets
+                    (make-hash-table :test #'equal))
+                   (sid (mevedel-session-session-id session))
+                   (note (lambda (id uuid text session-id)
+                           (list :overlay-start 1 :overlay-end 6
+                                 :anchor (list :uuid uuid :text "(defu")
+                                 :properties
+                                 (list 'mevedel-instruction t 'mevedel-id id
+                                       'mevedel-uuid uuid
+                                       'mevedel-instruction-type 'note
+                                       'mevedel-note-text text
+                                       'mevedel-note-author 'user
+                                       'mevedel-note-state 'sent
+                                       'mevedel-note-session-id session-id))))
+                   (record (lambda (&rest notes)
+                             (list :format mevedel-instruction-store-format-version
+                                   :ids (list :id-counter 2 :used-ids '(1 2)
+                                              :retired-ids nil)
+                                   :files (list (list "source.el"
+                                                       :original-content "(defun beta () t)\n"
+                                                       :instructions notes))
+                                   :rewinds nil))))
+              (puthash
+               (mevedel-execution-target-identity
+                (mevedel-session-execution-target session))
+               t mevedel-session-durability--disclosed-targets)
+              (should (mevedel-session-durability-lease-acquire
+                       session-dir "*redo-notes*" session))
+              (unwind-protect
+                  (cl-labels
+                      ((publish (transcript turns &rest extra)
+                         (setf (mevedel-session-turn-count session) turns)
+                         (mevedel-session-publication-publish
+                          session
+                          (append
+                           (list (list :path segment :content transcript))
+                           extra
+                           (list
+                            (list :path
+                                  (mevedel-session-artifacts-sidecar-path
+                                   session-dir)
+                                  :content
+                                  (mevedel-session-artifacts-printed-value
+                                   (mevedel-session-artifacts--live-sidecar
+                                    session (current-buffer)))
+                                  :commit-marker t :replace t)))
+                          t)
+                         (plist-get (mevedel-session-publication session)
+                                    :head)))
+                    (setf (mevedel-session-publication session)
+                          (mevedel-session-publication-read session-dir))
+                    (set-file-times
+                     (file-name-concat
+                      session-dir
+                      (plist-get (mevedel-session-publication session) :head))
+                     (time-subtract nil 60))
+                    (let ((restorable
+                           (publish
+                            "Original transcript\n" 1
+                            (list :path (file-name-concat
+                                         session-dir "instructions" "current.el")
+                                  :content
+                                  (mevedel-session-artifacts-printed-value
+                                   (funcall record
+                                            (funcall note 1 "N1" "mine v1" sid)))))))
+                      (publish "Rewound transcript\n" 0)
+                      ;; The store: this session's note edited since, and
+                      ;; another session's note the old snapshot never held.
+                      (should (mevedel-instruction-store--write
+                               workspace nil
+                               (funcall record
+                                        (funcall note 1 "N1" "mine v2" sid)
+                                        (funcall note 2 "N2" "theirs" "other"))))
+                      ;; Emacs restarted since: memory holds nothing, observed nothing.
+                      (test-mevedel-session-persistence--reset-instructions)
+                      (setq buffer (generate-new-buffer " *redo-notes-live*"))
+                      (with-current-buffer buffer
+                        (org-mode)
+                        (insert "Rewound transcript\n")
+                        (setq-local mevedel--session session)
+                        (setq buffer-file-name segment))
+                      (cl-letf (((symbol-function 'completing-read)
+                                 (lambda (&rest _)
+                                   (mevedel-session-rewind--published-head-label
+                                    (cl-find restorable
+                                             (mevedel-session-rewind-published-heads
+                                              session)
+                                             :key (lambda (entry)
+                                                    (plist-get entry :head))
+                                             :test #'equal))))
+                                ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                                ((symbol-function 'mevedel--run-session-start-hooks)
+                                 #'ignore)
+                                ((symbol-function
+                                  'mevedel-session-recovery-refresh-session-buffers)
+                                 #'ignore)
+                                ((symbol-function 'message) #'ignore))
+                        (with-current-buffer buffer
+                          (should (mevedel-redo))))
+                      (should (= 1 (mevedel-session-turn-count session)))
+                      ;; Both notes are as the store says.
+                      (should (equal '("mine v2" "theirs")
+                                     (sort (cl-loop
+                                            for file in
+                                            (plist-get
+                                             (mevedel--instruction-state
+                                              (mevedel--instruction-workspace-key
+                                               workspace))
+                                             :instructions)
+                                            append
+                                            (mapcar
+                                             (lambda (n)
+                                               (plist-get (plist-get n :properties)
+                                                          'mevedel-note-text))
+                                             (plist-get (cdr file) :instructions)))
+                                           #'string<)))))
+                (mevedel-session-durability-lease-release
+                 session-dir session)))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (when workspace (mevedel--clear-instruction-state workspace))
+      (test-mevedel-session-persistence--reset-instructions)
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))
+      (mevedel-workspace-clear-registry))))
 
 (mevedel-deftest mevedel-session-rewind--redo-availability ()
   ,test

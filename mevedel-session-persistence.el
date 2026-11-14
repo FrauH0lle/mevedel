@@ -141,7 +141,7 @@
 (declare-function mevedel-session-artifacts-find-artifact-noselect "mevedel-session-artifacts" (session logical &optional inspection committed-only))
 (declare-function mevedel-session-artifacts-inhibit-so-long "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-inspect-cold-session "mevedel-session-artifacts" (save-path authority-mode &optional publication scope))
-(declare-function mevedel-session-artifacts-load-instructions "mevedel-session-artifacts" (session buffer &optional turn snapshot-only))
+(declare-function mevedel-session-artifacts-load-instructions "mevedel-session-artifacts" (session))
 (declare-function mevedel-session-artifacts-printed-value "mevedel-session-artifacts" (value))
 (declare-function mevedel-session-artifacts-publish-sidecar-state "mevedel-session-artifacts" (session root-buffer &optional token))
 (declare-function mevedel-session-artifacts-publish-text "mevedel-session-artifacts" (session path content &optional coding prepared token))
@@ -1833,7 +1833,7 @@ CHECKPOINT-CALLBACK receives the candidate frozen with repaired root bytes."
          (prog1
              (mevedel-agent-persistence-restore-tree
               session buf (bound-and-true-p mevedel-session--read-only-mode))
-           (mevedel-session-artifacts-load-instructions session buf))))))
+           (mevedel-session-artifacts-load-instructions session))))))
 
 (defun mevedel-session-persistence--finish-restored-buffer
     (buf session live persist-repairs-p &optional repair-artifacts repair-checkpoint)

@@ -291,7 +291,7 @@
          (session (mevedel-session-create "main" workspace))
          (buffer (generate-new-buffer " *checkpoint-root-freeze*"))
          (seam (if (eq phase 'preparation)
-                   'mevedel-session-artifacts--instruction-artifacts
+                   'mevedel-session-artifacts-ensure-files
                  'mevedel-session-durability-commit-publication-head))
          (original (symbol-function seam))
          entered restored session-directory)

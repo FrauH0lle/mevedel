@@ -38,7 +38,7 @@
                   "mevedel-session-artifacts" (session buffer))
 (declare-function mevedel-session-artifacts-load-instructions
                   "mevedel-session-artifacts"
-                  (session buffer &optional turn snapshot-only))
+                  (session))
 (declare-function mevedel-session-artifacts-read-artifact
                   "mevedel-session-artifacts"
                   (session logical &optional committed-only))
@@ -642,9 +642,8 @@ session, including its native history, rather than a cooperative transfer."
               (condition-case install-error
                   (progn
                     (unless
-                        (mevedel-session-artifacts-load-instructions
-                         refreshed staging-buffer)
-                      (error "Transferred instruction snapshot is invalid"))
+                        (mevedel-session-artifacts-load-instructions refreshed)
+                      (error "Transferred workspace instructions could not be restored"))
                     (mevedel-session-control-transfer--install-staged-segment
                      buffer staging-buffer))
                 (error
