@@ -65,7 +65,8 @@
   "Buffer-local UI collapse state keyed by fragment collapse keys.")
 
 (defvar-local mevedel-view-zone--regions nil
-  "Managed region overlays keyed by fixed zone name.")
+  "Managed region overlays keyed by fixed zone name.
+The value `absent' records a zone proven to have no text.")
 
 (defconst mevedel-view-zone--names
   '(status interaction progress)
@@ -528,11 +529,17 @@ label, takes that path anyway, without scanning the whole buffer here."
 (defun mevedel-view-zone--absent-p (zone region fragments)
   "Return non-nil if ZONE has no FRAGMENTS, live REGION or stale text.
 Such a zone has nothing to reconcile, so it needs no viewport transaction.
-Stale text, such as text that outlived lost local state, still needs one."
+Stale text, such as text that outlived lost local state, still needs one.
+One whole-buffer scan proves absence until the region table entry changes:
+only zone rendering writes zone text, and creating a region, forgetting
+the zone or losing the table discards the proof."
   (and (null fragments)
        (null region)
-       (not (text-property-any (point-min) (point-max)
-                               'mevedel-view-zone-namespace zone))))
+       (let ((table (mevedel-view-zone--region-table)))
+         (or (eq (gethash zone table) 'absent)
+             (unless (text-property-any (point-min) (point-max)
+                                        'mevedel-view-zone-namespace zone)
+               (puthash zone 'absent table))))))
 
 (defun mevedel-view-zone--reconcile (region namespace text)
   "Reconcile rendered TEXT for NAMESPACE inside managed REGION."
@@ -576,12 +583,10 @@ Stale text, such as text that outlived lost local state, still needs one."
 
 (defun mevedel-view-zone--live-region (zone)
   "Return ZONE's live managed region, or nil."
-  (when-let* ((region (gethash zone (mevedel-view-zone--region-table))))
-    (if (and (overlayp region)
-             (eq (overlay-buffer region) (current-buffer)))
-        region
-      (remhash zone mevedel-view-zone--regions)
-      nil)))
+  (let ((region (gethash zone (mevedel-view-zone--region-table))))
+    (cond ((not (overlayp region)) nil) ; none, or the `absent' proof
+          ((eq (overlay-buffer region) (current-buffer)) region)
+          (t (remhash zone mevedel-view-zone--regions) nil))))
 
 (defun mevedel-view-zone--validate (zone start end fragments)
   "Validate ZONE, START, END, and FRAGMENTS."
