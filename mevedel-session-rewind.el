@@ -57,12 +57,12 @@
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts--live-sidecar "mevedel-session-artifacts" (session &optional data-buffer))
 (declare-function mevedel-session-artifacts-assert-mutation-authority "mevedel-session-artifacts" (session &optional buffer))
-(declare-function mevedel-session-artifacts-backup-path "mevedel-session-artifacts" (save-path backup-name))
 (declare-function mevedel-session-artifacts-collect-prompts "mevedel-session-artifacts" (buffer &optional preview-length))
 (declare-function mevedel-session-artifacts-fork-point-spans "mevedel-session-artifacts" (buffer))
 (declare-function mevedel-session-artifacts-load-instructions "mevedel-session-artifacts" (session))
 (declare-function mevedel-session-artifacts-printed-value "mevedel-session-artifacts" (value))
 (declare-function mevedel-session-artifacts-read-artifact "mevedel-session-artifacts" (session logical &optional committed-only))
+(declare-function mevedel-session-artifacts-read-backup "mevedel-session-artifacts" (session backup-name))
 (declare-function mevedel-session-artifacts-read-file-raw "mevedel-session-artifacts" (path))
 (declare-function mevedel-session-artifacts-replace-transcript-contents "mevedel-session-artifacts" (source))
 (declare-function mevedel-session-artifacts-segment-path "mevedel-session-artifacts" (save-path n))
@@ -72,7 +72,7 @@
 (declare-function mevedel-session-artifacts-update-prompt-index "mevedel-session-artifacts" (session buffer))
 (autoload 'mevedel-session-artifacts-assert-mutation-authority
   "mevedel-session-artifacts")
-(autoload 'mevedel-session-artifacts-backup-path "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-read-backup "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts--live-sidecar "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-collect-prompts
   "mevedel-session-artifacts")
@@ -213,6 +213,7 @@
 
 ;; `mevedel-view'
 (defvar mevedel--data-buffer)
+(defvar mevedel-session-artifacts-backup-cache)
 
 ;;
 ;;; File restore plan
@@ -227,27 +228,6 @@
         (when (> v best-version)
           (setq best-version v
                 best          (cdr entry)))))))
-
-(defvar mevedel-session-rewind--backup-cache nil
-  "Immutable backup bytes cached for one Rewind, including its merge rounds.")
-
-(defun mevedel-session-rewind-read-backup (session backup-name)
-  "Return SESSION's BACKUP-NAME as literal bytes.
-
-Portable project Rewind resolves only the committed immutable publication.  File
-sessions retain their existing direct file-history read."
-  (let ((cache (and (string-match-p "\\`[0-9a-f]\\{64\\}\\'" backup-name)
-                    mevedel-session-rewind--backup-cache)))
-    (or (and cache (gethash backup-name cache))
-      (let ((bytes
-             (if (mevedel-session-codec-portable-authority-p session)
-                 (mevedel-session-artifacts-read-artifact
-                  session (file-name-concat "file-history" backup-name) t)
-               (mevedel-session-artifacts-read-file-raw
-                (mevedel-session-artifacts-backup-path
-                 (mevedel-session-save-path session) backup-name)))))
-        (when cache (puthash backup-name bytes cache))
-        bytes))))
 
 (defun mevedel-session-rewind-state-at-turn
     (session cum-turn &optional before-turn)
@@ -306,7 +286,7 @@ or earlier.  Possible `:action' values are:
      ;; Target has content; file currently present -- compare.
      (t
       (let* ((target-content
-              (mevedel-session-rewind-read-backup
+              (mevedel-session-artifacts-read-backup
                session target-backup-name))
              (current-content
               (mevedel-session-artifacts-read-file-raw path)))
@@ -319,7 +299,7 @@ or earlier.  Possible `:action' values are:
                  (latest-name (and latest (plist-get latest :backup-name)))
                  (latest-content
                   (and latest-name
-                       (mevedel-session-rewind-read-backup
+                       (mevedel-session-artifacts-read-backup
                         session latest-name)))
                  (diverged (not (and latest-content
                                      (string-equal current-content
@@ -358,7 +338,7 @@ nothing to do.  When BEFORE-TURN is non-nil, target the pre-turn checkpoint."
 (defun mevedel-session-rewind--recorded-state (session path name)
   "Read SESSION's recorded PATH state from backup NAME, or absence."
   (list :path path :exists (and name t)
-        :bytes (and name (mevedel-session-rewind-read-backup session name))))
+        :bytes (and name (mevedel-session-artifacts-read-backup session name))))
 
 (defvar mevedel-session-rewind--merge-resolutions nil
   "Dynamically scoped, checked resolutions while resuming a Rewind merge.")
@@ -494,7 +474,7 @@ carries the plan-entry plist."
                    (insert
                     (if (plist-member entry :bytes)
                         (plist-get entry :bytes)
-                      (mevedel-session-rewind-read-backup
+                      (mevedel-session-artifacts-read-backup
                        session backup-name)))
                    (let ((coding-system-for-write 'no-conversion))
                      (write-region nil nil backup-path nil 'silent)))
@@ -528,7 +508,7 @@ carries the plan-entry plist."
        (let ((content
               (if (plist-member entry :bytes)
                   (plist-get entry :bytes)
-                (mevedel-session-rewind-read-backup
+                (mevedel-session-artifacts-read-backup
                  session backup-name))))
          (let ((dir (file-name-directory path)))
            (when (and dir (not (file-directory-p dir)))
@@ -1922,8 +1902,8 @@ discarded with everything later, which is what picking one of the user's
 own prompts asks for, since the point of naming a prompt is to return to
 just before sending it."
   (let ((session (buffer-local-value 'mevedel--session buffer))
-        (mevedel-session-rewind--backup-cache
-         (or mevedel-session-rewind--backup-cache (make-hash-table :test #'equal))))
+        (mevedel-session-artifacts-backup-cache
+         (or mevedel-session-artifacts-backup-cache (make-hash-table :test #'equal))))
     (unless (and session (plist-get target :fork-point-id))
       (user-error "Rewind requires a settled assistant response"))
     (mevedel-session-artifacts-assert-mutation-authority session buffer)

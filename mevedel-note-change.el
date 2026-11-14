@@ -21,8 +21,8 @@
 (declare-function mevedel-patch-review-start "mevedel-patch-review" (proposal callback data-buffer))
 
 ;; `mevedel-session-rewind'
-(declare-function mevedel-session-rewind-read-backup "mevedel-session-rewind" (session backup-name))
-(autoload 'mevedel-session-rewind-read-backup "mevedel-session-rewind")
+(declare-function mevedel-session-artifacts-read-backup "mevedel-session-artifacts" (session backup-name))
+(autoload 'mevedel-session-artifacts-read-backup "mevedel-session-artifacts")
 
 (defun mevedel-note-change-record (proposal changes data-buffer)
   "Capture prepared PROPOSAL and CHANGES owned by DATA-BUFFER's current turn."
@@ -358,7 +358,7 @@ Confirming a partial selection drops the rest of this waiting change."
                       path (plist-get record :gap)))
         (cl-labels ((snapshot (name)
                       (list :path path :exists (and name t)
-                            :bytes (and name (mevedel-session-rewind-read-backup session name))
+                            :bytes (and name (mevedel-session-artifacts-read-backup session name))
                             ;; File history records bytes, not modes; retain today's mode.
                             :mode (and name (plist-get current :mode)))))
           (let* ((before (snapshot (plist-get record :pre-backup-name)))

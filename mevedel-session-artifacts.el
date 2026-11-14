@@ -207,8 +207,6 @@
 (autoload 'mevedel-session-publication-read "mevedel-session-publication")
 (autoload 'mevedel-session-publication-uncommitted-artifact
   "mevedel-session-publication")
-(declare-function mevedel-session-rewind-read-backup "mevedel-session-rewind" (session backup-name))
-(autoload 'mevedel-session-rewind-read-backup "mevedel-session-rewind")
 
 ;; `mevedel-session-recovery'
 (declare-function mevedel-session-recovery-refresh "mevedel-session-recovery" (session &optional root-observation))
@@ -3019,6 +3017,28 @@ gate token; a deferred preparation receives its own."
       (insert-file-contents-literally path))
     (buffer-string)))
 
+(defvar mevedel-session-artifacts-backup-cache nil
+  "Hash table of immutable backup bytes cached by a caller, or nil.
+Rewind binds one around a whole operation, including its merge rounds.")
+
+(defun mevedel-session-artifacts-read-backup (session backup-name)
+  "Return SESSION's BACKUP-NAME as literal bytes.
+
+Portable project sessions resolve only the committed immutable publication.
+File sessions read their file history directly."
+  (let ((cache (and (string-match-p "\\`[0-9a-f]\\{64\\}\\'" backup-name)
+                    mevedel-session-artifacts-backup-cache)))
+    (or (and cache (gethash backup-name cache))
+        (let ((bytes
+               (if (mevedel-session-codec-portable-authority-p session)
+                   (mevedel-session-artifacts-read-artifact
+                    session (file-name-concat "file-history" backup-name) t)
+                 (mevedel-session-artifacts-read-file-raw
+                  (mevedel-session-artifacts-backup-path
+                   (mevedel-session-save-path session) backup-name)))))
+          (when cache (puthash backup-name bytes cache))
+          bytes))))
+
 (defun mevedel-session-artifacts--file-history-write-backup (save-path backup-name content)
   "Atomically write CONTENT under `<SAVE-PATH>/file-history/BACKUP-NAME'."
   (let* ((dir  (file-name-concat save-path "file-history"))
@@ -3167,7 +3187,7 @@ leaves THEN uncalled and the session unsaved; the source stays changed."
                                   (not (equal (and bytes (secure-hash 'sha256 bytes))
                                               (plist-get old :backup-name))))
                              (list :gap (format "edited after turn %d" turn)))
-                            (old (and name (mevedel-session-rewind-read-backup session name)))
+                            (old (and name (mevedel-session-artifacts-read-backup session name)))
                             (t bytes))
                  pre)))
     (let ((mevedel-session-artifacts--collecting-critical-artifacts-p

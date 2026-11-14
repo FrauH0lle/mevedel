@@ -14,6 +14,7 @@
 (require 'mevedel-chat)
 (require 'mevedel-notes)
 (require 'mevedel-session-rewind)
+(require 'mevedel-session-artifacts)
 (require 'mevedel-persistence)
 (require 'mevedel-session-recovery)
 
@@ -2902,7 +2903,7 @@
                    :backup-name backup-name))
             (goto-char (point-min))
             (cl-letf
-                (((symbol-function 'mevedel-session-rewind-read-backup)
+                (((symbol-function 'mevedel-session-artifacts-read-backup)
                   (lambda (seen-session seen-name)
                     (should (eq session seen-session))
                     (should (equal backup-name seen-name))

@@ -112,7 +112,7 @@
 ;; `mevedel-session-rewind'
 (declare-function mevedel-session-rewind-assert-stable-source "mevedel-session-rewind" (session buffer operation))
 (declare-function mevedel-session-rewind-load-rewind-target "mevedel-session-rewind" (session buffer target &optional before-turn))
-(declare-function mevedel-session-rewind-read-backup "mevedel-session-rewind" (session backup-name))
+(declare-function mevedel-session-artifacts-read-backup "mevedel-session-artifacts" (session backup-name))
 (declare-function mevedel-session-rewind-reduce-agent-transcripts "mevedel-session-rewind" (entries picked-cum-turn))
 (declare-function mevedel-session-rewind-reduce-file-snapshots "mevedel-session-rewind" (snapshots picked-cum-turn &optional before-turn))
 (declare-function mevedel-session-rewind-reduce-prompt-index "mevedel-session-rewind" (index picked-segment picked-cum-turn &optional before-turn))
@@ -123,7 +123,7 @@
   "mevedel-session-rewind")
 (autoload 'mevedel-session-rewind-load-rewind-target
   "mevedel-session-rewind")
-(autoload 'mevedel-session-rewind-read-backup "mevedel-session-rewind")
+(autoload 'mevedel-session-artifacts-read-backup "mevedel-session-artifacts")
 (autoload 'mevedel-session-rewind-reduce-agent-transcripts
   "mevedel-session-rewind")
 (autoload 'mevedel-session-rewind-reduce-file-snapshots
@@ -914,7 +914,7 @@ Return descriptions of malformed grants and rules dropped from the child."
                 (with-temp-buffer
                   (set-buffer-multibyte nil)
                   (insert
-                   (mevedel-session-rewind-read-backup
+                   (mevedel-session-artifacts-read-backup
                     source backup-name))
                   (mevedel-session-persistence-write-current-buffer-atomically
                    target)))

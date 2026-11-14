@@ -102,10 +102,10 @@ PORTABLE selects a portable session over a file one."
       (mevedel-session-artifacts-record-applied
        session 1 (list (test-mevedel-applied--change a "a1")
                        (test-mevedel-applied--change c "c1")))
-      (should (equal "a0" (mevedel-session-rewind-read-backup
+      (should (equal "a0" (mevedel-session-artifacts-read-backup
                            session (plist-get (test-mevedel-applied--entry session 1 a)
                                               :pre-backup-name))))
-      (should (equal "c1" (mevedel-session-rewind-read-backup
+      (should (equal "c1" (mevedel-session-artifacts-read-backup
                            session (plist-get (test-mevedel-applied--entry session 1 c)
                                               :pre-backup-name))))))
   :doc "backups are readable from file and portable sessions"
@@ -116,9 +116,9 @@ PORTABLE selects a portable session over a file one."
         (mevedel-session-artifacts-record-applied
          session 1 (list (test-mevedel-applied--change a "a1")))
         (let ((entry (test-mevedel-applied--entry session 1 a)))
-          (should (equal "a2" (mevedel-session-rewind-read-backup
+          (should (equal "a2" (mevedel-session-artifacts-read-backup
                                session (plist-get entry :backup-name))))
-          (should (equal "a1" (mevedel-session-rewind-read-backup
+          (should (equal "a1" (mevedel-session-artifacts-read-backup
                                session (plist-get entry :pre-backup-name))))
           (unless portable
             (should (file-exists-p
@@ -142,7 +142,7 @@ PORTABLE selects a portable session over a file one."
        :then (lambda (files) (push (list 'with files) seen)))
       (should (null (cadr (assq 'without seen))))
       (let ((entry (cdr (car (cadr (assq 'with seen))))))
-        (should (equal "b1" (mevedel-session-rewind-read-backup
+        (should (equal "b1" (mevedel-session-artifacts-read-backup
                              session (plist-get entry :pre-backup-name))))
         (should-not (plist-member entry :version))
         (should-not (plist-member entry :backup-time)))))
