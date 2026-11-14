@@ -44,10 +44,12 @@ or rolled-back operations start no epoch.
 
 Portable project sessions expose Redo by republishing a selected immutable head
 as a new head. It restores the head's conversation artifacts, sidecar state,
-instruction snapshots, retained agent transcripts, persisted tool results, and
-captured working-tree files. It neither recovers uncaptured effects nor
-replaces current workspace notes with historical snapshots. File sessions using
-PID locks have no published heads and no Redo.
+retained agent transcripts, persisted tool results, and captured working-tree
+files. Sessions keep no instruction snapshots, so Redo settles the workspace
+store for the restored turn count instead of loading a historical note set
+([ADR 0130](0130-keep-instructions-in-a-workspace-store.md)). It does not
+recover uncaptured effects. File sessions using PID locks have no published
+heads and no Redo.
 
 Redo preparation and confirmation read immutable bytes without reserving the
 lease. The reserved transaction then rechecks the current head and confirmed
