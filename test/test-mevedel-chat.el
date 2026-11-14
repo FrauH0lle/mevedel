@@ -1375,7 +1375,8 @@
           (should fsm)
           (should (eq fsm (plist-get request-args :fsm)))
           (should (equal "derived prompt" model-input))
-          (should (equal '(transform) (plist-get request-args :transforms)))
+          (should (equal '(mevedel-auth-codex-cache-key-transform transform)
+                         (plist-get request-args :transforms)))
           (should (plist-get request-args :stream)))
         (should-not mevedel--pending-model-input)))))
 
@@ -1406,7 +1407,8 @@
       (should (string-match-p "Planning prompt" (buffer-string)))
       (should (string-match-p "hook-context" (buffer-string)))
       (should (string-match-p "hook-context" model-input))
-      (should (equal '(transform) (plist-get request-args :transforms)))))
+      (should (equal '(mevedel-auth-codex-cache-key-transform transform)
+                         (plist-get request-args :transforms)))))
 
   :doc "stores the generated prompt while sending prepared skill context"
   (with-temp-buffer
