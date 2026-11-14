@@ -1481,10 +1481,13 @@ whose `:frames' are the decoded frames it received."
           (when-let* ((text (mevedel-collaboration--unseal
                              key (cdr (mevedel-collaboration--envelope-unpack
                                        (websocket-frame-payload frame))))))
-            (plist-put guest :frames
-                       (append (plist-get guest :frames)
-                               (list (mevedel-collaboration--frame-decode
-                                      text)))))))))
+            ;; As a browser does: drop a frame for another connection and
+            ;; strip this one's nonce, which every helper frame carries.
+            (let ((decoded (mevedel-collaboration--frame-decode text)))
+              (when (member (plist-get decoded :nonce) '(nil "guest-nonce"))
+                (cl-remf decoded :nonce)
+                (plist-put guest :frames
+                           (append (plist-get guest :frames) (list decoded))))))))))
     (push (plist-get guest :ws) test-mevedel-collaboration-guest--sockets)
     (should (mevedel-relay-test--pump
              (lambda () (websocket-openp (plist-get guest :ws)))))
@@ -1530,7 +1533,8 @@ whose `:frames' are the decoded frames it received."
                  (json-serialize
                   (append frame
                           (list :challenge (test-mevedel-collaboration-guest--challenge guest)
-                                :seq (plist-get guest :seq)))))))))
+                                :seq (plist-get guest :seq)
+                                :nonce "guest-nonce"))))))))
 
 (defun test-mevedel-collaboration-guest--exchange (guest frame)
   "Send FRAME then a store listing request from GUEST.
@@ -1793,7 +1797,8 @@ as presence may interleave, so only notices are returned."
                                     key (json-serialize
                                          (if challenge
                                              (append frame (list :challenge challenge
-                                                                 :seq (cl-incf seq)))
+                                                                 :seq (cl-incf seq)
+                                                                 :nonce "guest-nonce"))
                                            frame))))
                                  frames)))
                    (send-all original recorded)

@@ -394,7 +394,7 @@
                    transport 1 '(:t "abort" :challenge "x" :seq 9))))
     ;; Refusals never block the binding's own frames.
     (should-not (mevedel-collaboration--transport-refusal
-                 transport 1 '(:t "abort" :challenge "c" :seq 1)))
+                 transport 1 '(:t "abort" :challenge "c" :seq 1 :nonce "n")))
     ;; Unbound peers are remembered only up to the bound.
     (let ((mevedel-collaboration--max-unbound-peers 3))
       (should (consp (mevedel-collaboration--transport-refusal
@@ -421,6 +421,27 @@
     ;; Peer 1's own frames keep passing.
     (should-not (mevedel-collaboration--transport-refusal
                  transport 1 '(:t "prompt" :challenge "c" :seq 2 :nonce "socket-a")))))
+
+(mevedel-deftest mevedel-collaboration--transport-refusal/missing-nonce
+  (:doc "refuses a bound peer's frames without a valid nonce, so the first accepted adopts one")
+  (let ((transport (list :peers (test-mevedel-collaboration-transport--peers 1))))
+    ;; Without a nonce, or with one too long to keep, nothing is accepted
+    ;; or adopted; only the first refusal is answered.
+    (should (equal "notice"
+                   (plist-get (mevedel-collaboration--transport-refusal
+                               transport 1 '(:t "hello" :challenge "c" :seq 1))
+                              :t)))
+    (should (eq t (mevedel-collaboration--transport-refusal
+                   transport 1 (list :t "hello" :challenge "c" :seq 2
+                                     :nonce (make-string 65 ?n)))))
+    (should-not (nth 3 (gethash 1 (plist-get transport :peers))))
+    ;; A later valid frame is accepted and adopts its nonce ...
+    (should-not (mevedel-collaboration--transport-refusal
+                 transport 1 '(:t "hello" :challenge "c" :seq 3 :nonce "socket-a")))
+    (should (equal "socket-a" (nth 3 (gethash 1 (plist-get transport :peers)))))
+    ;; ... which then holds every frame to it.
+    (should (eq t (mevedel-collaboration--transport-refusal
+                   transport 1 '(:t "prompt" :challenge "c" :seq 4))))))
 
 (mevedel-deftest mevedel-collaboration--transport-send/broadcast-types
   (:doc "refuses to broadcast a frame type outside the bounded list")
@@ -599,7 +620,7 @@
                  :opcode 'binary :completep t
                  :payload (mevedel-collaboration--envelope-pack
                            1 (mevedel-collaboration--seal
-                              key "{\"t\":\"store-list\",\"challenge\":\"c\",\"seq\":1}")))))
+                              key "{\"t\":\"store-list\",\"challenge\":\"c\",\"seq\":1,\"nonce\":\"n\"}")))))
     (unwind-protect
         (progn
           (mevedel-transport--handler-advice
@@ -641,7 +662,7 @@
                                             1 (mevedel-collaboration--seal
                                                key (json-encode
                                                     (list :n number :challenge "c"
-                                                          :seq number))))))))
+                                                          :seq number :nonce "n"))))))))
           (mevedel-transport--handler-advice
            (lambda ()
              (let (timer-list timer-idle-list)

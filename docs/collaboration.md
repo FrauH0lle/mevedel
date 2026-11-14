@@ -88,8 +88,9 @@ challenge, or a `seq` at or below the last accepted, gets a notice that the
 relay repeated or reordered it. So recorded frames, the owner's `hello`
 included, act once, on their own connection. A reconnect is a new
 connection with a fresh challenge. The other way, every guest frame also
-carries a random `nonce` the guest drew for this socket; the host keeps the
-first one it accepts, then accepts only frames bearing it, and adds it to
+carries a random `nonce` the guest drew for this socket; the host refuses a
+frame without one, keeps the first it accepts, then accepts only frames
+bearing it, and adds it to
 every frame it sends that guest alone. A relay that hands another socket a
 live guest's recorded challenge therefore cannot speak with that guest's
 authority: the host refuses its frames.

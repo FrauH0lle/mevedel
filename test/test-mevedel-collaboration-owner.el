@@ -93,7 +93,7 @@ the room.  START replaces the child's room dial."
                                (or peer 3)
                                (mevedel-collaboration--seal
                                 key
-                                (format "{\"t\":\"fork\",\"reqId\":%d,\"forkPoint\":\"fixture-fork\",\"challenge\":\"c%d\",\"seq\":%d}"
+                                (format "{\"t\":\"fork\",\"reqId\":%d,\"forkPoint\":\"fixture-fork\",\"challenge\":\"c%d\",\"seq\":%d,\"nonce\":\"n\"}"
                                         request-id (or peer 3) (cl-incf seq))))))))))
       (dolist (child children)
         (when (buffer-live-p child)

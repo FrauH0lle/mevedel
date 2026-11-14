@@ -206,10 +206,18 @@ Return a plist holding its socket, room key and received frames."
             ;; The connection's challenge binds every frame the consumer
             ;; sends; it is not part of any exchange.
             (let ((parsed (mevedel-artifact-room-test--parse text)))
-              (if (equal "challenge" (alist-get 't parsed))
-                  (plist-put consumer :challenge (alist-get 'challenge parsed))
+              (cond
+               ((equal "challenge" (alist-get 't parsed))
+                (plist-put consumer :challenge (alist-get 'challenge parsed)))
+               ;; A frame for this consumer alone carries back its nonce,
+               ;; which is not part of any exchange either.
+               ((member (alist-get 'nonce parsed) '(nil "consumer-nonce"))
                 (plist-put consumer :texts
-                           (append (plist-get consumer :texts) (list text))))))))))
+                           (append (plist-get consumer :texts)
+                                   (list (json-serialize
+                                          (assq-delete-all 'nonce parsed)
+                                          :false-object :false
+                                          :null-object :null))))))))))))
     (should (mevedel-relay-test--pump
              (lambda () (plist-get consumer :challenge))))
     consumer))
@@ -251,7 +259,8 @@ An editing frame's body travels as the chunked transfer it stands for."
                      (plist-get consumer :key)
                      (json-serialize
                       (append part `((challenge . ,(plist-get consumer :challenge))
-                                     (seq . ,(plist-get consumer :seq))))
+                                     (seq . ,(plist-get consumer :seq))
+                                     (nonce . "consumer-nonce")))
                       :false-object :false :null-object :null))))))))
 
 (defun mevedel-artifact-room-test--frames (consumer)

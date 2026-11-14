@@ -443,15 +443,15 @@ sequence number at or below the last accepted was repeated or reordered."
     (cond
      ((and (car binding) (equal challenge (car binding))
            (natnump seq) (> seq (cadr binding))
-           ;; Once adopted, the nonce identifies the socket: a relay handing
-           ;; another socket this peer's recorded challenge cannot pass.
-           (or (null (nth 3 binding))
-               (equal (plist-get frame :nonce) (nth 3 binding))))
+           ;; The nonce identifies the socket: every frame needs a valid one,
+           ;; so the first accepted frame always adopts it, and a relay
+           ;; handing another socket this peer's recorded challenge cannot pass.
+           (let ((nonce (plist-get frame :nonce)))
+             (and (stringp nonce) (<= 1 (length nonce) 64)
+                  (or (null (nth 3 binding)) (equal nonce (nth 3 binding))))))
       (setf (cadr binding) seq)
-      (let ((nonce (plist-get frame :nonce)))
-        (when (and (null (nth 3 binding)) (stringp nonce)
-                   (<= (length nonce) 64))
-          (setf (nth 3 binding) nonce)))
+      (unless (nth 3 binding)
+        (setf (nth 3 binding) (plist-get frame :nonce)))
       nil)
      ((nth 2 binding) t)
      ((not binding)
