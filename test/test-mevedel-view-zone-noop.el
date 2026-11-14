@@ -173,5 +173,67 @@
       (should (string-search "Then word word word" (buffer-string)))
       (should (equal "> draft" (mevedel-view--input-text))))))
 
+(mevedel-deftest mevedel-view-zone-absent-proof
+  (:doc "one scan proves a zone absent until a region or lost state discards it")
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (mevedel-view-test--insert-data data-buf "Earlier answer.\n" 'response)
+      (mevedel-view--full-rerender)
+      (mevedel-view-stream-begin-turn
+       (mevedel-view--history-insertion-marker)
+       (with-current-buffer data-buf (point-max)))
+      (mevedel-view-test--insert-data data-buf "Then" 'response)
+      (mevedel-view--render-stream-update data-buf)
+      (mevedel-view-test--insert-composer-draft "> draft" 2)
+      (cl-flet ((stale ()
+                  (let ((inhibit-read-only t) (inhibit-modification-hooks t))
+                    (save-excursion
+                      (goto-char mevedel-view--status-marker)
+                      (insert (propertize "stale status\n"
+                                          'mevedel-view-zone-namespace 'status
+                                          'mevedel-view-zone-region 'dead)))))
+                (stale-p () (string-search "stale status" (buffer-string)))
+                (reconcile ()
+                  (mevedel-view-zone-reconcile
+                   'status mevedel-view--status-marker
+                   mevedel-view--status-marker nil)))
+        ;; The stream update's empty status writer proved the zone absent.
+        (mevedel-view-test--insert-data data-buf " word" 'response)
+        (mevedel-view--render-stream-update data-buf)
+        (should-not (mevedel-view-zone-region 'status))
+        ;; The proof is reused: text written behind the zone's back is not
+        ;; rescanned, which is what keeps the absent check off the buffer size.
+        (stale)
+        (should-not (reconcile))
+        (should (stale-p))
+        ;; Forgetting the zone discards the proof, so the stale text goes.
+        (mevedel-view-zone-forget 'status)
+        (should-not (reconcile))
+        (should-not (stale-p))
+        ;; So does losing the region table, as `kill-all-local-variables' would.
+        (should-not (reconcile))
+        (setq mevedel-view-zone--regions nil)
+        (stale)
+        (should-not (reconcile))
+        (should-not (stale-p))
+        ;; A live region replaces the proof; clearing it leaves no zone text.
+        (should-not (reconcile))
+        (should (mevedel-view-zone-reconcile
+                 'status mevedel-view--status-marker mevedel-view--status-marker
+                 '((:namespace status :id live :body "Live status"))))
+        (should (string-search "Live status" (buffer-string)))
+        (should-not (reconcile))
+        (should-not (mevedel-view-zone-region 'status))
+        (should-not (string-search "Live status" (buffer-string)))
+        (stale)
+        (mevedel-view-zone-forget 'status)
+        (should-not (reconcile))
+        (should-not (stale-p)))
+      (should (string-search "Then word" (buffer-string)))
+      (should (equal "> draft" (mevedel-view--input-text)))
+      (should (= (point) (+ 2 (mevedel-view--input-start)))))))
+
 (provide 'test-mevedel-view-zone-noop)
 ;;; test-mevedel-view-zone-noop.el ends here
