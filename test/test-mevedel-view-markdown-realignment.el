@@ -172,7 +172,31 @@
           (mevedel-view--realign-markdown)
           (mevedel-view--realign-on-window-change (selected-window))
           (should-not mevedel-view--realign-timer))
-      (mevedel-view--cancel-realign-timer))))
+      (mevedel-view--cancel-realign-timer)))
+
+  :doc "lays out a stale table above the tail after streaming text and scrolling up"
+  (mevedel-test--with-displayed-buffer
+    (mevedel-view-mode)
+    (let ((inhibit-read-only t)
+          (window (selected-window)))
+      (insert "| A | B |\n|---|---|\n| one | two |\n")
+      (mevedel-view-table-decorate (point-min) (point-max) nil)
+      (insert (make-string 300 ?\n))
+      (setq mevedel-view--image-layout-width (window-body-width window t))
+      (unwind-protect
+          (progn
+            ;; The window follows streamed text far below the stale table.
+            (set-window-start window (- (point-max) 5) t)
+            (insert "streamed chunk\n")
+            (mevedel-view--realign-on-window-change window)
+            (should-not mevedel-view--realign-timer)
+            (set-window-start window (point-min) t)
+            (mevedel-view--realign-on-window-change window)
+            (should (timerp mevedel-view--realign-timer))
+            (mevedel-view--realign-markdown (current-buffer) window)
+            (should (eql (window-body-width window t)
+                         (get-text-property (point-min) 'mevedel-view-table-width))))
+        (mevedel-view--cancel-realign-timer)))))
 
 (mevedel-deftest mevedel-view--enable-markdown-realign ()
   ,test

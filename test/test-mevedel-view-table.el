@@ -446,7 +446,7 @@
     (let ((answer (lambda (width)
                     ;; Each case is a separate text state.
                     (setq mevedel-view-table--stale-cache nil)
-                    (mevedel-view-table--last-stale-end width))))
+                    (mevedel-view-table--last-stale-end (point-min) width))))
       (insert "text\n| a |\nmid\n| b |\ntail")
       (should-not (funcall answer 400))
       (put-text-property 6 12 'mevedel-view-table-source "a")
@@ -461,19 +461,34 @@
   (with-temp-buffer
     (insert "| a | b |\n")
     (put-text-property 1 (point-max) 'mevedel-view-table-source "src")
-    (should (mevedel-view-table--last-stale-end 400))
+    (should (mevedel-view-table--last-stale-end 1 400))
     (let ((calls 0)
           (real (symbol-function 'next-single-property-change)))
       (cl-letf (((symbol-function 'next-single-property-change)
                  (lambda (&rest args) (cl-incf calls) (apply real args))))
         ;; Scrolling fontifies newly visible text: a property-only change.
         (put-text-property 1 (point-max) 'face 'bold)
-        (should (mevedel-view-table--last-stale-end 400))
+        (should (mevedel-view-table--last-stale-end 1 400))
         (should (= 0 calls))
         (goto-char (point-max))
         (insert "more text\n")
-        (should (mevedel-view-table--last-stale-end 400))
+        (should (mevedel-view-table--last-stale-end 1 400))
         (should (< 0 calls)))))
+  :doc "scans only from START and extends the cache when START moves up"
+  (with-temp-buffer
+    (insert "| a |\n" (make-string 200 ?x) "\n| b |\n" (make-string 200 ?y))
+    (put-text-property 1 7 'mevedel-view-table-source "a")
+    (let ((tail (- (point-max) 100))
+          (positions nil)
+          (real (symbol-function 'next-single-property-change)))
+      (cl-letf (((symbol-function 'next-single-property-change)
+                 (lambda (pos &rest args) (push pos positions) (apply real pos args))))
+        ;; A stream chunk changes the text; the tail window scans only its tail.
+        (should-not (mevedel-view-table--last-stale-end tail 400))
+        (should (cl-every (lambda (pos) (>= pos tail)) positions))
+        ;; Scrolling up to the stale table must find it above the old start.
+        (should (= 7 (mevedel-view-table--last-stale-end 1 400)))
+        (should (<= (or (mevedel-view-table--last-stale-end tail 400) 0) tail)))))
   :doc "table rendering resets it even when only the width property changes"
   (mevedel-test--with-displayed-buffer
     (insert "| a | b |\n|---|---|\n| 1 | 2 |\n")
@@ -484,10 +499,10 @@
                           (point-min) 'mevedel-view-table-source nil (point-max))
                          'mevedel-view-table-width nil))
     (let ((width (window-body-width (selected-window) t)))
-      (should (mevedel-view-table--last-stale-end width))
+      (should (mevedel-view-table--last-stale-end (point-min) width))
       (mevedel-view-table-rerender)
       (should (eql width (get-text-property (point-min) 'mevedel-view-table-width)))
-      (should-not (mevedel-view-table--last-stale-end width)))))
+      (should-not (mevedel-view-table--last-stale-end (point-min) width)))))
 
 (mevedel-deftest mevedel-view-table-rerender ()
   ,test
