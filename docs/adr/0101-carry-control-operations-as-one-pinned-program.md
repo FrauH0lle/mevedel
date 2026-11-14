@@ -176,6 +176,28 @@ protocol, extraction directory, or generic resolver cache is needed.
 
 ## Decision history
 
+- **Two more read-coalescing sites, and the limit of caller batching
+  (2026-11-14).** Counting programs per user-level memory operation on the
+  real carrier found no dominant site: starting a memory pass took about 97
+  programs, finishing it about 93, applying a decision 66 to 74, and no single
+  caller held more than 13% of a test file's programs. A quarter to a third
+  are claim elections and ownership proofs, which stay separate because each
+  consequential write needs a fresh proof or depends on a listing. Two
+  read-only sites now share programs. A freshness check without supplied
+  observations rereads its files at most eight per program, as its verifying
+  callers already did, instead of one program per file. A batched read of an
+  accepted bundle probes retirement in the program that reads the bundle,
+  before those reads, as an unobserved prepared read already does. Matched
+  runs, byte-compiled, pinned to one CPU, alternating old and new code, five
+  samples of 60 calls each under concurrent load: checking eleven files took
+  11 programs and a mean 63.5 ms (62.2 to 64.4 ms) before, 2 programs and
+  37.4 ms (36.9 to 37.8 ms) after; a batched accepted read took 3 programs and
+  18.3 ms (18.1 to 18.6 ms) before, 2 programs and 15.1 ms (14.6 to 15.5 ms)
+  after. Starting a pass went from about 97 to 95 programs and applying a
+  decision from about 74 to 72; their wall time did not change measurably.
+  The remaining programs are spread over many small sites, so further caller
+  batching cannot remove most of them.
+
 - **Re-measurement points at caller program counts, not startup (2026-11-07).**
   Exploratory probes, not matched measurements: local target, interpreted
   Lisp, concurrent load present. One run of
