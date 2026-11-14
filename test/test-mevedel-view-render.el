@@ -16,12 +16,14 @@
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
 (require 'mevedel-view-audit)
+(require 'mevedel-view-composer)
 (require 'mevedel-view-render)
 (require 'mevedel-view-segments)
 
 ;; Focused dependencies moved with the rendering tests.
 (require 'mevedel-view-stream)
 (require 'mevedel-transcript)
+(require 'mevedel-transcript-audit)
 (require 'mevedel-transcript-restore)
 (require 'mevedel-structs)
 (require 'mevedel-pipeline)
@@ -8462,8 +8464,10 @@
                    (mevedel-view--render-cache-key
                     (propertize text 'face 'bold))))))
 
-(mevedel-deftest mevedel-view--render-live-region
-  (:doc "decodes repeated trusted audits once per live projection")
+(mevedel-deftest mevedel-view--render-live-region ()
+  ,test
+  (test)
+  :doc "decodes repeated trusted audits once per live projection"
   (mevedel-view-test--with-buffers
     (let ((decode (symbol-function 'mevedel-transcript-audit--decode))
           (decodes 0)
@@ -8488,7 +8492,45 @@
           (mevedel-view--render-live-region data-buf nil)
           (should (= decodes 1))
           (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-          (should (= (point) (+ (mevedel-view--input-start) 3))))))))
+          (should (= (point) (+ (mevedel-view--input-start) 3)))))))
+  :doc "a retained tail update keeps history readers without counting history"
+  (mevedel-view-test--with-buffers
+    (let ((run-end (symbol-function 'mevedel-view--render-anchor-run-end))
+          (window (selected-window))
+          (scans 0))
+      (with-current-buffer data-buf
+        (dotimes (i 30)
+          (insert (format "Prompt %d\n" i))
+          (insert (propertize (format "Response %d\n" i) 'gptel 'response))))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (set-window-buffer window view-buf)
+        (mevedel-view-stream-begin-turn
+         (mevedel-view--history-insertion-marker)
+         (with-current-buffer data-buf (copy-marker (point-max)))))
+      (mevedel-view-test--insert-data data-buf "Live answer." 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--render-live-region data-buf nil)
+        (should (mevedel-view--live-tail-valid-p data-buf))
+        (goto-char (point-min))
+        (search-forward "Response 3")
+        (set-window-start window (save-excursion (search-backward "Prompt 2"))
+                          t))
+      (mevedel-view-test--insert-data data-buf " More." 'response)
+      (cl-letf (((symbol-function 'mevedel-view--render-anchor-run-end)
+                 (lambda (&rest args)
+                   (cl-incf scans)
+                   (apply run-end args))))
+        (with-current-buffer view-buf
+          (mevedel-view--render-live-region data-buf nil)
+          (should (string-search "Live answer. More." (buffer-string)))
+          (should (looking-back "Response 3" (line-beginning-position)))))
+      (with-current-buffer view-buf
+        (save-excursion
+          (goto-char (window-start window))
+          (should (looking-at-p "Prompt 2"))))
+      ;; Thirty settled turns hold at least sixty source runs.
+      (should (< scans 30)))))
 
 (mevedel-deftest mevedel-view--user-input-fold-p ()
   ,test
