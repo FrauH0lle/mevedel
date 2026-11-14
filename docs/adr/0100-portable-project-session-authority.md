@@ -35,10 +35,12 @@ with a takeover error, and new submissions fail immediately after confirmed
 takeover. A renewal failure or this client's expired lease alone is not evidence
 of takeover and does not discard its queued preparations. Fenced retained-agent
 settlement retires the local runtime without publishing or changing its retained
-transcript buffer. Each admitted agent invocation records its lease generation;
-a known generation mismatch or confirmed takeover keeps later settlement and
-saves fenced even after the parent takes control back. Ordinary loss in the
-same generation retains normal settlement and recovery. Taking control back
+transcript buffer. Each admitted agent invocation records the session's local
+ownership epoch; a mismatched epoch or confirmed takeover keeps later settlement
+and saves fenced even after the parent takes control back. The epoch advances
+only on gaining ownership after another holder or confirmed demotion, not on
+same-owner lease rotations or reclaiming this client's own expired record.
+Ordinary lease loss retains normal settlement and recovery. Taking control back
 must finish issuing the old epoch's pending stop before acquiring or adopting;
 a blocked stop refuses without changing authority. Deferred provider cancellation
 acknowledgements do not block take-back, because late settlement remains epoch-fenced.
@@ -142,13 +144,17 @@ Unicode format characters (including bidi controls) and are capped at 80 charact
 
 A deferred ACP cancellation exposed a second epoch boundary: after local demotion
 and take-back, the old terminal callback could use the parent's new lease. Each
-provider invocation now captures the admitted generation, including retained
-followups. A mismatched generation retires locally even if the parent currently
+provider invocation now captures the local ownership epoch, including retained
+followups. A mismatched epoch retires locally even if the parent currently
 owns authority. Late cleanup also checks buffer invocation identity before
 ending its request, so it cannot interrupt a newer turn reusing that transcript.
 Authority assertions can themselves yield to takeover and take-back. Settlement
 rechecks the epoch after those assertions and before building terminal publication;
 if the epoch changed after staging, it rolls back the local transaction and retires.
+Review reproduced a false fence during ordinary remote mutation: arming and
+settling the unsettled-mutation latch rotate the lease generation under the same
+owner. The local ownership epoch therefore replaces the originally chosen lease
+generation; same-owner rotations and own-expired reclaim preserve that epoch.
 
 On 2026-11-14 Roland decided to keep one session-ownership implementation:
 file-workspace sessions moved from the PID-lock profile to the portable

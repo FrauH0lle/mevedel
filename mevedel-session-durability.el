@@ -1031,12 +1031,15 @@ expiry and the replacement's own.  A lapsed deadline fails the prelude."
     (cancel-timer timer))
   (setf (mevedel-session-lease-renewal-timer session) nil))
 
-(defun mevedel-session-durability--bind-lease (session lease state &optional bytes)
+(defun mevedel-session-durability--bind-lease (session lease state &optional bytes predecessor)
   "Record LEASE and STATE on SESSION and maintain its renewal timer.
 
 BYTES is the exact content LEASE occupies on the target when that is known.
 A later renewal states it as the precondition of its own write, which saves
 re-reading a record this client just wrote.
+PREDECESSOR is the observed record before acquisition, when different from the
+bound lease.  Foreign ownership advances SESSION's local ownership epoch;
+same-owner generation rotations and reclaiming one's own expired lease do not.
 
 An `owned' state runs the renewal heartbeat and a `lost' one stops it,
 except while takeover still needs to stop producers: ticks retry that stop.
@@ -1054,6 +1057,17 @@ still holds expire for real."
         (setq live (plist-put live :bytes bytes)))
       (when release-pending
         (setq live (plist-put live :release-pending t)))
+      (when (and (eq state 'owned)
+                 (or (and predecessor
+                          (not (equal mevedel-session-durability--client-id
+                                      (plist-get predecessor :client-id))))
+                     (and (not (eq 'owned (plist-get previous :state)))
+                          (or (memq (plist-get (mevedel-session-control-transfer session) :state)
+                                    '(taken-over following))
+                              (and (memq (plist-get previous :status) '(active publishing released))
+                                   (not (equal mevedel-session-durability--client-id
+                                               (plist-get previous :client-id))))))))
+        (cl-incf (mevedel-session-ownership-epoch session)))
       (setf (mevedel-session-lease session) live)
       ;; The async updater runs on a private session projection.  Its bindings
       ;; are provisional: neither timers nor collection belong to that object.
@@ -1494,7 +1508,8 @@ Only an explicit user takeover command should pass FORCE."
            'foreign)
           (t 'expired))
          ;; An owned head is the record this client's claim just wrote.
-         (and owned (mevedel-session-durability--record-bytes current))))
+         (and owned (mevedel-session-durability--record-bytes current))
+         (and owned existing)))
       (and owned t))))
 
 (defun mevedel-session-durability-cleanup-assessment (session-dir)

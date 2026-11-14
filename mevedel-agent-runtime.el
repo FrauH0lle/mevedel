@@ -1272,8 +1272,8 @@ conversation's optional execution directory, never a resource grant."
             (with-current-buffer buffer
               (setq-local mevedel--agent-invocation invocation)))
         (mevedel-agent-runtime--setup-transcript invocation buffer))
-      (setf (mevedel-agent-invocation-lease-generation invocation)
-            (plist-get (mevedel-session-lease session) :generation))
+      (setf (mevedel-agent-invocation-ownership-epoch invocation)
+            (mevedel-session-ownership-epoch session))
       (mevedel-agent-conversation-configure invocation buffer)
       ;; Hydration itself performs no directory probes.  Discover a linked
       ;; checkout's instructions only after this turn validated the target and

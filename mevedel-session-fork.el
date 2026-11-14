@@ -268,7 +268,7 @@ only through PICKED-CUM-TURN.  Entries with non-integer
     publication-preparation-token publication-finishing-p publication-stopping-p
     mail-batch mail-notifications
     mail-notification-timer mail-notification-delay control-transfer control-transfer-drains root-buffer
-    lease
+    lease ownership-epoch
     lease-renewal-timer lease-renewal-job save-path session-id created-at updated-at
     current-segment forked-from-session-id forked-from-turn fork-type
     forked-from-fork-point-id worktree-source-root worktree-directory
@@ -405,6 +405,7 @@ The identity and timestamp keywords describe the new materialized child."
            :control-transfer-drains nil
            :root-buffer nil
            :lease nil
+           :ownership-epoch 0
            :lease-renewal-timer nil
            :lease-renewal-job nil
            :save-path save-path

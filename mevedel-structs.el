@@ -210,6 +210,7 @@ workspace."
   control-transfer-drains ; transient predicates that block lease handoff
   root-buffer       ; transient authoritative chat data buffer, or nil
   lease             ; transient portable lease record and live ownership state
+  (ownership-epoch 0) ; transient local authority epoch, not a lease generation
   lease-renewal-timer ; transient timer renewing remote mutation authority
   lease-renewal-job ; transient single-flight asynchronous heartbeat owner
   ;; Persistence -- nil until lazy materialization.
@@ -330,7 +331,7 @@ back to an authority inferred from a path or process locality."
         target))
 
 (defun mevedel-session-adopt-committed-state
-    (session workspace save-path lease lease-renewal-timer publication
+    (session workspace save-path lease ownership-epoch lease-renewal-timer publication
              control-transfer control-transfer-drains root-buffer)
   "Adopt committed durable state into SESSION after a control transfer.
 
@@ -340,6 +341,7 @@ owner alongside the newly committed session state."
   (setf (mevedel-session-workspace session) workspace
         (mevedel-session-save-path session) save-path
         (mevedel-session-lease session) lease
+        (mevedel-session-ownership-epoch session) ownership-epoch
         (mevedel-session-lease-renewal-timer session) lease-renewal-timer
         (mevedel-session-publication session) publication
         (mevedel-session-control-transfer session) control-transfer

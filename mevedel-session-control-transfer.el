@@ -170,7 +170,7 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session-adopt-committed-state
                   "mevedel-structs"
-                  (session workspace save-path lease lease-renewal-timer
+                  (session workspace save-path lease ownership-epoch lease-renewal-timer
                            publication control-transfer control-transfer-drains
                            root-buffer))
 (declare-function mevedel-session-agent-registry "mevedel-structs" (cl-x) t)
@@ -576,6 +576,7 @@ owner's side repoints the visited file here too."
    (mevedel-session-workspace session)
    (mevedel-session-save-path session)
    (mevedel-session-lease session)
+   (mevedel-session-ownership-epoch session)
    (mevedel-session-lease-renewal-timer session)
    publication
    (mevedel-session-control-transfer session)

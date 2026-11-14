@@ -12,7 +12,10 @@
 (require 'mevedel-agent-runtime)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-control-transfer)
+(require 'mevedel-session-durability)
 (require 'mevedel-session-publication)
+(require 'mevedel-session-rewind)
+(require 'mevedel-utilities)
 (require 'mevedel-session-publication-test-helpers
          (file-name-concat (file-name-directory
                             (or load-file-name buffer-file-name))
@@ -33,7 +36,7 @@
                (mevedel-agent-invocation--create
                 :agent-id "busy" :path "/root/busy" :description "busy"
                 :parent-session session :parent-data-buffer root
-                :lease-generation (plist-get (mevedel-session-lease session) :generation)
+                :ownership-epoch (mevedel-session-ownership-epoch session)
                 :transcript-relative-path relative :transcript-status 'running
                 :frozen-configuration
                 (test-mevedel-session-persistence--agent-configuration)))
@@ -128,7 +131,7 @@
             (record (mevedel-agent-record--create
                      :id "busy" :path "/root/busy" :parent-path "/root"
                      :role "default" :activity 'idle :configuration configuration))
-            callbacks cancelled invocation child before old-generation head
+            callbacks cancelled invocation child before old-generation old-epoch head
             (new-request (mevedel-request--create :session session :origin "/root/busy"))
             (publications 0))
        (setf (mevedel-session-agent-reservations session) (list (cons "/root/busy" record)))
@@ -149,8 +152,9 @@
                   :on-invocation (apply-partially #'mevedel-agent-control--record-invocation session record)
                   :on-settle (apply-partially #'mevedel-agent-control--settle session record))))
          (setq child (mevedel-agent-invocation-buffer invocation)
-               old-generation (plist-get (mevedel-session-lease session) :generation))
-         (should (equal old-generation (mevedel-agent-invocation-lease-generation invocation)))
+               old-generation (plist-get (mevedel-session-lease session) :generation)
+               old-epoch (mevedel-session-ownership-epoch session))
+         (should (equal old-epoch (mevedel-agent-invocation-ownership-epoch invocation)))
          (with-current-buffer child
            (goto-char (point-max))
            (insert (propertize "Old unpublished answer.\n" 'gptel 'response))
@@ -170,6 +174,13 @@
          (should (mevedel-session-control-transfer-acquire session root t))
          (should (eq 'owned (plist-get (mevedel-session-lease session) :state)))
          (should-not (equal old-generation (plist-get (mevedel-session-lease session) :generation)))
+         (should (> (mevedel-session-ownership-epoch session) old-epoch))
+         (let ((snapshot (copy-mevedel-session session))
+               (epoch (mevedel-session-ownership-epoch session)))
+           (should (> epoch 0))
+           (setf (mevedel-session-ownership-epoch snapshot) 0)
+           (mevedel-session-rewind--copy-rewind-session-state snapshot session)
+           (should (= epoch (mevedel-session-ownership-epoch session))))
          (setq head (mevedel-session-durability--lease-head
                      (mevedel-session-durability--lease-path (mevedel-session-save-path session))))
          ;; Isolate request-end's identity guard, not a full new provider turn.
@@ -206,11 +217,17 @@
                       :on-invocation (apply-partially #'mevedel-agent-control--record-invocation session fresh-record)
                       :on-settle (apply-partially #'mevedel-agent-control--settle session fresh-record))))
              (should-not (mevedel-agent-conversation-fenced-p fresh))
-             (should (equal (plist-get (mevedel-session-lease session) :generation)
-                            (mevedel-agent-invocation-lease-generation fresh)))
-             ;; Unconfirmed loss with the same epoch remains recoverable.
-             (setf (mevedel-session-lease session)
-                   (plist-put (copy-sequence (mevedel-session-lease session)) :state 'lost))
+             (should (equal (mevedel-session-ownership-epoch session)
+                            (mevedel-agent-invocation-ownership-epoch fresh)))
+             ;; A real renewal error is not evidence of another owner.
+             (let ((warnings 0))
+               (cl-letf (((symbol-function 'mevedel-session-durability--target-time)
+                          (lambda (&rest _) (error "Injected target clock failure")))
+                         ((symbol-function 'mevedel-diagnostic-warning)
+                          (lambda (&rest _) (cl-incf warnings))))
+                 (should-not (mevedel-session-durability-lease-renew session)))
+               (should (= 1 warnings)))
+             (should (eq 'lost (plist-get (mevedel-session-lease session) :state)))
              (should-not (mevedel-agent-conversation-fenced-p fresh))
              (should (mevedel-session-durability-lease-renew session))
              (funcall (cdr (assq fresh callbacks)) "New answer.")
@@ -230,8 +247,8 @@
                (should-not (eq fresh next))
                (should (eq (mevedel-agent-invocation-buffer fresh)
                            (mevedel-agent-invocation-buffer next)))
-               (should (equal (plist-get (mevedel-session-lease session) :generation)
-                              (mevedel-agent-invocation-lease-generation next)))
+               (should (equal (mevedel-session-ownership-epoch session)
+                              (mevedel-agent-invocation-ownership-epoch next)))
                (funcall (cdr (assq next callbacks)) "Followup answer.")
                (should (= 2 publications))
                (should (mevedel-session-control-fs-wait-async 5))))))))))
@@ -249,7 +266,7 @@
               (relative "agents/reentrant.chat.org")
               (invocation (mevedel-agent-invocation--create
                            :agent-id "busy" :path "/root/busy" :parent-session session :parent-data-buffer root
-                           :lease-generation (plist-get (mevedel-session-lease session) :generation)
+                           :ownership-epoch (mevedel-session-ownership-epoch session)
                            :transcript-relative-path relative :transcript-status 'running :frozen-configuration configuration))
               (child (mevedel-agent-conversation-open invocation root))
               (record (mevedel-agent-record--create
@@ -307,6 +324,83 @@
            (with-current-buffer child
              (should (equal-including-properties before (buffer-string)))
              (should (buffer-modified-p)))
+           (should (mevedel-session-control-fs-wait-async 5))))))))
+
+(mevedel-deftest mevedel-agent-runtime--settle/own-continuity (:quiet t)
+  ,test
+  (test)
+  :doc "same-owner latch rotations and expired reclamation preserve settlement"
+  (dolist (transition '(unchanged latch reclaim))
+    (test-mevedel-publication-async--fixture
+     (lambda (session root)
+       (mevedel-tools-register)
+       (test-mevedel-publication-async--wait
+        (lambda () (not (mevedel-session-publication-busy-p session))))
+       (let* ((configuration (test-mevedel-session-persistence--agent-configuration))
+              (record (mevedel-agent-record--create
+                       :id "busy" :path "/root/busy" :parent-path "/root"
+                       :role "default" :activity 'idle :configuration configuration))
+              (publish (symbol-function 'mevedel-session-artifacts-publish-agent-terminal-state))
+              (directory (mevedel-session-durability--lease-path (mevedel-session-save-path session)))
+              (epoch (mevedel-session-ownership-epoch session))
+              (generation (plist-get (mevedel-session-lease session) :generation))
+              callback invocation (publications 0))
+         (should (= generation 1))
+         (setf (mevedel-session-agent-reservations session) (list (cons "/root/busy" record)))
+         (cl-letf (((symbol-function 'mevedel-agent-exec-run)
+                    (lambda (settle _role _description owner buffer)
+                      (setq callback settle)
+                      (setf (mevedel-agent-invocation-runtime-fsm owner)
+                            (gptel-make-fsm :state 'WAIT :info (list :buffer buffer)))))
+                   ((symbol-function 'yes-or-no-p) (lambda (&rest _) (ert-fail "Own continuity asked for takeover")))
+                   ((symbol-function 'y-or-n-p) (lambda (&rest _) (ert-fail "Own continuity asked for takeover"))))
+           (with-current-buffer root
+             (setq invocation
+                   (mevedel-agent-runtime-dispatch
+                    nil "busy" "Retain own work."
+                    :path "/root/busy" :prepared-turn '(:prompt "Retain own work.")
+                    :frozen-configuration configuration
+                    :on-invocation (apply-partially #'mevedel-agent-control--record-invocation session record)
+                    :on-settle (apply-partially #'mevedel-agent-control--settle session record))))
+           (with-current-buffer (mevedel-agent-invocation-buffer invocation)
+             (goto-char (point-max))
+             (insert (propertize "Same-owner answer.\n" 'gptel 'response)))
+           (pcase transition
+             ('latch
+              (should (mevedel-session-durability-set-unsettled-mutation session t))
+              (should (= 2 (plist-get (mevedel-session-durability--lease-head directory) :generation)))
+              (should (mevedel-session-durability-unsettled-mutation-p session))
+              (should (mevedel-session-durability-set-unsettled-mutation session nil))
+              (should (= 3 (plist-get (mevedel-session-durability--lease-head directory) :generation)))
+              (should-not (mevedel-session-durability-unsettled-mutation-p session)))
+             ('reclaim
+              (let ((expired (copy-sequence (mevedel-session-durability--lease-head directory)))
+                    (now (float-time)))
+                (plist-put expired :renewed-at (- now 601))
+                (plist-put expired :expires-at (- now 1))
+                ;; Only disk time changes; renewal must observe and bind the real record.
+                (mevedel-session-durability--write-generation directory expired))
+              (should (mevedel-session-durability-lease-renew session))
+              (should (= 2 (plist-get (mevedel-session-durability--lease-head directory) :generation)))))
+           (should (eq 'owned (plist-get (mevedel-session-lease session) :state)))
+           (should (equal mevedel-session-durability--client-id
+                          (plist-get (mevedel-session-durability--lease-head directory) :client-id)))
+           (should (= epoch (mevedel-session-ownership-epoch session)))
+           (should (= epoch (mevedel-agent-invocation-ownership-epoch invocation)))
+           (should-not (mevedel-agent-conversation-fenced-p invocation))
+           (cl-letf (((symbol-function 'mevedel-session-artifacts-publish-agent-terminal-state)
+                      (lambda (&rest args) (cl-incf publications) (apply publish args))))
+             (funcall callback "Same-owner answer.")
+             (funcall callback "Duplicate answer.")
+             (should (= 1 publications)))
+           (should (mevedel-agent-invocation-runtime-settled-p invocation))
+           (let ((mail (test-mevedel-publication-async--restored-mail session)))
+             (should (= 1 (length mail)))
+             (should (eq 'RESULT (plist-get (car mail) :type))))
+           (should (string-match-p
+                    "Same-owner answer"
+                    (mevedel-session-artifacts-read-artifact
+                     session (mevedel-agent-invocation-transcript-relative-path invocation) t)))
            (should (mevedel-session-control-fs-wait-async 5))))))))
 
 (provide 'test-mevedel-session-takeover-agent-settlement)

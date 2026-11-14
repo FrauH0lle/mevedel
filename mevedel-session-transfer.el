@@ -45,7 +45,7 @@
 (declare-function mevedel-session-durability--finite-nonnegative-number-p
                   "mevedel-session-durability" (value))
 (declare-function mevedel-session-durability--bind-lease
-                  "mevedel-session-durability" (session lease state))
+                  "mevedel-session-durability" (session lease state &optional bytes predecessor))
 (declare-function mevedel-session-durability--bind-latest
                   "mevedel-session-durability" (session latest directory now))
 (declare-function mevedel-session-durability--claim-next

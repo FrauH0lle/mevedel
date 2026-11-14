@@ -49,7 +49,7 @@
 
   :doc "covers every session slot and isolates both clone policies"
   (progn
-    (should (= 104
+    (should (= 105
                (length
                 (cdr (cl-struct-slot-info 'mevedel-session)))))
     (should (mevedel-session-fork--assert-clone-slot-completeness))
@@ -137,6 +137,7 @@
            :control-transfer 'control-transfer
            :control-transfer-drains '(drain)
            :lease 'lease
+           :ownership-epoch 7
            :lease-renewal-timer 'timer
            :lease-renewal-job 'heartbeat
            :current-segment 1
@@ -172,7 +173,9 @@
            :forked-from-session-id "source")))
     (should-not (mevedel-session-note-conversation fork))
     (should (mevedel-session-note-conversation save-as))
+    (should (= 7 (mevedel-session-ownership-epoch source)))
     (dolist (candidate (list fork save-as))
+      (should (= 0 (mevedel-session-ownership-epoch candidate)))
       (should-not (mevedel-session-checkpoint-state candidate))
       (should (eq workspace (mevedel-session-workspace candidate)))
       (should (eq target (mevedel-session-execution-target candidate)))

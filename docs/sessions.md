@@ -1427,10 +1427,12 @@ keeping the stop behind a replenished queue. Renewal failure or this client's
 own expiry alone does not discard queued preparations as though taken over.
 Fenced retained-agent settlement retires the local runtime
 without publishing terminal state or changing its retained transcript buffer.
-Each provider turn records its admitted lease generation: a late terminal callback
+Each provider turn records its admitted local ownership epoch: a late terminal callback
 from that epoch cannot publish transcript or RESULT mail after the parent takes
-control back under another generation. A new turn in the newly owned generation
-publishes normally, and ordinary loss with the same generation remains recoverable.
+control back in a later ownership epoch. A new turn in the newly owned epoch
+publishes normally. Same-owner generation rotations, including remote mutation
+latch changes and reclaiming this client's own expired record, preserve the
+epoch and do not discard an agent's settlement. Ordinary loss remains recoverable.
 Taking control back first completes the old epoch's cancellation step, but does
 not wait for deferred provider cancellation acknowledgements. If publication still
 blocks stopping, acquisition refuses with "Still stopping this session's previous

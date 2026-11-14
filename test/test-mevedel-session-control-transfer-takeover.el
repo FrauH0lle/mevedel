@@ -135,7 +135,7 @@ With SETTLE, run the real terminal settlement callback as well."
   (let* ((cell (list nil))
          (invocation (mevedel-agent-invocation--create
                       :agent-id "busy" :path "/root/busy" :parent-session owner
-                      :lease-generation (plist-get (mevedel-session-lease owner) :generation)
+                      :ownership-epoch (mevedel-session-ownership-epoch owner)
                       :runtime-cancel (lambda ()
                                         (setcar cell t)
                                         (unless settle 'deferred))))
@@ -818,6 +818,43 @@ With SETTLE, run the real terminal settlement callback as well."
            (setf (mevedel-session-publication-active-p owner) nil)
            (unless (mevedel-execution--record-finished-p record)
              (mevedel-execution--discard-record record 'session-ended))))))))
+
+(mevedel-deftest mevedel-session-publication-submit/foreign-admission (:quiet t)
+  ,test
+  (test)
+  :doc "an admission binding the successor as foreign refuses submissions and stops"
+  (dolist (takeover '(nil t))
+    (test-mevedel-takeover--with-session
+     'project
+     (lambda (owner _buffer)
+       (let ((agent (and takeover (test-mevedel-takeover--busy-agent owner)))
+             (preparations 0) acks)
+         (when takeover
+           (let ((successor (car (test-mevedel-takeover--follower owner))))
+             (test-mevedel-takeover--as 'laptop
+                                        (should (mevedel-session-durability-lease-acquire
+                                                 (mevedel-session-save-path owner) "*laptop*" successor nil t)))))
+         (should (eq (not takeover)
+                     (mevedel-session-durability-lease-acquire
+                      (mevedel-session-save-path owner) "*owner*" owner)))
+         (should (eq (if takeover 'foreign 'owned)
+                     (plist-get (mevedel-session-lease owner) :state)))
+         (mevedel-session-publication-submit
+          owner (lambda () (cl-incf preparations) nil)
+          (lambda (ok err) (push (list ok err) acks)))
+         (test-mevedel-publication-async--wait (lambda () acks))
+         (should acks)
+         (if takeover
+             (progn
+               (should (= 0 preparations))
+               (should-not (caar acks))
+               (should (string-search "lease taken over" (error-message-string (cadar acks))))
+               (should (car agent))
+               (should (eq 'following (plist-get (mevedel-session-control-transfer owner) :state))))
+           (should (= 1 preparations))
+           (should (caar acks)))
+         (should-not (mevedel-session-publication-preparations owner))
+         (should (mevedel-session-control-fs-wait-async 5)))))))
 
 (mevedel-deftest mevedel-session-publication-enqueue/renewal-loss (:quiet t)
   ,test
