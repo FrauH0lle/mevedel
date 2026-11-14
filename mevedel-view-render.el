@@ -4526,7 +4526,15 @@ the render so user toggles survive streaming ticks."
             (mevedel-view--render-agent-status)
             (mevedel-view--interaction-rebuild)
             (when (fboundp 'mevedel-note-frame-refresh)
-              (mevedel-note-frame-refresh)))))))))
+              (mevedel-note-frame-refresh))))))
+      ;; A retained tail rewrites only the in-flight turn (pending rows from
+      ;; its start, units from the tail) and the zones below it; anchor
+      ;; readers there without counting the whole transcript per chunk.
+      (and retained-p in-flight-p
+           (cons (min in-flight-p
+                      (or (mevedel-view-stream-in-flight-turn-start-position)
+                          in-flight-p))
+                 (point-max))))))
 
 (defvar-local mevedel-view-render--owner nil
   "Non-nil while this view has an active projection writer.")
