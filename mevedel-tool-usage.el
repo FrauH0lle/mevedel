@@ -69,7 +69,11 @@ Return (:cancel FN); FN cancels every pending provider retrieval."
                            (mevedel-tool-usage--entry backend current readings error))
                      (when (zerop (cl-decf pending))
                        (setq done t)
-                       (funcall callback (list :result (json-serialize entries)))))))
+                       ;; json-serialize returns unibyte UTF-8; decode it so
+                       ;; non-ASCII quota names survive the tool-result bridge.
+                       (funcall callback
+                                (list :result (decode-coding-string
+                                               (json-serialize entries) 'utf-8)))))))
                 cancellers))
         (cl-incf index)))
     (list :cancel (lambda ()

@@ -120,6 +120,10 @@ With DEFERRED, transports answer from a timer.  Return (IMMEDIATE . RESULT)."
                      ((quota . "Codex") (window . "7 days") (used_percent . 30) (resets)))
                    (alist-get 'readings (cadr entries))))
     (should-not mevedel-tool-usage-test--cancelled))
+  :doc "the result is multibyte text, so non-ASCII quota names are valid JSON text"
+  (let ((text (cdr (mevedel-tool-usage-test--call (list claude) claude))))
+    (should (multibyte-string-p text))
+    (should (string-match-p "Weekly · all models" text)))
   :doc "readings carry only allowlisted fields and no account, plan, session or credential"
   (let ((text (cdr (mevedel-tool-usage-test--call (list codex claude) codex))))
     (should-not (string-match-p "SECRET\\|plus\\|max\\|Cost\\|session\\|credit\\|account\\|Bearer" text))
