@@ -238,6 +238,13 @@ parent identity."
      (plist-get transaction :session)
      (plist-get transaction :parent-publication)
      staging-path)
+    ;; Execution output is plain session storage outside the publication.
+    (let ((spool (file-name-concat (plist-get transaction :old-save-path)
+                                   "tool-results" "executions")))
+      (when (file-directory-p spool)
+        (copy-directory spool (file-name-concat staging-path "tool-results"
+                                                "executions")
+                        t t t)))
     (mevedel-session-codec-write
      (mevedel-session-artifacts-sidecar-path staging-path)
      (mevedel-session-artifacts--live-sidecar child buffer))
