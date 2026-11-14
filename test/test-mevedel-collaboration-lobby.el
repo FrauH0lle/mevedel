@@ -189,7 +189,7 @@ the session ended up open."
 
 (defun mevedel-collaboration-lobby-test--identity (process)
   "Return PROCESS's current OS identity, skipping where none is available."
-  (or (mevedel-session-persistence--pid-identity (process-id process))
+  (or (mevedel-session-durability--pid-identity (process-id process))
       (ert-skip "Process identity is unavailable on this host")))
 
 (defun mevedel-collaboration-lobby-test--other-identity (identity &optional boot)
@@ -212,7 +212,7 @@ after a reboot; otherwise keep the boot and move the start earlier."
   (let ((holder (plist-get outcome :holder)))
     (should (equal (emacs-pid) (plist-get holder :pid)))
     (should (equal (system-name) (plist-get holder :hostname)))
-    (should (equal (mevedel-session-persistence--pid-identity (emacs-pid))
+    (should (equal (mevedel-session-durability--pid-identity (emacs-pid))
                    (plist-get holder :process-identity)))))
 
 (defun mevedel-collaboration-lobby-test--should-refuse (outcome &optional message)

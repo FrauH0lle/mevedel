@@ -228,6 +228,123 @@ short enough that a picker row stays readable."
     (when (string-match-p "\\S-" name)
       (mevedel--truncate-display (string-trim name) 64))))
 
+(defun mevedel-session-durability--pid-alive-p (pid)
+  "Return non-nil unless PID is provably absent from the current host.
+An unavailable process list is not evidence that a holder is dead."
+  ;; Process inspection follows `default-directory' through file handlers.
+  ;; These PIDs belong to the Emacs host, not a remote workspace.
+  (let ((default-directory "/"))
+    (condition-case nil
+        (let ((pids (list-system-processes)))
+          (or (not (and (integerp pid) (> pid 0)))
+              (null pids)
+              (memq pid pids)))
+      (error t))))
+
+(defconst mevedel-session-durability--process-identity-regexp
+  (concat "\\`[0-9a-f]\\{8\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-"
+          "[0-9a-f]\\{4\\}-[0-9a-f]\\{12\\}:\\(?:0\\|[1-9][0-9]*\\)\\'")
+  "Shape of a Linux boot ID and process start tick count.")
+
+(defun mevedel-session-durability--pid-identity (pid)
+  "Return PID's clock-independent process identity on this host, or nil.
+Linux supplies a boot UUID and the process start ticks since boot.  Unlike
+wall-clock start times, these survive time-zone and clock changes.  Hosts
+without this evidence cannot prove PID reuse and keep live holders active."
+  (when (and (integerp pid) (> pid 0))
+    (let ((default-directory "/"))
+      (condition-case nil
+          (let* ((boot (with-temp-buffer
+                         (insert-file-contents "/proc/sys/kernel/random/boot_id")
+                         (string-trim (buffer-string))))
+                 (case-fold-search nil)
+                 (start
+                  (with-temp-buffer
+                    (insert-file-contents
+                     (file-name-concat "/proc" (number-to-string pid) "stat"))
+                    ;; The command (field 2) can contain spaces and closing
+                    ;; parentheses.  Only the last closing delimiter is safe.
+                    (goto-char (point-max))
+                    (when (search-backward ") " nil t)
+                      (forward-char 2)
+                      ;; The remaining fields start at 3; starttime is 22.
+                      (nth 19 (split-string
+                               (buffer-substring-no-properties
+                                (point) (point-max)))))))
+                 (identity (and start (concat boot ":" start))))
+            (and identity
+                 (string-match-p mevedel-session-durability--process-identity-regexp
+                                 identity)
+                 identity))
+        (error nil)))))
+
+(defvar mevedel-session-durability--host-cache nil
+  "Cons of the PID that computed `mevedel-session-durability--host' and its value.
+Keyed by PID so a dumped or forked image never reuses its creator's identity.")
+
+(defun mevedel-session-durability--host ()
+  "Return this Emacs host's boot, machine and PID-namespace identity, or nil.
+Only within one such identity can a recorded PID be checked for liveness."
+  (unless (eql (car mevedel-session-durability--host-cache) (emacs-pid))
+    (setq mevedel-session-durability--host-cache
+          (cons (emacs-pid)
+                (let ((default-directory "/"))
+                  (ignore-errors
+                    (let ((namespace (file-symlink-p "/proc/self/ns/pid"))
+                          (read (lambda (file)
+                                  (with-temp-buffer
+                                    (insert-file-contents file)
+                                    (string-trim (buffer-string))))))
+                      (and (stringp namespace)
+                           (format "%s/%s/%s"
+                                   (funcall read "/proc/sys/kernel/random/boot_id")
+                                   (funcall read "/etc/machine-id")
+                                   namespace))))))))
+  (cdr mevedel-session-durability--host-cache))
+
+(defun mevedel-session-durability--process-holder (pid)
+  "Return this user's PID as a host-scoped holder identity, or nil.
+Nil means the identity is unprovable on this host."
+  (when-let* ((host (mevedel-session-durability--host))
+              (process (mevedel-session-durability--pid-identity pid)))
+    (list :host host :uid (user-uid) :pid pid :process process)))
+
+(defvar mevedel-session-durability--holder-cache nil
+  "Cons of this Emacs's PID and its holder identity.")
+
+(defun mevedel-session-durability--holder ()
+  "Return this client's holder identity, recorded in every lease it writes."
+  (unless (eql (car mevedel-session-durability--holder-cache) (emacs-pid))
+    (setq mevedel-session-durability--holder-cache
+          (cons (emacs-pid)
+                (mevedel-session-durability--process-holder (emacs-pid)))))
+  (cdr mevedel-session-durability--holder-cache))
+
+(defun mevedel-session-durability--holder-dead-p (lease)
+  "Return non-nil when LEASE's holder process provably died on this host.
+The record must name this host's boot, machine and PID namespace and this
+user, and its PID must be gone or reused.  The process list is complete only
+for one's own processes: `hidepid' or `ProtectProc' hide other users'.
+Missing, foreign or unreadable evidence is uncertain liveness and returns
+nil, so such leases wait for expiry."
+  (let* ((holder (plist-get lease :holder))
+         (holder (and (proper-list-p holder) holder))
+         (pid (plist-get holder :pid))
+         (process (plist-get holder :process))
+         (host (mevedel-session-durability--host)))
+    (and host
+         (equal host (plist-get holder :host))
+         (eql (user-uid) (plist-get holder :uid))
+         (natnump pid) (> pid 0)
+         ;; Malformed identity evidence cannot prove reuse of a live PID.
+         (stringp process)
+         (let ((case-fold-search nil))
+           (string-match-p mevedel-session-durability--process-identity-regexp
+                           process))
+         (or (not (mevedel-session-durability--pid-alive-p pid))
+             (let ((current (mevedel-session-durability--pid-identity pid)))
+               (and current (not (equal current process))))))))
+
 (defcustom mevedel-session-durability-accept-target-storage nil
   "Non-nil stores project state on remote targets without asking first.
 Before its first write to a remote execution target, mevedel asks once
@@ -513,6 +630,8 @@ defaults to GENERATION."
         ;; now" and nothing else.  One session directory is reached from
         ;; several machines, so name the holder in terms the user shares.
         :host (mevedel-session-durability--client-host)
+        ;; Lets a later client on this host reclaim a crashed holder at once.
+        :holder (mevedel-session-durability--holder)
         :renewed-at now
         :expires-at (+ now mevedel-session-lease-seconds)
         :buffer buffer-name))
@@ -1177,7 +1296,9 @@ already taken for the surrounding operation."
   "Acquire SESSION-DIR's portable lease for BUFFER-NAME.
 
 Return non-nil when this client owns mutation authority and nil when another
-unexpired client owns it.  Expired takeover requires explicit confirmation.
+unexpired client owns it.  Expired takeover requires explicit confirmation,
+except from a holder that provably died on this host, which is reclaimed at
+once even before expiry (see `mevedel-session-durability--holder-dead-p').
 When SESSION is non-nil, record the resulting lease state on it, after
 serializing behind its asynchronous publication: see
 `mevedel-session-durability--gate' for TOKEN."
@@ -1230,7 +1351,13 @@ serializing behind its asynchronous publication: see
            ((and (memq (plist-get existing :status)
                        '(claiming active publishing))
                  (> (plist-get existing :expires-at) now))
-            nil)
+            ;; A holder that provably died on this host protects no write in
+            ;; flight.  A publishing holder's child writer may outlive it, so
+            ;; only expiry ends that lease.
+            (and (not (eq 'publishing (plist-get existing :status)))
+                 (mevedel-session-durability--holder-dead-p existing)
+                 (mevedel-session-durability--claim-next
+                  directory existing buffer-name)))
            ((eq 'released (plist-get existing :status))
             (let ((fence
                    (mevedel-session-transfer-release-fence
@@ -1251,6 +1378,11 @@ serializing behind its asynchronous publication: see
            ((and (equal mevedel-session-durability--client-id
                         (plist-get existing :client-id))
                  (memq (plist-get existing :status) '(claiming active)))
+            (mevedel-session-durability--claim-next
+             directory existing buffer-name))
+           ;; Nobody needs to confirm a takeover from a provably dead holder.
+           ((and (memq (plist-get existing :status) '(claiming active))
+                 (mevedel-session-durability--holder-dead-p existing))
             (mevedel-session-durability--claim-next
              directory existing buffer-name))
            ((not
@@ -1353,7 +1485,10 @@ The returned observations belong to this call only, never a status cache."
                              'foreign)
                             ((or (null head) (eq (plist-get head :status) 'released))
                              'available)
-                            ((<= (plist-get head :expires-at) now) 'expired)
+                            ((or (<= (plist-get head :expires-at) now)
+                                 (and (memq (plist-get head :status) '(active claiming))
+                                      (mevedel-session-durability--holder-dead-p head)))
+                             'expired)
                             ((equal mevedel-session-durability--client-id
                                     (plist-get head :client-id)) 'owned)
                             (t 'foreign)))
@@ -1386,15 +1521,17 @@ The returned observations belong to this call only, never a status cache."
 (defun mevedel-session-durability--abandoned-head-p (directory head now)
   "Return non-nil when lease HEAD of DIRECTORY has no owner at target time NOW.
 A missing head, a release not reserved for control transfer, or an expired
-active or claiming head qualifies.  Unresolved mutation and publishing never
-do: their evidence needs an explicit takeover."
+active or claiming head qualifies, as does one whose holder provably died on
+this host.  Unresolved mutation and publishing never do: their evidence needs
+an explicit takeover."
   (or (null head)
       (and (not (plist-get head :unsettled-mutation))
            (or (and (eq 'released (plist-get head :status))
                     (not (mevedel-session-transfer-release-fence
                           directory (plist-get head :generation))))
                (and (memq (plist-get head :status) '(active claiming))
-                    (<= (plist-get head :expires-at) now))))))
+                    (or (<= (plist-get head :expires-at) now)
+                        (mevedel-session-durability--holder-dead-p head)))))))
 
 (defun mevedel-session-durability--delete-owned-session (session-dir lease)
   "Delete SESSION-DIR only under LEASE's exact, newest, unexpired authority.
