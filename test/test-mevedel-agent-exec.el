@@ -1137,3 +1137,45 @@ fire-count and payload."
 
 (provide 'test-mevedel-agent-exec)
 ;;; test-mevedel-agent-exec.el ends here
+
+(ert-deftest mevedel-agent-exec-run/codex-cache-key-in-payload ()
+  "The realized Codex agent payload carries `<session-id>:<agent-id>'."
+  (let* ((gptel--known-backends nil)
+         (backend (gptel-make-openai-oauth "Agent Codex"))
+         (agent-buf (generate-new-buffer " *mev-agent-cache*"))
+         (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent" :agent-id "a--11111111"
+               :agent (mevedel-agent-default)))
+         (orig (symbol-function 'gptel-request))
+         (gptel--openai-oauth-token-file (make-temp-file "mev-token-"))
+         key)
+    ;; A current token, so the real `mevedel-auth-assert-ready' passes.
+    (with-temp-file gptel--openai-oauth-token-file
+      (prin1 (list :access_token "current" :expires_at (+ (float-time) 3600))
+             (current-buffer)))
+    (unwind-protect
+        (with-temp-buffer
+          ;; As `mevedel-agent-conversation-open' leaves the agent buffer.
+          (with-current-buffer agent-buf
+            (setq-local mevedel--session
+                        (mevedel-session--create :session-id "root-id")
+                        mevedel--agent-invocation inv))
+          (let ((mevedel-agents--specs nil)
+                (gptel-backend backend) (gptel-model 'gpt-5.5)
+                (gptel-stream nil) (gptel-use-tools nil) (gptel--fsm-last nil))
+            (setf (mevedel-agent-invocation-frozen-configuration inv)
+                  (mevedel-agent-exec-freeze-configuration
+                   "default" inv (list :backend backend :model 'gpt-5.5 :effort nil)))
+            ;; Run the real agent send; only gptel's dispatch is cut short
+            ;; by :dry-run, after its prompt transforms realize the payload.
+            (cl-letf (((symbol-function 'gptel-request)
+                       (lambda (_prompt &rest args)
+                         (let ((fsm (apply orig "hi" :dry-run t args)))
+                           (setq key (plist-get (plist-get (gptel-fsm-info fsm) :data)
+                                                :prompt_cache_key))
+                           fsm)))
+                      ((symbol-function 'gptel--update-status) #'ignore))
+              (mevedel-agent-exec-run #'ignore "default" "task" inv agent-buf))
+            (should (equal "root-id:a--11111111" key))))
+      (delete-file gptel--openai-oauth-token-file)
+      (kill-buffer agent-buf))))
