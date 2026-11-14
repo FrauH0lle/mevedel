@@ -111,9 +111,15 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
   const writeToken = randomBytes(16);
   const key = await webcrypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt', 'decrypt']);
   const received = [];
+  // Every sealed frame the origin sent: { connection, frame, bytes }, as a
+  // recording relay keeps them.
+  const sent = [];
+  const writers = new Map();
+  let held = null;
   let connections = 0;
   const sockets = new Set();
   const senders = new Set();
+  const repliers = new Set();
   const goodbyes = new Set();
   const examples = (name) => ({ ...fixture(name).bindings, ...bindings });
 
@@ -145,6 +151,7 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
   const server = http.createServer((_req, res) => { res.writeHead(404); res.end(); });
   server.on('upgrade', (req, socket) => {
     connections++;
+    const connection = connections;
     sockets.add(socket);
     socket.on('close', () => sockets.delete(socket));
     socket.on('error', () => {});
@@ -161,9 +168,23 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
       closeWith(4004);
       return;
     }
-    const send = async (frame) => { for (const f of wire(frame)) socket.write(wsFrame(2, await seal(f))); };
-    senders.add(send);
-    socket.on('close', () => senders.delete(send));
+    // A frame for this consumer alone carries back its nonce; broadcasts do not.
+    let nonce = null;
+    const sendWire = async (frame, back) => {
+      for (const f of wire(frame)) {
+        const out = back ? { ...f, nonce: back } : f;
+        const bytes = await seal(out);
+        sent.push({ connection, frame: out, bytes });
+        socket.write(wsFrame(2, bytes));
+      }
+    };
+    const send = (frame) => sendWire(frame, nonce);
+    senders.add(sendWire);
+    repliers.add(send);
+    writers.set(connection, (bytes) => socket.write(wsFrame(2, bytes)));
+    socket.on('close', () => {
+      senders.delete(sendWire); repliers.delete(send); writers.delete(connection);
+    });
     // Bind the connection as the origin does; unbound frames are dropped.
     const challenge = randomBytes(16).toString('base64url');
     let lastSeq = 0;
@@ -188,7 +209,8 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
         const bound = await unseal(payload);
         if (!bound || bound.challenge !== challenge || !(bound.seq > lastSeq)) return;
         lastSeq = bound.seq;
-        const { challenge: _challenge, seq: _seq, ...frame } = bound;
+        if (!nonce && typeof bound.nonce === 'string') nonce = bound.nonce;
+        const { challenge: _challenge, seq: _seq, nonce: _nonce, ...frame } = bound;
         if (frame.t === 'editing') {
           const parts = (transfers.get(frame.reqId) ?? '') + frame.data;
           if (parts.length < frame.total) { transfers.set(frame.reqId, parts); return; }
@@ -221,6 +243,7 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
         return;
       }
       if (frame.t === 'editing') {
+        await held;
         if (mode === 'goodbye') {
           await leave(reason);
           return;
@@ -251,13 +274,22 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
     roomId,
     writeToken: b64url(writeToken),
     received,
+    sent,
     get connections() { return connections; },
+    /* Write recorded sealed BYTES to CONNECTION, as a replaying relay can. */
+    inject: (connection, bytes) => writers.get(connection)(bytes),
+    /* Hold editing answers until the returned function is called. */
+    hold: () => {
+      let release;
+      held = new Promise((resolve) => { release = resolve; });
+      return () => { held = null; release(); };
+    },
     /* Send every connected consumer a change event BODY, as the origin does. */
     event: async (body) => {
       for (const send of senders) await send({ t: 'editing', reqId: 'event', body });
     },
-    /* Send every connected consumer the raw FRAME, bypassing chunking. */
-    raw: async (frame) => { for (const send of senders) await send(frame); },
+    /* Send every connected consumer the raw FRAME as a reply to it, bypassing chunking. */
+    raw: async (frame) => { for (const send of repliers) await send(frame); },
     goodbye: async (why, { back = false } = {}) => {
       await Promise.all([...goodbyes].map((leave) => leave(why)));
       if (!back) mode = 'absent';
