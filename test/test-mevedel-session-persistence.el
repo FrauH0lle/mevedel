@@ -2523,12 +2523,14 @@
                    (test-mevedel-session-persistence--execution-tool-block
                     "stale-call"
                     '(:execution-id "exec-stale" :state running
-                      :status success :live-execution-p t)))
+                      :status success :live-execution-p t
+                      :output-tail "你好 😀 café")))
                   (insert
                    (test-mevedel-session-persistence--execution-tool-block
                     "tail-call"
                     '(:execution-id "exec-tail" :state running
-                      :status success :live-execution-p t)))
+                      :status success :live-execution-p t
+                      :output-tail "你好 😀 café")))
                   (mevedel-session-artifacts-stabilize-gptel-bounds)
                   (mevedel-session-artifacts-save session buf)
                   (mevedel-session-artifacts-rotate-segment
@@ -2579,11 +2581,15 @@
                   (should (string-match-p ":state lost"
                                           (buffer-string))))
                 (with-temp-buffer
-                  (insert (mevedel-session-artifacts-read-artifact
-                           (buffer-local-value 'mevedel--session restored)
-                           "segment-0001.chat.org" t))
+                  (insert (decode-coding-string
+                           (mevedel-session-artifacts-read-artifact
+                            (buffer-local-value 'mevedel--session restored)
+                            "segment-0001.chat.org" t)
+                           'utf-8-unix))
                   (goto-char (point-min))
-                  (should (= 2 (how-many ":state archived"))))
+                  (should (= 2 (how-many ":state archived")))
+                  ;; Non-ASCII output survives the repair unescaped.
+                  (should (= 2 (how-many (regexp-quote "你好 😀 café")))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)
             (test-mevedel-session-persistence--release-and-kill

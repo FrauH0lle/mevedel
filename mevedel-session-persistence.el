@@ -510,8 +510,11 @@ Portable transcripts live in the publication, not at PATH itself."
   (if (mevedel-session-codec-portable-authority-p session)
       (when (mevedel-session-artifacts-artifact-present-p
              session (file-name-nondirectory path) t)
-        (mevedel-session-artifacts-read-artifact
-         session (file-name-nondirectory path) t))
+        ;; Published artifacts are literal bytes; transcripts are UTF-8.
+        (decode-coding-string
+         (mevedel-session-artifacts-read-artifact
+          session (file-name-nondirectory path) t)
+         'utf-8-unix))
     (when (file-regular-p path)
       (with-temp-buffer
         (insert-file-contents path)
@@ -568,7 +571,7 @@ of writing PATH directly."
                artifact-callback
                (list :path path
                      :content (buffer-string)
-                     :coding (or buffer-file-coding-system 'utf-8-unix)))
+                     :coding 'utf-8-unix))
             (mevedel-session-persistence-write-current-buffer-atomically
              path)))
         count))))
