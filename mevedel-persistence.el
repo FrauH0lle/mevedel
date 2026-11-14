@@ -1680,8 +1680,9 @@ a listing): resolving a workspace must not open a connection."
   "Durably record that SESSION is rewinding to SURVIVING-TURN turns.
 The Rewind discards SESSION's activity from turn PRUNE-FROM on.  Call
 before Rewind's first irreversible step.  Return non-nil when an intent
-was recorded, nil when the workspace keeps no active store.  Signal when
-the intent cannot be recorded, which aborts the Rewind."
+was recorded or when the store file does not exist yet (`none': nothing
+to record, memory holds the only copy), nil when the workspace keeps no
+store.  Signal when the intent cannot be recorded, which aborts the Rewind."
   (let ((workspace (mevedel-session-workspace session))
         (tries 0) result)
     (when (mevedel-instruction-store--applicable-p workspace)
@@ -1716,14 +1717,14 @@ the intent cannot be recorded, which aborts the Rewind."
                  (setq result 'recorded)))))))
       (unless result
         (error "Instruction store kept changing while recording a Rewind"))
-      (eq result 'recorded))))
+      result)))
 
 (defun mevedel-instruction-store-rewind-end (session committed)
   "Resolve SESSION's Rewind intent after its outcome is known.
 COMMITTED non-nil means the Rewind passed its commit point: prune the
 session's discarded activity from the store, then reinstall source
-presentations with held-back writes replayed over that store.  The historical
-snapshot is not the workspace's current set.  Otherwise drop the intent."
+presentations with held-back writes replayed over that store.  Without a
+store file, prune the live notes directly.  Otherwise drop the intent."
   (let ((workspace (mevedel-session-workspace session)))
     (when (mevedel-instruction-store--applicable-p workspace)
       (if committed
@@ -1754,9 +1755,14 @@ snapshot is not the workspace's current set.  Otherwise drop the intent."
                       (mevedel-instruction-store--observe
                        workspace nil
                        (plist-get current :data))
-                      (setq settled t))))
+                      (setq settled t))
+                  ;; No store file: memory is the only copy of the notes.
+                  (when (eq 'absent (plist-get current :status))
+                    (mevedel-notes-rewind-live
+                     workspace (mevedel-session-session-id session)
+                     (or (mevedel-session-turn-count session) 0)))))
               (unless settled
-                ;; Memory may hold the historical snapshot's presentations.
+                ;; Memory may hold presentations no store record matches.
                 ;; Without a base, the next write cannot delete anything.
                 (mevedel-instruction-store--forget workspace))))
         (mevedel-instruction-store--settle
