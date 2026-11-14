@@ -10,6 +10,7 @@
 
 ;;; Code:
 
+(require 'mevedel-telemetry)
 (require 'mevedel-utilities)
 
 (eval-when-compile
@@ -631,16 +632,15 @@ REASON is the wake outcome, or `cancelled' when omitted."
       (cancel-timer timer))
     (when-let* ((release (mevedel-agent-waiter-release waiter)))
       (funcall release))
-    (when (fboundp 'mevedel-telemetry-record)
-      (mevedel-telemetry-record
-       session 'agent-wait-ended
-       :agent-path path
-       :outcome (or reason 'cancelled)
-       :duration-ms
-       (and (numberp (mevedel-agent-waiter-started-at waiter))
-            (round (* 1000.0
-                      (- (float-time)
-                         (mevedel-agent-waiter-started-at waiter)))))))
+    (mevedel-telemetry-record
+     session 'agent-wait-ended
+     :agent-path path
+     :outcome (or reason 'cancelled)
+     :duration-ms
+     (and (numberp (mevedel-agent-waiter-started-at waiter))
+          (round (* 1000.0
+                    (- (float-time)
+                       (mevedel-agent-waiter-started-at waiter))))))
     t))
 
 (defun mevedel-agent-control--wake (session path reason)
@@ -671,10 +671,9 @@ Return the caller path when suspended, and nil after an immediate release."
     (let ((path (mevedel-agent-control-current-path session)))
       (cond
        ((mevedel-agent-control--mailbox session path)
-        (when (fboundp 'mevedel-telemetry-record)
-          (mevedel-telemetry-record
-           session 'agent-wait-immediate
-           :agent-path path :outcome 'mailbox))
+        (mevedel-telemetry-record
+         session 'agent-wait-immediate
+         :agent-path path :outcome 'mailbox)
         (funcall callback 'mailbox)
         nil)
        ((mevedel-agent-control--waiter session path)
@@ -683,10 +682,9 @@ Return the caller path when suspended, and nil after an immediate release."
         (let ((waiter (mevedel-agent-waiter--create
                        :callback callback :started-at (float-time))))
           (mevedel-agent-control--set-waiter session path waiter)
-          (when (fboundp 'mevedel-telemetry-record)
-            (mevedel-telemetry-record
-             session 'agent-wait-started
-             :agent-path path :timeout-ms timeout))
+          (mevedel-telemetry-record
+           session 'agent-wait-started
+           :agent-path path :timeout-ms timeout)
           (setf (mevedel-agent-waiter-release waiter)
                 (mevedel-agent-control-block-turn session path 'waiting))
           (condition-case err

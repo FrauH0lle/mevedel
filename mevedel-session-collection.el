@@ -12,11 +12,10 @@
 (require 'mevedel-session-publication)
 (require 'mevedel-journal-worker)
 (require 'mevedel-structs)
+(require 'mevedel-telemetry)
 (require 'mevedel-transport)
 
 ;; `mevedel-telemetry'
-(declare-function mevedel-telemetry-record "mevedel-telemetry" (session event &rest props))
-
 ;; `mevedel-utilities'
 (declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
 (declare-function mevedel-diagnostic-warning "mevedel-utilities" (scope type message &optional level buffer-name))
@@ -49,18 +48,17 @@ OUTCOME is `completed', `proof-failed' or `failed'.  Collection used to end
 silently, so a session that never reclaimed anything looked no different
 from one that did."
   (let ((plan (plist-get job :plan)))
-    (when (fboundp 'mevedel-telemetry-record)
-      (mevedel-telemetry-record
-       session 'publication-collection
-       :outcome (if (and (eq outcome 'completed) (plist-get plan :proof-failed))
-                    'proof-failed
-                  outcome)
-       :candidate-count (length (plist-get plan :candidates))
-       :retained-count (plist-get plan :retained-count)
-       :deleted-file-count (or (plist-get plan :deleted-files) 0)
-       :deleted-directory-count (or (plist-get plan :deleted-directories) 0)
-       :duration-ms (round (* 1000 (- (float-time)
-                                      (or (plist-get job :started-at) (float-time))))))))
+    (mevedel-telemetry-record
+     session 'publication-collection
+     :outcome (if (and (eq outcome 'completed) (plist-get plan :proof-failed))
+                  'proof-failed
+                outcome)
+     :candidate-count (length (plist-get plan :candidates))
+     :retained-count (plist-get plan :retained-count)
+     :deleted-file-count (or (plist-get plan :deleted-files) 0)
+     :deleted-directory-count (or (plist-get plan :deleted-directories) 0)
+     :duration-ms (round (* 1000 (- (float-time)
+                                    (or (plist-get job :started-at) (float-time)))))))
   (mevedel-session-collection-cancel session))
 
 (defun mevedel-session-collection--on-kill ()

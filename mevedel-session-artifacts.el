@@ -10,6 +10,8 @@
 (require 'mevedel-session-bounds)
 (require 'mevedel-ptc-checkpoint)
 (require 'mevedel-session-checkpoint)
+(require 'mevedel-telemetry)
+(require 'mevedel-tool-render-data)
 (require 'mevedel-transcript-source)
 
 (eval-when-compile
@@ -242,12 +244,6 @@
 (defvar mevedel--session)
 
 ;; `mevedel-telemetry'
-(declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
-(declare-function mevedel-telemetry-measure "mevedel-telemetry"
-                  (session event min-ms function &rest props))
-(declare-function mevedel-telemetry-record "mevedel-telemetry" (session event &rest props))
-(declare-function mevedel-telemetry-start "mevedel-telemetry" (session event &rest props))
-
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript--org-block-depths-before
                   "mevedel-transcript" (pos &optional start tool-depth summary-depth))
@@ -1135,7 +1131,7 @@ whitespace allowed, any trailing text after the render-data marker."
       (goto-char from)
       (let ((closed t)
             (regexp (concat "^[ \t]*#\\+begin_tool\\b"
-                            "\\|^<!-- mevedel-render-data -->")))
+                            "\\|^" (regexp-quote mevedel-tool-render-data-open))))
         (while (and closed (< (point) to) (re-search-forward regexp to t))
           (let ((marker (match-beginning 0)))
             (if (eq (char-after marker) ?<)
@@ -3589,185 +3585,181 @@ successor segment."
                      session 'segment-rotation
                      :old-segment old-current-segment
                      :new-segment (1+ old-current-segment)))))
-        (condition-case err
-            (progn
-              (when (fboundp 'mevedel-telemetry-record)
+          (condition-case err
+              (progn
                 (mevedel-telemetry-record
                  session 'segment-rotation-stage :stage 'old-save-start
-                 :old-segment old-current-segment))
-              (mevedel-session-artifacts-refresh-visited-file-modtime-or-error
-               (when (and pending-text
-                          (string-suffix-p
-                           (substring-no-properties pending-text)
-                           (buffer-substring-no-properties
-                            (point-min) (point-max))))
-                 (buffer-substring-no-properties
-                  (point-min) (- (point-max) (length pending-text)))))
-              (unless portable-p
-                (setq old-file-bytes
-                      (mevedel-session-artifacts--segment-file-snapshot old-segment)))
-              (when pending-text
-                (let ((inhibit-read-only t))
-                  (mevedel-session-artifacts--delete-trailing-text
-                   pending-text)))
-              (unless portable-p
-                (when (buffer-modified-p)
-                  (mevedel-session-artifacts-save-buffer-silently)))
-              (setq checkpoint (mevedel-session-checkpoint-capture session "/root")
-                    old-freeze-tick (buffer-chars-modified-tick))
-              (setq old-publish-text
-                    (mevedel-session-artifacts-finalized-segment-text
-                     (buffer-substring (point-min) (point-max))
-                     buffer-file-coding-system session old-current-segment))
-              (when (fboundp 'mevedel-telemetry-record)
+                 :old-segment old-current-segment)
+                (mevedel-session-artifacts-refresh-visited-file-modtime-or-error
+                 (when (and pending-text
+                            (string-suffix-p
+                             (substring-no-properties pending-text)
+                             (buffer-substring-no-properties
+                              (point-min) (point-max))))
+                   (buffer-substring-no-properties
+                    (point-min) (- (point-max) (length pending-text)))))
+                (unless portable-p
+                  (setq old-file-bytes
+                        (mevedel-session-artifacts--segment-file-snapshot old-segment)))
+                (when pending-text
+                  (let ((inhibit-read-only t))
+                    (mevedel-session-artifacts--delete-trailing-text
+                     pending-text)))
+                (unless portable-p
+                  (when (buffer-modified-p)
+                    (mevedel-session-artifacts-save-buffer-silently)))
+                (setq checkpoint (mevedel-session-checkpoint-capture session "/root")
+                      old-freeze-tick (buffer-chars-modified-tick))
+                (setq old-publish-text
+                      (mevedel-session-artifacts-finalized-segment-text
+                       (buffer-substring (point-min) (point-max))
+                       buffer-file-coding-system session old-current-segment))
                 (mevedel-telemetry-record
                  session 'segment-rotation-stage :stage 'old-saved
-                 :old-segment old-current-segment))
-              ;; 2. Advance segment counter.
-              (cl-incf (mevedel-session-current-segment session))
-              ;; 3. Build the new segment without changing visited-file state.
-              (setq new-segment
-                    (mevedel-session-artifacts-segment-path
-                     (mevedel-session-save-path session)
-                     (mevedel-session-current-segment session)))
-              (let ((coding-system buffer-file-coding-system))
-                (setq new-text
-                      (with-temp-buffer
-                        (setq buffer-file-coding-system coding-system)
-                        (org-mode)
-                        ;; 4. Build the persisted body in isolation.
-                        (mevedel-session-artifacts--insert-segment-header
-                         session)
-                        (when truncated-tail-p
-                          (org-entry-put
-                           (point-min) "MEVEDEL_SEGMENT_TRUNCATED_TAIL" "t"))
-                        (when (> tail-prompt-count 0)
-                          (org-entry-put
-                           (point-min) "MEVEDEL_SEGMENT_TAIL_PROMPTS"
-                           (number-to-string tail-prompt-count)))
-                        (goto-char (point-max))
-                        (unless (bolp) (insert "\n"))
-                        (insert "\n")
-                        (insert
-                         (mevedel-session-artifacts-summary-block summary))
-                        (when tail-text
+                 :old-segment old-current-segment)
+                ;; 2. Advance segment counter.
+                (cl-incf (mevedel-session-current-segment session))
+                ;; 3. Build the new segment without changing visited-file state.
+                (setq new-segment
+                      (mevedel-session-artifacts-segment-path
+                       (mevedel-session-save-path session)
+                       (mevedel-session-current-segment session)))
+                (let ((coding-system buffer-file-coding-system))
+                  (setq new-text
+                        (with-temp-buffer
+                          (setq buffer-file-coding-system coding-system)
+                          (org-mode)
+                          ;; 4. Build the persisted body in isolation.
+                          (mevedel-session-artifacts--insert-segment-header
+                           session)
+                          (when truncated-tail-p
+                            (org-entry-put
+                             (point-min) "MEVEDEL_SEGMENT_TRUNCATED_TAIL" "t"))
+                          (when (> tail-prompt-count 0)
+                            (org-entry-put
+                             (point-min) "MEVEDEL_SEGMENT_TAIL_PROMPTS"
+                             (number-to-string tail-prompt-count)))
+                          (goto-char (point-max))
                           (unless (bolp) (insert "\n"))
-                          (insert tail-text))
-                        (when archive-text
-                          (insert archive-text))
-                        (mevedel-session-artifacts-stabilize-gptel-bounds)
-                        (when pending-text
-                          (unless (bolp) (insert "\n"))
-                          (setq pending-position (point)))
-                        (insert "\n")
-                        (buffer-string))))
-              ;; 5. Publish, then repoint the canonical live buffer.
-              (when (fboundp 'mevedel-telemetry-record)
+                          (insert "\n")
+                          (insert
+                           (mevedel-session-artifacts-summary-block summary))
+                          (when tail-text
+                            (unless (bolp) (insert "\n"))
+                            (insert tail-text))
+                          (when archive-text
+                            (insert archive-text))
+                          (mevedel-session-artifacts-stabilize-gptel-bounds)
+                          (when pending-text
+                            (unless (bolp) (insert "\n"))
+                            (setq pending-position (point)))
+                          (insert "\n")
+                          (buffer-string))))
+                ;; 5. Publish, then repoint the canonical live buffer.
                 (mevedel-telemetry-record
                  session 'segment-rotation-stage :stage 'new-publish-start
-                 :new-segment (mevedel-session-current-segment session)))
-              (setf (mevedel-session-updated-at session)
-                    (format-time-string "%FT%H-%M-%S"))
-              (setq checkpoint
-                    (mevedel-session-checkpoint-with-root
-                     checkpoint (mevedel-session-artifacts--live-sidecar session buffer)))
-              (unless (= old-freeze-tick (buffer-chars-modified-tick))
-                ;; Preserve late predecessor edits when aborting preparation.
-                (setq old-text (concat (buffer-substring (point-min) (point-max))
-                                       pending-text)
-                      old-modified-p t)
-                (error "Transcript changed during segment transition; retry"))
-              ;; Do not let an ordinary keyboard quit separate the durable
-              ;; commit from its in-memory marker.  Explicit quit signals from
-              ;; a failed operation still enter the cleanup below.
-              (let ((inhibit-quit t))
-                (if portable-p
-                    (mevedel-session-artifacts--publish-remote-segment-transition
-                     session buffer old-segment old-publish-text
-                     new-segment new-text checkpoint)
-                  (mevedel-session-artifacts--publish-segment-text
-                   new-segment new-text)
-                  (mevedel-session-artifacts--finalize-segment-file
-                   old-segment nil nil old-publish-text)
-                  ;; 6. Rewrite the sidecar with the bumped current-segment.
-                  (unless (mevedel-session-checkpoint-valid-p session checkpoint)
-                    (error "Checkpoint candidate belongs to a different owner epoch"))
-                  (mevedel-session-codec-write
-                   (mevedel-session-artifacts-sidecar-path
-                    (mevedel-session-save-path session))
-                   (mevedel-session-artifacts-build-sidecar session buffer checkpoint))
-                  (mevedel-session-checkpoint-install session checkpoint)
-                  (setq committed t)
-                  (mevedel-session-artifacts-save-instructions session))
-                (setq committed t))
-              (when (fboundp 'mevedel-telemetry-record)
+                 :new-segment (mevedel-session-current-segment session))
+                (setf (mevedel-session-updated-at session)
+                      (format-time-string "%FT%H-%M-%S"))
+                (setq checkpoint
+                      (mevedel-session-checkpoint-with-root
+                       checkpoint (mevedel-session-artifacts--live-sidecar session buffer)))
+                (unless (= old-freeze-tick (buffer-chars-modified-tick))
+                  ;; Preserve late predecessor edits when aborting preparation.
+                  (setq old-text (concat (buffer-substring (point-min) (point-max))
+                                         pending-text)
+                        old-modified-p t)
+                  (error "Transcript changed during segment transition; retry"))
+                ;; Do not let an ordinary keyboard quit separate the durable
+                ;; commit from its in-memory marker.  Explicit quit signals from
+                ;; a failed operation still enter the cleanup below.
+                (let ((inhibit-quit t))
+                  (if portable-p
+                      (mevedel-session-artifacts--publish-remote-segment-transition
+                       session buffer old-segment old-publish-text
+                       new-segment new-text checkpoint)
+                    (mevedel-session-artifacts--publish-segment-text
+                     new-segment new-text)
+                    (mevedel-session-artifacts--finalize-segment-file
+                     old-segment nil nil old-publish-text)
+                    ;; 6. Rewrite the sidecar with the bumped current-segment.
+                    (unless (mevedel-session-checkpoint-valid-p session checkpoint)
+                      (error "Checkpoint candidate belongs to a different owner epoch"))
+                    (mevedel-session-codec-write
+                     (mevedel-session-artifacts-sidecar-path
+                      (mevedel-session-save-path session))
+                     (mevedel-session-artifacts-build-sidecar session buffer checkpoint))
+                    (mevedel-session-checkpoint-install session checkpoint)
+                    (setq committed t)
+                    (mevedel-session-artifacts-save-instructions session))
+                  (setq committed t))
                 (mevedel-telemetry-record
                  session 'segment-rotation-stage :stage 'new-published
-                 :new-segment (mevedel-session-current-segment session)))
-              (mevedel-session-forget-read-ranges session)
-              (when telemetry-span
-                (mevedel-telemetry-finish
-                 telemetry-span :outcome 'success))
-              (when pending-position
-                (let ((modified (buffer-modified-p)))
-                  (goto-char pending-position)
-                  (insert pending-text)
-                  (setq pending-position nil)
-                  ;; The pending prompt is not a durable late arrival.
-                  (set-buffer-modified-p modified)))
-              (when (fboundp 'mevedel-collaboration-notify-history-changed)
-                (mevedel-collaboration-notify-history-changed buffer))
-              new-segment)
-          ((error quit)
-           (let ((inhibit-quit t))
-             (when telemetry-span
-               (mevedel-telemetry-finish
-                telemetry-span :outcome 'error :error-class (car-safe err)))
-             ;; Ancillary publications may commit during preparation.  Only
-             ;; the installed root projection proves this transition committed.
-             (if (or committed
-                     (and portable-p
-                          (or (mevedel-session-pending-publication session)
-                              (not (equal old-current-segment
-                                          (plist-get (mevedel-session-checkpoint-project session nil)
-                                                     :current-segment))))))
-                 (progn
-                   (when pending-position
-                     (let ((modified (buffer-modified-p)))
-                       (goto-char pending-position)
-                       (insert pending-text)
-                       (set-buffer-modified-p modified))))
-               (setf (mevedel-session-current-segment session)
-                     old-current-segment)
-               (setf (mevedel-session-updated-at session) old-updated-at
-                     (mevedel-session-prompt-index session) old-prompt-index)
-               (mevedel-session-artifacts--restore-segment-file
-                old-segment old-file-bytes)
-               (when (and new-text
-                          (string-prefix-p new-text (buffer-string))
-                          (> (buffer-size) (length new-text)))
-                 ;; A failed successor write must not discard appended mail.
-                 (setq old-text
-                       (concat old-text (buffer-substring
-                                         (+ (point-min) (length new-text)) (point-max)))
-                       old-modified-p t))
-               (let ((inhibit-read-only t))
-                 (erase-buffer)
-                 (insert old-text))
-               (mevedel-session-artifacts--set-visited-segment-file
-                old-segment)
-               (goto-char (min old-point (point-max)))
-               (set-buffer-modified-p old-modified-p)
-               (if portable-p
-                   (mevedel-session-publication-discard-rolled-back session)
-                 (ignore-errors
-                   (mevedel-session-codec-write
-                    (mevedel-session-artifacts-sidecar-path
-                     (mevedel-session-save-path session))
-                    (mevedel-session-artifacts-build-sidecar session buffer)))
-                 (when (and new-segment (file-exists-p new-segment))
-                   (delete-file new-segment)))))
-           (signal (car err) (cdr err)))))))))
+                 :new-segment (mevedel-session-current-segment session))
+                (mevedel-session-forget-read-ranges session)
+                (when telemetry-span
+                  (mevedel-telemetry-finish
+                   telemetry-span :outcome 'success))
+                (when pending-position
+                  (let ((modified (buffer-modified-p)))
+                    (goto-char pending-position)
+                    (insert pending-text)
+                    (setq pending-position nil)
+                    ;; The pending prompt is not a durable late arrival.
+                    (set-buffer-modified-p modified)))
+                (when (fboundp 'mevedel-collaboration-notify-history-changed)
+                  (mevedel-collaboration-notify-history-changed buffer))
+                new-segment)
+            ((error quit)
+             (let ((inhibit-quit t))
+               (when telemetry-span
+                 (mevedel-telemetry-finish
+                  telemetry-span :outcome 'error :error-class (car-safe err)))
+               ;; Ancillary publications may commit during preparation.  Only
+               ;; the installed root projection proves this transition committed.
+               (if (or committed
+                       (and portable-p
+                            (or (mevedel-session-pending-publication session)
+                                (not (equal old-current-segment
+                                            (plist-get (mevedel-session-checkpoint-project session nil)
+                                                       :current-segment))))))
+                   (progn
+                     (when pending-position
+                       (let ((modified (buffer-modified-p)))
+                         (goto-char pending-position)
+                         (insert pending-text)
+                         (set-buffer-modified-p modified))))
+                 (setf (mevedel-session-current-segment session)
+                       old-current-segment)
+                 (setf (mevedel-session-updated-at session) old-updated-at
+                       (mevedel-session-prompt-index session) old-prompt-index)
+                 (mevedel-session-artifacts--restore-segment-file
+                  old-segment old-file-bytes)
+                 (when (and new-text
+                            (string-prefix-p new-text (buffer-string))
+                            (> (buffer-size) (length new-text)))
+                   ;; A failed successor write must not discard appended mail.
+                   (setq old-text
+                         (concat old-text (buffer-substring
+                                           (+ (point-min) (length new-text)) (point-max)))
+                         old-modified-p t))
+                 (let ((inhibit-read-only t))
+                   (erase-buffer)
+                   (insert old-text))
+                 (mevedel-session-artifacts--set-visited-segment-file
+                  old-segment)
+                 (goto-char (min old-point (point-max)))
+                 (set-buffer-modified-p old-modified-p)
+                 (if portable-p
+                     (mevedel-session-publication-discard-rolled-back session)
+                   (ignore-errors
+                     (mevedel-session-codec-write
+                      (mevedel-session-artifacts-sidecar-path
+                       (mevedel-session-save-path session))
+                      (mevedel-session-artifacts-build-sidecar session buffer)))
+                   (when (and new-segment (file-exists-p new-segment))
+                     (delete-file new-segment)))))
+             (signal (car err) (cdr err)))))))))
 
 (cl-defun mevedel-session-artifacts-start-fresh-segment
     (session buffer &key clear)

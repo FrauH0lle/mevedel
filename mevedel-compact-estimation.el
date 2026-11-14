@@ -12,6 +12,7 @@
 
 (require 'cl-lib)
 (require 'mevedel-models)
+(require 'mevedel-telemetry)
 (require 'mevedel-telemetry-usage)
 (require 'mevedel-transcript-audit)
 
@@ -225,8 +226,7 @@ count never becomes the baseline for the chat buffer."
                     (and (numberp (plist-get provider-usage :output))
                          (plist-get provider-usage :output))
                     :position (copy-marker (point-max))))
-        (when (and (bound-and-true-p mevedel--session)
-                   (fboundp 'mevedel-telemetry-record))
+        (when (bound-and-true-p mevedel--session)
           (mevedel-telemetry-record
            mevedel--session 'token-baseline-recorded
            :request-id request-id

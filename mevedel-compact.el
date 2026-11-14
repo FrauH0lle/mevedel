@@ -7,6 +7,7 @@
 
 ;;; Code:
 
+(require 'mevedel-telemetry)
 (require 'mevedel-utilities)
 
 (require 'mevedel-engine)
@@ -134,8 +135,7 @@
   "Inject reminders, record, and dispatch FSM's provider request."
   (let* ((info (and fsm (gptel-fsm-info fsm)))
          (chat-buffer (and (listp info) (plist-get info :buffer))))
-    (when (and (buffer-live-p chat-buffer)
-               (fboundp 'mevedel-telemetry-record))
+    (when (buffer-live-p chat-buffer)
       (with-current-buffer chat-buffer
         (when (bound-and-true-p mevedel--session)
           (mevedel-telemetry-record
@@ -236,8 +236,7 @@
              "Auto-compaction skipped: %s"
              (or ineligible-reason "session is not eligible"))
             nil))))
-    (when (and (bound-and-true-p mevedel--session)
-               (fboundp 'mevedel-telemetry-record))
+    (when (bound-and-true-p mevedel--session)
       (apply #'mevedel-telemetry-record
              mevedel--session 'compaction-threshold-evaluated
              :estimate estimate

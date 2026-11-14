@@ -8,6 +8,7 @@
 
 ;;; Code:
 
+(require 'mevedel-telemetry)
 (require 'mevedel-utilities)
 
 ;; `gptel'
@@ -401,27 +402,27 @@ was a leading allocator in a profiled session."
   "Settle PROCESS's stream with STATUS through gptel's ORIG-FN sentinel."
   (mevedel-transport-resume-process process)
   (mevedel--with-gc-batched
-  (let* ((entry (alist-get process gptel--request-alist))
-         (fsm (car-safe entry))
-         (info (and fsm (fboundp 'gptel-fsm-info)
-                    (ignore-errors (gptel-fsm-info fsm))))
-         (chat-buffer (plist-get info :buffer))
-         (session (and (buffer-live-p chat-buffer)
-                       (mevedel-telemetry-current-session chat-buffer))))
-    (when (mevedel-gptel-stream-bridge--gptel-stream-info-p info)
-      (mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch info)
-      (mevedel-gptel-stream-bridge--wrap-gptel-stream-transformer info))
-    (prog1 (funcall orig-fn process status)
-      (when (and session (fboundp 'mevedel-telemetry-record))
-        (mevedel-telemetry-record
-         session 'provider-stream-ended
-         :request-id (plist-get info :mevedel-request-id)
-         :agent-path
-         (when-let* ((invocation (plist-get info :mevedel-agent-invocation)))
-           (mevedel-agent-invocation-path invocation))
-         :provider-status status
-         :first-byte-seen
-         (and (process-get process 'mevedel-telemetry-first-byte) t)))))))
+   (let* ((entry (alist-get process gptel--request-alist))
+          (fsm (car-safe entry))
+          (info (and fsm (fboundp 'gptel-fsm-info)
+                     (ignore-errors (gptel-fsm-info fsm))))
+          (chat-buffer (plist-get info :buffer))
+          (session (and (buffer-live-p chat-buffer)
+                        (mevedel-telemetry-current-session chat-buffer))))
+     (when (mevedel-gptel-stream-bridge--gptel-stream-info-p info)
+       (mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch info)
+       (mevedel-gptel-stream-bridge--wrap-gptel-stream-transformer info))
+     (prog1 (funcall orig-fn process status)
+       (when session
+         (mevedel-telemetry-record
+          session 'provider-stream-ended
+          :request-id (plist-get info :mevedel-request-id)
+          :agent-path
+          (when-let* ((invocation (plist-get info :mevedel-agent-invocation)))
+            (mevedel-agent-invocation-path invocation))
+          :provider-status status
+          :first-byte-seen
+          (and (process-get process 'mevedel-telemetry-first-byte) t)))))))
 
 (defun mevedel-gptel-stream-bridge--gptel-stream-filter-registered-p (process)
   "Return non-nil when PROCESS has a registered gptel FSM."
@@ -481,42 +482,41 @@ chunk and replay it once the request entry exists.
 Chunk parsing and insertion is steady allocation for the whole stream;
 the entire filter runs with collections batched."
   (mevedel--with-gc-batched
-    (when (and (> (length output) 0)
-               (not (process-get process 'mevedel-telemetry-first-byte)))
-      (when-let* ((entry (and (boundp 'gptel--request-alist)
-                              (alist-get process gptel--request-alist)))
-                  (fsm (car-safe entry))
-                  (info (and (fboundp 'gptel-fsm-info)
-                             (ignore-errors (gptel-fsm-info fsm))))
-                  (chat-buffer (plist-get info :buffer))
-                  ((buffer-live-p chat-buffer)))
-        (process-put process 'mevedel-telemetry-first-byte t)
-        (with-current-buffer chat-buffer
-          (when (and (mevedel-telemetry-current-session chat-buffer)
-                     (fboundp 'mevedel-telemetry-record))
-            (mevedel-telemetry-record
-             (mevedel-telemetry-current-session chat-buffer)
-             'provider-first-byte
-             :request-id (plist-get info :mevedel-request-id)
-             :agent-path
-             (when-let* ((invocation
-                          (plist-get info :mevedel-agent-invocation)))
-               (mevedel-agent-invocation-path invocation))
-             :chunk-bytes (string-bytes output))))))
-    (let ((pending (process-get process
-                                'mevedel-gptel-stream-bridge--pending-output)))
-      (if (mevedel-gptel-stream-bridge--gptel-stream-filter-registered-p process)
-          (progn
-            (when pending
-              (setq output (concat pending output))
-              (process-put process 'mevedel-gptel-stream-bridge--pending-output nil))
-            (process-put process 'mevedel-gptel-stream-bridge--filter-retries nil)
-            (mevedel-gptel-stream-bridge--note-stream-start process)
-            (funcall orig-fn process output)
-            (mevedel-gptel-stream-bridge--pace-reading process output))
-        (process-put process 'mevedel-gptel-stream-bridge--pending-output
-                     (concat pending output))
-        (mevedel-gptel-stream-bridge--schedule-gptel-stream-filter-flush process)))))
+   (when (and (> (length output) 0)
+              (not (process-get process 'mevedel-telemetry-first-byte)))
+     (when-let* ((entry (and (boundp 'gptel--request-alist)
+                             (alist-get process gptel--request-alist)))
+                 (fsm (car-safe entry))
+                 (info (and (fboundp 'gptel-fsm-info)
+                            (ignore-errors (gptel-fsm-info fsm))))
+                 (chat-buffer (plist-get info :buffer))
+                 ((buffer-live-p chat-buffer)))
+       (process-put process 'mevedel-telemetry-first-byte t)
+       (with-current-buffer chat-buffer
+         (when (mevedel-telemetry-current-session chat-buffer)
+           (mevedel-telemetry-record
+            (mevedel-telemetry-current-session chat-buffer)
+            'provider-first-byte
+            :request-id (plist-get info :mevedel-request-id)
+            :agent-path
+            (when-let* ((invocation
+                         (plist-get info :mevedel-agent-invocation)))
+              (mevedel-agent-invocation-path invocation))
+            :chunk-bytes (string-bytes output))))))
+   (let ((pending (process-get process
+                               'mevedel-gptel-stream-bridge--pending-output)))
+     (if (mevedel-gptel-stream-bridge--gptel-stream-filter-registered-p process)
+         (progn
+           (when pending
+             (setq output (concat pending output))
+             (process-put process 'mevedel-gptel-stream-bridge--pending-output nil))
+           (process-put process 'mevedel-gptel-stream-bridge--filter-retries nil)
+           (mevedel-gptel-stream-bridge--note-stream-start process)
+           (funcall orig-fn process output)
+           (mevedel-gptel-stream-bridge--pace-reading process output))
+       (process-put process 'mevedel-gptel-stream-bridge--pending-output
+                    (concat pending output))
+       (mevedel-gptel-stream-bridge--schedule-gptel-stream-filter-flush process)))))
 
 
 (defun mevedel-gptel-stream-bridge--advice-add-if-bound (symbol where function)

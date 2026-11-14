@@ -144,16 +144,6 @@
   (interactive (list (mevedel--ov-actions-getov) t))
   (mevedel-note-menu instruction))
 
-
-(defun mevedel--ov-actions-help (callback)
-  "Eldoc documentation function for `mevedel' instruction actions.
-
-CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
-  (when (eq (get-char-property (point) 'mevedel-instruction-type) 'note)
-    (funcall callback
-             (substitute-command-keys
-              "Note menu: \\[mevedel--ov-actions-dispatch]"))))
-
 (defvar-keymap mevedel-note-actions-map
   :doc "Modified-key menu for notes; plain letters always edit source."
   "C-c C-a" #'mevedel-note-apply-change

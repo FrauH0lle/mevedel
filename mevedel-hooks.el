@@ -19,6 +19,7 @@
 (require 'json)
 (require 'subr-x)
 (require 'mevedel-structs)
+(require 'mevedel-telemetry)
 (require 'mevedel-transport)
 (require 'mevedel-utilities)
 
@@ -78,9 +79,6 @@
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-telemetry'
-(declare-function mevedel-telemetry-detailed-p "mevedel-telemetry" (session))
-(declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
-(declare-function mevedel-telemetry-forwarded-audit-p "mevedel-telemetry" (session))
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
 (declare-function mevedel-telemetry-record-audit
@@ -2346,56 +2344,55 @@ decision plist."
                    (setq decision
                          (mevedel-hooks-sanitize-final-decision
                           event decision (mevedel-diagnostic-scope session))))
-	                 (when telemetry-span
-	                   (mevedel-telemetry-finish
-	                    telemetry-span
-	                    :outcome
-	                    (cond
-	                     ((eq decision 'cancelled) 'cancelled)
-	                     ((mevedel-hooks--decision-blocking-p decision)
-	                      'blocked)
-	                     (t 'continued))
-	                    :context-chars
-	                    (when-let* (((not (eq decision 'cancelled)))
-	                                (context
-	                                 (mevedel-hooks-additional-context-string
-	                                  decision event)))
-	                      (length context))))
-	                 (when (timerp slow-timer)
-	                   (cancel-timer slow-timer))
-                         ;; The slow notice is a bare echo message that
-                         ;; would otherwise linger indefinitely and read
-                         ;; as a hang after the hook completes.
-                         (when slow-echoed
-                           (mevedel-hooks--surface
-                            (format "%s hook finished"
-                                    (mevedel-hooks-event-display-name
-                                     event))))
-                         (when slow-surfaced
-                           (let ((restored
-                                  (mevedel-hooks--restore-progress
-                                   progress-lease slow-surfaced)))
-                             (when (and session
-                                    (fboundp 'mevedel-telemetry-record))
-                               (mevedel-telemetry-record
-                                session 'hook-slow-status-released
-                                :hook-event event
-                                :handler-count (length handlers)
-                                :restored (and restored t)))))
-                         ;; A cancelled event belongs to a request being
-                         ;; torn down: nothing to surface, and the caller's
-                         ;; continuation must not run.
-                         (cond
-                          ((eq decision 'cancelled) nil)
-                          ((buffer-live-p dispatch-buffer)
-                           (with-current-buffer dispatch-buffer
-	                     (mevedel-hooks--surface-final-decision
-	                      event session decision)
-	                     (funcall callback decision)))
-                          (t
-                           (mevedel-hooks--surface-final-decision
-                            event session decision)
-                           (funcall callback decision))))))
+	         (when telemetry-span
+	           (mevedel-telemetry-finish
+	            telemetry-span
+	            :outcome
+	            (cond
+	             ((eq decision 'cancelled) 'cancelled)
+	             ((mevedel-hooks--decision-blocking-p decision)
+	              'blocked)
+	             (t 'continued))
+	            :context-chars
+	            (when-let* (((not (eq decision 'cancelled)))
+	                        (context
+	                         (mevedel-hooks-additional-context-string
+	                          decision event)))
+	              (length context))))
+	         (when (timerp slow-timer)
+	           (cancel-timer slow-timer))
+                 ;; The slow notice is a bare echo message that
+                 ;; would otherwise linger indefinitely and read
+                 ;; as a hang after the hook completes.
+                 (when slow-echoed
+                   (mevedel-hooks--surface
+                    (format "%s hook finished"
+                            (mevedel-hooks-event-display-name
+                             event))))
+                 (when slow-surfaced
+                   (let ((restored
+                          (mevedel-hooks--restore-progress
+                           progress-lease slow-surfaced)))
+                     (when session
+                       (mevedel-telemetry-record
+                        session 'hook-slow-status-released
+                        :hook-event event
+                        :handler-count (length handlers)
+                        :restored (and restored t)))))
+                 ;; A cancelled event belongs to a request being
+                 ;; torn down: nothing to surface, and the caller's
+                 ;; continuation must not run.
+                 (cond
+                  ((eq decision 'cancelled) nil)
+                  ((buffer-live-p dispatch-buffer)
+                   (with-current-buffer dispatch-buffer
+	             (mevedel-hooks--surface-final-decision
+	              event session decision)
+	             (funcall callback decision)))
+                  (t
+                   (mevedel-hooks--surface-final-decision
+                    event session decision)
+                   (funcall callback decision))))))
           (when (and mevedel-hooks-slow-threshold
                      handlers)
             (setq slow-timer
@@ -2415,8 +2412,7 @@ decision plist."
                                               event))
                                      progress-owner)))
                          (setq slow-surfaced token)
-                         (when (and session
-                                    (fboundp 'mevedel-telemetry-record))
+                         (when session
                            (mevedel-telemetry-record
                             session 'hook-slow-status-acquired
                             :hook-event event

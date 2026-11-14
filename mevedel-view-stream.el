@@ -15,6 +15,7 @@
 
 (eval-when-compile (require 'cl-lib))
 (require 'mevedel-execution-transcript)
+(require 'mevedel-telemetry)
 (require 'mevedel-view-animation)
 (require 'mevedel-present)
 (require 'mevedel-view-power)
@@ -1492,8 +1493,7 @@ STATUS defaults to \"Thinking...\"."
   (when-let* ((session
                (and (buffer-live-p mevedel--data-buffer)
                     (buffer-local-value 'mevedel--session
-                                        mevedel--data-buffer)))
-              ((fboundp 'mevedel-telemetry-record)))
+                                        mevedel--data-buffer))))
     (mevedel-telemetry-record
      session 'status-transition
      :previous-owner mevedel-view--spinner-owner
@@ -1546,8 +1546,7 @@ Return non-nil when the status was restored."
   (when-let* ((session
                (and (buffer-live-p mevedel--data-buffer)
                     (buffer-local-value 'mevedel--session
-                                        mevedel--data-buffer)))
-              ((fboundp 'mevedel-telemetry-record)))
+                                        mevedel--data-buffer))))
     (mevedel-telemetry-record
      session 'status-transition
      :previous-owner mevedel-view--spinner-owner
