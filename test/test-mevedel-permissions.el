@@ -37,7 +37,7 @@
   (test)
   :doc "omitted owners use ambient Plan stamps but explicit nil owners do not"
   (let* ((mevedel-permission-rules nil)
-         (session (mevedel-session--create :authority-mode 'pid-lock)))
+         (session (mevedel-session--create)))
     (dolist (owner '(request invocation))
       (let ((mevedel--current-request
              (and (eq owner 'request)
@@ -1178,7 +1178,7 @@
 
   :doc "captured request and invocation Plan stamps survive ambient drift"
   (let* ((mevedel-permission-rules nil)
-         (session (mevedel-session--create :authority-mode 'pid-lock))
+         (session (mevedel-session--create))
          (mevedel--current-request (mevedel-request--create :session session))
          (mevedel--agent-invocation
           (mevedel-agent-invocation--create
@@ -1205,7 +1205,7 @@
 
   :doc "captured non-Plan and nil stamps do not borrow ambient Plan authority"
   (let* ((mevedel-permission-rules nil)
-         (session (mevedel-session--create :authority-mode 'pid-lock))
+         (session (mevedel-session--create))
          (mevedel--current-request
           (mevedel-request--create :session session :plan-read-only t))
          (mevedel--agent-invocation
@@ -1228,7 +1228,7 @@
 
   :doc "captured nil stamps still enforce the owning session's live Plan flag"
   (let* ((mevedel-permission-rules nil)
-         (session (mevedel-session--create :authority-mode 'pid-lock))
+         (session (mevedel-session--create))
          (mevedel--current-request nil)
          (mevedel--agent-invocation nil)
          (tool (mevedel-tool--create :name "Eval")))

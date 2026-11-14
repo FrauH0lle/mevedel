@@ -1748,6 +1748,49 @@ holder identity is recorded by an owner lease acquired before the call."
       (delete-directory dir t))))
 
 
+(mevedel-deftest mevedel-session-durability-legacy-lock-proof ()
+  ,test
+  (test)
+  :doc "a batched absence proof is reused within the durable transaction"
+  (let ((root (make-temp-file "mevedel-legacy-proof-" t)))
+    (unwind-protect
+        (mevedel-session-durability-with-transaction
+          (let* ((operation (mevedel-session-durability--pid-lock-operation root))
+                 (result (car (mevedel-session-control-fs-run-program
+                               (list operation)))))
+            (should (eq 'absent (plist-get result :status)))
+            (mevedel-session-durability--settle-pid-lock root result)
+            (should-not (mevedel-session-durability--pid-lock-operation root))
+            (mevedel-session-durability--assert-no-pid-lock root)))
+      (delete-directory root t)))
+  :doc "direct and batched legacy-lock checks refuse without modifying bytes"
+  (let* ((root (make-temp-file "mevedel-legacy-refusal-" t))
+         (lock (file-name-concat root ".lock")))
+    (unwind-protect
+        (progn
+          (with-temp-file lock (insert "unmigrated"))
+          (should
+           (string-match-p
+            "scripts/migrate-sessions\\.el"
+            (error-message-string
+             (should-error (mevedel-session-durability--assert-no-pid-lock root)
+                           :type 'error))))
+          (let* ((operation (mevedel-session-durability--pid-lock-operation root))
+                 (result (car (mevedel-session-control-fs-run-program
+                               (list operation)))))
+            (should
+             (string-match-p
+              "scripts/migrate-sessions\\.el"
+              (error-message-string
+               (should-error
+                (mevedel-session-durability--settle-pid-lock root result)
+                :type 'error)))))
+          (should (equal "unmigrated"
+                         (with-temp-buffer
+                           (insert-file-contents lock)
+                           (buffer-string)))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-session-durability-lease-renew ()
   ,test
   (test)
@@ -5066,7 +5109,7 @@ holder identity is recorded by an owner lease acquired before the call."
             (should (file-directory-p recovery))
             (should (equal recovery
                            (plist-get pending :manual-recovery-local)))
-            (should (string-match-p "Portable session has a PID lock"
+            (should (string-match-p "scripts/migrate-sessions\\.el"
                                     (plist-get pending :reason)))
             (should-not
              (file-exists-p (file-name-concat session-dir ".recovery")))

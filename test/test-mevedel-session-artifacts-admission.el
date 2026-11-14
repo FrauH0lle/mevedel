@@ -106,8 +106,11 @@
                        (should (string-match-p "pending publication"
                                                (error-message-string err))))
                       ('fresh-mixed
-                       (should (string-match-p "has a PID lock"
-                                               (error-message-string err))))
+                       (should (string-match-p "scripts/migrate-sessions[.]el"
+                                               (error-message-string err)))
+                       (with-temp-buffer
+                         (insert-file-contents (file-name-concat session-dir ".lock"))
+                         (should (equal (buffer-string) "mixed authority"))))
                       ('fresh-redirected-recovery
                        (should-not (string-match-p "skipped"
                                                    (error-message-string err))))))))

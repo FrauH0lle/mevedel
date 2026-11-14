@@ -142,7 +142,7 @@ workspace."
   naming-input      ; bounded authored prompt of an `attempted' automatic title, or nil
   workspace         ; mevedel-workspace struct (shared by reference)
   (execution-target nil :read-only t) ; immutable filesystem/process authority
-  authority-mode    ; `portable' for project sessions, `pid-lock' for file sessions
+  authority-mode    ; `portable' for durable workspaces, nil for workspace-free sessions
   working-directory ; absolute directory used for relative tools/prompts
   tasks             ; list of mevedel-task structs
   task-status-notes ; alist: owner -> plist with :note/:updated-turn/:updated-at
@@ -279,34 +279,29 @@ workspace."
 (defun mevedel-session-authority-mode-for-workspace (workspace)
   "Return the durable authority mode required by WORKSPACE.
 
-Project and file workspaces use the portable lease.  Any other category is
-process-local, which is also the safe default for a category added later: it
-claims no lease protocol.  A missing workspace has no
-category to derive from and returns nil, so its caller can reject the
-session instead of guessing."
-  (pcase (and workspace (mevedel-workspace-type workspace))
-    ('nil nil)
-    ((or 'project 'file) 'portable)
-    (_ 'pid-lock)))
+Project and file workspaces use the portable lease.  Without a durable
+workspace category, return nil rather than claiming a persistence protocol."
+  (when (and workspace
+             (memq (mevedel-workspace-type workspace) '(project file)))
+    'portable))
 
 (defun mevedel-session-authority-mode-for-session (session)
   "Return and normalize SESSION's explicit durable authority mode.
 
-A session with a workspace derives its missing mode once and stores it on the
-struct.  An explicitly supplied mode must match that workspace category.  A
-session with neither a mode nor a workspace is rejected instead of falling
-back to an authority inferred from a path or process locality."
+A session with a durable workspace derives its missing mode once and stores
+it on the struct.  Workspace-free sessions may keep a nil mode and do not
+materialize durable state.  An obsolete or unknown explicit mode is rejected."
   (let* ((workspace (mevedel-session-workspace session))
          (mode (mevedel-session-authority-mode session))
          (expected (and workspace
                         (mevedel-session-authority-mode-for-workspace
                          workspace))))
-    (unless (or (eq mode 'portable) (eq mode 'pid-lock))
-      (if expected
-          (setq mode expected)
-        (error "Session authority mode is unavailable")))
-    (when (and expected (not (eq mode expected)))
-      (error "Session authority mode does not match its workspace: %S" mode))
+    (when (eq mode 'pid-lock)
+      (error "Pre-lease session requires migration with scripts/migrate-sessions.el"))
+    (unless (memq mode '(nil portable))
+      (error "Invalid session authority mode: %S" mode))
+    (unless mode
+      (setq mode expected))
     (unless (eq mode (mevedel-session-authority-mode session))
       (setf (mevedel-session-authority-mode session) mode))
     mode))

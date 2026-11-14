@@ -21,8 +21,8 @@
 (defun test-mevedel-execution--workspace (root)
   "Return an execution workspace rooted at ROOT.
 
-TRAMP roots model project workspaces so remote sessions use portable authority;
-local test roots model file workspaces so they retain PID-lock authority."
+TRAMP roots model project workspaces; local test roots model file workspaces.
+Both use portable lease authority."
   (mevedel-workspace--create
    :type (if (file-remote-p root) 'project 'file)
    :id root :root root :name "execution"

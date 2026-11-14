@@ -371,9 +371,6 @@ directories -- the existence probes and the lease listings."
         (cl-letf
             (((symbol-function 'mevedel-session-persistence-cleanup-expired)
               #'ignore)
-             ((symbol-function
-               'mevedel-session-persistence--sweep-stale-locks)
-              #'ignore)
              ((symbol-function 'mevedel-session-persistence--enumerate-sessions)
               (lambda (&rest _)
                 (list
@@ -382,7 +379,7 @@ directories -- the existence probes and the lease listings."
                  (mapcar
                   (lambda (path)
                     (list :kind 'incompatible :save-path path
-                          :authority-mode 'pid-lock :status 'missing))
+                          :authority-mode 'portable :status 'missing))
                   paths))))
              ((symbol-function
                'mevedel--ordered-completion-table)

@@ -19,6 +19,9 @@
 (require 'mevedel-tool-exec)
 (require 'mevedel-tools)
 (require 'mevedel-gptel-stream-bridge)
+(require 'mevedel-session-codec)
+(require 'mevedel-session-durability)
+(require 'mevedel-session-publication)
 
 (mevedel-deftest mevedel-collaboration--agent-mailbox ()
   ,test
@@ -879,6 +882,40 @@ Emacs notice, the projected record and its group-summary entry then read it."
                         (current-buffer) nil nil nil "/root")))))
     (should (equal "warning" (plist-get record :status)))
     (should (equal "lost" (plist-get record :verb)))))
+
+(mevedel-deftest mevedel-collaboration--execution-archive-signature ()
+  ,test
+  (test)
+  :doc "fingerprints a staged artifact, else its published hash, never a plain path"
+  (let* ((plain (make-temp-file "mevedel-signature-plain-"))
+         (staged (make-temp-file "mevedel-signature-staged-"))
+         (logical "segment-0002.chat.org")
+         (session (mevedel-session--create
+                   :publication `(:artifacts ((,logical :sha256 "published")))))
+         (descriptor (list :number 2 :status 'readable :path plain))
+         portable owned)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-session-codec-portable-authority-p)
+                   (lambda (_) portable))
+                  ((symbol-function 'mevedel-session-durability-lease-owned-p)
+                   (lambda (_) owned))
+                  ((symbol-function 'mevedel-session-publication-uncommitted-artifact)
+                   (lambda (_ name) (and (equal name logical) staged))))
+          ;; Without durable authority the plain descriptor path is no source.
+          (should (equal (list 2 logical 'readable nil)
+                         (mevedel-collaboration--execution-archive-signature
+                          session descriptor)))
+          (setq portable t owned t)
+          (let ((source (nth 3 (mevedel-collaboration--execution-archive-signature
+                                session descriptor))))
+            (should (equal staged (car source)))
+            (should (cadr source)))
+          (setq owned nil)
+          (should (equal (list 2 logical 'readable "published")
+                         (mevedel-collaboration--execution-archive-signature
+                          session descriptor))))
+      (delete-file plain)
+      (delete-file staged))))
 
 (provide 'test-mevedel-collaboration-projection)
 ;;; test-mevedel-collaboration-projection.el ends here

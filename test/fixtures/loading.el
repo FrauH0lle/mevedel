@@ -394,7 +394,7 @@ temporary one."
                         nil '(:expression "(+ 1 2)")
                         (lambda (value) (setq outcome value)))
                (should (eq 'allow outcome)))
-             (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "cold"))
+             (let ((session (mevedel-session--create :name "cold"))
                    result)
                (with-temp-buffer
                  (setq-local mevedel--session session)

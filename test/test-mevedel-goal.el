@@ -6,6 +6,10 @@
 
 ;;; Code:
 
+(require 'mevedel-session-test-support
+         (file-name-concat (file-name-directory
+                            (or buffer-file-name load-file-name byte-compile-current-file))
+                           "mevedel-session-test-support"))
 (require 'gptel-request)
 (require 'mevedel)
 (require 'mevedel-goal)
@@ -423,7 +427,7 @@
    (let* ((root (make-temp-file "mevedel-goal-plan-" t))
          (plan-file (file-name-concat root "accepted-plan.md"))
          (session (mevedel-session--create
-                   :authority-mode 'pid-lock :name "main" :save-path root))
+                   :name "main" :save-path root))
          (goal (mevedel-goal--create
                 :id "goal-1" :objective "Ship" :status 'active
                 :tokens-used 0 :time-used-seconds 0 :turns-run 0
@@ -473,8 +477,7 @@
   (let* ((root (make-temp-file "mevedel-goal-plan-address-" t))
          (relative "local/plans/accepted-20260813-120000.md")
          (plan-file (file-name-concat root relative))
-         (session (mevedel-session--create
-                   :authority-mode 'pid-lock :name "main" :save-path root))
+         (session (test-mevedel-session-persistence--leased-session root :name "main"))
          (goal (mevedel-goal--create
                 :id "goal-1" :objective "Ship" :status 'active
                 :tokens-used 0 :time-used-seconds 0 :turns-run 0
@@ -489,6 +492,13 @@
                 (mevedel-session-plan-metadata session)
                 (list :accepted-path relative
                       :accepted-hash (mevedel-plan-hash "accepted")))
+          (mevedel-session-publication-publish
+           session
+           (list (list :path plan-file :content "accepted")
+                 (list :path (file-name-concat root "session.meta.el")
+                       :content (mevedel-session-artifacts-printed-value
+                                 (mevedel-session-codec-serialize session))
+                       :commit-marker t)))
           (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
                      (lambda (_path values) (setq replacements values)
                        "context")))
@@ -498,6 +508,8 @@
             (should (string-match-p
                      "work://plans/accepted-20260813-120000\\.md" line))
             (should-not (string-match-p (regexp-quote root) line))))
+      (mevedel-session-persistence-lock-release root session)
+      (mevedel-workspace-clear-registry)
       (delete-directory root t)))))
 
 (mevedel-deftest mevedel-goal-capture-request

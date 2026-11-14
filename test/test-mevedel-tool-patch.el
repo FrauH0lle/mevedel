@@ -234,12 +234,12 @@
   (:vars* ((root (file-name-as-directory
                   (make-temp-file "mevedel-apply-patch-resource-" t)))
            (workspace (mevedel-workspace--create
-                       :type 'test :id root :root root :name "patch-resource"
+                       :type 'file :id root :root root :name "patch-resource"
                        :file-cache (mevedel-test-file-cache-create)))
-           (session (mevedel-session--create
-                     :name "patch-resource" :session-id "patch-resource-id" :workspace workspace
-                     :working-directory root :permission-mode 'edits
-                     :touched-files (make-hash-table :test #'equal)))
+           (session (let ((session (mevedel-session-create
+                                    "patch-resource" workspace root "patch-resource-id")))
+                      (setf (mevedel-session-permission-mode session) 'edits)
+                      session))
            (buffer (generate-new-buffer " *mevedel-apply-patch-resource*"))
            (patch (string-join
                    '("*** Begin Patch"
@@ -251,6 +251,8 @@
    :after-each
    (progn
      (when (buffer-live-p buffer) (kill-buffer buffer))
+     (when-let* ((save-path (mevedel-session-save-path session)))
+       (mevedel-session-persistence-lock-release save-path session))
      (when (file-directory-p root) (delete-directory root t))))
   ,test
   (test)
@@ -266,6 +268,7 @@
     (let* ((save-path (mevedel-session-save-path session))
            (local-path (file-name-concat save-path "local" "notes" "new.txt")))
       (should save-path)
+      (should (mevedel-session-durability-lease-owned-p session))
       (should (equal "created\n"
                      (mevedel-test--read-file local-path)))
       (should (string-match-p "work://notes/new.txt"
@@ -299,12 +302,12 @@
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-apply-patch-mixed-move-" t)))
          (workspace (mevedel-workspace--create
-                     :type 'test :id root :root root :name "mixed-move"
+                     :type 'file :id root :root root :name "mixed-move"
                      :file-cache (mevedel-test-file-cache-create)))
-         (session (mevedel-session--create
-                   :name "mixed-move" :session-id "mixed-move-id" :workspace workspace
-                   :working-directory root :permission-mode 'edits
-                   :touched-files (make-hash-table :test #'equal)))
+         (session (let ((session (mevedel-session-create
+                                  "mixed-move" workspace root "mixed-move-id")))
+                    (setf (mevedel-session-permission-mode session) 'edits)
+                    session))
          (buffer (generate-new-buffer " *mevedel-apply-patch-mixed-move*"))
          (local-source "work://notes/from-local.txt")
          (local-target "work://notes/to-local.txt")
@@ -374,6 +377,8 @@
                           "notes" "to-local.txt")
                          (mevedel-session-touched-files session)))))
       (when (buffer-live-p buffer) (kill-buffer buffer))
+      (when-let* ((save-path (mevedel-session-save-path session)))
+        (mevedel-session-persistence-lock-release save-path session))
       (when (file-directory-p root) (delete-directory root t)))))
 
 (mevedel-deftest mevedel-tool-patch-annotate-line-numbers

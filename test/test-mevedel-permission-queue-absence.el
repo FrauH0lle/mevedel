@@ -345,7 +345,7 @@
   (test-pqa--with-timeout 3600
     (let ((session (mevedel-session--create
                     :permission-mode 'ask :sandbox-mode 'off
-                    :authority-mode 'pid-lock))
+                    ))
           (mevedel-permission-rules nil)
           failure)
       (with-temp-buffer

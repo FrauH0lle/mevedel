@@ -28,7 +28,7 @@
   ,test
   (test)
   :doc "a pending delivery acks and wakes only when the mailbox secures it"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+  (let ((session (mevedel-session--create :name "test"))
         (log nil) secured)
     (cl-letf (((symbol-function 'mevedel-agent-control-enqueue-execution-result)
                (lambda (&rest args) (setq secured (nth 6 args)) 'pending))
@@ -44,7 +44,7 @@
       ;; Bookkeeping settles before the model is woken.
       (should (equal '((ack t nil) wake) (reverse log)))))
   :doc "a failed acknowledgement forwards the failure and never wakes"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+  (let ((session (mevedel-session--create :name "test"))
         (log nil) secured)
     (cl-letf (((symbol-function 'mevedel-agent-control-enqueue-execution-result)
                (lambda (&rest args) (setq secured (nth 6 args)) 'pending))
@@ -56,7 +56,7 @@
       (funcall secured nil "Disk full")
       (should (equal '((ack nil "Disk full")) log))))
   :doc "a stopped command acknowledges success without waking"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+  (let ((session (mevedel-session--create :name "test"))
         (log nil) secured)
     (cl-letf (((symbol-function 'mevedel-agent-control-enqueue-execution-result)
                (lambda (&rest args) (setq secured (nth 6 args)) 'pending))
@@ -70,7 +70,7 @@
       (funcall secured t nil)
       (should (equal '((ack t nil)) log))))
   :doc "a session that is stopping acknowledges success without waking"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+  (let ((session (mevedel-session--create :name "test"))
         (log nil) secured)
     (setf (mevedel-session-publication-stopping-p session) t)
     (cl-letf (((symbol-function 'mevedel-agent-control-enqueue-execution-result)
@@ -83,7 +83,7 @@
       (funcall secured t nil)
       (should (equal '((ack t nil)) log))))
   :doc "a failing wake is contained after the acknowledgement"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+  (let ((session (mevedel-session--create :name "test"))
         (log nil) secured)
     (cl-letf (((symbol-function 'mevedel-agent-control-enqueue-execution-result)
                (lambda (&rest args) (setq secured (nth 6 args)) 'pending))
@@ -97,7 +97,7 @@
       (should (equal '((ack t nil)) log))))
   :doc "monitor batches and terminals pass the acknowledgement to the monitor mailbox"
   (dolist (type '(monitor-batch terminal))
-    (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+    (let ((session (mevedel-session--create :name "test"))
           secured result)
       (cl-letf (((symbol-function 'mevedel-agent-control-enqueue-monitor-events)
                  (lambda (&rest args) (setq secured (nth 5 args)) 'pending))
@@ -137,7 +137,7 @@ scheduling opens the gate."
          (root (generate-new-buffer " *tool-exec-ack-root*"))
          (other (generate-new-buffer " *tool-exec-ack-other*"))
          (session (mevedel-session--create
-                   :authority-mode 'pid-lock :name "test"
+                   :name "test"
                    :save-path (file-name-as-directory directory)))
          (log nil))
     (unwind-protect
@@ -160,7 +160,7 @@ scheduling opens the gate."
   (test)
   :doc "an idle session wakes in place once, after the acknowledgement"
   (let ((root (generate-new-buffer " *tool-exec-ack-root*"))
-        (session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+        (session (mevedel-session--create :name "test"))
         (log nil))
     (unwind-protect
         (progn
@@ -176,7 +176,7 @@ scheduling opens the gate."
           (should-not (mevedel-session-publication-preparations session)))
       (kill-buffer root)))
   :doc "a failed acknowledgement or a non-waking event never offers the root"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+  (let ((session (mevedel-session--create :name "test"))
         (log nil))
     (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-root-event)
                (lambda (&rest _) (push 'wake log))))
@@ -249,7 +249,7 @@ scheduling opens the gate."
        (should-not (mevedel-session-mail-notification-timer session)))))
   :doc "a failing wake is a diagnostic and the secured acknowledgement stands"
   (let ((root (generate-new-buffer " *tool-exec-ack-root*"))
-        (session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+        (session (mevedel-session--create :name "test"))
         acks warned)
     (unwind-protect
         (progn

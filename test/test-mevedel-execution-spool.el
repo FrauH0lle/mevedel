@@ -9,11 +9,15 @@
          (file-name-concat (file-name-directory
                             (or buffer-file-name load-file-name byte-compile-current-file))
                            "mevedel-execution-spool-test-support"))
+(require 'mevedel-session-test-support
+         (file-name-concat (file-name-directory
+                            (or buffer-file-name load-file-name byte-compile-current-file))
+                           "mevedel-session-test-support"))
 
 (mevedel-deftest mevedel-execution-spool-tools
   (:doc "Read pagination, directory/file Grep and logical Glob survive compression")
   (let* ((root (make-temp-file "mevedel-spool-tools-" t))
-         (session (mevedel-session--create :authority-mode 'pid-lock :save-path root))
+         (session (mevedel-session--create :save-path root))
          (directory (file-name-concat root "tool-results" "executions"))
          (file (file-name-concat directory "execution-one.log"))
          (address "artifact://executions/execution-one.log")
@@ -89,6 +93,8 @@
 (mevedel-deftest mevedel-execution-spool-tramp-consumption
   (:quiet t :doc "a locally compressed spool remains readable and searchable through TRAMP")
   (let* ((root (make-temp-file "mevedel-spool-tramp-" t))
+         (mevedel-session-durability-accept-target-storage t)
+         (mevedel-session-durability--disclosed-targets (make-hash-table :test #'equal))
          (path (file-name-concat root "tool-results" "executions" "execution.log")))
     (unwind-protect
         (progn
@@ -99,50 +105,53 @@
           (test-mevedel-spool--wait (lambda () (not (file-exists-p path))))
           (mevedel-test--with-local-shell-tramp '("spool")
             (let* ((remote-root (format "/mevedelmock:spool:%s/" root))
-                   (workspace (mevedel-workspace--create
-                               :type 'file :id remote-root :root remote-root :name "spool"))
-                   (session (mevedel-session-create "main" workspace))
+                   (session (test-mevedel-session-persistence--leased-session
+                             remote-root :name "main" :sandbox-mode 'off))
                    (default-directory remote-root))
-              (setf (mevedel-session-save-path session) remote-root
-                    (mevedel-session-authority-mode session) 'pid-lock
-                    (mevedel-session-sandbox-mode session) 'off)
-              (let (done selected)
-                (mevedel-execution-spool-with-path
-                 (concat (file-remote-p remote-root) path) 'read
-                 (lambda (_result) (setq done t))
-                 (lambda (view callback)
-                   (setq selected view)
-                   (funcall callback '(:result "owned view"))))
-                (test-mevedel-spool--wait (lambda () done))
-                (should selected)
-                (should (equal (file-remote-p remote-root) (file-remote-p selected)))
-                (should (string-prefix-p (file-name-as-directory temporary-file-directory)
-                                         (file-local-name selected))))
-              (let ((result (test-mevedel-spool--tool
-                             session 'read "artifact://executions/execution.log"
-                             :offset 2 :limit 1)))
-                (should-not (eq 'error (plist-get result :status)))
-                (should (string-match-p "2\tneedle" (plist-get result :result))))
-              (dolist (target '("artifact://" "artifact://executions"))
-                (dolist (operation '(read glob grep))
-                  (let* ((options (pcase operation
-                                    ('read '(:limit 1))
-                                    ('glob '(:pattern "**/*.log"))
-                                    ('grep '(:pattern "needle" :output_mode "files_with_matches"))))
-                         (result (apply #'test-mevedel-spool--tool
-                                        session operation target options))
-                         (text (plist-get result :result)))
-                    (should-not (eq 'error (plist-get result :status)))
-                    (should (string-match-p "artifact://executions/execution.log" text))
-                    (should-not (string-match-p "\\.gz" text))
-                    (should-not (string-match-p (regexp-quote root) text)))))
-              (should-not mevedel-execution-spool--readers))))
+              (unwind-protect
+                  (progn
+                    (with-temp-buffer
+                      (org-mode)
+                      (mevedel-session-artifacts-save session (current-buffer)))
+                    (let (done selected)
+                      (mevedel-execution-spool-with-path
+                       (concat (file-remote-p remote-root) path) 'read
+                       (lambda (_result) (setq done t))
+                       (lambda (view callback)
+                         (setq selected view)
+                         (funcall callback '(:result "owned view"))))
+                      (test-mevedel-spool--wait (lambda () done))
+                      (should selected)
+                      (should (equal (file-remote-p remote-root) (file-remote-p selected)))
+                      (should (string-prefix-p (file-name-as-directory temporary-file-directory)
+                                               (file-local-name selected))))
+                    (let ((result (test-mevedel-spool--tool
+                                   session 'read "artifact://executions/execution.log"
+                                   :offset 2 :limit 1)))
+                      (should-not (eq 'error (plist-get result :status)))
+                      (should (string-match-p "2\tneedle" (plist-get result :result))))
+                    (dolist (target '("artifact://" "artifact://executions"))
+                      (dolist (operation '(read glob grep))
+                        (let* ((options (pcase operation
+                                          ('read '(:limit 1))
+                                          ('glob '(:pattern "**/*.log"))
+                                          ('grep '(:pattern "needle" :output_mode "files_with_matches"))))
+                               (result (apply #'test-mevedel-spool--tool
+                                              session operation target options))
+                               (text (plist-get result :result)))
+                          (should-not (eq 'error (plist-get result :status)))
+                          (should (string-match-p "artifact://executions/execution.log" text))
+                          (should-not (string-match-p "\\.gz" text))
+                          (should-not (string-match-p (regexp-quote root) text)))))
+                    (should-not mevedel-execution-spool--readers))
+                (mevedel-session-persistence-lock-release remote-root session)
+                (mevedel-workspace-clear-registry)))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-execution-spool-view-errors
   (:doc "corrupt gzip produces one error and cleans the disposable view")
   (let* ((root (make-temp-file "mevedel-spool-corrupt-" t))
-         (session (mevedel-session--create :authority-mode 'pid-lock :save-path root))
+         (session (mevedel-session--create :save-path root))
          (path (file-name-concat root "tool-results" "executions" "bad.log.gz"))
          (make-temp (symbol-function 'make-temp-file)) views)
     (unwind-protect

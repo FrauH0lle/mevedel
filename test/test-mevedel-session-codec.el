@@ -14,6 +14,63 @@
 (require 'mevedel-sandbox)
 (require 'mevedel-session-checkpoint)
 
+(mevedel-deftest mevedel-session-codec-validate-authority-mode ()
+  ,test
+  (test)
+  :doc "only the portable profile may be persisted"
+  (should (eq 'portable
+              (mevedel-session-codec-validate-authority-mode 'portable)))
+  (dolist (mode '(nil unknown))
+    (should-error (mevedel-session-codec-validate-authority-mode mode)
+                  :type 'error))
+  :doc "obsolete PID authority directs the user to standalone migration"
+  (should (string-match-p
+           "scripts/migrate-sessions\\.el"
+           (error-message-string
+            (should-error
+             (mevedel-session-codec-validate-authority-mode 'pid-lock)
+             :type 'error)))))
+
+(mevedel-deftest mevedel-session-codec-authority-mode-for-path ()
+  ,test
+  (test)
+  :doc "a fresh path requires explicit authority and does not create controls"
+  (let ((root (make-temp-file "mevedel-codec-fresh-" t)))
+    (unwind-protect
+        (progn
+          (should-error (mevedel-session-codec-authority-mode-for-path root)
+                        :type 'error)
+          (should (eq 'portable
+                      (mevedel-session-codec-authority-mode-for-path
+                       root nil 'portable)))
+          (should-not (directory-files root nil directory-files-no-dot-files-regexp)))
+      (delete-directory root t)))
+  :doc "a lease proves portable authority but any legacy lock refuses access"
+  (let* ((root (make-temp-file "mevedel-codec-legacy-" t))
+         (lock (file-name-concat root ".lock"))
+         (lease (file-name-concat root ".lease")))
+    (unwind-protect
+        (progn
+          (make-directory lease)
+          (should (eq 'portable
+                      (mevedel-session-codec-authority-mode-for-path root)))
+          (dolist (mixed '(t nil))
+            (unless mixed (delete-directory lease))
+            (with-temp-file lock (insert "legacy bytes"))
+            (dolist (mode '(nil portable pid-lock))
+              (should
+               (string-match-p
+                "scripts/migrate-sessions\\.el"
+                (error-message-string
+                 (should-error
+                  (mevedel-session-codec-authority-mode-for-path root nil mode)
+                  :type 'error)))))
+            (should (equal "legacy bytes"
+                           (with-temp-buffer
+                             (insert-file-contents lock)
+                             (buffer-string))))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-session-codec-deserialize/checkpoint-seed ()
   (let ((root (make-temp-file "mevedel-checkpoint-restore-" t)))
     (unwind-protect

@@ -7,6 +7,11 @@
 
 ;;; Code:
 
+(require 'mevedel-session-test-support
+         (file-name-concat (file-name-directory
+                            (or buffer-file-name load-file-name byte-compile-current-file))
+                           "mevedel-session-test-support"))
+
 (require 'mevedel-buddy)
 (require 'mevedel-buddy-feed)
 (require 'mevedel-plan)
@@ -47,14 +52,16 @@ messages."
            (save-dir (let ((dir (file-name-concat root "session")))
                        (make-directory dir t)
                        dir))
-           (session (mevedel-session--create
-                     :authority-mode 'pid-lock :name "test"
-                     :save-path save-dir))
+           (session (test-mevedel-session-persistence--leased-session save-dir
+                     :name "test"
+                     ))
            (exchange (concat "Add retries to the fetcher\n"
                              (propertize "Use exponential backoff.\n"
                                          'gptel 'response))))
    :after-each ((mevedel-buddy-global-mode -1)
                 (clrhash mevedel-buddy--briefs)
+                (mevedel-session-persistence-lock-release save-dir session)
+                (mevedel-workspace-clear-registry)
                 (delete-directory root t)))
   ,test
   (test)

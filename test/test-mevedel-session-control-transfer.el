@@ -7,6 +7,10 @@
 ;;; Code:
 
 (require 'mevedel-notes)
+(require 'mevedel-session-test-support
+         (file-name-concat (file-name-directory
+                            (or buffer-file-name load-file-name byte-compile-current-file))
+                           "mevedel-session-test-support"))
 
 (require 'helpers
          (file-name-concat
@@ -247,8 +251,8 @@
                 (make-temp-file "mevedel-transfer-stage-" t)))
          (save-path (file-name-as-directory
                      (file-name-concat root "session")))
-         (session (mevedel-session--create
-                   :name "stage" :authority-mode 'pid-lock))
+         (session (test-mevedel-session-persistence--leased-session save-path
+                   :name "stage" :working-directory root))
          (buffer (generate-new-buffer " *mevedel-transfer-stage*")))
     (unwind-protect
         (progn
@@ -259,6 +263,14 @@
           (setf (mevedel-session-save-path session) save-path
                 (mevedel-session-current-segment session) 1
                 (mevedel-session-working-directory session) root)
+          (mevedel-session-publication-publish
+           session
+           (list (list :path (mevedel-session-artifacts-segment-path save-path 1)
+                       :content "committed transcript\n")
+                 (list :path (file-name-concat save-path "session.meta.el")
+                       :content (mevedel-session-artifacts-printed-value
+                                 (mevedel-session-codec-serialize session))
+                       :commit-marker t)))
           (should (eq 'fundamental-mode
                       (buffer-local-value 'major-mode buffer)))
           (mevedel-session-control-transfer--insert-committed-segment
@@ -273,6 +285,8 @@
           (set-buffer-modified-p nil)
           (setq-local kill-buffer-hook nil))
         (kill-buffer buffer))
+      (mevedel-session-persistence-lock-release save-path session)
+      (mevedel-workspace-clear-registry)
       (delete-directory root t))))
 
 

@@ -1238,7 +1238,7 @@ this collapses both shapes to the delivered text."
       (setq-local mevedel--session
                   (unless (eq kind 'agent)
                     (mevedel-session--create
-                     :authority-mode 'pid-lock :name "plan"
+                     :name "plan"
                      :plan-mode (eq kind 'sticky))))
       (setq-local mevedel--current-request
                   (when (eq kind 'read-only-request)
@@ -1275,7 +1275,7 @@ this collapses both shapes to the delivered text."
   (:doc "fires every turn only while Plan mode is active")
   ,test
   (test)
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "main" :plan-mode t))
+  (let* ((session (mevedel-session--create :name "main" :plan-mode t))
          (reminder (mevedel-reminders-make-plan-mode))
          (skeleton
           (concat
@@ -1737,7 +1737,6 @@ this collapses both shapes to the delivered text."
   :doc "stays suppressed during a standalone Plan conversation"
   (let ((session
          (mevedel-session--create
-          :authority-mode 'pid-lock
           :name "main" :plan-mode t :turn-count 2
           :plan-metadata '(:status accepted :accepted-turn 1))))
     (should-not

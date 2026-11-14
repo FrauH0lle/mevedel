@@ -100,7 +100,7 @@ files use an explicit lossless coding: detection read evidence holding a NUL
 byte, such as binary tool output, as raw bytes and broke every non-ASCII string.
 Terminal hooks and queued requests
 wait for settlement, and collection is offered afterward. Explicit checkpointing,
-compaction/close, PID-lock sessions and remote roots use the same preparation
+compaction/close and remote roots use the same preparation
 and publication operations synchronously.
 
 Publication retains capture and completed-turn IDs in private immutable coverage
@@ -282,11 +282,7 @@ Completed, durably saved root turns, session opening, and idle maintenance
 schedule recovery before processing. Recovery inspects inactive captures as well as ready jobs,
 repairs interrupted pin/ready publication, and seals abandoned completed work.
 It verifies the original source session and frozen evidence under temporary
-source authority. PID locks use the existing dead-holder check and a checked
-replacement serialized with normal resume and release by Emacs native file
-locking. A resume replacing the observed stale record prevents recovery from
-acquiring it. Live, foreign,
-or unreadable locks remain untouched. Portable recovery fences an expired
+source authority. Recovery fences an expired
 ordinary lease through the existing generation election. Live leases, publishing
 leases, unresolved mutation, and reserved control transfers remain held for
 normal session recovery. No conversation is resumed and no model request runs

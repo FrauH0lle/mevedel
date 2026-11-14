@@ -1144,10 +1144,10 @@ publication thereby takes three programs instead of six.
 Enumerating a workspace's sessions obeys the same budget. Every candidate
 directory's control artifacts are probed in one program and every lease
 directory is listed in one more, and both observations are then shared with
-the reads they feed: a candidate proved free of a PID lock is recorded in the
-durable transaction that spans the listing, so the assertions each publication
-read repeats cost nothing, and each listing is handed to that read in place of
-its own listing round trip. Lease records, manifests, and sidecars are then
+the reads they feed: legacy-control absence proofs are recorded in the durable
+transaction, so repeated refusal checks cost nothing, and each listing is
+handed to the publication read in place of its own listing round trip.
+Lease records, manifests, and sidecars are then
 read in bounded batches rather than separate programs for each session.
 Capturing a manifest canonicalizes its session root once and qualifies each
 validated relative artifact name beneath it. It does not repeatedly canonicalize
@@ -1703,8 +1703,8 @@ outcome. Emacs exit also cleans up jobs whose delivery never ran and retries
 failed staged-file deletions. A hard process kill cannot run exit cleanup.
 
 Admission is one program carrying the clock, the lease listing and the bound
-generation's record, the transfer-request listing and the PID-lock and
-recovery-root probes. It admits only the warm case: an owned, newest
+generation's record, the transfer-request listing, and the legacy-control
+refusal and recovery-root probes. It admits only the warm case: an owned, newest
 generation whose target record proves this client's live ownership, no recovery
 marker, no live transfer request naming this client, and no quiescing or released
 state. Remembered lease bytes must match when present; absent remembered bytes
@@ -3078,6 +3078,8 @@ repository's common exclude file. The generated entries are:
 Project and file-workspace sessions use the same portable `.lease/` generations
 for concurrent-edit protection. They never create `.lock` files; existing PID
 sessions require [explicit migration](#explicit-session-migration).
+There is no runtime PID-lock acquisition, release, cleanup, or transcript-reader
+branch. Workspace-free sessions remain process-local and carry no durable authority.
 Same-user, same-host proven dead or reused holders of `active` or `claiming`
 leases are reclaimed immediately, including through
 [lobby opens](collaboration.md#the-lobby).

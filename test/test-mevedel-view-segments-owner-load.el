@@ -41,14 +41,19 @@
                   '(progn
                      (require 'mevedel-session-artifacts)
                      (require 'mevedel-structs)
+                     (require 'mevedel-workspace-identity)
                      (require 'mevedel-view-segments)
                      (let* ((directory
                              (make-temp-file "mevedel-segment-cold-" t))
                             (data (generate-new-buffer " *segment-cold-data*"))
                             (view (generate-new-buffer " *segment-cold-view*"))
+                            (workspace (mevedel-workspace--create
+                                        :type 'file :id directory :root directory :name "cold"))
                             (session
                              (mevedel-session--create
-                              :authority-mode 'pid-lock
+                              :authority-mode 'portable :workspace workspace
+                              :working-directory (file-name-as-directory directory)
+                              :execution-target (mevedel-execution-target-create directory)
                               :name "cold"
                               :save-path (file-name-as-directory directory)
                               :current-segment 2
@@ -63,6 +68,18 @@
                                (insert
                                 ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n"
                                 "Archived prompt\n"))
+                             (mevedel-workspace-identity-ensure directory)
+                             (unless (mevedel-session-durability-lease-acquire
+                                      directory "cold fixture" session)
+                               (error "Could not lease cold fixture"))
+                             (mevedel-session-publication-publish
+                              session
+                              (list (list :path (mevedel-session-artifacts-segment-path directory 1)
+                                          :content ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\nArchived prompt\n")
+                                    (list :path (file-name-concat directory "session.meta.el")
+                                          :content (mevedel-session-artifacts-printed-value
+                                                    (mevedel-session-codec-serialize session))
+                                          :commit-marker t)))
                              (with-current-buffer data
                                (org-mode)
                                (setq-local mevedel--session session)
@@ -82,6 +99,7 @@
                            (kill-buffer view))
                          (when (buffer-live-p data)
                            (kill-buffer data))
+                         (mevedel-session-durability-lease-release directory session)
                          (delete-directory directory t))))))))
             (should (string-empty-p (string-trim (buffer-string))))))
       (delete-directory compiled-root t))))

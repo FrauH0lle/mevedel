@@ -23,6 +23,12 @@
 (require 'mevedel-artifact-store)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-persistence)
+(require 'mevedel-session-publication)
+(require 'mevedel-session-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-session-test-support"))
 (require 'mevedel-structs)
 (require 'mevedel-transcript)
 (require 'mevedel-transcript-audit)
@@ -444,9 +450,10 @@
 (mevedel-deftest mevedel-collaboration--handle-execution-result-get
   () ,test (test)
   :doc "parent breadcrumb has no stdout; authorized click prefers child evidence"
-  (let* ((directory (make-temp-file "mevedel-guest-result-" t))
-         (session (mevedel-session--create :name "parent" :save-path directory
-                                          :current-segment 2 :authority-mode 'pid-lock))
+  (let* ((fixture (test-mevedel-session-persistence--make-materialized-session))
+         (session (car fixture))
+         (tempdir (cdr fixture))
+         (directory (mevedel-session-save-path session))
          (child-session (mevedel-session--create :name "child" :save-path
                                                 (file-name-concat directory "child")
                                                 :current-segment 1))
@@ -458,7 +465,8 @@
          (room (list :session session :data-buffer parent :transport 'transport
                      :guests guests))
          sent)
-    (setf (mevedel-session-agent-registry session) (list (cons "/root/child" agent)))
+    (setf (mevedel-session-current-segment session) 2
+          (mevedel-session-agent-registry session) (list (cons "/root/child" agent)))
     (puthash 1 (list :ready t :writable nil) guests)
     (unwind-protect
         (progn
@@ -550,9 +558,10 @@
                            (plist-get (cdar sent) :error)))
             ;; After child loss and parent compaction, retained forwarded
             ;; evidence still answers from a readable older parent segment.
-            (write-region (with-current-buffer parent (buffer-string)) nil
-                          (mevedel-session-artifacts-segment-path directory 1)
-                          nil 'silent)
+            (should
+             (mevedel-session-artifacts-publish-text
+              session (mevedel-session-artifacts-segment-path directory 1)
+              (with-current-buffer parent (buffer-string)) 'utf-8-unix))
             (with-current-buffer parent (erase-buffer))
             (kill-buffer child)
             (plist-put (gethash 1 guests) :last-execution-result-fetch nil)
@@ -562,7 +571,10 @@
             (should (equal "forwarded bounded output\n" (plist-get (cdar sent) :output)))
             ;; A gone archive has no authority or result; no path is accepted
             ;; from the guest as a substitute.
-            (delete-file (mevedel-session-artifacts-segment-path directory 1))
+            (should
+             (mevedel-session-publication-publish
+              session (list (list :path (mevedel-session-artifacts-segment-path directory 1)
+                                  :delete t)) t))
             (plist-put (gethash 1 guests) :last-execution-result-fetch nil)
             (mevedel-collaboration--handle-execution-result-get
              room 1 '(:reqId 5 :owner "/root/child" :executionId "exec-1"
@@ -571,7 +583,7 @@
             (should (plist-get (cdar sent) :error))))
       (when (buffer-live-p parent) (kill-buffer parent))
       (when (buffer-live-p child) (kill-buffer child))
-      (delete-directory directory t)))
+      (test-mevedel-session-persistence--cleanup tempdir)))
   :doc "bounded retained output never exceeds the guest result frame budget"
   (let* ((directory (make-temp-file "mevedel-guest-result-bound-" t))
          (session (mevedel-session--create :name "bound" :save-path directory

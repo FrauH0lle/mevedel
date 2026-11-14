@@ -481,7 +481,6 @@
   (mevedel-view-test--with-buffers
     (let ((session
            (mevedel-session--create
-            :authority-mode 'pid-lock
             :name "fork-points"
             :current-segment 1)))
       (with-current-buffer data-buf
@@ -514,7 +513,6 @@
   (mevedel-view-test--with-buffers
     (let ((session
            (mevedel-session--create
-            :authority-mode 'pid-lock
             :name "rewind-point"
             :current-segment 1))
           called-buffer called-target called-boundary returned-latest)
@@ -559,7 +557,6 @@
         (mevedel-view-test--with-buffers
           (let* ((session
                   (mevedel-session--create
-                   :authority-mode 'pid-lock
                    :name "source"
                    :session-id "source-id"
                    :save-path (file-name-concat root "sessions/source/")
@@ -611,7 +608,6 @@
   (with-temp-buffer
     (let ((session
            (mevedel-session--create
-            :authority-mode 'pid-lock
             :name "source"
             :session-id "source-id"
             :save-path "/tmp/mevedel-view-sessions/source/"))
@@ -690,7 +686,6 @@
            (target-view (generate-new-buffer " *test-target-view*"))
            (source-session
             (mevedel-session--create
-             :authority-mode 'pid-lock
              :name "source"
              :session-id "source-id"
              :save-path source-path
@@ -698,7 +693,6 @@
              :current-segment 1))
            (target-session
             (mevedel-session--create
-             :authority-mode 'pid-lock
              :name "fork"
              :session-id "child-id"
              :save-path target-path
@@ -795,7 +789,6 @@
   (mevedel-view-test--with-buffers
     (let* ((session
             (mevedel-session--create
-             :authority-mode 'pid-lock
              :name "source"
              :session-id "source-id"
              :save-path "/tmp/mevedel-view-sessions/source/"))
@@ -819,7 +812,6 @@
             (with-current-buffer target-data
               (setq-local mevedel--session
                           (mevedel-session--create
-                           :authority-mode 'pid-lock
                            :name "target"
                            :session-id "child-2"))
               (setq-local mevedel--view-buffer target-view))

@@ -318,16 +318,13 @@ starts no inference, and returns the sealed capture descriptors."
                (mevedel-workspace-p (mevedel-session-workspace session))
                (eq buffer (mevedel-session-root-buffer session))
                (mevedel-session-save-path session)
-               (or (not (mevedel-session-codec-portable-authority-p session))
-                   (mevedel-session-durability-lease-owned-p session)))
+               (mevedel-session-durability-lease-owned-p session))
       (with-current-buffer buffer
         (unless (or mevedel--agent-invocation
                     (bound-and-true-p mevedel-session--read-only-mode))
           (mevedel-session-artifacts-assert-mutation-authority session buffer)
-          (let ((seal (lambda () (mevedel-journal-capture--seal-owned session trigger captures))))
-            (if (mevedel-session-codec-portable-authority-p session)
-                (mevedel-session-durability-call-with-reserved-lease session seal)
-              (funcall seal))))))))
+          (mevedel-session-durability-call-with-reserved-lease
+           session (lambda () (mevedel-journal-capture--seal-owned session trigger captures))))))))
 
 (defun mevedel-journal-capture-seal-and-schedule (session buffer trigger &optional captures)
   "Seal SESSION's checkpoints with TRIGGER, then schedule digest processing.
@@ -441,10 +438,8 @@ settlement.  This performs no inference and does not seal the capture."
         ;; The assertion and the reservation share one clock reading.
         (mevedel-session-durability-with-transaction
           (mevedel-session-artifacts-assert-mutation-authority session buffer)
-          (if (mevedel-session-codec-portable-authority-p session)
-              (mevedel-session-durability-call-with-reserved-lease
-               session (lambda () (mevedel-journal-capture--checkpoint-owned session)))
-            (mevedel-journal-capture--checkpoint-owned session)))))))
+          (mevedel-session-durability-call-with-reserved-lease
+           session (lambda () (mevedel-journal-capture--checkpoint-owned session))))))))
 
 (defun mevedel-journal-capture--prepare (session policy client)
   "Prepare SESSION's frozen checkpoint without publishing or pinning it.
@@ -480,8 +475,7 @@ are read, so a worker needs no source mutation authority."
                      (notes (encode-coding-string
                              (mevedel-journal-evidence-notes session)
                              'utf-8-unix))
-                     (head (and (mevedel-session-codec-portable-authority-p session)
-                                (plist-get (mevedel-session-publication session) :head)))
+                     (head (plist-get (mevedel-session-publication session) :head))
                      (metadata
                       (list :capture-id id :session (mevedel-session-session-id session)
                             :session-name (mevedel-session-name session)
@@ -502,9 +496,8 @@ are read, so a worker needs no source mutation authority."
                       (list :id id :metadata metadata :policy policy
                             :source-directory (file-local-name (mevedel-session-save-path session))
                             :source-client client
-                            :source-kind (if (and (mevedel-session-codec-portable-authority-p session)
-                                                  (equal (file-remote-p root)
-                                                         (file-remote-p (mevedel-session-save-path session))))
+                            :source-kind (if (equal (file-remote-p root)
+                                                    (file-remote-p (mevedel-session-save-path session)))
                                              "target" "client")
                             :head head :sources (vconcat (plist-get projection :sources))
                             :evidence (decode-coding-string evidence 'utf-8-unix)

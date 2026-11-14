@@ -155,7 +155,8 @@
     (should (equal "mevedel-view-control-transfer"
                    (file-name-base (or (symbol-file symbol 'defun) "")))))
   (let ((session (mevedel-session--create
-                  :name "control" :session-id "control")))
+                  :name "control" :session-id "control"
+                  :authority-mode 'portable)))
     (test-mevedel-view-control-transfer--with-pair session nil
       (let ((rebuild #'ignore)
             (drain (lambda () t)))
@@ -174,7 +175,8 @@
   ,test
   (test)
   :doc "retains registrations but refuses rearming until initialization"
-  (let ((session (mevedel-session--create :name "stop-polling")))
+  (let ((session (mevedel-session--create :name "stop-polling"
+                                          :authority-mode 'portable)))
     (test-mevedel-view-control-transfer--with-pair session nil
       (let ((drain (lambda () t)))
         (mevedel-view-control-transfer-initialize #'ignore drain)
@@ -195,7 +197,7 @@
   ,test
   (test)
   :doc "does not poll a session that cannot transfer control"
-  (let ((session (mevedel-session--create :name "local" :authority-mode 'pid-lock)))
+  (let ((session (mevedel-session--create :name "local")))
     (test-mevedel-view-control-transfer--with-pair session nil
       (mevedel-view--control-transfer-schedule view)
       (should-not mevedel-view--control-transfer-timer))))
@@ -205,7 +207,8 @@
   (test)
   :doc "removes every registration and cancels the owned timer"
   (let ((session (mevedel-session--create
-                  :name "control" :session-id "control")))
+                  :name "control" :session-id "control"
+                  :authority-mode 'portable)))
     (test-mevedel-view-control-transfer--with-pair session nil
       (let ((drain (lambda () t)))
         (mevedel-view-control-transfer-initialize #'ignore drain)

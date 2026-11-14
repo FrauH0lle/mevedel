@@ -548,7 +548,7 @@
   ,test
   (test)
   :doc "reserves monotonically suffixed review and verify path names"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "validation"))
+  (let* ((session (mevedel-session--create :name "validation"))
          (review (mevedel-agent-record--create :path "/root/review"))
          (review-2 (mevedel-agent-record--create :path "/root/review_2"))
          (verify (mevedel-agent-record--create :path "/root/verify")))
@@ -628,7 +628,7 @@
           (with-temp-file (file-name-concat root "example.txt") (insert "review evidence\n"))
           (with-current-buffer data
             (setq default-directory root)
-            (setq-local mevedel--session (mevedel-session--create :authority-mode 'pid-lock :name "review"))
+            (setq-local mevedel--session (mevedel-session--create :name "review"))
             (setq-local mevedel--current-request (mevedel-request--create :session mevedel--session))
             (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
                        (lambda (_session _name prompt _callback &rest _options)
@@ -669,7 +669,7 @@
                         '((goal-review :provider "Balanced:balanced-model" :effort high)
                           (verifier :provider "Missing:model")))
             (setq-local mevedel--session
-                        (mevedel-session--create :authority-mode 'pid-lock :name "goal"))
+                        (mevedel-session--create :name "goal"))
             (setq-local mevedel--current-request
                         (mevedel-request--create :session mevedel--session))
             (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
@@ -732,7 +732,7 @@
     (unwind-protect
         (with-current-buffer data
           (setq-local mevedel--session
-                      (mevedel-session--create :authority-mode 'pid-lock :name "review"))
+                      (mevedel-session--create :name "review"))
           (setq-local mevedel--current-request
                       (mevedel-request--create :session mevedel--session))
           (setq-local mevedel-agents--specs roster)
@@ -801,7 +801,7 @@
     (unwind-protect
         (with-current-buffer data
           (setq-local mevedel--session
-                      (mevedel-session--create :authority-mode 'pid-lock :name "verify"))
+                      (mevedel-session--create :name "verify"))
           (setq-local mevedel--current-request
                       (mevedel-request--create :session mevedel--session))
           (setq-local mevedel-model-workloads
@@ -922,7 +922,7 @@
     (unwind-protect
         (with-current-buffer data
           (setq-local mevedel--session
-                      (mevedel-session--create :authority-mode 'pid-lock :name "cancel"))
+                      (mevedel-session--create :name "cancel"))
           (setq-local mevedel--current-request
                       (mevedel-request--create :session mevedel--session))
           (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
@@ -956,7 +956,7 @@
     (unwind-protect
         (with-current-buffer data
           (setq-local mevedel--session
-                      (mevedel-session--create :authority-mode 'pid-lock :name "error"))
+                      (mevedel-session--create :name "error"))
           (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
                      (lambda (&rest _args)
                        (error "Dispatch exploded"))))
@@ -1011,7 +1011,7 @@
   :doc "review status redraw preserves a multiline leading-> composer draft"
   (mevedel-view-test--with-buffers
     (let* ((draft "> quoted\nsecond line")
-           (session (mevedel-session--create :authority-mode 'pid-lock :name "review-redraw"))
+           (session (mevedel-session--create :name "review-redraw"))
            (invocation
             (mevedel-agent-invocation--create
              :agent (mevedel-agent-get "reviewer")
@@ -1102,7 +1102,7 @@
         (progn
           (with-current-buffer data
             (setq-local mevedel--session
-                        (mevedel-session--create :authority-mode 'pid-lock :name "review")))
+                        (mevedel-session--create :name "review")))
           (with-current-buffer view
             (setq-local mevedel--data-buffer data)
             (should (eq data (mevedel-review--current-data-buffer)))))
@@ -1235,7 +1235,7 @@
           (insert "source text")
           (with-current-buffer data
             (setq-local mevedel--session
-                        (mevedel-session--create :authority-mode 'pid-lock :name "review")))
+                        (mevedel-session--create :name "review")))
           (cl-letf (((symbol-function 'mevedel-review--ensure-dispatch-deps)
                      #'ignore)
                     ((symbol-function
@@ -1280,7 +1280,7 @@
           (with-current-buffer data
             (setq-local mevedel--session
                         (mevedel-session--create
-                         :authority-mode 'pid-lock :name "review")
+                         :name "review")
                         mevedel--current-request (eq state 'request)
                         mevedel-compact-run-in-flight (eq state 'compaction)
                         mevedel-session--read-only-mode (eq state 'read-only))

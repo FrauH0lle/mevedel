@@ -112,9 +112,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
 
 
 (defun test-mevedel-session-persistence--make-file-workspace (root)
-  "Build a file-workspace authority rooted at ROOT.
-Use this for tests that exercise direct local files rather than project
-publication."
+  "Build a portable file-workspace authority rooted at ROOT."
   (mevedel-workspace-clear-registry)
   (mevedel-workspace-get-or-create
    'file
@@ -123,9 +121,35 @@ publication."
    (file-name-nondirectory (directory-file-name root))))
 
 
-(defun test-mevedel-session-persistence--pid-lock-context ()
-  "Return an explicit file-session authority profile for lock tests."
-  (mevedel-session--create :authority-mode 'pid-lock))
+(defun test-mevedel-session-persistence--lease-fixture (session &optional artifacts)
+  "Lease SESSION's existing save path and publish optional ARTIFACTS with a marker.
+Return SESSION.  The caller releases its lease during cleanup."
+  (when (and artifacts
+             (not (cl-some (lambda (item) (plist-get item :commit-marker)) artifacts)))
+    (error "Fixture artifacts require a sidecar commit marker"))
+  (setf (mevedel-session-authority-mode session) 'portable)
+  (unless (mevedel-session-durability-lease-acquire
+           (mevedel-session-save-path session) "*lease-fixture*" session)
+    (error "Could not acquire fixture lease"))
+  (when artifacts
+    (mevedel-session-publication-publish session artifacts t))
+  session)
+
+
+(defun test-mevedel-session-persistence--leased-session (directory &rest slots)
+  "Build a real file-workspace session at DIRECTORY with caller SLOTS.
+The caller releases the lease, removes DIRECTORY and clears the workspace registry."
+  (let* ((root (file-name-as-directory directory))
+         (workspace (test-mevedel-session-persistence--make-file-workspace root)))
+    (mevedel-workspace-identity-ensure root)
+    (test-mevedel-session-persistence--lease-fixture
+     (apply #'mevedel-session--create
+            (append slots
+                    (list :workspace workspace :authority-mode 'portable
+                          :execution-target (mevedel-execution-target-create root)
+                          :working-directory root :save-path root
+                          :name "fixture" :naming-state 'explicit
+                          :session-id (mevedel-session-generate-id)))))))
 
 
 (defun test-mevedel-session-persistence--execution-tool-block
@@ -473,17 +497,29 @@ Lease cleanup also requires the last renewal to be older than the cap."
                   (mevedel-session-durability--lease-path save-path))
                  :status)))
 
-(defun test-mevedel-session-persistence--expire-session (session)
-  "Set SESSION's persisted update time to fourteen days ago."
-  (let* ((save-path (mevedel-session-save-path session))
-         (sidecar (mevedel-session-artifacts-sidecar-path save-path))
-         (plist (mevedel-session-codec-read sidecar)))
-    (plist-put
-     plist :updated-at
-     (format-time-string
-      "%FT%H-%M-%S"
-      (time-subtract (current-time) (* 14 24 60 60))))
-    (mevedel-session-codec-write sidecar plist)))
+(defun test-mevedel-session-persistence--edit-sidecar (session function)
+  "Publish SESSION's metadata after FUNCTION edits it under its held lease."
+  (let* ((directory (mevedel-session-save-path session))
+         (sidecar (mevedel-session-codec-read
+                   (plist-get (mevedel-session-publication-read directory)
+                              :sidecar))))
+    (mevedel-session-publication-publish
+     session
+     (list (list :path (mevedel-session-artifacts-sidecar-path directory)
+                 :content (mevedel-session-artifacts-printed-value
+                           (funcall function sidecar))
+                 :commit-marker t)) t)))
+
+
+(defun test-mevedel-session-persistence--expire-session (session &optional days)
+  "Publish SESSION's update time as DAYS ago, defaulting to fourteen."
+  (test-mevedel-session-persistence--edit-sidecar
+   session
+   (lambda (sidecar)
+     (plist-put sidecar :updated-at
+                (format-time-string
+                 "%FT%H-%M-%S"
+                 (time-subtract (current-time) (* (or days 14) 24 60 60)))))))
 
 
 (defun test-mevedel-session-persistence--make-missing-cwd-session ()

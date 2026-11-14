@@ -248,7 +248,7 @@
            (mevedel-permission-reviewer 'user)
            (session (mevedel-session--create
                      :permission-mode 'ask :sandbox-mode sandbox-mode
-                     :authority-mode 'pid-lock :working-directory root))
+                     :working-directory root))
            entry allowed)
       (unwind-protect
           (with-temp-buffer

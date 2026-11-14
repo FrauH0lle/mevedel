@@ -910,11 +910,10 @@ Both lists are in source order, so one pass pairs them."
          (logical (or (plist-get descriptor :logical)
                       (format "segment-%04d.chat.org" number)))
          (portable (mevedel-session-codec-portable-authority-p session))
-         (source (if portable
-                     (and (mevedel-session-durability-lease-owned-p session)
-                          (mevedel-session-publication-uncommitted-artifact
-                           session logical))
-                   (plist-get descriptor :path)))
+         (source (and portable
+                      (mevedel-session-durability-lease-owned-p session)
+                      (mevedel-session-publication-uncommitted-artifact
+                       session logical)))
          (publication (and portable
                            (or (mevedel-session-publication session)
                                (mevedel-session-publication-read

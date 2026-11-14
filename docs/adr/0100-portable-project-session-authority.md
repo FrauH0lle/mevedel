@@ -75,6 +75,31 @@ standalone migration does not change the runtime authority or codec contract. Se
 
 ## Decision history
 
+The same 2026-11-14 change removed the runtime PID-lock implementation after
+moving file sessions to the lease. Keeping unused branches made tests and
+callers select obsolete fixed-path storage and bypass the publication contract.
+Durable fixtures now exercise real lease ownership and committed artifacts;
+workspace-free fixtures carry no durable authority. Legacy PID sidecars remain
+input data only for the standalone migration script. This removes no lease
+takeover restriction: forced takeover of a live or foreign holder is still
+unavailable.
+
+Removing the PID-specific paths intentionally changes these interactions:
+
+- A conflicting live lease opens a read-only inspector immediately instead
+  of offering break/read-only/abort. Closing that buffer is the abort action;
+  it does not acquire ownership or change the holder's state.
+- A missing published live transcript fails closed with an explicit error,
+  rather than offering to delete the directory during resume. Confirmed
+  Discard is the separate destructive action and retains its authority checks.
+- Cleanup no longer exempts a pre-lease `.lock` because it names this Emacs
+  or an apparently dead PID. Such evidence refuses cleanup unchanged; close
+  the session and run the standalone migration script first.
+- Resume no longer salvages orphan fixed transcripts by advancing the segment
+  counter. The lease publishes transcript and counter in one generation, so
+  the old transcript-before-sidecar crash ordering cannot occur. Arbitrarily
+  inconsistent manually edited trees have no automatic salvage path.
+
 On 2026-11-14 Roland decided to keep one session-ownership implementation:
 file-workspace sessions moved from the PID-lock profile to the portable
 lease, replacing the earlier decision that kept both profiles. A matched

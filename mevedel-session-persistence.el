@@ -141,7 +141,7 @@
 (declare-function mevedel-session-artifacts-disown-save-machinery "mevedel-session-artifacts" nil)
 (declare-function mevedel-session-artifacts-find-artifact-noselect "mevedel-session-artifacts" (session logical &optional inspection committed-only))
 (declare-function mevedel-session-artifacts-inhibit-so-long "mevedel-session-artifacts" ())
-(declare-function mevedel-session-artifacts-inspect-cold-session "mevedel-session-artifacts" (save-path authority-mode &optional publication scope))
+(declare-function mevedel-session-artifacts-inspect-cold-session "mevedel-session-artifacts" (save-path &optional publication scope))
 (declare-function mevedel-session-artifacts-load-instructions "mevedel-session-artifacts" (session))
 (declare-function mevedel-session-artifacts-printed-value "mevedel-session-artifacts" (value))
 (declare-function mevedel-session-artifacts-publish-sidecar-state "mevedel-session-artifacts" (session root-buffer &optional token))
@@ -150,7 +150,6 @@
 (declare-function mevedel-session-artifacts-save "mevedel-session-artifacts" (session buffer &optional settled force token))
 (declare-function mevedel-session-artifacts-save-agent-registry "mevedel-session-artifacts" (session buffer &optional token))
 (declare-function mevedel-session-artifacts-segment-path "mevedel-session-artifacts" (save-path n))
-(declare-function mevedel-session-artifacts-self-heal-segment-counter "mevedel-session-artifacts" (session save-path))
 (declare-function mevedel-session-artifacts-sessions-dir "mevedel-session-artifacts" (workspace))
 (declare-function mevedel-session-artifacts-sidecar-path "mevedel-session-artifacts" (save-path))
 (declare-function mevedel-session-artifacts-stabilize-gptel-bounds "mevedel-session-artifacts" nil)
@@ -172,9 +171,8 @@
 (declare-function mevedel-session-codec-deserialize "mevedel-session-codec" (plist workspace))
 (declare-function mevedel-session-codec-portable-authority-p "mevedel-session-codec" (session))
 (declare-function mevedel-session-codec-read "mevedel-session-codec" (path))
-(declare-function mevedel-session-codec-validate-authority-mode "mevedel-session-codec" (mode workspace-plist))
+(declare-function mevedel-session-codec-validate-authority-mode "mevedel-session-codec" (mode))
 (declare-function mevedel-session-codec-validate-current-sidecar "mevedel-session-codec" (plist))
-(declare-function mevedel-session-codec-write "mevedel-session-codec" (path plist))
 (defvar mevedel-session-codec-format-version)
 
 ;; `mevedel-session-collection'
@@ -458,9 +456,8 @@ most once a day per Emacs, and only an interactive Emacs sweeps from
 session activity or exit.  Age comes from `:updated-at', or the sidecar
 or session directory modification time when metadata cannot provide it;
 a portable session's last lease renewal must also be older.  Sessions
-with an owner are always skipped: any cross-host lock, a same-host lock
-whose PID is live and not known to have been reused, or a portable lease
-that is live, publishing, mutating, or reserved for transfer.  So are the
+with a live, publishing, mutating or transfer-reserved lease are skipped.
+Legacy pre-lease control state is always refused.  So are the
 `mevedel-session-keep-recent-count' most-recently-updated sessions.  A nil
 value disables auto-cleanup entirely."
   :type '(choice (integer :tag "Days")
@@ -507,18 +504,13 @@ to Emacs auto-save alone."
 (defun mevedel-session-persistence--segment-text (session path)
   "Return SESSION's committed transcript text at PATH, or nil when absent.
 Portable transcripts live in the publication, not at PATH itself."
-  (if (mevedel-session-codec-portable-authority-p session)
-      (when (mevedel-session-artifacts-artifact-present-p
-             session (file-name-nondirectory path) t)
-        ;; Published artifacts are literal bytes; transcripts are UTF-8.
-        (decode-coding-string
-         (mevedel-session-artifacts-read-artifact
-          session (file-name-nondirectory path) t)
-         'utf-8-unix))
-    (when (file-regular-p path)
-      (with-temp-buffer
-        (insert-file-contents path)
-        (buffer-string)))))
+  (when (mevedel-session-artifacts-artifact-present-p
+         session (file-name-nondirectory path) t)
+    ;; Published artifacts are literal bytes; transcripts are UTF-8.
+    (decode-coding-string
+     (mevedel-session-artifacts-read-artifact
+      session (file-name-nondirectory path) t)
+     'utf-8-unix)))
 
 (defun mevedel-session-persistence--execution-successor-ids (text)
   "Return structured execution ids present in transcript TEXT."
@@ -771,42 +763,26 @@ TOKEN is the caller's gate token."
   (when (and (memq session (bound-and-true-p mevedel-session-artifacts--terminal-sessions))
              (not prepared))
     (user-error "Session checkpoint is being prepared"))
-  (when (and session (mevedel-session-save-path session))
-    (let* ((sidecar (mevedel-session-artifacts-sidecar-path
-                     (mevedel-session-save-path session)))
-           (portable-p
-            (mevedel-session-codec-portable-authority-p session))
-           (present-p
-            (if portable-p
-                (mevedel-session-artifacts-artifact-present-p
-                 session "session.meta.el")
-              (file-exists-p sidecar))))
-      (when present-p
-        (condition-case err
-            (if portable-p
-                ;; Admission and publication share one transaction's
-                ;; recovery and clock observations rather than each
-                ;; running its own target programs.
-                (progn
-                  ;; Drain async work before the sidecar is captured.
-                  (mevedel-session-publication-barrier session token)
-                  (mevedel-session-durability-with-transaction
-                    (mevedel-session-artifacts-assert-mutation-authority
-                     session buffer)
-                    (mevedel-session-publication-publish
-                     session
-                     (list (mevedel-session-artifacts--sidecar-artifact
-                            session buffer checkpoint))
-                     nil prepared token)))
-              (mevedel-session-codec-write
-               sidecar
-               (mevedel-session-artifacts-build-sidecar session buffer checkpoint))
-              (when checkpoint
-                (mevedel-session-checkpoint-install session checkpoint)))
-          (error
-           (mevedel-diagnostic-message (mevedel-diagnostic-scope session) "Sidecar rewrite failed: %S" err)
-           nil)
-          (:success t))))))
+  (when (and session (mevedel-session-save-path session)
+             (mevedel-session-codec-portable-authority-p session)
+             (mevedel-session-artifacts-artifact-present-p
+              session "session.meta.el"))
+    (condition-case err
+        (progn
+          ;; Drain async work before the sidecar is captured.
+          (mevedel-session-publication-barrier session token)
+          (mevedel-session-durability-with-transaction
+            (mevedel-session-artifacts-assert-mutation-authority session buffer)
+            (mevedel-session-publication-publish
+             session
+             (list (mevedel-session-artifacts--sidecar-artifact
+                    session buffer checkpoint))
+             nil prepared token)))
+      (error
+       (mevedel-diagnostic-message (mevedel-diagnostic-scope session)
+                                   "Sidecar rewrite failed: %S" err)
+       nil)
+      (:success t))))
 
 (defun mevedel-session-persistence-save-agent-state (session &optional token)
   "Commit SESSION's agent state through its authoritative root buffer.
@@ -957,237 +933,21 @@ already registered the session-owned data buffer."
 ;;
 ;;; Locking
 
-(defvar mevedel-session-persistence--emacs-invocation-time
-  (format-time-string "%FT%H-%M-%S")
-  "Wall-clock time when the lock module loaded.
-Stamped into `.lock' files for diagnostics, never as liveness authority.")
-
-(defvar mevedel-session-persistence--reclaim-stale-locks nil
-  "When non-nil, reclaim provably stale same-host PID locks without prompting.
-Bound by lobby session opens; live, foreign and uncertain holders still
-require an interactive decision.  Portable leases are unaffected.")
-
-(defun mevedel-session-persistence--lock-path (session-dir)
-  "Return the absolute path to SESSION-DIR's `.lock' file."
-  (file-name-concat session-dir ".lock"))
-
-(defun mevedel-session-persistence--change-lock (lock-path expected buffer-name)
-  "Replace EXPECTED lock at LOCK-PATH with BUFFER-NAME, or delete for nil.
-Serialize the observed-holder check and mutation with Emacs's native file
-lock. Creation, replacement and release share that lock; a competing live
-holder causes a silent refusal, never a lock-breaking prompt. Return nil
-when another client changed the record or owns its mutation lock."
-  (let ((create-lockfiles t) locked temporary)
-    (condition-case nil
-        (unwind-protect
-            (cl-letf (((symbol-function 'ask-user-about-lock)
-                       (lambda (&rest _) (error "Session lock mutation is busy"))))
-              (when (eq (file-locked-p lock-path) t)
-                (error "Session lock mutation is reentrant"))
-              (lock-file lock-path)
-              (unless (eq (file-locked-p lock-path) t)
-                (error "Session lock mutation could not be locked"))
-              (setq locked t)
-              (when (and (or expected (not (file-exists-p lock-path)))
-                         (equal expected (mevedel-session-persistence--read-lock lock-path)))
-                (if buffer-name
-                    (progn
-                      (setq temporary (make-temp-file (file-name-concat (file-name-directory lock-path) ".mevedel-lock-")))
-                      (with-temp-file temporary
-                        (let ((print-length nil) (print-level nil))
-                          (prin1 (list :pid (emacs-pid) :hostname (system-name)
-                                       :emacs-invocation-time mevedel-session-persistence--emacs-invocation-time
-                                       :process-identity (mevedel-session-durability--pid-identity (emacs-pid))
-                                       :buffer buffer-name) (current-buffer))))
-                      (rename-file temporary lock-path t))
-                  (delete-file lock-path))
-                t))
-          (when (and temporary (file-exists-p temporary)) (delete-file temporary))
-          (when locked (unlock-file lock-path)))
-      (error nil))))
-
-(defun mevedel-session-persistence--write-lock (lock-path buffer-name expected)
-  "Replace LOCK-PATH with BUFFER-NAME only while its EXPECTED holder remains.
-Signal on a competing replacement so a caller cannot assume ownership."
-  (unless (mevedel-session-persistence--change-lock lock-path expected buffer-name)
-    (error "Session lock changed before replacement")))
-
-(defun mevedel-session-persistence--read-lock (lock-path)
-  "Return the plist read from LOCK-PATH, or nil if absent or unparseable."
-  (when (file-exists-p lock-path)
-    (condition-case _
-        (with-temp-buffer
-          (insert-file-contents lock-path)
-          (goto-char (point-min))
-          (read (current-buffer)))
-      (error nil))))
-
-(defun mevedel-session-persistence--same-host-lock-active-p (lock-info)
-  "Return non-nil if same-host LOCK-INFO describes an active holder.
-
-Dead PIDs are stale.  A live PID is stale only when its clock-independent
-process identity differs from the lock holder's recorded identity.  Missing
-or malformed evidence keeps the lock active rather than risking data loss."
-  (let ((pid (plist-get lock-info :pid)))
-    (or (not (and (integerp pid) (> pid 0)))
-        (when (mevedel-session-durability--pid-alive-p pid)
-          (let ((recorded (plist-get lock-info :process-identity))
-                (current (mevedel-session-durability--pid-identity pid))
-                (case-fold-search nil))
-            (or (not (and (stringp recorded)
-                          (string-match-p
-                           mevedel-session-durability--process-identity-regexp
-                           recorded)))
-                (not current)
-                (equal recorded current)))))))
-
 (defun mevedel-session-persistence-lock-acquire
     (session-dir buffer-name &optional session)
-  "Acquire SESSION-DIR's mutation authority for BUFFER-NAME.
-
-Portable sessions use a renewable lease.  File-workspace sessions use `.lock'.
-SESSION supplies the live lease owner when SESSION-DIR is portable.
-
-Returns:
-  t   - lock acquired (or broken from a previous holder).
-  nil - user chose read-only access; caller should set variable
-        `buffer-read-only'.
-
-Signals `user-error' when the user declines to break a stale lock or
-aborts any of the 3-way conflict prompts.
-
-Portable project sessions acquire their renewable lease and never inspect the
-PID-lock table.  File-workspace sessions use the following lock table:
-- No existing lock: write a new lock, return t.
-- Provably stale same-host lock (dead or reused PID): prompt to break,
-  unless `mevedel-session-persistence--reclaim-stale-locks' is non-nil.
-- Lock from same host, live PID: 3-way prompt -- break / read-only / abort.
-- Lock from different host: 3-way prompt -- break / read-only / abort."
-  (if (eq (mevedel-session-codec-authority-mode-for-path
-           session-dir session)
-          'portable)
-      (progn
-        (when session
-          (mevedel-session-durability-disclose session))
-        (mevedel-session-durability-lease-acquire
-         session-dir buffer-name session))
-    (let* ((lock-path (mevedel-session-persistence--lock-path session-dir))
-           (existing (mevedel-session-persistence--read-lock lock-path))
-           (same-host (and existing
-                           (equal (plist-get existing :hostname)
-                                  (system-name)))))
-      (cond
-       ((null existing)
-        ;; Checked creation uses the same native mutation lock as replacement.
-        ;; If another process wins, reread its holder before prompting.
-        (cond
-         ((mevedel-session-persistence--change-lock lock-path nil buffer-name)
-          t)
-         ((mevedel-session-persistence--read-lock lock-path)
-          (mevedel-session-persistence-lock-acquire
-           session-dir buffer-name session))
-         (t
-          (user-error "Session lock exists but could not be read: %s"
-                      lock-path))))
-       ((and same-host
-             (not (mevedel-session-persistence--same-host-lock-active-p existing)))
-        (if (or mevedel-session-persistence--reclaim-stale-locks
-                (y-or-n-p
-                 (format "Stale mevedel lock (PID %d, buffer %s).  Break and proceed? "
-                         (plist-get existing :pid)
-                         (plist-get existing :buffer))))
-            (progn
-              (mevedel-session-persistence--write-lock lock-path buffer-name existing)
-              t)
-          (user-error "Lock not broken")))
-       (t
-        (let ((prompt
-               (if same-host
-                   (format
-                    (concat "Mevedel session locked by a live process on this host:\n"
-                            "  PID:    %s\n"
-                            "  Since:  %s\n"
-                            "  Buffer: %s\n"
-                            "[b]reak, [r]ead-only, [a]bort? ")
-                    (plist-get existing :pid)
-                    (plist-get existing :emacs-invocation-time)
-                    (plist-get existing :buffer))
-                 (format
-                  (concat "Mevedel session locked by:\n"
-                          "  PID:    %s\n"
-                          "  Host:   %s\n"
-                          "  Since:  %s\n"
-                          "  Buffer: %s\n"
-                          "[b]reak, [r]ead-only, [a]bort? ")
-                  (plist-get existing :pid)
-                  (plist-get existing :hostname)
-                  (plist-get existing :emacs-invocation-time)
-                  (plist-get existing :buffer)))))
-          (pcase (read-char-choice prompt '(?b ?r ?a))
-            (?b (mevedel-session-persistence--write-lock lock-path buffer-name existing)
-                t)
-            (?r nil)
-            (?a (user-error "Session resume aborted")))))))))
+  "Acquire SESSION-DIR's portable lease for BUFFER-NAME.
+SESSION supplies the live owner.  Return nil when another client owns the
+lease, permitting read-only inspection; legacy pre-lease state is refused."
+  (mevedel-session-codec-authority-mode-for-path session-dir session)
+  (when session
+    (mevedel-session-durability-disclose session))
+  (mevedel-session-durability-lease-acquire session-dir buffer-name session))
 
 (defun mevedel-session-persistence-lock-release (session-dir &optional session token)
-  "Release this client's mutation authority for SESSION-DIR.
-SESSION supplies the live lease owner when SESSION-DIR is portable.  TOKEN is
-the caller's gate token."
-  (if (eq (mevedel-session-codec-authority-mode-for-path
-           session-dir session)
-          'portable)
-      (progn
-        (mevedel-session-durability-lease-release session-dir session token))
-    (let* ((lock-path (mevedel-session-persistence--lock-path session-dir))
-           (existing  (mevedel-session-persistence--read-lock lock-path)))
-      (when (and existing
-                 (eq (plist-get existing :pid) (emacs-pid))
-                 (equal (plist-get existing :hostname) (system-name)))
-        (mevedel-session-persistence--change-lock lock-path existing nil)))))
-
-(defun mevedel-session-persistence-call-with-abandoned-lock (session-dir function)
-  "Call FUNCTION while holding abandoned file SESSION-DIR's PID lock.
-This uses the same stale-holder test as the session chooser.  Live, foreign,
-and unreadable locks remain untouched.  No prompt or conversation is created."
-  (unless (eq 'pid-lock (mevedel-session-codec-authority-mode-for-path session-dir))
-    (error "Abandoned PID-lock recovery requires a file session"))
-  (let* ((path (mevedel-session-persistence--lock-path session-dir))
-         (existing (mevedel-session-persistence--read-lock path)))
-    (when (and (or (not existing)
-                   (and (equal (plist-get existing :hostname) (system-name))
-                        (integerp (plist-get existing :pid))
-                        (> (plist-get existing :pid) 0)
-                        (not (mevedel-session-persistence--same-host-lock-active-p existing))))
-               (mevedel-session-persistence--change-lock path existing "journal recovery"))
-      (unwind-protect (funcall function)
-        (mevedel-session-persistence-lock-release session-dir)))))
-
-(defun mevedel-session-persistence--sweep-stale-locks (workspace)
-  "Silently remove stale `.lock' files in WORKSPACE.
-
-A lock is stale only when its hostname matches this host and the holder
-is not active: either its PID is dead, or the PID is live but the live
-process identity proves PID reuse.  Cross-host locks are left alone.
-Best-effort; any I/O failure is swallowed.
-
-Called opportunistically from the `mevedel' session chooser."
-  (let ((sessions-dir (mevedel-session-artifacts-sessions-dir workspace)))
-    ;; Portable leases expire and are taken over explicitly.  A project
-    ;; sweep has no authority over them.
-    (when (and (eq (mevedel-workspace-type workspace) 'file)
-               (file-directory-p sessions-dir))
-      (dolist (entry (directory-files sessions-dir t "\\`[^.]"))
-        (when (file-directory-p entry)
-          (let* ((lock-path (mevedel-session-persistence--lock-path entry))
-                 (info      (mevedel-session-persistence--read-lock
-                             lock-path)))
-            (when (and info
-                       (equal (plist-get info :hostname) (system-name))
-                       (not (mevedel-session-persistence--same-host-lock-active-p
-                             info)))
-              (condition-case _
-                  (mevedel-session-persistence--change-lock lock-path info nil)
-                (error nil)))))))))
+  "Release this client's portable lease for SESSION-DIR.
+SESSION supplies the live owner; TOKEN is the caller's mutation gate token."
+  (mevedel-session-codec-authority-mode-for-path session-dir session)
+  (mevedel-session-durability-lease-release session-dir session token))
 
 (defun mevedel-session-persistence-release-on-kill ()
   "Buffer-local `kill-buffer-hook' that releases session mutation authority.
@@ -1579,48 +1339,6 @@ failures and read-only mode when active."
 ;;
 ;;; Read path (resume)
 
-(defun mevedel-session-persistence--find-file-noselect (file)
-  "Return a buffer visiting persisted mevedel FILE without `so-long'.
-
-Persisted chat and agent transcript files may contain very long org
-property lines, especially GPTEL_BOUNDS.  Those lines are expected
-data, and letting `so-long' replace `org-mode' breaks gptel/org state
-restoration and reveal timers."
-  (let* ((so-long-predicate #'ignore)
-         ;; Segments live under the project, so its directory-local
-         ;; variables apply; restores run where nobody may be there to
-         ;; confirm unsafe ones.
-         (enable-local-variables :safe)
-         ;; Bound around the visit so a stale entry cannot move point either.
-         (save-place-mode nil)
-         (normal-mode-function (symbol-function 'normal-mode))
-         (set-auto-mode-function (symbol-function 'set-auto-mode))
-         (buffer
-          (cl-letf (((symbol-function 'normal-mode)
-                     (lambda (&optional find-file)
-                       ;; `delay-mode-hooks' covers derived-mode hooks but
-                       ;; `kill-all-local-variables' runs this one directly.
-                       (when (equal buffer-file-name file)
-                         (setq-local change-major-mode-hook nil))
-                       (funcall normal-mode-function find-file)))
-                    ((symbol-function 'set-auto-mode)
-                     (lambda (&optional keep-mode-if-same)
-                       ;; `normal-mode' cleared its temporary local binding
-                       ;; before dispatching to the selected major mode.
-                       (when (equal buffer-file-name file)
-                         (setq-local change-major-mode-hook nil))
-                       (funcall set-auto-mode-function keep-mode-if-same))))
-            (mevedel--call-with-bare-transcript-mode
-             (lambda () (find-file-noselect file))))))
-    (with-current-buffer buffer
-      (unless (derived-mode-p 'org-mode)
-        (mevedel--transcript-org-mode))
-      ;; The let-binding only covers the visit.  Keep native inhibition active
-      ;; across every later major-mode change too.
-      (mevedel-session-artifacts-inhibit-so-long)
-      (mevedel--forget-place))
-    buffer))
-
 (defun mevedel-session-persistence-load-sidecar (path &optional scope)
   "Read a current-version sidecar plist from PATH.
 Return nil when the sidecar is missing or unreadable.  Signal when a
@@ -1715,20 +1433,6 @@ not search unrelated buffers or infer roles from view-local variables."
                                 session-id))))
           candidate))))
 
-(defun mevedel-session-persistence--maybe-prune-orphan (session-dir segment-path)
-  "Offer to delete SESSION-DIR when SEGMENT-PATH is missing.
-Called from the restore path when the live segment file cannot be
-found.  Returns nil; signals `user-error' to abort the restore."
-  (cond
-   ((and (file-directory-p session-dir)
-         (yes-or-no-p
-          (format "Live segment %s is missing.  Delete orphan session directory %s? "
-                  segment-path session-dir)))
-    (delete-directory session-dir t)
-    (user-error "Orphan session directory deleted"))
-   (t
-    (user-error "Session segment file %s missing" segment-path))))
-
 (defun mevedel-session-persistence--hydrate-restored-buffer
     (buf session workspace segment-path acquired additional-roots
          lifecycle-source &optional artifact-callback checkpoint-callback)
@@ -1765,7 +1469,7 @@ CHECKPOINT-CALLBACK receives the candidate frozen with repaired root bytes."
                   (mevedel-tool-render-data-reconcile-lost-executions buf))))
           (when (or (> transcript-repairs 0) (> ptc-consumptions 0))
             ;; PTC insertions and lost-execution repairs both change transcript
-            ;; length; both publication paths need current offsets.  Rewrite
+            ;; length; the repair publication needs current offsets.  Rewrite
             ;; only bounds: chat setup has not installed the advice that keeps
             ;; `gptel--save-state' from writing request config to the drawer.
             (mevedel-session-artifacts-stabilize-gptel-bounds)
@@ -1774,21 +1478,16 @@ CHECKPOINT-CALLBACK receives the candidate frozen with repaired root bytes."
                        (mevedel-session-checkpoint-capture
                         session "/root" (mevedel-session-artifacts--live-sidecar session buf)))
               (setq checkpoint-captured t))
-            (if artifact-callback
+            (when artifact-callback
                 (funcall
                  artifact-callback
                  (list :path segment-path
                        :content (buffer-string)
-                       :coding (or buffer-file-coding-system 'utf-8-unix)))
-              (mevedel-session-persistence-write-current-buffer-atomically
-               segment-path)
-              (set-visited-file-modtime))
+                       :coding (or buffer-file-coding-system 'utf-8-unix))))
             (set-buffer-modified-p nil))))
       (unless acquired
         (mevedel-session-persistence-apply-read-only-mode buf))
-      ;; PID crash recovery can advance the counter and repair predecessor
-      ;; coordinates without changing the live transcript.  Freeze that
-      ;; disk-proven metadata before initialization hooks can advance it again.
+      ;; Freeze reconciled metadata before initialization hooks advance it.
       (when (and acquired checkpoint-callback (not checkpoint-captured))
         (funcall checkpoint-callback
                  (mevedel-session-checkpoint-capture
@@ -1810,41 +1509,25 @@ REPAIR-ARTIFACTS are portable transcript replacements published before the
 sidecar commit marker.  REPAIR-CHECKPOINT was frozen with the root repair."
   (with-current-buffer buf
     (when persist-repairs-p
-      (let ((portable-p
-             (mevedel-session-codec-portable-authority-p session))
-            (published-p nil))
+      (let ((published-p nil))
         (condition-case err
             (progn
-              (if portable-p
-                  (progn
-                    (mevedel-session-publication-publish
-                     session
-                     (append
-                      repair-artifacts
-                      (list
-                       (list
-                        :path
-                        (mevedel-session-artifacts-sidecar-path
-                         (mevedel-session-save-path session))
-                        :content
-                        (mevedel-session-artifacts-printed-value
-                         (mevedel-session-artifacts-build-sidecar
-                          session buf repair-checkpoint))
-                        :checkpoint repair-checkpoint
-                        :commit-marker t)))))
-                (unless (or (not repair-checkpoint)
-                            (mevedel-session-checkpoint-valid-p session repair-checkpoint))
-                  (error "Checkpoint candidate belongs to a different owner epoch"))
-                (mevedel-session-codec-write
-                 (mevedel-session-artifacts-sidecar-path
-                  (mevedel-session-save-path session))
-                 (mevedel-session-artifacts-build-sidecar session buf repair-checkpoint))
-                (when repair-checkpoint
-                  (mevedel-session-checkpoint-install session repair-checkpoint)))
+              (mevedel-session-publication-publish
+               session
+               (append
+                repair-artifacts
+                (list (list
+                       :path (mevedel-session-artifacts-sidecar-path
+                              (mevedel-session-save-path session))
+                       :content
+                       (mevedel-session-artifacts-printed-value
+                        (mevedel-session-artifacts-build-sidecar
+                         session buf repair-checkpoint))
+                       :checkpoint repair-checkpoint
+                       :commit-marker t))))
               (setq published-p t))
           (error
-           (unless (or (not portable-p)
-                       (mevedel-session-pending-publication session))
+           (unless (mevedel-session-pending-publication session)
              (signal (car err) (cdr err)))))
         (when (and published-p
                    (cl-find buffer-file-name repair-artifacts
@@ -1922,61 +1605,25 @@ WORKSPACE is the currently opened workspace authority.
 
 Tasks are deserialized from the sidecar.  Touched-files and
 mentions-shown reset to empty hash tables on load."
-  (let* ((direct-sidecar
-          (mevedel-session-artifacts-sidecar-path session-dir))
-         ;; A supplied workspace is the authority profile for cold discovery.
-         ;; Without one, read the fixed sidecar only to learn which committed
-         ;; profile must be verified below.
-         (cold-sidecar
-          (and (not workspace)
-               (not session-override)
-               (mevedel-session-control-fs-path-exists-p direct-sidecar)
-               (mevedel-session-codec-read direct-sidecar)))
-         (authority-mode
-          (or (and session-override
-                   (mevedel-session-authority-mode-for-session
-                    session-override))
-              (and workspace
-                   (mevedel-session-authority-mode-for-workspace
-                    workspace))
-              (and cold-sidecar
-                   (if (eq 'pid-lock (plist-get cold-sidecar :authority-mode))
-                       (user-error mevedel-session-persistence--pre-lease-message
-                                   session-dir)
-                     (mevedel-session-codec-validate-authority-mode
-                      (plist-get cold-sidecar :authority-mode)
-                      (plist-get cold-sidecar :workspace))))
-              (and (mevedel-session-control-fs-path-exists-p
-                    (file-name-concat session-dir ".lease"))
-                   'portable)
-              (and (mevedel-session-control-fs-path-exists-p
-                    (file-name-concat session-dir ".lock"))
-                   'pid-lock)
-              (error "Session authority profile is unavailable: %s"
-                     session-dir)))
-         (_authority-check
+  (let* ((_authority-check
           (condition-case err
               (mevedel-session-codec-authority-mode-for-path
-               session-dir session-override authority-mode)
+               session-dir session-override
+               (and workspace
+                    (mevedel-session-authority-mode-for-workspace workspace)))
             (error
              (if (mevedel-session-persistence--pre-lease-p session-dir)
                  (user-error mevedel-session-persistence--pre-lease-message
                              session-dir)
                (signal (car err) (cdr err))))))
-         (portable-p (eq authority-mode 'portable))
          (publication
-         (when portable-p
-            (or (mevedel-session-publication-read session-dir)
-                (if (mevedel-session-persistence--pre-lease-p session-dir)
-                    (user-error mevedel-session-persistence--pre-lease-message
-                                session-dir)
-                  (user-error
-                   "Portable session has no committed publication: %s"
-                   session-dir)))))
-         (sidecar-path
-          (if portable-p
-              (plist-get publication :sidecar)
-            direct-sidecar))
+          (or (mevedel-session-publication-read session-dir)
+              (if (mevedel-session-persistence--pre-lease-p session-dir)
+                  (user-error mevedel-session-persistence--pre-lease-message
+                              session-dir)
+                (user-error "Portable session has no committed publication: %s"
+                            session-dir))))
+         (sidecar-path (plist-get publication :sidecar))
          (sidecar
           (mevedel-session-persistence-load-sidecar
            sidecar-path (mevedel-diagnostic-scope (or session-override workspace))))
@@ -1994,13 +1641,9 @@ mentions-shown reset to empty hash tables on load."
                               sidecar opened-workspace)))
          (session          (or session-override
                                (plist-get result :session)
-                               (if portable-p
-                                   (user-error
-                                    "Portable session has no valid published sidecar: %s"
-                                    session-dir)
-                                 (user-error
-                                  "Session has no valid sidecar: %s"
-                                  session-dir))))
+                               (user-error
+                                "Portable session has no valid published sidecar: %s"
+                                session-dir)))
          (agent-registry-repaired-p
           (plist-get result :agent-registry-repaired-p))
          (additional-roots (plist-get result :additional-roots))
@@ -2038,17 +1681,11 @@ mentions-shown reset to empty hash tables on load."
                       (mevedel-workspace-root workspace)
                       t)
                      workspace))))
-           ;; Acquire the lock BEFORE opening the segment file.  If the
-           ;; user aborts the conflict prompt (`user-error') we unwind
-           ;; before any buffer is materialized, so no stray half-
-           ;; initialized chat buffer is left behind.  Read-only
-           ;; acquisitions return nil; we still open the buffer but
-           ;; flip it to read-only below.  `live' skips acquisition
-           ;; because the buffer is already owned by this Emacs.
+           ;; Fence before opening artifacts.  A foreign holder permits only
+           ;; inspection; a live local buffer already owns its session.
            (acquired
            (unless live
               (if (and session-override
-                       portable-p
                        (mevedel-session-durability-lease-owned-p session))
                   t
                 (mevedel-session-persistence-lock-acquire
@@ -2062,38 +1699,20 @@ mentions-shown reset to empty hash tables on load."
               (setq repair-callback
                     (and acquired
                          (not live)
-                         portable-p
                          (lambda (artifact)
                            (push artifact repair-artifacts))))
-              ;; Once fenced, confirm the same published state still owns the
-              ;; portable lease head.  File-workspace sessions retain their sidecar-last
-              ;; comparison because they have no immutable publication head.
+              ;; Recheck the captured head after fencing, before restoring bytes.
               (when (and acquired (not live))
-                (if portable-p
-                    (mevedel-session-durability-call-with-reserved-lease
-                     session
-                     (lambda ()
-                       (let ((current
-                              (mevedel-session-publication-read
-                               session-dir)))
-                         (unless (and current
-                                      (equal (plist-get publication :head)
-                                             (plist-get current :head)))
-                           (user-error
-                            "Session state changed while acquiring its lease; retry restore"))
-                         (setf (mevedel-session-publication session) current))))
-                  (unless
-                      (equal
-                       sidecar
-                       (mevedel-session-persistence-load-sidecar sidecar-path (mevedel-diagnostic-scope session)))
-                    (user-error
-                     "Session state changed while acquiring its lock; retry restore"))))
-              ;; Files newer than the sidecar may be an incomplete publication.
-              ;; Only the mutation owner may reconcile them; inspection trusts
-              ;; the sidecar.
-              (when (and acquired (not live) (not portable-p))
-                (mevedel-session-artifacts-self-heal-segment-counter
-                 session session-dir))
+                (mevedel-session-durability-call-with-reserved-lease
+                 session
+                 (lambda ()
+                   (let ((current (mevedel-session-publication-read session-dir)))
+                     (unless (and current
+                                  (equal (plist-get publication :head)
+                                         (plist-get current :head)))
+                       (user-error
+                        "Session state changed while acquiring its lease; retry restore"))
+                     (setf (mevedel-session-publication session) current)))))
               (let* ((segment-n (mevedel-session-current-segment session))
                      (segment-path
                       (mevedel-session-artifacts-segment-path
@@ -2104,22 +1723,16 @@ mentions-shown reset to empty hash tables on load."
                  buf
                  (or
                   live
-                  (if portable-p
+                  (condition-case err
                       (mevedel-session-artifacts-find-artifact-noselect
                        session (file-name-nondirectory segment-path)
                        (not acquired))
-                    (and
-                     (file-exists-p segment-path)
-                     (mevedel-session-persistence--find-file-noselect
-                      segment-path)))))
-                (unless (and buf (buffer-live-p buf)
-                             (or portable-p (file-exists-p segment-path)))
-                  (if (and acquired (not portable-p))
-                      (mevedel-session-persistence--maybe-prune-orphan
-                       session-dir segment-path)
-                    (user-error
-                     "%s session segment is unavailable: %s"
-                     (if portable-p "Published" "Session") segment-path)))
+                    (file-missing
+                     (user-error "Published session segment is unavailable: %s (%s)"
+                                 segment-path (error-message-string err))))))
+                (unless (and buf (buffer-live-p buf))
+                  (user-error "Published session segment is unavailable: %s"
+                              segment-path))
                 (when (and acquired (not live))
                   (mevedel-session-persistence-reconcile-lost-execution-segments
                    session segment-path repair-callback))
@@ -2351,73 +1964,34 @@ cold discovery without making it resumable."
           (format-time-string "%FT%H-%M-%S" time))
         :publication publication))
 
-(defun mevedel-session-persistence-read-sidecar-batch (directories)
-  "Return fresh PID sidecar observations for session DIRECTORIES.
-Each alist value contains :sidecar-data or :error.  One pinned program reads
-the files; discovery applies the ordinary current-schema classification."
-  (when directories
-    (cl-mapcar
-     (lambda (directory result)
-       (cons directory
-             (condition-case err
-                 (list :sidecar-data
-                       (car (read-from-string
-                             (mevedel-session-control-fs-program-value result))))
-               (error (list :error err)))))
-     directories
-     (mevedel-session-control-fs-run-program
-      (mapcar (lambda (directory)
-                (list :op 'read :optional t
-                      :path (file-name-concat directory "session.meta.el")))
-              directories)))))
-
 (defun mevedel-session-persistence--discover-entry
     (entry authority-mode control-results listing &optional observation)
-  "Return the discovery record for the session directory ENTRY.
-
-AUTHORITY-MODE is the workspace's mode, CONTROL-RESULTS are ENTRY's control
-probe results, and LISTING is its observed lease listing.  OBSERVATION, when
-provided, is this discovery's publication or PID sidecar batch observation.
-A current sidecar
-yields a compatible `(:save-path :summary :publication)' record; any other
-outcome yields an incompatible record.  Signal when a probe failed or ENTRY's
-controls contradict AUTHORITY-MODE; the caller records that as an
-`undiscoverable' row, which stays visible but is never inspected."
-  (let ((portable-p (eq authority-mode 'portable)))
-    (when-let* ((failed
-                 (seq-find (lambda (result)
-                             (not (memq (plist-get result :status)
-                                        '(ok absent))))
-                           control-results)))
-      (mevedel-session-control-fs-program-value failed))
-    ;; A PID lock or a plain sidecar without any lease is an old file session.
-    (if (and portable-p
-             (eq 'absent (plist-get (nth 1 control-results) :status))
-             (or (eq 'ok (plist-get (nth 0 control-results) :status))
-                 (eq 'ok (plist-get (nth 2 control-results) :status))))
-        (mevedel-session-persistence--incompatible-entry
-         entry authority-mode
-         (list :status 'unsupported
-               :diagnostic (format mevedel-session-persistence--pre-lease-message
-                                   entry)))
+  "Return the discovery record for session directory ENTRY.
+AUTHORITY-MODE is the workspace's portable profile.  CONTROL-RESULTS and
+LISTING are this enumeration's legacy-control and lease observations.
+OBSERVATION is its batched publication/sidecar read.  Failed or contradictory
+controls signal, so the caller keeps an undiscoverable, uninspectable row."
+  (mevedel-session-codec-validate-authority-mode authority-mode)
+  (when-let* ((failed
+               (seq-find (lambda (result)
+                           (not (memq (plist-get result :status) '(ok absent))))
+                         control-results)))
+    (mevedel-session-control-fs-program-value failed))
+  (if (and (eq 'absent (plist-get (nth 1 control-results) :status))
+           (or (eq 'ok (plist-get (nth 0 control-results) :status))
+               (eq 'ok (plist-get (nth 2 control-results) :status))))
+      (mevedel-session-persistence--incompatible-entry
+       entry authority-mode
+       (list :status 'unsupported
+             :diagnostic (format mevedel-session-persistence--pre-lease-message entry)))
     (when-let* ((err (plist-get observation :error)))
       (signal (car err) (cdr err)))
     (when (seq-find (lambda (result) (eq (plist-get result :status) 'ok))
-                    control-results)
-      ;; A PID profile only needs proof that no portable lease exists. Reuse
-      ;; this enumeration's pinned probe, never a previous discovery's cache.
-      (unless (and (eq authority-mode 'pid-lock)
-                   (eq (plist-get (nth 1 control-results) :status) 'absent))
-        (mevedel-session-codec-authority-mode-for-path
-         entry nil authority-mode)))
-    (let* ((publication
-            (when portable-p
-              (if observation (plist-get observation :publication)
-                (mevedel-session-publication-read entry nil listing))))
-           (sidecar
-            (if portable-p
-                (plist-get publication :sidecar)
-              (file-name-concat entry "session.meta.el")))
+                   control-results)
+      (mevedel-session-codec-authority-mode-for-path entry nil authority-mode))
+    (let* ((publication (if observation (plist-get observation :publication)
+                          (mevedel-session-publication-read entry nil listing)))
+           (sidecar (plist-get publication :sidecar))
            (status
             (if sidecar
                 (if observation
@@ -2431,14 +2005,12 @@ controls contradict AUTHORITY-MODE; the caller records that as an
                         classified))
                   (mevedel-session-persistence--read-summary sidecar))
               (list :status 'missing
-                    :diagnostic
-                    "Portable session has no committed publication"))))
+                    :diagnostic "Portable session has no committed publication"))))
       (if (eq (plist-get status :status) 'current)
           (list :save-path (file-name-as-directory entry)
-                :summary (plist-get status :summary)
-                :publication publication)
+                :summary (plist-get status :summary) :publication publication)
         (mevedel-session-persistence--incompatible-entry
-         entry authority-mode status publication sidecar))))))
+         entry authority-mode status publication sidecar)))))
 
 (defun mevedel-session-persistence--enumerate-sessions
     (workspace &optional cached)
@@ -2455,7 +2027,6 @@ reuse the last live enumeration when one exists."
                 (mevedel-session-artifacts-sessions-dir workspace))
                (authority-mode
                 (mevedel-session-authority-mode-for-workspace workspace))
-               (portable-p (eq authority-mode 'portable))
                sessions
                incompatible)
           ;; One enumeration is one transaction: the PID-lock proofs and the
@@ -2474,11 +2045,11 @@ reuse the last live enumeration when one exists."
                            (mevedel-session-persistence--control-artifacts
                             entries)))
                      (listings
-                      (and entries portable-p
+                      (and entries
                            (mevedel-session-persistence--lease-listings
                             entries)))
                      (observations
-                      (when portable-p
+                      (when entries
                         ;; Keep each read batch within the native archive
                         ;; carrier's bound; all proofs belong to this listing.
                         (cl-loop for batch on entries by (lambda (rest) (nthcdr 32 rest))
@@ -2678,6 +2249,7 @@ because nobody is writing it any more.
 
 One assessment shares the lease and retention probes; individual reasons do
 not trigger another authority read."
+  (ignore workspace)
   (cond
    ((when-let* ((buffer (mevedel-session-persistence--entry-live-buffer entry)))
       (list :action "Switch"
@@ -2686,8 +2258,7 @@ not trigger another authority read."
                         "already open here, read-only"
                       "already open here")
             :held t)))
-   ((eq (mevedel-session-authority-mode-for-workspace workspace)
-        'portable)
+   (t
     (let* ((status (mevedel-session-durability-cleanup-assessment
                     (plist-get entry :save-path)))
            (host (plist-get status :host))
@@ -2719,10 +2290,8 @@ not trigger another authority read."
            (list :action "Resume"
                  :detail (and elsewhere
                               (format "last held by %s" elsewhere))
-                 :held nil)))))))
-   ((mevedel-session-persistence--active-lock-p (plist-get entry :save-path))
-    (list :action "Join" :detail "locked by another process" :held t))
-   (t (list :action "Resume" :detail nil :held nil))))
+                 :held nil)))))))))
+
 
 (defun mevedel-session-persistence--entry-action (workspace entry)
   "Return the entry action label for WORKSPACE session ENTRY."
@@ -2818,7 +2387,6 @@ REFRESHED keeps an empty chooser open after deleting its last session."
   ;; listing, so the chooser never offers a row that exists only because
   ;; nothing has cleaned up after a previous invocation.
   (mevedel-session-persistence-cleanup-expired workspace)
-  (mevedel-session-persistence--sweep-stale-locks workspace)
   (let* ((enumeration
           (mevedel-session-persistence--enumerate-sessions workspace))
          (sessions (mevedel-session-persistence-without-dedicated
@@ -2895,7 +2463,6 @@ REFRESHED keeps an empty chooser open after deleting its last session."
                    :buffer
                    (mevedel-session-artifacts-inspect-cold-session
                     (plist-get entry :save-path)
-                    (plist-get entry :authority-mode)
                     (plist-get entry :publication) (mevedel-diagnostic-scope workspace))))
               (let* ((assessment (plist-get entry :cleanup))
                      (action (when (plist-get assessment :recoverable)
@@ -2911,7 +2478,7 @@ REFRESHED keeps an empty chooser open after deleting its last session."
                  ((eq 'unknown (plist-get assessment :state))
                   (list :action 'inspect :buffer
                         (mevedel-session-artifacts-inspect-cold-session
-                         (plist-get entry :save-path) 'portable
+                         (plist-get entry :save-path)
                          (plist-get entry :publication)
                          (mevedel-diagnostic-scope workspace))))
                  (t
@@ -3078,14 +2645,13 @@ To rename the current session in place, use `mevedel-rename-session'."
 
 (defun mevedel-session-persistence--save-as (session data-buf)
   "Save SESSION as an independent child under a fresh id.
-Called from `mevedel-save-session' with a prefix arg.  Portable project
-sessions copy only committed logical artifacts; file-workspace sessions copy
-their directory.  Repoint DATA-BUF at the child after it commits."
-  ;; Force materialization so either authority mode has a durable parent.
+Called from `mevedel-save-session' with a prefix arg.  Copy committed logical
+artifacts and retained execution output, excluding unfinished spools.
+Repoint DATA-BUF at the child after it commits."
+  ;; Force materialization so the child has a durable parent.
   (unless (mevedel-session-save-path session)
     (mevedel-session-artifacts-save session data-buf nil t))
   (let* ((old-save-path (mevedel-session-save-path session))
-         (old-id (mevedel-session-session-id session))
          (new-name (read-string
                     "Save session as (new name): "
                     (mevedel-session-name session)))
@@ -3098,58 +2664,8 @@ their directory.  Repoint DATA-BUF at the child after it commits."
     ;; Publish the parent completely before deriving the child.
     (with-current-buffer data-buf (mevedel-session-naming-cancel))
     (mevedel-session-artifacts-save session data-buf)
-    (if (mevedel-session-codec-portable-authority-p session)
-        (mevedel-session-save-as-run
-         session data-buf display-name new-id new-save-path)
-      (let (child-acquired child)
-        (unwind-protect
-            (progn
-              (copy-directory old-save-path new-save-path nil t t)
-              (let ((lock-in-clone
-                     (mevedel-session-persistence--lock-path new-save-path)))
-                (when (file-exists-p lock-in-clone)
-                  (delete-file lock-in-clone)))
-              (unless
-                  (mevedel-session-persistence-lock-acquire
-                   new-save-path (buffer-name data-buf) session)
-                (error "Could not acquire cloned session lock"))
-              (setq child-acquired t)
-              (let ((now (format-time-string "%FT%H-%M-%S")))
-                (setq child
-                      (mevedel-session-fork-clone-session
-                       session 'save-as
-                       :save-path new-save-path
-                       :session-id new-id
-                       :name display-name
-                       :created-at now
-                       :updated-at now
-                       :forked-from-session-id old-id)))
-              (setf (mevedel-session-save-path session) new-save-path
-                    (mevedel-session-session-id session) new-id
-                    ;; The saved copy is the user's own chat.
-                    (mevedel-session-dedicated-artifact session) nil
-                    (mevedel-session-forked-from-session-id session) old-id
-                    (mevedel-session-forked-from-turn session)
-                    (mevedel-session-turn-count session))
-              (mevedel-session-naming-adopt-explicit session display-name)
-              (with-current-buffer data-buf
-                (when buffer-file-name
-                  (setq buffer-file-name
-                        (file-name-concat
-                         new-save-path
-                         (file-name-nondirectory buffer-file-name)))))
-              (mevedel-session-artifacts-publish-text
-               session
-               (mevedel-session-artifacts-sidecar-path new-save-path)
-               (mevedel-session-artifacts-printed-value
-                (mevedel-session-artifacts-build-sidecar
-                 child data-buf))))
-          (when child-acquired
-            (condition-case _
-                (mevedel-session-persistence-lock-release old-save-path)
-              (error nil))))
-        (mevedel-session-save-as--rename-live-session-buffers
-         session data-buf)))
+    (mevedel-session-save-as-run
+     session data-buf display-name new-id new-save-path)
     (message "Session saved as %s" display-name)
     new-save-path))
 
@@ -3223,18 +2739,6 @@ nil when nothing was queued."
      (string-to-number (match-string 3 str))
      (string-to-number (match-string 2 str))
      (string-to-number (match-string 1 str)))))
-
-(defun mevedel-session-persistence--active-lock-p (save-path)
-  "Return non-nil if SAVE-PATH's `.lock' counts as active.
-A same-host lock is stale when its PID is dead or when the live process
-identity proves PID reuse.  Cross-host locks are always treated as
-active because we cannot probe the remote process."
-  (when-let* ((lock-info (mevedel-session-persistence--read-lock
-                          (mevedel-session-persistence--lock-path save-path))))
-    (if (equal (plist-get lock-info :hostname) (system-name))
-        (mevedel-session-persistence--same-host-lock-active-p lock-info)
-      ;; Cross-host: cannot verify liveness, treat as active.
-      t)))
 
 (defun mevedel-session-persistence--discard-identity (workspace entry &optional session)
   "Validate WORKSPACE's selected ENTRY and return its cold SESSION identity.
@@ -3333,19 +2837,22 @@ through their owners before deletion; failure may retain approved omissions."
                              (error-message-string err))))))))
 
 (cl-defun mevedel-session-persistence--delete-saved
-    (workspace save-path portable max-age-seconds
+    (workspace save-path max-age-seconds
                &optional (note-session-ids 'unread))
   "Delete saved session SAVE-PATH unless something may still hold it.
-Journal pins always keep it.  PORTABLE storage is deleted only through
-`mevedel-session-durability-delete-abandoned' with MAX-AGE-SECONDS; other
-storage is kept while its PID lock is active.  Original note conversations
+Journal pins always keep it.  Deletion uses
+`mevedel-session-durability-delete-abandoned' with MAX-AGE-SECONDS.
+Original note conversations
 require proof that WORKSPACE no longer references them.  NOTE-SESSION-IDS
 is the sweep's reference snapshot, or `unread' to obtain it here.
 Return non-nil only when the directory was deleted."
   (and (not (mevedel-journal-pins-present-p save-path))
        (let ((sidecar (condition-case nil
-                          (let ((data (mevedel-session-codec-read
-                                       (mevedel-session-artifacts-sidecar-path save-path))))
+                          (let* ((publication
+                                  (mevedel-session-publication-read save-path))
+                                 (data (and publication
+                                            (mevedel-session-codec-read
+                                             (plist-get publication :sidecar)))))
                             (and (listp data) data))
                         (error nil))))
          (not
@@ -3360,12 +2867,8 @@ Return non-nil only when the directory was deleted."
                 (member (plist-get sidecar :session-id) note-session-ids)
                 (member (file-name-nondirectory (directory-file-name save-path))
                         note-session-ids)))))
-       (if portable
-           (mevedel-session-durability-delete-abandoned
-            save-path max-age-seconds)
-         (unless (mevedel-session-persistence--active-lock-p save-path)
-           (delete-directory save-path t)
-           t))))
+       (mevedel-session-durability-delete-abandoned
+        save-path max-age-seconds)))
 
 (defun mevedel-session-persistence-delete (workspace save-path)
   "Delete WORKSPACE's saved session at SAVE-PATH now.
@@ -3374,9 +2877,7 @@ without its age cap: a session a client may still hold, or whose journal
 captures are pending, is kept.  Referenced note conversations and uncertain
 note stores are kept too.  Return non-nil only when it was deleted."
   (mevedel-session-persistence--delete-saved
-   workspace save-path
-   (eq 'portable (mevedel-session-authority-mode-for-workspace workspace))
-   0))
+   workspace save-path 0))
 
 (defun mevedel-session-persistence-cleanup-expired (workspace &optional force)
   "Delete sessions older than `mevedel-session-max-age-days'.
@@ -3389,10 +2890,7 @@ The `mevedel-session-keep-recent-count' most-recently-updated sessions are
 never deleted regardless of age.  Original note conversations do not count
 toward that floor, and are eligible only after their notes leave the store;
 an uncertain reference check retains them.  Pending journal capture pins prevent
-deletion.  PID-lock sessions with an active lock are skipped; cross-host
-locks are active, and same-host locks are stale when their PID is dead or
-when the live process identity proves PID reuse.  Portable sessions open
-in this Emacs are skipped; the others are deleted only through
+deletion.  Sessions open in this Emacs are skipped; the others use
 `mevedel-session-durability-delete-abandoned', which also requires the last
 lease renewal to be older than the cap.  Throttled to at most one sweep
 per `(workspace-type . workspace-id)' within
@@ -3402,8 +2900,7 @@ the throttle is bypassed.
 Returns the number of sessions deleted, or nil when the cap is nil or the
 workspace was swept too recently."
   (let ((sessions-dir
-         (mevedel-session-artifacts-sessions-dir workspace))
-        (portable (eq 'portable (mevedel-session-authority-mode-for-workspace workspace))))
+         (mevedel-session-artifacts-sessions-dir workspace)))
     (when mevedel-session-max-age-days
       (let ((ws-key (mevedel-session-persistence--cleanup-key workspace)))
       (when (or force (mevedel-session-persistence--cleanup-due-p workspace))
@@ -3419,11 +2916,15 @@ workspace was swept too recently."
                    (and (file-directory-p sessions-dir)
                         (directory-files sessions-dir t "\\`[^.]")))
             (when (file-directory-p save-path)
-              (let* ((sidecar-path
-                      (mevedel-session-artifacts-sidecar-path save-path))
+              (let* ((publication
+                      (condition-case nil
+                          (mevedel-session-publication-read save-path)
+                        (error nil)))
+                     (sidecar-path (plist-get publication :sidecar))
                      (sidecar
                       (condition-case nil
-                          (let ((data (mevedel-session-codec-read sidecar-path)))
+                          (let ((data (and sidecar-path
+                                           (mevedel-session-codec-read sidecar-path))))
                             (and (listp data) data))
                         (error nil)))
                      (parsed-time
@@ -3468,14 +2969,14 @@ workspace was swept too recently."
                        (> (- now updated-secs) threshold-secs)
                        ;; A session open here may outlive its lease after
                        ;; suspend.
-                       (not (and portable session-id
+                       (not (and session-id
                                  (mevedel-session-control-transfer-root-buffer-for-id
                                   session-id)))
                        ;; One unreadable or contested session must not end
                        ;; the sweep.
                        (condition-case nil
                            (mevedel-session-persistence--delete-saved
-                            workspace save-path portable threshold-secs note-session-ids)
+                            workspace save-path threshold-secs note-session-ids)
                          (error nil)))
               (cl-incf deleted)))
           (when (> deleted 0)

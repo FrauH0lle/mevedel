@@ -439,7 +439,7 @@
             (org-mode)
             (setq-local mevedel--session
                         (mevedel-session--create
-                         :authority-mode 'pid-lock :name "plan" :plan-mode t))
+                         :name "plan" :plan-mode t))
             (setq-local mevedel-compact-target-current-request-reminder
                         "Re-read /tmp/old.el")
             (insert "Prompt\n")

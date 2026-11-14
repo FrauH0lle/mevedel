@@ -9,6 +9,7 @@
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
                            "mevedel-journal-test-support"))
 (require 'mevedel-agent-runtime)
+(require 'mevedel-session-publication)
 (require 'mevedel-session-publication-test-helpers
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
                            "mevedel-session-publication-test-helpers"))
@@ -764,6 +765,57 @@ head and the unreadable observation are injected only while the job runs."
      (with-current-buffer child
        (set-visited-file-name (make-temp-name "/tmp/mevedel-elsewhere-") t t))
      (should-not (mevedel-agent-conversation-prepare-save inv)))))
+
+(mevedel-deftest mevedel-agent-conversation--write/without-durable-authority (:quiet t)
+  ,test
+  (test)
+  :doc "writes nothing and keeps the transcript modified"
+  (mevedel-test-journal-capture--with-portable-session
+   (lambda (session parent)
+     (let* ((child (generate-new-buffer " *agent-no-authority*"))
+            (inv (mevedel-agent-invocation--create
+                  :agent (mevedel-agent--create :name "default")
+                  :agent-id "default--no-authority" :path "/root/check"
+                  :parent-session session :parent-data-buffer parent
+                  :buffer child :parent-turn 1))
+            (publications 0))
+       (unwind-protect
+           (progn
+             (setf (mevedel-agent-invocation-frozen-configuration inv)
+                   (with-current-buffer parent
+                     (mevedel-agent-exec-freeze-configuration
+                      "default" inv (list :backend gptel-backend :model gptel-model))))
+             (with-current-buffer child
+               (org-mode)
+               (setq-local mevedel--session session mevedel--agent-invocation inv)
+               (mevedel-agent-conversation-configure inv child)
+               (mevedel-agent-runtime--setup-transcript inv child)
+               (insert "* Agent Task: check\n\nUnpublished task\n")
+               (should buffer-file-name))
+             ;; The removed fallback saved this canonical file directly.
+             (let ((workspace (mevedel-session-workspace session))
+                   (mode (mevedel-session-authority-mode session)))
+               (unwind-protect
+                   (progn
+                     (setf (mevedel-session-workspace session) nil
+                           (mevedel-session-authority-mode session) nil)
+                     (cl-letf (((symbol-function 'mevedel-session-publication-publish)
+                                (lambda (&rest _) (cl-incf publications) nil)))
+                       (should-not (mevedel-agent-conversation--write inv))))
+                 (setf (mevedel-session-workspace session) workspace
+                       (mevedel-session-authority-mode session) mode)))
+             (should (= 0 publications))
+             (with-current-buffer child
+               (should (buffer-modified-p))
+               (should-not (and (file-exists-p buffer-file-name)
+                                (with-temp-buffer
+                                  (insert-file-contents buffer-file-name)
+                                  (search-forward "Unpublished task" nil t))))))
+         (mevedel-agent-conversation--cancel-save inv)
+         (with-current-buffer child
+           (setq-local kill-buffer-hook nil)
+           (set-buffer-modified-p nil))
+         (kill-buffer child))))))
 
 (provide 'test-mevedel-agent-conversation-publication)
 ;;; test-mevedel-agent-conversation-publication.el ends here

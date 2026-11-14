@@ -150,7 +150,7 @@
           (with-temp-file input (insert "one\none\ntwo\n"))
           (dolist (captured '(nil t))
             (let* ((session (mevedel-session--create
-                             :authority-mode 'pid-lock :name "uniq-inspection"
+                             :name "uniq-inspection"
                              :plan-mode (not captured)))
                    (mevedel--current-request
                     (when captured
@@ -201,7 +201,7 @@
   (dolist (captured '(nil t))
     (let* ((mevedel-permission-rules nil)
            (session (mevedel-session--create
-                     :authority-mode 'pid-lock :name "inspection"
+                     :name "inspection"
                      :plan-mode (not captured)))
            (mevedel--current-request
             (when captured
@@ -224,7 +224,7 @@
                               source :permission-context context))))))))
   :doc "retained agents inherit reading permission but not mutation authority"
   (let* ((session (mevedel-session--create
-                   :authority-mode 'pid-lock :name "parent" :plan-mode t))
+                   :name "parent" :plan-mode t))
          (mevedel-permission-rules nil))
     (with-temp-buffer
       (setq-local mevedel--agent-invocation
@@ -238,7 +238,7 @@
                           :permission-context context))))))
   :doc "explicit denies still override reading classification"
   (let* ((session (mevedel-session--create
-                   :authority-mode 'pid-lock :name "deny" :plan-mode t))
+                   :name "deny" :plan-mode t))
          (mevedel-permission-rules nil)
          (context '(:mode edits :buckets
                    ((:session ("Bash" :pattern "git diff:*" :action deny))))))
@@ -420,7 +420,7 @@
   ,test
   (test)
   :doc "uses the permission context's session policy"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :sandbox-mode 'required)))
+  (let ((session (mevedel-session--create :sandbox-mode 'required)))
     (should
      (eq 'required
          (mevedel-bash-policy-effective-sandbox-mode
@@ -435,7 +435,7 @@
     (should (eq 'allow (mevedel-bash-policy-check-permission "pwd && cat file"))))
   :doc "Plan mode allows only recognized read-only Bash"
   (let* ((mevedel-permission-rules nil)
-         (session (mevedel-session--create :authority-mode 'pid-lock :name "plan" :plan-mode t)))
+         (session (mevedel-session--create :name "plan" :plan-mode t)))
     (dolist (mode '(ask edits full-auto))
       (let ((context (list :mode mode :session session :buckets nil)))
         (should (eq 'allow
@@ -453,7 +453,7 @@
                                              :action allow))))))))))
   :doc "captured nil Plan stamps ignore ambient turns but retain live session Plan"
   (let* ((mevedel-permission-rules nil)
-         (session (mevedel-session--create :authority-mode 'pid-lock))
+         (session (mevedel-session--create))
          (mevedel--current-request
           (mevedel-request--create :session session :plan-read-only t))
          (mevedel--agent-invocation
@@ -475,7 +475,6 @@
   (let* ((mevedel-permission-rules nil)
          (session
           (mevedel-session--create
-           :authority-mode 'pid-lock
            :name "captured-plan"))
          (mevedel--current-request
           (mevedel-request--create :session session :plan-read-only t))
@@ -487,7 +486,7 @@
                 (mevedel-bash-policy-check-permission
                  "make test" :permission-context context))))
   :doc "Plan mode follows a retained agent's parent session"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "plan" :plan-mode t))
+  (let* ((session (mevedel-session--create :name "plan" :plan-mode t))
          (mevedel-permission-rules nil))
     (with-temp-buffer
       (setq-local mevedel--agent-invocation
@@ -876,7 +875,7 @@ for effects despite reusable authority"
           (should (eq (plist-get decision :via) via))))))
 
   :doc "captured context fences ambient request and invocation authority"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+  (let* ((session (mevedel-session--create))
          (mevedel--current-request
           (mevedel-request--create
            :session session
@@ -1167,7 +1166,6 @@ for effects despite reusable authority"
                                                 (let* ((target (mevedel-execution-target-create remote-root))
                                                        (session
                                                         (mevedel-session--create
-                                                         :authority-mode 'pid-lock
                                                          :execution-target target
                                                          :working-directory remote-root))
                                                        (context `(:session ,session

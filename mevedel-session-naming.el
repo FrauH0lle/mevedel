@@ -108,15 +108,11 @@ Either kind resolves a retained naming-failure notice."
     (unless current-p (setf (mevedel-session-naming-input session) nil))
     (mevedel-recovery-clear session "session-naming")
     (condition-case err
-        (when-let* ((path (mevedel-session-save-path session)))
-          (if (mevedel-session-codec-portable-authority-p session)
-              (when (mevedel-session-artifacts-artifact-present-p
-                     session "session.meta.el" t)
-                (mevedel-session-artifacts-publish-sidecar-state session buffer))
-            (mevedel-session-artifacts-publish-text
-             session (mevedel-session-artifacts-sidecar-path path)
-             (mevedel-session-artifacts-printed-value
-              (mevedel-session-artifacts-build-sidecar session buffer)))))
+        (when (and (mevedel-session-save-path session)
+                   (mevedel-session-codec-portable-authority-p session)
+                   (mevedel-session-artifacts-artifact-present-p
+                    session "session.meta.el" t))
+          (mevedel-session-artifacts-publish-sidecar-state session buffer))
       (error
        (if (equal head (plist-get (mevedel-session-publication session) :head))
            (progn

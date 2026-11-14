@@ -504,7 +504,7 @@
   (let* ((root (make-temp-file "mevedel-review-" t))
          (buffer (generate-new-buffer " *mevedel-review-intent*"))
          (session (mevedel-session--create
-                   :name "review" :authority-mode 'pid-lock :permission-mode 'edits :working-directory root
+                   :name "review" :permission-mode 'edits :working-directory root
                    :root-buffer buffer :sandbox-mode 'required
                    :execution-target (mevedel-execution-target-create root)))
          (request (mevedel-request--create :id "review-request" :session session))
@@ -1034,7 +1034,7 @@
              (mevedel-permission-reviewer (car review))
              (mevedel-permission-rules nil)
              (session (mevedel-session--create
-                       :permission-mode (or (caddr review) 'edits) :authority-mode 'pid-lock
+                       :permission-mode (or (caddr review) 'edits)
                        :working-directory root))
              (command (if capability-p "echo first" "echo first; cat private.txt"))
              (args (append (list :command command)
@@ -1101,7 +1101,7 @@
       (org-mode)
       (insert "Evaluate (+ 1 2) in this Emacs.\n")
       (let* ((session (mevedel-session--create
-                       :permission-mode 'edits :authority-mode 'pid-lock
+                       :permission-mode 'edits
                        :working-directory temporary-file-directory
                        :root-buffer (current-buffer)))
              (request (mevedel-request--create
@@ -1150,7 +1150,7 @@
       (org-mode)
       (insert "Update the session plan.\n")
       (let* ((session (mevedel-session--create
-                       :plan-mode t :permission-mode 'edits :authority-mode 'pid-lock
+                       :plan-mode t :permission-mode 'edits
                        :working-directory temporary-file-directory
                        :root-buffer (current-buffer)))
              (mevedel-permission-reviewer 'auto)

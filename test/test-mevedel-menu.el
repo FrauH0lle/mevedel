@@ -1376,11 +1376,7 @@
     (with-current-buffer view-buf
       (setf (mevedel-session-authority-mode session) 'portable)
       (should-not (mevedel-menu--redo-inapt-p))
-      ;; A file session publishes no immutable heads, so it has nothing
-      ;; to restore.
-      (setf (mevedel-session-authority-mode session) 'pid-lock)
-      (should (mevedel-menu--redo-inapt-p))
-      ;; An unrecorded mode is not a reason to signal from a menu.
+      ;; A workspace-free session has no durable heads to restore.
       (setf (mevedel-session-authority-mode session) nil)
       (should (mevedel-menu--redo-inapt-p)))))
 

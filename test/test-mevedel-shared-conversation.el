@@ -9,6 +9,9 @@
 (require 'helpers
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name)) "helpers"))
+(require 'mevedel-session-test-support
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name)) "mevedel-session-test-support"))
 (require 'gptel-request)
 (require 'gptel-openai)
 (require 'gptel-org)
@@ -249,8 +252,7 @@
 
   :doc "context and browser history stop at overflow without reading an unused older archive"
   (let* ((directory (make-temp-file "bounded-item-history-" t))
-         (session (mevedel-session--create :save-path directory :current-segment 4
-                                           :authority-mode 'pid-lock))
+         (session (test-mevedel-session-persistence--leased-session directory :current-segment 4))
          (mevedel-shared-conversation--history-limit 1500)
          reads
          (probe (lambda (_session number) (push number reads))))
@@ -266,7 +268,12 @@
              "doc" (format "q%d" number))
             (let ((gptel--bounds nil)) (gptel--save-state))
             (write-region (point-min) (point-max)
-                          (mevedel-session-artifacts-segment-path directory number) nil 'silent))
+                          (mevedel-session-artifacts-segment-path directory number) nil 'silent)
+            (mevedel-session-publication-publish
+             session (list (list :path (mevedel-session-artifacts-segment-path directory number)
+                                 :content (buffer-string))
+                           '(:path "session.meta.el" :content "(:fixture archive-only)"
+                             :commit-marker t)) t))
           (erase-buffer)
           (setq-local mevedel--session session gptel-track-response t
                       gptel-backend (gptel-make-openai "bounded-test" :key "test" :models '(test-model))
@@ -286,9 +293,14 @@
             (should (eq t (plist-get result :conversationTruncated)))
             (should (equal '(2 3) reads)))
           ;; A damaged archive within the selected prefix still fails visibly.
-          (delete-file (mevedel-session-artifacts-segment-path directory 3))
+          (mevedel-session-publication-publish
+           session '((:path "segment-0003.chat.org" :delete t)
+                     (:path "session.meta.el" :content "(:fixture archive-only)"
+                      :commit-marker t)) t)
           (should-error (mevedel-collaboration-editing--conversation session "doc") :type 'user-error))
       (advice-remove 'mevedel-session-artifacts-read-segment probe)
+      (mevedel-session-durability-lease-release directory session)
+      (mevedel-workspace-clear-registry)
       (delete-directory directory t))))
 
 (mevedel-deftest mevedel-shared-conversation-history ()
@@ -296,7 +308,7 @@
   (test)
   :doc "restores archived item turns and deduplicates the preserved live tail"
   (let* ((directory (make-temp-file "shared-conversation-" t))
-         (session (mevedel-session--create :save-path directory :current-segment 2 :authority-mode 'pid-lock)))
+         (session (test-mevedel-session-persistence--leased-session directory :current-segment 2)))
     (unwind-protect
         (with-temp-buffer
           (org-mode)
@@ -307,6 +319,11 @@
           (let ((coding-system-for-write 'utf-8-unix))
             (write-region (point-min) (point-max)
                           (mevedel-session-artifacts-segment-path directory 1) nil 'silent))
+          (mevedel-session-publication-publish
+           session (list (list :path (mevedel-session-artifacts-segment-path directory 1)
+                               :content (buffer-string))
+                         '(:path "session.meta.el" :content "(:fixture archive-only)"
+                           :commit-marker t)) t)
           (erase-buffer)
           (mevedel-shared-conversation-test--turn "Tail question" "Tail answer" "doc" "q2")
           (mevedel-shared-conversation-test--turn "Other question" "Other answer" "board" "q3")
@@ -348,9 +365,14 @@
             (should (string-match-p "Tail answer" data))
             (should (string-match-p "New document question" data))
             (should-not (string-match-p "Other question\\|Other answer" data)))
-          (delete-file (mevedel-session-artifacts-segment-path directory 1))
+          (mevedel-session-publication-publish
+           session '((:path "segment-0001.chat.org" :delete t)
+                     (:path "session.meta.el" :content "(:fixture archive-only)"
+                      :commit-marker t)) t)
           (should-error (mevedel-shared-conversation-history session "doc" :live-buffer (current-buffer))
                         :type 'user-error))
+      (mevedel-session-durability-lease-release directory session)
+      (mevedel-workspace-clear-registry)
       (delete-directory directory t))))
 
 ;;; test-mevedel-shared-conversation.el ends here

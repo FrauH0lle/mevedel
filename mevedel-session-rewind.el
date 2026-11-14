@@ -772,27 +772,19 @@ When BEFORE-TURN is non-nil, discard TARGET itself as well as later text."
          (segment-path
           (mevedel-session-artifacts-segment-path
            (mevedel-session-save-path session) segment-n))
-         (portable-p
-          (mevedel-session-codec-portable-authority-p session))
          (logical (file-name-nondirectory segment-path))
          (content
-          (when portable-p
-            (condition-case nil
-                (mevedel-session-artifacts-read-artifact
-                 session logical t)
-              (error
-               (user-error "Published segment %d is unavailable" segment-n))))))
-    (unless (or portable-p (file-exists-p segment-path))
-      (user-error "Segment %d file missing: %s" segment-n segment-path))
+          (condition-case nil
+              (mevedel-session-artifacts-read-artifact session logical t)
+            (error
+             (user-error "Published segment %d is unavailable" segment-n)))))
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
         (erase-buffer)
         (let ((buffer-file-name segment-path))
-          (if portable-p
-              (insert
-               (decode-coding-string
-                content (or buffer-file-coding-system 'utf-8-unix)))
-            (insert-file-contents segment-path))
+          (insert
+           (decode-coding-string
+            content (or buffer-file-coding-system 'utf-8-unix)))
           (when (derived-mode-p 'org-mode)
             (when (fboundp 'mevedel--chat-buffer-disable-org-element-cache)
               (mevedel--chat-buffer-disable-org-element-cache))
@@ -899,17 +891,12 @@ When BEFORE-TURN is non-nil, discard TARGET itself as well as later text."
     (session target-turn)
   "Return direct child count detached by rewinding SESSION to TARGET-TURN."
   (let ((session-id (mevedel-session-session-id session))
-        (portable-p
-         (mevedel-session-codec-portable-authority-p session))
         (count 0))
     (dolist (entry
              (mevedel-session-persistence-list-sessions
               (mevedel-session-workspace session)))
-      (when-let* ((path (plist-get entry :save-path))
-                  (sidecar-path
-                   (if portable-p
-                       (plist-get (plist-get entry :publication) :sidecar)
-                     (mevedel-session-artifacts-sidecar-path path)))
+      (when-let* ((sidecar-path
+                   (plist-get (plist-get entry :publication) :sidecar))
                   (sidecar
                    (condition-case nil
                        (mevedel-session-codec-read sidecar-path)
@@ -1305,27 +1292,18 @@ TARGET identifies the retained segment and turn."
         (delete-directory plans t)))))
 
 (defun mevedel-session-rewind--stage-rewind
-    (session candidate target staging-path staging-buffer
-             &optional publication rollback-staging-path)
+    (session candidate target staging-path staging-buffer publication)
   "Stage CANDIDATE and TARGET from SESSION under STAGING-PATH.
 
-When PUBLICATION is non-nil, materialize only its immutable logical artifacts;
-portable lease and publication control directories are never copied."
-  (if publication
-      (progn
-        (mevedel-session-rewind-materialize-publication
-         session publication staging-path)
-        (when rollback-staging-path
-          (copy-directory staging-path rollback-staging-path nil t t)))
-    (copy-directory (mevedel-session-save-path session) staging-path nil t t))
-  (let ((source session)
+Materialize only PUBLICATION's immutable logical artifacts; lease and
+publication control directories are never copied."
+  (mevedel-session-rewind-materialize-publication session publication staging-path)
+  (let ((source (copy-sequence session))
         ;; The candidate already decided which turn survives, so the
         ;; transcript cutoff follows it instead of deciding again.
         (before-p (< (or (mevedel-session-turn-count candidate) 0)
                      (or (plist-get target :cum-turn) 0))))
-    (when publication
-      (setq source (copy-sequence session))
-      (setf (mevedel-session-save-path source) staging-path))
+    (setf (mevedel-session-save-path source) staging-path)
     (mevedel-session-rewind-load-rewind-target
      source staging-buffer target before-p))
   (with-current-buffer staging-buffer
@@ -1344,9 +1322,8 @@ portable lease and publication control directories are never copied."
                        staging-path segment)
            when (file-exists-p path)
            do (delete-file path))
-  (when publication
-    (mevedel-session-rewind--prune-remote-rewind-staging
-     candidate target staging-path))
+  (mevedel-session-rewind--prune-remote-rewind-staging
+   candidate target staging-path)
   (mevedel-session-codec-write
    (mevedel-session-artifacts-sidecar-path staging-path)
    (mevedel-session-artifacts--live-sidecar candidate staging-buffer))
@@ -1490,10 +1467,10 @@ drops it without pruning anything."
               label (error-message-string err))
       :warning))))
 
-(defun mevedel-session-rewind--commit-remote-rewind
+(defun mevedel-session-rewind--commit-rewind
     (session buffer target plan &optional boundary replan)
-  "Commit portable project SESSION, BUFFER, TARGET, and file PLAN through one
-head CAS.  BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
+  "Commit SESSION, BUFFER, TARGET, and file PLAN through one head CAS.
+BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
   (let* ((workspace (mevedel-session-workspace session))
          (save-path (mevedel-session-save-path session))
          (publication
@@ -1682,166 +1659,6 @@ head CAS.  BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
              (error-message-string post-commit-error)))
     t))
 
-(defun mevedel-session-rewind--commit-rewind
-    (session buffer target plan &optional boundary replan)
-  "Commit SESSION, BUFFER, TARGET, and file PLAN as one recoverable Rewind.
-BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
-  (if (mevedel-session-codec-portable-authority-p session)
-      (mevedel-session-rewind--commit-remote-rewind
-       session buffer target plan boundary replan)
-    (mevedel-session-rewind--commit-local-rewind
-     session buffer target plan boundary replan)))
-
-(defun mevedel-session-rewind--commit-local-rewind
-    (session buffer target plan &optional boundary replan)
-  "Commit local SESSION, BUFFER, TARGET, and file PLAN as one Rewind.
-BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
-  (let* ((workspace (mevedel-session-workspace session))
-         (save-path (mevedel-session-save-path session))
-         (parent (file-name-directory (directory-file-name save-path)))
-         (temporary-root
-          (make-temp-file
-           (expand-file-name ".mevedel-rewind-" parent) t))
-         (staging-path (file-name-concat temporary-root "staging"))
-         (rollback-path (file-name-concat temporary-root "rollback"))
-         (file-backup-dir (file-name-concat temporary-root "files"))
-         (original-state (copy-sequence session))
-         (candidate
-          (mevedel-session-rewind--rewind-candidate
-           session target boundary))
-         (staging-buffer
-          (generate-new-buffer " *mevedel-rewind-staging*"))
-         (original-buffer
-          (generate-new-buffer " *mevedel-rewind-original*"))
-         (original-file-name (buffer-local-value 'buffer-file-name buffer))
-         (original-file-truename
-          (buffer-local-value 'buffer-file-truename buffer))
-         (original-buffer-modified
-          (with-current-buffer buffer (buffer-modified-p)))
-         (original-point (with-current-buffer buffer (point)))
-         ;; The workspace store changes only after the commit point; until
-         ;; then a durable intent lets recovery finish or drop the prune.
-         (mevedel-instruction-store--inhibit workspace)
-         file-backups restore-result source-moved published session-installed
-         (mevedel-session-rewind--written-states (list nil))
-         file-restore-started buffer-install-started committed
-         rollback-failures)
-    (with-current-buffer original-buffer
-      (insert-buffer-substring buffer))
-    (unwind-protect
-        (progn
-          (with-current-buffer staging-buffer
-            (funcall (buffer-local-value 'major-mode buffer)))
-          (make-directory file-backup-dir t)
-          (setq file-backups
-                (mevedel-session-rewind--backup-restore-files
-                 plan file-backup-dir))
-          (mevedel-session-rewind--stage-rewind
-           session candidate target staging-path staging-buffer)
-          (let ((rechecked
-                 (if replan (funcall replan)
-                   (mevedel-session-rewind-restore-plan
-                    session (plist-get target :cum-turn)
-                    (not (eq boundary 'after))))))
-            (unless (equal
-                     (mevedel-session-rewind--sorted-file-plan plan)
-                     (mevedel-session-rewind--sorted-file-plan rechecked))
-              (error "Captured files changed after Rewind confirmation")))
-          (mevedel-instruction-store-rewind-begin
-           session (or (mevedel-session-turn-count candidate) 0)
-           (plist-get target :cum-turn))
-          (setq file-restore-started t)
-          (setq restore-result (mevedel-session-rewind-execute-restore session plan))
-            (when (plist-get restore-result :failed)
-              (error "File restore failed on %s: %s"
-                     (plist-get restore-result :failed)
-                     (plist-get restore-result :error)))
-          (rename-file (directory-file-name save-path)
-                       rollback-path)
-          (setq source-moved t)
-          (rename-file staging-path (directory-file-name save-path))
-          (setq published t)
-          (mevedel-session-rewind-copy-session-state candidate session)
-          (setq session-installed t)
-          (setq buffer-install-started t)
-          (mevedel-session-rewind--install-rewind-buffer
-           buffer staging-buffer session target)
-          (delete-directory rollback-path t)
-          (setq source-moved nil
-                committed t)
-          (mevedel-session-rewind--end-store-intent session t "Rewind")
-          (condition-case err
-              (mevedel-session-rewind--refresh-restored-buffers
-               plan (list :succeeded (length plan)))
-            (error
-             (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
-              'mevedel
-              (format "Rewind committed, but buffers could not refresh: %s"
-                      (error-message-string err)))))
-          t)
-      (unless committed
-        (when session-installed
-          (mevedel-session-rewind-copy-session-state
-           original-state session))
-        (mevedel-session-rewind--end-store-intent session nil "Rewind")
-        (when published
-          (condition-case err
-              (progn
-                (when (file-directory-p save-path)
-                  (delete-directory save-path t))
-                (setq published nil))
-            (error
-             (push (format "%s (%s)" save-path (error-message-string err))
-                   rollback-failures))))
-        (when source-moved
-          (condition-case err
-              (rename-file rollback-path (directory-file-name save-path))
-            (error
-             (push (format "%s (%s)" save-path (error-message-string err))
-                   rollback-failures))))
-        (when file-restore-started
-          (setq rollback-failures
-                (nconc
-                 rollback-failures
-                 (mevedel-session-rewind--rollback-restore-files
-                  file-backups (car mevedel-session-rewind--written-states)))))
-        (when buffer-install-started
-          (condition-case err
-              (progn
-                (with-current-buffer buffer
-                  (let ((inhibit-read-only t))
-                    (setq buffer-file-name original-file-name
-                          buffer-file-truename original-file-truename)
-                    (set-visited-file-modtime)
-                    (mevedel-session-artifacts-replace-transcript-contents
-                     original-buffer)
-                    (set-buffer-modified-p original-buffer-modified)
-                    (goto-char (min original-point (point-max)))))
-                (mevedel-session-persistence-notify-session-event
-                 session 'rerender))
-            (error
-             (push (format "%s (%s)"
-                           (buffer-name buffer)
-                           (error-message-string err))
-                   rollback-failures)))))
-      (when (buffer-live-p staging-buffer)
-        (with-current-buffer staging-buffer
-          (set-buffer-modified-p nil))
-        (kill-buffer staging-buffer))
-      (when (buffer-live-p original-buffer)
-        (kill-buffer original-buffer))
-      (if rollback-failures
-          (let ((reason
-                 (format
-                  "Rewind rollback incomplete; inconsistent artifacts: %s"
-                  (string-join (nreverse rollback-failures) ", "))))
-            (when (mevedel-session-codec-portable-authority-p session)
-              (mevedel-session-recovery-record-failure
-               session reason temporary-root))
-            (error "%s; recovery data: %s" reason temporary-root))
-        (when (file-directory-p temporary-root)
-          (delete-directory temporary-root t))))))
-
 (defun mevedel-session-rewind--rewind-confirmation (session impact)
   "Return the Rewind confirmation for SESSION and IMPACT.
 
@@ -1987,8 +1804,7 @@ a given turn count and fork point stands for all of them.  The state the
 session is already in is excluded for the same reason.
 
 Each entry carries `:head', `:time', `:transcript-bytes', and the turn
-facts from the published sidecar.  Only a portable session publishes
-immutable heads, so a PID-lock session has none."
+facts from the published sidecar.  Workspace-free sessions have no heads."
   (when (mevedel-session-codec-portable-authority-p session)
     (let* ((session-dir (mevedel-session-save-path session))
            (current
@@ -2093,7 +1909,7 @@ the modified-buffer prompt, happens before the session lease is
 reserved; the reserved transaction then rechecks both the current head
 and the file plan the caller confirmed."
   (unless (mevedel-session-codec-portable-authority-p session)
-    (user-error "Only a portable project session publishes restorable heads"))
+    (user-error "A workspace session is required to restore published heads"))
   (mevedel-session-rewind-assert-stable-source session buffer "restoring")
   (let* ((save-path (mevedel-session-save-path session))
          (publication
@@ -2340,7 +2156,7 @@ current, rather than returning to their historical state."
       (mevedel-engine-assert-local-history session "Redo"))
     (unless (mevedel-session-codec-portable-authority-p session)
       (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session)
-       "Only a portable project session publishes restorable heads"))
+       "A workspace session is required to restore published heads"))
     (let ((heads (mevedel-with-diagnostic-errors scope
                    (mevedel-session-rewind-published-heads session))))
       (unless heads
@@ -2403,11 +2219,9 @@ BUFFER is the already-live execution session when available."
 (defun mevedel-session-rewind--redo-availability (session)
   "Return how Rewind describes what SESSION can restore afterwards.
 
-A portable session's superseded head stays published, so its
-conversation and captured files can be restored with `mevedel-redo'.
-The recorded mode is read directly: naming what Rewind offers must not
-be the step that rejects a session."
-  (if (eq (mevedel-session-authority-mode session) 'portable)
+A workspace session's superseded head stays published, so its
+conversation and captured files can be restored with `mevedel-redo'."
+  (if (mevedel-session-codec-portable-authority-p session)
       "conversation and captured-file redo"
     "no redo"))
 

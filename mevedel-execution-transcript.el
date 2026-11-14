@@ -62,13 +62,9 @@
                   "mevedel-session-persistence" (buffer))
 (declare-function mevedel-session-persistence-checkpoints-active-p
                   "mevedel-session-persistence" ())
-(declare-function mevedel-session-persistence-write-current-buffer-atomically
-                  "mevedel-session-persistence" (path))
 (autoload 'mevedel-session-persistence-autosave-soon
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-checkpoints-active-p
-  "mevedel-session-persistence")
-(autoload 'mevedel-session-persistence-write-current-buffer-atomically
   "mevedel-session-persistence")
 
 ;; `mevedel-structs'
@@ -225,27 +221,18 @@ the matching original Bash row; do not publish an unsent in-memory draft."
   (when-let* ((path buffer-file-name))
     (let* ((session (or mevedel--session
                         (error "Transcript has no session")))
-           (portable (mevedel-session-codec-portable-authority-p session))
-           (root-buffer
-            (and portable (mevedel-session-root-buffer session)))
+           (relative (file-relative-name
+                      path (mevedel-session-save-path session)))
            (coding (or buffer-file-coding-system 'utf-8-unix)))
-      (when (if portable
-                (mevedel-session-artifacts-artifact-present-p
-                 session (file-relative-name
-                          path (mevedel-session-save-path session)))
-              (file-exists-p path))
+      (when (and (mevedel-session-codec-portable-authority-p session)
+                 (mevedel-session-artifacts-artifact-present-p
+                  session relative))
         (with-temp-buffer
-          (if portable
-              (progn
-                (setq buffer-file-coding-system coding)
-                (insert
-                 (decode-coding-string
-                  (mevedel-session-artifacts-read-artifact
-                   session
-                   (file-relative-name
-                    path (mevedel-session-save-path session)))
-                  coding)))
-            (insert-file-contents path))
+          (setq buffer-file-coding-system coding)
+          (insert
+           (decode-coding-string
+            (mevedel-session-artifacts-read-artifact session relative)
+            coding))
           ;; Bare: the user's Org hooks cost 45 of 80 ms on a 2.9 MB copy.
           (let ((org-agenda-file-menu-enabled nil)) (mevedel--transcript-org-mode))
           (mevedel-transcript-restore-properties)
@@ -259,15 +246,12 @@ the matching original Bash row; do not publish an unsent in-memory draft."
             (goto-char (point-max))
             (insert (mevedel--format-hook-audit-record record))
             (mevedel-session-artifacts-stabilize-gptel-bounds)
-            (if portable
-                (mevedel-session-artifacts-publish-transcript-state
-                 session root-buffer path
-                 (buffer-substring-no-properties (point-min) (point-max))
-                 ;; These are committed bytes plus an audit, not a freeze of
-                 ;; the receiving live conversation.  Retain pending mail.
-                 nil coding)
-              (mevedel-session-persistence-write-current-buffer-atomically
-               path))))
+            (mevedel-session-artifacts-publish-transcript-state
+             session (mevedel-session-root-buffer session) path
+             (buffer-substring-no-properties (point-min) (point-max))
+             ;; These are committed bytes plus an audit, not a freeze of
+             ;; the receiving live conversation.  Retain pending mail.
+             nil coding)))
         (set-visited-file-modtime)
         t))))
 
@@ -406,32 +390,29 @@ RENDER-DATA is retained in the hidden transcript audit record."
                (modified-p (buffer-modified-p))
                (tool-use-id (plist-get event :tool-use-id))
                (path buffer-file-name)
+               (durable
+                (and path
+                     (mevedel-session-codec-portable-authority-p
+                      (or mevedel--session
+                          (error "Transcript has no session")))))
                (replacement
                 (list :type 'execution-completion
                       :tool-use-id tool-use-id
                       :owner (plist-get event :owner)
                       :render-data render-data))
                (marker-table mevedel-execution-transcript--archived-rows))
-          (when path
-            (let* ((session (or mevedel--session
-                                (error "Transcript has no session")))
-                   (portable
-                    (mevedel-session-codec-portable-authority-p session))
-                   (root-buffer
-                    (and portable (mevedel-session-root-buffer session)))
-                   (coding (or buffer-file-coding-system 'utf-8-unix)))
+          (when durable
+            (let ((session mevedel--session)
+                  (coding (or buffer-file-coding-system 'utf-8-unix)))
               (with-temp-buffer
-                (if portable
-                    (progn
-                      (setq buffer-file-coding-system coding)
-                      (insert
-                       (decode-coding-string
-                        (mevedel-session-artifacts-read-artifact
-                         session
-                         (file-relative-name
-                          path (mevedel-session-save-path session)))
-                        coding)))
-                  (insert-file-contents path))
+                (setq buffer-file-coding-system coding)
+                (insert
+                 (decode-coding-string
+                  (mevedel-session-artifacts-read-artifact
+                   session
+                   (file-relative-name
+                    path (mevedel-session-save-path session)))
+                  coding))
                 (let ((org-agenda-file-menu-enabled nil))
                   (mevedel--transcript-org-mode))
                 (mevedel-transcript-restore-properties)
@@ -443,15 +424,12 @@ RENDER-DATA is retained in the hidden transcript audit record."
                       tool-use-id replacement))
                   (error "Persisted execution record missing: %s" tool-use-id))
                 (mevedel-session-artifacts-stabilize-gptel-bounds)
-                (if portable
-                    (mevedel-session-artifacts-publish-transcript-state
-                     session root-buffer path
-                     (buffer-substring-no-properties (point-min) (point-max))
-                     ;; Only enrich the committed archive; do not checkpoint
-                     ;; unsaved live fields or retire pending consumption.
-                     nil coding)
-                  (mevedel-session-persistence-write-current-buffer-atomically
-                   path))))
+                (mevedel-session-artifacts-publish-transcript-state
+                 session (mevedel-session-root-buffer session) path
+                 (buffer-substring-no-properties (point-min) (point-max))
+                 ;; Only enrich the committed archive; do not checkpoint
+                 ;; unsaved live fields or retire pending consumption.
+                 nil coding)))
             ;; The atomic rename changed the visited file.  Refresh the
             ;; buffer's baseline before applying the same replacement in
             ;; memory, otherwise Emacs may report a spurious file-supersession
@@ -466,7 +444,8 @@ RENDER-DATA is retained in the hidden transcript audit record."
               (error "Archived execution record missing: %s" tool-use-id)))
           (when path
             (mevedel-session-artifacts-stabilize-gptel-bounds))
-          (set-buffer-modified-p modified-p)
+          ;; Without a durable workspace only an ordinary save keeps the row.
+          (set-buffer-modified-p (or modified-p (and path (not durable))))
           (when (hash-table-p marker-table)
             (remhash tool-use-id marker-table)))))))
 
@@ -647,13 +626,10 @@ after publishing the updated archive."
                                             (plist-get descriptor :number)))
                                 save-path))
                               (coding (or buffer-file-coding-system 'utf-8-unix)))
-                          (if (mevedel-session-codec-portable-authority-p session)
-                              (mevedel-session-artifacts-publish-transcript-state
-                               session (mevedel-session-root-buffer session) path
-                               (buffer-substring-no-properties (point-min) (point-max))
-                               nil coding)
-                            (mevedel-session-persistence-write-current-buffer-atomically
-                             path))))
+                          (mevedel-session-artifacts-publish-transcript-state
+                           session (mevedel-session-root-buffer session) path
+                           (buffer-substring-no-properties (point-min) (point-max))
+                           nil coding)))
                       (unless mevedel-execution-transcript--archived-update-cache
                         (setq mevedel-execution-transcript--archived-update-cache
                               (make-hash-table :test #'equal)))

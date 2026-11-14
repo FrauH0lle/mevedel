@@ -39,6 +39,16 @@
           "mevedel-session-test-support"))
 (require 'mevedel-compact)
 
+(defun mevedel-plan-handoff-dispatch-test--publish (session path body)
+  "Commit fixture BODY at PATH with SESSION's genuine sidecar."
+  (mevedel-session-publication-publish
+   session
+   (list (list :path path :content body)
+         (list :path (file-name-concat (mevedel-session-save-path session) "session.meta.el")
+               :content (mevedel-session-artifacts-printed-value
+                         (mevedel-session-codec-serialize session))
+               :commit-marker t))))
+
 (mevedel-deftest mevedel-plan-handoff--dispatch-accepted
   (:quiet t :doc "Here/Fresh rotates once, runs setup hooks, and retries only submission")
   ,test
@@ -56,9 +66,8 @@
                 (list :path "local/plans/accepted-20260813-120000.md"
                       :hash (mevedel-plan-hash body))))
          (session
-          (mevedel-session--create
-           :authority-mode 'pid-lock
-           :name "test" :save-path save-dir :permission-mode 'ask
+          (test-mevedel-session-persistence--leased-session save-dir
+           :name "test"  :permission-mode 'ask
            :plan-metadata
            (list :status 'accepted :implementation-retry record)))
          (data-buffer (generate-new-buffer " *plan-fresh-data*"))
@@ -71,7 +80,7 @@
     (unwind-protect
         (progn
           (make-directory (file-name-directory accepted-path) t)
-          (write-region body nil accepted-path nil 'silent)
+          (mevedel-plan-handoff-dispatch-test--publish session accepted-path body)
           (write-region "# Mutable replacement" nil current-path nil 'silent)
           (with-current-buffer data-buffer
             (setq-local mevedel--session session))
@@ -132,6 +141,8 @@
               (should-not (string-match-p "Mutable replacement" prompt)))))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (mevedel-session-persistence-lock-release save-dir session)
+      (mevedel-workspace-clear-registry)
       (delete-directory save-dir t)))
 
   :doc "a failed Fresh rotation remains retryable at the preparation step"
@@ -144,7 +155,6 @@
                        :hash "hash")))
          (session
           (mevedel-session--create
-           :authority-mode 'pid-lock
            :name "test"
            :plan-metadata
            (list :status 'accepted :implementation-retry record)))
@@ -182,9 +192,8 @@
                 (list :path "local/plans/accepted-20260813-120000.md"
                       :hash (mevedel-plan-hash body))))
          (session
-          (mevedel-session--create
-           :authority-mode 'pid-lock
-           :name "main" :save-path save-dir :goal goal
+          (test-mevedel-session-persistence--leased-session save-dir
+           :name "main"  :goal goal
            :plan-metadata
            (list :status 'accepted :implementation-retry record)))
          (data-buffer (generate-new-buffer " *plan-goal-crash-data*"))
@@ -193,7 +202,7 @@
     (unwind-protect
         (progn
           (make-directory (file-name-directory accepted-path) t)
-          (write-region body nil accepted-path nil 'silent)
+          (mevedel-plan-handoff-dispatch-test--publish session accepted-path body)
           (with-current-buffer data-buffer
             (setq-local mevedel--session session))
           (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
@@ -221,6 +230,8 @@
                          :implementation-retry)))
       (kill-buffer view-buffer)
       (kill-buffer data-buffer)
+      (mevedel-session-persistence-lock-release save-dir session)
+      (mevedel-workspace-clear-registry)
       (delete-directory save-dir t)))
 
   :doc "leaves a different unfinished Goal untouched and retryable"
@@ -239,9 +250,8 @@
                 (list :path "local/plans/accepted-20260813-120000.md"
                       :hash (mevedel-plan-hash body))))
          (session
-          (mevedel-session--create
-           :authority-mode 'pid-lock
-           :name "main" :save-path save-dir :goal goal
+          (test-mevedel-session-persistence--leased-session save-dir
+           :name "main"  :goal goal
            :plan-metadata
            (list :status 'accepted :implementation-retry record)))
          (data-buffer (generate-new-buffer " *plan-goal-conflict-data*"))
@@ -249,7 +259,7 @@
     (unwind-protect
         (progn
           (make-directory (file-name-directory accepted-path) t)
-          (write-region body nil accepted-path nil 'silent)
+          (mevedel-plan-handoff-dispatch-test--publish session accepted-path body)
           (with-current-buffer data-buffer
             (setq-local mevedel--session session))
           (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
@@ -278,6 +288,8 @@
              :failure))))
       (kill-buffer view-buffer)
       (kill-buffer data-buffer)
+      (mevedel-session-persistence-lock-release save-dir session)
+      (mevedel-workspace-clear-registry)
       (delete-directory save-dir t)))
 
   :doc "pauses after kickoff startup failure and resumes held input first"
@@ -293,9 +305,8 @@
                 (list :path "local/plans/accepted-20260813-120000.md"
                       :hash (mevedel-plan-hash body))))
          (session
-          (mevedel-session--create
-           :authority-mode 'pid-lock
-           :name "main" :save-path save-dir
+          (test-mevedel-session-persistence--leased-session save-dir
+           :name "main"
            :pending-follow-ups
            '((:input "steer first" :queued-at-goal-id "reserved"))
            :plan-metadata
@@ -306,7 +317,7 @@
     (unwind-protect
         (progn
           (make-directory (file-name-directory accepted-path) t)
-          (write-region body nil accepted-path nil 'silent)
+          (mevedel-plan-handoff-dispatch-test--publish session accepted-path body)
           (with-current-buffer data-buffer
             (setq-local mevedel--session session))
           (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
@@ -354,6 +365,8 @@
                             :input)))))
       (kill-buffer view-buffer)
       (kill-buffer data-buffer)
+      (mevedel-session-persistence-lock-release save-dir session)
+      (mevedel-workspace-clear-registry)
       (delete-directory save-dir t)))
 
   :doc "Here/Summary caches one zero-tail compaction across dispatch retry"
@@ -369,9 +382,8 @@
                 (list :path "local/plans/accepted-20260813-120000.md"
                       :hash (mevedel-plan-hash body))))
          (session
-          (mevedel-session--create
-           :authority-mode 'pid-lock
-           :name "test" :save-path save-dir
+          (test-mevedel-session-persistence--leased-session save-dir
+           :name "test"
            :plan-metadata
            (list :status 'accepted :implementation-retry record)))
          (data-buffer (generate-new-buffer " *plan-summary-data*"))
@@ -387,7 +399,7 @@
     (unwind-protect
         (progn
           (make-directory (file-name-directory accepted-path) t)
-          (write-region body nil accepted-path nil 'silent)
+          (mevedel-plan-handoff-dispatch-test--publish session accepted-path body)
           (with-current-buffer data-buffer
             (setq-local mevedel--session session))
           (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
@@ -496,6 +508,8 @@
                 (should-not (string-search anchored-summary prompt)))))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (mevedel-session-persistence-lock-release save-dir session)
+      (mevedel-workspace-clear-registry)
       (delete-directory save-dir t)))))
 
 (defun test-mevedel-plan-handoff-dispatch--commit-source (session)
@@ -613,7 +627,7 @@
   (:doc "a session that cannot fork refuses before acceptance")
   ,test
   (test)
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "busy"))
+  (let* ((session (mevedel-session--create :name "busy"))
          (buffer (generate-new-buffer " *plan-worktree-busy*")))
     (unwind-protect
         (progn

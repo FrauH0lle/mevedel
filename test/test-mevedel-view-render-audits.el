@@ -21,10 +21,21 @@
 (require 'mevedel-view-stream)
 (require 'mevedel-transcript)
 (require 'mevedel-session-artifacts)
+(require 'mevedel-session-test-support
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name)) "mevedel-session-test-support"))
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-ptc)
 (require 'mevedel-execution-transcript)
+
+(defun mevedel-view-audit-test--publish (session &rest paths)
+  "Publish explicit archive PATHS for read-only audit lookup in SESSION."
+  (mevedel-session-publication-publish
+   session (append (mapcar (lambda (path)
+                             (list :path path :content
+                                   (mevedel-session-artifacts-read-file-raw path))) paths)
+                   '((:path "session.meta.el" :content "(:fixture archive-only)" :commit-marker t))) t))
 
 (mevedel-deftest mevedel-view--insert-hook-audit-block/display-insets ()
   ,test
@@ -1050,8 +1061,7 @@
   (let* ((root (make-temp-file "mevedel-control-older-" t))
          (archive (mevedel-session-artifacts-segment-path root 2))
          (live (generate-new-buffer " *control latest segment*"))
-         (session (mevedel-session--create :save-path root
-                                           :authority-mode 'pid-lock
+         (session (test-mevedel-session-persistence--leased-session root
                                            :current-segment 3)))
     (unwind-protect
         (progn
@@ -1068,6 +1078,7 @@
                                      :execution-output "RETAINED OLDER OUTPUT"))))
             (mevedel-session-artifacts-stabilize-gptel-bounds)
             (write-region (point-min) (point-max) archive nil 'silent))
+          (mevedel-view-audit-test--publish session archive)
           (should (equal '(missing readable readable)
                          (mapcar (lambda (entry) (plist-get entry :status))
                                  (mevedel-session-artifacts-transcript-segments
@@ -1104,6 +1115,8 @@
       (when (buffer-live-p live) (kill-buffer live))
       (when-let* ((buffer (get-buffer "*mevedel execution result*")))
         (kill-buffer buffer))
+      (mevedel-session-durability-lease-release root session)
+      (mevedel-workspace-clear-registry)
       (delete-directory root t)))))
 
 (mevedel-deftest mevedel-view-audit-show-control-result-older-source ()
@@ -1113,8 +1126,7 @@
   (let* ((root (make-temp-file "mevedel-control-source-" t))
          (archive (mevedel-session-artifacts-segment-path root 1))
          (live (generate-new-buffer " *control source latest*"))
-         (session (mevedel-session--create :save-path root
-                                           :authority-mode 'pid-lock
+         (session (test-mevedel-session-persistence--leased-session root
                                            :current-segment 3))
          opened)
     (unwind-protect
@@ -1136,6 +1148,7 @@
                      "outer"))
             (mevedel-session-artifacts-stabilize-gptel-bounds)
             (write-region (point-min) (point-max) archive nil 'silent))
+          (mevedel-view-audit-test--publish session archive)
           (with-temp-buffer
             (setq-local mevedel--data-buffer live)
             (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
@@ -1146,6 +1159,8 @@
               (should (equal "outer/1" (plist-get opened :tool-use-id)))
               (should (equal "exec-older" (plist-get opened :execution-id))))))
       (when (buffer-live-p live) (kill-buffer live))
+      (mevedel-session-durability-lease-release root session)
+      (mevedel-workspace-clear-registry)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-view-audit-show-control-result-agent-archive ()
@@ -1161,8 +1176,7 @@
          (live (generate-new-buffer " *agent control current*"))
          (view (generate-new-buffer " *agent control view*"))
          (mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
-         (session (mevedel-session--create :save-path root
-                                           :authority-mode 'pid-lock
+         (session (test-mevedel-session-persistence--leased-session root
                                            :current-segment 7)))
     (unwind-protect
         (progn
@@ -1221,6 +1235,7 @@
             (insert (propertize "SECOND-ARCHIVE\n" 'gptel 'response))
             (mevedel-session-artifacts-stabilize-gptel-bounds)
             (write-region (point-min) (point-max) later nil 'silent))
+          (mevedel-view-audit-test--publish session archive later)
           (mevedel-view--setup view live
                                '(:agent-transcript-p t :agent-path "/root/worker"))
           (mevedel-tool-register
@@ -1315,6 +1330,8 @@
       (when (buffer-live-p live) (kill-buffer live))
       (when-let* ((buffer (get-buffer "*mevedel execution result*")))
         (kill-buffer buffer))
+      (mevedel-session-durability-lease-release root session)
+      (mevedel-workspace-clear-registry)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-view-audit-show-result-forwarded-agent-archive ()
@@ -1329,8 +1346,7 @@
                                       "worker.compact-0001.chat.org"))
            (mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
            (session
-            (mevedel-session--create
-             :authority-mode 'pid-lock :save-path root
+            (test-mevedel-session-persistence--leased-session root
              :agent-transcripts
              '(("worker-id" . (:agent-path "/root/worker"
                                :path "agents/worker.chat.org")))))
@@ -1359,6 +1375,7 @@
               (write-region (point-min) (point-max) archive nil 'silent))
             (with-temp-file live-path
               (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n"))
+            (mevedel-view-audit-test--publish session archive live-path)
             (mevedel-tool-register
              (mevedel-tool--create :name "Bash" :category "mevedel"
                                    :renderer #'mevedel-tool-exec--render-bash))
@@ -1405,6 +1422,8 @@
           (kill-buffer agent-data))
         (when-let* ((evidence (get-buffer "*mevedel execution result*")))
           (kill-buffer evidence))
+        (mevedel-session-durability-lease-release root session)
+        (mevedel-workspace-clear-registry)
         (delete-directory root t)))))
 
 (mevedel-deftest mevedel-view-audit-archived-terminal-rendering ()
@@ -1449,8 +1468,7 @@
          (archive (generate-new-buffer " *first source segment*"))
          (first-path (mevedel-session-artifacts-segment-path root 1))
          (middle-path (mevedel-session-artifacts-segment-path root 2))
-         (session (mevedel-session--create :save-path root
-                                           :authority-mode 'pid-lock
+         (session (test-mevedel-session-persistence--leased-session root
                                            :current-segment 3)))
     (unwind-protect
         (progn
@@ -1471,6 +1489,7 @@
                                      :execution-output "FINAL AFTER ROTATION"))))
             (mevedel-session-artifacts-stabilize-gptel-bounds)
             (write-region (point-min) (point-max) middle-path nil 'silent))
+          (mevedel-view-audit-test--publish session first-path middle-path)
           (with-temp-buffer
             (setq-local mevedel--data-buffer live)
             (let ((descriptors (mevedel-session-artifacts-transcript-segments
@@ -1507,6 +1526,8 @@
               (should-not (cl-set-difference (buffer-list) before)))))
       (when (buffer-live-p live) (kill-buffer live))
       (when (buffer-live-p archive) (kill-buffer archive))
+      (mevedel-session-durability-lease-release root session)
+      (mevedel-workspace-clear-registry)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-view-audit-intermediate-terminal-evidence ()
@@ -1516,8 +1537,7 @@
   (let* ((root (make-temp-file "mevedel-terminal-evidence-" t))
          (middle-path (mevedel-session-artifacts-segment-path root 2))
          (live (generate-new-buffer " *latest without Bash*"))
-         (session (mevedel-session--create :save-path root
-                                           :authority-mode 'pid-lock
+         (session (test-mevedel-session-persistence--leased-session root
                                            :current-segment 3)))
     (unwind-protect
         (progn
@@ -1534,6 +1554,7 @@
                                      :execution-output "RETAINED FINAL S2"))))
             (mevedel-session-artifacts-stabilize-gptel-bounds)
             (write-region (point-min) (point-max) middle-path nil 'silent))
+          (mevedel-view-audit-test--publish session middle-path)
           (with-temp-buffer
             (setq-local mevedel--data-buffer live)
             (should (equal '(missing readable readable)
@@ -1554,6 +1575,8 @@
       (when (buffer-live-p live) (kill-buffer live))
       (when-let* ((buffer (get-buffer "*mevedel execution result*")))
         (kill-buffer buffer))
+      (mevedel-session-durability-lease-release root session)
+      (mevedel-workspace-clear-registry)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-view-audit-agent-compact-archive-evidence ()
@@ -1566,8 +1589,7 @@
          (archive-1 (file-name-concat agents "worker.compact-0001.chat.org"))
          (archive-2 (file-name-concat agents "worker.compact-0002.chat.org"))
          (data (generate-new-buffer " *agent current after compaction*"))
-         (session (mevedel-session--create :save-path root
-                                           :authority-mode 'pid-lock
+         (session (test-mevedel-session-persistence--leased-session root
                                            :current-segment 1)))
     (unwind-protect
         (progn
@@ -1589,6 +1611,7 @@
                                     (or (org-entry-get (point-min)
                                                        "GPTEL_BOUNDS") "")))
             (write-region (point-min) (point-max) archive-2 nil 'silent))
+          (mevedel-view-audit-test--publish session archive-1 archive-2)
           (with-current-buffer data
             (setq buffer-file-name canonical)
             (setq-local mevedel--session session)
@@ -1617,7 +1640,10 @@
                 (with-current-buffer evidence
                   (should (string-match-p "FINAL CHILD ARCHIVE"
                                           (buffer-string))))
-              (delete-file archive-1)
+              (mevedel-session-publication-publish
+               session '((:path "agents/worker.compact-0001.chat.org" :delete t)
+                         (:path "session.meta.el" :content "(:fixture archive-only)"
+                          :commit-marker t)) t)
               (should (= 2 (length
                             (mevedel-session-artifacts-transcript-segments
                              session data))))
@@ -1630,6 +1656,8 @@
       (when (buffer-live-p data) (kill-buffer data))
       (when-let* ((evidence (get-buffer "*mevedel execution result*")))
         (kill-buffer evidence))
+      (mevedel-session-durability-lease-release root session)
+      (mevedel-workspace-clear-registry)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-view-audit-retained-child-evidence ()
@@ -2080,8 +2108,7 @@
   (let* ((root (make-temp-file "mevedel-breadcrumb-source-" t))
          (live (generate-new-buffer " *breadcrumb live*"))
          (archive (mevedel-session-artifacts-segment-path root 1))
-         (session (mevedel-session--create :save-path root
-                                           :authority-mode 'pid-lock
+         (session (test-mevedel-session-persistence--leased-session root
                                            :current-segment 3))
          selected)
     (unwind-protect
@@ -2101,6 +2128,7 @@
                                       'gptel (cons 'tool (nth 2 case))))
                   (mevedel-session-artifacts-stabilize-gptel-bounds)
                   (write-region (point-min) (point-max) archive nil 'silent))
+                (mevedel-view-audit-test--publish session archive)
                 (should (equal '(readable missing readable)
                                (mapcar (lambda (entry) (plist-get entry :status))
                                        (mevedel-session-artifacts-transcript-segments
@@ -2115,6 +2143,8 @@
                   (should (= 1 selected))
                   (should-not (cl-set-difference (buffer-list) before)))))))
       (when (buffer-live-p live) (kill-buffer live))
+      (mevedel-session-durability-lease-release root session)
+      (mevedel-workspace-clear-registry)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-view-audit--history-records-nested ()
@@ -2168,8 +2198,7 @@
   (let* ((root (make-temp-file "mevedel-mailbox-delivery-" t))
          (data (generate-new-buffer " *next mailbox segment*"))
          (archive (mevedel-session-artifacts-segment-path root 1))
-         (session (mevedel-session--create :save-path root
-                                           :authority-mode 'pid-lock
+         (session (test-mevedel-session-persistence--leased-session root
                                            :current-segment 3)))
     (unwind-protect
         (progn
@@ -2181,6 +2210,7 @@
             (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\" execution_id=\"exec-1\" outcome=\"success\">\n"
                     "<bash-execution execution_id=\"exec-1\" outcome=\"success\"/>\n"
                     "</agent-message>\n"))
+          (mevedel-view-audit-test--publish session archive)
           (with-temp-buffer
             (setq-local mevedel--data-buffer data)
             (should (equal '(readable missing readable)
@@ -2195,6 +2225,8 @@
                          (point-max))))
               (should-not (cl-set-difference (buffer-list) before)))))
       (when (buffer-live-p data) (kill-buffer data))
+      (mevedel-session-durability-lease-release root session)
+      (mevedel-workspace-clear-registry)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-view-audit--archived-breadcrumbs ()
@@ -2204,8 +2236,7 @@
   (let* ((root (make-temp-file "mevedel-archive-cache-" t))
          (data (generate-new-buffer " *archive cache live*"))
          (archive (mevedel-session-artifacts-segment-path root 1))
-         (session (mevedel-session--create :save-path root
-                                           :authority-mode 'pid-lock
+         (session (test-mevedel-session-persistence--leased-session root
                                            :current-segment 2))
          (read (symbol-function
                 'mevedel-session-artifacts-read-transcript-segment))
@@ -2224,6 +2255,7 @@
             (delay-mode-hooks (org-mode))
             (insert (funcall delivery "exec-1"))
             (mevedel-session-artifacts-stabilize-gptel-bounds))
+          (mevedel-view-audit-test--publish session archive)
           (with-temp-buffer
             (setq-local mevedel--data-buffer data)
             (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
@@ -2246,6 +2278,7 @@
                 (delay-mode-hooks (org-mode))
                 (insert (funcall delivery "exec-2") (funcall delivery "exec-3"))
                 (mevedel-session-artifacts-stabilize-gptel-bounds))
+              (mevedel-view-audit-test--publish session archive)
               (should (mevedel-view-audit-breadcrumb-present-p
                        '(:execution-id "exec-2" :owner "/root/child")
                        (point-max)))
@@ -2254,6 +2287,8 @@
                            (point-max)))
               (should (= 2 reads)))))
       (when (buffer-live-p data) (kill-buffer data))
+      (mevedel-session-durability-lease-release root session)
+      (mevedel-workspace-clear-registry)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-view-audit-breadcrumb-archived-projection ()
@@ -2262,8 +2297,7 @@
   :doc "historical projection consults earlier, not later, receiver segments"
   (let* ((root (make-temp-file "mevedel-mailbox-projection-" t))
          (live (generate-new-buffer " *live mailbox session*"))
-         (session (mevedel-session--create :save-path root
-                                           :authority-mode 'pid-lock
+         (session (test-mevedel-session-persistence--leased-session root
                                            :current-segment 4))
          earlier)
     (unwind-protect
@@ -2285,6 +2319,8 @@
                                    '(:type execution-breadcrumb :execution-id "new"
                                      :owner "/root/child" :facts (:outcome success)))))
                         (mevedel-session-artifacts-stabilize-gptel-bounds)))
+          (apply #'mevedel-view-audit-test--publish session
+                 (mapcar (lambda (number) (mevedel-session-artifacts-segment-path root number)) '(1 2 3)))
           (let ((descriptors (mevedel-session-artifacts-transcript-segments
                               session live)))
             (should (equal '(readable readable readable readable)
@@ -2315,6 +2351,8 @@
               (should-not (cl-set-difference (buffer-list) before)))))
       (when (buffer-live-p live) (kill-buffer live))
       (when (buffer-live-p earlier) (kill-buffer earlier))
+      (mevedel-session-durability-lease-release root session)
+      (mevedel-workspace-clear-registry)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-view-audit--history-records-mailbox ()
@@ -2399,8 +2437,7 @@
            (later-path (when agent-p
                          (file-name-concat
                           agents "child.compact-0003.chat.org")))
-           (session (mevedel-session--create :save-path root
-                                             :authority-mode 'pid-lock
+           (session (test-mevedel-session-persistence--leased-session root
                                              :current-segment 3
                                              :name "execution history")))
       (unwind-protect
@@ -2443,6 +2480,8 @@
                        'gptel '(tool . "bash")))
               (mevedel-session-artifacts-stabilize-gptel-bounds)
               (write-region (point-min) (point-max) archive-path nil 'silent))
+            (apply #'mevedel-view-audit-test--publish session
+                   (delq nil (list archive-path later-path)))
             (with-temp-buffer
               (setq-local mevedel--data-buffer live)
               (let* ((descriptors
@@ -2469,6 +2508,8 @@
                 (should-not (cl-set-difference (buffer-list) before))
                 (should (buffer-live-p live)))))
         (when (buffer-live-p live) (kill-buffer live))
+        (mevedel-session-durability-lease-release root session)
+        (mevedel-workspace-clear-registry)
         (delete-directory root t)))))
 
 (mevedel-deftest mevedel-view-audit--owner-record ()
@@ -2478,8 +2519,7 @@
   (let* ((root (make-temp-file "mevedel-owner-segments-" t))
          (live (generate-new-buffer " *child current*"))
          (archive (mevedel-session-artifacts-segment-path root 1))
-         (session (mevedel-session--create :save-path root
-                                           :authority-mode 'pid-lock
+         (session (test-mevedel-session-persistence--leased-session root
                                            :current-segment 3))
          (forwarded '(:execution-id "child-exec" :owner "/root/child")))
     (unwind-protect
@@ -2497,6 +2537,7 @@
                        :command "echo child")))
             (mevedel-session-artifacts-stabilize-gptel-bounds)
             (write-region (point-min) (point-max) archive nil 'silent))
+          (mevedel-view-audit-test--publish session archive)
           (should (equal '(readable missing readable)
                          (mapcar (lambda (entry) (plist-get entry :status))
                                  (mevedel-session-artifacts-transcript-segments
@@ -2509,6 +2550,8 @@
                                         :tool-use-id))))
             (should-not (cl-set-difference (buffer-list) before))))
       (when (buffer-live-p live) (kill-buffer live))
+      (mevedel-session-durability-lease-release root session)
+      (mevedel-workspace-clear-registry)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-view-audit-show-result-nested-agent-owner ()

@@ -48,8 +48,6 @@
                   "mevedel-session-artifacts" (session buffer &optional checkpoint))
 (declare-function mevedel-session-artifacts-artifact-present-p
                   "mevedel-session-artifacts" (session logical &optional committed-only))
-(declare-function mevedel-session-artifacts-assert-not-superseded
-                  "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-call-with-checkpoint
                   "mevedel-session-artifacts" (session function))
 (declare-function mevedel-session-artifacts-find-artifact-noselect
@@ -81,7 +79,6 @@
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-strip-gptel-config-properties
   "mevedel-session-artifacts")
-(autoload 'mevedel-session-artifacts-assert-not-superseded "mevedel-session-artifacts")
 
 ;; `mevedel-session-codec'
 (declare-function mevedel-session-codec-portable-authority-p
@@ -194,9 +191,6 @@
                   (&optional all no-persistence))
 (defvar org-element-cache-persistent)
 (defvar org-element-use-cache)
-
-;; `undo-tree'
-(defvar undo-tree-auto-save-history)
 
 (require 'mevedel-execution-telemetry)
 (require 'mevedel-execution-transcript)
@@ -850,7 +844,7 @@ FROZEN-TICK is a `buffer-modified-tick', so text and property edits count."
 
 (defun mevedel-agent-conversation-prepare-save (invocation)
   "Freeze INVOCATION's retained transcript for an asynchronous portable commit.
-Return nil when the warm portable path does not apply (cold, file-backed, no
+Return nil when the warm portable path does not apply (cold, workspace-free, no
 committed sidecar or no live root), so the caller saves synchronously.
 Otherwise return (:artifacts ARTIFACTS :finish FUNCTION).  ARTIFACTS is the
 transcript, when modified, followed by the sidecar commit marker carrying the
@@ -938,71 +932,50 @@ ownership, handed to gated writers."
              (session (mevedel-agent-invocation-parent-session invocation))
              (parent
               (mevedel-agent-invocation-parent-data-buffer invocation)))
-	 (when (buffer-live-p buffer)
+         (when (buffer-live-p buffer)
            (with-current-buffer buffer
              (when (and buffer-file-name relative session
-			(mevedel-session-save-path session)
-			(mevedel--same-file-p
-			 buffer-file-name
-			 (expand-file-name
-			  relative (mevedel-session-save-path session))))
+                        (mevedel-session-save-path session)
+                        (mevedel--same-file-p
+                         buffer-file-name
+                         (expand-file-name
+                          relative (mevedel-session-save-path session)))
+                        ;; Only durable workspaces publish transcripts.
+                        (mevedel-session-codec-portable-authority-p session))
                (condition-case err
-                           (progn
-                             (let ((checkpoint
-                                    (mevedel-agent-conversation--freeze-preamble
-                                     invocation session)))
+                   (let ((checkpoint
+                          (mevedel-agent-conversation--freeze-preamble
+                           invocation session)))
                      (when (buffer-modified-p)
-                       (let* ((coding-system-for-write 'utf-8-unix)
-                              (save-silently t)
-                              (inhibit-message t)
+                       (let* ((inhibit-message t)
                               (message-log-max nil)
-                              (before-save-hook
-                               (remq 'gptel--save-state before-save-hook))
-                              (undo-tree-auto-save-history nil)
-                              (write-file-functions
-                               (remq 'undo-tree-save-history-from-hook
-                                     write-file-functions)))
-			 ;; Portable authority resolves this transcript
-			 ;; through the publication, so a direct write would
-			 ;; leave resume unable to see it.
-			 (if (mevedel-session-codec-portable-authority-p session)
+                              (frozen (mevedel-agent-conversation--freeze-content
+                                       invocation session))
+                              (content (plist-get frozen :content))
+                              (root (or (mevedel-session-root-buffer session) parent)))
+                         (setq checkpoint (plist-get frozen :checkpoint))
+                         (if (and (buffer-live-p root)
+                                  (mevedel-session-artifacts-artifact-present-p
+                                   session "session.meta.el" t))
                              (progn
-                               (let* ((frozen (mevedel-agent-conversation--freeze-content
-                                               invocation session))
-                                      (frozen-tick (plist-get frozen :frozen-tick))
-                                      (content (plist-get frozen :content))
-                                      (root (or (mevedel-session-root-buffer session) parent)))
-                                         (setq checkpoint (plist-get frozen :checkpoint))
-					 (if (and (buffer-live-p root)
-					  (mevedel-session-artifacts-artifact-present-p
-                                           session "session.meta.el" t))
-                                     (progn
-                                       (mevedel-session-artifacts-publish-transcript-state
-						session root buffer-file-name content checkpoint 'utf-8-unix t token)
-	                                       (setq checkpoint nil)
-                                       (setf (mevedel-agent-invocation-sidecar-dirty invocation) nil))
-                                   (mevedel-session-artifacts-publish-text
-                                    session buffer-file-name content 'utf-8-unix t token))
-                               (mevedel-agent-conversation--finish-save frozen-tick)))
-                           (when (bound-and-true-p gptel-mode)
-                             (gptel--save-state))
-                           (mevedel-session-artifacts-assert-not-superseded)
-                                   (let ((before-save-hook
-                                          (append before-save-hook
-                                                  (list (lambda ()
-                                                          (setq checkpoint
-                                                                (mevedel-session-checkpoint-capture
-                                                                 session (mevedel-agent-invocation-path invocation))))))))
-	                             (basic-save-buffer)))))
-                     (when (and
-	                            (or checkpoint
-                                        (mevedel-agent-invocation-sidecar-dirty invocation))
-                            (buffer-live-p parent)
-                            (mevedel-session-persistence-write-sidecar-now
-	                             session parent t checkpoint token))
+                               (mevedel-session-artifacts-publish-transcript-state
+                                session root buffer-file-name content checkpoint
+                                'utf-8-unix t token)
+                               (setq checkpoint nil)
+                               (setf (mevedel-agent-invocation-sidecar-dirty invocation)
+                                     nil))
+                           (mevedel-session-artifacts-publish-text
+                            session buffer-file-name content 'utf-8-unix t token))
+                         (mevedel-agent-conversation--finish-save
+                          (plist-get frozen :frozen-tick))))
+                     (when (and (or checkpoint
+                                    (mevedel-agent-invocation-sidecar-dirty invocation))
+                                (buffer-live-p parent)
+                                (mevedel-session-persistence-write-sidecar-now
+                                 session parent t checkpoint token))
                        (setf (mevedel-agent-invocation-sidecar-dirty invocation)
                              nil))
-	                     t))
+                     t)
 		 (mevedel-session-control-fs-busy
 		  ;; Reached from a timer or sentinel inside a remote command:
 		  ;; the control filesystem refused to nest and nothing was

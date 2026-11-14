@@ -27,6 +27,10 @@
 (require 'mevedel-agents)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
+(require 'mevedel-session-test-support
+         (file-name-concat (file-name-directory
+                            (or buffer-file-name load-file-name byte-compile-current-file))
+                           "mevedel-session-test-support"))
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -327,6 +331,9 @@ With RAW-P, retain the full pipeline result including hidden render data."
               mevedel-artifact-lease--held)
      (mevedel-tool-clear-registry)
      (when (buffer-live-p buffer) (kill-buffer buffer))
+     (when (mevedel-session-lease session)
+       (mevedel-session-persistence-lock-release save-path session)
+       (mevedel-workspace-clear-registry))
      (when (file-directory-p root) (delete-directory root t))
      (when (file-directory-p save-path) (delete-directory save-path t))))
   ,test
@@ -385,7 +392,6 @@ With RAW-P, retain the full pipeline result including hidden render data."
   (unwind-protect
       (progn
         (mevedel-tool-editing--register)
-        (setf (mevedel-session-authority-mode session) 'pid-lock)
         (with-current-buffer buffer
           (setq-local gptel-tools
                       (test-mevedel-ptc-driver--gptel-tools "SharedCreate" "SharedEdit")))
@@ -1081,6 +1087,11 @@ With RAW-P, retain the full pipeline result including hidden render data."
 
   :doc "preserves child media references without payload data"
   (let (result)
+    (setq session (test-mevedel-session-persistence--leased-session
+                   save-path :working-directory root :permission-mode 'full-auto))
+    (with-current-buffer buffer
+      (setq-local mevedel--session session
+                  mevedel--workspace (mevedel-session-workspace session)))
     (test-mevedel-ptc-driver--register-probe
      (lambda (_args)
        '(:result "image"

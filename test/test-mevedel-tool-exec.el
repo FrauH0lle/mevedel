@@ -118,7 +118,7 @@ A synchronous result must come with exactly one matching acknowledgement."
   (test)
   :doc "places execution artifacts below the session tool-results directory"
   (let* ((target (mevedel-execution-target-create default-directory))
-         (session (mevedel-session--create :authority-mode 'pid-lock :execution-target target)))
+         (session (mevedel-session--create :execution-target target)))
     (cl-letf (((symbol-function 'mevedel-pipeline-tool-results-dir)
                (lambda (_session _buffer _request existing-only-p)
                  (should-not existing-only-p)
@@ -129,7 +129,7 @@ A synchronous result must come with exactly one matching acknowledgement."
   :doc "remote sessions use the execution module's local temporary spool"
   (let* ((target (mevedel-execution-target-create
                   "/ssh:user@host:/srv/project/"))
-         (session (mevedel-session--create :authority-mode 'pid-lock :execution-target target)))
+         (session (mevedel-session--create :execution-target target)))
     (cl-letf (((symbol-function 'mevedel-pipeline-tool-results-dir)
                (lambda (&rest _)
                  (ert-fail "Remote spool consulted the target store"))))
@@ -390,7 +390,7 @@ A synchronous result must come with exactly one matching acknowledgement."
   (test)
   :doc "a poll that reads the terminal result cancels its mailbox wake"
   (dolist (state '(running completed))
-    (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test")))
+    (let ((session (mevedel-session--create :name "test")))
       (mevedel-agent-control-enqueue-execution-result
        session "/root" "done" "exec-1" t)
       (let ((mevedel--session session)
@@ -407,7 +407,7 @@ A synchronous result must come with exactly one matching acknowledgement."
       (should (eq (eq state 'running)
                   (mevedel-agent-control-wake-pending-p session)))))
   :doc "polls through the captured session and canonical owner"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+  (let ((session (mevedel-session--create :name "test"))
         captured events input result)
     (let ((mevedel--session session)
           (mevedel--current-request nil)
@@ -449,7 +449,7 @@ A synchronous result must come with exactly one matching acknowledgement."
     (should (plist-get (plist-get result :render-data)
                        :observation-output-p)))
   :doc "retains model-visible failure while marking a successful observation"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock
+  (let ((session (mevedel-session--create
                                           :name "failed-command"))
         result)
     (let ((mevedel--session session)
@@ -475,7 +475,7 @@ A synchronous result must come with exactly one matching acknowledgement."
                         (plist-get result :render-data))
                        :hidden-p)))
   :doc "accepted input collecting a failed command is a successful interaction"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock
+  (let ((session (mevedel-session--create
                                           :name "failed-after-input"))
         result)
     (let ((mevedel--session session)
@@ -515,9 +515,8 @@ A synchronous result must come with exactly one matching acknowledgement."
       (should (eq 'success (plist-get row :status)))
       (should (equal "WriteStdin: sent input" (plist-get row :header)))))
   :doc "side execution observations use the durable audit target"
-  (let* ((parent (mevedel-session--create :authority-mode 'pid-lock :name "parent"))
+  (let* ((parent (mevedel-session--create :name "parent"))
          (session (mevedel-session--create
-                   :authority-mode 'pid-lock
                    :name "side" :audit-session parent))
          captured)
     (let ((mevedel--session session)
@@ -544,7 +543,7 @@ A synchronous result must come with exactly one matching acknowledgement."
     (should-not
      (string-match-p "private input" (prin1-to-string (nth 2 captured)))))
   :doc "marks input writes separately from empty output polls"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+  (let ((session (mevedel-session--create :name "test"))
         result)
     (let ((mevedel--session session)
           (mevedel--current-request nil)
@@ -572,7 +571,7 @@ A synchronous result must come with exactly one matching acknowledgement."
   ,test
   (test)
   :doc "lists only facts returned by the owner-filtered execution API"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+  (let ((session (mevedel-session--create :name "test"))
         captured)
     (let ((mevedel--session session)
           (mevedel--current-request nil)
@@ -589,7 +588,7 @@ A synchronous result must come with exactly one matching acknowledgement."
           (should-not (plist-member envelope :render-data)))))
     (should (equal (list session "/root") captured)))
   :doc "registered dispatch completes through the full pipeline"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+  (let ((session (mevedel-session--create :name "test"))
         result)
     (mevedel-tool-exec--register)
     (with-temp-buffer
@@ -609,7 +608,7 @@ A synchronous result must come with exactly one matching acknowledgement."
   ,test
   (test)
   :doc "stops through the owner-filtered API and reports tool success"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+  (let ((session (mevedel-session--create :name "test"))
         captured result)
     (let ((mevedel--session session)
           (mevedel--current-request nil)
@@ -636,7 +635,7 @@ A synchronous result must come with exactly one matching acknowledgement."
   ,test
   (test)
   :doc "queues unread output and final facts for an independent completion"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test")))
+  (let ((session (mevedel-session--create :name "test")))
     (should
      (mevedel-tool-exec-test--handle
       (list :type 'terminal :delivery 'mailbox
@@ -662,7 +661,7 @@ A synchronous result must come with exactly one matching acknowledgement."
     '(:type terminal :delivery model) nil))
   :doc "a root command that ended on its own wakes the idle root; stops do not"
   (dolist (case '((exited . t) (signaled . t) (stopped . nil)))
-    (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+    (let* ((session (mevedel-session--create :name "test"))
            (root (generate-new-buffer " *wake-root*"))
            offered)
       (unwind-protect
@@ -685,7 +684,7 @@ A synchronous result must come with exactly one matching acknowledgement."
         (kill-buffer root))))
   :doc "a fresh root without saved artifacts wakes through the event's data buffer"
   (dolist (type '(terminal monitor-batch))
-    (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "fresh"))
+    (let ((session (mevedel-session--create :name "fresh"))
           offered)
       (with-temp-buffer
         (setq-local mevedel--session session)
@@ -702,7 +701,7 @@ A synchronous result must come with exactly one matching acknowledgement."
         (should (equal (list (current-buffer)) offered))
         (should (mevedel-agent-control-wake-pending-p session)))))
   :doc "an agent's completion is queued unchanged and never wakes the root"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+  (let ((session (mevedel-session--create :name "test"))
         queued offered)
     (cl-letf (((symbol-function 'mevedel-agent-runtime-queue-execution-completion)
                (lambda (&rest args)
@@ -724,7 +723,7 @@ A synchronous result must come with exactly one matching acknowledgement."
     (should-not offered)
     (should-not (mevedel-agent-control-context-mailbox session)))
   :doc "a failed save reports no delivery and offers no wake"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+  (let ((session (mevedel-session--create :name "test"))
         offered)
     (cl-letf (((symbol-function 'mevedel-agent-control-commit-session)
                (lambda (_session) (error "Disk full")))
@@ -742,7 +741,7 @@ A synchronous result must come with exactly one matching acknowledgement."
     (should-not offered)
     (should-not (mevedel-agent-control-context-mailbox session)))
   :doc "a monitor batch queues one MONITOR record per line, omission on the last"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test")))
+  (let ((session (mevedel-session--create :name "test")))
     (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-root-event) #'ignore))
       (mevedel-tool-exec-test--handle
        (list :type 'monitor-batch :delivery 'mailbox :owner "/root"
@@ -757,7 +756,7 @@ A synchronous result must come with exactly one matching acknowledgement."
       (should (string-match-p "5 more event lines"
                               (plist-get (cadr messages) :payload)))))
   :doc "a monitor terminal flushes pending lines, then a structural terminal record"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test")))
+  (let ((session (mevedel-session--create :name "test")))
     (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-root-event) #'ignore))
       (mevedel-tool-exec-test--handle
        (list :type 'terminal :delivery 'mailbox :owner "/root"
@@ -776,7 +775,7 @@ A synchronous result must come with exactly one matching acknowledgement."
       (should (equal "Monitor w: stopped (3 events)."
                      (plist-get (cadr messages) :payload)))))
   :doc "a monitor flush is one durable commit for all its line records"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+  (let ((session (mevedel-session--create :name "test"))
         (commits 0))
     (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-root-event) #'ignore)
               ((symbol-function 'mevedel-agent-control-commit-session)
@@ -800,7 +799,7 @@ A synchronous result must come with exactly one matching acknowledgement."
                            (mevedel-agent-control-context-mailbox session)))))
   :doc "a failed monitor commit queues nothing and a retry does not duplicate"
   (dolist (kind '(monitor-batch terminal))
-    (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+    (let ((session (mevedel-session--create :name "test"))
           (fail t) (attempts 0) err
           (unrelated (list :type 'MAIL :sender "/root/a" :recipient "/root"
                            :payload "unrelated" :timestamp '(1 0 0 0)))
@@ -844,7 +843,7 @@ A synchronous result must come with exactly one matching acknowledgement."
                          '("unrelated" "a" "b" "c"))
                        (mapcar (lambda (m) (plist-get m :payload)) messages))))))
   :doc "an execution result carries its terminal facts as metadata"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test")))
+  (let ((session (mevedel-session--create :name "test")))
     (mevedel-tool-exec-test--handle
      (list :type 'terminal :delivery 'mailbox :owner "/root"
            :tool-args '(:command "make")
@@ -861,7 +860,7 @@ A synchronous result must come with exactly one matching acknowledgement."
                    (plist-get (car (mevedel-agent-control-context-mailbox session))
                               :meta))))
   :doc "a failure while offering the wake keeps the delivered waking mail"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+  (let* ((session (mevedel-session--create :name "test"))
          (root (generate-new-buffer " *wake-root*")))
     (unwind-protect
         (progn
@@ -977,7 +976,6 @@ A synchronous result must come with exactly one matching acknowledgement."
   :doc "launches a default call with its matching remembered profile"
   (let* ((session
           (mevedel-session--create
-           :authority-mode 'pid-lock
            :name "profile"
            :permission-rules
            '(("Bash" :pattern "npx test" :network t :action allow))))

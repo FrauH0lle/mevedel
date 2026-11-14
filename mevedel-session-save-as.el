@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Owns the portable project Save As transaction.  The interface is
+;; Owns the portable session Save As transaction.  The interface is
 ;; `mevedel-session-save-as-run': it validates the committed parent, creates
 ;; and publishes a fresh child, moves it into discoverability, adopts the
 ;; committed child into the live session, and returns one committed result.

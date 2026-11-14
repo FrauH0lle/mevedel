@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 
-;; Owns portable project-session leases and the storage primitives used by
-;; durable session publication.  File-workspace sessions retain their PID lock.
+;; Owns project and file session leases and the storage primitives used by
+;; durable session publication.  Legacy pre-lease `.lock' files are refused.
 
 ;;; Code:
 
@@ -171,7 +171,7 @@
 ;;; Customization
 
 (defcustom mevedel-session-lease-seconds 90
-  "Seconds for which one portable project lease grants mutation authority.
+  "Seconds for which one portable session lease grants mutation authority.
 
 Renewal runs from a timer, which cannot fire while a durable action is inside
 blocking target I/O, so a slow remote action can outlive the lease.  The
@@ -182,7 +182,7 @@ measured with the target clock at whole-second resolution."
   :group 'mevedel)
 
 (defcustom mevedel-session-lease-renewal-seconds 30
-  "Seconds between portable project lease renewal attempts."
+  "Seconds between portable session lease renewal attempts."
   :type 'integer
   :group 'mevedel)
 
@@ -465,7 +465,7 @@ fails closed instead of falling back to a client clock."
        directory (mevedel-session-control-fs-target-time directory))))
 
 (defvar mevedel-session-durability--asserted-directories nil
-  "Cons cell listing directories already proved free of a PID lock, or nil.
+  "Cons cell listing directories proved free of legacy `.lock' files, or nil.
 
 A portable session cannot grow a `.lock' while this client holds its lease,
 and one transaction reaches several entry points that each prove its absence.
@@ -479,7 +479,7 @@ outside such a binding every call proves it against the target.")
 (defmacro mevedel-session-durability-with-transaction (&rest body)
   "Run BODY as one durable transaction sharing clock, probe, and recovery reads.
 
-The target clock reading, the pid-lock assertions, and the recovery
+The target clock reading, legacy `.lock' absence proofs, and the recovery
 mutation lookups repeat across the entry points one user action reaches;
 inside this scope each is paid once.  The bindings nest: an inner
 transaction joins the outer one instead of starting fresh, and the reads
@@ -500,20 +500,21 @@ not declare the variables; a lexical binding would silently share nothing."
      ,@body))
 
 (defun mevedel-session-durability--assert-no-pid-lock (session-dir)
-  "Signal when portable SESSION-DIR also contains the obsolete PID lock."
+  "Signal when portable SESSION-DIR contains a legacy pre-lease `.lock'."
   (setq session-dir (mevedel-session-control-fs-physical-path
                      session-dir))
   (unless (member session-dir
                   (car mevedel-session-durability--asserted-directories))
     (when (mevedel-session-control-fs-path-exists-p
            (file-name-concat session-dir ".lock"))
-      (error "Portable session has a PID lock: %s" session-dir))
+      (error "Pre-lease session requires migration with scripts/migrate-sessions.el: %s"
+             session-dir))
     (when mevedel-session-durability--asserted-directories
       (push session-dir
             (car mevedel-session-durability--asserted-directories)))))
 
 (defun mevedel-session-durability--pid-lock-operation (session-dir)
-  "Return the program operation proving SESSION-DIR has no PID lock, or nil.
+  "Return the program operation proving no legacy `.lock' in SESSION-DIR.
 
 Nil means this transaction already proved it.  A caller that runs the
 operation inside its own program settles it with
@@ -527,10 +528,10 @@ operation inside its own program settles it with
             :optional t))))
 
 (defun mevedel-session-durability--settle-pid-lock (session-dir result)
-  "Interpret RESULT of SESSION-DIR's PID-lock operation."
+  "Interpret RESULT of SESSION-DIR's legacy `.lock' absence operation."
   (pcase (plist-get result :status)
     ('absent (mevedel-session-durability-note-no-pid-lock session-dir))
-    ('ok (error "Portable session has a PID lock: %s"
+    ('ok (error "Pre-lease session requires migration with scripts/migrate-sessions.el: %s"
                 (mevedel-session-control-fs-physical-path session-dir)))
     (_ (mevedel-session-control-fs-program-value result))))
 
@@ -552,7 +553,7 @@ authoritative as a separate clock program."
      directory (plist-get result :value))))
 
 (defun mevedel-session-durability-note-no-pid-lock (session-dir)
-  "Record SESSION-DIR as already proved free of a PID lock.
+  "Record SESSION-DIR as already proved free of a legacy pre-lease `.lock'.
 
 A caller that probes many candidates at once -- enumerating a workspace
 probes every one of them in a single program -- seeds its proofs here, so
@@ -609,9 +610,8 @@ accept still passes its own validator."
              "\\(?:\\`\\|/\\)\\.\\.?\\(?:/\\|\\'\\)" path))))
 
 (defun mevedel-session-durability--portable-session-p (session)
-  "Return non-nil when SESSION uses portable project durability."
+  "Return non-nil when SESSION has portable durable workspace authority."
   (eq (mevedel-session-authority-mode-for-session session) 'portable))
-
 
 (defun mevedel-session-durability--lease-record
     (buffer-name generation &optional status publication-head
@@ -1306,9 +1306,6 @@ When SESSION is non-nil, record the resulting lease state on it, after
 serializing behind its asynchronous publication: see
 `mevedel-session-durability--gate' for TOKEN."
   (require 'mevedel-session-publication)
-  (when (and session
-             (not (mevedel-session-durability--portable-session-p session)))
-    (error "Portable lease requires a portable project session"))
   (mevedel-session-durability--gate session token)
   (let* ((remote-file-name-inhibit-cache t)
          (_ (mevedel-session-durability--assert-no-pid-lock session-dir))
@@ -1584,8 +1581,6 @@ No lock spans Lisp processing.  Delete only after all blockers are resolved;
 errors retain partial preparation progress and release the claim, not rollback.
 The caller must ensure the previous client and its child writers have stopped."
   (require 'mevedel-session-publication)
-  (unless (mevedel-session-durability--portable-session-p session)
-    (error "Session discard requires portable authority"))
   (when (or (mevedel-session-publication-busy-p session)
             (mevedel-session-lease-renewal-job session))
     (error "Session discard refused: local work is still active"))
@@ -1652,8 +1647,6 @@ Return nil without prompting for live owners, unresolved mutation, publishing
 leases, or a release reserved for control transfer.  Expired ordinary owners
 are fenced by the existing generation election.  Always release the temporary
 lease, including on nonlocal exit; never publish a new session head."
-  (unless (mevedel-session-durability--portable-session-p session)
-    (error "Portable recovery requires a portable project session"))
   (mevedel-session-durability--gate session token)
   (let* ((session-dir (mevedel-session-save-path session))
          (_ (mevedel-session-durability--assert-no-pid-lock session-dir))
@@ -2068,9 +2061,6 @@ remote target each extra read is a round trip the user waits through."
 An inactive owned `publishing' generation is releasable, but a live publisher
 is never interrupted.  When SESSION is non-nil, cancel its renewal and clear
 its lease state."
-  (when (and session
-             (not (mevedel-session-durability--portable-session-p session)))
-    (error "Portable lease requires a portable project session"))
   (mevedel-session-durability--gate session token)
   (mevedel-session-durability--assert-no-pid-lock session-dir)
   (if (and session (mevedel-session-publication-active-p session))
@@ -2340,8 +2330,8 @@ carrier runs synchronously has no process and does not call it.")
 (defun mevedel-session-durability-capture-context ()
   "Return the dynamic transaction state an asynchronous operation keeps.
 
-The clock, PID-lock, and recovery cells and the commit riders are dynamic
-bindings that do not survive a returned callback.  Every asynchronous
+The clock, legacy `.lock' absence, and recovery cells and commit riders are
+dynamic bindings that do not survive a returned callback.  Every asynchronous
 operation here captures them at launch and rebinds them through
 `mevedel-session-durability-call-in-context' while it advances, so a job can
 do the same for its own continuations."
@@ -2376,10 +2366,11 @@ do the same for its own continuations."
 
 Unlike `mevedel-session-durability-capture-context' inside
 `mevedel-session-durability-with-transaction', it never joins a surrounding
-transaction: the clock, PID-lock, and recovery cells are its own, shared by
-every `mevedel-session-durability-call-in-context' with it.  It carries no
-commit riders, so a phase sees only riders it binds itself, never ones of a
-publisher whose binding a timer happened to run inside.  PROCESS-FUNCTION
+transaction: its own clock, legacy `.lock' absence, and recovery cells are
+shared by every `mevedel-session-durability-call-in-context' with it.  It
+carries no commit riders, so a phase sees only riders it binds itself,
+never ones of a publisher whose binding a timer happened to run inside.
+PROCESS-FUNCTION
 owns each process a lease step launches; see
 `mevedel-session-durability-async-process-function'.  With no async validity
 predicate, observed time, final commit, and the drain flag stay inherited."
@@ -2388,10 +2379,10 @@ predicate, observed time, final commit, and the drain flag stay inherited."
 (defun mevedel-session-durability-call-outside-transaction (function)
   "Call FUNCTION with no transaction state of the caller in effect.
 
-The clock, PID-lock and recovery cells, commit riders, final commit, and
-process function are all nil, so arbitrary code called back from inside a
-job or a timer opens its own transactions.  Callers, to audit whenever these
-cells change: the publication acknowledgement in
+The clock, legacy `.lock' absence and recovery cells, commit riders, final
+commit, and process function are all nil, so arbitrary code called back from
+inside a job or timer opens its own transactions.  Callers, to audit
+whenever these cells change: the publication acknowledgement in
 `mevedel-session-publication--job-complete', and
 `mevedel-agent-control-notify' and `mevedel-agent-control--flush-notifications'."
   (dlet ((mevedel-session-durability--transaction-clock nil)
@@ -2850,8 +2841,8 @@ is exactly what a commit of that record put on the target."
 
 The program is the one the synchronous admission runs: target clock, lease
 listing, the bound generation's record, the transfer request listing, the
-PID-lock probe, and the recovery-root probe.  Its PID-lock, clock, and
-recovery observations are recorded in the transaction cells as the
+legacy `.lock' absence probe, and the recovery-root probe.  Its absence,
+clock, and recovery observations are recorded in the transaction cells as the
 synchronous admission records them.
 
 CALLBACK receives SUCCESS: t when SESSION's bound lease is this client's live
@@ -2862,12 +2853,12 @@ SESSION's lease.  The target head must match SESSION's cached publication.
 A nil SUCCESS always carries ERROR, as condition data:
 a `user-error' naming the first observed cause when the warm path declines
 -- a missing save path, session ID, bound lease generation or
-ownership, a non-portable session, quiescing or released state, an
+ownership, quiescing or released state, an
 unobserved lease directory, a lease record that is not this client's live
 lease, target bytes that differ from the bound ones, a changed publication
 head, a newer generation, a recovery marker, or a live transfer request --
 and otherwise the error of a
-failed program, an invalid request, or a PID lock.  Local checks (pending
+failed program, an invalid request, or a legacy `.lock'.  Local checks (pending
 publication, target incarnation, disclosure, materialization) stay with the
 caller."
   (let* ((job (mevedel-session-durability--async-job callback (mevedel-diagnostic-scope session)))
@@ -2888,8 +2879,6 @@ caller."
                  "Portable session has no bound lease generation")
                 ((not (eq 'owned (plist-get bound :state)))
                  "Portable session lease is not owned by this client")
-                ((not (mevedel-session-durability--portable-session-p session))
-                 "Session is not a portable project session")
                 ((memq (plist-get (mevedel-session-control-transfer session)
                                   :state)
                        '(quiescing released))
