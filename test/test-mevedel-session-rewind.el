@@ -1513,10 +1513,14 @@
                          (mevedel-session-save-path session)))
                        (before-sidecar
                         (mevedel-session-artifacts--file-text sidecar-path)))
-                  (cl-letf
-                      (((symbol-function
-                         'mevedel-session-artifacts-save-instructions)
-                        (lambda (&rest _)
+                  (cl-letf*
+                      ((install
+                        (symbol-function
+                         'mevedel-session-rewind--install-rewind-buffer))
+                       ((symbol-function
+                         'mevedel-session-rewind--install-rewind-buffer)
+                        (lambda (&rest args)
+                          (apply install args)
                           (error "Injected publication failure"))))
                     (should-error
                      (mevedel-session-rewind--commit-rewind
@@ -1632,9 +1636,6 @@
                     (make-directory staging-path t)))
                  ((symbol-function
                    'mevedel-session-rewind--install-rewind-buffer)
-                  #'ignore)
-                 ((symbol-function
-                   'mevedel-session-artifacts-save-instructions)
                   #'ignore)
                  ((symbol-function
                    'mevedel-session-rewind--refresh-restored-buffers)

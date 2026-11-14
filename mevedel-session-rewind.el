@@ -65,7 +65,6 @@
 (declare-function mevedel-session-artifacts-read-artifact "mevedel-session-artifacts" (session logical &optional committed-only))
 (declare-function mevedel-session-artifacts-read-file-raw "mevedel-session-artifacts" (path))
 (declare-function mevedel-session-artifacts-replace-transcript-contents "mevedel-session-artifacts" (source))
-(declare-function mevedel-session-artifacts-save-instructions "mevedel-session-artifacts" (session))
 (declare-function mevedel-session-artifacts-segment-path "mevedel-session-artifacts" (save-path n))
 (declare-function mevedel-session-artifacts-sidecar-path "mevedel-session-artifacts" (save-path))
 (declare-function mevedel-session-artifacts-stabilize-gptel-bounds "mevedel-session-artifacts" nil)
@@ -88,8 +87,6 @@
 (autoload 'mevedel-session-artifacts-read-file-raw
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-replace-transcript-contents
-  "mevedel-session-artifacts")
-(autoload 'mevedel-session-artifacts-save-instructions
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-segment-path
   "mevedel-session-artifacts")
@@ -1497,6 +1494,22 @@ step that fails afterwards has to name its own frame."
   (mevedel-session-persistence-notify-session-event
    session 'rerender))
 
+(defun mevedel-session-rewind--end-store-intent (session committed label)
+  "Resolve SESSION's instruction store Rewind intent; warn if that fails.
+COMMITTED is the Rewind outcome and LABEL names the Rewind in the warning.
+An intent left behind names the original turn count, so the next resolution
+drops it without pruning anything."
+  (condition-case err
+      (mevedel-instruction-store-rewind-end session committed)
+    (error
+     (mevedel-diagnostic-warning
+      (mevedel-diagnostic-scope session) 'mevedel
+      (format (if committed
+                  "%s committed, but the instruction store still holds the discarded activity; it is pruned before the next request or at resume: %s"
+                "%s rolled back; its instruction store intent is dropped later: %s")
+              label (error-message-string err))
+      :warning))))
+
 (defun mevedel-session-rewind--commit-remote-rewind
     (session buffer target plan &optional boundary replan)
   "Commit portable project SESSION, BUFFER, TARGET, and file PLAN through one
@@ -1624,15 +1637,8 @@ head CAS.  BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                     :warning))))
               ;; The workspace store owns the current set: prune the records
               ;; here and in the store.
-              (condition-case store-error
-                  (mevedel-instruction-store-rewind-end session t)
-                (error
-                 (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
-                  'mevedel
-                  (format
-                   "Portable project Rewind committed, but the instruction store still holds the discarded activity; it is pruned before the next request or at resume: %s"
-                   (error-message-string store-error))
-                  :warning)))
+              (mevedel-session-rewind--end-store-intent
+               session t "Portable project Rewind")
               (condition-case refresh-error
                   (mevedel-session-rewind--refresh-restored-buffers
                    plan (list :succeeded (length plan)))
@@ -1645,13 +1651,8 @@ head CAS.  BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                   :warning))))
           (error (setq operation-error err)))
       (unless committed
-        (condition-case store-error
-            (mevedel-instruction-store-rewind-end session nil)
-          (error
-           (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
-            'mevedel
-            (format "Rewind rolled back; its instruction store intent is dropped later: %s"
-                    (error-message-string store-error)))))
+        (mevedel-session-rewind--end-store-intent
+         session nil "Portable project Rewind")
         (when project-restore-started
           (condition-case rollback-error
               (setq rollback-failures
@@ -1785,17 +1786,10 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
           (setq buffer-install-started t)
           (mevedel-session-rewind--install-rewind-buffer
            buffer staging-buffer session target)
-          (mevedel-session-artifacts-save-instructions session)
           (delete-directory rollback-path t)
           (setq source-moved nil
                 committed t)
-          (condition-case err
-              (mevedel-instruction-store-rewind-end session t)
-            (error
-             (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
-              'mevedel
-              (format "Rewind committed, but the instruction store still holds the discarded activity; it is pruned before the next request or at resume: %s"
-                      (error-message-string err)))))
+          (mevedel-session-rewind--end-store-intent session t "Rewind")
           (condition-case err
               (mevedel-session-rewind--refresh-restored-buffers
                plan (list :succeeded (length plan)))
@@ -1804,27 +1798,12 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
               'mevedel
               (format "Rewind committed, but buffers could not refresh: %s"
                       (error-message-string err)))))
-          (condition-case err
-              (mevedel-session-artifacts-save-instructions session)
-            (error
-             (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
-              'mevedel
-              (format "Rewind committed, but notes could not refresh: %s"
-                      (error-message-string err)))))
           t)
       (unless committed
         (when session-installed
           (mevedel-session-rewind-copy-session-state
            original-state session))
-        (condition-case err
-            (mevedel-instruction-store-rewind-end session nil)
-          (error
-           ;; An intent left behind names the original turn count, so
-           ;; the next resolution drops it without pruning anything.
-           (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
-            'mevedel
-            (format "Rewind rolled back; its instruction store intent is dropped later: %s"
-                    (error-message-string err)))))
+        (mevedel-session-rewind--end-store-intent session nil "Rewind")
         (when published
           (condition-case err
               (progn

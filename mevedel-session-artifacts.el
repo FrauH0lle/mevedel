@@ -2187,14 +2187,10 @@ cannot leave stale request configuration behind."
 ;;; Workspace instruction store
 
 (defun mevedel-session-artifacts-save-instructions (session)
-  "Write SESSION's workspace instructions to the workspace store."
-  (when (mevedel-session-save-path session)
-    (mevedel-session-artifacts--sync-instruction-store session)))
-
-(defun mevedel-session-artifacts--sync-instruction-store (session)
   "Write SESSION's workspace instructions to the workspace store.
 A failure is reported; the session save itself already succeeded."
-  (unless (eq (bound-and-true-p mevedel-instruction-store--inhibit) t)
+  (when (and (mevedel-session-save-path session)
+             (not (eq (bound-and-true-p mevedel-instruction-store--inhibit) t)))
     (condition-case err
         (mevedel-instruction-store-sync (mevedel-session-workspace session))
       (mevedel-instruction-store-unreadable
@@ -2747,7 +2743,7 @@ Edits made after capture remain modified.  Nothing is published here."
          ;; Input history is diagnostic UI state, not critical publication.
          (mevedel-session-persistence-notify-session-event session 'save-history)
          (when (buffer-live-p buffer)
-           (mevedel-session-artifacts--sync-instruction-store session))
+           (mevedel-session-artifacts-save-instructions session))
          (mevedel-session-save-path session))))))
 
 (defun mevedel-session-artifacts--remote-save
