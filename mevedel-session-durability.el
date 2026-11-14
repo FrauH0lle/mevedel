@@ -238,10 +238,12 @@ short enough that a picker row stays readable."
 
 (defun mevedel-session-durability-holder-label (label)
   "Return LABEL as plain display text of at most 80 characters.
-Strip text properties and control characters without changing lease records."
-  (let ((text (replace-regexp-in-string
-               "[[:cntrl:]]" ""
-               (substring-no-properties (format "%s" label)))))
+Strip properties, control and format characters without changing lease records."
+  (let ((text (concat
+               (seq-remove
+                (lambda (char)
+                  (memq (get-char-code-property char 'general-category) '(Cc Cf)))
+                (substring-no-properties (format "%s" label))))))
     (substring text 0 (min 80 (length text)))))
 
 (defun mevedel-session-durability--pid-alive-p (pid)

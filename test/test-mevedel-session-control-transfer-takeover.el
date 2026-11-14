@@ -135,6 +135,7 @@ With SETTLE, run the real terminal settlement callback as well."
   (let* ((cell (list nil))
          (invocation (mevedel-agent-invocation--create
                       :agent-id "busy" :path "/root/busy" :parent-session owner
+                      :lease-generation (plist-get (mevedel-session-lease owner) :generation)
                       :runtime-cancel (lambda ()
                                         (setcar cell t)
                                         (unless settle 'deferred))))
@@ -198,7 +199,7 @@ With SETTLE, run the real terminal settlement callback as well."
      (let* ((successor (car (test-mevedel-takeover--follower owner)))
             (directory (mevedel-session-durability--lease-path
                         (mevedel-session-save-path owner)))
-            (host (propertize (concat "host\n\r\t" (make-string 100 ?H))
+            (host (propertize (concat "host\n\r\t\u202e" (make-string 100 ?H))
                               'display "SPOOF"))
             (label (propertize (concat "buffer\n" (make-string 100 ?B))
                                'face 'error))
@@ -817,6 +818,51 @@ With SETTLE, run the real terminal settlement callback as well."
            (setf (mevedel-session-publication-active-p owner) nil)
            (unless (mevedel-execution--record-finished-p record)
              (mevedel-execution--discard-record record 'session-ended))))))))
+
+(mevedel-deftest mevedel-session-publication-enqueue/renewal-loss (:quiet t)
+  ,test
+  (test)
+  :doc "own expired authority keeps preparations queued until reclamation commits them"
+  (test-mevedel-takeover--with-session
+   'project
+   (lambda (owner buffer)
+     (let* ((directory (mevedel-session-durability--lease-path
+                        (mevedel-session-save-path owner)))
+            (record (test-mevedel-takeover--head owner))
+            (generation (plist-get record :generation))
+            failures acknowledgements)
+       (dolist (key '(:renewed-at :expires-at))
+         (plist-put record key (- (plist-get record key) 120)))
+       (mevedel-session-durability--write-generation directory record)
+       (should (eq 'lost (mevedel-session-durability--bind-latest
+                          owner record directory (float-time))))
+       (should-not (memq (plist-get (mevedel-session-control-transfer owner) :state)
+                         '(taken-over following)))
+       (setf (mevedel-session-publication-active-p owner) t)
+       (unwind-protect
+           (progn
+             (mevedel-session-publication-enqueue
+              owner
+              (lambda (token)
+                (should (mevedel-session-durability-lease-acquire
+                         (mevedel-session-save-path owner) (buffer-name buffer) owner token)))
+              (lambda (err) (push err failures)))
+             (mevedel-agent-control--batch-mail
+              owner "/root"
+              (list (list :id "renewal-loss" :type 'EXECUTION :sender "/root"
+                          :recipient "/root" :payload "retained" :timestamp (current-time))) nil
+              (lambda (ok err) (push (list ok err) acknowledgements)))
+             (should (= 2 (length (mevedel-session-publication-preparations owner))))
+             (should-not acknowledgements)
+             (setf (mevedel-session-publication-active-p owner) nil)
+             (test-mevedel-publication-async--wait (lambda () acknowledgements))
+             (should-not failures)
+             (should (equal '((t nil)) acknowledgements))
+             (should (> (plist-get (test-mevedel-takeover--head owner) :generation) generation))
+             (should (equal '("renewal-loss")
+                            (test-mevedel-publication-async--ids
+                             (test-mevedel-publication-async--restored-mail owner)))))
+         (setf (mevedel-session-publication-active-p owner) nil))))))
 
 (provide 'test-mevedel-session-control-transfer-takeover)
 

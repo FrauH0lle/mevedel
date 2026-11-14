@@ -185,8 +185,9 @@ Errors are reported and do not stop the queue.")
 
 (defun mevedel-session-publication--takeover-error (session)
   "Return the refusal error when SESSION has lost its publication authority."
-  (when (or (eq 'lost (plist-get (mevedel-session-lease session) :state))
-            (eq 'taken-over (plist-get (mevedel-session-control-transfer session) :state)))
+  (when (and (eq 'lost (plist-get (mevedel-session-lease session) :state))
+             (memq (plist-get (mevedel-session-control-transfer session) :state)
+                   '(taken-over following)))
     (list 'user-error "Session lease taken over")))
 
 (defun mevedel-session-publication--fail-preparation (session entry err)

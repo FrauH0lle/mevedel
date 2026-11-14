@@ -1486,8 +1486,12 @@ Return rollback and post-commit delivery closures for INVOCATION."
                  (mevedel-session-artifacts-assert-mutation-authority
                   session (mevedel-session-root-buffer session))
                  ;; The authority fence can yield to another terminal callback.
-                 (and (eq invocation (mevedel-agent-record-invocation record))
-                      (mevedel-agent-control--active-p record))))
+                 (if (mevedel-agent-conversation-fenced-p invocation)
+                     (progn
+                       (mevedel-agent-control--settle session record invocation response event token)
+                       nil)
+                   (and (eq invocation (mevedel-agent-record-invocation record))
+                        (mevedel-agent-control--active-p record)))))
       (let* ((outcome
               (pcase (mevedel-agent-invocation-transcript-status invocation)
                 ('error 'errored)

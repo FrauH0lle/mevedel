@@ -31,10 +31,17 @@ committed publications. Unpublished work here is discarded. A superseded async
 publication whose head has advanced under that foreign generation is completed
 without rollback, acknowledgement or retry; its pending local batches are
 dropped. Queued preparations that have not published fail their acknowledgements
-with a takeover error, and new submissions fail immediately. Fenced retained-agent
+with a takeover error, and new submissions fail immediately after confirmed
+takeover. A renewal failure or this client's expired lease alone is not evidence
+of takeover and does not discard its queued preparations. Fenced retained-agent
 settlement retires the local runtime without publishing or changing its retained
-transcript buffer. Taking control back must finish the old epoch's pending stop
-before acquiring or adopting; a blocked stop refuses without changing authority.
+transcript buffer. Each admitted agent invocation records its lease generation;
+a known generation mismatch or confirmed takeover keeps later settlement and
+saves fenced even after the parent takes control back. Ordinary loss in the
+same generation retains normal settlement and recovery. Taking control back
+must finish issuing the old epoch's pending stop before acquiring or adopting;
+a blocked stop refuses without changing authority. Deferred provider cancellation
+acknowledgements do not block take-back, because late settlement remains epoch-fenced.
 An unexplained head change still retains unresolved recovery. Project
 file effects cannot be undone by the session lease: old-holder producers may
 continue until ownership loss is observed and the publication gate permits stopping.
@@ -128,9 +135,20 @@ could fail against the foreign lease and prevent demotion from completing. All
 acquisition now first completes the pending stop, or asks the user to try again
 if the publication gate still blocks it. Fenced settlement cancels and retires
 only local runtime state, keeping the transcript buffer unchanged. New publication
-admission fails immediately after loss, so a producer cannot keep the stop behind
-an endlessly replenished queue. Holder labels shown in confirmation and takeover
-messages lose text properties and control characters and are capped at 80 characters.
+admission fails immediately after confirmed takeover, so a producer cannot keep
+the stop behind an endlessly replenished queue. Holder labels shown in
+confirmation and takeover messages lose text properties, control characters and
+Unicode format characters (including bidi controls) and are capped at 80 characters.
+
+A deferred ACP cancellation exposed a second epoch boundary: after local demotion
+and take-back, the old terminal callback could use the parent's new lease. Each
+provider invocation now captures the admitted generation, including retained
+followups. A mismatched generation retires locally even if the parent currently
+owns authority. Late cleanup also checks buffer invocation identity before
+ending its request, so it cannot interrupt a newer turn reusing that transcript.
+Authority assertions can themselves yield to takeover and take-back. Settlement
+rechecks the epoch after those assertions and before building terminal publication;
+if the epoch changed after staging, it rolls back the local transaction and retires.
 
 On 2026-11-14 Roland decided to keep one session-ownership implementation:
 file-workspace sessions moved from the PID-lock profile to the portable

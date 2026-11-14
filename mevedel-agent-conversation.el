@@ -791,11 +791,14 @@ Return nil when INVOCATION has no live conversation buffer."
      buffer (mevedel-agent-invocation-parent-session invocation))))
 
 (defun mevedel-agent-conversation-fenced-p (invocation)
-  "Return non-nil when INVOCATION belongs to a taken-over local session."
+  "Return non-nil when INVOCATION's admitted lease epoch is superseded."
   (when-let* ((session (mevedel-agent-invocation-parent-session invocation)))
-    (and (eq 'lost (plist-get (mevedel-session-lease session) :state))
-         (memq (plist-get (mevedel-session-control-transfer session) :state)
-               '(taken-over following)))))
+    (let ((admitted (mevedel-agent-invocation-lease-generation invocation))
+          (current (plist-get (mevedel-session-lease session) :generation)))
+      (or (and admitted current (not (equal admitted current)))
+          (and (eq 'lost (plist-get (mevedel-session-lease session) :state))
+               (memq (plist-get (mevedel-session-control-transfer session) :state)
+                     '(taken-over following)))))))
 
 (defun mevedel-agent-conversation--cancel-save (invocation)
   "Cancel INVOCATION's pending debounced save."
