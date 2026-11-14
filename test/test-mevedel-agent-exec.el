@@ -1136,7 +1136,6 @@ fire-count and payload."
 
 
 (provide 'test-mevedel-agent-exec)
-;;; test-mevedel-agent-exec.el ends here
 
 (ert-deftest mevedel-agent-exec-run/codex-cache-key-in-payload ()
   "The realized Codex agent payload carries `<session-id>:<agent-id>'."
@@ -1179,3 +1178,5 @@ fire-count and payload."
             (should (equal "root-id:a--11111111" key))))
       (delete-file gptel--openai-oauth-token-file)
       (kill-buffer agent-buf))))
+
+;;; test-mevedel-agent-exec.el ends here
