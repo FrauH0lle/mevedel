@@ -29,6 +29,11 @@
 (defvar gptel--markdown-block-map)
 (defvar gptel-system-prompt)
 
+;; `mevedel-agent-conversation'
+(declare-function mevedel-agent-conversation-fenced-p
+                  "mevedel-agent-conversation" (invocation))
+(autoload 'mevedel-agent-conversation-fenced-p "mevedel-agent-conversation")
+
 ;; `mevedel-agent-persistence'
 (declare-function mevedel-agent-persistence-transcript-path-p "mevedel-agent-persistence" (path save-path))
 (autoload 'mevedel-agent-persistence-transcript-path-p
@@ -2318,13 +2323,14 @@ only patches already committed bytes and retires no live delivery state."
           sidecar-artifact)
          t prepared token)))))
 
-(defun mevedel-session-artifacts-publish-agent-terminal-state
+(cl-defun mevedel-session-artifacts-publish-agent-terminal-state
     (invocation &optional token)
   "Publish INVOCATION's portable transcript and final session sidecar together.
 
 TOKEN is the caller's gate token.  The authoritative sidecar must already
 exist.  Shallow first-turn agent state
-continues to wait for the root turn's completed-turn publication boundary."
+continues to wait for the root turn's completed-turn publication boundary.
+Return nil if INVOCATION's epoch is superseded during the authority check."
   (unless (mevedel-agent-invocation-p invocation)
     (error "Invalid agent invocation"))
   (let* ((session (mevedel-agent-invocation-parent-session invocation))
@@ -2357,6 +2363,8 @@ continues to wait for the root turn's completed-turn publication boundary."
          (let ((mevedel-session-artifacts--terminal-sessions
                 (cons session mevedel-session-artifacts--terminal-sessions)))
            (mevedel-session-artifacts-assert-mutation-authority session)
+           (when (mevedel-agent-conversation-fenced-p invocation)
+             (cl-return-from mevedel-session-artifacts-publish-agent-terminal-state nil))
            (let ((modified-p (buffer-modified-p)) frozen-tick)
              (when modified-p
                (when (bound-and-true-p gptel-mode)

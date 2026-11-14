@@ -16,9 +16,37 @@ Every lease record names its holder by host identity (boot ID, machine ID,
 PID namespace), user ID, PID and process start ticks.  A client of the same
 user on the same host reclaims an `active` or `claiming` lease at once when
 that process is provably gone or reused; any other or uncertain evidence
-waits for expiry, and a `publishing` lease always does.
-Forced takeover of an unexpired live or foreign holder is unavailable; this
-dead-holder reclaim is not a general forced-break operation.
+waits for expiry under ordinary acquisition, as does a `publishing` lease.
+An explicit forced takeover can replace an unexpired live or foreign holder
+after a full yes/no confirmation naming the host, buffer, last renewal and
+status. Publishing additionally requires confirmation that the prior client is
+stopped because a critical write may still be in flight. Ordinary acquisition
+never forces. Exclusive generation creation elects the winner, and the exact
+publishing-generation/head compare-and-set fences the old holder's commits,
+renewals and releases. Already committed state remains authoritative.
+
+On observing a newer activated foreign generation, the old holder stops its
+request, retained agent turns and live executions, becomes read-only and follows
+committed publications. Unpublished work here is discarded. A superseded async
+publication whose head has advanced under that foreign generation is completed
+without rollback, acknowledgement or retry; its pending local batches are
+dropped. Queued preparations that have not published fail their acknowledgements
+with a takeover error, and new submissions fail immediately after confirmed
+takeover. A renewal failure or this client's expired lease alone is not evidence
+of takeover and does not discard its queued preparations. Fenced retained-agent
+settlement retires the local runtime without publishing or changing its retained
+transcript buffer. Each admitted agent invocation records the session's local
+ownership epoch; a mismatched epoch or confirmed takeover keeps later settlement
+and saves fenced even after the parent takes control back. The epoch advances
+only on gaining ownership after another holder or confirmed demotion, not on
+same-owner lease rotations or reclaiming this client's own expired record.
+Ordinary lease loss retains normal settlement and recovery. Taking control back
+must finish issuing the old epoch's pending stop before acquiring or adopting;
+a blocked stop refuses without changing authority. Deferred provider cancellation
+acknowledgements do not block take-back, because late settlement remains epoch-fenced.
+An unexplained head change still retains unresolved recovery. Project
+file effects cannot be undone by the session lease: old-holder producers may
+continue until ownership loss is observed and the publication gate permits stopping.
 
 All authority operations receive the session's explicit profile.  Path
 remoteness is only a transport/path concern and cannot choose lock acquisition,
@@ -80,9 +108,9 @@ moving file sessions to the lease. Keeping unused branches made tests and
 callers select obsolete fixed-path storage and bypass the publication contract.
 Durable fixtures now exercise real lease ownership and committed artifacts;
 workspace-free fixtures carry no durable authority. Legacy PID sidecars remain
-input data only for the standalone migration script. This removes no lease
-takeover restriction: forced takeover of a live or foreign holder is still
-unavailable.
+input data only for the standalone migration script. That step did not remove
+the lease takeover restriction: forced takeover of a live or foreign holder
+remained unavailable until the confirmed-takeover amendment below.
 
 Removing the PID-specific paths intentionally changes these interactions:
 
@@ -100,6 +128,59 @@ Removing the PID-specific paths intentionally changes these interactions:
   the old transcript-before-sidecar crash ordering cannot occur. Arbitrarily
   inconsistent manually edited trees have no automatic salvage path.
 
+### 2026-11-14: Confirmed takeover replaces the PID break
+
+Roland required parity with the PID lock's live-holder break before removing
+that implementation. The portable lease now offers the read-only follower a
+separate confirmed takeover, shared by project and file-workspace sessions.
+Unlike a PID break, the successor generation fences later storage commits by
+the old holder. No new authority capability or on-disk format is needed: whoever
+can write the session directory could already create a successor generation.
+
+Implementation review exposed an additional async reconciliation case: if the
+successor had already published, the old holder retained an unresolved job and
+its active-publication gate blocked following forever. A newer activated
+foreign generation proves supersession, so that case drops unpublished batches
+without rollback or acknowledgement that might duplicate inherited execution
+mail. Preparations still queued before publication instead receive exactly one
+failure acknowledgement; mail batching also releases its pending slot. Same-client
+and otherwise unexplained head changes keep the existing unresolved behavior.
+
+Agent interruption itself waits behind publication, so enqueueing it during the
+old job could let that job's cleanup discard the interrupt. Demotion is immediate
+but stopping waits for the publication gate and is re-derived on the existing
+view poll or retained session heartbeat, with no extra timer kind. The heartbeat
+only retries stopping, never renews lost authority, and ends after producers stop;
+closing all views cannot strand a running agent. If reconciliation errors after
+a validated newer foreign generation was bound, the next tick can retire the job
+from that irreversible fence without a fresh target read. Dropped checkpoint callbacks
+also relinquish their buffer-local pending identity before later control reuse.
+
+Review reproduced two additional failures: taking control back could adopt over
+an unstopped child process, and a retained agent's normal terminal publication
+could fail against the foreign lease and prevent demotion from completing. All
+acquisition now first completes the pending stop, or asks the user to try again
+if the publication gate still blocks it. Fenced settlement cancels and retires
+only local runtime state, keeping the transcript buffer unchanged. New publication
+admission fails immediately after confirmed takeover, so a producer cannot keep
+the stop behind an endlessly replenished queue. Holder labels shown in
+confirmation and takeover messages lose text properties, control characters and
+Unicode format characters (including bidi controls) and are capped at 80 characters.
+
+A deferred ACP cancellation exposed a second epoch boundary: after local demotion
+and take-back, the old terminal callback could use the parent's new lease. Each
+provider invocation now captures the local ownership epoch, including retained
+followups. A mismatched epoch retires locally even if the parent currently
+owns authority. Late cleanup also checks buffer invocation identity before
+ending its request, so it cannot interrupt a newer turn reusing that transcript.
+Authority assertions can themselves yield to takeover and take-back. Settlement
+rechecks the epoch after those assertions and before building terminal publication;
+if the epoch changed after staging, it rolls back the local transaction and retires.
+Review reproduced a false fence during ordinary remote mutation: arming and
+settling the unsettled-mutation latch rotate the lease generation under the same
+owner. The local ownership epoch therefore replaces the originally chosen lease
+generation; same-owner rotations and own-expired reclaim preserve that epoch.
+
 On 2026-11-14 Roland decided to keep one session-ownership implementation:
 file-workspace sessions moved from the PID-lock profile to the portable
 lease, replacing the earlier decision that kept both profiles. A matched
@@ -114,9 +195,9 @@ and 20.0 ms to 42.7 and 49.4 ms in one block, resume from 36.2 and 45.7 ms to
 are the costs project sessions already paid. Immediate reclaim of a proven
 same-host dead holder moved into the lease as described above, so those
 `active` and `claiming` leases no longer wait for the 90 s expiry and a
-confirmation. This does not reproduce the PID lock's forced-break option:
-forced takeover of an unexpired foreign or live holder remains unavailable.
-Uncertain holders and `publishing` leases still wait for expiry and the
+confirmation. That first step did not reproduce the PID lock's forced break;
+the confirmed-takeover amendment above adds it. Without that explicit command,
+uncertain holders and `publishing` leases still wait for expiry and the
 applicable confirmation. Existing PID-lock file sessions convert through the
 migration script.
 

@@ -23,10 +23,13 @@
 (declare-function gptel-backend-name "ext:gptel" (backend))
 
 ;; `mevedel-agent-conversation'
+(declare-function mevedel-agent-conversation-fenced-p
+                  "mevedel-agent-conversation" (invocation))
 (declare-function mevedel-agent-conversation-final-response
                   "mevedel-agent-conversation" (invocation))
 (declare-function mevedel-agent-conversation-save
                   "mevedel-agent-conversation" (invocation &optional deferred))
+(autoload 'mevedel-agent-conversation-fenced-p "mevedel-agent-conversation")
 (autoload 'mevedel-agent-conversation-final-response
   "mevedel-agent-conversation")
 (autoload 'mevedel-agent-conversation-save "mevedel-agent-conversation")
@@ -857,31 +860,33 @@ Recovery repairs neither mark records nor release waits."
     (error "Invalid mailbox message identity"))
   record)
 
-(defun mevedel-agent-control--commit-mail-batch (session token)
+(defun mevedel-agent-control--commit-mail-batch (session token &optional failure)
   "Commit SESSION's pending background arrivals together under gate TOKEN.
 Until success every record is hidden and every producer retains its output.
-Detach before I/O: arrivals during the commit belong to the next preparation."
+Detach before I/O: arrivals during the commit belong to the next preparation.
+FAILURE declines a queued batch locally without attempting a commit."
   (let ((batch (nreverse (mevedel-session-mail-batch session)))
-        added failure)
+        added)
     (setf (mevedel-session-mail-batch session) nil)
-    (condition-case err
-        (progn
-          (dolist (entry batch)
-            (pcase-let ((`(,recipient ,records ,_wake ,_ack) entry))
-              (let ((present (mapcar (lambda (record) (plist-get record :id))
-                                     (mevedel-agent-control--mailbox-queue session recipient))))
-                (dolist (record records)
-                  (unless (or (member (plist-get record :id) present)
-                              (mevedel-session-checkpoint-pending-message-p
-                               session recipient (plist-get record :id)))
-                    (plist-put record :uncommitted t)
-                    (push (cons recipient record) added)
-                    (push (plist-get record :id) present)
-                    (mevedel-agent-control--set-mailbox-queue
-                     session recipient
-                     (cons record (mevedel-agent-control--mailbox-queue session recipient))))))))
-          (mevedel-agent-control-commit-session session token))
-      ((error quit) (setq failure err)))
+    (unless failure
+      (condition-case err
+          (progn
+            (dolist (entry batch)
+              (pcase-let ((`(,recipient ,records ,_wake ,_ack) entry))
+                (let ((present (mapcar (lambda (record) (plist-get record :id))
+                                      (mevedel-agent-control--mailbox-queue session recipient))))
+                  (dolist (record records)
+                    (unless (or (member (plist-get record :id) present)
+                                (mevedel-session-checkpoint-pending-message-p
+                                 session recipient (plist-get record :id)))
+                      (plist-put record :uncommitted t)
+                      (push (cons recipient record) added)
+                      (push (plist-get record :id) present)
+                      (mevedel-agent-control--set-mailbox-queue
+                       session recipient
+                       (cons record (mevedel-agent-control--mailbox-queue session recipient))))))))
+            (mevedel-agent-control-commit-session session token))
+        ((error quit) (setq failure err))))
     (dolist (entry added)
       (if failure
           (mevedel-agent-control--set-mailbox-queue
@@ -910,7 +915,8 @@ WAKE and ACKNOWLEDGE retain each producer's delivery and acknowledgement."
     (push (list recipient records wake acknowledge) (mevedel-session-mail-batch session))
     (when first
       (mevedel-session-publication-enqueue
-       session (apply-partially #'mevedel-agent-control--commit-mail-batch session))))
+       session (apply-partially #'mevedel-agent-control--commit-mail-batch session)
+       (lambda (err) (mevedel-agent-control--commit-mail-batch session nil err)))))
   'pending)
 
 (defun mevedel-agent-control--enqueue-records
@@ -1461,140 +1467,153 @@ The delivery closure releases this bounded producer state on success."
     (session record invocation response &optional event token)
   "Stage RECORD's terminal RESPONSE and EVENT in SESSION.
 Return rollback and post-commit delivery closures for INVOCATION."
-  (mevedel-session-publication-barrier session token)
-  (when (and (eq invocation (mevedel-agent-record-invocation record))
-             (mevedel-agent-control--active-p record)
-             (progn
-               ;; Target replacement invalidates grants and may publish a
-               ;; sidecar.  Do this before exposing tentative terminal state
-               ;; or capturing the rollback snapshot, never under its guard.
-               (mevedel-session-artifacts-assert-mutation-authority
-                session (mevedel-session-root-buffer session))
-               ;; The authority fence can yield to another terminal callback.
-               (and (eq invocation (mevedel-agent-record-invocation record))
-                    (mevedel-agent-control--active-p record))))
-    (let* ((outcome
-            (pcase (mevedel-agent-invocation-transcript-status invocation)
-              ('error 'errored)
-              ('aborted 'interrupted)
-              (_ (if (and (stringp response)
-                          (string-prefix-p "Error:" response))
-                     'errored
-                   'completed))))
-           (payload
-            (if (eq outcome 'errored)
-                (or (and (listp event) (plist-get event :error-details))
-                    (mevedel-agent-invocation-terminal-reason invocation)
-                    "Agent turn failed")
-              response))
-           (recipient (mevedel-agent-record-parent-path record))
-           (previous-queue
-            (mevedel-agent-control--mailbox-queue session recipient))
-           (previous-activity (mevedel-agent-record-activity record))
-           (previous-invocation (mevedel-agent-record-invocation record))
-           (previous-blockers (mevedel-agent-record-blockers record))
-           (previous-result (mevedel-agent-record-settled-result record))
-           (previous-outcome (mevedel-agent-record-settled-outcome record))
-           (previous-metadata (mevedel-agent-record-model-metadata record))
-           ;; Completions of the agent's own Bash it never read go to the
-           ;; caller with the result.
-           (own-path (mevedel-agent-record-path record))
-           (own-queue (mevedel-agent-record-mailbox record))
-           (unread-executions          ; newest first, like the queue
-            (cl-remove-if-not
-             (lambda (item)
-               (and (eq (plist-get item :type) 'EXECUTION)
-                    (equal (plist-get item :sender) own-path)))
-             own-queue))
-           ;; Normalized input plus output, excluding cached input, while the
-           ;; child engine context is still attached.  Callers may charge it elsewhere.
-           (usage
-            (when-let* ((tokens (plist-get (mevedel-engine-info invocation) :tokens-full)))
-              (+ (or (plist-get tokens :input) 0)
-                 (or (plist-get tokens :output) 0))))
-           result staged-records turn-closed)
-      (cl-labels
-          ((rollback ()
-             (setf (mevedel-agent-record-activity record) previous-activity
-                   (mevedel-agent-record-invocation record)
-                   previous-invocation
-                   (mevedel-agent-record-blockers record) previous-blockers
-                   (mevedel-agent-record-settled-result record)
-                   previous-result
-                   (mevedel-agent-record-settled-outcome record)
-                   previous-outcome
-                   (mevedel-agent-record-model-metadata record)
-                   previous-metadata)
-             (mevedel-agent-control--set-mailbox-queue
-              session recipient
-              (cl-remove-if (lambda (message) (memq message staged-records))
-                            (mevedel-agent-control--mailbox-queue session recipient)))
-             (setf (mevedel-agent-record-mailbox record)
-                   (append (cl-set-difference
-                            (mevedel-agent-record-mailbox record) own-queue :test #'eq)
-                           own-queue)))
-           (deliver ()
-             (dolist (message staged-records) (cl-remf message :uncommitted))
-             ;; Close the finished turn once.  A delivery retry can run after
-             ;; the agent's next turn started; that turn's wait and wake
-             ;; marks are its own.
-             (unless turn-closed
-               (mevedel-agent-control-cancel-wait session own-path)
-               ;; A failed turn does not restart itself for mail it missed.
-               (when (eq outcome 'errored)
-                 (mevedel-agent-control-clear-agent-wakes session own-path))
-               (setq turn-closed t))
-             (mevedel-agent-control--publish-result
-              session record result t)
-             (setf (mevedel-engine-info invocation)
-                   (plist-put (mevedel-engine-info invocation)
-                              :mevedel-settlement-mail-ids nil))))
-        (setq payload
-              (mevedel-agent-control--record-settled-result
-               record outcome payload))
-        (mevedel-agent-control--capture-model-metadata record)
+  (if (mevedel-agent-conversation-fenced-p invocation)
+      (when (eq invocation (mevedel-agent-record-invocation record))
+        ;; The successor owns durable state; retire only this local producer.
+        (let ((mevedel-agent-control-suppress-persistence t))
+          (mevedel-agent-control-cancel-wait session (mevedel-agent-record-path record)))
         (setf (mevedel-agent-record-activity record) 'idle
               (mevedel-agent-record-invocation record) nil
               (mevedel-agent-record-blockers record) nil)
-        (setq result
-              (mevedel-agent-control--identify-record
-               (list :id (mevedel-agent-control--settlement-mail-id invocation 'result)
-                     :type 'RESULT
-                     :sender (mevedel-agent-record-path record)
-                     :recipient recipient
-                     :outcome outcome
-                     :payload
-                     (mevedel-agent-control--bounded-result record payload)
-                     :timestamp (current-time))))
-        (when usage
-          (setq result (append result (list :usage usage))))
-        (setq staged-records
-              (append
-               (mapcar
-                (lambda (entry)
-                  (mevedel-agent-control--identify-record
-                   (append
-                    (list :id (mevedel-agent-control--settlement-mail-id invocation entry)
-                          :type 'EXECUTION
-                          :sender (mevedel-agent-record-path record)
-                          :recipient recipient :payload (car entry)
-                          :timestamp (current-time))
-                    (and (cdr entry) (list :meta (cdr entry))))))
-                ;; Completions after the answer are newer.  Runtime entries have
-                ;; no identity yet; queued completions retain theirs.
-                (mevedel-agent-invocation-runtime-execution-results invocation))
-               (mapcar (lambda (item)
-                         (plist-put (copy-sequence item) :recipient recipient))
-                       unread-executions)
-               (list result)))
-        (dolist (message staged-records) (plist-put message :uncommitted t))
-        (mevedel-agent-control--set-mailbox-queue
-         session recipient (append staged-records previous-queue))
-        (when unread-executions
-          (setf (mevedel-agent-record-mailbox record)
-                (cl-remove-if (lambda (item) (memq item unread-executions))
-                              own-queue)))
-        (cons #'rollback #'deliver)))))
+        nil)
+    (mevedel-session-publication-barrier session token)
+    (when (and (eq invocation (mevedel-agent-record-invocation record))
+               (mevedel-agent-control--active-p record)
+               (progn
+                 ;; Target replacement invalidates grants and may publish a
+                 ;; sidecar.  Do this before exposing tentative terminal state
+                 ;; or capturing the rollback snapshot, never under its guard.
+                 (mevedel-session-artifacts-assert-mutation-authority
+                  session (mevedel-session-root-buffer session))
+                 ;; The authority fence can yield to another terminal callback.
+                 (if (mevedel-agent-conversation-fenced-p invocation)
+                     (progn
+                       (mevedel-agent-control--settle session record invocation response event token)
+                       nil)
+                   (and (eq invocation (mevedel-agent-record-invocation record))
+                        (mevedel-agent-control--active-p record)))))
+      (let* ((outcome
+              (pcase (mevedel-agent-invocation-transcript-status invocation)
+                ('error 'errored)
+                ('aborted 'interrupted)
+                (_ (if (and (stringp response)
+                            (string-prefix-p "Error:" response))
+                       'errored
+                     'completed))))
+             (payload
+              (if (eq outcome 'errored)
+                  (or (and (listp event) (plist-get event :error-details))
+                      (mevedel-agent-invocation-terminal-reason invocation)
+                      "Agent turn failed")
+                response))
+             (recipient (mevedel-agent-record-parent-path record))
+             (previous-queue
+              (mevedel-agent-control--mailbox-queue session recipient))
+             (previous-activity (mevedel-agent-record-activity record))
+             (previous-invocation (mevedel-agent-record-invocation record))
+             (previous-blockers (mevedel-agent-record-blockers record))
+             (previous-result (mevedel-agent-record-settled-result record))
+             (previous-outcome (mevedel-agent-record-settled-outcome record))
+             (previous-metadata (mevedel-agent-record-model-metadata record))
+             ;; Completions of the agent's own Bash it never read go to the
+             ;; caller with the result.
+             (own-path (mevedel-agent-record-path record))
+             (own-queue (mevedel-agent-record-mailbox record))
+             (unread-executions          ; newest first, like the queue
+              (cl-remove-if-not
+               (lambda (item)
+                 (and (eq (plist-get item :type) 'EXECUTION)
+                      (equal (plist-get item :sender) own-path)))
+               own-queue))
+             ;; Normalized input plus output, excluding cached input, while the
+             ;; child engine context is still attached.  Callers may charge it elsewhere.
+             (usage
+              (when-let* ((tokens (plist-get (mevedel-engine-info invocation) :tokens-full)))
+                (+ (or (plist-get tokens :input) 0)
+                   (or (plist-get tokens :output) 0))))
+             result staged-records turn-closed)
+        (cl-labels
+            ((rollback ()
+               (setf (mevedel-agent-record-activity record) previous-activity
+                     (mevedel-agent-record-invocation record)
+                     previous-invocation
+                     (mevedel-agent-record-blockers record) previous-blockers
+                     (mevedel-agent-record-settled-result record)
+                     previous-result
+                     (mevedel-agent-record-settled-outcome record)
+                     previous-outcome
+                     (mevedel-agent-record-model-metadata record)
+                     previous-metadata)
+               (mevedel-agent-control--set-mailbox-queue
+                session recipient
+                (cl-remove-if (lambda (message) (memq message staged-records))
+                              (mevedel-agent-control--mailbox-queue session recipient)))
+               (setf (mevedel-agent-record-mailbox record)
+                     (append (cl-set-difference
+                              (mevedel-agent-record-mailbox record) own-queue :test #'eq)
+                             own-queue)))
+             (deliver ()
+               (dolist (message staged-records) (cl-remf message :uncommitted))
+               ;; Close the finished turn once.  A delivery retry can run after
+               ;; the agent's next turn started; that turn's wait and wake
+               ;; marks are its own.
+               (unless turn-closed
+                 (mevedel-agent-control-cancel-wait session own-path)
+                 ;; A failed turn does not restart itself for mail it missed.
+                 (when (eq outcome 'errored)
+                   (mevedel-agent-control-clear-agent-wakes session own-path))
+                 (setq turn-closed t))
+               (mevedel-agent-control--publish-result
+                session record result t)
+               (setf (mevedel-engine-info invocation)
+                     (plist-put (mevedel-engine-info invocation)
+                                :mevedel-settlement-mail-ids nil))))
+          (setq payload
+                (mevedel-agent-control--record-settled-result
+                 record outcome payload))
+          (mevedel-agent-control--capture-model-metadata record)
+          (setf (mevedel-agent-record-activity record) 'idle
+                (mevedel-agent-record-invocation record) nil
+                (mevedel-agent-record-blockers record) nil)
+          (setq result
+                (mevedel-agent-control--identify-record
+                 (list :id (mevedel-agent-control--settlement-mail-id invocation 'result)
+                       :type 'RESULT
+                       :sender (mevedel-agent-record-path record)
+                       :recipient recipient
+                       :outcome outcome
+                       :payload
+                       (mevedel-agent-control--bounded-result record payload)
+                       :timestamp (current-time))))
+          (when usage
+            (setq result (append result (list :usage usage))))
+          (setq staged-records
+                (append
+                 (mapcar
+                  (lambda (entry)
+                    (mevedel-agent-control--identify-record
+                     (append
+                      (list :id (mevedel-agent-control--settlement-mail-id invocation entry)
+                            :type 'EXECUTION
+                            :sender (mevedel-agent-record-path record)
+                            :recipient recipient :payload (car entry)
+                            :timestamp (current-time))
+                      (and (cdr entry) (list :meta (cdr entry))))))
+                  ;; Completions after the answer are newer.  Runtime entries have
+                  ;; no identity yet; queued completions retain theirs.
+                  (mevedel-agent-invocation-runtime-execution-results invocation))
+                 (mapcar (lambda (item)
+                           (plist-put (copy-sequence item) :recipient recipient))
+                         unread-executions)
+                 (list result)))
+          (dolist (message staged-records) (plist-put message :uncommitted t))
+          (mevedel-agent-control--set-mailbox-queue
+           session recipient (append staged-records previous-queue))
+          (when unread-executions
+            (setf (mevedel-agent-record-mailbox record)
+                  (cl-remove-if (lambda (item) (memq item unread-executions))
+                                own-queue)))
+          (cons #'rollback #'deliver))))))
 
 (defun mevedel-agent-control--record-invocation
     (session record invocation)

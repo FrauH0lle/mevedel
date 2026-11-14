@@ -1197,6 +1197,7 @@ candidate's surviving turn count."
          (mevedel-session-publication-uncommitted-batches to))
         (active (mevedel-session-publication-active-p to))
         (lease (mevedel-session-lease to))
+        (ownership-epoch (mevedel-session-ownership-epoch to))
         (timer (mevedel-session-lease-renewal-timer to)))
     (mevedel-session-rewind-copy-session-state from to)
     (setf (mevedel-session-pending-publication to) pending
@@ -1206,6 +1207,7 @@ candidate's surviving turn count."
           (mevedel-session-publication-uncommitted-batches to) uncommitted
           (mevedel-session-publication-active-p to) active
           (mevedel-session-lease to) lease
+          (mevedel-session-ownership-epoch to) ownership-epoch
           (mevedel-session-lease-renewal-timer to) timer)))
 
 (defun mevedel-session-rewind-materialize-publication

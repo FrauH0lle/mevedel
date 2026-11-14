@@ -59,8 +59,12 @@
 (defvar mevedel-agent-control-suppress-persistence)
 
 ;; `mevedel-agent-conversation'
+(declare-function mevedel-agent-conversation--cancel-save
+                  "mevedel-agent-conversation" (invocation))
 (declare-function mevedel-agent-conversation-configure
                   "mevedel-agent-conversation" (invocation &optional buffer))
+(declare-function mevedel-agent-conversation-fenced-p
+                  "mevedel-agent-conversation" (invocation))
 (declare-function mevedel-agent-conversation-final-response
                   "mevedel-agent-conversation" (invocation))
 (declare-function mevedel-agent-conversation-open
@@ -73,7 +77,9 @@
                   "mevedel-agent-conversation" (invocation))
 (declare-function mevedel-agent-conversation-save
                   "mevedel-agent-conversation" (invocation &optional deferred token))
+(autoload 'mevedel-agent-conversation--cancel-save "mevedel-agent-conversation")
 (autoload 'mevedel-agent-conversation-configure "mevedel-agent-conversation")
+(autoload 'mevedel-agent-conversation-fenced-p "mevedel-agent-conversation")
 (autoload 'mevedel-agent-conversation-final-response
   "mevedel-agent-conversation")
 (autoload 'mevedel-agent-conversation-open "mevedel-agent-conversation")
@@ -439,8 +445,9 @@
 TOKEN is the caller's publication gate ownership, handed to gated writers."
   ;; `incomplete' is terminal like the other three: finalizing over it
   ;; would run terminal lifecycle effects twice for a hydrated agent.
-  (unless (memq (mevedel-agent-invocation-transcript-status invocation)
-                '(completed error aborted incomplete))
+  (unless (or (mevedel-agent-conversation-fenced-p invocation)
+              (memq (mevedel-agent-invocation-transcript-status invocation)
+                    '(completed error aborted incomplete)))
     (let ((buffer (mevedel-agent-invocation-buffer invocation))
           (session (mevedel-agent-invocation-parent-session invocation))
           (parent-buffer
@@ -559,7 +566,8 @@ the gate; such a caller is not queued.  FUNCTION receives the fresh token of
 its queued run, before any registry mutation or sidecar capture, in the
 buffer that requested it.  A failure is passed to FAILURE, if supplied, and
 warned as WHAT, never dropped silently."
-  (when-let* ((session (mevedel-agent-invocation-parent-session invocation)))
+  (when-let* ((session (mevedel-agent-invocation-parent-session invocation))
+              ((not (mevedel-agent-conversation-fenced-p invocation))))
     (let ((buffer (current-buffer))
           (scope (mevedel-diagnostic-scope session)))
       (mevedel-session-publication-defer
@@ -600,13 +608,14 @@ or a failed preparation exactly once.  Teardown drains accepted preparations."
      (lambda (err)
        (funcall acknowledge nil (error-message-string err))))))
 
-(defun mevedel-agent-runtime--settle-1 (invocation response event token)
+(cl-defun mevedel-agent-runtime--settle-1 (invocation response event token)
   "Finalize INVOCATION and deliver RESPONSE and EVENT; see the caller.
 TOKEN, possibly nil, is the gate ownership its mutations hand on explicitly."
-  (let* ((pending
+  (let* ((fenced-p (mevedel-agent-conversation-fenced-p invocation))
+         (pending
           (mevedel-agent-invocation-runtime-pending-response invocation))
          (committed-p
-          (and (listp pending)
+          (and (not fenced-p) (listp pending)
                (eq 'committed (plist-get pending :phase))))
          status visible transaction terminal-publication-p)
     (if committed-p
@@ -628,7 +637,7 @@ TOKEN, possibly nil, is the gate ownership its mutations hand on explicitly."
               (mevedel-agent-invocation-parent-session invocation))
              (save-path (and session
                              (mevedel-session-save-path session))))
-        (setq status (pcase event-status
+        (setq status (pcase (if fenced-p 'aborted event-status)
                        ('error 'error)
                        ('aborted 'aborted)
                        (_ 'completed))
@@ -643,7 +652,7 @@ TOKEN, possibly nil, is the gate ownership its mutations hand on explicitly."
                       "interrupted")))
                 (_ response))
               terminal-publication-p
-              (and session
+              (and (not fenced-p) session
                    save-path
                    (mevedel-session-artifacts-artifact-present-p
                     session "session.meta.el")
@@ -665,19 +674,35 @@ TOKEN, possibly nil, is the gate ownership its mutations hand on explicitly."
              (mevedel-recovery-category (and (stringp detail) detail))
              (format "Agent %s failed; inspect its transcript before continuing"
                      (mevedel-agent-invocation-require-path invocation)) nil)))
-        (let ((mevedel-agent-runtime--defer-terminal-publication-p
-               terminal-publication-p))
-          (mevedel-agent-runtime--finalize invocation status token))
+        (if fenced-p
+            (progn
+              (mevedel-agent-conversation--cancel-save invocation)
+              (setf (mevedel-agent-invocation-transcript-status invocation) 'aborted)
+              (when-let* ((buffer (mevedel-agent-invocation-buffer invocation))
+                          ((buffer-live-p buffer))
+                          ((eq invocation (buffer-local-value 'mevedel--agent-invocation buffer))))
+                (let ((mevedel-agent-control-suppress-persistence t))
+                  (with-current-buffer buffer (mevedel-request-end)))))
+          (let ((mevedel-agent-runtime--defer-terminal-publication-p
+                 terminal-publication-p))
+            (mevedel-agent-runtime--finalize invocation status token)))
         (when callback
           (let ((mevedel-agent-control-suppress-persistence t))
             (setq transaction
                   (funcall callback invocation visible event token))))
         (condition-case err
-            (if terminal-publication-p
-                (mevedel-session-artifacts-publish-agent-terminal-state
-                 invocation token)
-              (when (consp transaction)
-                (mevedel-agent-control-commit-session session token)))
+            (progn
+              (unless (mevedel-agent-conversation-fenced-p invocation)
+                (if terminal-publication-p
+                    (mevedel-session-artifacts-publish-agent-terminal-state
+                     invocation token)
+                  (when (consp transaction)
+                    (mevedel-agent-control-commit-session session token))))
+              (when (and (not fenced-p) (mevedel-agent-conversation-fenced-p invocation))
+                (when (functionp (car-safe transaction)) (funcall (car transaction)))
+                (setq transaction nil)
+                (cl-return-from mevedel-agent-runtime--settle-1
+                  (mevedel-agent-runtime--settle-1 invocation response event token))))
           ;; A quit must not leave the staged idle record and its
           ;; uncommitted RESULT behind either.
           ((error quit)
@@ -1247,6 +1272,8 @@ conversation's optional execution directory, never a resource grant."
             (with-current-buffer buffer
               (setq-local mevedel--agent-invocation invocation)))
         (mevedel-agent-runtime--setup-transcript invocation buffer))
+      (setf (mevedel-agent-invocation-ownership-epoch invocation)
+            (mevedel-session-ownership-epoch session))
       (mevedel-agent-conversation-configure invocation buffer)
       ;; Hydration itself performs no directory probes.  Discover a linked
       ;; checkout's instructions only after this turn validated the target and

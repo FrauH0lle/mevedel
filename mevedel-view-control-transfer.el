@@ -45,6 +45,8 @@
                   "mevedel-session-control-transfer" (session buffer))
 (declare-function mevedel-session-control-transfer-request
                   "mevedel-session-control-transfer" (session))
+(declare-function mevedel-session-control-transfer-take-over
+                  "mevedel-session-control-transfer" (session buffer))
 (declare-function mevedel-session-control-transfer-unregister-drain
                   "mevedel-session-control-transfer" (session predicate))
 (declare-function mevedel-session-control-transfer-unregister-observer
@@ -296,6 +298,8 @@ ambient current buffer, which may be an unrelated buffer when a timer fires."
               (ignore-errors
                 (mevedel-session-control-transfer-poll
                  session data nil))))
+          (setq read-only-p
+                (buffer-local-value 'mevedel-session--read-only-mode data))
           ;; The zone shows only this descriptor; rebuilding it unchanged
           ;; every poll allocated about 180 KB per view every five seconds.
           (let ((descriptor
@@ -367,6 +371,17 @@ releases, so control arrives without anyone sitting at the other machine."
       (mevedel-session-control-transfer-acquire session data)
       (mevedel-view-rerender)
       (mevedel-view--control-transfer-rebuild))))
+
+(defun mevedel-view-control-transfer-take-over ()
+  "Confirm taking the current read-only session from its live holder."
+  (interactive)
+  (pcase-let ((`(,data . ,session) (mevedel-view--control-transfer-session)))
+    (unless (buffer-local-value 'mevedel-session--read-only-mode data)
+      (mevedel-diagnostic-user-error
+       (mevedel-diagnostic-scope session) "This session is already writable here"))
+    (mevedel-session-control-transfer-take-over session data)
+    (mevedel-view-rerender)
+    (mevedel-view--control-transfer-rebuild)))
 
 ;;;###autoload
 (defun mevedel-release-control ()
@@ -446,6 +461,10 @@ this view follows."
 (defvar-keymap mevedel-view--control-transfer-status-map
   :doc "Inert keymap for a control-transfer status line.")
 
+(defvar-keymap mevedel-view--control-transfer-take-over-map
+  :doc "Keymap for taking over while a cooperative request waits."
+  "b" #'mevedel-view-control-transfer-take-over)
+
 (defvar-keymap mevedel-view--control-transfer-map
   :doc "Keymap for cooperative lease-transfer controls."
   "g" #'mevedel-view-control-transfer-grant
@@ -453,7 +472,8 @@ this view follows."
 
 (defvar-keymap mevedel-view--control-transfer-request-map
   :doc "Keymap for taking control from read-only mode."
-  "r" #'mevedel-take-control)
+  "r" #'mevedel-take-control
+  "b" #'mevedel-view-control-transfer-take-over)
 
 (defun mevedel-view-control-transfer-current-descriptor ()
   "Return the current view's complete control-transfer descriptor, or nil."
@@ -470,6 +490,9 @@ this view follows."
                   (pcase (plist-get descriptor :action)
                     ('grant mevedel-view--control-transfer-map)
                     ('request mevedel-view--control-transfer-request-map)
+                    ('status (if (plist-get descriptor :keys)
+                                 mevedel-view--control-transfer-take-over-map
+                               mevedel-view--control-transfer-status-map))
                     (_ mevedel-view--control-transfer-status-map))
                   :origin "/root"))))
 

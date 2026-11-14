@@ -784,6 +784,16 @@ Return nil when INVOCATION has no live conversation buffer."
     (mevedel-agent-conversation-project-history
      buffer (mevedel-agent-invocation-parent-session invocation))))
 
+(defun mevedel-agent-conversation-fenced-p (invocation)
+  "Return non-nil when INVOCATION's admitted ownership epoch is superseded."
+  (when-let* ((session (mevedel-agent-invocation-parent-session invocation)))
+    (let ((admitted (mevedel-agent-invocation-ownership-epoch invocation))
+          (current (mevedel-session-ownership-epoch session)))
+      (or (and admitted current (not (equal admitted current)))
+          (and (memq (plist-get (mevedel-session-lease session) :state) '(lost foreign))
+               (memq (plist-get (mevedel-session-control-transfer session) :state)
+                     '(taken-over following)))))))
+
 (defun mevedel-agent-conversation--cancel-save (invocation)
   "Cancel INVOCATION's pending debounced save."
   (when (mevedel-agent-invocation-p invocation)
@@ -922,6 +932,7 @@ The session's publication gate drains first, so a concurrent job cannot have
 captured a stale agent candidate.  TOKEN is the caller's publication gate
 ownership, handed to gated writers."
   (when (and (mevedel-agent-invocation-p invocation)
+             (not (mevedel-agent-conversation-fenced-p invocation))
              (mevedel-agent-conversation--drain-gate invocation token))
     (mevedel-session-artifacts-call-with-checkpoint
      (mevedel-agent-invocation-parent-session invocation)
@@ -997,22 +1008,24 @@ ownership, handed to gated writers."
 When DEFERRED is non-nil, coalesce writes through an idle timer.  TOKEN is the
 caller's publication gate ownership for an immediate write; a timer write runs
 later and never carries it."
-  (if (and deferred
-           (numberp mevedel-agent-conversation-save-debounce)
-           (> mevedel-agent-conversation-save-debounce 0))
-      (progn
-        (mevedel-agent-conversation--cancel-save invocation)
-        (setf
-         (mevedel-agent-invocation-transcript-save-timer invocation)
-         (run-with-idle-timer
-          mevedel-agent-conversation-save-debounce nil
-          (lambda (inv)
-            (when (mevedel-agent-invocation-p inv)
-              (setf (mevedel-agent-invocation-transcript-save-timer inv) nil)
-              (mevedel-agent-conversation--write inv)))
-          invocation)))
-    (mevedel-agent-conversation--cancel-save invocation)
-    (mevedel-agent-conversation--write invocation token)))
+  (if (mevedel-agent-conversation-fenced-p invocation)
+      (mevedel-agent-conversation--cancel-save invocation)
+    (if (and deferred
+             (numberp mevedel-agent-conversation-save-debounce)
+             (> mevedel-agent-conversation-save-debounce 0))
+        (progn
+          (mevedel-agent-conversation--cancel-save invocation)
+          (setf
+           (mevedel-agent-invocation-transcript-save-timer invocation)
+           (run-with-idle-timer
+            mevedel-agent-conversation-save-debounce nil
+            (lambda (inv)
+              (when (mevedel-agent-invocation-p inv)
+                (setf (mevedel-agent-invocation-transcript-save-timer inv) nil)
+                (mevedel-agent-conversation--write inv)))
+            invocation)))
+      (mevedel-agent-conversation--cancel-save invocation)
+      (mevedel-agent-conversation--write invocation token))))
 
 (defun mevedel-agent-conversation--owes-p (invocation)
   "Return non-nil when INVOCATION's canonical transcript has unpublished bytes."

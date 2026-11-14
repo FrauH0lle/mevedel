@@ -516,6 +516,8 @@ and render-data markers are runtime-only caches for cheap live updates."
   (sandbox-summary-cell nil :type list)
   ;; Runtime-only provider-turn state.  Durable identity and unread mail live
   ;; on the root session's `mevedel-agent-record'.
+  ;; Nil for inspection/preparation handles that have not admitted a provider.
+  (ownership-epoch nil :type (or null integer))
   runtime-fsm
   runtime-cancel
   (runtime-context nil :type list)
