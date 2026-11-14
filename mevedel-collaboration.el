@@ -638,12 +638,27 @@ identity.  The id never enters model context or the transcript."
 ;;
 ;;; Room publication
 
+(defun mevedel-collaboration--skip-oversize (room send)
+  "Call SEND; when a frame it sends is too large, report it and return nil.
+One oversized frame must not cost the guests the frames sent after it.
+The diagnostic for ROOM carries only the sizes, never frame content."
+  (condition-case err
+      (funcall send)
+    (mevedel-collaboration-frame-too-large
+     (mevedel-diagnostic-message
+      (mevedel-diagnostic-scope (or (plist-get room :session)
+                                    (plist-get room :workspace)
+                                    'unavailable))
+      "Collaboration frame not sent: %s" (error-message-string err))
+     nil)))
+
 (defun mevedel-collaboration--broadcast (room frame)
   "Broadcast FRAME to every guest in ROOM when the transport is live."
   (when-let* ((transport (plist-get room :transport))
              (guests (plist-get room :guests)))
     (when (> (hash-table-count guests) 0)
-      (mevedel-collaboration--transport-send transport 0 frame))))
+      (mevedel-collaboration--skip-oversize
+       room (lambda () (mevedel-collaboration--transport-send transport 0 frame))))))
 
 (defun mevedel-collaboration--publish (room)
   "Publish changed records from ROOM to its connected guests.

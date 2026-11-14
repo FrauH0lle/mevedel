@@ -616,6 +616,39 @@
                                          (plist-get (cdr entry) :record))))
                            sent)))))
 
+(mevedel-deftest mevedel-collaboration--publish/oversized-record
+  (:doc "one record too large to send costs the guest only that record")
+  (let* ((old (list (list :id "a" :kind "assistant" :revision 0 :text "one")
+                    (list :id "b" :kind "assistant" :revision 0 :text "two")
+                    (list :id "c" :kind "assistant" :revision 0 :text "three")))
+         (new (list (list :id "a" :kind "assistant" :revision 0 :text "secret ONE")
+                    (list :id "b" :kind "assistant" :revision 0 :text "TWO")))
+         (sent nil)
+         (guests (make-hash-table :test #'eql))
+         (room (list :records old :transport 'transport :guests guests))
+         captured)
+    (puthash 1 (list :name "g" :writable nil :ready t) guests)
+    (cl-letf (((symbol-function 'mevedel-collaboration--project-records)
+               (lambda (_) new))
+              ((symbol-function 'mevedel-collaboration--transport-send)
+               (lambda (_transport _peer frame)
+                 ;; The transport refuses record a as over the wire bound.
+                 (if (equal "a" (cdr (assoc "id" (plist-get frame :record))))
+                     (signal 'mevedel-collaboration-frame-too-large
+                             (list "9 bytes over the 1048540-byte bound"))
+                   (push (plist-get frame :t) sent)
+                   t))))
+      (mevedel-test--with-captured-diagnostics captured
+        (mevedel-collaboration--publish room)))
+    ;; The later record, the removal and the status still reach the guest.
+    (setq sent (nreverse sent))
+    (should (equal '("record" "remove" "status")
+                   (cl-remove-if-not (lambda (type) (member type '("record" "remove" "status")))
+                                     sent)))
+    (should (string-search "Collaboration frame not sent" captured))
+    (should (string-search "bytes over" captured))
+    (should-not (string-search "secret" captured))))
+
 (mevedel-deftest mevedel-collaboration--publish/repeated
   (:doc "unchanged publishes preserve the revision for the next change and joins")
   (with-temp-buffer
