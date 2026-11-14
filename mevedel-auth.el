@@ -31,17 +31,30 @@
 (defvar-local mevedel-auth--managed nil
   "Non-nil when provider requests in this buffer use asynchronous renewal.")
 
-;; `mevedel-structs'
+;; `mevedel-structs' and `mevedel-agents'
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x))
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x))
 (defvar mevedel--session)
+(defvar mevedel--agent-invocation)
 
 (cl-defmethod gptel--request-data :around ((_backend gptel-openai-oauth) _prompts)
-  "Add the session id as Codex's `prompt_cache_key', as the Codex CLI does.
-Agent buffers share their parent's session, so they send the root's id."
-  (let ((data (cl-call-next-method))
-        (id (and (bound-and-true-p mevedel--session)
-                 (mevedel-session-session-id mevedel--session))))
-    (if (stringp id) (plist-put data :prompt_cache_key id) data)))
+  "Add Codex's `prompt_cache_key', following the Codex CLI.
+The root conversation, and requests continuing its prefix such as
+compaction, send the session id.  A spawned agent's prefix differs from
+its parent's, so it sends the session id plus its own stable agent id."
+  (let* ((data (cl-call-next-method))
+         (id (and (bound-and-true-p mevedel--session)
+                  (mevedel-session-session-id mevedel--session)))
+         (inv (and (bound-and-true-p mevedel--agent-invocation)
+                   (mevedel-agent-invocation-p mevedel--agent-invocation)
+                   mevedel--agent-invocation)))
+    (if (stringp id)
+        (plist-put data :prompt_cache_key
+                   (if inv
+                       (format "%s:%s" id (mevedel-agent-invocation-agent-id inv))
+                     id))
+      data)))
 
 (defvar mevedel-auth--operations (make-hash-table :test #'equal))
 (defvar mevedel-auth-changed-hook nil

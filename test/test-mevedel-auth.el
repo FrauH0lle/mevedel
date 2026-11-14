@@ -5,33 +5,46 @@
 (require 'helpers (file-name-concat (file-name-directory (or load-file-name buffer-file-name)) "helpers"))
 (require 'mevedel-auth)
 (require 'mevedel-structs)
+(require 'mevedel-agents)
 (require 'mevedel-claude-code)
 
 (defconst mevedel-auth-test--fixtures
   (file-name-concat (file-name-directory (or load-file-name buffer-file-name)) "fixtures"))
 
 (ert-deftest mevedel-auth-codex-sends-session-cache-key ()
-  "Codex payloads carry the session id; sub-agent buffers carry the root's."
+  "Root requests send the session id; each spawned agent its own stable key."
   (let* ((gptel--known-backends nil)
          (codex (gptel-make-openai-oauth "Cache Codex"))
          (plain (gptel-make-openai "Cache Plain" :key "x" :models '(gpt-4o)))
-         (root (generate-new-buffer " *cache-root*"))
-         (agent (generate-new-buffer " *cache-agent*"))
-         (session (mevedel-session--create :session-id "root-id")))
-    (unwind-protect
-        (progn
-          (dolist (buf (list root agent))
-            (with-current-buffer buf
-              (setq-local mevedel--session session)))
-          (cl-flet ((data (buf backend model)
-                      (with-current-buffer buf
-                        (let ((gptel-backend backend) (gptel-model model)
-                              (gptel-use-tools nil) (gptel-stream nil))
-                          (gptel--request-data backend (gptel--parse-buffer backend nil))))))
-            (should (equal "root-id" (plist-get (data root codex 'gpt-5.5) :prompt_cache_key)))
-            (should (equal "root-id" (plist-get (data agent codex 'gpt-5.5) :prompt_cache_key)))
-            (should-not (plist-member (data root plain 'gpt-4o) :prompt_cache_key))))
-      (mapc #'kill-buffer (list root agent)))))
+         (session (mevedel-session--create :session-id "root-id"))
+         (bufs nil))
+    (cl-flet* ((buffer (agent-id)
+                 ;; Nested agents share the top-level session, as in
+                 ;; `mevedel-agent-conversation-open'.
+                 (with-current-buffer (generate-new-buffer " *cache-key*")
+                   (push (current-buffer) bufs)
+                   (setq-local mevedel--session session)
+                   (when agent-id
+                     (setq-local mevedel--agent-invocation
+                                 (mevedel-agent-invocation--create :agent-id agent-id)))
+                   (current-buffer)))
+               (key (buf backend model)
+                 (with-current-buffer buf
+                   (let ((gptel-backend backend) (gptel-model model)
+                         (gptel-use-tools nil) (gptel-stream nil))
+                     (plist-get (gptel--request-data
+                                 backend (gptel--parse-buffer backend nil))
+                                :prompt_cache_key)))))
+      (unwind-protect
+          (let ((root (buffer nil)) (agent (buffer "a--11111111"))
+                (nested (buffer "a--22222222")))
+            (should (equal "root-id" (key root codex 'gpt-5.5)))
+            (should (equal "root-id:a--11111111" (key agent codex 'gpt-5.5)))
+            (should (equal (key agent codex 'gpt-5.5) (key agent codex 'gpt-5.5)))
+            (should (equal "root-id:a--22222222" (key nested codex 'gpt-5.5)))
+            (should-not (key root plain 'gpt-4o))
+            (should-not (key agent plain 'gpt-4o)))
+        (mapc #'kill-buffer bufs)))))
 
 (defmacro mevedel-auth-test--with-provider (status &rest body)
   "Run BODY with isolated credentials and a local HTTP server returning STATUS."
