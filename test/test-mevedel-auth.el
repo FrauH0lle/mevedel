@@ -12,7 +12,7 @@
   (file-name-concat (file-name-directory (or load-file-name buffer-file-name)) "fixtures"))
 
 (ert-deftest mevedel-auth-codex-sends-session-cache-key ()
-  "Root requests send the session id; each spawned agent its own stable key."
+  "The realized payload carries the root id, or the agent's own stable key."
   (let* ((gptel--known-backends nil)
          (codex (gptel-make-openai-oauth "Cache Codex"))
          (plain (gptel-make-openai "Cache Plain" :key "x" :models '(gpt-4o)))
@@ -29,11 +29,15 @@
                                  (mevedel-agent-invocation--create :agent-id agent-id)))
                    (current-buffer)))
                (key (buf backend model)
+                 ;; Build the payload through gptel's prompt buffer, with the
+                 ;; transform list mevedel's send paths pass.
                  (with-current-buffer buf
-                   (let ((gptel-backend backend) (gptel-model model)
-                         (gptel-use-tools nil) (gptel-stream nil))
-                     (plist-get (gptel--request-data
-                                 backend (gptel--parse-buffer backend nil))
+                   (setq-local gptel-backend backend gptel-model model
+                               gptel-use-tools nil)
+                   (let ((fsm (gptel-request "hi" :buffer buf :dry-run t :stream nil
+                                             :transforms
+                                             (list #'mevedel-auth-codex-cache-key-transform))))
+                     (plist-get (plist-get (gptel-fsm-info fsm) :data)
                                 :prompt_cache_key)))))
       (unwind-protect
           (let ((root (buffer nil)) (agent (buffer "a--11111111"))

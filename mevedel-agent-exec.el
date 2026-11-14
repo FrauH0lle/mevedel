@@ -33,6 +33,7 @@
 ;; `mevedel-auth'
 (declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
 (autoload 'mevedel-auth-assert-ready "mevedel-auth")
+(autoload 'mevedel-auth-codex-cache-key-transform "mevedel-auth")
 
 ;; `mevedel-claude-code-agent'
 (declare-function mevedel-claude-code-agent-run
@@ -560,6 +561,7 @@ Returns the native FSM or external invocation handle."
                        :callback wrapped
                        :system gptel-system-prompt
                        :transforms (list #'gptel--transform-add-context
+					 #'mevedel-auth-codex-cache-key-transform
 					 #'mevedel-reminders--agent-transform)))
       (let ((req-info (gptel-fsm-info fsm)))
         ;; `gptel-request' replaces the FSM info plist wholesale, so

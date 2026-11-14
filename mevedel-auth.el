@@ -35,26 +35,32 @@
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x))
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x))
+(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (defvar mevedel--session)
 (defvar mevedel--agent-invocation)
+(defvar gptel--request-params)
 
-(cl-defmethod gptel--request-data :around ((_backend gptel-openai-oauth) _prompts)
-  "Add Codex's `prompt_cache_key', following the Codex CLI.
-The root conversation, and requests continuing its prefix such as
-compaction, send the session id.  A spawned agent's prefix differs from
-its parent's, so it sends the session id plus its own stable agent id."
-  (let* ((data (cl-call-next-method))
-         (id (and (bound-and-true-p mevedel--session)
-                  (mevedel-session-session-id mevedel--session)))
-         (inv (and (bound-and-true-p mevedel--agent-invocation)
-                   (mevedel-agent-invocation-p mevedel--agent-invocation)
-                   mevedel--agent-invocation)))
-    (if (stringp id)
-        (plist-put data :prompt_cache_key
-                   (if inv
-                       (format "%s:%s" id (mevedel-agent-invocation-agent-id inv))
-                     id))
-      data)))
+(defun mevedel-auth-codex-cache-key-transform (fsm)
+  "Set Codex's `prompt_cache_key' from the request's source conversation.
+A `gptel-prompt-transform-functions' entry: it runs in gptel's prompt
+buffer, which does not copy mevedel's variables, so read them from the
+buffer in FSM's info.  The root conversation sends its session id; a
+spawned agent's prefix differs, so it sends the session id plus its own
+agent id, as the Codex CLI keys sub-agents separately."
+  (when (gptel-openai-oauth-p gptel-backend)
+    (let* ((origin (plist-get (gptel-fsm-info fsm) :buffer))
+           (session (and (buffer-live-p origin)
+                         (buffer-local-value 'mevedel--session origin)))
+           (id (and session (mevedel-session-session-id session)))
+           (inv (and (buffer-live-p origin)
+                     (buffer-local-value 'mevedel--agent-invocation origin))))
+      (when (stringp id)
+        (setq-local gptel--request-params
+                    (plist-put (copy-sequence gptel--request-params)
+                               :prompt_cache_key
+                               (if (mevedel-agent-invocation-p inv)
+                                   (format "%s:%s" id (mevedel-agent-invocation-agent-id inv))
+                                 id)))))))
 
 (defvar mevedel-auth--operations (make-hash-table :test #'equal))
 (defvar mevedel-auth-changed-hook nil

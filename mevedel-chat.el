@@ -83,6 +83,7 @@
 ;; `mevedel-auth'
 (declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
 (autoload 'mevedel-auth-assert-ready "mevedel-auth")
+(autoload 'mevedel-auth-codex-cache-key-transform "mevedel-auth")
 
 ;; `mevedel-claude-code-btw'
 (declare-function mevedel-claude-code-btw-send "mevedel-claude-code-btw" (input policy))
@@ -1348,7 +1349,8 @@ MODEL-INPUT replaces the stored prompt for this request only."
    (lambda ()
      (gptel-request nil
 		    :stream gptel-stream
-		    :transforms gptel-prompt-transform-functions
+		    :transforms (cons #'mevedel-auth-codex-cache-key-transform
+				      gptel-prompt-transform-functions)
 		    :fsm (gptel-make-fsm
 			  :table gptel-send--transitions
 			  :handlers gptel-send--handlers)))))
