@@ -277,7 +277,8 @@ Each line is capped at 220 characters to keep failure diagnostics bounded."
                                      launch-environments)
                                (apply real-make-process arguments)))))
                   (condition-case err
-                      (mevedel-test--run-wayland-fixture "present-wayland-thread.el" 20)
+                      ;; The pass takes about 3.8 s; 10 s bounds a deadlock.
+                      (mevedel-test--run-wayland-fixture "present-wayland-thread.el" 10)
                     (ert-test-failed
                      ;; Stock pgtk itself deadlocks here now and then: the
                      ;; thread waits in `gtk_main_iteration' for the GLib
