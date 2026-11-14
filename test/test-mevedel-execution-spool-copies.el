@@ -8,6 +8,8 @@
 
 ;;; Code:
 
+(require 'mevedel-execution)
+(require 'mevedel-execution-process)
 (require 'mevedel-session-test-support
          (file-name-concat
           (file-name-directory
@@ -93,6 +95,82 @@ The shared Read helper waits at most ten seconds and cancels on unwind."
         (test-mevedel-session-persistence--release-and-kill buffer session)
         (delete-directory root t)
         (mevedel-workspace-clear-registry)))))
+
+(mevedel-deftest mevedel-execution-session-live-spools
+  (:doc "names only unfinished executions' spools, as absolute paths")
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-live-spools-" t)))
+         (records (make-hash-table :test #'equal))
+         (session (mevedel-session--create
+                   :execution-state (mevedel-execution--state-create :records records)))
+         (record
+          (lambda (id &rest slots)
+            (puthash id
+                     (apply #'mevedel-execution--record-create
+                            :execution-id id
+                            :child (mevedel-execution-process--child-create
+                                    :spool-path (concat root "x/../" id ".log"))
+                            slots)
+                     records))))
+    (unwind-protect
+        (progn
+          (funcall record "running")
+          (funcall record "stopping" :stop-p t)
+          (funcall record "finished" :finished-p t)
+          (funcall record "undelivered" :finished-p t :delivery-pending-p t)
+          (puthash "childless" (mevedel-execution--record-create
+                                :execution-id "childless")
+                   records)
+          (should (equal (list (concat root "running.log")
+                               (concat root "stopping.log"))
+                         (sort (mevedel-execution-session-live-spools session)
+                               #'string<)))
+          (should-not (mevedel-execution-session-live-spools
+                       (mevedel-session--create))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-execution-spool-copies/portable-save-as
+  (:quiet t
+   :doc "portable Save As copies compressed output into the child session")
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-spool-portable-" t)))
+         (workspace (test-mevedel-session-persistence--make-workspace root))
+         (session (mevedel-session-create "parent" workspace))
+         (buffer (generate-new-buffer " *spool-portable-save-as*"))
+         parent-gzip child-gzip)
+    (unwind-protect
+        (with-current-buffer buffer
+          (org-mode)
+          (setq-local mevedel--session session)
+          (insert "Parent transcript\n")
+          (mevedel-session-artifacts-save session buffer)
+          (setq parent-gzip (test-mevedel-execution-spool-copies--fixture session))
+          ;; Foreground output before its first yield, and a spool a live
+          ;; execution still writes, stay with the parent.
+          (let ((spools (file-name-directory parent-gzip)))
+            (make-directory (file-name-concat spools ".mevedel-pending-executions") t)
+            (write-region "pending\n" nil
+                          (file-name-concat spools ".mevedel-pending-executions"
+                                            "execution-a.log")
+                          nil 'silent)
+            (write-region "live\n" nil (file-name-concat spools "live.log") nil 'silent)
+            (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "child"))
+                      ((symbol-function 'mevedel-execution-session-live-spools)
+                       (lambda (_) (list (expand-file-name "live.log" spools)))))
+              (mevedel-save-session t)))
+          (let ((child-spools (file-name-concat (mevedel-session-save-path session)
+                                                "tool-results" "executions")))
+            (should-not (file-exists-p (file-name-concat
+                                        child-spools ".mevedel-pending-executions")))
+            (should-not (file-exists-p (file-name-concat child-spools "live.log"))))
+          (setq child-gzip (file-name-concat (mevedel-session-save-path session)
+                                             "tool-results" "executions" "retained.log.gz"))
+          (should (file-regular-p parent-gzip))
+          (should (file-regular-p child-gzip))
+          (should (equal (secure-hash 'sha256 (mevedel-session-artifacts-read-file-raw parent-gzip))
+                         (secure-hash 'sha256 (mevedel-session-artifacts-read-file-raw child-gzip))))
+          (test-mevedel-execution-spool-copies--read session))
+      (test-mevedel-session-persistence--release-and-kill buffer session)
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
 
 (mevedel-deftest mevedel-execution-spool-copies/fork
   (:doc "conversation Fork leaves compressed execution history with Source")
