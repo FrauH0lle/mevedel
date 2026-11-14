@@ -19,6 +19,7 @@
 ;; Durability reaches back into publication only from inside functions, so
 ;; this direction is the loadable one.
 (require 'mevedel-session-durability)
+(require 'mevedel-telemetry)
 (require 'mevedel-transport)
 (require 'mevedel-utilities)
 
@@ -71,10 +72,6 @@
 (autoload 'mevedel-session-codec-read "mevedel-session-codec")
 (autoload 'mevedel-session-codec-validate-current-sidecar "mevedel-session-codec")
 (autoload 'mevedel-session-codec-write "mevedel-session-codec")
-
-;; `mevedel-telemetry'
-(declare-function mevedel-telemetry-measure "mevedel-telemetry"
-                  (session event min-ms function &rest props))
 
 ;; `mevedel-session-durability'
 (declare-function mevedel-session-durability--assert-no-pid-lock
@@ -2567,16 +2564,14 @@ TOKEN explicitly authorizes a preparation reentering its own publication gate."
   (when (and (memq session (bound-and-true-p mevedel-session-artifacts--terminal-sessions))
              (not prepared))
     (user-error "Session terminal checkpoint is being prepared"))
-  (if (fboundp 'mevedel-telemetry-measure)
-      (mevedel-telemetry-measure
-       session 'session-publication 0
-       (lambda () (mevedel-session-publication--publish session artifacts require-commit token))
-       :artifact-count (length artifacts)
-       :input-bytes (apply #'+ (mapcar (lambda (artifact)
-                                         (let ((content (plist-get artifact :content)))
-                                           (if (stringp content) (string-bytes content) 0)))
-                                       artifacts)))
-    (mevedel-session-publication--publish session artifacts require-commit token)))
+  (mevedel-telemetry-measure
+   session 'session-publication 0
+   (lambda () (mevedel-session-publication--publish session artifacts require-commit token))
+   :artifact-count (length artifacts)
+   :input-bytes (apply #'+ (mapcar (lambda (artifact)
+                                     (let ((content (plist-get artifact :content)))
+                                       (if (stringp content) (string-bytes content) 0)))
+                                   artifacts))))
 
 (defun mevedel-session-publication--publish (session artifacts require-commit &optional token)
   "Publish SESSION's ARTIFACTS as `mevedel-session-publication-publish' does.

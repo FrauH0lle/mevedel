@@ -175,7 +175,7 @@ Instructions are only saved if they are associated with a buffer that has an
 associated file on disk.  In other words, instructions in ethereal buffers are
 not saved."
   (interactive (list (read-file-name "Save instruction list to file: ")))
-  (mevedel--write-instructions-file path (file-name-directory path) t))
+  (mevedel--write-instructions-file path))
 
 (defun mevedel--instruction-id-state-plist ()
   "Return the current instruction ID state as a serializable plist."
@@ -299,16 +299,15 @@ would lose all of them at once."
          (print-circle nil))
      (prin1-to-string save-file))))
 
-(defun mevedel--write-instructions-file
-    (path &optional base-directory include-original-content)
+(defun mevedel--write-instructions-file (path &optional omit-original-content)
   "Write the current workspace instruction export to PATH.
 
-BASE-DIRECTORY is passed to `mevedel--serialize-instructions'.
-When INCLUDE-ORIGINAL-CONTENT is non-nil, include full buffer
-contents for position patching if the file changes before restore.
+File names are stored relative to PATH's directory.  The export includes
+full buffer contents for position patching if the file changes before
+restore, unless OMIT-ORIGINAL-CONTENT is non-nil.
 Returns the number of saved instructions."
   (let* ((save-file (mevedel--serialize-instructions
-                     base-directory include-original-content))
+                     (file-name-directory path) (not omit-original-content)))
          (file-alist (plist-get save-file :files))
          (saved-instruction-count
           (mevedel--instructions-saved-count file-alist)))
@@ -1671,9 +1670,9 @@ a listing): resolving a workspace must not open a connection."
   "Durably record that SESSION is rewinding to SURVIVING-TURN turns.
 The Rewind discards SESSION's activity from turn PRUNE-FROM on.  Call
 before Rewind's first irreversible step.  Return non-nil when an intent
-was recorded or when the store file does not exist yet (`none': nothing
-to record, memory holds the only copy), nil when the workspace keeps no
-store.  Signal when the intent cannot be recorded, which aborts the Rewind."
+was recorded or when the store file does not exist yet (nothing to record,
+memory holds the only copy), nil when the workspace keeps no store.  Signal
+when the intent cannot be recorded, which aborts the Rewind."
   (let ((workspace (mevedel-session-workspace session))
         (tries 0) result)
     (when (mevedel-instruction-store--applicable-p workspace)
@@ -1681,7 +1680,7 @@ store.  Signal when the intent cannot be recorded, which aborts the Rewind."
         (cl-incf tries)
         (let ((theirs (mevedel-instruction-store--read workspace)))
           (pcase (plist-get theirs :status)
-            ('absent (setq result 'none))
+            ('absent (setq result t))
             ((or 'corrupt 'unsupported)
              (mevedel-instruction-store--unreadable workspace theirs))
             ('ok
@@ -1705,7 +1704,7 @@ store.  Signal when the intent cannot be recorded, which aborts the Rewind."
                    (when (equal (plist-get observed :hash) (plist-get theirs :hash))
                      (mevedel-instruction-store--observe workspace hash record)))
                  (mevedel-instruction-store--owe workspace sid t)
-                 (setq result 'recorded)))))))
+                 (setq result t)))))))
       (unless result
         (error "Instruction store kept changing while recording a Rewind"))
       result)))

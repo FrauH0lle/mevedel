@@ -13,6 +13,7 @@
 (require 'mevedel-skills-core)
 (require 'mevedel-skills-invoke)
 (require 'mevedel-structs)
+(require 'mevedel-telemetry)
 (require 'mevedel-tool-registry)
 
 ;; `gptel'
@@ -53,11 +54,6 @@
 
 ;; `mevedel-tool-ptc'
 (declare-function mevedel-tool-ptc--roster "mevedel-tool-ptc" ())
-
-;; `mevedel-telemetry'
-(declare-function mevedel-telemetry-detailed-p "mevedel-telemetry" (session))
-(declare-function mevedel-telemetry-record
-                  "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-tool-permission'
 (declare-function mevedel-tool-permission-paths "mevedel-tool-permission"
@@ -213,8 +209,7 @@ rendering."
            (listing (plist-get listing-result :text)))
       ;; Rendering also happens for prompt sizing and unchanged retained
       ;; context.  It is not evidence of a new advertisement to the model.
-      (when (and (fboundp 'mevedel-telemetry-detailed-p)
-                 (mevedel-telemetry-detailed-p session))
+      (when (mevedel-telemetry-detailed-p session)
         (mevedel-telemetry-record
          session 'skills-roster-advertised
          :skill-count (length skills)

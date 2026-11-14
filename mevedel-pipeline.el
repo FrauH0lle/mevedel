@@ -682,10 +682,8 @@ CONTEXT is the initial plist."
               (telemetry-settled nil)
               (telemetry-span
                (when (and (plist-get context :session)
-                          (fboundp 'mevedel-telemetry-detailed-p)
                           (mevedel-telemetry-detailed-p
-                           (plist-get context :session))
-                          (fboundp 'mevedel-telemetry-start))
+                           (plist-get context :session)))
                  (mevedel-telemetry-start
                   (plist-get context :session) 'tool-pipeline-step
                   :tool-name (mevedel-tool-name (plist-get context :tool))

@@ -1446,8 +1446,7 @@ EVENT labels each generated hook event block."
     ;; value-free audit of a side conversation, whose own log is transient.
     (when (or (not mevedel-hooks-persist-log)
               (mevedel-telemetry-forwarded-audit-p session)
-              (and (fboundp 'mevedel-telemetry-detailed-p)
-                   (mevedel-telemetry-detailed-p session)))
+              (mevedel-telemetry-detailed-p session))
       (let ((handler (plist-get entry :handler)))
         (mevedel-telemetry-record-audit
          session 'hook-handler
@@ -2215,9 +2214,7 @@ stable public event payload."
       (let* ((handler (car handlers))
              (handler-span
               (and session
-                   (fboundp 'mevedel-telemetry-detailed-p)
                    (mevedel-telemetry-detailed-p session)
-                   (fboundp 'mevedel-telemetry-start)
                    (mevedel-telemetry-start
                     session 'hook-handler-lifecycle
                     :hook-event event
@@ -2322,9 +2319,7 @@ decision plist."
              (telemetry-span
               (when (and session
                          (or handlers
-                             (and (fboundp 'mevedel-telemetry-detailed-p)
-                                  (mevedel-telemetry-detailed-p session)))
-                         (fboundp 'mevedel-telemetry-start))
+                             (mevedel-telemetry-detailed-p session)))
                 (mevedel-telemetry-start
                  session 'hook-event
                  :hook-event event

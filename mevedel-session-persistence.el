@@ -15,6 +15,7 @@
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-codec)
 (require 'mevedel-session-durability)
+(require 'mevedel-telemetry)
 (require 'mevedel-utilities)
 
 (eval-when-compile
@@ -600,8 +601,7 @@ on exit -- so a flush point paid that four times over for data nothing
 reads live."
   (let ((flush
          (lambda ()
-           (when (fboundp 'mevedel-telemetry-flush)
-             (mevedel-telemetry-flush session))
+           (mevedel-telemetry-flush session)
            (when (fboundp 'mevedel-hooks-flush-log)
              (mevedel-hooks-flush-log session))
            (when (fboundp 'mevedel-tool-repair-flush-log)

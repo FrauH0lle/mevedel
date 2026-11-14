@@ -17,11 +17,8 @@
 ;; suspended, and the latter is a macro, so this is a load-time dependency
 ;; rather than a lazily reachable one.
 (require 'mevedel-transport)
+(require 'mevedel-telemetry)
 (require 'tar-mode)
-
-;; `mevedel-telemetry'
-(declare-function mevedel-telemetry-measure "mevedel-telemetry"
-                  (session event min-ms function &rest props))
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create
@@ -1323,15 +1320,13 @@ Each result carries
 `:status' from the shared vocabulary -- `ok', `conflict', `absent',
 `mismatch', `failed', `skipped' -- so a caller reproduces the nil-versus-
 signal contract of the single-operation wrappers per operation."
-  (if (fboundp 'mevedel-telemetry-measure)
-      ;; A synchronous program blocks the editor for its whole round trip,
-      ;; so a long one is worth attributing to a pause.
-      (mevedel-telemetry-measure
-       nil 'control-program mevedel-session-control-fs--measure-min-ms
-       (lambda () (mevedel-session-control-fs--run-program operations lock-directory))
-       :kind (plist-get (car operations) :op)
-       :operation-count (length operations))
-    (mevedel-session-control-fs--run-program operations lock-directory)))
+  ;; A synchronous program blocks the editor for its whole round trip,
+  ;; so a long one is worth attributing to a pause.
+  (mevedel-telemetry-measure
+   nil 'control-program mevedel-session-control-fs--measure-min-ms
+   (lambda () (mevedel-session-control-fs--run-program operations lock-directory))
+   :kind (plist-get (car operations) :op)
+   :operation-count (length operations)))
 
 (defun mevedel-session-control-fs--run-program (operations &optional lock-directory)
   "Run OPERATIONS as `mevedel-session-control-fs-run-program' documents.

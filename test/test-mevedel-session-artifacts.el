@@ -1942,7 +1942,7 @@
               ;; The installer is shared by the store and the export file;
               ;; without the original text, bounds cannot be patched.
               (mevedel--write-instructions-file
-               (file-name-concat tempdir "export.el") tempdir)
+               (file-name-concat tempdir "export.el") t)
               (mevedel--clear-instruction-state workspace)
               (with-current-buffer source-buf
                 (goto-char (point-min))

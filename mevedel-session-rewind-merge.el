@@ -10,11 +10,13 @@
 (require 'mevedel-session-rewind)
 (require 'mevedel-note-merge)
 
+(defvar mevedel-session-artifacts-backup-cache)
+
 (defun mevedel-session-rewind-merge-open (buffer target boundary plan resolutions)
   "Resolve BUFFER's Rewind PLAN for TARGET and BOUNDARY without source writes.
 RESOLUTIONS holds already resolved newer turns.  Confirmation resumes Rewind."
   (let* ((session (buffer-local-value 'mevedel--session buffer))
-         (cache mevedel-session-rewind--backup-cache)
+         (cache mevedel-session-artifacts-backup-cache)
          (tick (with-current-buffer buffer (buffer-chars-modified-tick)))
          (history (copy-tree (mevedel-session-file-snapshots session)))
          (turn (plist-get target :cum-turn))
@@ -62,7 +64,7 @@ RESOLUTIONS holds already resolved newer turns.  Confirmation resumes Rewind."
                             resolutions)))
                   (mevedel-note-merge-cancel)
                   (let ((mevedel-session-rewind--merge-resolutions resolutions)
-                        (mevedel-session-rewind--backup-cache cache))
+                        (mevedel-session-artifacts-backup-cache cache))
                     (mevedel-session-rewind-rewind buffer target boundary))))))
           (with-current-buffer merge
             (setq-local header-line-format
