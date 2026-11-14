@@ -60,7 +60,11 @@ Each note is a plist with `:id', `:buffer', `:line', `:note',
 
 (cl-defstruct (mevedel-buddy-note--run
                (:constructor mevedel-buddy-note--make-run) (:copier nil))
-  "Everything one Buddy review owns, from begin to end."
+  "The tool-visible values of one Buddy review, from begin to end.
+Captured markers (`mevedel-buddy-note--markers') and the review index
+(`mevedel-buddy-note--notes') stay in their own variables, and the
+lifecycle state (running scope, request buffer, generation, timers) lives in
+`mevedel-buddy.el'."
   (scope nil :documentation "Alist of names and exact buffers the review may touch.")
   (taken nil :documentation "Captured taken-note goals and code.")
   (goals nil :documentation "Captured authored goals near the shown code.")
