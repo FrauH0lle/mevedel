@@ -30,7 +30,12 @@ request, retained agent turns and live executions, becomes read-only and follows
 committed publications. Unpublished work here is discarded. A superseded async
 publication whose head has advanced under that foreign generation is completed
 without rollback, acknowledgement or retry; its pending local batches are
-dropped. An unexplained head change still retains unresolved recovery. Project
+dropped. Queued preparations that have not published fail their acknowledgements
+with a takeover error, and new submissions fail immediately. Fenced retained-agent
+settlement retires the local runtime without publishing or changing its retained
+transcript buffer. Taking control back must finish the old epoch's pending stop
+before acquiring or adopting; a blocked stop refuses without changing authority.
+An unexplained head change still retains unresolved recovery. Project
 file effects cannot be undone by the session lease: old-holder producers may
 continue until ownership loss is observed and the publication gate permits stopping.
 
@@ -103,8 +108,9 @@ successor had already published, the old holder retained an unresolved job and
 its active-publication gate blocked following forever. A newer activated
 foreign generation proves supersession, so that case drops unpublished batches
 without rollback or acknowledgement that might duplicate inherited execution
-mail. Same-client and otherwise unexplained head changes keep the existing
-unresolved behavior.
+mail. Preparations still queued before publication instead receive exactly one
+failure acknowledgement; mail batching also releases its pending slot. Same-client
+and otherwise unexplained head changes keep the existing unresolved behavior.
 
 Agent interruption itself waits behind publication, so enqueueing it during the
 old job could let that job's cleanup discard the interrupt. Demotion is immediate
@@ -115,6 +121,16 @@ closing all views cannot strand a running agent. If reconciliation errors after
 a validated newer foreign generation was bound, the next tick can retire the job
 from that irreversible fence without a fresh target read. Dropped checkpoint callbacks
 also relinquish their buffer-local pending identity before later control reuse.
+
+Review reproduced two additional failures: taking control back could adopt over
+an unstopped child process, and a retained agent's normal terminal publication
+could fail against the foreign lease and prevent demotion from completing. All
+acquisition now first completes the pending stop, or asks the user to try again
+if the publication gate still blocks it. Fenced settlement cancels and retires
+only local runtime state, keeping the transcript buffer unchanged. New publication
+admission fails immediately after loss, so a producer cannot keep the stop behind
+an endlessly replenished queue. Holder labels shown in confirmation and takeover
+messages lose text properties and control characters and are capped at 80 characters.
 
 On 2026-11-14 Roland decided to keep one session-ownership implementation:
 file-workspace sessions moved from the PID-lock profile to the portable

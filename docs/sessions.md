@@ -1399,7 +1399,9 @@ The read-only interaction's `b` key, including while a request is waiting,
 offers **take over** through `mevedel-view-control-transfer-take-over`. It can
 replace a live, unexpired holder that is frozen or not answering. The full
 yes/no confirmation names the holder's host, buffer, last renewal and status,
-and warns that its unpublished work will not be kept. A publishing holder
+and warns that its unpublished work will not be kept. Displayed host and buffer
+labels omit text properties and control characters and are capped at 80 characters.
+A publishing holder
 requires the stronger confirmation that the prior client is stopped, since a
 critical write may still be in flight. Declining leaves ownership unchanged;
 concurrent claims elect only one winner. No chooser row changes are needed:
@@ -1418,6 +1420,13 @@ async publication reconciles against the successor's newer head, it drops its
 pending local batches without rollback, acknowledgement or
 retry, then releases its publication gate. Unexplained head changes still keep
 unresolved recovery rather than guessing whether execution mail was committed.
+Queued preparations that never published instead receive a takeover failure;
+new publication submissions fail immediately rather than keeping the stop behind
+a replenished queue. Fenced retained-agent settlement retires the local runtime
+without publishing terminal state or changing its retained transcript buffer.
+Taking control back first completes the old epoch's stop. If publication still
+blocks stopping, acquisition refuses with "Still stopping this session's previous
+work; try again in a moment" rather than adopting over running work.
 If reconciliation itself errors after a newer foreign generation was already
 validated and bound, that irreversible fence lets the next retry tick retire the
 unresolved job without another target read. Ordinary same-client uncertainty

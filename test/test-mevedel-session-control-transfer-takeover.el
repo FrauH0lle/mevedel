@@ -13,6 +13,7 @@
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-runtime)
 (require 'mevedel-session-artifacts)
+(require 'mevedel-session-control-fs)
 (require 'mevedel-session-control-transfer)
 (require 'mevedel-session-durability)
 (require 'mevedel-session-persistence)
@@ -126,20 +127,25 @@ KIND is `project' or `file'.  The holder renews once as host desktop."
   "Return SECONDS as the prompts render a lease time."
   (format-time-string "%FT%T%z" (seconds-to-time seconds)))
 
-(defun test-mevedel-takeover--busy-agent (owner)
+(defun test-mevedel-takeover--busy-agent (owner &optional settle)
   "Register a running agent turn on OWNER; return a cell set when it is cancelled.
 The turn's native canceller stands in for a provider request; interruption
-itself runs the real runtime path, including its publication gate."
+itself runs the real runtime path, including its publication gate.
+With SETTLE, run the real terminal settlement callback as well."
   (let* ((cell (list nil))
          (invocation (mevedel-agent-invocation--create
                       :agent-id "busy" :path "/root/busy" :parent-session owner
-                      ;; `deferred': this test owns no settlement to finish.
-                      :runtime-cancel (lambda () (setcar cell t) 'deferred))))
+                      :runtime-cancel (lambda ()
+                                        (setcar cell t)
+                                        (unless settle 'deferred))))
+         (record (mevedel-agent-record--create
+                  :id "busy" :path "/root/busy" :parent-path "/root"
+                  :activity 'running :invocation invocation)))
+    (when settle
+      (setf (mevedel-agent-invocation-runtime-settle-callback invocation)
+            (apply-partially #'mevedel-agent-control--settle owner record)))
     (setf (mevedel-session-agent-registry owner)
-          (list (cons "/root/busy"
-                      (mevedel-agent-record--create
-                       :id "busy" :path "/root/busy" :parent-path "/root"
-                       :activity 'running :invocation invocation))))
+          (list (cons "/root/busy" record)))
     cell))
 
 (mevedel-deftest mevedel-session-durability-lease-acquire/force (:quiet t)
@@ -184,6 +190,41 @@ itself runs the real runtime path, including its publication gate."
            ;; The claim carries the committed publication forward.
            (should (equal (plist-get holder :publication-head)
                           (plist-get head :publication-head))))))))
+
+  :doc "target holder labels are plain bounded text in confirmation and loss messages"
+  (test-mevedel-takeover--with-session
+   'project
+   (lambda (owner _buffer)
+     (let* ((successor (car (test-mevedel-takeover--follower owner)))
+            (directory (mevedel-session-durability--lease-path
+                        (mevedel-session-save-path owner)))
+            (host (propertize (concat "host\n\r\t" (make-string 100 ?H))
+                              'display "SPOOF"))
+            (label (propertize (concat "buffer\n" (make-string 100 ?B))
+                               'face 'error))
+            (record (test-mevedel-takeover--head owner)) messages)
+       (setq record (plist-put record :host host)
+             record (plist-put record :buffer label))
+       (mevedel-session-durability--write-generation directory record)
+       (should (get-text-property 0 'display
+                                  (plist-get (test-mevedel-takeover--head owner) :host)))
+       (test-mevedel-takeover--as 'laptop
+         (should (mevedel-session-durability-lease-acquire
+                  (mevedel-session-save-path owner) "*laptop*" successor nil t)))
+       (let ((prompt (car test-mevedel-takeover--prompts)))
+         (should-not (string-match-p "[[:cntrl:]]" prompt))
+         (should (equal-including-properties prompt (substring-no-properties prompt)))
+         (should (string-search (concat "host" (make-string 76 ?H) ", buffer ") prompt))
+         (should (string-search (concat "buffer" (make-string 74 ?B) ", last renewal") prompt)))
+       (mevedel-session-durability--write-generation
+        directory (plist-put (test-mevedel-takeover--head owner) :host host))
+       (mevedel-test--with-captured-messages messages
+         (should-not (mevedel-session-durability-lease-renew owner)))
+       ;; The capture helper appends a newline, independently of the label.
+       (setq messages (string-remove-suffix "\n" messages))
+       (should-not (string-match-p "[[:cntrl:]]" messages))
+       (should (equal-including-properties messages (substring-no-properties messages)))
+       (should (string-search (concat "host" (make-string 76 ?H) " at ") messages)))))
 
   :doc "a remote force prompts with the holder's target-clock renewal and claims there"
   (let* ((host "takeover-force-host")
@@ -270,7 +311,7 @@ itself runs the real runtime path, including its publication gate."
          (mevedel-session-durability--bind-lease
           owner own 'owned (plist-get own :bytes))
          (should (mevedel-session-durability-lease-renew owner))
-         (setq agent (test-mevedel-takeover--busy-agent owner))
+         (setq agent (test-mevedel-takeover--busy-agent owner t))
          (test-mevedel-takeover--as 'laptop
            (should (mevedel-session-control-transfer-take-over successor view)))
          (should-not (buffer-local-value 'mevedel-session--read-only-mode view))
@@ -399,6 +440,8 @@ itself runs the real runtime path, including its publication gate."
                     (observed nil)
                     (agent nil)
                     (timer (mevedel-session-lease-renewal-timer owner))
+                    (queued-acks nil)
+                    (mail-acks nil)
                     (acks nil)
                     (interleaved nil))
          (cl-letf (((symbol-function
@@ -461,6 +504,12 @@ itself runs the real runtime path, including its publication gate."
            (should (eq 'pending (test-mevedel-publication-async--send
                                  owner "in-flight"
                                  (lambda (ok error) (push (list ok error) acks)))))
+           (mevedel-session-publication-submit
+            owner (lambda () (ert-fail "Superseded queued preparation ran"))
+            (lambda (ok err) (push (list ok err) queued-acks)))
+           (mevedel-agent-control--batch-mail
+            owner "/root" (list (list :id "queued-mail" :text "not prepared")) nil
+            (lambda (ok err) (push (list ok err) mail-acks)))
            (test-mevedel-publication-async--wait
             (lambda ()
               (let ((job (mevedel-session-publication-job owner)))
@@ -490,11 +539,20 @@ itself runs the real runtime path, including its publication gate."
              (progn
                (should (mevedel-session-publication-job owner))
                (should (mevedel-session-publication-active-p owner))
+               (should-not queued-acks)
+               (should-not mail-acks)
+               (should (mevedel-session-mail-batch owner))
                (should (eq 'in-flight (buffer-local-value
                                        'mevedel-session--checkpoint-pending buffer))))
            (should-not (mevedel-session-publication-job owner))
            (should-not (mevedel-session-publication-active-p owner))
            (should (buffer-local-value 'mevedel-session--read-only-mode buffer))
+           (should (= 1 (length queued-acks)))
+           (should (= 1 (length mail-acks)))
+           (dolist (ack (append queued-acks mail-acks))
+             (should-not (car ack))
+             (should (string-search "lease taken over" (error-message-string (cadr ack)))))
+           (should-not (mevedel-session-mail-batch owner))
            (should-not (mevedel-session-pending-publication owner))
            ;; No view has polled: the retained heartbeat stops the agent.
            (test-mevedel-publication-async--wait
@@ -559,7 +617,10 @@ itself runs the real runtime path, including its publication gate."
        (kill-buffer buffer)
        (setf (mevedel-session-publication-active-p owner) nil)
        (mevedel-session-durability-heartbeat owner)
-       (should-not (mevedel-session-lease-renewal-timer owner))))))
+       (should-not (mevedel-session-lease-renewal-timer owner))
+       ;; Let the cancelled renewal's real sentinel retire its control job.
+       (should (mevedel-session-control-fs-wait-async 5))
+       (should-not (mevedel-session-lease-renewal-job owner))))))
 
 (mevedel-deftest mevedel-session-control-transfer-take-over (:quiet t)
   ,test
@@ -680,6 +741,82 @@ itself runs the real runtime path, including its publication gate."
          (should (= 2 (length test-mevedel-takeover--prompts)))
          (should-not (buffer-local-value 'mevedel-session--read-only-mode
                                          data)))))))
+
+(mevedel-deftest mevedel-session-control-transfer-taken-over/safety (:quiet t)
+  ,test
+  (test)
+  :doc "an agent submitting after loss cannot keep the stop gate busy"
+  (test-mevedel-takeover--with-session
+   'project
+   (lambda (owner _buffer)
+     (let ((successor (car (test-mevedel-takeover--follower owner)))
+           (agent (test-mevedel-takeover--busy-agent owner)) acks)
+       (test-mevedel-takeover--as 'laptop
+                                  (mevedel-session-durability-lease-acquire
+                                   (mevedel-session-save-path owner) "*laptop*" successor nil t))
+       (setf (mevedel-session-publication-active-p owner) t)
+       (mevedel-session-durability--bind-lease
+        owner (test-mevedel-takeover--head owner) 'lost)
+       (should-not (car agent))
+       (setf (mevedel-session-publication-active-p owner) nil)
+       (dotimes (_ 2)
+         (unless (car agent)
+           (mevedel-session-publication-submit
+            owner (lambda () (ert-fail "Fenced agent preparation ran"))
+            (lambda (ok err) (push (list ok err) acks)))
+           (mevedel-session-durability-heartbeat owner)))
+       (should (car agent))
+       (should acks)
+       (should-not (car (car acks)))
+       (should (string-search "lease taken over"
+                              (error-message-string (cadar acks))))
+       (should-not (mevedel-session-publication-job owner))
+       (should-not (mevedel-session-publication-preparations owner)))))
+
+  :doc "taking control back settles old children before adopting; a busy stop refuses"
+  (dolist (gated '(nil t))
+    (test-mevedel-takeover--with-session
+     'project
+     (lambda (owner buffer)
+       (let* ((successor (car (test-mevedel-takeover--follower owner)))
+              (root (mevedel-session-working-directory owner))
+              (pid-file (file-name-concat root "takeback-child.pid"))
+              (initial (progn
+                         (setf (mevedel-session-sandbox-mode owner) 'off)
+                         (test-mevedel-execution--start-managed
+                          owner root (list "sh" "-c" "echo $$ > \"$1\"; exec sleep 30"
+                                           "takeback" pid-file))))
+              (record (gethash (plist-get (plist-get initial :facts) :execution-id)
+                               (mevedel-execution--state-records
+                                (mevedel-session-execution-state owner)))))
+         (unwind-protect
+             (progn
+               (test-mevedel-execution--wait (lambda () (file-readable-p pid-file)))
+               (let ((pid (test-mevedel-execution--read-pid pid-file)))
+                 (test-mevedel-takeover--as 'laptop
+                                            (mevedel-session-durability-lease-acquire
+                                             (mevedel-session-save-path owner) "*laptop*" successor nil t))
+                 (setf (mevedel-session-publication-active-p owner) t)
+                 (mevedel-session-durability--bind-lease
+                  owner (test-mevedel-takeover--head owner) 'lost)
+                 (when gated
+                   (let* ((head (test-mevedel-takeover--head owner))
+                          (failure (should-error
+                                    (mevedel-session-control-transfer-take-over owner buffer)
+                                    :type 'user-error)))
+                     (should (string-search "Still stopping" (error-message-string failure)))
+                     (should (equal head (test-mevedel-takeover--head owner)))
+                     (should-not (test-mevedel-execution--process-gone-p pid))))
+                 (setf (mevedel-session-publication-active-p owner) nil)
+                 (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t)))
+                   (mevedel-session-control-transfer-take-over owner buffer))
+                 (should (mevedel-execution--record-finished-p record))
+                 (should (eq 'session-ended (mevedel-execution--record-termination record)))
+                 (should (test-mevedel-execution--process-gone-p pid))
+                 (should (mevedel-session-durability-lease-owned-p owner))))
+           (setf (mevedel-session-publication-active-p owner) nil)
+           (unless (mevedel-execution--record-finished-p record)
+             (mevedel-execution--discard-record record 'session-ended))))))))
 
 (provide 'test-mevedel-session-control-transfer-takeover)
 

@@ -236,6 +236,14 @@ short enough that a picker row stays readable."
     (when (string-match-p "\\S-" name)
       (mevedel--truncate-display (string-trim name) 64))))
 
+(defun mevedel-session-durability-holder-label (label)
+  "Return LABEL as plain display text of at most 80 characters.
+Strip text properties and control characters without changing lease records."
+  (let ((text (replace-regexp-in-string
+               "[[:cntrl:]]" ""
+               (substring-no-properties (format "%s" label)))))
+    (substring text 0 (min 80 (length text)))))
+
 (defun mevedel-session-durability--pid-alive-p (pid)
   "Return non-nil unless PID is provably absent from the current host.
 An unavailable process list is not evidence that a holder is dead."
@@ -1430,8 +1438,10 @@ Only an explicit user takeover command should pass FORCE."
                       "Take over portable session held by %s, buffer %s, "
                       "last renewal %s, status %s? "
                       "%sUnpublished changes on that client will not be kept. ")
-                     (plist-get existing :host)
-                     (plist-get existing :buffer)
+                     (mevedel-session-durability-holder-label
+                      (plist-get existing :host))
+                     (mevedel-session-durability-holder-label
+                      (plist-get existing :buffer))
                      (format-time-string
                       "%FT%T%z" (seconds-to-time
                                    (plist-get existing :renewed-at)))

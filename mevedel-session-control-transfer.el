@@ -93,6 +93,8 @@
                   "mevedel-session-durability" (session token &optional reentrant))
 (declare-function mevedel-session-durability-call-outside-transaction
                   "mevedel-session-durability" (function))
+(declare-function mevedel-session-durability-holder-label
+                  "mevedel-session-durability" (label))
 (declare-function mevedel-session-durability-lease-acquire
                   "mevedel-session-durability"
                   (session-dir buffer-name &optional session token force))
@@ -104,6 +106,7 @@
 (defvar mevedel-session-durability--heartbeat-inhibit)
 (autoload 'mevedel-session-durability--gate "mevedel-session-durability")
 (autoload 'mevedel-session-durability-call-outside-transaction "mevedel-session-durability")
+(autoload 'mevedel-session-durability-holder-label "mevedel-session-durability")
 (autoload 'mevedel-session-durability-lease-acquire
   "mevedel-session-durability")
 (autoload 'mevedel-session-durability-lease-release
@@ -451,7 +454,8 @@ interrupt that publication cleanup could discard."
       (mevedel-session-persistence-apply-read-only-mode
        buffer
        (format "control taken over by %s at %s; unpublished changes here were not kept"
-               (plist-get lease :host)
+               (mevedel-session-durability-holder-label
+                (plist-get lease :host))
                (format-time-string "%FT%T%z"
                                    (seconds-to-time (plist-get lease :renewed-at))))))
     (when (and (eq 'taken-over
@@ -830,6 +834,12 @@ FORCE also offers confirmation to take over from a live holder."
     (error "Session buffer is not live"))
   (unless (mevedel-session-save-path session)
     (user-error "Session has not been materialized yet"))
+  (when (eq 'taken-over
+            (plist-get (mevedel-session-control-transfer session) :state))
+    (mevedel-session-control-transfer-taken-over session (mevedel-session-lease session))
+    (when (eq 'taken-over
+              (plist-get (mevedel-session-control-transfer session) :state))
+      (user-error "Still stopping this session's previous work; try again in a moment")))
   (when (buffer-modified-p buffer)
     (user-error "Read-only session changed locally; refresh before taking control"))
   (mevedel-session-control-transfer-register-root-buffer session buffer)

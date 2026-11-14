@@ -124,6 +124,7 @@
   "mevedel-session-recovery")
 
 ;; `mevedel-structs'
+(declare-function mevedel-session-control-transfer "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-lease "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-publication
                   "mevedel-structs" (cl-x) t)
@@ -182,6 +183,23 @@ a turn even when producers keep the queue non-empty.  A
 function that mutates the session queues behind the waiting preparations.
 Errors are reported and do not stop the queue.")
 
+(defun mevedel-session-publication--takeover-error (session)
+  "Return the refusal error when SESSION has lost its publication authority."
+  (when (or (eq 'lost (plist-get (mevedel-session-lease session) :state))
+            (eq 'taken-over (plist-get (mevedel-session-control-transfer session) :state)))
+    (list 'user-error "Session lease taken over")))
+
+(defun mevedel-session-publication--fail-preparation (session entry err)
+  "Decline queued ENTRY for SESSION with ERR, isolating its failure handler."
+  (condition-case handler-error
+      (if (cdr entry) (funcall (cdr entry) err)
+        (mevedel-diagnostic-warning
+         (mevedel-diagnostic-scope session) 'mevedel (error-message-string err) :warning))
+    ((error quit)
+     (mevedel-diagnostic-warning
+      (mevedel-diagnostic-scope session) 'mevedel
+      (error-message-string handler-error) :warning))))
+
 (defun mevedel-session-publication--schedule (session)
   "Schedule SESSION's next preparation outside the current callback."
   (let* ((thunk
@@ -208,13 +226,11 @@ Errors are reported and do not stop the queue.")
                     (setf (mevedel-session-publication-preparation-token session) token)
                     (unwind-protect
                         (condition-case err
-                            (funcall (car entry) token)
+                            (if-let* ((refusal (mevedel-session-publication--takeover-error session)))
+                                (signal (car refusal) (cdr refusal))
+                              (funcall (car entry) token))
                           ((error quit)
-                           (condition-case handler-error
-                               (if (cdr entry) (funcall (cdr entry) err)
-                                 (mevedel-diagnostic-warning (mevedel-diagnostic-scope session) 'mevedel (error-message-string err) :warning))
-                             ((error quit)
-                              (mevedel-diagnostic-warning (mevedel-diagnostic-scope session) 'mevedel (error-message-string handler-error) :warning)))))
+                           (mevedel-session-publication--fail-preparation session entry err)))
                       (setf (mevedel-session-publication-preparation-token session) nil)
                       (when (and (not (mevedel-session-publication-job session))
                                  (mevedel-session-publication-preparations session))
@@ -230,10 +246,12 @@ Errors are reported and do not stop the queue.")
 PREPARATION receives the gate token; FAILURE receives any error it signals.
 Unlike `mevedel-session-publication-defer', always queue, even at an idle gate.
 Synchronous saves and teardown drain this accepted work through the barrier."
-  (setf (mevedel-session-publication-preparations session)
-        (nconc (mevedel-session-publication-preparations session)
-               (list (cons preparation failure))))
-  (mevedel-session-publication--schedule session)
+  (if-let* ((err (mevedel-session-publication--takeover-error session)))
+      (mevedel-session-publication--fail-preparation session (cons preparation failure) err)
+    (setf (mevedel-session-publication-preparations session)
+          (nconc (mevedel-session-publication-preparations session)
+                 (list (cons preparation failure))))
+    (mevedel-session-publication--schedule session))
   t)
 
 (defun mevedel-session-publication-defer (session preparation &optional failure token)
@@ -326,35 +344,38 @@ over, never live buffers, and may rewrite a frozen sidecar if it also records
 that sidecar's exact digest.  Nil is a clean no-op success: nothing is
 reserved or committed.  It is refused while earlier retained batches exist,
 which a no-op would otherwise consume.  Every staged batch belongs to the job
-until acknowledgement."
-  (when (mevedel-session-publication-stopping-p session)
-    (user-error "Session publication is stopping"))
-  (let ((launch
-         (lambda (&optional _token)
-           (let ((job (mevedel-session-publication--job-create
-                       :session session :path (mevedel-session-save-path session)
-                       :epoch (mevedel-session-checkpoint-state session)
-                       :prepare prepare :acknowledge acknowledge :mail-ids mail-ids
-                       :retain-failure retain-failure :selector select-staged
-                       :expected-lease (copy-sequence (mevedel-session-lease session))
-                       :expected-head (plist-get (mevedel-session-publication session) :head)
-                       :phase 'admission)))
-             (setf (mevedel-session-publication--job-context job)
-                   (mevedel-session-durability-fresh-context
-                    (lambda (process)
-                      (setf (mevedel-session-publication--job-process job) process))))
-             (setf (mevedel-session-publication-job session) job
-                   (mevedel-session-publication-active-p session) t)
-             (mevedel-session-publication--advance-soon job)))))
-    (if (or (mevedel-session-publication-busy-p session)
-            (mevedel-session-publication-finishing-p session)
-            (mevedel-session-publication-active-p session))
-        (progn
-          (setf (mevedel-session-publication-preparations session)
-                (nconc (mevedel-session-publication-preparations session)
-                       (list (cons launch (lambda (err) (funcall acknowledge nil err))))))
-          (mevedel-session-publication--schedule session))
-      (funcall launch)))
+until acknowledgement.  A superseded uncertain job is retired without an
+acknowledgement; never-launched queued work receives a definitive failure."
+  (if-let* ((err (mevedel-session-publication--takeover-error session)))
+      (funcall acknowledge nil err)
+    (when (mevedel-session-publication-stopping-p session)
+      (user-error "Session publication is stopping"))
+    (let ((launch
+           (lambda (&optional _token)
+             (let ((job (mevedel-session-publication--job-create
+                         :session session :path (mevedel-session-save-path session)
+                         :epoch (mevedel-session-checkpoint-state session)
+                         :prepare prepare :acknowledge acknowledge :mail-ids mail-ids
+                         :retain-failure retain-failure :selector select-staged
+                         :expected-lease (copy-sequence (mevedel-session-lease session))
+                         :expected-head (plist-get (mevedel-session-publication session) :head)
+                         :phase 'admission)))
+               (setf (mevedel-session-publication--job-context job)
+                     (mevedel-session-durability-fresh-context
+                      (lambda (process)
+                        (setf (mevedel-session-publication--job-process job) process))))
+               (setf (mevedel-session-publication-job session) job
+                     (mevedel-session-publication-active-p session) t)
+               (mevedel-session-publication--advance-soon job)))))
+      (if (or (mevedel-session-publication-busy-p session)
+              (mevedel-session-publication-finishing-p session)
+              (mevedel-session-publication-active-p session))
+          (progn
+            (setf (mevedel-session-publication-preparations session)
+                  (nconc (mevedel-session-publication-preparations session)
+                         (list (cons launch (lambda (err) (funcall acknowledge nil err))))))
+            (mevedel-session-publication--schedule session))
+        (funcall launch))))
   'pending)
 
 (defun mevedel-session-publication--advance-soon (job)
@@ -467,13 +488,19 @@ ABANDONED explicitly discards recovery instead of retaining a failed checkpoint.
 
 (defun mevedel-session-publication--job-superseded (job observation)
   "Discard irreversibly fenced JOB using its foreign lease OBSERVATION."
-  (let ((session (mevedel-session-publication--job-session job)))
+  (let* ((session (mevedel-session-publication--job-session job))
+         (queued (mevedel-session-publication-preparations session)))
     ;; The successor may include this mail: neither roll it back nor
     ;; acknowledge it again from the fenced client.
     (mevedel-session-publication-clear-transient session)
     (setf (mevedel-session-publication-preparations session) nil
           (mevedel-session-publication--job-acknowledge job) #'ignore)
     (mevedel-session-durability-bind-observed-lease session observation)
+    (mevedel-session-durability-call-outside-transaction
+     (lambda ()
+       (dolist (entry queued)
+         (mevedel-session-publication--fail-preparation
+          session entry (list 'user-error "Session lease taken over")))))
     (mevedel-session-publication--job-complete job nil nil t)))
 
 (defun mevedel-session-publication-settle-taken-over (session)
