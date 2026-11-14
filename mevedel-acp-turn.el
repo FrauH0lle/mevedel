@@ -7,6 +7,7 @@
 
 ;;; Code:
 
+(require 'mevedel-telemetry)
 (require 'mevedel-utilities)
 
 (require 'gptel)
@@ -152,7 +153,7 @@ the admitted request and, for a child, its agent path."
     (when (< (length lost) mevedel-acp-turn--lost-reply-limit)
       (setf (mevedel-engine-info request)
             (plist-put info :mevedel-mcp-lost (append lost (list diagnostic)))))
-    (when (and session (fboundp 'mevedel-telemetry-record))
+    (when session
       (mevedel-telemetry-record
        session 'mcp-reply-lost :kind (plist-get diagnostic :kind)
        :request-id (and admission (mevedel-request-id admission))

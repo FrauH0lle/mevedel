@@ -9,6 +9,7 @@
 
 ;;; Code:
 
+(require 'mevedel-telemetry)
 (require 'mevedel-utilities)
 
 (require 'mevedel-recovery)
@@ -381,8 +382,7 @@ caller for telemetry.  Return non-nil when this call made the request."
     (setf (mevedel-engine-info fsm) (plist-put info :mevedel-end-turn reason))
     (when-let* ((buffer (plist-get info :buffer))
                 ((buffer-live-p buffer))
-                (session (buffer-local-value 'mevedel--session buffer))
-                ((fboundp 'mevedel-telemetry-record)))
+                (session (buffer-local-value 'mevedel--session buffer)))
       (mevedel-telemetry-record session 'turn-end-requested :reason reason))
     t))
 
@@ -576,15 +576,14 @@ recovery state alone."
       (mevedel-collaboration-notify-request-changed (current-buffer)))
     (when (equal origin "/root")
       (setf (mevedel-session-agent-root-activity session) 'running))
-    (when (fboundp 'mevedel-telemetry-record)
-      (mevedel-telemetry-record
-       session 'request-queued :request-id id :origin origin
-       :permission-mode (mevedel-permission-mode-effective session nil nil request)
-       :sandbox-mode (mevedel-sandbox-mode-effective session))
-      (mevedel-telemetry-record
-       session 'request-start :request-id id :origin origin
-       :permission-mode (mevedel-permission-mode-effective session nil nil request)
-       :sandbox-mode (mevedel-sandbox-mode-effective session)))
+    (mevedel-telemetry-record
+     session 'request-queued :request-id id :origin origin
+     :permission-mode (mevedel-permission-mode-effective session nil nil request)
+     :sandbox-mode (mevedel-sandbox-mode-effective session))
+    (mevedel-telemetry-record
+     session 'request-start :request-id id :origin origin
+     :permission-mode (mevedel-permission-mode-effective session nil nil request)
+     :sandbox-mode (mevedel-sandbox-mode-effective session))
     request))
 
 (defun mevedel-request-call-owned (request buffer function &rest args)
@@ -628,12 +627,11 @@ is returned here."
       ;; teardown step that signals must not leave it set.
       (unwind-protect
           (unwind-protect
-              (when (fboundp 'mevedel-telemetry-record)
-                (mevedel-telemetry-record
-                 (mevedel-request-session request) 'request-teardown
-                 :request-id (mevedel-request-id request)
-                 :origin (mevedel-request-origin request)
-                 :abort-plan-approval (and abort-plan-approval t)))
+              (mevedel-telemetry-record
+               (mevedel-request-session request) 'request-teardown
+               :request-id (mevedel-request-id request)
+               :origin (mevedel-request-origin request)
+               :abort-plan-approval (and abort-plan-approval t))
             (mevedel-request-cancel request abort-plan-approval))
         ;; Cancelling interactions invokes callbacks; do not erase a request
         ;; installed by one of them while the old teardown was on the stack.
@@ -653,8 +651,8 @@ is returned here."
                        workspace id (mevedel-session-session-id
                                      (mevedel-request-session request)))
                     (error (mevedel-diagnostic-message (mevedel-diagnostic-scope workspace)
-                                    "%s (no version of %s was saved)"
-                                    (error-message-string err) id))))
+                                                       "%s (no version of %s was saved)"
+                                                       (error-message-string err) id))))
                 (when (equal (mevedel-request-origin request) "/root")
                   ;; A long-running Emacs must keep expiring old sessions.
                   (mevedel-session-persistence-schedule-cleanup
@@ -690,13 +688,12 @@ Run `mevedel-turn-settled-functions' with OUTCOME in the chat buffer."
         (condition-case err
             (funcall function outcome)
           (error (mevedel-diagnostic-message (mevedel-diagnostic-scope chat-buffer)
-                          "%s (turn settlement step %s failed)"
-                          (error-message-string err) function))))
+                                             "%s (turn settlement step %s failed)"
+                                             (error-message-string err) function))))
       (when (featurep 'mevedel-readiness)
         (mevedel-readiness-record-turn info outcome (mevedel--fsm-error-message fsm)))
       (when (and (bound-and-true-p mevedel--session)
-                 (bound-and-true-p mevedel--current-request)
-                 (fboundp 'mevedel-telemetry-record))
+                 (bound-and-true-p mevedel--current-request))
         (let* ((request mevedel--current-request)
                (tokens (or (plist-get info :tokens-full)
                            (plist-get info :tokens)))
@@ -1217,8 +1214,7 @@ available."
         (setf (mevedel-session-last-outcome mevedel--session) 'lost)
         (mevedel-recovery-report mevedel--session "request" 'request
                                  "Turn ownership was lost; review the transcript before continuing" nil))
-      (when (and (bound-and-true-p mevedel--session)
-                 (fboundp 'mevedel-telemetry-record))
+      (when (bound-and-true-p mevedel--session)
         (mevedel-telemetry-record
          mevedel--session 'request-settled
          :request-id (plist-get info :mevedel-request-id)

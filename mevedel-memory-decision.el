@@ -1177,14 +1177,18 @@ expiry only after freshly observing CLAIM's original target-clock deadline."
         (mevedel-journal-claim-outcome claim))
       (error "No durable memory operation fence")))
 
+(defun mevedel-memory-decision--stamp-round-trip (job)
+  "Record JOB's recovery round-trip milliseconds once and clear its start."
+  (when-let* ((start (plist-get job :recovery-started-at)))
+    (plist-put job :recovery-round-trip-ms
+               (round (* 1000 (max 0 (- (mevedel-telemetry--monotonic-now) start)))))
+    (plist-put job :recovery-started-at nil)))
+
 (defun mevedel-memory-decision--operation-finish (job result)
   "Release JOB and deliver RESULT exactly once, after any editor work unwinds."
   (unless (plist-get job :done)
     (plist-put job :done t)
-    (when-let* ((start (plist-get job :recovery-started-at)))
-      (plist-put job :recovery-round-trip-ms
-                 (round (* 1000 (max 0 (- (mevedel-telemetry--monotonic-now) start)))))
-      (plist-put job :recovery-started-at nil))
+    (mevedel-memory-decision--stamp-round-trip job)
     (when (plist-member job :recovery-round-trip-ms)
       (plist-put result :recovery-round-trip-ms (plist-get job :recovery-round-trip-ms)))
     (when (plist-get job :cancelled)
@@ -1354,10 +1358,7 @@ Keep :error, :cancelled and timing alongside the decision's result."
                        (signal 'mevedel-memory-decision--held '("Memory operation context changed")))
                      (mevedel-memory-store--assert-owned (plist-get job :claim)))
                    (plist-put job :recovered t)
-                   (when-let* ((start (plist-get job :recovery-started-at)))
-                     (plist-put job :recovery-round-trip-ms
-                                (round (* 1000 (max 0 (- (mevedel-telemetry--monotonic-now) start)))))
-                     (plist-put job :recovery-started-at nil))
+                   (mevedel-memory-decision--stamp-round-trip job)
                    (let ((mevedel-memory-decision--publication-job
                           (and (plist-get job :application) (not (plist-get reply :synchronous)) job)))
                      (list :ok t :value

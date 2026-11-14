@@ -15,6 +15,7 @@
 
 ;;; Code:
 
+(require 'mevedel-telemetry)
 (require 'mevedel-utilities)
 
 (require 'mevedel-recovery)
@@ -642,13 +643,12 @@ explicitly selected skills applied together, with the same admission recheck."
                        (mevedel-view--reserved-goal-handoff-id session))
                    :queued-at-turn
                    (or (mevedel-session-turn-count session) 0)))))
-      (when (fboundp 'mevedel-telemetry-record)
-        (mevedel-telemetry-record
-         session 'user-message-queued
-         :message-hash (secure-hash 'sha256 input)
-         :message-chars (length input)
-         :queue-depth (length (mevedel-view--pending-follow-ups session))
-         :enqueue-goal-id (plist-get entry :queued-at-goal-id)))
+      (mevedel-telemetry-record
+       session 'user-message-queued
+       :message-hash (secure-hash 'sha256 input)
+       :message-chars (length input)
+       :queue-depth (length (mevedel-view--pending-follow-ups session))
+       :enqueue-goal-id (plist-get entry :queued-at-goal-id))
       (mevedel-view-history-add input)
       (when (equal-including-properties (mevedel-view--input-text) input)
         (mevedel-view--clear-input))
@@ -1171,26 +1171,25 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                            (mevedel-view--interaction-rebuild)))
                         (after-insert
                          (lambda ()
-                           (when (fboundp 'mevedel-telemetry-record)
-                             (mevedel-telemetry-record
-                              session 'user-message-dequeued
-                              :message-hash (secure-hash 'sha256 input)
-                              :queue-depth-before
-                              (length
-                               (mevedel-view--pending-follow-ups session))
-                              :queue-duration-ms
-                              (and (numberp (plist-get entry :queued-at-time))
-                                   (round
-                                    (* 1000.0
-                                       (- (float-time)
-                                          (plist-get entry
-                                                     :queued-at-time)))))
-                              :enqueue-goal-id
-                              (plist-get entry :queued-at-goal-id)
-                              :dequeue-goal-id
-                              (and (mevedel-session-goal session)
-                                   (mevedel-goal-id
-                                    (mevedel-session-goal session)))))
+                           (mevedel-telemetry-record
+                            session 'user-message-dequeued
+                            :message-hash (secure-hash 'sha256 input)
+                            :queue-depth-before
+                            (length
+                             (mevedel-view--pending-follow-ups session))
+                            :queue-duration-ms
+                            (and (numberp (plist-get entry :queued-at-time))
+                                 (round
+                                  (* 1000.0
+                                     (- (float-time)
+                                        (plist-get entry
+                                                   :queued-at-time)))))
+                            :enqueue-goal-id
+                            (plist-get entry :queued-at-goal-id)
+                            :dequeue-goal-id
+                            (and (mevedel-session-goal session)
+                                 (mevedel-goal-id
+                                  (mevedel-session-goal session))))
                            (setq delivered t)
                            ;; The turn's own checkpoints persist the removal;
                            ;; until then a restart reloads the durable
@@ -1430,7 +1429,7 @@ VIEW-BUFFER is the live root view.  Gates are checked in admission order."
                                          data-buffer))
     (with-current-buffer data-buffer
       (setq mevedel-pending-inputs--wake-refusal reason))
-    (when (and reason (fboundp 'mevedel-telemetry-record))
+    (when reason
       (mevedel-telemetry-record session 'event-wake-refused :reason reason))))
 
 (defun mevedel-pending-inputs--event-wake-view (data-buffer)

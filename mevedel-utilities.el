@@ -1447,12 +1447,6 @@ trailing newline.  The caller owns request admission and response markers."
       (set-marker start nil)
       (when body-start (set-marker body-start nil)))))
 
-(defconst mevedel--render-data-open "<!-- mevedel-render-data -->"
-  "Opening delimiter for internal render-data side-channel blocks.")
-
-(defconst mevedel--render-data-close "<!-- /mevedel-render-data -->"
-  "Closing delimiter for internal render-data side-channel blocks.")
-
 (defconst mevedel--hook-audit-open "<!-- mevedel-hook-audit -->"
   "Opening delimiter for internal hook audit side-channel blocks.")
 

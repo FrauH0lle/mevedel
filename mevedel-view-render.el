@@ -12,6 +12,7 @@
 (require 'mevedel-activity-group)
 (require 'mevedel-execution-transcript)
 (require 'mevedel-plan)
+(require 'mevedel-tool-render-data)
 (require 'mevedel-view-fontify)
 (require 'mevedel-view-prepare)
 
@@ -3435,7 +3436,7 @@ Completed blocks are cached globally; see
   "Return non-nil if TEXT is only render-data scaffolding."
   (and (stringp text)
        ;; Without a block the text itself is what remains; skip the copies.
-       (string-search mevedel--render-data-open text)
+       (string-search mevedel-tool-render-data-open text)
        (string-match-p "[^ \t\n\r]" text)
        (not (string-match-p
              "[^ \t\n\r]"
@@ -3661,7 +3662,7 @@ Return the last deleted summary, so settlement can preserve its timing."
             (limit (copy-marker (or end (point-max)) t)))
         (goto-char (or start (point-min)))
         (unwind-protect
-            (while (search-forward "<!-- mevedel-render-data -->" limit t)
+            (while (search-forward mevedel-tool-render-data-open limit t)
               (when-let* ((open (match-beginning 0))
                           (block (mevedel-tool-render-data-block-at
                                   open (marker-position limit))))
@@ -3885,7 +3886,12 @@ without moving ahead of prior transcript turns."
              mevedel-view--render-insertion-marker)
         history-tail)))
 
-;;;; In-flight tool calls
+;;;; Turn assembly
+;;
+;; Live-region rendering, mutation and settling, and the assembly of user,
+;; assistant, activity and tool-group rows into a turn.
+
+;;;;; In-flight tool calls
 ;;
 ;; A tool call the model has started but whose result has not reached the
 ;; data buffer has no source to project.  The live render still shows it,

@@ -9,6 +9,7 @@
 
 ;;; Code:
 
+(require 'mevedel-telemetry)
 (require 'mevedel-utilities)
 
 (require 'mevedel-agent-directory)
@@ -700,8 +701,7 @@ TOKEN, possibly nil, is the gate ownership its mutations hand on explicitly."
       (cancel-timer timer)
       (setf (mevedel-agent-invocation-runtime-budget-timer invocation) nil))
     (when-let* ((session
-                 (mevedel-agent-invocation-parent-session invocation))
-                ((fboundp 'mevedel-telemetry-record)))
+                 (mevedel-agent-invocation-parent-session invocation)))
       (mevedel-telemetry-record
        session 'agent-settled
        :agent-id (mevedel-agent-invocation-agent-id invocation)
@@ -1213,22 +1213,21 @@ conversation's optional execution directory, never a resource grant."
                 (when on-settle
                   (funcall on-settle settled-invocation response event token))
               (error "Agent invocation publication is pending"))))
-    (when (fboundp 'mevedel-telemetry-record)
-      (mevedel-telemetry-record
-       session 'agent-dispatch
-       :agent-id agent-id
-       :agent-path path
-       :agent-type agent-type
-       :retained (and retained-p t)
-       :parent-turn (mevedel-agent-invocation-parent-turn invocation)))
+    (mevedel-telemetry-record
+     session 'agent-dispatch
+     :agent-id agent-id
+     :agent-path path
+     :agent-type agent-type
+     :retained (and retained-p t)
+     :parent-turn (mevedel-agent-invocation-parent-turn invocation))
     (when skill-permission-rules
       (setf (mevedel-agent-invocation-skill-permission-rules invocation)
             skill-permission-rules))
     (let* ((mevedel--conversation-working-directory working-directory)
            (configuration
-           (or frozen-configuration
-               (mevedel-agent-exec-freeze-configuration
-                agent-type invocation model-policy))))
+            (or frozen-configuration
+                (mevedel-agent-exec-freeze-configuration
+                 agent-type invocation model-policy))))
       (setf (mevedel-agent-invocation-frozen-configuration invocation)
             configuration
             (mevedel-agent-invocation-agent invocation)
@@ -1328,13 +1327,12 @@ conversation's optional execution directory, never a resource grant."
                                              '(error aborted)))))
                     (mevedel-recovery-clear session (plist-get previous-issue :id))
                     (mevedel-recovery-save session)))
-                (when (fboundp 'mevedel-telemetry-record)
-                  (mevedel-telemetry-record
-                   session 'agent-request-sent
-                   :agent-id agent-id
-                   :agent-path path
-                   :agent-type agent-type
-                   :retained (and retained-p t)))
+                (mevedel-telemetry-record
+                 session 'agent-request-sent
+                 :agent-id agent-id
+                 :agent-path path
+                 :agent-type agent-type
+                 :retained (and retained-p t))
                 invocation))
           ((error quit)
            (if published-p

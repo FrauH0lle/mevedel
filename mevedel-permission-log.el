@@ -17,6 +17,7 @@
 
 (eval-when-compile (require 'cl-lib))
 
+(require 'mevedel-telemetry)
 (require 'mevedel-utilities)
 
 ;; `mevedel-execution-target'
@@ -142,16 +143,15 @@
           nil
         (setf (mevedel-session-permission-log-pending session)
               (append pending (list entry))))
-      (when (fboundp 'mevedel-telemetry-record)
-        (apply #'mevedel-telemetry-record session event
-               :permission-mode-base
-               (or (plist-get props :permission-mode-base)
-                   (mevedel-session-permission-mode session))
-               :permission-mode-effective
-               (or (plist-get props :permission-mode-effective)
-                   (plist-get props :mode)
-                   (mevedel-permission-mode-effective session))
-               props)))))
+      (apply #'mevedel-telemetry-record session event
+             :permission-mode-base
+             (or (plist-get props :permission-mode-base)
+                 (mevedel-session-permission-mode session))
+             :permission-mode-effective
+             (or (plist-get props :permission-mode-effective)
+                 (plist-get props :mode)
+                 (mevedel-permission-mode-effective session))
+             props))))
 
 (provide 'mevedel-permission-log)
 

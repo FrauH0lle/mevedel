@@ -11,6 +11,7 @@
 
 (eval-when-compile (require 'cl-lib))
 (require 'mevedel-structs)
+(require 'mevedel-telemetry)
 
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-block-turn
@@ -74,9 +75,6 @@
 (defvar mevedel--view-buffer)
 
 ;; `mevedel-telemetry'
-(declare-function mevedel-telemetry-record "mevedel-telemetry"
-		  (session event &rest props))
-
 ;; `mevedel-utilities'
 (declare-function mevedel--normalize-message-text "mevedel-utilities"
 		  (text))
@@ -197,8 +195,7 @@ buffer; its retained-agent blocker would otherwise never be released."
   (when-let* ((metadata
                (and (hash-table-p mevedel-view--interaction-lifecycle)
                     (gethash id mevedel-view--interaction-lifecycle))))
-    (when-let* ((session (mevedel-view--session))
-                ((fboundp 'mevedel-telemetry-record)))
+    (when-let* ((session (mevedel-view--session)))
       (mevedel-telemetry-record
        session 'interaction-closed
        :interaction-id id
@@ -867,8 +864,7 @@ The separator rule and width-fitted cards are sized when rendered."
                      :origin (plist-get descriptor :origin)
                      :arrival (cl-incf mevedel-view--interaction-arrivals))
                mevedel-view--interaction-lifecycle)
-      (when-let* ((session (mevedel-view--session))
-                  ((fboundp 'mevedel-telemetry-record)))
+      (when-let* ((session (mevedel-view--session)))
         (mevedel-telemetry-record
          session 'interaction-opened
          :interaction-id id

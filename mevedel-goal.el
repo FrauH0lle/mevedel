@@ -11,6 +11,7 @@
 
 ;;; Code:
 
+(require 'mevedel-telemetry)
 (require 'mevedel-utilities)
 
 (require 'mevedel-recovery)
@@ -249,8 +250,7 @@ means unlimited.  Neither choice changes that default."
          (setf (mevedel-session-goal session) previous))
        (signal (car err) (cdr err))))
     (setq mevedel-goal--transient-retries 0)
-    (when (fboundp 'mevedel-telemetry-record)
-      (mevedel-telemetry-record session 'goal-start :goal-id (mevedel-goal-id goal)))
+    (mevedel-telemetry-record session 'goal-start :goal-id (mevedel-goal-id goal))
     goal))
 
 (cl-defun mevedel-goal-ensure
@@ -442,9 +442,8 @@ Return `dispatched' on dispatch or the deterministic blocking gate symbol."
          mevedel-goal--continuation-trigger
          mevedel-goal--continuation-trigger
          prompt-submission))
-      (when (fboundp 'mevedel-telemetry-record)
-        (mevedel-telemetry-record
-         session 'goal-continuation :goal-id (mevedel-goal-id goal)))
+      (mevedel-telemetry-record
+       session 'goal-continuation :goal-id (mevedel-goal-id goal))
       'dispatched))))
 
 (defun mevedel-goal--scheduled-continuation (session buffer prompt-submission)
@@ -1024,13 +1023,12 @@ The entry holds `:body' and a delivery `:commit'."
             (setf (mevedel-engine-info fsm)
                   (plist-put info :mevedel-goal-accounted t))
             (mevedel-goal--touch goal)
-            (when (fboundp 'mevedel-telemetry-record)
-              (mevedel-telemetry-record
-               mevedel--session 'goal-turn-settled
-               :captured-goal-id captured-id
-               :goal-id (mevedel-goal-id goal)
-               :tokens-used (mevedel-goal-tokens-used goal)
-               :turns-run (mevedel-goal-turns-run goal)))
+            (mevedel-telemetry-record
+             mevedel--session 'goal-turn-settled
+             :captured-goal-id captured-id
+             :goal-id (mevedel-goal-id goal)
+             :tokens-used (mevedel-goal-tokens-used goal)
+             :turns-run (mevedel-goal-turns-run goal))
             (list mevedel--session goal before)))))))
 
 (defun mevedel-goal--fsm-failure-reason (fsm status)

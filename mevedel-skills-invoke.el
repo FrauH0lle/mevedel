@@ -15,6 +15,7 @@
   (require 'mevedel-agents))
 
 (require 'mevedel-structs)
+(require 'mevedel-telemetry)
 (require 'mevedel-tool-registry)
 (require 'mevedel-models)
 (require 'mevedel-implementation-policy)
@@ -1383,7 +1384,7 @@ asynchronous agent and calls CALLBACK when that turn settles."
          (original-callback callback)
          (callback
           (lambda (outcome)
-            (when (and session (fboundp 'mevedel-telemetry-record))
+            (when session
               (mevedel-telemetry-record
                session 'skill-invocation-settled
                :skill-name skill-name
@@ -1394,7 +1395,7 @@ asynchronous agent and calls CALLBACK when that turn settles."
                :duration-ms (round (* 1000.0
                                       (- (float-time) started-at)))))
             (funcall original-callback outcome))))
-    (when (and session (fboundp 'mevedel-telemetry-record))
+    (when session
       (mevedel-telemetry-record
        session 'skill-invocation-requested
        :skill-name skill-name
@@ -1478,10 +1479,10 @@ asynchronous agent and calls CALLBACK when that turn settles."
      (t
       (pcase (mevedel-skill-context skill)
         ('inline
-         (mevedel-skills--invoke-inline
-          skill arguments callback
-          :origin origin :display-callback display-callback
-          :skip-gates skip-gates))
+          (mevedel-skills--invoke-inline
+           skill arguments callback
+           :origin origin :display-callback display-callback
+           :skip-gates skip-gates))
         ('fork
          (mevedel-skills--invoke-fork-direct
           skill arguments callback
