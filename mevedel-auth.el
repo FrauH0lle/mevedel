@@ -31,6 +31,18 @@
 (defvar-local mevedel-auth--managed nil
   "Non-nil when provider requests in this buffer use asynchronous renewal.")
 
+;; `mevedel-structs'
+(declare-function mevedel-session-session-id "mevedel-structs" (cl-x))
+(defvar mevedel--session)
+
+(cl-defmethod gptel--request-data :around ((_backend gptel-openai-oauth) _prompts)
+  "Add the session id as Codex's `prompt_cache_key', as the Codex CLI does.
+Agent buffers share their parent's session, so they send the root's id."
+  (let ((data (cl-call-next-method))
+        (id (and (bound-and-true-p mevedel--session)
+                 (mevedel-session-session-id mevedel--session))))
+    (if (stringp id) (plist-put data :prompt_cache_key id) data)))
+
 (defvar mevedel-auth--operations (make-hash-table :test #'equal))
 (defvar mevedel-auth-changed-hook nil
   "Functions called with BACKEND and safe STATE after an authentication change.")
