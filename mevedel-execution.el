@@ -2609,6 +2609,14 @@ not active work and cannot keep session transfer or history changes blocked."
           (setq live-p t)))
       live-p)))
 
+(defun mevedel-execution-session-live-spools (session)
+  "Return spool paths still written by SESSION's unfinished executions."
+  (when-let* ((state (and session (mevedel-session-execution-state session))))
+    (cl-loop for record in (mevedel-execution--state-record-list state)
+             unless (mevedel-execution--record-finished-p record)
+             when (mevedel-execution--spool-path record)
+             collect (expand-file-name (mevedel-execution--spool-path record)))))
+
 (defun mevedel-execution-working-p ()
   "Return non-nil while any session's managed execution is working.
 A monitor waiting for events is live but not working."

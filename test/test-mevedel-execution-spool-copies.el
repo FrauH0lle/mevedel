@@ -8,6 +8,7 @@
 
 ;;; Code:
 
+(require 'mevedel-execution)
 (require 'mevedel-session-test-support
          (file-name-concat
           (file-name-directory
@@ -109,8 +110,24 @@ The shared Read helper waits at most ten seconds and cancels on unwind."
           (insert "Parent transcript\n")
           (mevedel-session-artifacts-save session buffer)
           (setq parent-gzip (test-mevedel-execution-spool-copies--fixture session))
-          (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "child")))
-            (mevedel-save-session t))
+          ;; Foreground output before its first yield, and a spool a live
+          ;; execution still writes, stay with the parent.
+          (let ((spools (file-name-directory parent-gzip)))
+            (make-directory (file-name-concat spools ".mevedel-pending-executions") t)
+            (write-region "pending\n" nil
+                          (file-name-concat spools ".mevedel-pending-executions"
+                                            "execution-a.log")
+                          nil 'silent)
+            (write-region "live\n" nil (file-name-concat spools "live.log") nil 'silent)
+            (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "child"))
+                      ((symbol-function 'mevedel-execution-session-live-spools)
+                       (lambda (_) (list (expand-file-name "live.log" spools)))))
+              (mevedel-save-session t)))
+          (let ((child-spools (file-name-concat (mevedel-session-save-path session)
+                                                "tool-results" "executions")))
+            (should-not (file-exists-p (file-name-concat
+                                        child-spools ".mevedel-pending-executions")))
+            (should-not (file-exists-p (file-name-concat child-spools "live.log"))))
           (setq child-gzip (file-name-concat (mevedel-session-save-path session)
                                              "tool-results" "executions" "retained.log.gz"))
           (should (file-regular-p parent-gzip))

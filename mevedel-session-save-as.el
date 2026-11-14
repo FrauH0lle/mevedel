@@ -31,6 +31,8 @@
 (defvar remote-file-name-inhibit-cache)
 
 ;; `mevedel-session-artifacts'
+(declare-function mevedel-execution-session-live-spools "mevedel-execution" (session))
+(autoload 'mevedel-execution-session-live-spools "mevedel-execution")
 (declare-function mevedel-session-artifacts--live-sidecar
                   "mevedel-session-artifacts" (session &optional data-buffer))
 (declare-function mevedel-session-artifacts-printed-value
@@ -238,13 +240,20 @@ parent identity."
      (plist-get transaction :session)
      (plist-get transaction :parent-publication)
      staging-path)
-    ;; Execution output is plain session storage outside the publication.
+    ;; Retained execution output is plain storage outside the publication.
+    ;; Pending (hidden) and still-written spools stay with the parent.
     (let ((spool (file-name-concat (plist-get transaction :old-save-path)
-                                   "tool-results" "executions")))
+                                   "tool-results" "executions"))
+          (target (file-name-concat staging-path "tool-results" "executions"))
+          (live (mevedel-execution-session-live-spools
+                 (plist-get transaction :session))))
       (when (file-directory-p spool)
-        (copy-directory spool (file-name-concat staging-path "tool-results"
-                                                "executions")
-                        t t t)))
+        (dolist (file (directory-files spool t "\\`[^.]"))
+          (when (and (file-regular-p file)
+                     (not (member (expand-file-name file) live)))
+            (make-directory target t)
+            (copy-file file (file-name-concat target (file-name-nondirectory file))
+                       nil t)))))
     (mevedel-session-codec-write
      (mevedel-session-artifacts-sidecar-path staging-path)
      (mevedel-session-artifacts--live-sidecar child buffer))
