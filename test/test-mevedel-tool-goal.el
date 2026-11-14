@@ -143,6 +143,25 @@ and `verify-callback' delivers the verifier outcome."
       (should (= 25 (mevedel-goal-tokens-used (mevedel-session-goal session))))
       (should (= 1 (mevedel-goal-turns-run (mevedel-session-goal session)))))))
 
+(mevedel-deftest mevedel-tool-goal--handle/non-ascii ()
+  ,test
+  (test)
+  :doc "a non-ASCII objective reaches the pipeline result as multibyte text"
+  (mevedel-tool-goal-test--with-request
+    (let (outcome)
+      (mevedel-tool-ptc--handler
+       (lambda (value) (setq outcome value))
+       '(:expression "(CreateGoal :objective \"Fix café — tests\" :token_budget 100)"))
+      (let ((mevedel-tools--current-engine nil))
+        (mevedel-test--await 5 "CreateGoal did not answer" outcome))
+      (let ((text (plist-get outcome :result)))
+        (should (multibyte-string-p text))
+        (should (equal "Fix café — tests"
+                       (plist-get (plist-get (json-parse-string
+                                              text :object-type 'plist)
+                                             :goal)
+                                  :objective)))))))
+
 (mevedel-deftest mevedel-tool-goal--handle-get ()
   ,test
   (test)

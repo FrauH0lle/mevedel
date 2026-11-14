@@ -849,6 +849,31 @@
             (should-not (string-match-p "/root/zeta" result))))
       (kill-buffer buffer))))
 
+(mevedel-deftest mevedel-tool-ui--list-agents/non-ascii
+  (:after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "a non-ASCII agent path reaches the pipeline result as multibyte text"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'project :id "list-agents-u"
+                     :root temporary-file-directory :name "list-agents-u"))
+         (session (mevedel-session-create "main" workspace))
+         (path "/root/café")
+         context)
+    (setf (mevedel-session-agent-registry session)
+          (list (cons path (mevedel-agent-record--create
+                            :id "default--u" :path path
+                            :role "default" :activity 'idle))))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (mevedel-pipeline--step-handler
+       (list :tool (mevedel-tool-ensure "ListAgents") :args nil
+             :cancel-cell (list #'ignore))
+       (lambda (ctx) (setq context ctx)) #'ignore))
+    (let ((text (plist-get context :result)))
+      (should (multibyte-string-p text))
+      (should (string-match-p path text)))))
+
 (mevedel-deftest mevedel-tool-ui--send-message-activation
   (:after-each (mevedel-workspace-clear-registry))
   ,test
