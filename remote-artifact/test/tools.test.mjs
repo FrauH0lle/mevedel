@@ -121,6 +121,19 @@ test('a room with no host reports the origin unavailable', async (t) => {
   assert.equal(result.content[0].text, 'Origin unavailable (revoked, deleted, or offline)');
 });
 
+test('an origin that never binds the connection may run an older protocol', async (t) => {
+  const env = tempEnv(t);
+  await attach(env, (await room(t)).link());
+  const old = await room(t, { mode: 'old' });
+  const connect = (entry) => openRoom(old.link(), { name: 'tester', guestId: entry.guestId, timeoutMs: 200 });
+  const result = await callTool('read_artifact', { name: 'snt-pipeline' }, { env, connect });
+  assert.ok(result.isError);
+  assert.equal(result.content[0].text, 'Origin may run an older protocol; update mevedel on the host');
+  const listed = await callTool('list_artifacts', {}, { env, connect });
+  assert.match(listed.content[0].text,
+    /edit link, origin may run an older protocol; update mevedel on the host$/);
+});
+
 for (const [reason, message] of [
   ['revoked', 'Origin unavailable: the host revoked this artifact link; ask them for a new one'],
   ['artifact-deleted', 'Origin unavailable: the artifact was deleted at its origin'],

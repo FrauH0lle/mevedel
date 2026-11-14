@@ -19,6 +19,8 @@ import { parseLink } from './link.mjs';
 import { EditingAssembler, PROTOCOL, editingFrames, importKey, seal, unseal } from './protocol.mjs';
 
 export const UNAVAILABLE = 'Origin unavailable (revoked, deleted, or offline)';
+/* The relay connected, but the origin never bound the connection. */
+export const OLDER_ORIGIN = 'Origin may run an older protocol; update mevedel on the host';
 
 const GOODBYES = {
   revoked: 'Origin unavailable: the host revoked this artifact link; ask them for a new one',
@@ -53,6 +55,9 @@ export class Room {
 
   /* True once the connection ended or was closed. */
   get closed() { return this.#closed !== null; }
+
+  /* True once the origin's challenge bound this connection. */
+  get bound() { return this.#challenge !== null; }
 
   /* Why the connection ended, such as the origin's goodbye, or null. */
   get ended() { return this.#closed; }
@@ -161,7 +166,10 @@ export async function openRoom(link, { name, guestId, timeoutMs = 10000 } = {}) 
         reject(new Error(message));
       }
     };
-    const timer = setTimeout(() => fail(UNAVAILABLE), timeoutMs);
+    // An origin of an older protocol never sends the challenge hello waits for.
+    let opened = false;
+    ws.addEventListener('open', () => { opened = true; });
+    const timer = setTimeout(() => fail(opened && !room.bound ? OLDER_ORIGIN : UNAVAILABLE), timeoutMs);
     room.onFrame = (frame) => {
       if (settled) return;
       if (frame.t === 'error') {
