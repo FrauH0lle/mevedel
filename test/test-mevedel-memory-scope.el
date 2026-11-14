@@ -13,6 +13,7 @@
           "helpers"))
 (require 'mevedel-system)
 (require 'mevedel-memory-scope)
+(require 'mevedel-session-control-fs)
 
 (mevedel-deftest mevedel-memory-scope-capture ()
   ,test
@@ -235,6 +236,32 @@
             (should (eq 'stale (plist-get (mevedel-memory-scope-check scope root '("new.md")) :status)))
             (delete-file topic)
             (should (eq 'stale (plist-get (mevedel-memory-scope-check scope root '("topic.md")) :status)))))
+      (delete-directory directory t)))
+  :doc "an unobserved check rereads at most eight files per program and still sees a change"
+  (let* ((directory (make-temp-file "mevedel-memory-check-batch-" t))
+         (workspace (mevedel-workspace--create :root directory))
+         (mevedel-memory-dirs '("memory"))
+         (memory (file-name-concat directory "memory"))
+         (run (symbol-function 'mevedel-session-control-fs-run-program))
+         (calls 0))
+    (unwind-protect
+        (progn
+          (make-directory memory)
+          (with-temp-file (file-name-concat memory "MEMORY.md") (insert "- index\n"))
+          (dotimes (index 10)
+            (with-temp-file (file-name-concat memory (format "topic-%d.md" index))
+              (insert (format "Fact %d.\n" index))))
+          (let* ((scope (mevedel-memory-scope-capture workspace))
+                 (root (caar (plist-get scope :roots)))
+                 (files (mapcar #'car (plist-get (cdar (plist-get scope :roots)) :before))))
+            (should (= 11 (length files)))
+            (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                       (lambda (&rest args) (cl-incf calls) (apply run args))))
+              (should (eq 'fresh (plist-get (mevedel-memory-scope-check scope root files) :status)))
+              (should (= 2 calls))
+              (with-temp-file (file-name-concat memory "topic-9.md") (insert "Fact 9, longer now.\n"))
+              (should (equal "Files changed since capture: topic-9.md"
+                             (plist-get (mevedel-memory-scope-check scope root files) :reason))))))
       (delete-directory directory t)))
   :doc "configuration changes never rebind roots and another client cannot inspect local bodies"
   (let* ((directory (make-temp-file "mevedel-memory-origin-" t))

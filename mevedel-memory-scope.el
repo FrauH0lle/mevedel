@@ -313,9 +313,13 @@ The result has :status `fresh', `stale', or `unavailable', and a :reason for
 non-fresh states. This is a read-only check, not write coordination: callers
 must hold current ownership and target coordination across check and commit.
 OBSERVATIONS may supply fresh path/result pairs from this verification phase;
-every checked path must be present.  Never reuse them across phases."
+every checked path must be present.  Never reuse them across phases.  Without
+them, this check rereads FILES itself in bounded batches."
   (condition-case err
-      (let ((root (mevedel-memory-scope--root scope id)) stale)
+      (let* ((root (mevedel-memory-scope--root scope id)) stale
+             (observations (or observations
+                               (unless (eq (plist-get root :kind) 'notes)
+                                 (mevedel-memory-scope--check-reads scope id files)))))
         (dolist (file files)
           (let* ((before (mevedel-memory-scope-before scope id file))
                  (path (file-name-concat (plist-get root :dir) file))
@@ -324,12 +328,10 @@ every checked path must be present.  Never reuse them across phases."
                   (unless (eq (plist-get root :kind) 'notes)
                     (condition-case nil
                         (list :exists t :bytes
-                              (if observations
-                                  (let ((result (cdr (assoc path observations))))
-                                    (unless (and result (equal path (plist-get result :path)))
-                                      (error "Missing or mismatched memory freshness observation"))
-                                    (mevedel-session-control-fs-program-value result))
-                                (mevedel-session-control-fs-read-file path 'no-conversion (1+ (length bytes)))))
+                              (let ((result (cdr (assoc path observations))))
+                                (unless (and result (equal path (plist-get result :path)))
+                                  (error "Missing or mismatched memory freshness observation"))
+                                (mevedel-session-control-fs-program-value result)))
                       (mevedel-session-control-fs-absent (list :exists nil))))))
             (unless (and (equal path (plist-get before :path))
                          (or (not (plist-get before :exists)) (plist-get before :directory)

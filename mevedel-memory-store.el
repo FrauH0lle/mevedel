@@ -92,11 +92,12 @@ OBSERVATION may supply PATH's pinned read from this operation's bounded batch."
     (error "Invalid memory evidence identity"))
   (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "evidence-pins" digest (concat id ".pin")))
 
-(defun mevedel-memory-store-read (workspace id &optional observation evidence)
+(defun mevedel-memory-store-read (workspace id &optional observation evidence retired)
   "Read WORKSPACE's immutable prepared pass ID, including its private scope.
 This internal storage interface grants no right to display original memory
 bodies; inspection must use the original authority checks on the returned scope.
-OBSERVATION and EVIDENCE may supply this operation's prepared and claim reads."
+OBSERVATION and EVIDENCE may supply this operation's prepared and claim reads,
+and RETIRED the retirement probe from OBSERVATION's program, made before it."
   (let* ((root (mevedel-workspace-root workspace))
          (path (file-name-concat (mevedel-memory-store--directory workspace id) "prepared.el"))
          ;; One program probes retirement, then reads the record.  It is no
@@ -107,7 +108,7 @@ OBSERVATION and EVIDENCE may supply this operation's prepared and claim reads."
                                   :path (mevedel-journal-cleanup--retired-path root id))
                             (list :op 'read :optional t :path path :coding 'utf-8-unix
                                   :max-bytes (1+ mevedel-memory-store--max-bytes))))))
-         (record (if (mevedel-journal-cleanup-pass-retired-p root id (car observed))
+         (record (if (mevedel-journal-cleanup-pass-retired-p root id (if observation retired (car observed)))
                      (error "Memory pass has expired")
                    (mevedel-memory-store--read-lisp path (or observation (cadr observed)))))
          (data (car record)) (text (cdr record))
@@ -245,12 +246,18 @@ independently of memory proposal contents.  Return the immutable prepared
 record under :prepared and the authenticated accepted bytes' hash under :hash.
 BATCH requests bounded pinned reads for this pass alone."
   (let* ((directory (mevedel-memory-store--directory workspace id))
+         ;; One program probes retirement, then reads both records, in the
+         ;; order `mevedel-memory-store-read' itself uses.
          (reads (when batch
                   (mevedel-session-control-fs-run-program
-                   (mapcar (lambda (name)
-                             (list :op 'read :path (file-name-concat directory name)
-                                   :optional t :coding 'utf-8-unix :max-bytes (1+ mevedel-memory-store--max-bytes)))
-                           '("prepared.el" "accepted.el")))))
+                   (cons (list :op 'path-exists-p :optional t
+                               :path (mevedel-journal-cleanup--retired-path (mevedel-workspace-root workspace) id))
+                         (mapcar (lambda (name)
+                                   (list :op 'read :path (file-name-concat directory name)
+                                         :optional t :coding 'utf-8-unix :max-bytes (1+ mevedel-memory-store--max-bytes)))
+                                 '("prepared.el" "accepted.el"))))))
+         (retired (car reads))
+         (reads (cdr reads))
          (claim (when batch
                   (append (list :directory (mevedel-memory-store--claim-directory workspace))
                           (plist-get (car (mevedel-memory-store--read-lisp
@@ -259,7 +266,7 @@ BATCH requests bounded pinned reads for this pass alone."
                      (mevedel-session-control-fs-run-program
                       (list (list :op 'read :path (mevedel-journal-claim--path claim nil))
                             (list :op 'read :path (mevedel-journal-claim--path claim t) :optional t)))))
-         (prepared (mevedel-memory-store-read workspace id (car reads) (car evidence)))
+         (prepared (mevedel-memory-store-read workspace id (car reads) (car evidence) retired))
          (outcome (mevedel-journal-claim-outcome (plist-get prepared :claim) (cadr evidence))))
     (when (eq (plist-get outcome :status) 'completed)
       (let* ((record (mevedel-memory-store--read-lisp

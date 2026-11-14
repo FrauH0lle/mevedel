@@ -479,5 +479,50 @@
          (should (equal '(error "Memory pass has expired")
                         (should-error (mevedel-memory-store-read workspace id)))))))))
 
+(defun mevedel-test-memory-store--accept (workspace prepared)
+  "Accept PREPARED's journal evidence in WORKSPACE with a no-action review."
+  (mevedel-memory-store-accept
+   workspace prepared
+   "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## No action\n- none"
+   (mevedel-journal-store-entries (mevedel-workspace-root workspace)) "test:model" nil))
+
+(mevedel-deftest mevedel-memory-store-accepted ()
+  ,test
+  (test)
+  :doc "a batched read carries the retirement probe with the bundle reads, then the claim"
+  (mevedel-test-memory-store--with-pass
+   (lambda (workspace prepared)
+     (let* ((id (plist-get prepared :id))
+            (accepted (mevedel-test-memory-store--accept workspace prepared))
+            (run (symbol-function 'mevedel-session-control-fs-run-program))
+            (calls 0))
+       (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                  (lambda (&rest args) (cl-incf calls) (apply run args))))
+         (should (equal accepted (mevedel-memory-store-accepted workspace id t))))
+       (should (= 2 calls))
+       (should (equal accepted (mevedel-memory-store-accepted workspace id))))))
+
+  :doc "batched retirement, absence and malformed records keep their results"
+  (dolist (case '((:retired (error "Memory pass has expired"))
+                  (:retired-absent mevedel-session-control-fs-absent)
+                  (:absent mevedel-session-control-fs-absent)
+                  ;; Fails closed before the claim read, as before batching.
+                  (:malformed error)))
+    (mevedel-test-memory-store--with-pass
+     (lambda (workspace prepared)
+       (let* ((id (plist-get prepared :id))
+              (path (file-name-concat (mevedel-memory-store--directory workspace id) "prepared.el")))
+         (mevedel-test-memory-store--accept workspace prepared)
+         (pcase (car case)
+           (:retired (mevedel-test-memory-store--retire workspace id))
+           (:retired-absent (mevedel-test-memory-store--retire workspace id) (delete-file path))
+           (:absent (delete-file path))
+           (:malformed (write-region "(:id" nil path nil 'silent)))
+         (let ((err (should-error (mevedel-memory-store-accepted workspace id t))))
+           (ert-info ((format "%S" case))
+             (if (consp (nth 1 case))
+                 (should (equal (nth 1 case) err))
+               (should (eq (nth 1 case) (car err)))))))))))
+
 (provide 'test-mevedel-memory-store)
 ;;; test-mevedel-memory-store.el ends here
