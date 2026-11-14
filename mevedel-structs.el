@@ -279,10 +279,9 @@ workspace."
 (defun mevedel-session-authority-mode-for-workspace (workspace)
   "Return the durable authority mode required by WORKSPACE.
 
-Project and file workspaces use the portable lease.  Without a durable
-workspace category, return nil rather than claiming a persistence protocol."
-  (when (and workspace
-             (memq (mevedel-workspace-type workspace) '(project file)))
+Every workspace type uses the portable lease.  Without a workspace, return
+nil rather than claiming a persistence protocol."
+  (when workspace
     'portable))
 
 (defun mevedel-session-authority-mode-for-session (session)

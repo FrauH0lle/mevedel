@@ -83,8 +83,8 @@
 (mevedel-deftest mevedel-session-authority-mode-for-workspace ()
   ,test
   (test)
-  :doc "project and file workspaces share portable authority"
-  (dolist (type '(project file))
+  :doc "all workspace types share portable authority"
+  (dolist (type '(project file custom))
     (should (eq 'portable
                 (mevedel-session-authority-mode-for-workspace
                  (mevedel-workspace--create :type type)))))

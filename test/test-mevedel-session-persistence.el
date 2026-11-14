@@ -1188,6 +1188,55 @@
                    (mevedel-workspace-root workspace)))))
 
 
+(mevedel-deftest mevedel-session-persistence-restore/custom-workspace (:quiet t)
+  ,test
+  (test)
+  :doc "saves and cold-restores a custom workspace through the portable lease"
+  (let* ((root (make-temp-file "mevedel-custom-workspace-" t))
+         (mevedel-workspace-types-alist
+          (cons '(custom . (:get-root identity :get-name file-name-nondirectory))
+                mevedel-workspace-types-alist))
+         (mevedel-workspace-functions
+          (list (lambda () (cons 'custom root))))
+         (workspace (with-temp-buffer (mevedel-workspace)))
+         (session (mevedel-session-create "custom" workspace))
+         (buffer (generate-new-buffer " *custom-workspace-save*"))
+         restored)
+    (unwind-protect
+        (progn
+          (should (eq 'custom (mevedel-workspace-type workspace)))
+          (with-current-buffer buffer
+            (org-mode)
+            (setq-local mevedel--session session)
+            (insert "Custom workspace transcript\n")
+            (should (mevedel-session-artifacts-save session buffer)))
+          (should (eq 'portable (mevedel-session-authority-mode session)))
+          (should (mevedel-session-durability-lease-owned-p session))
+          (let ((directory (mevedel-session-save-path session)))
+            (should (plist-get (mevedel-session-publication-read directory) :head))
+            (test-mevedel-session-persistence--release-and-kill buffer session)
+            (mevedel-workspace-clear-registry)
+            (setq restored (mevedel-session-persistence-restore directory))
+            (with-current-buffer restored
+              (should (string-match-p "Custom workspace transcript" (buffer-string)))
+              (should (eq 'custom
+                          (mevedel-workspace-type
+                           (mevedel-session-workspace mevedel--session))))
+              (should (equal (file-name-as-directory root)
+                             (mevedel-workspace-root
+                              (mevedel-session-workspace mevedel--session))))
+              (should (equal (mevedel-session-session-id session)
+                             (mevedel-session-session-id mevedel--session)))
+              (should (eq 'portable (mevedel-session-authority-mode mevedel--session)))
+              (should (mevedel-session-durability-lease-owned-p mevedel--session)))))
+      (test-mevedel-session-persistence--release-and-kill buffer session)
+      (test-mevedel-session-persistence--release-and-kill
+       restored (and (buffer-live-p restored)
+                     (buffer-local-value 'mevedel--session restored)))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
+
+
 (mevedel-deftest mevedel-session-persistence-restore (:quiet t)
   ,test
   (test)
