@@ -40,20 +40,18 @@
 (defvar mevedel--agent-invocation)
 (defvar gptel--request-params)
 
-(defun mevedel-auth-codex-cache-key-transform (fsm)
-  "Set Codex's `prompt_cache_key' from the request's source conversation.
-A `gptel-prompt-transform-functions' entry: it runs in gptel's prompt
-buffer, which does not copy mevedel's variables, so read them from the
-buffer in FSM's info.  The root conversation sends its session id; a
-spawned agent's prefix differs, so it sends the session id plus its own
-agent id, as the Codex CLI keys sub-agents separately."
-  (when (gptel-openai-oauth-p gptel-backend)
-    (let* ((origin (plist-get (gptel-fsm-info fsm) :buffer))
-           (session (and (buffer-live-p origin)
-                         (buffer-local-value 'mevedel--session origin)))
+(defun mevedel-auth-codex-cache-key-apply (source)
+  "Set Codex's `prompt_cache_key' in the current prompt buffer from SOURCE.
+SOURCE is the conversation buffer the request belongs to.  Gptel's prompt
+buffer does not copy mevedel's variables, so every request realization
+mevedel performs calls this: the transform below and the compaction
+rebuild.  The root conversation sends its session id; a spawned agent's
+prefix differs, so it sends the session id plus its own agent id, as the
+Codex CLI keys sub-agents separately.  Other backends are untouched."
+  (when (and (gptel-openai-oauth-p gptel-backend) (buffer-live-p source))
+    (let* ((session (buffer-local-value 'mevedel--session source))
            (id (and session (mevedel-session-session-id session)))
-           (inv (and (buffer-live-p origin)
-                     (buffer-local-value 'mevedel--agent-invocation origin))))
+           (inv (buffer-local-value 'mevedel--agent-invocation source)))
       (when (stringp id)
         (setq-local gptel--request-params
                     (plist-put (copy-sequence gptel--request-params)
@@ -61,6 +59,10 @@ agent id, as the Codex CLI keys sub-agents separately."
                                (if (mevedel-agent-invocation-p inv)
                                    (format "%s:%s" id (mevedel-agent-invocation-agent-id inv))
                                  id)))))))
+
+(defun mevedel-auth-codex-cache-key-transform (fsm)
+  "Apply `mevedel-auth-codex-cache-key-apply' for FSM's source buffer."
+  (mevedel-auth-codex-cache-key-apply (plist-get (gptel-fsm-info fsm) :buffer)))
 
 (defvar mevedel-auth--operations (make-hash-table :test #'equal))
 (defvar mevedel-auth-changed-hook nil

@@ -1688,4 +1688,35 @@
 
 
 (provide 'test-mevedel-compact)
+
+(ert-deftest mevedel--compact-rebuild-info-data-from-buffer/codex-cache-key ()
+  "The real post-compaction rebuild keeps the root and agent cache keys."
+  (let* ((gptel--known-backends nil)
+         (backend (gptel-make-openai-oauth "Rebuild Codex"))
+         (session (mevedel-session--create :session-id "root-id"))
+         (bufs nil))
+    (cl-flet ((rebuilt-key (agent-id)
+                (let ((chat (generate-new-buffer " *mev-rebuild-key*")))
+                  (push chat bufs)
+                  (with-current-buffer chat
+                    (insert "Prompt\n")
+                    (setq-local gptel-backend backend gptel-model 'gpt-5.5
+                                gptel-use-tools nil
+                                mevedel--session session)
+                    (when agent-id
+                      (setq-local mevedel--agent-invocation
+                                  (mevedel-agent-invocation--create :agent-id agent-id))))
+                  ;; Real prompt buffer and realization; nothing is sent.
+                  (let ((fsm (gptel-make-fsm
+                              :info (list :buffer chat :backend backend
+                                          :model 'gpt-5.5 :data 'old))))
+                    (mevedel--compact-rebuild-info-data-from-buffer fsm chat)
+                    (plist-get (plist-get (gptel-fsm-info fsm) :data)
+                               :prompt_cache_key)))))
+      (unwind-protect
+          (progn
+            (should (equal "root-id" (rebuilt-key nil)))
+            (should (equal "root-id:a--11111111" (rebuilt-key "a--11111111"))))
+        (mapc #'kill-buffer bufs)))))
+
 ;;; test-mevedel-compact.el ends here
