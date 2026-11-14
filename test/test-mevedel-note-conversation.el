@@ -702,9 +702,7 @@
         (should (eq note-view (mevedel-note-send note))))))
   :doc "ordinary saved selection excludes note conversations beyond forty summaries"
   (mevedel-note-conversation-test--with-source
-    ;; Real note sessions, one more than a lowered scan bound (default 40).
-    (let ((mevedel-session-publication-summary-scan-max 2))
-     (dotimes (_ 3)
+    (dotimes (_ 41)
       (let ((view (with-current-buffer source
                     (goto-char (point-min))
                     (forward-line 1)
@@ -713,10 +711,10 @@
         (let ((data (buffer-local-value 'mevedel--data-buffer view)))
           (with-current-buffer data (mevedel-session-persistence-release-on-kill))
           (mevedel-chat-discard-buffers data t))))
-     (with-current-buffer source
-       (cl-letf (((symbol-function 'completing-read)
-                  (lambda (&rest _) (ert-fail "Saved note session offered in ordinary chooser"))))
-         (call-interactively #'mevedel)))))
+    (with-current-buffer source
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (&rest _) (ert-fail "Saved note session offered in ordinary chooser"))))
+        (call-interactively #'mevedel))))
   :doc "an explicit fork remains an ordinary discoverable chat with a changeable preset"
   (mevedel-note-conversation-test--with-source
     (let* ((view (mevedel-note-send (mevedel-note-create "Forkable question")))
