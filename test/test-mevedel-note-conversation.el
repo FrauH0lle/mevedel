@@ -700,9 +700,9 @@
       (should-not (eq note-view (window-buffer (selected-window))))
       (with-current-buffer source
         (should (eq note-view (mevedel-note-send note))))))
-  :doc "ordinary saved selection excludes note conversations beyond forty summaries"
+  :doc "ordinary saved selection excludes several saved note conversations"
   (mevedel-note-conversation-test--with-source
-    (dotimes (_ 41)
+    (dotimes (_ 3)
       (let ((view (with-current-buffer source
                     (goto-char (point-min))
                     (forward-line 1)

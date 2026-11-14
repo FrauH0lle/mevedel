@@ -226,7 +226,13 @@
                                 (and state (not (equal state "Z")))))
                             descendants))
           (write-region "go" nil release nil 'silent)
-          (sleep-for .5)
+          ;; A surviving shell publishes its late claim and exits; wait for that
+          ;; instead of a fixed pause.
+          (let ((until (+ (float-time) 4)))
+            (while (and (let ((state (cdr (assq 'state (process-attributes shell)))))
+                          (and state (not (equal state "Z"))))
+                        (< (float-time) until))
+              (accept-process-output nil .01)))
           ;; Check the durable symptom before the OS-liveness assertion so a
           ;; red run identifies the valid late claim and refused immediate retry.
           (let ((late (mevedel-journal-claim-current directory))
