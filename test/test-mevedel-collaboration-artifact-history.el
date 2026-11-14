@@ -8,6 +8,10 @@
 (require 'helpers
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name)) "helpers"))
+(require 'mevedel-session-test-support
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name))
+          "mevedel-session-test-support"))
 (require 'gptel)
 (require 'gptel-org)
 (require 'mevedel-collaboration)
@@ -19,13 +23,31 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-view-interaction)
 
+(defmacro mevedel-artifact-history-test--raw-segments (&rest body)
+  "Run BODY with archive segments served from raw files under the save path.
+The fixtures write segments directly instead of publishing generations."
+  (declare (indent 0))
+  `(cl-letf (((symbol-function 'mevedel-session-artifacts-artifact-present-p)
+              (lambda (session logical &rest _)
+                (file-exists-p
+                 (expand-file-name logical (mevedel-session-save-path session)))))
+             ((symbol-function 'mevedel-session-artifacts-find-artifact-noselect)
+              (lambda (session logical &rest _)
+                (let ((buffer (generate-new-buffer " *raw segment*")))
+                  (with-current-buffer buffer
+                    (insert-file-contents
+                     (expand-file-name logical (mevedel-session-save-path session)))
+                    (delay-mode-hooks (org-mode)))
+                  buffer))))
+     ,@body))
+
 (defmacro mevedel-artifact-history-test--with-room (&rest body)
   "Run BODY with an isolated ROOM, SESSION, GUEST and store ITEM."
   (declare (indent 0))
   `(let* ((directory (make-temp-file "artifact-history-" t))
           (workspace (mevedel-workspace--create :type 'file :id "history" :root directory))
           (session (mevedel-session--create :name "History" :session-id "history-session"
-                                            :workspace workspace :authority-mode 'pid-lock
+                                            :workspace workspace :authority-mode 'portable
                                             :save-path directory :current-segment 2))
           (buffer (generate-new-buffer " *artifact-history*"))
           (room (list :session session :data-buffer buffer :transport 'test
@@ -48,7 +70,7 @@
              (make-directory (file-name-directory path) t)
              (write-region "<p>Page</p>" nil path nil 'silent)
              (mevedel-artifact-store-create-meta workspace "page" "index.html"))
-           ,@body)
+           (mevedel-artifact-history-test--raw-segments ,@body))
        (kill-buffer buffer)
        (delete-directory directory t))))
 
@@ -160,7 +182,7 @@
         (should (string-match-p (regexp-quote path) messages))
         (should (string-match-p
                  (pcase failure
-                   ('unreadable "Segment file is unreadable")
+                   ('unreadable "Is a directory")
                    ('read-error "PRIVATE READ DETAIL")
                    (_ "Segment file is missing"))
                  messages)))))
@@ -280,12 +302,16 @@
            (path (file-name-as-directory
                   (file-name-concat (mevedel-session-artifacts-sessions-dir workspace) id)))
            (item (list :store "page" :workspace workspace)))
-      (make-directory path t)
-      (setf (mevedel-session-save-path cold) path
-            (mevedel-session-authority-mode cold) 'pid-lock)
-      (mevedel-workspace-identity-ensure directory)
-      (mevedel-session-codec-write (file-name-concat path "session.meta.el")
-                                  (mevedel-session-codec-serialize cold))
+      ;; A real leased publication, released so the session is cold.
+      (let ((data (generate-new-buffer " *cold answering*")))
+        (with-current-buffer data
+          (delay-mode-hooks (org-mode))
+          (insert "Cold\n")
+          (mevedel-session-artifacts-ensure-files cold data)
+          (test-mevedel-session-persistence--publish-generation
+           cold path (mevedel-session-artifacts-segment-path path 1) "Cold\n" 1))
+        (should (equal path (mevedel-session-save-path cold)))
+        (test-mevedel-session-persistence--release-and-kill data cold))
       (let* ((source (mevedel-collaboration-artifact-history--source
                       nil item (list :session id)))
              (restored (car source)))

@@ -15,6 +15,18 @@
 (require 'mevedel-agent-control)
 
 
+(defun test-mevedel-fork--publish (session buffer &rest entries)
+  "Publish and commit ENTRIES, (LOGICAL . BYTES), in SESSION via BUFFER."
+  (mevedel-session-publication-publish
+   session
+   (mapcar (lambda (entry)
+             (list :path (expand-file-name (car entry)
+                                           (mevedel-session-save-path session))
+                   :content (cdr entry)))
+           entries)
+   t)
+  (mevedel-session-artifacts-save session buffer nil t))
+
 (mevedel-deftest mevedel-session-fork-clone-session ()
   ,test
   (test)
@@ -357,10 +369,15 @@
                         'source-execution-state))
                (before (mevedel-session-codec-serialize session))
                (before-text (prin1-to-string before))
+               (staged (file-name-as-directory
+                        (make-temp-file
+                         (expand-file-name ".stage-clone-"
+                                           (plist-get fixture :sessions-dir))
+                         t)))
                (child
                 (mevedel-session-fork-clone-session
                  session 'fork
-                 :save-path "/tmp/staged-fork/"
+                 :save-path staged
                  :session-id "child-id"
                  :created-at "now"
                  :updated-at "now"
@@ -372,8 +389,7 @@
                       (mevedel-session-execution-target child)))
           (should (equal before
                          (mevedel-session-codec-serialize session)))
-          (should (equal "/tmp/staged-fork/"
-                         (mevedel-session-save-path child)))
+          (should (equal staged (mevedel-session-save-path child)))
           (should (= 2 (mevedel-session-turn-count child)))
           (should (equal "test-backend:test-model"
                          (mevedel-session-model-provider child)))
@@ -495,10 +511,24 @@
          (logical "plans/accepted.md"))
     (unwind-protect
         (progn
-          (setf (mevedel-session-save-path source) source-path)
-          (make-directory (file-name-concat source-path "plans") t)
-          (write-region "accepted bytes" nil
-                        (expand-file-name logical source-path) nil 'silent)
+          (setf (mevedel-session-save-path source) source-path
+                (mevedel-session-session-id source) "source")
+          (mevedel-workspace-identity-ensure root)
+          (make-directory source-path t)
+          (should (mevedel-session-durability-lease-acquire
+                   source-path "*fork-artifact*" source))
+          (should (mevedel-session-publication-publish
+                   source
+                   (list (list :path (expand-file-name logical source-path)
+                               :content "accepted bytes")
+                         (list :path (mevedel-session-artifacts-sidecar-path
+                                      source-path)
+                               :content
+                               (mevedel-session-artifacts-printed-value
+                                (with-temp-buffer
+                                  (mevedel-session-artifacts--live-sidecar
+                                   source (current-buffer))))
+                               :commit-marker t :replace t))))
           (should
            (mevedel-session-fork--materialize-fork-artifact
             source logical staging-path t))
@@ -512,6 +542,8 @@
           (should-error
            (mevedel-session-fork--materialize-fork-artifact
             source "plans/required.md" staging-path t)))
+      (ignore-errors
+        (mevedel-session-durability-lease-release source-path source))
       (when (file-directory-p root)
         (delete-directory root t))
       (mevedel-workspace-clear-registry))))
@@ -616,16 +648,6 @@
           (let ((plans-dir
                  (file-name-concat
                   (plist-get fixture :parent-path) "local" "plans")))
-            (make-directory plans-dir t)
-            (write-region "mutable draft" nil
-                          (file-name-concat plans-dir "current.md")
-                          nil 'silent)
-            (write-region "accepted evidence" nil
-                          (file-name-concat plans-dir "accepted.md")
-                          nil 'silent)
-            (write-region "unrelated plan evidence" nil
-                          (file-name-concat plans-dir "unrelated.md")
-                          nil 'silent)
             (setf (mevedel-session-plan-metadata session)
                   (list :status 'accepted
                         :accepted-turn 2
@@ -634,24 +656,18 @@
                                         "accepted evidence"))))
           (with-current-buffer staging-buffer
             (setq-local kill-buffer-hook nil))
-          (let ((parent-local
-                 (file-name-concat
-                  (plist-get fixture :parent-path) "local" "notes.md")))
-            (make-directory (file-name-directory parent-local) t)
-            (write-region "parent local\n" nil parent-local nil 'silent))
           ;; Artifacts live in the workspace store; a fork copies none.
-          (let ((artifact
-                 (file-name-concat (plist-get fixture :parent-path)
-                                   "artifacts" "nested" "mockup.html")))
-            (make-directory (file-name-directory artifact) t)
-            (write-region "local artifact" nil artifact nil 'silent))
+          (test-mevedel-fork--publish
+           session buf
+           (cons "local/plans/current.md" "mutable draft")
+           (cons "local/plans/accepted.md" "accepted evidence")
+           (cons "local/plans/unrelated.md" "unrelated plan evidence")
+           (cons "local/notes.md" "parent local\n")
+           (cons "artifacts/nested/mockup.html" "local artifact"))
           (mevedel-session-fork--stage-fork
            child buf staging-buffer (plist-get fixture :parent-path)
            staging-path 2 2)
-          (let ((parent-local
-                 (file-name-concat
-                  (plist-get fixture :parent-path) "local" "notes.md"))
-                (child-local
+          (let ((child-local
                  (file-name-concat staging-path "local" "notes.md")))
             (should (equal "parent local\n"
                            (with-temp-buffer
@@ -659,9 +675,8 @@
                              (buffer-string))))
             (write-region "child local\n" nil child-local nil 'silent)
             (should (equal "parent local\n"
-                           (with-temp-buffer
-                             (insert-file-contents parent-local)
-                             (buffer-string)))))
+                           (mevedel-session-artifacts-read-artifact
+                            session "local/notes.md" t))))
           (should (file-exists-p
                    (mevedel-session-artifacts-segment-path
                     staging-path 1)))
@@ -677,8 +692,7 @@
           ;; Mutation authority belongs to `--publish-fork' and must already
           ;; exist before this staging helper starts target writes.
           (should-not
-           (file-exists-p
-            (mevedel-session-persistence--lock-path staging-path)))
+           (file-exists-p (file-name-concat staging-path ".lease")))
           (should
            (file-exists-p
             (file-name-concat staging-path "local" "plans" "accepted.md")))
@@ -688,11 +702,8 @@
           (should-not
            (file-exists-p
             (file-name-concat staging-path "local" "plans" "current.md")))
-          (write-region "tampered evidence" nil
-                        (file-name-concat
-                         (plist-get fixture :parent-path)
-                         "local" "plans" "accepted.md")
-                        nil 'silent)
+          (test-mevedel-fork--publish
+           session buf (cons "local/plans/accepted.md" "tampered evidence"))
           (should-error
            (mevedel-session-fork--stage-fork
             child buf staging-buffer (plist-get fixture :parent-path)
@@ -1124,9 +1135,8 @@
                (source-text
                 (with-current-buffer (plist-get fixture :buffer)
                   (buffer-string)))
-               (source-lock
-                (mevedel-session-artifacts--file-text
-                 (plist-get fixture :parent-lock))))
+               (source-head
+                (plist-get (mevedel-session-publication session) :head)))
           (write-region "current checkout\n" nil source-file nil 'silent)
           (setf (mevedel-session-model-provider session)
                 "test-backend:test-model"
@@ -1161,8 +1171,9 @@
                   (buffer-local-value 'mevedel--session child-buffer))
                  (child-path (mevedel-session-save-path child))
                  (child-sidecar
-                  (mevedel-session-codec-read
-                   (mevedel-session-artifacts-sidecar-path child-path))))
+                  (car (read-from-string
+                        (mevedel-session-artifacts-read-artifact
+                         child "session.meta.el" t)))))
             (should-not (equal (mevedel-session-session-id session)
                                (mevedel-session-session-id child)))
             (should (string= (mevedel-session-session-id child)
@@ -1218,12 +1229,15 @@
               (should (equal source-text (buffer-string)))
               (should (eq session mevedel--session)))
             (should (equal (plist-get fixture :parent-sidecar-text)
-                           (mevedel-session-artifacts--file-text
-                            (mevedel-session-artifacts-sidecar-path
-                             (plist-get fixture :parent-path)))))
-            (should (equal source-lock
-                           (mevedel-session-artifacts--file-text
-                            (plist-get fixture :parent-lock))))
+                           (decode-coding-string
+                            (mevedel-session-artifacts-read-artifact
+                             session "session.meta.el" t)
+                            'utf-8-unix)))
+            ;; The Source keeps its lease and its published head.
+            (should (mevedel-session-durability-lease-owned-p session))
+            (should (equal source-head
+                           (plist-get (mevedel-session-publication session)
+                                      :head)))
             (should (equal source-state
                            (mevedel-session-codec-serialize session)))))
       (when (buffer-live-p child-buffer)
@@ -1269,9 +1283,10 @@
             (should (equal before (directory-files sessions-dir)))
             (should (equal source-state (mevedel-session-codec-serialize session)))
             (should (equal (plist-get fixture :parent-sidecar-text)
-                           (mevedel-session-artifacts--file-text
-                            (mevedel-session-artifacts-sidecar-path
-                             (plist-get fixture :parent-path))))))
+                           (decode-coding-string
+                            (mevedel-session-artifacts-read-artifact
+                             session "session.meta.el" t)
+                            'utf-8-unix))))
         (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))))
 
 
@@ -1706,10 +1721,6 @@
           (let ((base-commit
                  (test-mevedel-session-persistence--git
                   source-root "rev-parse" "HEAD")))
-            (write-region "captured state\n" nil
-                          (mevedel-session-artifacts-backup-path
-                           (plist-get fixture :parent-path) backup-name)
-                          nil 'silent)
             (setf
              (mevedel-session-file-snapshots session)
              `((1 . ((,source-file
@@ -1730,20 +1741,17 @@
                `((,source-root
                   ,(file-name-concat source-root "nested")
                   "/tmp/shared"))))
-            (mevedel-session-codec-write
-             (mevedel-session-artifacts-sidecar-path
-              (plist-get fixture :parent-path))
-             (mevedel-session-artifacts-build-sidecar
-              session (plist-get fixture :buffer)))
+            (test-mevedel-fork--publish
+             session (plist-get fixture :buffer)
+             (cons (file-name-concat "file-history" backup-name)
+                   "captured state\n"))
             (let ((source-state
                    (mevedel-session-codec-serialize session))
                   (source-sidecar
-                   (mevedel-session-artifacts--file-text
-                    (mevedel-session-artifacts-sidecar-path
-                     (plist-get fixture :parent-path))))
-                  (source-lock
-                   (mevedel-session-artifacts--file-text
-                    (plist-get fixture :parent-lock))))
+                   (mevedel-session-artifacts-read-artifact
+                    session "session.meta.el" t))
+                  (source-head
+                   (plist-get (mevedel-session-publication session) :head)))
               (write-region "dirty Source state\n" nil
                             source-file nil 'silent)
               (write-region "untracked Source file\n" nil
@@ -1838,13 +1846,14 @@
                                 session)))
                 (should
                  (equal source-sidecar
-                        (mevedel-session-artifacts--file-text
-                         (mevedel-session-artifacts-sidecar-path
-                          (plist-get fixture :parent-path)))))
+                        (mevedel-session-artifacts-read-artifact
+                         session "session.meta.el" t)))
+                ;; The Source keeps its lease and its published head.
+                (should (mevedel-session-durability-lease-owned-p session))
                 (should
-                 (equal source-lock
-                        (mevedel-session-artifacts--file-text
-                         (plist-get fixture :parent-lock))))))))
+                 (equal source-head
+                        (plist-get (mevedel-session-publication session)
+                                   :head)))))))
       (when (buffer-live-p child-buffer)
         (let ((view (buffer-local-value 'mevedel--view-buffer child-buffer)))
           (with-current-buffer child-buffer

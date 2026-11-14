@@ -54,11 +54,17 @@
     ;; Portable authority and target replacement run in persistence suites.
     session))
 
+(defun mevedel-agent-control-test--stage-settle (&rest args)
+  "Stage a settlement with ARGS; in-memory fixtures have no lease to admit."
+  (cl-letf (((symbol-function 'mevedel-session-artifacts-assert-mutation-authority)
+             #'ignore))
+    (apply #'mevedel-agent-control--settle args)))
+
 (defun mevedel-agent-control-test--settle
     (session record invocation response &optional event)
   "Settle one test turn through the runtime-owned commit boundary."
   (when-let* ((transaction
-               (mevedel-agent-control--settle
+               (mevedel-agent-control-test--stage-settle
                 session record invocation response event)))
     (condition-case err
         (mevedel-agent-control-commit-session session)
@@ -1074,7 +1080,7 @@
     (setf (mevedel-agent-invocation-transcript-status invocation) 'error
           (mevedel-session-agent-registry session)
           (list (cons "/root/work" record)))
-    (setq transaction (mevedel-agent-control--settle
+    (setq transaction (mevedel-agent-control-test--stage-settle
                        session record invocation "failed"))
     (cl-letf* ((publish (symbol-function 'mevedel-agent-control--publish-result))
                ((symbol-function 'mevedel-agent-control--publish-result)
@@ -1108,7 +1114,7 @@
                   :path "/root/work" :parent-path "/root"
                   :activity 'running :invocation invocation
                   :model-metadata old))
-         (transaction (mevedel-agent-control--settle
+         (transaction (mevedel-agent-control-test--stage-settle
                        session record invocation "answer")))
     (should (equal '(:backend "New" :model "new" :effort nil)
                    (mevedel-agent-record-model-metadata record)))
@@ -1131,7 +1137,7 @@
     (setf (mevedel-session-agent-registry session) (list (cons "/root/work" record)))
     (mevedel-agent-control-enqueue-execution-result session "/root/work" "unread execution")
     (setq execution-id (plist-get (car (mevedel-agent-record-mailbox record)) :id)
-          transaction (mevedel-agent-control--settle session record invocation "answer"))
+          transaction (mevedel-agent-control-test--stage-settle session record invocation "answer"))
     (should (equal execution-id (plist-get (car (mevedel-session-messages session)) :id)))
     (mevedel-agent-control-send-message session "/root" "new root arrival")
     (mevedel-agent-control-send-message session "/root/work" "new agent arrival")
@@ -1152,11 +1158,11 @@
          (record (mevedel-agent-record--create
                   :path "/root/work" :parent-path "/root"
                   :activity 'running :invocation invocation))
-         (transaction (mevedel-agent-control--settle session record invocation "answer"))
+         (transaction (mevedel-agent-control-test--stage-settle session record invocation "answer"))
          (ids (mapcar (lambda (message) (plist-get message :id))
                       (mevedel-session-messages session))))
     (funcall (car transaction))
-    (setq transaction (mevedel-agent-control--settle session record invocation "answer"))
+    (setq transaction (mevedel-agent-control-test--stage-settle session record invocation "answer"))
     (should (equal ids (mapcar (lambda (message) (plist-get message :id))
                               (mevedel-session-messages session))))
     (funcall (cdr transaction))
@@ -1166,7 +1172,7 @@
     (setf (mevedel-session-messages session) nil
           (mevedel-agent-record-activity record) 'running
           (mevedel-agent-record-invocation record) invocation)
-    (setq transaction (mevedel-agent-control--settle session record invocation "next answer"))
+    (setq transaction (mevedel-agent-control-test--stage-settle session record invocation "next answer"))
     (should-not (cl-intersection ids
                                  (mapcar (lambda (message) (plist-get message :id))
                                          (mevedel-session-messages session))
@@ -1187,7 +1193,7 @@
            transaction)
       (setq-local mevedel--session session)
       (setf (mevedel-session-root-buffer session) (current-buffer))
-      (setq transaction (mevedel-agent-control--settle session record invocation "answer"))
+      (setq transaction (mevedel-agent-control-test--stage-settle session record invocation "answer"))
       ;; This is the receiving WAIT interleaved with the writer's before-save
       ;; I/O, while its ordinary raw sidecar still needs the tentative records.
       (should (= 2 (length (mevedel-session-messages session))))
@@ -1197,7 +1203,7 @@
       (should-not (plist-get (mevedel-session-checkpoint-project session nil) :messages))
       (funcall (car transaction))
       (should-not (mevedel-session-messages session))
-      (setq transaction (mevedel-agent-control--settle session record invocation "answer"))
+      (setq transaction (mevedel-agent-control-test--stage-settle session record invocation "answer"))
       (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-root-event) #'ignore))
         (funcall (cdr transaction)))
       (mevedel-tools--handle-message-inject fsm)

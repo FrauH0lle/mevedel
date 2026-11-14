@@ -548,17 +548,39 @@
         (should-not (file-exists-p destination))
         (should (equal before (mevedel-migrate-session--hash (file-name-concat source "session.meta.el")))))))
 
-  :doc "converts an unlocked file-workspace session without a publication lease"
+  :doc "converts an unlocked PID-lock file session to a released lease publication"
   (mevedel-migration-test--with-source "v0.5.9"
     (delete-directory (file-name-concat source ".lease") t)
     (delete-directory (file-name-concat source ".publications") t)
     (setq old (plist-put old :authority-mode 'pid-lock))
     (setf (plist-get (plist-get old :workspace) :type) 'file)
     (mevedel-migrate-session--write (file-name-concat source "session.meta.el") old)
+    (make-directory (file-name-concat source "agents") t)
+    (with-temp-file (file-name-concat source "segment-0001.chat.org") (insert "* Old turn\n"))
+    (with-temp-file (file-name-concat source "agents/worker.chat.org") (insert "Agent text\n"))
+    (with-temp-file (file-name-concat source "telemetry-log.el") (insert "()\n"))
     (should (= 1 (mevedel-migrate-session-copy source destination)))
     (should (equal mevedel-session-codec-format-version
                    (plist-get (mevedel-session-codec-read
-                               (file-name-concat destination "session.meta.el")) :version))))
+                               (file-name-concat destination "session.meta.el")) :version)))
+    ;; The copy is a closed lease session: released head, published files.
+    (should (eq 'portable (mevedel-session-codec-authority-mode-for-path destination)))
+    (should (eq 'released
+                (plist-get (mevedel-session-durability--lease-head
+                            (mevedel-session-durability--lease-path destination))
+                           :status)))
+    (let ((publication (mevedel-session-publication-read destination)))
+      (should (eq 'portable (plist-get (mevedel-session-codec-read
+                                        (plist-get publication :sidecar))
+                                       :authority-mode)))
+      (dolist (logical '("segment-0001.chat.org" "agents/worker.chat.org"))
+        (should (equal (mevedel-migrate-artifacts--bytes (file-name-concat source logical))
+                       (mevedel-session-artifacts--read-published-artifact
+                        publication logical)))
+        (should-not (file-exists-p (file-name-concat destination logical)))))
+    ;; Diagnostic logs stay plain files; the source keeps its PID layout.
+    (should (file-exists-p (file-name-concat destination "telemetry-log.el")))
+    (should-not (file-exists-p (file-name-concat source ".lease"))))
 
   :doc "never overwrites an existing destination or copies into itself"
   (mevedel-migration-test--with-source "v0.5.9"

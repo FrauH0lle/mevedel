@@ -1358,6 +1358,8 @@ Each call is a plist of :backend, :model, :effort, :prompt, :callback,
   (test-mevedel-session-naming--with-session
     (let ((timer-function (symbol-function 'run-at-time))
           (mevedel-transport-retry-seconds 0.01)
+          ;; The spy times the 30 s reply deadline; keep lease renewal apart.
+          (mevedel-session-lease-renewal-seconds 31)
           deadlines calls events)
       (cl-letf (((symbol-function 'run-at-time)
                  (lambda (time repeat function &rest args)
@@ -1389,7 +1391,9 @@ Each call is a plist of :backend, :model, :effort, :prompt, :callback,
                                       :outcome)))))
   :doc "a synchronous reply settles without starting a deadline"
   (test-mevedel-session-naming--with-session
-    (let ((timer-function (symbol-function 'run-at-time)) deadline)
+    (let ((timer-function (symbol-function 'run-at-time))
+          (mevedel-session-lease-renewal-seconds 31)
+          deadline)
       (cl-letf (((symbol-function 'run-at-time)
                  (lambda (time repeat function &rest args)
                    (if (equal time 30) (setq deadline t)

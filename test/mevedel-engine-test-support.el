@@ -85,8 +85,7 @@ Fail when BODY leaves a timer the fixture does not own."
                  (mevedel-session-artifacts-ensure-files session buffer)
                  (should (eq (if file-workspace-p 'file 'project)
                              (mevedel-workspace-type workspace)))
-                 (should (eq (if file-workspace-p 'pid-lock 'portable)
-                             (mevedel-session-authority-mode session)))
+                 (should (eq 'portable (mevedel-session-authority-mode session)))
                  (let ((request (mevedel-request-begin session)))
                    ;; These fixtures exercise turn engines; provider readiness has
                    ;; its own real HTTP/CLI and pre-commit lifecycle tests.

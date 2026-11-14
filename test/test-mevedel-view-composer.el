@@ -61,6 +61,16 @@
 (require 'gptel-request)
 (require 'mcp)
 
+(defmacro mevedel-view-composer-test--without-admission (&rest body)
+  "Run BODY with in-memory fixtures exempt from portable lease admission.
+Control-transfer quiescing stays real."
+  (declare (indent 0) (debug t))
+  `(cl-letf (((symbol-function 'mevedel-session-artifacts-assert-mutation-authority)
+              #'ignore)
+             ((symbol-function 'mevedel-session-durability-lease-owned-p)
+              (lambda (&rest _) t)))
+     ,@body))
+
 (defun mevedel-view-composer-test--status-rows (count)
   "Reconcile COUNT status rows through the real zone preserver."
   (mevedel-view-zone-reconcile
@@ -1184,7 +1194,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
 
   :doc "Plan shows the retained permission mode"
   (let ((mevedel--session
-         (mevedel-session--create :authority-mode 'pid-lock :name "main" :plan-mode t)))
+         (mevedel-session--create :authority-mode 'portable :name "main" :plan-mode t)))
     (should (string= "[Plan · full-auto]"
                      (mevedel-view--composer-mode-badge 'full-auto)))
     (should (string= "> "
@@ -1224,7 +1234,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   ,test
   (test)
   (let ((mevedel--session
-         (mevedel-session--create :authority-mode 'pid-lock :name "main" :plan-mode t)))
+         (mevedel-session--create :authority-mode 'portable :name "main" :plan-mode t)))
     (should (mevedel-view--plan-mode-p))
     (setf (mevedel-session-plan-mode mevedel--session) nil)
     (should-not (mevedel-view--plan-mode-p))))
@@ -1235,18 +1245,18 @@ Policy tests use terminal rows, not production's pixel measurement helper."
 
   :doc "idle session is not occupied"
   (should-not (mevedel-view--occupied-root-workflow
-               (mevedel-session--create :authority-mode 'pid-lock
+               (mevedel-session--create :authority-mode 'portable
                                         :name "main")))
 
   :doc "plan approval names its cause"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock
+  (let ((session (mevedel-session--create :authority-mode 'portable
                                           :name "main")))
     (setf (mevedel-session-pending-plan-approval session) 'pending)
     (should (eq 'plan-approval
                 (mevedel-view--occupied-root-workflow session))))
 
   :doc "retained implementation retry names its cause"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock
+  (let ((session (mevedel-session--create :authority-mode 'portable
                                           :name "main")))
     (setf (mevedel-session-plan-metadata session)
           '(:implementation-retry (:selection (:location here))))
@@ -1254,7 +1264,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                 (mevedel-view--occupied-root-workflow session))))
 
   :doc "unfinished goal names its cause; complete goal does not occupy"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock
+  (let ((session (mevedel-session--create :authority-mode 'portable
                                           :name "main")))
     (setf (mevedel-session-goal session)
           (mevedel-goal--create :id "g1" :objective "obj" :status 'paused))
@@ -1314,7 +1324,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
     (unwind-protect
         (mevedel-view-test--with-buffers
           (let ((session (mevedel-session--create
-                          :authority-mode 'pid-lock
+                          :authority-mode 'portable
                           :name "main"
                           :permission-mode 'ask)))
             (with-current-buffer data-buf
@@ -1362,7 +1372,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   :doc "cycles only baseline during implementation and preserves multiline draft"
   (mevedel-view-test--with-buffers
     (let* ((session (mevedel-session--create
-                     :authority-mode 'pid-lock :permission-mode 'ask))
+                     :authority-mode 'portable :permission-mode 'ask))
            (request (mevedel-request--create
                      :session session :permission-mode-override 'full-auto)))
       (with-current-buffer data-buf
@@ -1403,11 +1413,11 @@ Policy tests use terminal rows, not production's pixel measurement helper."
 
 (mevedel-deftest mevedel-view-toggle-plan-mode
   (:quiet t :doc "toggles Plan independently while retaining permission mode and draft")
-  ,test
+  (mevedel-view-composer-test--without-admission ,test)
   (test)
   (mevedel-view-test--with-buffers
     (let ((session (mevedel-session--create
-                    :authority-mode 'pid-lock
+                    :authority-mode 'portable
                     :name "main"
                     :permission-mode 'full-auto)))
       (with-current-buffer data-buf
@@ -1689,7 +1699,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   (mevedel-view-test--with-buffers
     (let ((session
            (mevedel-session--create
-            :authority-mode 'pid-lock
+            :authority-mode 'portable
             :name "source"
             :session-id "source-id"
             :current-segment 1))
@@ -1757,7 +1767,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   (mevedel-view-test--with-buffers
     (let* ((session
             (mevedel-session--create
-             :authority-mode 'pid-lock
+             :authority-mode 'portable
              :name "child"
              :session-id "child-id"
              :forked-from-session-id "source-id"
@@ -1803,7 +1813,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   (mevedel-view-test--with-buffers
     (let ((session
            (mevedel-session--create
-            :authority-mode 'pid-lock
+            :authority-mode 'portable
             :name "source"
             :session-id "source-id"
             :current-segment 1))
@@ -1851,7 +1861,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   (mevedel-view-test--with-buffers
     (let ((session
            (mevedel-session--create
-            :authority-mode 'pid-lock
+            :authority-mode 'portable
             :name "source"
             :session-id "source-id"
             :current-segment 1))
@@ -1911,7 +1921,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
            (make-temp-file "mevedel-mentions-worktree-" t)))
          (session
           (mevedel-session--create
-           :authority-mode 'pid-lock
+           :authority-mode 'portable
            :worktree-source-root source
            :worktree-directory worktree))
          (text (copy-sequence "Use @file:local and $skill"))
@@ -1979,7 +1989,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                  (error-message-string error)))))))
 
 (mevedel-deftest mevedel-view-send/conversation-fork ()
-  ,test
+  (mevedel-view-composer-test--without-admission ,test)
   (test)
   :doc "publishes before Child-owned prompt preparation and preserves ownership"
   (mevedel-view-test--with-source-skills nil
@@ -3685,7 +3695,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                          seen))
           (should (string-empty-p (mevedel-view--input-text))))))))
 (mevedel-deftest mevedel-view-send/dollar-text ()
-  ,test
+  (mevedel-view-composer-test--without-admission ,test)
   (test)
   :doc "unknown dollar-prefixed input sends as normal prompt text"
   (mevedel-view-test--with-buffers
@@ -4066,7 +4076,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                (regexp-quote "[skill:alpha -- attached]") sent)))))
 
 (mevedel-deftest mevedel-view-send/skill-inline (:quiet t)
-  ,test
+  (mevedel-view-composer-test--without-admission ,test)
   (test)
   :doc "inline attachment reaches the model-visible gptel request"
   (mevedel-view-test--with-fork-skill
@@ -4510,7 +4520,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
          (skill-root (file-name-concat root "skills"))
          (mevedel-skill-dirs (list skill-root))
          (session (mevedel-session--create
-                   :authority-mode 'pid-lock
+                   :authority-mode 'portable
                    :name "main"
                    :working-directory root
                    :turn-count 0))
@@ -4668,7 +4678,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   (mevedel-view-test--bound-source-failure-case 'not-user-invocable))
 
 (mevedel-deftest mevedel-view-send/planned-skills (:quiet t)
-  ,test
+  (mevedel-view-composer-test--without-admission ,test)
   (test)
 
   :doc "embedded mentions are instructions while a leading mention is a command"
@@ -5232,7 +5242,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (should (= 0 dispatches)))))))
 
 (mevedel-deftest mevedel-view-send/plan-model-policy ()
-  ,test
+  (mevedel-view-composer-test--without-admission ,test)
   (test)
   :doc "Plan root requests use planning policy without changing session policy"
   (mevedel-skills-test--with-model-backends
@@ -5513,7 +5523,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (should (equal data-before (buffer-string)))))))
 
 (mevedel-deftest mevedel-view--send-root (:quiet t)
-  ,test
+  (mevedel-view-composer-test--without-admission ,test)
   (test)
   :doc "external steering prepares skill context and leaves an unrelated draft"
   (mevedel-view-test--with-source-skills
@@ -5546,7 +5556,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 
   :doc "external steering cannot become an idle turn or slash command"
   (mevedel-view-test--with-buffers
-    (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "main"))
+    (let* ((session (mevedel-session--create :authority-mode 'portable :name "main"))
            (request (mevedel-request--create
                      :id "steer" :session session
                      :fsm (gptel-make-fsm :state 'TOOL))))
@@ -5562,7 +5572,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (should (equal "> untouched\ndraft" (mevedel-view--input-text)))))))
 
 (mevedel-deftest mevedel-view-send/pending-input (:quiet t)
-  ,test
+  (mevedel-view-composer-test--without-admission ,test)
   (test)
 
   :doc "both send keys queue once during settlement before and after request teardown"
@@ -5570,7 +5580,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
     (dolist (send '(mevedel-view-send mevedel-view-send-follow-up))
       (mevedel-view-test--with-buffers
         (let* ((session (mevedel-session--create
-                         :authority-mode 'pid-lock :name "main"))
+                         :authority-mode 'portable :name "main"))
                (draft "> 2. **ADR 0091:** may it get that one pointer edit?\nYes")
                (request
                 (unless (eq engine 'torn-down)
@@ -5601,7 +5611,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 
   :doc "C-c TAB queues independent FIFO follow-ups during an active request"
   (mevedel-view-test--with-buffers
-    (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "main")))
+    (let ((session (mevedel-session--create :authority-mode 'portable :name "main")))
       (with-current-buffer data-buf
         (setq-local mevedel--session session
                     mevedel--current-request
@@ -5631,7 +5641,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 
   :doc "C-c TAB cannot overtake an older follow-up after the request settles"
   (mevedel-view-test--with-buffers
-    (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "main")))
+    (let ((session (mevedel-session--create :authority-mode 'portable :name "main")))
       (with-current-buffer data-buf
         (setq-local mevedel--session session
                     mevedel--current-request
@@ -5660,7 +5670,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 
   :doc "C-c RET queues plain steering against the active request"
   (mevedel-view-test--with-buffers
-    (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "main"))
+    (let* ((session (mevedel-session--create :authority-mode 'portable :name "main"))
            (request (mevedel-request--create
                      :id "request-1" :session session
                      :fsm (gptel-make-fsm :state 'TOOL))))
@@ -5854,7 +5864,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 
   :doc "a lost ordinary steering race restores the exact composer state"
   (mevedel-view-test--with-buffers
-    (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "steering-race"))
+    (let* ((session (mevedel-session--create :authority-mode 'portable :name "steering-race"))
            (fsm (gptel-make-fsm :state 'TOOL))
            (request
             (mevedel-request--create
@@ -5900,7 +5910,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   (mevedel-view-test--with-buffers
     (let ((session
            (mevedel-session--create
-            :authority-mode 'pid-lock
+            :authority-mode 'portable
             :name "handoff"
             :plan-metadata
             '(:implementation-retry
@@ -5925,7 +5935,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
     (let* ((metadata '(:status proposed :proposal-id (1 2 "hash")))
            (session
             (mevedel-session--create
-             :authority-mode 'pid-lock
+             :authority-mode 'portable
              :name "plan" :plan-mode t :plan-metadata metadata)))
       (setf (mevedel-session-pending-plan-approval session)
             (list :session session :callback #'ignore :renderer #'ignore))
@@ -5948,7 +5958,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 
   :doc "special root workflows reject steering but accept a follow-up"
   (mevedel-view-test--with-buffers
-    (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "review"))
+    (let* ((session (mevedel-session--create :authority-mode 'portable :name "review"))
            (request
             (mevedel-request--create
              :id "review-request" :session session :origin "/root")))
@@ -6914,7 +6924,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   (test)
   :doc "applies prompt-hook context and starts the Goal in the data buffer"
   (mevedel-view-test--with-buffers
-    (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "main"))
+    (let ((session (mevedel-session--create :authority-mode 'portable :name "main"))
           started
           started-buffer)
       (with-current-buffer data-buf
@@ -6940,7 +6950,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (should (equal '("expanded" "hook context") started))))
   :doc "treats the former auto selector as ordinary objective text"
   (mevedel-view-test--with-buffers
-    (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "main"))
+    (let ((session (mevedel-session--create :authority-mode 'portable :name "main"))
           started)
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
@@ -6962,7 +6972,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (should (equal "auto ship it" started)))))
 
 (mevedel-deftest mevedel-view-send/user-prompt-hooks (:quiet t)
-  ,test
+  (mevedel-view-composer-test--without-admission ,test)
   (test)
 
   :doc "blocking UserPromptSubmit does not record history or insert prompt"

@@ -284,7 +284,12 @@
                     (test-mevedel-execution-scheduler--yield-across-owners))))))
 
 (mevedel-deftest mevedel-execution-start-bash/scheduler ()
-  ,test
+  ;; In-memory fixtures have no root buffer or save path for lease admission.
+  (cl-letf (((symbol-function 'mevedel-session-artifacts-assert-mutation-authority)
+             #'ignore)
+            ((symbol-function 'mevedel-session-durability-lease-owned-p)
+             (lambda (&rest _) t)))
+    ,test)
   (test)
   :doc "runs proven readers concurrently inside one session"
   (let* ((root (make-temp-file "mevedel-scheduler-readers-" t))

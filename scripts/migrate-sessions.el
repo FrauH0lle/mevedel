@@ -230,6 +230,10 @@ never modified.  Unsupported versions fail rather than guessing a path."
   ;; The fork-first Worktree handoff changed within v0.5.13.  Its shape,
   ;; rather than the top-level format alone, determines whether repair is needed.
   (setq data (mevedel-migrate-session--plan-retry data))
+  ;; File sessions moved from the PID lock to the portable lease within this
+  ;; format.  `mevedel-migrate-session--lease-file' converts their storage.
+  (when (eq 'pid-lock (plist-get data :authority-mode))
+    (setq data (plist-put data :authority-mode 'portable)))
   (when-let* ((goal (plist-get data :goal)))
     (mevedel-session-codec--goal-from-plist goal))
   (mevedel-session-codec-validate-current-sidecar data))
@@ -298,7 +302,7 @@ the new copy.  The caller must keep SOURCE closed throughout conversion."
          (lease (mevedel-migrate-session--closed source))
          (sidecars (make-hash-table :test #'equal))
          (hashes (make-hash-table :test #'equal))
-         manifests success)
+         manifests pid-data success)
     (dolist (file (cons source files))
       (when (or (file-symlink-p file)
                 (not (or (file-directory-p file) (file-regular-p file))))
@@ -355,8 +359,12 @@ the new copy.  The caller must keep SOURCE closed throughout conversion."
                (condition-case err
                    (let* ((original (mevedel-migrate-session--read file))
                           (data (mevedel-migrate-session--sidecar original attached)))
-                     (when (and (eq 'portable (plist-get data :authority-mode)) (not lease))
-                       (error "Portable session is missing its released lease"))
+                     (cond
+                      ((eq 'pid-lock (plist-get original :authority-mode))
+                       (when lease (error "PID-lock session also has a portable lease"))
+                       (setq pid-data data))
+                      ((and (eq 'portable (plist-get data :authority-mode)) (not lease))
+                       (error "Portable session is missing its released lease")))
                      (unless (equal original data)
                        (setq mevedel-migrate-session--changed t))
                      (mevedel-migrate-session--write file data))
@@ -387,11 +395,51 @@ the new copy.  The caller must keep SOURCE closed throughout conversion."
                         (or (gethash file hashes)
                             (puthash file (mevedel-migrate-session--hash file) hashes))))))
             (mevedel-migrate-session--write (car row) (cdr row)))
+          (when pid-data
+            (mevedel-migrate-session--lease-file destination pid-data))
           (unless (equal lease (mevedel-migrate-session--closed source))
             (error "Source lease changed during migration; keep it closed and retry"))
           (setq success t)
           (hash-table-count sidecars))
       (unless success (delete-directory destination t)))))
+
+(defun mevedel-migrate-session--lease-file (directory data)
+  "Publish converted PID-lock file session DIRECTORY as one lease generation.
+DATA is its converted sidecar.  Every plain session file becomes a published
+artifact and is removed; hidden control state and diagnostic logs stay plain.
+The lease is released afterwards, as a closed session's is."
+  (let* ((directory (file-name-as-directory directory))
+         (files (cl-remove-if
+                 (lambda (file)
+                   (let ((relative (file-relative-name file directory)))
+                     (or (cl-some (lambda (part) (string-prefix-p "." part))
+                                  (split-string relative "/"))
+                         (string-suffix-p "-log.el" relative)
+                         (equal relative "session.meta.el"))))
+                 (directory-files-recursively directory "." nil)))
+         (workspace (mevedel-workspace--create
+                     :type 'file :id "migration" :name "migration"
+                     :root directory))
+         (owner (mevedel-session-create
+                 (or (plist-get data :session-name) "migration") workspace)))
+    (setf (mevedel-session-session-id owner) (plist-get data :session-id)
+          (mevedel-session-save-path owner) directory)
+    (unless (mevedel-session-durability-lease-acquire
+             directory "session migration" owner)
+      (error "Could not lease the converted session"))
+    (unwind-protect
+        (mevedel-session-publication-publish
+         owner
+         (append
+          (mapcar (lambda (file)
+                    (list :path file :coding 'no-conversion
+                          :content (mevedel-migrate-artifacts--bytes file)))
+                  files)
+          (list (list :path (file-name-concat directory "session.meta.el")
+                      :content (mevedel-session-artifacts-printed-value data)
+                      :commit-marker t))))
+      (mevedel-session-durability-lease-release directory owner))
+    (mapc #'delete-file files)))
 
 (defconst mevedel-migrate-artifacts--comments-prefix
   "artifacts/shared-editing/artifact-comments/"

@@ -324,7 +324,7 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
           (data-buffer (generate-new-buffer " *store-room-data*"))
           (session (mevedel-session--create :name "s" :session-id "s1"
                                             :workspace workspace
-                                            :authority-mode 'pid-lock))
+                                            :authority-mode 'portable))
           (room (list :session session :data-buffer data-buffer :transport 'room
                       :guests (make-hash-table :test #'eql)))
           (lobby (list :workspace workspace :transport 'lobby
@@ -611,7 +611,7 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
 (mevedel-deftest mevedel-collaboration--handle-artifact-delete
   (:doc "deletes a whole store artifact by card or store id for writable links only")
   (let* ((root (make-temp-file "mevedel-guest-artifact-delete-" t))
-         ;; A file workspace, so the pid-lock session matches its authority.
+         ;; A file workspace, so the portable session matches its authority.
          (workspace (mevedel-workspace--create :type 'file :id "w"
                                                :root root :name "w"))
          (dir (expand-file-name (mevedel-artifact-store-directory workspace)))
@@ -619,7 +619,7 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
          (discussions (file-name-concat dir ".state" "mockup" "discussions.json"))
          (other (file-name-concat dir "other" "page.html"))
          (session (mevedel-session--create :name "s" :workspace workspace
-                                           :authority-mode 'pid-lock))
+                                           :authority-mode 'portable))
          (guests (make-hash-table :test #'eql))
          (logo (file-name-concat dir "mockup" "logo.png"))
          (room (list :session session :guests guests :transport 'transport

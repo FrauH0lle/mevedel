@@ -209,10 +209,8 @@ add more, and we don't want to act on actions we don't understand).")
   (unless (memq mode '(portable pid-lock))
     (error "Invalid session authority mode: %S" mode))
   (let ((type (plist-get workspace-plist :type)))
-    (when (and (eq type 'project) (not (eq mode 'portable)))
-      (error "Project sessions require portable authority"))
-    (when (and (eq type 'file) (not (eq mode 'pid-lock)))
-      (error "File sessions require PID-lock authority")))
+    (when (and (memq type '(project file)) (not (eq mode 'portable)))
+      (error "Project and file sessions require portable authority")))
   mode)
 
 (defun mevedel-session-codec-authority-mode-for-path

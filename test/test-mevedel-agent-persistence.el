@@ -13,10 +13,13 @@
 (require 'mevedel-agents)
 (require 'mevedel-execution-target)
 (require 'mevedel-reminders)
+(require 'mevedel-session-durability)
 (require 'mevedel-session-persistence)
+(require 'mevedel-session-publication)
 (require 'mevedel-structs)
 (require 'mevedel-tools)
 (require 'mevedel-workspace)
+(require 'mevedel-workspace-identity)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -73,13 +76,54 @@
   (mevedel-session-create
    "main"
    (mevedel-workspace--create
-    ;; These fixtures stage conversations at their fixed paths, which is the
-    ;; pid-lock reading; portable project sessions require published
-    ;; artifacts and are covered by the session persistence suites.
+    ;; File sessions are portable: fixtures publish conversations through
+    ;; `mevedel-agent-persistence-test--publish' instead of staging paths.
     :type 'file
     :id "agent-persistence"
     :root (or root temporary-file-directory)
     :name "agent-persistence")))
+
+(defun mevedel-agent-persistence-test--publish (session &rest entries)
+  "Publish ENTRIES to SESSION's committed storage under its lease.
+Each entry is (RELATIVE . CONTENT), or (RELATIVE . :delete) to remove it."
+  (let ((root (mevedel-session-save-path session)))
+    (mevedel-workspace-identity-ensure
+     (mevedel-workspace-root (mevedel-session-workspace session)))
+    (unless (mevedel-session-session-id session)
+      (setf (mevedel-session-session-id session) "agent-persistence-test"))
+    (unless (mevedel-session-durability-lease-owned-p session)
+      (should (mevedel-session-durability-lease-acquire
+               root "*agent-persistence*" session)))
+    (should
+     (mevedel-session-publication-publish
+      session
+      (append
+       (mapcar (lambda (entry)
+                 (if (eq :delete (cdr entry))
+                     (list :path (expand-file-name (car entry) root) :delete t)
+                   (list :path (expand-file-name (car entry) root)
+                         :content (cdr entry))))
+               entries)
+       (list (list :path (expand-file-name "session.meta.el" root)
+                   ;; The fixtures' registries are not live-valid; the
+                   ;; commit marker only needs a well-formed sidecar.
+                   :content (let ((registry
+                                   (mevedel-session-agent-registry session)))
+                              (setf (mevedel-session-agent-registry session) nil)
+                              (unwind-protect
+                                  (with-temp-buffer
+                                    (mevedel-session-artifacts-printed-value
+                                     (mevedel-session-artifacts--live-sidecar
+                                      session (current-buffer))))
+                                (setf (mevedel-session-agent-registry session)
+                                      registry)))
+                   :commit-marker t :replace t)))))))
+
+(defun mevedel-agent-persistence-test--release (session)
+  "Release SESSION's lease taken by `mevedel-agent-persistence-test--publish'."
+  (when (mevedel-session-durability-lease-owned-p session)
+    (mevedel-session-durability-lease-release
+     (mevedel-session-save-path session) session)))
 
 (defun mevedel-agent-persistence-test--record
     (&optional path parent id activity)
@@ -804,9 +848,7 @@
   (let* ((root-dir (make-temp-file "mevedel-agent-tree-" t))
          (session (mevedel-agent-persistence-test--session root-dir))
          (root-buffer (generate-new-buffer " *agent-tree-root*"))
-         (agents-dir (file-name-concat root-dir "agents"))
          (relative "agents/valid.chat.org")
-         (conversation (expand-file-name relative root-dir))
          (configuration (mevedel-agent-persistence-test--configuration))
          (valid
           (mevedel-agent-record--create
@@ -820,13 +862,12 @@
            :conversation-location "../escape.chat.org")))
     (unwind-protect
         (progn
-          (make-directory agents-dir t)
-          (write-region "* Agent Task: valid\nDurable context.\n"
-                        nil conversation nil 'silent)
           (setf (mevedel-session-save-path session) root-dir
                 (mevedel-session-agent-registry session)
                 (list (cons "/root/valid" valid)
                       (cons "/root/escaping" escaping)))
+          (mevedel-agent-persistence-test--publish
+           session (cons relative "* Agent Task: valid\nDurable context.\n"))
           (with-current-buffer root-buffer
             (org-mode)
             (setq-local mevedel--session session)
@@ -842,6 +883,7 @@
                                  (mevedel-session-agent-registry session))))
           (should-not (mevedel-agent-record-conversation-buffer valid))
           (should (eq configuration (mevedel-agent-record-configuration valid))))
+      (mevedel-agent-persistence-test--release session)
       (mevedel-agent-control-teardown-session session)
       (when (buffer-live-p root-buffer)
         (kill-buffer root-buffer))
@@ -851,7 +893,6 @@
   (let* ((root-dir (make-temp-file "mevedel-agent-outcome-" t))
          (session (mevedel-agent-persistence-test--session root-dir))
          (root-buffer (generate-new-buffer " *agent-outcome-root*"))
-         (agents-dir (file-name-concat root-dir "agents"))
          (configuration (mevedel-agent-persistence-test--configuration))
          (records
           (list (cons 'errored "failed")
@@ -860,15 +901,16 @@
                 (cons nil "unknown"))))
     (unwind-protect
         (progn
-          (make-directory agents-dir t)
           (setf (mevedel-session-save-path session) root-dir)
+          (apply #'mevedel-agent-persistence-test--publish session
+                 (mapcar (lambda (entry)
+                           (cons (format "agents/%s.chat.org" (cdr entry))
+                                 (format "* Agent Task: %s\n" (cdr entry))))
+                         records))
           (setf (mevedel-session-agent-registry session)
                 (mapcar
                  (lambda (entry)
                    (let ((relative (format "agents/%s.chat.org" (cdr entry))))
-                     (write-region (format "* Agent Task: %s\n" (cdr entry))
-                                   nil (expand-file-name relative root-dir)
-                                   nil 'silent)
                      (cons (format "/root/%s" (cdr entry))
                            (mevedel-agent-record--create
                             :id (cdr entry)
@@ -903,6 +945,7 @@
                    (mevedel-agent-invocation-transcript-status
                     (buffer-local-value 'mevedel--agent-invocation
                                         buffer)))))))
+      (mevedel-agent-persistence-test--release session)
       (mevedel-agent-control-teardown-session session)
       (when (buffer-live-p root-buffer)
         (kill-buffer root-buffer))
@@ -967,7 +1010,6 @@
          (session (mevedel-agent-persistence-test--session root-dir))
          (root-buffer (generate-new-buffer " *agent-readonly-root*"))
          (relative "agents/active.chat.org")
-         (conversation (expand-file-name relative root-dir))
          (record
           (mevedel-agent-record--create
            :id "active" :path "/root/active" :parent-path "/root"
@@ -978,12 +1020,11 @@
            :conversation-location relative)))
     (unwind-protect
         (progn
-          (make-directory (file-name-directory conversation) t)
-          (write-region "* Agent Task: active\nDurable context.\n"
-                        nil conversation nil 'silent)
           (setf (mevedel-session-save-path session) root-dir
                 (mevedel-session-agent-registry session)
                 (list (cons "/root/active" record)))
+          (mevedel-agent-persistence-test--publish
+           session (cons relative "* Agent Task: active\nDurable context.\n"))
           (with-current-buffer root-buffer
             (org-mode)
             (setq-local mevedel--session session)
@@ -999,6 +1040,7 @@
           (should (equal '(:path "/root/active" :previous-activity idle)
                          (mevedel-agent-control-interrupt
                           session "/root/active"))))
+      (mevedel-agent-persistence-test--release session)
       (mevedel-agent-control-teardown-session session)
       (when (buffer-live-p root-buffer)
         (kill-buffer root-buffer))
@@ -1013,7 +1055,6 @@
          (parent (generate-new-buffer " *lazy-agent-root*"))
          (configuration (mevedel-agent-persistence-test--configuration))
          (relative "agents/lazy.chat.org")
-         (file (file-name-concat root relative))
          (record (mevedel-agent-record--create
                   :id "lazy" :path "/root/lazy" :parent-path "/root"
                   :role "default" :activity 'idle :settled-outcome 'completed
@@ -1023,12 +1064,12 @@
          inspected resident dispatched)
     (unwind-protect
         (progn
-          (make-directory (file-name-directory file) t)
-          (write-region "* Agent Task: original\nRetained decision.\n" nil file nil 'silent)
           (setf (mevedel-session-save-path session) root
                 (mevedel-session-root-buffer session) parent
                 (mevedel-session-agent-registry session)
                 (list (cons "/root/lazy" record) (cons "/root/sibling" sibling)))
+          (mevedel-agent-persistence-test--publish
+           session (cons relative "* Agent Task: original\nRetained decision.\n"))
           (with-current-buffer parent
             (setq-local mevedel--session session
                         mevedel--workspace (mevedel-session-workspace session)))
@@ -1070,12 +1111,15 @@
           (kill-buffer resident)
           (setf (mevedel-agent-record-conversation-buffer record) nil)
           ;; Missing durable bytes fail before any provider dispatch and can retry.
-          (delete-file file)
+          (mevedel-agent-persistence-test--publish
+           session (cons relative :delete))
           (should-error (mevedel-agent-persistence-ensure-conversation session record parent))
           (should-not (mevedel-agent-record-conversation-buffer record))
-          (write-region "Recovered transcript\n" nil file nil 'silent)
+          (mevedel-agent-persistence-test--publish
+           session (cons relative "Recovered transcript\n"))
           (setq resident (mevedel-agent-persistence-ensure-conversation session record parent))
           (should (with-current-buffer resident (string-search "Recovered transcript" (buffer-string)))))
+      (mevedel-agent-persistence-test--release session)
       (mevedel-agent-control-teardown-session session)
       (dolist (buffer (list inspected resident parent))
         (when (buffer-live-p buffer)

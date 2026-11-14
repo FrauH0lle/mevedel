@@ -146,8 +146,7 @@
                    (require 'mevedel-structs)
                    (require 'mevedel-session-persistence)
                    (let ((owner (mevedel-session--create
-                                 :workspace (mevedel-workspace--create :type 'file :root ,root)
-                                 :authority-mode 'pid-lock))
+                                 :workspace (mevedel-workspace--create :type 'file :root ,root)))
                          (deadline (+ (float-time) 15)))
                      (unwind-protect
                          (progn

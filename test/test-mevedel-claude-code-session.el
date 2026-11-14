@@ -17,7 +17,7 @@
   (dolist (file-p '(nil t))
     (mevedel-engine-test--with-claude-session :file-workspace file-p
       (should (eq (if file-p 'file 'project) (mevedel-workspace-type workspace)))
-      (should (eq (if file-p 'pid-lock 'portable) (mevedel-session-authority-mode session)))
+      (should (eq 'portable (mevedel-session-authority-mode session)))
       (should (mevedel-claude-code-backend-p gptel-backend))
       (should (file-directory-p (mevedel-session-save-path session)))
       (mevedel-session-artifacts-save session buffer)

@@ -20,6 +20,24 @@
 (require 'mevedel-execution-transcript)
 (require 'org)
 
+(defmacro mevedel-test--raw-segments (&rest body)
+  "Run BODY with archive segments served from raw files under the save path.
+The fixtures write segments directly instead of publishing generations."
+  (declare (indent 0))
+  `(cl-letf (((symbol-function 'mevedel-session-artifacts-artifact-present-p)
+              (lambda (session logical &rest _)
+                (file-exists-p
+                 (expand-file-name logical (mevedel-session-save-path session)))))
+             ((symbol-function 'mevedel-session-artifacts-find-artifact-noselect)
+              (lambda (session logical &rest _)
+                (let ((buffer (generate-new-buffer " *raw segment*")))
+                  (with-current-buffer buffer
+                    (insert-file-contents
+                     (expand-file-name logical (mevedel-session-save-path session)))
+                    (delay-mode-hooks (org-mode)))
+                  buffer))))
+     ,@body))
+
 (mevedel-deftest mevedel-collaboration-history-rename-notification
   (:doc "rename schedules the current chat heading as well as room status")
   (let (status history)
@@ -58,12 +76,13 @@
 
 (mevedel-deftest mevedel-collaboration-archived-artifacts
   (:doc "publishes and serves archived artifacts after compaction and a cold room start")
-  (let* ((directory (make-temp-file "mevedel-history-" t))
+  (mevedel-test--raw-segments
+    (let* ((directory (make-temp-file "mevedel-history-" t))
          (artifact (file-name-concat directory ".mevedel" "artifacts" "design.html"))
          (session (mevedel-session--create :name "history" :save-path directory
                                          :workspace (mevedel-workspace--create
                                                      :type 'file :id "w" :root directory)
-                                         :authority-mode 'pid-lock :current-segment 2))
+                                         :authority-mode 'portable :current-segment 2))
          (data (generate-new-buffer " *history live*"))
          (guests (make-hash-table :test #'eql))
          (room (list :session session :data-buffer data :guests guests :transport 'test))
@@ -141,7 +160,7 @@
           (should-not (plist-get room :records))))
       (kill-buffer data)
       (mevedel-collaboration--artifact-stat-invalidate)
-      (delete-directory directory t))))
+      (delete-directory directory t)))))
 
 (mevedel-deftest mevedel-collaboration--history-artifacts
   (:doc "refreshes archived titles without rereading transcripts or warm metadata")
@@ -173,7 +192,8 @@
 
 (mevedel-deftest mevedel-collaboration--handle-history-get
   (:doc "remote callback reads wait for transport and recheck room and guest authority")
-  (dolist (revocation '(nil guest room))
+  (mevedel-test--raw-segments
+    (dolist (revocation '(nil guest room))
     (let* ((session (mevedel-session--create :name "deferred-history"
                                             :save-path temporary-file-directory :current-segment 2))
            (guest (list :ready t))
@@ -218,13 +238,14 @@
               (should read)
               (should (equal '(1 2) (sort (mapcar (lambda (frame) (plist-get frame :reqId)) sent) #'<)))
               (should (cl-every (lambda (frame) (plist-get frame :final)) sent))))
-        (mevedel-transport-cancel-pending)))))
+        (mevedel-transport-cancel-pending))))))
 
 (mevedel-deftest mevedel-collaboration--history-records-bash-completion
   (:doc "later hidden terminal evidence updates the original archived Bash row")
-  (let* ((directory (make-temp-file "mevedel-history-bash-" t))
+  (mevedel-test--raw-segments
+    (let* ((directory (make-temp-file "mevedel-history-bash-" t))
          (session (mevedel-session--create :name "history-bash" :save-path directory
-                                          :authority-mode 'pid-lock :current-segment 2))
+                                          :authority-mode 'portable :current-segment 2))
          (data (generate-new-buffer " *history bash live*"))
          (room (list :session session :data-buffer data))
          (mevedel-tool--registry (copy-hash-table mevedel-tool--registry)))
@@ -329,14 +350,15 @@
             (should (string-match-p "child final" (plist-get child :body))))
           (should-not (mevedel-collaboration--history-records room 2)))
       (kill-buffer data)
-      (delete-directory directory t))))
+      (delete-directory directory t)))))
 
 (mevedel-deftest mevedel-collaboration--history-records-second-compaction
   (:doc "second compaction keeps the original Bash result without duplicate cards")
-  (let* ((directory (make-temp-file "mevedel-history-twice-" t))
+  (mevedel-test--raw-segments
+    (let* ((directory (make-temp-file "mevedel-history-twice-" t))
          (session (mevedel-session--create :name "history-twice"
                                           :save-path directory
-                                          :authority-mode 'pid-lock
+                                          :authority-mode 'portable
                                           :current-segment 2))
          (data (generate-new-buffer " *history twice live*"))
          (room (list :session session :data-buffer data))
@@ -443,14 +465,15 @@
                               (list :session session :data-buffer nil) 1))))
             (should (equal "initial" (plist-get record :result)))))
       (kill-buffer data)
-      (delete-directory directory t))))
+      (delete-directory directory t)))))
 
 (mevedel-deftest mevedel-collaboration--history-records-compaction
   (:doc "an archived segment projects its leading summary as a compaction record")
-  (let* ((directory (make-temp-file "mevedel-history-compaction-" t))
+  (mevedel-test--raw-segments
+    (let* ((directory (make-temp-file "mevedel-history-compaction-" t))
          (session (mevedel-session--create :name "history-compaction"
                                            :save-path directory
-                                           :authority-mode 'pid-lock
+                                           :authority-mode 'portable
                                            :current-segment 2)))
     (unwind-protect
         (progn
@@ -468,13 +491,14 @@
             (should (equal '("compaction" "user")
                            (mapcar (lambda (record) (plist-get record :kind))
                                    records)))))
-      (delete-directory directory t))))
+      (delete-directory directory t)))))
 
 (mevedel-deftest mevedel-collaboration-forwarded-execution-compaction-dedup
   (:doc "first readable mailbox owns breadcrumb across archives and current transcript")
-  (let* ((directory (make-temp-file "mevedel-history-execution-" t))
+  (mevedel-test--raw-segments
+    (let* ((directory (make-temp-file "mevedel-history-execution-" t))
          (session (mevedel-session--create :name "history-execution"
-                                          :save-path directory :authority-mode 'pid-lock
+                                          :save-path directory :authority-mode 'portable
                                           :current-segment 3))
          (data (generate-new-buffer " *forwarded history live*"))
          (child (generate-new-buffer " *forwarded history child*"))
@@ -540,7 +564,7 @@
                                    (lambda (record) (plist-get record :kind)) :test #'equal)))))
       (kill-buffer child)
       (kill-buffer data)
-      (delete-directory directory t))))
+      (delete-directory directory t)))))
 
 (mevedel-deftest mevedel-collaboration-execution-dedup-lazy-archive-reads
   (:doc "text-only publishes avoid archive I/O and source changes invalidate memoized ids")

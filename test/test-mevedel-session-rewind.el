@@ -19,6 +19,20 @@
 (require 'mevedel-session-recovery)
 
 
+(defun test-mevedel-rewind--publish-backups (session &rest pairs)
+  "Publish and commit file-history backups for SESSION.
+PAIRS alternate backup name and bytes.  Call after the snapshots referencing
+them are set, so the committing save keeps them."
+  (let ((mevedel-session-artifacts--collecting-critical-artifacts-p t)
+        (mevedel-session-artifacts--critical-artifacts nil))
+    (while pairs
+      (mevedel-session-artifacts--file-history-write-backup
+       (mevedel-session-save-path session) (pop pairs) (pop pairs)))
+    (mevedel-session-publication-publish
+     session (nreverse mevedel-session-artifacts--critical-artifacts) t))
+  (mevedel-session-artifacts-save
+   session (or (get-buffer "*test-data-buf*") (current-buffer)) nil t))
+
 (mevedel-deftest mevedel-session-rewind--refresh-restored-buffers ()
   ,test
   (test)
@@ -1041,14 +1055,18 @@
                     `((1 . ((,missing . (:backup-name nil
                                          :pre-backup-name "missing"
                                          :version 1))))))
-              (mevedel-session-artifacts--file-history-write-backup
-               (mevedel-session-save-path session) "missing" "original")
+              (test-mevedel-rewind--publish-backups session "missing" "original")
               (cl-letf (((symbol-function 'display-buffer) #'ignore)
                         ((symbol-function 'yes-or-no-p)
                          (lambda (&rest _)
+                           ;; Lose the committed pre-image behind the plan.
                            (delete-file
-                            (mevedel-session-artifacts-backup-path
-                             (mevedel-session-save-path session) "missing"))
+                            (plist-get
+                             (cdr (assoc "file-history/missing"
+                                         (plist-get
+                                          (mevedel-session-publication session)
+                                          :artifacts)))
+                             :published))
                            t)))
                 (should-error
                  (mevedel-session-rewind-rewind buffer target)))
@@ -1245,12 +1263,12 @@
                          session))))
                 (let ((backup
                        (mevedel-session-artifacts--file-history-backup-name "first")))
-                  (mevedel-session-artifacts--file-history-write-backup
-                   (mevedel-session-save-path session) backup "first")
                   (setf (mevedel-session-file-snapshots session)
                         `((1 . ((,path . (:backup-name ,backup
                                         :pre-backup-name ,backup
-                                        :version 1)))))))
+                                        :version 1))))))
+                  (test-mevedel-rewind--publish-backups
+                   session backup "first"))
                 (goto-char (point-max))
                 (insert "Second prompt\n")
                 (insert (propertize "Second reply.\n" 'gptel 'response))
@@ -1258,8 +1276,6 @@
                 (mevedel-session-artifacts-save session buf t)
                 (let ((backup
                        (mevedel-session-artifacts--file-history-backup-name "second")))
-                  (mevedel-session-artifacts--file-history-write-backup
-                   (mevedel-session-save-path session) backup "second")
                   (setf (mevedel-session-file-snapshots session)
                         (append
                          (mevedel-session-file-snapshots session)
@@ -1267,22 +1283,17 @@
                                          :pre-backup-name
                                          ,(mevedel-session-artifacts--file-history-backup-name
                                            "first")
-                                         :version 2))))))))
+                                         :version 2)))))))
+                  (test-mevedel-rewind--publish-backups
+                   session backup "second"))
                 (write-region "second" nil path nil 'silent)
-                (mevedel-session-codec-write
-                 (mevedel-session-artifacts-sidecar-path
-                  (mevedel-session-save-path session))
-                 (mevedel-session-artifacts-build-sidecar session buf))
                 (let* ((before-buffer (buffer-string))
                        (session-id (mevedel-session-session-id session))
                        (save-path (mevedel-session-save-path session))
                        starts ended
                        (before-sidecar
-                        (with-temp-buffer
-                          (insert-file-contents
-                           (mevedel-session-artifacts-sidecar-path
-                            (mevedel-session-save-path session)))
-                          (buffer-string))))
+                        (mevedel-session-artifacts-read-artifact
+                         session "session.meta.el" t)))
                   (cl-letf (((symbol-function 'display-buffer) #'ignore)
                             ((symbol-function 'yes-or-no-p)
                              (lambda (&rest _) nil))
@@ -1297,11 +1308,8 @@
                   (should
                    (equal
                     before-sidecar
-                    (with-temp-buffer
-                      (insert-file-contents
-                       (mevedel-session-artifacts-sidecar-path
-                        (mevedel-session-save-path session)))
-                      (buffer-string))))
+                    (mevedel-session-artifacts-read-artifact
+                     session "session.meta.el" t)))
                   (should
                    (equal "second"
                           (with-temp-buffer
@@ -1330,7 +1338,9 @@
                                (lambda ()
                                  (setq ended t))))
                       (mevedel-session-rewind-rewind buf target))
-                    (should (string-match-p "no redo" confirmation)))
+                    ;; Lease-owned sessions keep both redo layers.
+                    (should (string-match-p "conversation and captured-file redo"
+                                            confirmation)))
                   (should (equal '("rewind") starts))
                   (should-not ended)
                   (let* ((context
@@ -1356,9 +1366,9 @@
                             (insert-file-contents path)
                             (buffer-string))))
                   (let ((sidecar
-                         (mevedel-session-codec-read
-                          (mevedel-session-artifacts-sidecar-path
-                           save-path))))
+                         (car (read-from-string
+                               (mevedel-session-artifacts-read-artifact
+                                session "session.meta.el" t)))))
                     (should (= 0 (plist-get sidecar :total-turn-count)))
                     (should-not (plist-get sidecar
                                            :forked-from-session-id)))))
@@ -2705,11 +2715,10 @@
         (let* ((path (file-name-concat tempdir "foo.el"))
                (backup-name (mevedel-session-artifacts--file-history-backup-name "v1")))
           (write-region "v1" nil path nil 'silent)
-          (mevedel-session-artifacts--file-history-write-backup
-           (mevedel-session-save-path session) backup-name "v1")
           (setf (mevedel-session-file-snapshots session)
                 `((1 . ((,path . (:backup-name ,backup-name :version 1
                                   :backup-time "..." :file-mtime "..."))))))
+          (test-mevedel-rewind--publish-backups session backup-name "v1")
           (let ((plan (mevedel-session-rewind-restore-plan session 1)))
             (should (null plan))))   ; noop entries filtered
       (test-mevedel-session-persistence--cleanup tempdir)))
@@ -2719,12 +2728,11 @@
     (unwind-protect
         (let* ((path (file-name-concat tempdir "foo.el"))
                (backup-name (mevedel-session-artifacts--file-history-backup-name "content")))
-          (mevedel-session-artifacts--file-history-write-backup
-           (mevedel-session-save-path session) backup-name "content")
           ;; File doesn't currently exist.
           (setf (mevedel-session-file-snapshots session)
                 `((1 . ((,path . (:backup-name ,backup-name :version 1
                                   :backup-time "..." :file-mtime "..."))))))
+          (test-mevedel-rewind--publish-backups session backup-name "content")
           (let ((plan (mevedel-session-rewind-restore-plan session 1)))
             (should (= 1 (length plan)))
             (should (eq 'create (plist-get (car plan) :action)))))
@@ -2749,10 +2757,6 @@
         (let* ((path (file-name-concat tempdir "foo.el"))
                (b1   (mevedel-session-artifacts--file-history-backup-name "v1"))
                (b2   (mevedel-session-artifacts--file-history-backup-name "v2")))
-          (mevedel-session-artifacts--file-history-write-backup
-           (mevedel-session-save-path session) b1 "v1")
-          (mevedel-session-artifacts--file-history-write-backup
-           (mevedel-session-save-path session) b2 "v2")
           ;; Current file content is something the snapshots have never seen.
           (write-region "external edits" nil path nil 'silent)
           (setf (mevedel-session-file-snapshots session)
@@ -2760,6 +2764,7 @@
                                   :backup-time "..." :file-mtime "..."))))
                   (2 . ((,path . (:backup-name ,b2 :version 2
                                   :backup-time "..." :file-mtime "..."))))))
+          (test-mevedel-rewind--publish-backups session b1 "v1" b2 "v2")
           (let ((plan (mevedel-session-rewind-restore-plan session 1)))
             (should (= 1 (length plan)))
             (should (eq 'overwrite (plist-get (car plan) :action)))
@@ -2781,10 +2786,12 @@
                 (mevedel-session-artifacts--file-history-backup-name "newly created"))
                (backup-name-restore
                 (mevedel-session-artifacts--file-history-backup-name "original")))
-          (mevedel-session-artifacts--file-history-write-backup
-           (mevedel-session-save-path session) backup-name-create "newly created")
-          (mevedel-session-artifacts--file-history-write-backup
-           (mevedel-session-save-path session) backup-name-restore "original")
+          (setf (mevedel-session-file-snapshots session)
+                `((1 . ((,create-path . (:backup-name ,backup-name-create :version 1))
+                        (,restore-path . (:backup-name ,backup-name-restore :version 1))))))
+          (test-mevedel-rewind--publish-backups
+           session backup-name-create "newly created"
+           backup-name-restore "original")
           ;; Set up current state: delete-path exists, restore-path has different content
           (write-region "to be deleted" nil delete-path nil 'silent)
           (write-region "diverged" nil restore-path nil 'silent)
@@ -2814,8 +2821,9 @@
     (unwind-protect
         (let* ((path (file-name-concat tempdir "fine.el"))
                (bn   (mevedel-session-artifacts--file-history-backup-name "ok")))
-          (mevedel-session-artifacts--file-history-write-backup
-           (mevedel-session-save-path session) bn "ok")
+          (setf (mevedel-session-file-snapshots session)
+                `((1 . ((,path . (:backup-name ,bn :version 1))))))
+          (test-mevedel-rewind--publish-backups session bn "ok")
           (let* ((plan
                   (list (list :action 'create :path path :backup-name bn)
                         ;; Bogus backup name; reading the backup will fail.

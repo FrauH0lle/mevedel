@@ -334,7 +334,7 @@ flowchart TD
     F --> G[Restore data and render the view]
 ```
 
-File-backed sessions use the separate PID-lock profile described below. File
+File-backed sessions use the same portable lease as project sessions. File
 snapshots are captured at mutation boundaries; saving persists that evidence.
 [Compaction](compaction.md), [Rewind](#rewind), and [Fork](#fork)
 use the persistence contracts described in their sections.
@@ -541,10 +541,11 @@ without an additional fixed copy. Old fixed
 transcripts are ignored, including their modification times; this change does
 not delete them. Numbered agent compaction archives still receive a physical
 recovery copy before the live buffer is rewritten. File-workspace
-sessions use the separate `pid-lock` profile and `.lock`; they do not create a
-lease or publication tree.  A session directory containing both control
-artifacts, or a persisted authority profile that disagrees with its workspace
-category, is rejected rather than guessed.
+sessions use the same lease and publication tree.  A session directory
+containing both a `.lock` and a lease, or a persisted authority profile that
+disagrees with its workspace category, is rejected rather than guessed; a
+`.lock` or plain sidecar without a lease is an unmigrated file session (see
+[explicit migration](#explicit-session-migration)).
 
 Retired local execution output may use lossless gzip storage behind stable
 `artifact://executions/*.log` handles. Compression runs outside the editor and
@@ -989,8 +990,8 @@ The package release is `0.5.0`; its persisted session format is independently
 `v0.5.15`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
 execution-target incarnation are
 required by that session format:
-project sessions persist `portable`, while file-workspace sessions
-persist `pid-lock`.  Portable project sessions always persist a non-empty
+project and file-workspace sessions persist `portable`.  Portable sessions
+always persist a non-empty
 `:target-incarnation`, including local sessions; the local and TRAMP probes use
 one canonical boot-id, machine-id, PID-1 start, and hostname payload, without
 client-specific TRAMP spelling or Emacs build details.  Resume restores the
@@ -2529,6 +2530,16 @@ format. To retire old support, remove the oldest prefix of steps and their
 unused conversion functions; the first remaining source becomes the minimum
 supported version. Retained steps do not need rewriting. Runtime readers and
 writers still accept only the current schema.
+
+File sessions used a PID lock (`.lock`, plain transcript files) before they
+moved to the portable lease within v0.5.15. Like the Worktree retry repair,
+this conversion follows the session's shape rather than its version: a
+closed `pid-lock` sidecar becomes `portable`, and the converted copy publishes
+every plain session file (transcripts, agent transcripts, file history,
+plans) as one immutable generation under a lease it then releases. Hidden
+control state and `*-log.el` diagnostic logs stay plain files. The runtime
+does not read unmigrated file sessions: the chooser lists them as unsupported
+and resume refuses them, both naming this script.
 
 #### Safety and backups
 
