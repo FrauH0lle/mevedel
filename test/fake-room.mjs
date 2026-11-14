@@ -90,6 +90,7 @@ function wsFrame(opcode, payload) {
  *   session   a session room (a welcome without a room kind)
  *   lobby     a lobby (a lobby listing instead of a welcome)
  *   mismatch  an origin speaking another protocol version
+ *   old       an origin of protocol 3: it never sends a challenge
  *   absent    no origin: the relay closes the room with 4004
  *   goodbye   an artifact room that ends itself when a request arrives:
  *             it sends the goodbye fixture with REASON, then the relay
@@ -188,7 +189,7 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
     // Bind the connection as the origin does; unbound frames are dropped.
     const challenge = randomBytes(16).toString('base64url');
     let lastSeq = 0;
-    send({ t: 'challenge', challenge });
+    if (mode !== 'old') send({ t: 'challenge', challenge });
     // The host ends the room: goodbye, then the relay closes it.
     const leave = async (why) => {
       for (const { from, frame: origin } of fixture('goodbye').frames) {
