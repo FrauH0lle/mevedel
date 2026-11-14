@@ -1378,8 +1378,7 @@ Inline and fork contexts are callback-driven.  Inline invocation
 calls CALLBACK with a prepared body; fork invocation spawns a retained
 asynchronous agent and calls CALLBACK when that turn settles."
   (let* ((skill-name (and skill (mevedel-skill-name skill)))
-         (session (and (fboundp 'mevedel-telemetry-current-session)
-                       (mevedel-telemetry-current-session)))
+         (session (mevedel-telemetry-current-session))
          (started-at (float-time))
          (original-callback callback)
          (callback

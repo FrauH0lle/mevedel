@@ -9,6 +9,7 @@
 ;;; Code:
 
 (require 'mevedel-resource)
+(require 'mevedel-telemetry)
 (require 'mevedel-turn)
 (require 'mevedel-utilities)
 
@@ -23,11 +24,6 @@
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
-
-;; `mevedel-telemetry'
-(declare-function mevedel-telemetry-detailed-p "mevedel-telemetry" (session))
-(declare-function mevedel-telemetry-record
-                  "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-args "mevedel-tool-registry" (cl-x) t)
@@ -748,7 +744,6 @@ with `Error:' so gptel settles the call without invoking its handler."
          ;; worth a log line in any tier.
          (telemetry-start-time
           (and session
-               (fboundp 'mevedel-telemetry-detailed-p)
                (mevedel-telemetry-detailed-p session)
                (float-time))))
     (when tool

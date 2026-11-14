@@ -2777,13 +2777,11 @@ gate token."
   (mevedel-session-artifacts-call-with-checkpoint
    session
    (lambda ()
-     (if (fboundp 'mevedel-telemetry-measure)
-	 (mevedel-telemetry-measure
-	  session 'session-save 0
-	  (lambda ()
-	    (mevedel-session-artifacts--save session buffer settled force token))
-	  :kind 'full :settled (and settled t))
-       (mevedel-session-artifacts--save session buffer settled force token)))))
+     (mevedel-telemetry-measure
+      session 'session-save 0
+      (lambda ()
+        (mevedel-session-artifacts--save session buffer settled force token))
+      :kind 'full :settled (and settled t)))))
 
 (defun mevedel-session-artifacts--save (session buffer settled force &optional token)
   "Save SESSION from BUFFER as `mevedel-session-artifacts-save' documents.
@@ -2938,14 +2936,12 @@ gate token; a deferred preparation receives its own."
                 #'ignore token))
     (when mevedel-session-artifacts-require-agent-commit-p
       (mevedel-session-artifacts--barrier session token))
-    (if (fboundp 'mevedel-telemetry-measure)
-        (mevedel-telemetry-measure
-         session 'session-save 0
-         (lambda ()
-           (mevedel-session-artifacts--save-agent-registry
-            session buffer token))
-         :kind 'agent-registry)
-      (mevedel-session-artifacts--save-agent-registry session buffer token))))
+    (mevedel-telemetry-measure
+     session 'session-save 0
+     (lambda ()
+       (mevedel-session-artifacts--save-agent-registry
+        session buffer token))
+     :kind 'agent-registry)))
 
 (defun mevedel-session-artifacts--save-agent-registry (session buffer &optional token)
   "Persist SESSION's sidecar from BUFFER as the public entry documents."
@@ -3576,11 +3572,10 @@ successor segment."
             new-text
             pending-position)
         (let ((telemetry-span
-               (and (fboundp 'mevedel-telemetry-start)
-                    (mevedel-telemetry-start
-                     session 'segment-rotation
-                     :old-segment old-current-segment
-                     :new-segment (1+ old-current-segment)))))
+               (mevedel-telemetry-start
+                session 'segment-rotation
+                :old-segment old-current-segment
+                :new-segment (1+ old-current-segment))))
           (condition-case err
               (progn
                 (mevedel-telemetry-record

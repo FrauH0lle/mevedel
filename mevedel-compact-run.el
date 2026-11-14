@@ -7,6 +7,7 @@
 
 ;;; Code:
 
+(require 'mevedel-telemetry)
 (require 'mevedel-utilities)
 
 (eval-when-compile (require 'cl-lib))
@@ -95,12 +96,6 @@
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-p "mevedel-structs" (object))
 (defvar mevedel--view-buffer)
-
-;; `mevedel-telemetry'
-(declare-function mevedel-telemetry-finish
-                  "mevedel-telemetry" (span &rest props))
-(declare-function mevedel-telemetry-start
-                  "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view-stream-end-progress
@@ -553,7 +548,6 @@ task-relevance data for a handoff summary.  SOURCE-TRANSFORM filters the
            (target-policy (mevedel-compact-estimation-target-policy))
            (telemetry-span
             (and session
-                 (fboundp 'mevedel-telemetry-start)
                  (apply #'mevedel-telemetry-start
                         session 'compaction
                         :trigger (if auto 'auto 'manual)

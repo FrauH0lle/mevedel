@@ -9,6 +9,7 @@
 ;;; Code:
 
 (require 'mevedel-recovery)
+(require 'mevedel-telemetry)
 
 (eval-when-compile
   (require 'cl-lib))
@@ -60,12 +61,6 @@
 (declare-function mevedel-system-render-prompt-file
                   "mevedel-system" (relative-path &optional replacements))
 (autoload 'mevedel-system-render-prompt-file "mevedel-system")
-
-;; `mevedel-telemetry'
-(declare-function mevedel-telemetry-finish "mevedel-telemetry"
-                  (span &rest props))
-(declare-function mevedel-telemetry-start "mevedel-telemetry"
-                  (session event &rest props))
 
 
 (defconst mevedel-context-summary--common-headings
@@ -430,7 +425,6 @@ continuation and handoff summaries."
                             '(:max-tokens nil :request-params nil)))))
           (setq span
                 (and session
-                     (fboundp 'mevedel-telemetry-start)
                      (mevedel-telemetry-start
                       session 'context-summary-request
                       :purpose purpose
