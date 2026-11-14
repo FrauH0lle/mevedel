@@ -87,9 +87,18 @@ challenge is answered `protocol mismatch`; one bearing another connection's
 challenge, or a `seq` at or below the last accepted, gets a notice that the
 relay repeated or reordered it. So recorded frames, the owner's `hello`
 included, act once, on their own connection. A reconnect is a new
-connection with a fresh challenge. The relay can still drop, delay or
-withhold frames and replay host frames to a guest, which may show stale
-content but cannot make the host act.
+connection with a fresh challenge. The other way, every guest frame also
+carries a random `nonce` the guest drew for this socket; the host keeps the
+first one it accepts and adds it to every frame it sends that guest alone.
+A guest drops any frame bearing another nonce, so a reply, link or file the
+host once sent another connection cannot be replayed as an answer to this
+one; the remote-artifact package also takes a request's answer only from a
+frame bearing its own nonce. A guest takes only the first `challenge` on a
+socket. Broadcasts carry no nonce. The relay can therefore still drop,
+delay or withhold frames, end connections, hand a fresh socket an old
+challenge so the host refuses it, and replay old broadcasts, which may show
+stale transcript or presence but cannot make the host act or answer a
+request.
 
 ## The owner link
 

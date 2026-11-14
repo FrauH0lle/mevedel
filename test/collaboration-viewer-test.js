@@ -192,9 +192,10 @@ async function unsealRaw(key, data) {
 
 // A frame the viewer sent, after checking it is bound to its connection.
 async function unseal(key, data) {
-  const {challenge, seq, ...frame} = await unsealRaw(key, data);
+  const {challenge, seq, nonce, ...frame} = await unsealRaw(key, data);
   assert.equal(typeof challenge, 'string');
   assert.ok(Number.isInteger(seq) && seq > 0);
+  assert.equal(typeof nonce, 'string');
   return frame;
 }
 
@@ -251,9 +252,13 @@ async function testTransportLifecycle() {
           });
         }),
         decrypt: (_algorithm, _key, sealed) => {
-          // Payload byte 9 stands for the host's challenge frame.
+          // Payload byte 9 stands for the host's challenge frame; 7 and 8
+          // for frames sent to this socket and, replayed, to another one.
           const plaintext = new TextEncoder().encode(JSON.stringify(
-            sealed[0] === 9 ? {t: 'challenge', challenge: 'c'} : {id: sealed[0]}));
+            sealed[0] === 9 ? {t: 'challenge', challenge: 'c'}
+              : sealed[0] === 7 ? {id: 7, nonce: 'A'.repeat(22)}
+                : sealed[0] === 8 ? {id: 8, nonce: 'another-connection'}
+                  : {id: sealed[0]}));
           if (sealed[0] !== 3) return Promise.resolve(plaintext);
           return new Promise(resolve => {
             finishDecrypts.push(() => resolve(plaintext));
@@ -330,6 +335,7 @@ async function testTransportLifecycle() {
   // Every frame echoes the socket's challenge with a rising sequence number.
   assert.equal(finishSeals[0].frame.challenge, 'c');
   assert.equal(finishSeals[0].frame.seq, 2);
+  assert.equal(finishSeals[0].frame.nonce, 'A'.repeat(22));
   finishSeals.shift().finish();
   await waitFor(() => finishSeals.length, 'second ordered encryption');
   assert.equal(finishSeals[0].frame.t, 'second');
@@ -362,6 +368,16 @@ async function testTransportLifecycle() {
   latest.dispatch('message', {data: good.buffer});
   await waitFor(() => received.length, 'frame after failed handler');
   assert.deepEqual(received, [2]);
+  // A frame carrying another connection's nonce is dropped; its own passes.
+  const foreign = new Uint8Array(33);
+  foreign[16] = 8;
+  const own = new Uint8Array(33);
+  own[16] = 7;
+  latest.dispatch('message', {data: foreign.buffer});
+  latest.dispatch('message', {data: own.buffer});
+  await waitFor(() => received.length === 2, 'frame for this socket');
+  assert.deepEqual(received, [2, 7]);
+  received.length = 1;
 
   const staleInbound = new Uint8Array(33);
   staleInbound[16] = 3;

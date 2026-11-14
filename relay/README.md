@@ -20,6 +20,9 @@ only the first per connection: one without a challenge with `error`
 `protocol mismatch: host speaks 4`, a stale challenge or a `seq` at or below
 the last accepted with a `notice`, and one from a peer the relay never
 announced with a `notice` that the connection is not bound yet.
+Every guest frame also carries `"nonce"`, random per socket; the host keeps
+the first it accepts and adds it to each frame for that peer alone, and
+guests drop frames bearing another nonce. Broadcasts carry none.
 
 Viewer destination links keep content selectors after the bearer fragment,
 for example `#ROOM.SECRET?artifact=STORE-ID&version=2`. The viewer imports the

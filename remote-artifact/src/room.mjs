@@ -10,7 +10,11 @@
 //
 // The relay may record and replay sealed frames, so the origin binds each
 // connection with a challenge: hello waits for it, and every frame echoes
-// it with a rising sequence number.
+// it with a rising sequence number.  The other way, every frame carries
+// this connection's own random nonce, which the origin's frames for this
+// connection carry back; a frame bearing another nonce was recorded
+// elsewhere and is dropped, and only a frame bearing this one answers a
+// request.
 import { parseLink } from './link.mjs';
 import { EditingAssembler, PROTOCOL, editingFrames, importKey, seal, unseal } from './protocol.mjs';
 
@@ -38,6 +42,7 @@ export class Room {
   #closed = null;
   #challenge = null;
   #seq = 0;
+  #nonce = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString('base64url');
 
   constructor(ws, key, link) {
     this.#ws = ws;
@@ -57,7 +62,8 @@ export class Room {
     this.#outbound = this.#outbound.then(async () => {
       if (this.#ws.readyState !== WebSocket.OPEN || !this.#challenge) return;
       this.#seq += 1;
-      this.#ws.send(await seal(this.#key, { ...frame, challenge: this.#challenge, seq: this.#seq }));
+      this.#ws.send(await seal(this.#key, { ...frame, challenge: this.#challenge, seq: this.#seq,
+        nonce: this.#nonce }));
     });
     return this.#outbound;
   }
@@ -100,7 +106,8 @@ export class Room {
           }
           return;
         }
-        if (frame.t === 'editing' && frame.reqId !== 'event') {
+        if ('nonce' in frame && frame.nonce !== this.#nonce) return;
+        if (frame.t === 'editing' && frame.reqId !== 'event' && frame.nonce === this.#nonce) {
           const body = this.#assembler.add(frame);
           const pending = body !== undefined && this.#pending.get(frame.reqId);
           if (pending) {

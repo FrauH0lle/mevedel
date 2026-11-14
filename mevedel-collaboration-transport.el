@@ -25,6 +25,8 @@
 ;; bound to its connection: on `peer-joined' the host sends that peer a
 ;; random challenge, and the peer's frames must echo it with a sequence
 ;; number above the previous one.  Others are refused before delivery.
+;; The other way, each guest sends a random nonce of its own, which every
+;; frame sent to that peer alone carries back.
 
 ;;; Code:
 
@@ -247,7 +249,7 @@ count as drops; undecryptable or malformed input is dropped silently."
                          :on-frame (plist-get callbacks :on-frame)
                          :on-control (plist-get callbacks :on-control)
                          :on-state (plist-get callbacks :on-state)
-                         ;; Peer id -> (CHALLENGE LAST-SEQ REFUSED) of its connection.
+                         ;; Peer id -> (CHALLENGE LAST-SEQ REFUSED NONCE).
                          :peers (make-hash-table :test #'eql)
                          :inbound-at nil
                          :keepalive-timer nil)))
@@ -430,8 +432,8 @@ Otherwise return t to drop it silently, or the frame that refuses it.
 Only a binding's first refusal is answered.  A frame without a challenge
 comes from a client of an older protocol; one with a stale challenge or a
 sequence number at or below the last accepted was repeated or reordered."
-  ;; A binding is (CHALLENGE LAST-SEQ REFUSED); CHALLENGE is nil for a
-  ;; peer the relay never announced.
+  ;; A binding is (CHALLENGE LAST-SEQ REFUSED NONCE); CHALLENGE is nil for
+  ;; a peer the relay never announced, NONCE nil until its first frame.
   (let* ((peers (plist-get transport :peers))
          (binding (gethash peer peers))
          (challenge (plist-get frame :challenge))
@@ -440,12 +442,16 @@ sequence number at or below the last accepted was repeated or reordered."
      ((and (car binding) (equal challenge (car binding))
            (natnump seq) (> seq (cadr binding)))
       (setf (cadr binding) seq)
+      (let ((nonce (plist-get frame :nonce)))
+        (when (and (null (nth 3 binding)) (stringp nonce)
+                   (<= (length nonce) 64))
+          (setf (nth 3 binding) nonce)))
       nil)
      ((nth 2 binding) t)
      ((not binding)
       (if (>= (hash-table-count peers) mevedel-collaboration--max-unbound-peers)
           t
-        (puthash peer (list nil 0 t) peers)
+        (puthash peer (list nil 0 t nil) peers)
         (list :t "notice"
               :message "The host ignored a frame from a connection it has not bound yet.")))
      (t
@@ -492,7 +498,7 @@ sequence number at or below the last accepted was repeated or reordered."
                ;; A fresh challenge per connection, a reconnect included.
                (let ((challenge (mevedel-collaboration--base64url
                                  (mevedel-collaboration--random-bytes 16))))
-                 (puthash peer (list challenge 0 nil) peers)
+                 (puthash peer (list challenge 0 nil nil) peers)
                  (mevedel-collaboration--transport-deliver
                   transport #'mevedel-collaboration--transport-send
                   transport peer (list :t "challenge" :challenge challenge))))
@@ -575,8 +581,18 @@ one by closing the connection it arrived on -- which for the host means
 the relay collects the room, ending the session for every guest."
   (when (mevedel-collaboration--transport-open-p transport)
     (condition-case nil
-        (let ((encoded (if (stringp frame) frame (json-encode frame)))
-              (ws (plist-get transport :ws)))
+        (let* ((nonce (when-let* (((/= peer 0))
+                                  (peers (plist-get transport :peers)))
+                        (nth 3 (gethash peer peers))))
+               ;; A frame for one peer carries back its nonce, so the relay
+               ;; cannot answer a later connection with it.
+               (encoded (cond
+                         ((not nonce) (if (stringp frame) frame (json-encode frame)))
+                         ((stringp frame)
+                          (concat (substring frame 0 -1) ",\"nonce\":"
+                                  (json-encode nonce) "}"))
+                         (t (json-encode (append frame (list :nonce nonce))))))
+               (ws (plist-get transport :ws)))
           (when (<= (string-bytes encoded)
                     mevedel-collaboration--max-frame-json-bytes)
             (unless (websocket-openp ws)

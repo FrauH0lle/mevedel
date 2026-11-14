@@ -63,9 +63,10 @@
     let inbound = Promise.resolve();
     let outbound = Promise.resolve();
     let sending = 0;
-    // The host's challenge for the current socket and the last sequence
-    // number sent on it. Every frame carries both, so a relay replaying
-    // recorded frames cannot make the host act again.
+    // The host's challenge for the current socket, the last sequence number
+    // sent on it and this socket's own nonce. Every frame carries all three,
+    // so a relay replaying recorded frames cannot make the host act again;
+    // the host's frames for this socket carry the nonce back.
     let binding = null;
 
     async function sealFrame(text) {
@@ -99,7 +100,8 @@
       // TEXT is the frame object serialized at send time; append the binding.
       const sealed = await sealFrame(
         `${text.slice(0, -1)}${text === '{}' ? '' : ','}"challenge":`
-        + `${JSON.stringify(binding.challenge)},"seq":${binding.seq}}`);
+        + `${JSON.stringify(binding.challenge)},"seq":${binding.seq},`
+        + `"nonce":${JSON.stringify(binding.nonce)}}`);
       if (ended || socket !== target || target.readyState !== WebSocket.OPEN) {
         return false;
       }
@@ -155,12 +157,13 @@
       binding = null;
       options.onConnection('Connecting…');
       const nextSocket = new WebSocket(websocketUrl());
+      const nonce = base64urlEncode(crypto.getRandomValues(new Uint8Array(16)));
       let queuedBytes=0,queuedFrames=0;
       nextSocket.binaryType = 'arraybuffer';
       socket = nextSocket;
       // The hello waits for the host's challenge, which binds this socket.
       async function join(challenge) {
-        binding = {socket: nextSocket, challenge, seq: 0};
+        binding = {socket: nextSocket, challenge, seq: 0, nonce};
         if (!await send(options.hello())) return;
         if (ended || socket !== nextSocket
             || nextSocket.readyState !== WebSocket.OPEN) return;
@@ -189,7 +192,9 @@
             if (frame.t === 'challenge') {
               // Only the first: a socket's binding never changes.
               if (!binding && typeof frame.challenge === 'string') join(frame.challenge);
-            } else {
+            } else if (!('nonce' in frame) || frame.nonce === nonce) {
+              // Another nonce marks a frame the host sent another
+              // connection, replayed by the relay; broadcasts carry none.
               options.onFrame(frame);
             }
           }

@@ -160,7 +160,7 @@ async function open(browser, {viewport = {width: 1200, height: 800}, files = {}}
     send({t: 'challenge', challenge: 'c'});
     socket.onMessage(async message => {
       if (typeof message === 'string') return;
-      const {challenge, seq, ...frame} = await unseal(key, message);
+      const {challenge, seq, nonce: _nonce, ...frame} = await unseal(key, message);
       if (challenge !== 'c' || !(seq > last)) return;
       last = seq;
       page.received.push(frame);

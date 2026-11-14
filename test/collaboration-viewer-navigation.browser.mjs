@@ -204,7 +204,7 @@ async function open(browser, {lobbyRunning = true, records = [], sharedItem = nu
     page.push[id]({t: 'challenge', challenge: 'c'});
     socket.onMessage(async message => {
       if (typeof message === 'string') return;
-      const {challenge, seq, ...frame} = await unseal(keys[id], message);
+      const {challenge, seq, nonce: _nonce, ...frame} = await unseal(keys[id], message);
       if (challenge !== 'c' || !(seq > last)) return;
       last = seq;
       page.received.push({room: id, connection, frame});

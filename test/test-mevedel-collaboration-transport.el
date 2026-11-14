@@ -373,7 +373,7 @@
 (defun test-mevedel-collaboration-transport--peers (peer)
   "Return a peer table binding PEER's connection to challenge \"c\"."
   (let ((peers (make-hash-table :test #'eql)))
-    (puthash peer (list "c" 0 nil) peers)
+    (puthash peer (list "c" 0 nil nil) peers)
     peers))
 
 (mevedel-deftest mevedel-collaboration--transport-refusal
@@ -452,7 +452,7 @@
                                       key (json-encode
                                            (list :t type :proto 4
                                                  :challenge challenge
-                                                 :seq seq)))))))
+                                                 :seq seq :nonce "guest-nonce")))))))
               (unwind-protect
                   (progn
                     (should (mevedel-relay-test--pump
@@ -473,17 +473,22 @@
                     (should (equal 1 (caar frames)))
                     (should (equal "hello" (plist-get (cdar frames) :t)))
                     ;; Host -> guest: targeted and broadcast envelopes
-                    ;; arrive sealed and unseal to the sent frame.
+                    ;; arrive sealed and unseal to the sent frame; one for
+                    ;; this peer alone carries back its nonce, encoded or not.
                     (should (mevedel-collaboration--transport-send
                              transport 1 (list :t "welcome" :proto 4)))
                     (should (mevedel-collaboration--transport-send
                              transport 0 (list :t "record")))
+                    (should (mevedel-collaboration--transport-send
+                             transport 1 "{\"t\":\"chunk\"}"))
                     (should (mevedel-relay-test--pump
-                             (lambda () (= 2 (length guest-frames)))))
+                             (lambda () (= 3 (length guest-frames)))))
                     (let ((decoded (mapcar #'decode (nreverse guest-frames))))
-                      (should (equal '("welcome" "record")
+                      (should (equal '(("welcome" . "guest-nonce") ("record")
+                                       ("chunk" . "guest-nonce"))
                                      (mapcar (lambda (frame)
-                                               (plist-get frame :t))
+                                               (cons (plist-get frame :t)
+                                                     (plist-get frame :nonce)))
                                              decoded))))
                     ;; An undecryptable binary frame is dropped silently.
                     (setq frames nil)
