@@ -787,6 +787,28 @@ holder identity is recorded by an owner lease acquired before the call."
      (let ((mevedel-session-durability--client-id (make-string 64 ?b)))
        (should (mevedel-session-durability-lease-acquire root "*new*")))))
 
+  :doc "keeps a dead holder whose PID is out of range or whose boot disagrees"
+  (test-mevedel-session-durability--with-holder
+   (lambda (root process)
+     (test-mevedel-session-durability--kill-holder process)
+     (let* ((directory (mevedel-session-durability--lease-path root))
+            (head (mevedel-session-durability--lease-head directory))
+            (holder (plist-get head :holder)))
+       (dolist (forged
+                (list (plist-put (copy-sequence holder) :pid 4194305)
+                      (plist-put (copy-sequence holder) :process
+                                 (replace-regexp-in-string
+                                  "\\`[0-9a-f]" (lambda (c) (if (equal c "0") "1" "0"))
+                                  (plist-get holder :process)))))
+         (mevedel-session-durability--write-generation
+          directory (plist-put (copy-sequence head) :holder forged))
+         (let ((mevedel-session-durability--client-id (make-string 64 ?b)))
+           (should-not (mevedel-session-durability-lease-acquire root "*new*"))))
+       ;; Control: the unforged dead holder is reclaimable.
+       (mevedel-session-durability--write-generation directory head)
+       (let ((mevedel-session-durability--client-id (make-string 64 ?b)))
+         (should (mevedel-session-durability-lease-acquire root "*new*"))))))
+
   :doc "keeps a live holder whose recorded identity is malformed"
   (test-mevedel-session-durability--with-holder
    (lambda (root process)
