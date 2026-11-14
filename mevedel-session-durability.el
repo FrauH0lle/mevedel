@@ -335,12 +335,15 @@ nil, so such leases wait for expiry."
     (and host
          (equal host (plist-get holder :host))
          (eql (user-uid) (plist-get holder :uid))
-         (natnump pid) (> pid 0)
+         ;; 4194304 is Linux's largest pid_max; a larger PID is forged.
+         (natnump pid) (> pid 0) (<= pid 4194304)
          ;; Malformed identity evidence cannot prove reuse of a live PID.
          (stringp process)
          (let ((case-fold-search nil))
            (string-match-p mevedel-session-durability--process-identity-regexp
                            process))
+         ;; The identity must come from the boot the host names.
+         (string-prefix-p (concat (car (split-string host "/")) ":") process)
          (or (not (mevedel-session-durability--pid-alive-p pid))
              (let ((current (mevedel-session-durability--pid-identity pid)))
                (and current (not (equal current process))))))))
