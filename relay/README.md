@@ -23,7 +23,7 @@ announced with a `notice` that the connection is not bound yet.
 Every guest frame also carries `"nonce"`, random per socket; the host keeps
 the first it accepts and adds it to each frame for that peer alone, and
 guests drop frames bearing another nonce. The host refuses a frame without
-a nonce of 1 to 64 characters and, once it has one, any frame bearing another. Broadcasts carry none and are limited to
+a nonce of 1 to 64 base64url characters and, once it has one, any frame bearing another. Broadcasts carry none and are limited to
 `mevedel-collaboration--broadcast-types`; sending another type to peer 0
 is an error.
 

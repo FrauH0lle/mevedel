@@ -55,6 +55,10 @@
                   "mevedel-collaboration" (room peer guest &optional force))
 (declare-function mevedel-collaboration--status-frame
                   "mevedel-collaboration" (room))
+(declare-function mevedel-collaboration--skip-oversize
+                  "mevedel-collaboration" (room send))
+(declare-function mevedel-collaboration--send-guarded
+                  "mevedel-collaboration" (room peer frame))
 (defvar mevedel-collaboration--attachment-extensions)
 (defvar mevedel-collaboration--duplicate-prompt-window)
 (defvar mevedel-collaboration--max-attachment-bytes)
@@ -516,8 +520,8 @@ One guest's failed send does not keep the others from hearing it."
       (when (plist-get guest :writable)
         (list :models (mevedel-collaboration--model-labels)))))
     (cl-loop for rest on chunks do
-             (mevedel-collaboration--transport-send
-              transport peer
+             (mevedel-collaboration--send-guarded
+              room peer
               (mevedel-collaboration--records-frame
                (list :t "snapshot-chunk") (car rest) (null (cdr rest)))))))
 
@@ -680,8 +684,8 @@ must not collect a decision it may not see by reconnecting."
         (when (or (null audience)
                   (mevedel-collaboration--audience-peer-p
                    room peer audience))
-          (mevedel-collaboration--transport-send
-           (plist-get room :transport) peer
+          (mevedel-collaboration--send-guarded
+           room peer
            (mevedel-collaboration--ui-request-frame request-id overlay)))))))
 
 (defun mevedel-collaboration-retire-permission-requests (session entries)
@@ -867,50 +871,59 @@ Authority comes only from the tokens FRAME proves it holds."
         guest))))
 
 (defun mevedel-collaboration--handle-hello (room peer frame)
-  "Register guest PEER from its hello FRAME and send the snapshot."
+  "Register guest PEER from its hello FRAME and send the snapshot.
+Each step stands alone: a frame too large to send costs the guest only
+that step."
   (when-let* ((guest (mevedel-collaboration--admit-hello room peer frame)))
-    (mevedel-collaboration--send-snapshot room peer)
-    (mevedel-collaboration--publish-history room peer)
-    ;; Queue and busy state travel only on change, so a joining
-    ;; guest is told the current ones directly.
-    (mevedel-collaboration--send-queue-state room peer guest t)
-    (mevedel-collaboration--transport-send
-     (plist-get room :transport) peer
-     (mevedel-collaboration--status-frame room))
-    ;; The roster broadcast is latched on change, so a joining guest
-    ;; is told the current one directly -- an empty roster included,
-    ;; because a reconnecting viewer must clear stale rows.
-    (mevedel-collaboration--transport-send
-     (plist-get room :transport) peer
-     (mevedel-collaboration--agents-frame room))
-    (mevedel-collaboration--transport-send
-     (plist-get room :transport) peer
-     (mevedel-collaboration--background-frame room))
-    ;; The task list is latched the same way.
-    (mevedel-collaboration--transport-send
-     (plist-get room :transport) peer
-     (mevedel-collaboration--tasks-frame room))
-    (mevedel-collaboration--transport-send
-     (plist-get room :transport) peer
-     (mevedel-collaboration--goal-frame room))
-    ;; The store's artifacts attached to the session join the sidebar.  A
-    ;; store fault costs the guest only this listing.
-    (condition-case err
-        (mevedel-collaboration--transport-send
-         (plist-get room :transport) peer
-         (mevedel-collaboration--store-frame room))
-      (error (mevedel-diagnostic-message
-              (mevedel-diagnostic-scope (mevedel-collaboration--room-workspace room))
-              "Artifact listing failed: %s"
-                      (error-message-string err))))
-    (when (and (plist-get guest :writable)
-               mevedel-collaboration-remote-interactions)
-      (mevedel-collaboration--send-ui-requests room peer))
-    (mevedel-collaboration-presence-publish room)
-    ;; Last, so an optional recovery fault cannot cost the owner the
-    ;; frames above.
-    (when (plist-get guest :owner)
-      (mevedel-collaboration-recovery-send room peer))))
+    (let ((transport (plist-get room :transport)))
+      (dolist (step
+               (list
+                (lambda () (mevedel-collaboration--send-snapshot room peer))
+                (lambda () (mevedel-collaboration--publish-history room peer))
+                ;; Queue and busy state travel only on change, so a joining
+                ;; guest is told the current ones directly.
+                (lambda () (mevedel-collaboration--send-queue-state room peer guest t))
+                (lambda ()
+                  (mevedel-collaboration--transport-send
+                   transport peer (mevedel-collaboration--status-frame room)))
+                ;; The roster broadcast is latched on change, so a joining
+                ;; guest is told the current one directly -- an empty roster
+                ;; included, because a reconnecting viewer must clear stale rows.
+                (lambda ()
+                  (mevedel-collaboration--transport-send
+                   transport peer (mevedel-collaboration--agents-frame room)))
+                (lambda ()
+                  (mevedel-collaboration--transport-send
+                   transport peer (mevedel-collaboration--background-frame room)))
+                ;; The task list is latched the same way.
+                (lambda ()
+                  (mevedel-collaboration--transport-send
+                   transport peer (mevedel-collaboration--tasks-frame room)))
+                (lambda ()
+                  (mevedel-collaboration--transport-send
+                   transport peer (mevedel-collaboration--goal-frame room)))
+                ;; The store's artifacts attached to the session join the
+                ;; sidebar.  A store fault costs the guest only this listing.
+                (lambda ()
+                  (condition-case err
+                      (mevedel-collaboration--transport-send
+                       transport peer (mevedel-collaboration--store-frame room))
+                    (error (mevedel-diagnostic-message
+                            (mevedel-diagnostic-scope
+                             (mevedel-collaboration--room-workspace room))
+                            "Artifact listing failed: %s"
+                            (error-message-string err)))))
+                (lambda ()
+                  (when (and (plist-get guest :writable)
+                             mevedel-collaboration-remote-interactions)
+                    (mevedel-collaboration--send-ui-requests room peer)))
+                (lambda () (mevedel-collaboration-presence-publish room))
+                ;; Last, so an optional recovery fault cannot cost the owner
+                ;; the frames above.
+                (lambda ()
+                  (when (plist-get guest :owner)
+                    (mevedel-collaboration-recovery-send room peer)))))
+        (mevedel-collaboration--skip-oversize room step)))))
 
 (defconst mevedel-collaboration--max-push-endpoint-bytes 2048
   "Maximum encoded bytes accepted for a browser push endpoint.")

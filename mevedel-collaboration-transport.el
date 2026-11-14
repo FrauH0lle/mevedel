@@ -144,15 +144,33 @@ must never signal out of the transport."
           (substring envelope
                      mevedel-collaboration--envelope-header-bytes))))
 
-(defconst mevedel-collaboration--max-frame-json-bytes
+(defconst mevedel-collaboration--max-wire-json-bytes
   (- mevedel-collaboration--max-message-bytes
      mevedel-collaboration--envelope-header-bytes
      mevedel-collaboration--nonce-bytes
      mevedel-collaboration--tag-bytes)
-  "Encoded JSON bytes one frame may carry.
+  "Encoded JSON bytes one frame may carry on the wire.
 The wire bound covers what is actually written: the peer header, the
 nonce, and the authentication tag travel with the sealed JSON, so they
 come out of the same budget.")
+
+(defconst mevedel-collaboration--max-guest-nonce-chars 64
+  "Longest guest nonce the host accepts; it is base64url text.")
+
+(defconst mevedel-collaboration--max-binding-bytes
+  (string-bytes (format ",\"nonce\":\"%s\""
+                        (make-string mevedel-collaboration--max-guest-nonce-chars ?n)))
+  "Bytes the transport may add to a frame for one guest: its nonce.")
+
+(defconst mevedel-collaboration--max-frame-json-bytes
+  (- mevedel-collaboration--max-wire-json-bytes
+     mevedel-collaboration--max-binding-bytes)
+  "Encoded JSON bytes a caller's frame may use.
+The transport adds the receiving guest's nonce to a frame for one guest,
+so callers filling frames to this bound leave room for it.")
+
+(define-error 'mevedel-collaboration-frame-too-large
+  "Collaboration frame too large to send")
 
 (defconst mevedel-collaboration--max-control-bytes 4096
   "Encoded bytes one unencrypted relay control may carry.")
@@ -447,7 +465,12 @@ sequence number at or below the last accepted was repeated or reordered."
            ;; so the first accepted frame always adopts it, and a relay
            ;; handing another socket this peer's recorded challenge cannot pass.
            (let ((nonce (plist-get frame :nonce)))
-             (and (stringp nonce) (<= 1 (length nonce) 64)
+             ;; Base64url, so the nonce the host echoes costs a known size.
+             (and (stringp nonce)
+                  (string-match-p
+                   (format "\\`[A-Za-z0-9_-]\\{1,%d\\}\\'"
+                           mevedel-collaboration--max-guest-nonce-chars)
+                   nonce)
                   (or (null (nth 3 binding)) (equal nonce (nth 3 binding))))))
       (setf (cadr binding) seq)
       (unless (nth 3 binding)
@@ -605,28 +628,38 @@ non-nil when the frame was written.  A closed connection drops the
 frame: guests recover state by re-sending hello after their own
 reconnect, so nothing is queued across a relay outage.
 
-A frame over the wire bound is dropped here rather than sent.  This is
-the one place every frame passes, and the relay must refuse an oversized
-one by closing the connection it arrived on -- which for the host means
-the relay collects the room, ending the session for every guest."
+A frame over the wire bound signals `mevedel-collaboration-frame-too-large'
+rather than being sent: the relay refuses an oversized frame by closing
+the connection it arrived on, which for the host collects the room and
+ends the session for every guest.  Callers keep frames within
+`mevedel-collaboration--max-frame-json-bytes', which leaves room for the
+nonce added here; the error surfaces any frame that does not, instead of
+losing it silently."
   (when (zerop peer)
     (mevedel-collaboration--transport-check-broadcast frame))
   (when (mevedel-collaboration--transport-open-p transport)
-    (condition-case nil
-        (let* ((nonce (when-let* (((/= peer 0))
-                                  (peers (plist-get transport :peers)))
-                        (nth 3 (gethash peer peers))))
-               ;; A frame for one peer carries back its nonce, so the relay
-               ;; cannot answer a later connection with it.
-               (encoded (cond
-                         ((not nonce) (if (stringp frame) frame (json-encode frame)))
-                         ((stringp frame)
-                          (concat (substring frame 0 -1) ",\"nonce\":"
-                                  (json-encode nonce) "}"))
-                         (t (json-encode (append frame (list :nonce nonce))))))
-               (ws (plist-get transport :ws)))
-          (when (<= (string-bytes encoded)
-                    mevedel-collaboration--max-frame-json-bytes)
+    (when-let* ((encoded
+                 (condition-case nil
+                     (let ((nonce (when-let* (((/= peer 0))
+                                              (peers (plist-get transport :peers)))
+                                    (nth 3 (gethash peer peers)))))
+                       ;; A frame for one peer carries back its nonce, so the
+                       ;; relay cannot answer a later connection with it.
+                       (cond
+                        ((not nonce) (if (stringp frame) frame (json-encode frame)))
+                        ((stringp frame)
+                         (concat (substring frame 0 -1) ",\"nonce\":"
+                                 (json-encode nonce) "}"))
+                        (t (json-encode (append frame (list :nonce nonce))))))
+                   (error nil))))
+      (let ((bytes (string-bytes encoded)))
+        (when (> bytes mevedel-collaboration--max-wire-json-bytes)
+          (signal 'mevedel-collaboration-frame-too-large
+                  (list (format "%d bytes over the %d-byte bound"
+                                (- bytes mevedel-collaboration--max-wire-json-bytes)
+                                mevedel-collaboration--max-wire-json-bytes)))))
+      (condition-case nil
+          (let ((ws (plist-get transport :ws)))
             (unless (websocket-openp ws)
               (signal 'websocket-closed (list frame)))
             (process-send-string
@@ -635,11 +668,11 @@ the relay collects the room, ending the session for every guest."
               (mevedel-collaboration--envelope-pack
                peer
                (mevedel-collaboration--seal (plist-get transport :key) encoded))))
-            t))
-      (websocket-closed (mevedel-collaboration--transport-down
-                         transport (plist-get transport :ws))
-                        nil)
-      (error nil))))
+            t)
+        (websocket-closed (mevedel-collaboration--transport-down
+                           transport (plist-get transport :ws))
+                          nil)
+        (error nil)))))
 
 (defun mevedel-collaboration--transport-control (transport control)
   "Send unencrypted relay CONTROL through TRANSPORT.

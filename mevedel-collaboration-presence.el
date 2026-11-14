@@ -38,9 +38,9 @@
 (declare-function mevedel-collaboration--workspace-key
                   "mevedel-collaboration-guest" (room))
 
-;; `mevedel-collaboration-transport'
-(declare-function mevedel-collaboration--transport-send
-                  "mevedel-collaboration-transport" (transport peer frame))
+;; `mevedel-collaboration'
+(declare-function mevedel-collaboration--send-guarded
+                  "mevedel-collaboration" (room peer frame))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x))
@@ -152,8 +152,8 @@ artifact room's consumers are listed but sent nothing."
                 (guest (nth 2 person)))
             (unless (equal frame (plist-get guest :presence-sent))
               (plist-put guest :presence-sent frame)
-              (mevedel-collaboration--transport-send
-               (plist-get (car person) :transport) (nth 1 person) frame))))))))
+              (mevedel-collaboration--send-guarded
+               (car person) (nth 1 person) frame))))))))
 
 (defun mevedel-collaboration-presence-state (frame)
   "Return the `(:viewing PAGE :active ACTIVE)' a guest FRAME reports.
