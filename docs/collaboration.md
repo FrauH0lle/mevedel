@@ -89,15 +89,25 @@ relay repeated or reordered it. So recorded frames, the owner's `hello`
 included, act once, on their own connection. A reconnect is a new
 connection with a fresh challenge. The other way, every guest frame also
 carries a random `nonce` the guest drew for this socket; the host keeps the
-first one it accepts and adds it to every frame it sends that guest alone.
+first one it accepts, then accepts only frames bearing it, and adds it to
+every frame it sends that guest alone. A relay that hands another socket a
+live guest's recorded challenge therefore cannot speak with that guest's
+authority: the host refuses its frames.
 A guest drops any frame bearing another nonce, so a reply, link or file the
 host once sent another connection cannot be replayed as an answer to this
 one; the remote-artifact package also takes a request's answer only from a
 frame bearing its own nonce. A guest takes only the first `challenge` on a
-socket. Broadcasts carry no nonce. The relay can therefore still drop,
-delay or withhold frames, end connections, hand a fresh socket an old
-challenge so the host refuses it, and replay old broadcasts, which may show
-stale transcript or presence but cannot make the host act or answer a
+socket. Broadcasts carry no nonce, and the host broadcasts only a bounded
+list of frame types (`mevedel-collaboration--broadcast-types`): `record`,
+`remove`, `notice`, `status`, `store-artifacts`, `agents`, `history-index`,
+`goal`, `tasks`, `background-work`, `discussions`, `bye`, and shared-editing
+change events (`editing` with `reqId` `event`); any other type must name its
+peer. The relay can therefore still drop, delay or withhold frames, end
+connections, hand a fresh socket an old challenge so the host refuses it,
+and replay any of those broadcasts. A replay can show a stale transcript,
+status, store, goal, task list or notice, and a replayed `bye` ends a live
+viewer's session with its old reason, such as `revoked`. That is denial of
+service and a false display; it cannot make the host act or answer a
 request.
 
 ## The owner link

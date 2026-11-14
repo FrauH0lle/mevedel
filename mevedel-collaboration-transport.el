@@ -35,7 +35,9 @@
 
 (require 'json)
 
-(defvar mevedel-collaboration--protocol-version)
+(defconst mevedel-collaboration--protocol-version 4
+  "The sealed host/guest payload protocol, checked at hello.
+See relay/README.md for what changes with it.")
 
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--base64url "mevedel-collaboration" (bytes))
@@ -440,7 +442,11 @@ sequence number at or below the last accepted was repeated or reordered."
          (seq (plist-get frame :seq)))
     (cond
      ((and (car binding) (equal challenge (car binding))
-           (natnump seq) (> seq (cadr binding)))
+           (natnump seq) (> seq (cadr binding))
+           ;; Once adopted, the nonce identifies the socket: a relay handing
+           ;; another socket this peer's recorded challenge cannot pass.
+           (or (null (nth 3 binding))
+               (equal (plist-get frame :nonce) (nth 3 binding))))
       (setf (cadr binding) seq)
       (let ((nonce (plist-get frame :nonce)))
         (when (and (null (nth 3 binding)) (stringp nonce)
@@ -566,11 +572,35 @@ this loop masks in place."
      (unibyte-string k0 k1 k2 k3)
      masked)))
 
+(defconst mevedel-collaboration--broadcast-types
+  '("record" "remove" "notice" "status" "store-artifacts" "agents"
+    "history-index" "goal" "tasks" "background-work" "discussions" "bye"
+    ("editing" . "event"))
+  "Frame types the host may send to every guest at once.
+An entry (TYPE . REQ-ID) admits TYPE only with that request id: shared
+editing broadcasts its change events, never a reply to one request.
+Broadcasts carry no guest's nonce, so a relay can replay them to any
+guest; a reply or anything else meant for one guest must name its peer.")
+
+(defun mevedel-collaboration--transport-check-broadcast (frame)
+  "Signal an error unless FRAME, a plist or its JSON text, may be broadcast."
+  (let ((type (if (stringp frame)
+                  (and (string-match "\\`{\"t\":\"\\([^\"]+\\)\"" frame)
+                       (match-string 1 frame))
+                (plist-get frame :t))))
+    (unless (or (member type mevedel-collaboration--broadcast-types)
+                (and (consp frame)
+                     (member (cons type (plist-get frame :reqId))
+                             mevedel-collaboration--broadcast-types)))
+      (error "Frame type %S may not be broadcast; send it to its peer" type))))
+
 (defun mevedel-collaboration--transport-send (transport peer frame)
   "Seal and send plist FRAME to PEER through TRANSPORT.
 FRAME may also be its JSON text, already encoded.
 
-PEER 0 broadcasts to every guest; PEER N targets one guest.  Return
+PEER 0 broadcasts to every guest, only the frame types in
+`mevedel-collaboration--broadcast-types' (others signal an error);
+PEER N targets one guest.  Return
 non-nil when the frame was written.  A closed connection drops the
 frame: guests recover state by re-sending hello after their own
 reconnect, so nothing is queued across a relay outage.
@@ -579,6 +609,8 @@ A frame over the wire bound is dropped here rather than sent.  This is
 the one place every frame passes, and the relay must refuse an oversized
 one by closing the connection it arrived on -- which for the host means
 the relay collects the room, ending the session for every guest."
+  (when (zerop peer)
+    (mevedel-collaboration--transport-check-broadcast frame))
   (when (mevedel-collaboration--transport-open-p transport)
     (condition-case nil
         (let* ((nonce (when-let* (((/= peer 0))

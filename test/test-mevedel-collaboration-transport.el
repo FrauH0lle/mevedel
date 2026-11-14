@@ -403,6 +403,42 @@
                      transport 4 '(:t "abort" :challenge "c" :seq 1))))
       (should-not (gethash 4 (plist-get transport :peers))))))
 
+(mevedel-deftest mevedel-collaboration--transport-refusal/spliced-socket
+  (:doc "refuses another socket the relay hands a live peer's recorded challenge")
+  (let ((transport (list :peers (test-mevedel-collaboration-transport--peers 1))))
+    ;; Peer 1's own socket binds its nonce with its first frame.
+    (should-not (mevedel-collaboration--transport-refusal
+                 transport 1 '(:t "hello" :challenge "c" :seq 1 :nonce "socket-a")))
+    ;; A second socket, routed by the relay as peer 1 with peer 1's recorded
+    ;; challenge and a sequence number past it, is still refused.
+    (should (equal "notice"
+                   (plist-get (mevedel-collaboration--transport-refusal
+                               transport 1 '(:t "set-mode" :challenge "c" :seq 50
+                                             :nonce "socket-b"))
+                              :t)))
+    (should (eq t (mevedel-collaboration--transport-refusal
+                   transport 1 '(:t "prompt" :challenge "c" :seq 51))))
+    ;; Peer 1's own frames keep passing.
+    (should-not (mevedel-collaboration--transport-refusal
+                 transport 1 '(:t "prompt" :challenge "c" :seq 2 :nonce "socket-a")))))
+
+(mevedel-deftest mevedel-collaboration--transport-send/broadcast-types
+  (:doc "refuses to broadcast a frame type outside the bounded list")
+  ;; No connection is needed: the check precedes any write.
+  (let ((transport (list :state 'down :peers (make-hash-table :test #'eql))))
+    (dolist (frame (list '(:t "new-session" :reqId 1 :link "owner-link")
+                         '(:t "editing" :reqId 3 :offset 0 :total 4 :data "e30=")
+                         "{\"t\":\"queued\",\"id\":1}"
+                         "{\"records\":[]}"))
+      (should-error (mevedel-collaboration--transport-send transport 0 frame)))
+    (dolist (frame (list '(:t "record" :record nil)
+                         '(:t "editing" :reqId "event" :offset 0 :total 4 :data "e30=")
+                         "{\"t\":\"history-index\",\"records\":[]}"))
+      (should-not (mevedel-collaboration--transport-send transport 0 frame)))
+    ;; A frame for one peer may be of any type.
+    (should-not (mevedel-collaboration--transport-send
+                 transport 1 '(:t "new-session" :reqId 1)))))
+
 (mevedel-deftest mevedel-collaboration--transport-open
   (:doc "delivers sealed frames and control messages both ways through a relay")
   (mevedel-relay-test--with-stub-relay (state port server)

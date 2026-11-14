@@ -22,7 +22,10 @@ the last accepted with a `notice`, and one from a peer the relay never
 announced with a `notice` that the connection is not bound yet.
 Every guest frame also carries `"nonce"`, random per socket; the host keeps
 the first it accepts and adds it to each frame for that peer alone, and
-guests drop frames bearing another nonce. Broadcasts carry none.
+guests drop frames bearing another nonce. Once it has a nonce, the host
+accepts only frames bearing it. Broadcasts carry none and are limited to
+`mevedel-collaboration--broadcast-types`; sending another type to peer 0
+is an error.
 
 Viewer destination links keep content selectors after the bearer fragment,
 for example `#ROOM.SECRET?artifact=STORE-ID&version=2`. The viewer imports the
