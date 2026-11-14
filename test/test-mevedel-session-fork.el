@@ -552,7 +552,7 @@
 (mevedel-deftest mevedel-session-fork--stage-fork (:quiet t)
   ,test
   (test)
-  :doc "bare staging persists shifted bounds after lost-execution-only repairs"
+  :doc "bare staging repairs active and closed segments without changing Source"
   (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
          (session (plist-get fixture :session))
          (staging-path (file-name-as-directory
@@ -567,6 +567,17 @@
          (staging (generate-new-buffer " *fork-bounds-stage*")))
     (unwind-protect
         (progn
+          (test-mevedel-fork--publish
+           session (plist-get fixture :buffer)
+           (cons "segment-0001.chat.org"
+                 (with-temp-buffer
+                   (org-mode)
+                   (insert (test-mevedel-session-persistence--execution-tool-block
+                            "closed-bash"
+                            '(:kind bash :state running :execution-id "closed-exec"
+                                    :live-execution-p t :execution-output "closed output")))
+                   (mevedel-session-artifacts-stabilize-gptel-bounds)
+                   (buffer-string))))
           (with-current-buffer staging
             (org-mode)
             (should-not (bound-and-true-p gptel-mode))
@@ -590,6 +601,20 @@
           (mevedel-session-fork--stage-fork
            child (plist-get fixture :buffer) staging (plist-get fixture :parent-path)
            staging-path 2 2)
+          (dolist (where '(child source))
+            (with-temp-buffer
+              (if (eq where 'child)
+                  (insert-file-contents
+                   (mevedel-session-artifacts-segment-path staging-path 1))
+                (insert (decode-coding-string
+                         (mevedel-session-artifacts-read-artifact
+                          session "segment-0001.chat.org" t) 'utf-8-unix)))
+              (org-mode)
+              (mevedel-transcript-restore-properties)
+              (should (eq (if (eq where 'child) 'lost 'running)
+                          (plist-get
+                           (mevedel-tool-render-data-for-tool
+                            (current-buffer) "closed-bash") :state)))))
           (with-current-buffer staging
             (should (equal (alist-get 'tool
                                       (read (org-entry-get (point-min) "GPTEL_BOUNDS")))
@@ -1429,7 +1454,6 @@
          (bad-target (file-name-concat worktree-root "bad.el"))
          (source
           (mevedel-session--create
-           :authority-mode 'pid-lock
            :save-path save-path
            :file-snapshots
            `((1 . ((,good-source . (:backup-name "good@v1"))
@@ -1441,11 +1465,15 @@
            :worktree-directory worktree-root)))
     (unwind-protect
         (progn
-          (make-directory (file-name-concat save-path "file-history") t)
-          (write-region "captured good\n" nil
-                        (mevedel-session-artifacts-backup-path
-                         save-path "good@v1")
-                        nil 'silent)
+          (test-mevedel-session-persistence--lease-fixture
+           source
+           (list (list :path (mevedel-session-artifacts-backup-path
+                              save-path "good@v1")
+                       :content "captured good\n")
+                 (list :path (mevedel-session-artifacts-sidecar-path save-path)
+                       ;; This archive test reads backups, never sidecar metadata.
+                       :content "sidecar"
+                       :commit-marker t)))
           (write-region "source good\n" nil good-source nil 'silent)
           (write-region "source bad\n" nil bad-source nil 'silent)
           (write-region "shared external\n" nil external-file nil 'silent)
@@ -1476,6 +1504,7 @@
             (should (equal "shared external\n"
                            (mevedel-session-artifacts--file-text
                             external-file)))))
+      (mevedel-session-durability-lease-release save-path source)
       (delete-directory source-root t)
       (delete-directory worktree-root t)
       (delete-directory save-path t)
@@ -1494,7 +1523,6 @@
          (valid-target (file-name-concat worktree-root "valid.el"))
          (source
           (mevedel-session--create
-           :authority-mode 'pid-lock
            :save-path save-path
            :file-snapshots
            `((1 . ((,valid-source . (:backup-name "valid@v1"))
@@ -1505,41 +1533,15 @@
            :worktree-directory worktree-root)))
     (unwind-protect
         (progn
-          (make-directory (file-name-concat save-path "file-history") t)
-          (write-region "captured\n" nil
-                        (mevedel-session-artifacts-backup-path
-                         save-path "valid@v1")
-                        nil 'silent)
           (write-region "HEAD\n" nil valid-target nil 'silent)
-          (should-error
-           (mevedel-session-fork--restore-worktree-files
-            source child 1))
+          (let ((err (should-error
+                      (mevedel-session-fork--restore-worktree-files
+                       source child 1))))
+            (should (string-match-p "Invalid captured Worktree Fork path"
+                                    (error-message-string err))))
           (should (equal "HEAD\n"
                          (mevedel-session-artifacts--file-text
                           valid-target))))
-      (delete-directory source-root t)
-      (delete-directory worktree-root t)
-      (delete-directory save-path t)))
-  :doc "rejects an unavailable required history store"
-  (let* ((source-root
-          (file-name-as-directory
-           (make-temp-file "mevedel-worktree-store-source-" t)))
-         (worktree-root
-          (file-name-as-directory
-           (make-temp-file "mevedel-worktree-store-child-" t)))
-         (save-path
-          (file-name-as-directory
-           (make-temp-file "mevedel-worktree-store-session-" t)))
-         (source
-          (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
-         (child
-          (mevedel-session--create
-           :worktree-source-root source-root
-           :worktree-directory worktree-root)))
-    (unwind-protect
-        (should-error
-         (mevedel-session-fork--restore-worktree-files
-          source child 1))
       (delete-directory source-root t)
       (delete-directory worktree-root t)
       (delete-directory save-path t)))

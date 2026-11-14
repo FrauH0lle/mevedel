@@ -42,7 +42,6 @@
               (require 'mevedel-session-artifacts)
               (let ((session
                      (mevedel-session--create
-                      :authority-mode 'pid-lock
                       :save-path temporary-file-directory
                       :session-id "cold-artifacts"
                       :current-segment 1)))
@@ -54,8 +53,8 @@
                   (mevedel-session-artifacts--insert-segment-header session)
                   (mevedel-session-artifacts-collect-prompts
                    (current-buffer))))
-              (unless (featurep 'mevedel-session-codec)
-                (error "Artifacts did not load the codec"))
+              (unless (featurep 'mevedel-session-publication)
+                (error "Artifact resolution did not load its publication owner"))
               (unless (featurep 'mevedel-utilities)
                 (error "Artifacts did not load Utilities"))))
            (codec

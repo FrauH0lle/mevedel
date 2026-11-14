@@ -197,8 +197,8 @@
 				   session "segment-0001.chat.org" t)))
 			 (should-not
 			  (file-exists-p
-			   (mevedel-session-persistence--lock-path
-			    (mevedel-session-save-path session)))))
+			   (file-name-concat
+			    (mevedel-session-save-path session) ".lock"))))
 		     (test-mevedel-session-persistence--release-and-kill buffer session)
 		     (delete-directory root t))))
 

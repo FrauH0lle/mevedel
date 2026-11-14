@@ -23,15 +23,13 @@
          (session-id (plist-get metadata :session))
          (operation
           (lambda ()
-            (unless (eq (not (null (plist-get capture :head))) (eq mode 'portable))
+            (unless (plist-get capture :head)
               (error "Capture publication does not match its source authority"))
-            (let* ((publication (and (eq mode 'portable)
-                                     (mevedel-session-publication-read source (plist-get capture :head))))
+            (let* ((publication (mevedel-session-publication-read
+                                 source (plist-get capture :head)))
                    (sidecar (mevedel-session-codec-read
-                             (if (eq mode 'portable)
-                                 (or (plist-get publication :sidecar)
-                                     (error "Captured session publication is unavailable"))
-                               (mevedel-session-artifacts-sidecar-path source)))))
+                             (or (plist-get publication :sidecar)
+                                 (error "Captured session publication is unavailable")))))
               (unless (and (eq mode (plist-get sidecar :authority-mode))
                            (equal session-id (plist-get sidecar :session-id)))
                 (error "Capture does not belong to its source session"))
@@ -41,14 +39,12 @@
               (mevedel-journal-capture-trigger workspace capture)))))
     (unless (mevedel-session-persistence-find-live-buffer
              session-id (mevedel-session-buffer-name (plist-get metadata :session-name) workspace))
-      (if (eq mode 'portable)
-          ;; This owner has no conversation, request, tools, or registry entry.
-          ;; It exists only for the existing bounded lease reservation API.
-          (mevedel-session-durability-call-with-abandoned-lease
-           (mevedel-session--create :workspace workspace :authority-mode mode
-                                    :session-id session-id :save-path source)
-           operation)
-        (mevedel-session-persistence-call-with-abandoned-lock source operation)))))
+      ;; This owner has no conversation, request, tools, or registry entry.
+      ;; It exists only for the bounded lease reservation API.
+      (mevedel-session-durability-call-with-abandoned-lease
+       (mevedel-session--create :workspace workspace :authority-mode mode
+                                :session-id session-id :save-path source)
+       operation))))
 
 (defun mevedel-journal-recovery--retire-superseded (workspace capture entries)
   "Finish CAPTURE's accepted supersession in WORKSPACE using ENTRIES as proof.

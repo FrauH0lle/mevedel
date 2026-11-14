@@ -8,6 +8,11 @@
 
 ;;; Code:
 
+(require 'mevedel-session-test-support
+         (file-name-concat (file-name-directory
+                            (or buffer-file-name load-file-name byte-compile-current-file))
+                           "mevedel-session-test-support"))
+
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -109,6 +114,16 @@ Bind parent, child, origin, parent-before and child-before for assertions."
            (when (frame-live-p child) (delete-frame child t))
            (when (frame-live-p parent) (select-frame-set-input-focus parent))
            (when (buffer-live-p other) (kill-buffer other)))))))
+
+(defun mevedel-window-graphical-test--publish (session path body)
+  "Commit archived fixture BODY at PATH under SESSION's real lease."
+  (mevedel-session-publication-publish
+   session
+   (list (list :path path :content body)
+         (list :path (file-name-concat (mevedel-session-save-path session) "session.meta.el")
+               :content (mevedel-session-artifacts-printed-value
+                         (mevedel-session-codec-serialize session))
+               :commit-marker t))))
 
 (mevedel-deftest mevedel-window-child-frame-return ()
   ,test
@@ -357,9 +372,8 @@ body height and composer draft."
   (progn
     (skip-unless (display-graphic-p))
     (let* ((directory (make-temp-file "mevedel-frame-continuation-" t))
-           (session (mevedel-session--create
-                     :authority-mode 'pid-lock :name "frame-continuation"
-                     :save-path (file-name-as-directory directory)
+           (session (test-mevedel-session-persistence--leased-session directory
+                   :name "frame-continuation"
                      :current-segment 2))
            indexed)
       (unwind-protect
@@ -370,9 +384,8 @@ body height and composer draft."
               (insert "Original framed prompt\n")
               (setq indexed (car (mevedel-session-artifacts-collect-prompts
                                   (current-buffer))))
-              (write-region (point-min) (point-max)
-                            (mevedel-session-artifacts-segment-path directory 1)
-                            nil 'silent))
+              (mevedel-window-graphical-test--publish
+               session (mevedel-session-artifacts-segment-path directory 1) (buffer-string)))
             (setf (mevedel-session-prompt-index session)
                   (list (cons 1 (list (append indexed '(:cum-turn 1))))))
             (mevedel-window-graphical-test--with-frame '()
@@ -392,9 +405,8 @@ body height and composer draft."
                                   :header)))
               ;; An empty previous segment is a /clear boundary.
               (with-temp-buffer
-                (write-region (point-min) (point-max)
-                              (mevedel-session-artifacts-segment-path directory 2)
-                              nil 'silent))
+                (mevedel-window-graphical-test--publish
+                 session (mevedel-session-artifacts-segment-path directory 2) (buffer-string)))
               (setf (mevedel-session-current-segment session) 3)
               (mevedel-view--full-rerender)
               (mevedel-window-graphical-test--start-at
@@ -402,6 +414,8 @@ body height and composer draft."
               (let ((rows (mevedel-window-graphical-test--rows window)))
                 (should (equal "" (plist-get rows :header)))
                 (should (> (plist-get rows :header-px) 0)))))
+        (mevedel-session-persistence-lock-release directory session)
+        (mevedel-workspace-clear-registry)
         (delete-directory directory t)))))
 
 (provide 'test-mevedel-window-graphical)

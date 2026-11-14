@@ -58,7 +58,7 @@ Return a plist with the `:attempt' its handler saw for the source address."
   (test)
   :doc "prepares a resource address for reading, but only when the argument declares it"
   (let* ((save-path (make-temp-file "mevedel-read-access-resource-" t))
-         (session (mevedel-session--create :name "read-access" :authority-mode 'pid-lock :save-path save-path)))
+         (session (mevedel-session--create :name "read-access" :save-path save-path)))
     (unwind-protect
         (progn
           (make-directory (file-name-concat save-path "local") t)
@@ -74,7 +74,7 @@ Return a plist with the `:attempt' its handler saw for the source address."
                        :attempt)))
       (delete-directory save-path t)))
   :doc "rejects an address read cannot serve before permission or the handler"
-  (let* ((session (mevedel-session--create :name "read-access" :authority-mode 'pid-lock))
+  (let* ((session (mevedel-session--create :name "read-access" ))
          result handled)
     (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                (lambda (_event _payload callback &rest _) (funcall callback nil))))

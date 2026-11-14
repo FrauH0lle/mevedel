@@ -62,6 +62,23 @@
     (mevedel-execution-transcript-test--restored-audit-records
      (buffer-string) type)))
 
+(defun mevedel-execution-transcript-test--publish (session entries)
+  "Make ENTRIES SESSION's verified publication.
+ENTRIES is an alist of logical names and content strings.  Archives resolve
+only through a publication, never a plain file under the save path."
+  (setf (mevedel-session-publication session)
+        (list :artifacts
+              (cl-loop for (logical . content) in entries
+                       for bytes = (encode-coding-string content 'utf-8-unix)
+                       for published = (make-temp-file
+                                        (file-name-concat
+                                         (mevedel-session-save-path session)
+                                         "published-"))
+                       do (let ((coding-system-for-write 'no-conversion))
+                            (write-region bytes nil published nil 'silent))
+                       collect (list logical :published published
+                                     :sha256 (secure-hash 'sha256 bytes))))))
+
 (mevedel-deftest mevedel-execution-transcript--update-archived-render-data ()
   ,test
   (test)
@@ -69,9 +86,8 @@
   (dolist (nested '(nil t))
     (let* ((directory (make-temp-file "mevedel-summary-archive-" t))
            (parent (generate-new-buffer " *summary-parent*"))
-           (session (mevedel-session--create :authority-mode 'pid-lock
-                                             :save-path directory))
-           (archive (file-name-concat directory "agents/parent.compact-0001.chat.org"))
+           (session (mevedel-session--create :save-path directory))
+           (archive "agents/parent.compact-0001.chat.org")
            (id (if nested "outer/1" "outer"))
            (summary '(:attempt-count 3 :started-count 3 :refused-count 0
                       :sandbox off :filesystem unrestricted :network unrestricted))
@@ -81,23 +97,27 @@
                         :sandbox-summary-cell (list summary))))
       (unwind-protect
           (progn
-            (make-directory (file-name-directory archive) t)
-            (with-temp-file archive
-              (mevedel--transcript-org-mode)
-              (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
-              (insert "#+begin_tool (Agent)\n")
-              (insert (propertize
-                       (concat "(:name \"Agent\" :args nil)\n\nstarted\n"
-                               (mevedel-tool-render-data-format
-                                (if nested
-                                    '(:kind ptc :calls
-                                      ((:id "outer/1" :tool "Agent"
-                                        :render-data (:kind collaboration-event :agent-id "retained"))))
-                                  '(:kind collaboration-event :agent-id "retained"))
-                                "outer"))
-                       'gptel '(tool . "outer")))
-              (insert "#+end_tool\n")
-              (mevedel-session-artifacts-stabilize-gptel-bounds))
+            (mevedel-execution-transcript-test--publish
+             session
+             (list
+              (cons archive
+                    (with-temp-buffer
+                      (mevedel--transcript-org-mode)
+                      (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
+                      (insert "#+begin_tool (Agent)\n")
+                      (insert (propertize
+                               (concat "(:name \"Agent\" :args nil)\n\nstarted\n"
+                                       (mevedel-tool-render-data-format
+                                        (if nested
+                                            '(:kind ptc :calls
+                                              ((:id "outer/1" :tool "Agent"
+                                                :render-data (:kind collaboration-event :agent-id "retained"))))
+                                          '(:kind collaboration-event :agent-id "retained"))
+                                        "outer"))
+                               'gptel '(tool . "outer")))
+                      (insert "#+end_tool\n")
+                      (mevedel-session-artifacts-stabilize-gptel-bounds)
+                      (buffer-substring-no-properties (point-min) (point-max))))))
             (with-current-buffer parent
               (setq-local mevedel--session session
                           mevedel--agent-invocation invocation
@@ -108,22 +128,32 @@
                        (lambda (&rest _) nil)))
               (let (diagnostics)
                 (mevedel-test--with-captured-diagnostics diagnostics
-                  (cl-letf (((symbol-function 'mevedel-session-persistence-write-current-buffer-atomically)
+                  (cl-letf (((symbol-function 'mevedel-session-artifacts-publish-transcript-state)
                              (lambda (&rest _) (error "Injected archive failure"))))
                     (mevedel-agent-conversation-refresh invocation)))
                 (should (string-match-p "Injected archive failure" diagnostics)))
               (with-current-buffer parent
                 (should (gethash id mevedel-execution-transcript--pending-terminals)))
-              (mevedel-agent-conversation-refresh invocation)
-              ;; Identical refreshes must not parse/rewrite the archived file.
-              (cl-letf (((symbol-function 'mevedel-session-artifacts-read-transcript-segment)
-                         (lambda (&rest _) (error "Redundant archive read"))))
-                (mevedel-agent-conversation-refresh invocation)))
+              ;; The publication contract is tested elsewhere; adopt its bytes.
+              (cl-letf (((symbol-function 'mevedel-session-artifacts-publish-transcript-state)
+                         (lambda (session _root path content &rest _)
+                           (mevedel-execution-transcript-test--publish
+                            session
+                            (list (cons (file-relative-name
+                                         path (mevedel-session-save-path session))
+                                        content))))))
+                (mevedel-agent-conversation-refresh invocation)
+                ;; Identical refreshes must not parse/rewrite the archived file.
+                (cl-letf (((symbol-function 'mevedel-session-artifacts-read-transcript-segment)
+                           (lambda (&rest _) (error "Redundant archive read"))))
+                  (mevedel-agent-conversation-refresh invocation))))
             (with-current-buffer parent
               (should (= 0 (hash-table-count mevedel-execution-transcript--pending-terminals)))
               (should (equal "unsent draft must stay here\n" (buffer-string))))
             (with-temp-buffer
-              (insert-file-contents archive)
+              (insert (decode-coding-string
+                       (mevedel-session-artifacts-read-artifact session archive)
+                       'utf-8-unix))
               (mevedel--transcript-org-mode)
               (mevedel-transcript-restore-properties)
               (should (equal summary (plist-get
@@ -426,8 +456,7 @@
   :doc "records one completion in memory without writing the file"
   (let* ((path (make-temp-file "mevedel-execution-breadcrumb-"))
          (buffer (find-file-noselect path))
-         (session (mevedel-session--create :authority-mode 'pid-lock
-                                           :name "breadcrumb")))
+         (session (mevedel-session--create :name "breadcrumb")))
     (unwind-protect
         (progn
           (with-current-buffer buffer
@@ -462,8 +491,7 @@
   :doc "keeps flushed stream text eligible for checkpoint after a completion"
   (let* ((path (make-temp-file "mevedel-execution-breadcrumb-batch-"))
          (buffer (find-file-noselect path))
-         (session (mevedel-session--create :authority-mode 'pid-lock
-                                          :name "breadcrumb-batch"))
+         (session (mevedel-session--create :name "breadcrumb-batch"))
          (mevedel-gptel-stream-bridge-insert-batch-delay 60)
          (advice #'mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice)
          (installed (advice-member-p advice 'gptel-curl--stream-insert-response))
@@ -607,8 +635,7 @@
   :doc "checkpoints a mid-turn completion at the response marker"
   (let* ((path (make-temp-file "mevedel-execution-breadcrumb-mid-"))
          (buffer (find-file-noselect path))
-         (session (mevedel-session--create :authority-mode 'pid-lock
-                                           :name "breadcrumb-mid")))
+         (session (mevedel-session--create :name "breadcrumb-mid")))
     (unwind-protect
         (with-current-buffer buffer
           (delay-mode-hooks (org-mode))
@@ -635,7 +662,7 @@
               (should (< (plist-get span :end) (point-max))))
             ;; The next ordinary save writes the record before later output.
             (gptel-curl--stream-insert-response " Later." info)
-            (mevedel-session-persistence-write-current-buffer-atomically path)
+            (write-region (point-min) (point-max) path nil 'silent)
             (with-temp-buffer
               (insert-file-contents path)
               (let ((record (string-search "mevedel-hook-audit" (buffer-string))))
@@ -654,9 +681,7 @@
   (test)
   :doc "a retry after compaction does not append a second completion breadcrumb"
   (let* ((root (make-temp-file "mevedel-breadcrumb-archives-" t))
-         (archive (mevedel-session-artifacts-segment-path root 1))
          (session (mevedel-session--create :save-path root
-                                           :authority-mode 'pid-lock
                                            :current-segment 3)))
     (unwind-protect
         (with-temp-buffer
@@ -668,7 +693,8 @@
             (mevedel-execution-transcript--record-breadcrumb event)
             (let ((text (mevedel-execution-transcript-test--persisted-audit-transcript
                          (buffer-string))))
-              (with-temp-file archive (insert text)))
+              (mevedel-execution-transcript-test--publish
+               session (list (cons "segment-0001.chat.org" text))))
             (erase-buffer)
             (setq buffer-file-name
                   (mevedel-session-artifacts-segment-path root 3))
@@ -693,7 +719,7 @@
   (test)
   :doc "is nil without a readable file"
   (let* ((root (make-temp-file "mevedel-breadcrumb-missing-" t))
-         (session (mevedel-session--create :save-path root :authority-mode 'pid-lock))
+         (session (mevedel-session--create :save-path root))
          (mevedel-execution-transcript--segment-breadcrumbs
           (make-hash-table :test #'equal)))
     (unwind-protect
@@ -703,8 +729,7 @@
   :doc "reads an archived segment once and rereads it only after a rewrite"
   (let* ((root (make-temp-file "mevedel-breadcrumb-keys-" t))
          (archive (mevedel-session-artifacts-segment-path root 1))
-         (session (mevedel-session--create :save-path root :authority-mode 'pid-lock
-                                           :current-segment 2))
+         (session (mevedel-session--create :save-path root :current-segment 2))
          (descriptor (list :number 1 :path archive :status 'readable))
          (mevedel-execution-transcript--segment-breadcrumbs (make-hash-table :test #'equal))
          (write (lambda (id)
@@ -716,7 +741,8 @@
                                                     :state 'completed :outcome 'success)))
                                 (mevedel-execution-transcript-test--persisted-audit-transcript
                                  (buffer-string)))))
-                    (with-temp-file archive (insert text))))))
+                    (mevedel-execution-transcript-test--publish
+                     session (list (cons "segment-0001.chat.org" text)))))))
     (unwind-protect
         (progn
           (funcall write "exec-1")
@@ -728,7 +754,7 @@
             (should (equal '(("/root" . "exec-1"))
                            (mevedel-execution-transcript--segment-breadcrumb-keys
                             session descriptor))))
-          ;; A rewind can rewrite a segment; a different file identity rereads it.
+          ;; A rewind can rewrite a segment; a different published hash rereads it.
           (funcall write "exec-two")
           (should (equal '(("/root" . "exec-two"))
                          (mevedel-execution-transcript--segment-breadcrumb-keys
@@ -755,8 +781,7 @@
   :doc "retains a ToolCall child result independently of the ephemeral pending table"
   (let* ((path (make-temp-file "mevedel-execution-nested-"))
          (buffer (find-file-noselect path))
-         (session (mevedel-session--create :authority-mode 'pid-lock
-                                           :name "nested completion"))
+         (session (mevedel-session--create :name "nested completion"))
          (event (list :type 'terminal :data-buffer buffer :owner "/root"
                       :tool-use-id "outer/1" :whole-output "whole output"
                       :facts '(:execution-id "exec-nested" :command "printf ok"
@@ -766,6 +791,7 @@
           (with-current-buffer buffer
             (delay-mode-hooks (org-mode))
             (setq-local mevedel--session session)
+            (mevedel-transcript-enable-gptel-mode)
             (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
             (write-region (point-min) (point-max) path nil 'silent)
             (set-buffer-modified-p nil)
@@ -779,7 +805,10 @@
                              buffer "outer/1")
                             :execution-output)))
             (should (= 1 (length (mevedel-transcript-audit-records
-                                  (buffer-string) 'execution-completion)))))
+                                  (buffer-string) 'execution-completion))))
+            ;; A workspace-free transcript persists through its ordinary save.
+            (should (buffer-modified-p))
+            (save-buffer))
           (should (= 1 (length
                         (mevedel-execution-transcript-test--audit-records-in-file
                          path 'execution-completion))))
@@ -806,8 +835,7 @@
   :doc "publishes the terminal Bash row and breadcrumb together, not an unsent draft"
   (let* ((path (make-temp-file "mevedel-execution-row-"))
          (buffer (find-file-noselect path))
-         (session (mevedel-session--create :authority-mode 'pid-lock
-                                           :name "terminal row")))
+         (session (mevedel-session--create :name "terminal row")))
     (unwind-protect
         (progn
           (with-current-buffer buffer
@@ -859,28 +887,36 @@
         (kill-buffer buffer))
       (delete-file path)))
   :doc "parses the saved copy without running the user's Org hooks"
-  (let* ((path (make-temp-file "mevedel-execution-bare-"))
+  (let* ((root (make-temp-file "mevedel-execution-bare-" t))
+         (path (file-name-concat root "segment-0001.chat.org"))
+         (header ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
          (buffer (find-file-noselect path))
-         (session (mevedel-session--create :authority-mode 'pid-lock
-                                           :name "bare copy"))
-         (hook-runs 0))
+         ;; Explicit portable authority over a storage-only fixture.
+         (session (mevedel-session--create :name "bare copy" :save-path root
+                                           :authority-mode 'portable))
+         (hook-runs 0)
+         published)
     (unwind-protect
         (progn
+          (mevedel-execution-transcript-test--publish
+           session (list (cons "segment-0001.chat.org" header)))
           (with-current-buffer buffer
             (delay-mode-hooks (org-mode))
             (setq-local mevedel--session session)
-            (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
-            (write-region (point-min) (point-max) path nil 'silent)
-            (set-buffer-modified-p nil)
-            (set-visited-file-modtime))
+            (insert header)
+            (set-buffer-modified-p nil))
           (let ((org-mode-hook (list (lambda () (cl-incf hook-runs)))))
             (with-current-buffer buffer
-              (should (mevedel-execution-transcript--persist-terminal-record
-                       (list :type 'execution-breadcrumb :execution-id "exec-bare"
-                             :tool-use-id "call-bare" :owner "/root" :command "true")))))
+              (cl-letf (((symbol-function
+                          'mevedel-session-artifacts-publish-transcript-state)
+                         (lambda (_session _root _path content &rest _)
+                           (setq published content))))
+                (should (mevedel-execution-transcript--persist-terminal-record
+                         (list :type 'execution-breadcrumb :execution-id "exec-bare"
+                               :tool-use-id "call-bare" :owner "/root" :command "true"))))))
           (should (= 0 hook-runs))
           (with-temp-buffer
-            (insert-file-contents path)
+            (insert published)
             (delay-mode-hooks (org-mode))
             (mevedel-transcript-restore-properties)
             (should (= 1 (length (mevedel-transcript-audit-records
@@ -888,7 +924,7 @@
       (when (buffer-live-p buffer)
         (with-current-buffer buffer (set-buffer-modified-p nil))
         (kill-buffer buffer))
-      (delete-file path)))
+      (delete-directory root t)))
 
   :doc "publishes nested completion and archive after the intermediate conversation is closed"
   (mevedel-test--with-captured-diagnostics nil
@@ -1150,11 +1186,10 @@
 (mevedel-deftest mevedel-execution-transcript--record-archived-terminal ()
   ,test
   (test)
-  :doc "retains failed archived publication through ordinary save and reload"
+  :doc "keeps a workspace-free archived completion for ordinary save and reload"
   (let* ((path (make-temp-file "mevedel-execution-archive-fallback-"))
          (buffer (find-file-noselect path))
-         (session (mevedel-session--create :authority-mode 'pid-lock
-                                           :name "archive fallback")))
+         (session (mevedel-session--create :name "archive fallback")))
     (unwind-protect
         (progn
           (with-current-buffer buffer
@@ -1172,16 +1207,12 @@
           (mevedel-execution-transcript-commit-archive
            buffer '(:live (("failed-call" :execution-id "exec-failed"
                             :state running :live-execution-p t))))
-          (cl-letf (((symbol-function
-                      'mevedel-session-persistence-write-current-buffer-atomically)
-                     (lambda (&rest _) (error "Publication failed")))
-                    ((symbol-function 'display-warning) #'ignore))
-            (mevedel-execution-transcript-handle-event
-             (list :type 'terminal :session session :data-buffer buffer
-                   :owner "/root" :tool-use-id "failed-call"
-                   :facts '(:execution-id "exec-failed" :command "false"
-                           :state completed :outcome failure :exit-code 1)
-                   :whole-output "failed output")))
+          (mevedel-execution-transcript-handle-event
+           (list :type 'terminal :session session :data-buffer buffer
+                 :owner "/root" :tool-use-id "failed-call"
+                 :facts '(:execution-id "exec-failed" :command "false"
+                         :state completed :outcome failure :exit-code 1)
+                 :whole-output "failed output"))
           (with-current-buffer buffer
             (should (buffer-modified-p))
             (should (= 1 (length (mevedel-transcript-audit-records
@@ -1208,149 +1239,10 @@
         (with-current-buffer buffer (set-buffer-modified-p nil))
         (kill-buffer buffer))
       (when (file-exists-p path) (delete-file path))))
-  :doc "publishes completion transactionally and permits a later save"
-  (let* ((path (make-temp-file "mevedel-execution-archive-"))
-         (buffer (find-file-noselect path))
-         (session (mevedel-session--create :authority-mode 'pid-lock :name "archive")))
-    (unwind-protect
-        (progn
-          (with-current-buffer buffer
-            (delay-mode-hooks (org-mode))
-            (setq-local mevedel--session session)
-            (let ((archive
-                   (mevedel-execution-transcript-test--persisted-audit-transcript
-                    (mevedel-execution-transcript-archive-text
-                     '(:live (("old-call" :execution-id "exec-old"
-                               :state running :live-execution-p t)))))))
-              (insert archive))
-            (mevedel-transcript-restore-properties)
-            (write-region (point-min) (point-max) path nil 'silent)
-            (set-buffer-modified-p nil)
-            (set-visited-file-modtime)
-            (insert "pending prompt\n")
-            (set-buffer-modified-p nil))
-          (mevedel-execution-transcript-commit-archive
-           buffer '(:live (("old-call" :execution-id "exec-old"
-                            :state running :live-execution-p t))))
-          (should (= 1
-                     (length
-                      (mevedel-execution-transcript-test--audit-records-in-file
-                       path 'execution-archive))))
-          (cl-letf (((symbol-function
-                      'mevedel-session-persistence-write-current-buffer-atomically)
-                     (lambda (&rest _) (error "Publication failed")))
-                    ((symbol-function 'display-warning) #'ignore))
-            (mevedel-execution-transcript-handle-event
-             (list :type 'terminal :session session :data-buffer buffer
-                   :owner "main" :tool-use-id "old-call"
-                   :facts '(:state completed :outcome success :exit-code 0)
-                   :whole-output "done")))
-          (with-current-buffer buffer
-            (should (gethash "old-call"
-                             mevedel-execution-transcript--archived-rows))
-            (should (gethash "old-call"
-                             mevedel-execution-transcript--pending-terminals)))
-          (should (= 1
-                     (length
-                      (mevedel-execution-transcript-test--audit-records-in-file
-                       path 'execution-archive))))
-          (with-current-buffer buffer
-            (should (buffer-modified-p))
-            (should (= 1 (length (mevedel-transcript-audit-records
-                                  (buffer-string) 'execution-completion)))))
-          (mevedel-execution-transcript-retry-pending-terminals buffer)
-          (with-current-buffer buffer
-            (should (buffer-modified-p))
-            (should (verify-visited-file-modtime buffer))
-            (let ((records
-                   (mevedel-transcript-audit-records
-                    (buffer-string) 'execution-completion)))
-              (should (= 1 (length records)))
-              (should (equal "old-call"
-                             (plist-get (car records) :tool-use-id))))
-            (goto-char (point-max))
-            (insert "assistant done\n")
-            (save-buffer))
-          (with-temp-buffer
-            (insert-file-contents path)
-            (should (string-search "pending prompt" (buffer-string)))
-            (should (string-search "assistant done" (buffer-string))))
-          (should (= 1
-                     (length
-                      (mevedel-execution-transcript-test--audit-records-in-file
-                       path 'execution-completion)))))
-      (when (buffer-live-p buffer)
-        (with-current-buffer buffer (set-buffer-modified-p nil))
-        (kill-buffer buffer))
-      (when (file-exists-p path) (delete-file path))))
-  :doc "retries a disk-first partial commit from a narrowed live buffer"
-  (let* ((path (make-temp-file "mevedel-execution-partial-"))
-         (buffer (find-file-noselect path))
-         (session (mevedel-session--create :authority-mode 'pid-lock :name "partial"))
-         (event
-          (list :type 'terminal :session session :data-buffer buffer
-                :owner "main" :tool-use-id "partial-call"
-                :facts '(:state completed :outcome success :exit-code 0)
-                :whole-output "done")))
-    (unwind-protect
-        (progn
-          (with-current-buffer buffer
-            (setq-local mevedel--session session)
-            (insert
-             (mevedel-execution-transcript-test--persisted-audit-transcript
-              (mevedel-execution-transcript-archive-text
-               '(:live (("partial-call" :execution-id "exec-partial"
-                         :state running :live-execution-p t))))))
-            (delay-mode-hooks (org-mode))
-            (mevedel-transcript-restore-properties)
-            (write-region (point-min) (point-max) path nil 'silent)
-            (set-buffer-modified-p nil)
-            (set-visited-file-modtime))
-          (mevedel-execution-transcript-commit-archive
-           buffer '(:live (("partial-call" :execution-id "exec-partial"
-                            :state running :live-execution-p t))))
-          (let ((replace
-                 (symbol-function
-                  'mevedel-execution-transcript--replace-archived-record)))
-            (cl-letf
-                (((symbol-function
-                   'mevedel-execution-transcript--replace-archived-record)
-                  (lambda (&rest args)
-                    (if (eq (current-buffer) buffer)
-                        (error "Live publication failed")
-                      (apply replace args))))
-                 ((symbol-function 'display-warning) #'ignore))
-              (mevedel-execution-transcript-handle-event event)))
-          (should (= 1
-                     (length
-                      (mevedel-execution-transcript-test--audit-records-in-file
-                       path 'execution-completion))))
-          (with-current-buffer buffer
-            (should (= 1
-                       (length
-                        (mevedel-transcript-audit-records
-                         (buffer-string) 'execution-archive))))
-            (narrow-to-region (point-max) (point-max)))
-          (mevedel-execution-transcript-retry-pending-terminals buffer)
-          (with-current-buffer buffer
-            (widen)
-            (should-not
-             (gethash "partial-call"
-                      mevedel-execution-transcript--pending-terminals))
-            (should (= 1
-                       (length
-                        (mevedel-transcript-audit-records
-                         (buffer-string) 'execution-completion))))))
-      (when (buffer-live-p buffer)
-        (with-current-buffer buffer
-          (widen)
-          (set-buffer-modified-p nil))
-        (kill-buffer buffer))
-      (when (file-exists-p path) (delete-file path))))
   :doc "reroutes a terminal queued before its archive marker commits"
   (let* ((path (make-temp-file "mevedel-execution-reroute-"))
          (buffer (find-file-noselect path))
-         (session (mevedel-session--create :authority-mode 'pid-lock :name "reroute"))
+         (session (mevedel-session--create :name "reroute"))
          (event
           (list :type 'terminal :session session :data-buffer buffer
                 :owner "main" :tool-use-id "reroute-call"
@@ -1392,7 +1284,9 @@
         (kill-buffer buffer))
       (when (file-exists-p path) (delete-file path))))
   :doc "updates committed project transcripts through local and remote access"
-  (dolist (remote '(nil t))
+  ;; PARTIAL commits the publication but fails the live replacement, then
+  ;; retries from a narrowed live buffer.
+  (pcase-dolist (`(,remote ,partial) '((nil nil) (t nil) (nil t)))
     (let* ((host "archived-terminal-publication")
            (local-root
             (file-name-as-directory
@@ -1511,10 +1405,37 @@
                                                            committed
                                                            (mevedel-session-artifacts-read-artifact
                                                             session "agents/remote-call.chat.org" t))))
+                                                (when partial
+                                                  (let ((replace
+                                                         (symbol-function
+                                                          'mevedel-execution-transcript--replace-archived-record)))
+                                                    (cl-letf (((symbol-function
+                                                                'mevedel-execution-transcript--replace-archived-record)
+                                                               (lambda (&rest args)
+                                                                 (if (eq (current-buffer) buffer)
+                                                                     (error "Live replacement failed")
+                                                                   (apply replace args)))))
+                                                      (should-error
+                                                       (mevedel-execution-transcript--record-archived-terminal
+                                                        buffer event render-data))))
+                                                  (should (= 1
+                                                             (length
+                                                              (mevedel-execution-transcript-test--restored-audit-records
+                                                               (decode-coding-string
+                                                                (mevedel-session-artifacts-read-artifact
+                                                                 session "agents/remote-call.chat.org" t)
+                                                                'utf-8-unix)
+                                                               'execution-completion))))
+                                                  (with-current-buffer buffer
+                                                    (should (gethash
+                                                             "remote-call"
+                                                             mevedel-execution-transcript--archived-rows))
+                                                    (narrow-to-region (point-max) (point-max))))
                                                 (dotimes (_ 2)
                                                   (mevedel-execution-transcript--record-archived-terminal
                                                    buffer event render-data))
                                                 (with-current-buffer buffer
+                                                  (widen)
                                                   (should-not (gethash
                                                                "remote-call"
                                                                mevedel-execution-transcript--archived-rows)))

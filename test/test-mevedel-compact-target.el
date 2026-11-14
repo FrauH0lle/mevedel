@@ -19,6 +19,7 @@
 (require 'mevedel-execution-transcript)
 (require 'mevedel-models)
 (require 'mevedel-hooks)
+(require 'mevedel-session-artifacts)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-system)
@@ -146,6 +147,27 @@
     (setf (mevedel-agent-invocation-transcript-relative-path invocation)
           "agents/other.chat.org")
     (should-not (mevedel-compact-target-agent-target invocation)))
+
+  :doc "refuses a writable plain transcript without durable authority"
+  (test-mevedel-compact--with-persisted-agent
+      (agent-buffer invocation session canonical-path parent-buffer)
+    (test-mevedel-compact--insert-agent-task
+     invocation "inspect" "Keep this task.")
+    (let ((start (point)))
+      (insert "Agent response.\n")
+      (put-text-property start (point) 'gptel 'response))
+    ;; The removed fallback accepted exactly this canonical writable file.
+    (write-region (point-min) (point-max) canonical-path nil 'silent)
+    (should (file-writable-p canonical-path))
+    (let ((workspace (mevedel-session-workspace session))
+          (mode (mevedel-session-authority-mode session)))
+      (unwind-protect
+          (progn
+            (setf (mevedel-session-workspace session) nil
+                  (mevedel-session-authority-mode session) nil)
+            (should-not (mevedel-compact-target-agent-target invocation)))
+        (setf (mevedel-session-workspace session) workspace
+              (mevedel-session-authority-mode session) mode))))
 
   :doc "anchors the marked child task after inherited nested-agent context"
   (test-mevedel-compact--with-persisted-agent

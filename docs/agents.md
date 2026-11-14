@@ -403,11 +403,9 @@ its terminal outcome (`completed`, `errored`, or `interrupted`) separately from
 the bounded inline `RESULT` mailbox preview. The complete payload is recorded
 before the preview is published, including recovery settlements. Request and
 owned-execution teardown must both succeed before terminal state is published.
-PID-lock settlement commits the idle record and queued result before delivery;
-portable settlement -- every project session, local target included --
+Durable settlement -- every project and file-workspace session, local targets included --
 publishes transcript plus sidecar atomically before it wakes a waiter or
-invokes a workflow result handler. Authority, not target locality, chooses:
-a portable session resolves its transcripts through the publication, so a
+invokes a workflow result handler. A durable session resolves its transcripts through the publication, so a
 direct write would leave resume unable to see them. A new or
 follow-up turn clears the previous settled result before it becomes active,
 including the `starting` interval in which provider setup can yield to other

@@ -4,6 +4,11 @@
 
 ;;; Code:
 
+(require 'mevedel-session-test-support
+         (file-name-concat (file-name-directory
+                            (or buffer-file-name load-file-name byte-compile-current-file))
+                           "mevedel-session-test-support"))
+
 (require 'gptel-request)
 (require 'mevedel-chat)
 (require 'mevedel-menu)
@@ -32,11 +37,21 @@
           "helpers"))
 (require 'mevedel-compact)
 
+(defun mevedel-plan-mode-test--publish-plan (session path body)
+  "Commit BODY at PATH with SESSION's real sidecar."
+  (mevedel-session-publication-publish
+   session
+   (list (list :path path :content body)
+         (list :path (file-name-concat (mevedel-session-save-path session) "session.meta.el")
+               :content (mevedel-session-artifacts-printed-value
+                         (mevedel-session-codec-serialize session))
+               :commit-marker t))))
+
 (mevedel-deftest mevedel-plan-mode-active-p
   (:doc "reads Plan state from the explicit or current session")
   ,test
   (test)
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test" :plan-mode t)))
+  (let ((session (mevedel-session--create :name "test" :plan-mode t)))
     (should (mevedel-plan-mode-active-p session))
     (let ((mevedel--session session))
       (should (mevedel-plan-mode-active-p)))))
@@ -55,7 +70,7 @@
   (test)
   (let* ((reminder (mevedel-reminders-make-plan-mode))
          (session (mevedel-session--create
-                   :authority-mode 'pid-lock :reminders (list reminder)
+                   :reminders (list reminder)
                    :name "test" :permission-mode 'full-auto)))
     (setf (mevedel-reminder-last-fired reminder) 5)
     (mevedel-plan-mode-enter session)
@@ -70,7 +85,6 @@
   (dolist (status '(active paused blocked))
     (let ((session
            (mevedel-session--create
-            :authority-mode 'pid-lock
             :name "test" :permission-mode 'edits
             :goal (mevedel-goal--create :status status))))
       (should-error (mevedel-plan-mode-enter session) :type 'user-error)
@@ -80,14 +94,12 @@
   :doc "allows a completed Goal to remain as history"
   (let ((session
          (mevedel-session--create
-          :authority-mode 'pid-lock
           :name "test" :goal (mevedel-goal--create :status 'complete))))
     (should (mevedel-plan-mode-enter session)))
 
   :doc "new Plan conversations discard an earlier execution selection"
   (let ((session
          (mevedel-session--create
-          :authority-mode 'pid-lock
           :name "test" :plan-metadata
           '(:status accepted :selection (:execution goal)))))
     (mevedel-plan-mode-enter session)
@@ -99,7 +111,6 @@
                       :execution goal :mode edits))
          (session
           (mevedel-session--create
-           :authority-mode 'pid-lock
            :name "test" :plan-mode t
            :plan-metadata (list :status 'proposed :selection selection))))
     (mevedel-plan-mode-enter session)
@@ -112,7 +123,6 @@
   ,test
   (test)
   (let ((session (mevedel-session--create
-                  :authority-mode 'pid-lock
                   :name "test" :permission-mode 'edits :plan-mode t)))
     (mevedel-plan-mode-exit session)
     (should-not (mevedel-session-plan-mode session))
@@ -122,7 +132,6 @@
   (let* ((selection '(:location here :context current
                       :execution goal :mode edits))
          (session (mevedel-session--create
-                   :authority-mode 'pid-lock
                    :name "test" :plan-mode t
                    :plan-metadata
                    (list :status 'proposed :proposal-id '(1 2 "h")
@@ -146,7 +155,6 @@
   (test)
   (mevedel-skills-test--with-model-backends
     (let ((session (mevedel-session--create
-                    :authority-mode 'pid-lock
                     :name "test" :permission-mode 'edits)))
       (with-temp-buffer
         (setq-local mevedel-goal-token-budget 1234
@@ -215,7 +223,6 @@
   (let* ((selection '(:location here :context current
                       :execution direct :mode edits))
          (session (mevedel-session--create
-                   :authority-mode 'pid-lock
                    :name "test" :plan-mode t
                    :plan-metadata
                    (list :status 'proposed :proposal-id '(1 2 "h")
@@ -236,7 +243,7 @@
   (:quiet t :doc "clears pending state before delivering the outcome")
   ,test
   (test)
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+  (let* ((session (mevedel-session--create :name "test"))
          pending-during-callback
          (entry
           (list :session session
@@ -250,7 +257,7 @@
     (should-not (mevedel-session-pending-plan-approval session)))
 
   :doc "restores and rerenders after a callback error"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+  (let* ((session (mevedel-session--create :name "test"))
          rendered
          (entry
           (list :session session
@@ -265,7 +272,7 @@
   (dolist (failure '(goal-save submission))
     (let* ((session
             (mevedel-session--create
-             :authority-mode 'pid-lock :name "test" :plan-mode t :permission-mode 'ask))
+             :name "test" :plan-mode t :permission-mode 'ask))
            (chat-buffer (generate-new-buffer " *plan-committed-failure*"))
            (selection
             (list :location 'here :context 'current
@@ -339,7 +346,7 @@
                       :reasoning-effort nil))
          (session
           (mevedel-session--create
-           :authority-mode 'pid-lock :name "test" :plan-mode t
+           :name "test" :plan-mode t
            :plan-metadata (list :status 'proposed
                                 :proposal-id '(1 2 "hash")
                                 :selection selection)))
@@ -361,7 +368,6 @@
   ,test
   (test)
   (let* ((session (mevedel-session--create
-                   :authority-mode 'pid-lock
                    :name "test" :permission-mode 'edits))
          (data-buffer (generate-new-buffer " *plan-approval-data*"))
          (view-buffer (generate-new-buffer " *plan-approval-view*"))
@@ -520,7 +526,7 @@
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
 
   :doc "keeps approval pending when the selected model is unregistered"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+  (let* ((session (mevedel-session--create :name "test"))
          (data-buffer (generate-new-buffer " *plan-model-data*"))
          (view-buffer (generate-new-buffer " *plan-model-view*"))
          (selection (mevedel-plan-mode--default-selection session))
@@ -554,7 +560,7 @@
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
 
   :doc "toggles canonical skills and saves multiline implementation instructions"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+  (let* ((session (mevedel-session--create :name "test"))
          (data-buffer (generate-new-buffer " *plan-extras-data*"))
          (view-buffer (generate-new-buffer " *plan-extras-view*"))
          (selection (mevedel-plan-mode--default-selection session))
@@ -602,7 +608,7 @@
 
   :doc "shows selected Goal execution and its editable proposal budget"
   (dolist (case '((nil "Unlimited") (200000 "200000 tokens")))
-    (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+    (let* ((session (mevedel-session--create :name "test"))
            (data-buffer (generate-new-buffer " *plan-goal-budget-data*"))
            (view-buffer (generate-new-buffer " *plan-goal-budget-view*"))
            (selection (list :location 'here :context 'current
@@ -635,7 +641,7 @@
         (when (buffer-live-p data-buffer) (kill-buffer data-buffer)))))
 
   :doc "edits Goal budget proposal-locally and preserves it across execution"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+  (let* ((session (mevedel-session--create :name "test"))
          (data-buffer (generate-new-buffer " *plan-edit-budget-data*"))
          (view-buffer (generate-new-buffer " *plan-edit-budget-view*"))
          (selection '(:location here :context current
@@ -697,7 +703,6 @@
 
   :doc "warns for dirty Worktree state and cancellation keeps approval pending"
   (let* ((session (mevedel-session--create
-                   :authority-mode 'pid-lock
                    :name "test" :working-directory default-directory))
          (data-buffer (generate-new-buffer " *plan-dirty-data*"))
          (view-buffer (generate-new-buffer " *plan-dirty-view*"))
@@ -743,7 +748,6 @@
 
   :doc "a Worktree card names queued input as the blocker and RET refuses with the same reason"
   (let* ((session (mevedel-session--create
-                   :authority-mode 'pid-lock
                    :workspace (mevedel-workspace--create :root "/tmp/plan-origin")
                    :name "test" :working-directory default-directory))
          (data-buffer (generate-new-buffer " *plan-blocked-data*"))
@@ -805,7 +809,6 @@
 
   :doc "a narrow host split cuts only the local card; the remote payload keeps every setting and notice whole"
   (let* ((session (mevedel-session--create
-                   :authority-mode 'pid-lock
                    :name "test" :working-directory default-directory))
          (data-buffer (generate-new-buffer " *plan-remote-data*"))
          (view-buffer (generate-new-buffer " *plan-remote-view*"))
@@ -868,7 +871,6 @@
   :doc "cycling a setting preserves a multiline leading-> composer draft"
   (mevedel-view-test--with-buffers
     (let* ((session (mevedel-session--create
-                     :authority-mode 'pid-lock
                      :name "test" :permission-mode 'edits))
            (selection (mevedel-plan-mode--default-selection session))
            (entry (mevedel-plan-mode--approval-entry
@@ -900,7 +902,6 @@
                         :goal-token-budget nil))
            (session
             (mevedel-session--create
-             :authority-mode 'pid-lock
              :name "test"
              :plan-mode t
              :plan-metadata
@@ -972,7 +973,6 @@
                         :goal-token-budget nil))
            (session
             (mevedel-session--create
-             :authority-mode 'pid-lock
              :name "test"
              :plan-mode t
              :plan-metadata
@@ -1007,7 +1007,6 @@
   (mevedel-view-test--with-buffers
     (let ((session
            (mevedel-session--create
-            :authority-mode 'pid-lock
             :name "test" :plan-mode t
             :plan-metadata '(:status draft :path "plans/current.md"))))
       (with-current-buffer data-buf
@@ -1029,7 +1028,6 @@
   (mevedel-view-test--with-buffers
     (let ((session
            (mevedel-session--create
-            :authority-mode 'pid-lock
             :name "test" :plan-mode t
             :plan-metadata '(:status draft :path "plans/current.md")))
           captured)
@@ -1049,7 +1047,6 @@
   (mevedel-view-test--with-buffers
     (let ((session
            (mevedel-session--create
-            :authority-mode 'pid-lock
             :name "test" :plan-mode t
             :plan-metadata '(:status draft :path "plans/current.md")))
           captured)
@@ -1069,7 +1066,6 @@
   (test)
   (let* ((directory (file-name-as-directory default-directory))
          (session (mevedel-session--create
-                   :authority-mode 'pid-lock
                    :name "source" :working-directory directory))
          (entry (list :session session))
          validated)
@@ -1089,9 +1085,8 @@
   ,test
   (test)
   (let* ((save-dir (make-temp-file "mevedel-plan-proposal-" t))
-         (session (mevedel-session--create
-                   :authority-mode 'pid-lock
-                   :name "test" :save-path save-dir :plan-mode t
+         (session (test-mevedel-session-persistence--leased-session save-dir
+                   :name "test"  :plan-mode t
                    :plan-metadata
                    '(:selection (:location here :context current
                                  :execution goal :mode edits
@@ -1137,10 +1132,12 @@
           (should (equal 'proposed
                          (plist-get (mevedel-session-plan-metadata session)
                                     :status))))
+      (mevedel-session-persistence-lock-release save-dir session)
+      (mevedel-workspace-clear-registry)
       (delete-directory save-dir t)))
 
   :doc "tool output alone cannot create a proposal"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test" :plan-mode t))
+  (let ((session (mevedel-session--create :name "test" :plan-mode t))
         presented)
     (with-temp-buffer
       (setq-local mevedel--session session)
@@ -1153,7 +1150,7 @@
       (should-not presented)))
 
   :doc "injected agent output cannot create a proposal"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test" :plan-mode t))
+  (let ((session (mevedel-session--create :name "test" :plan-mode t))
         presented)
     (with-temp-buffer
       (insert "<agent-result sender=\"/root/worker\" recipient=\"/root\">\n"
@@ -1172,7 +1169,7 @@
                   "<proposed_plan>\n# Plan\ntext </proposed_plan>"
                   "<proposed_plan>\n \t\n</proposed_plan>"))
     (let ((session (mevedel-session--create
-                    :authority-mode 'pid-lock :name "test" :plan-mode t))
+                    :name "test" :plan-mode t))
           diagnostics)
       (with-temp-buffer
         (setq-local mevedel--session session)
@@ -1200,7 +1197,7 @@
       (with-temp-buffer
         (setq-local mevedel--session
                     (mevedel-session--create
-                     :authority-mode 'pid-lock :name "test" :plan-mode active))
+                     :name "test" :plan-mode active))
         (insert (propertize text 'gptel property))
         (mevedel-test--with-captured-diagnostics diagnostics
           (mevedel-plan-mode--post-response (point-min) (point-max)))
@@ -1220,16 +1217,15 @@
                       :reasoning-effort nil
                       :goal-token-budget 1357))
          (session
-          (mevedel-session--create
-           :authority-mode 'pid-lock
-           :name "test" :save-path save-dir :plan-mode t
+          (test-mevedel-session-persistence--leased-session save-dir
+           :name "test"  :plan-mode t
            :plan-metadata
            (list :path "local/plans/current.md" :hash hash :status 'proposed
                  :proposal-id (list 10 20 hash) :selection selection))))
     (unwind-protect
         (progn
           (make-directory (file-name-directory path) t)
-          (write-region plan nil path nil 'silent)
+          (mevedel-plan-mode-test--publish-plan session path plan)
           (mevedel-view-test--with-buffers
             (with-current-buffer data-buf
               (setq-local mevedel--session session))
@@ -1251,6 +1247,8 @@
             (with-current-buffer view-buf
               (should (equal "> first\nsecond"
                              (mevedel-view--input-text))))))
+      (mevedel-session-persistence-lock-release save-dir session)
+      (mevedel-workspace-clear-registry)
       (delete-directory save-dir t)))
 
   :doc "demotes persisted proposals without an implementation model snapshot"
@@ -1259,9 +1257,8 @@
          (plan "# Old proposal")
          (hash (mevedel-plan-hash plan))
          (session
-          (mevedel-session--create
-           :authority-mode 'pid-lock
-           :name "test" :save-path save-dir :plan-mode t
+          (test-mevedel-session-persistence--leased-session save-dir
+           :name "test"  :plan-mode t
            :plan-metadata
            (list :path "local/plans/current.md" :hash hash :status 'proposed
                  :proposal-id (list 1 2 hash)
@@ -1270,7 +1267,7 @@
     (unwind-protect
         (progn
           (make-directory (file-name-directory path) t)
-          (write-region plan nil path nil 'silent)
+          (mevedel-plan-mode-test--publish-plan session path plan)
           (should-not
            (mevedel-plan-mode-restore-pending-approval session))
           (should (eq 'draft
@@ -1298,6 +1295,8 @@
                 (should (eq 'high
                             (plist-get replacement
                                        :reasoning-effort)))))))
+      (mevedel-session-persistence-lock-release save-dir session)
+      (mevedel-workspace-clear-registry)
       (delete-directory save-dir t)))
 
   :doc "demotes a proposed artifact whose durable identity no longer agrees"
@@ -1305,9 +1304,8 @@
          (path (file-name-concat save-dir "local" "plans" "current.md"))
          (hash (mevedel-plan-hash "# Original"))
          (session
-          (mevedel-session--create
-           :authority-mode 'pid-lock
-           :name "test" :save-path save-dir :plan-mode t
+          (test-mevedel-session-persistence--leased-session save-dir
+           :name "test"  :plan-mode t
            :plan-metadata
            (list :path "local/plans/current.md" :hash hash :status 'proposed
                  :proposal-id (list 1 2 hash)
@@ -1316,7 +1314,7 @@
     (unwind-protect
         (progn
           (make-directory (file-name-directory path) t)
-          (write-region "# Tampered" nil path nil 'silent)
+          (mevedel-plan-mode-test--publish-plan session path "# Tampered")
           (should-not
            (mevedel-plan-mode-restore-pending-approval session))
           (should (eq 'draft
@@ -1325,6 +1323,8 @@
           (should-not
            (plist-member (mevedel-session-plan-metadata session)
                          :proposal-id)))
+      (mevedel-session-persistence-lock-release save-dir session)
+      (mevedel-workspace-clear-registry)
       (delete-directory save-dir t))))
 
 (mevedel-deftest mevedel-plan-mode--approval-callback
@@ -1332,9 +1332,8 @@
   ,test
   (test)
   (let* ((save-dir (make-temp-file "mevedel-plan-direct-" t))
-         (session (mevedel-session--create
-                   :authority-mode 'pid-lock
-                   :name "test" :save-path save-dir
+         (session (test-mevedel-session-persistence--leased-session save-dir
+                   :name "test"
                    :permission-mode 'edits :plan-mode t))
          (data-buffer (generate-new-buffer " *plan-direct-data*"))
          (view-buffer (generate-new-buffer " *plan-direct-view*"))
@@ -1395,13 +1394,14 @@
                            :implementation-retry))))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (mevedel-session-persistence-lock-release save-dir session)
+      (mevedel-workspace-clear-registry)
       (delete-directory save-dir t)))
 
   :doc "constructs Here Goal with immutable contract and canonical kickoff"
   (let* ((save-dir (make-temp-file "mevedel-plan-goal-" t))
-         (session (mevedel-session--create
-                   :authority-mode 'pid-lock
-                   :name "test" :save-path save-dir
+         (session (test-mevedel-session-persistence--leased-session save-dir
+                   :name "test"
                    :permission-mode 'edits :plan-mode t))
          (data-buffer (generate-new-buffer " *plan-goal-data*"))
          (view-buffer (generate-new-buffer " *plan-goal-view*"))
@@ -1478,13 +1478,14 @@
             (should-not (plist-member metadata :implementation-retry))))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (mevedel-session-persistence-lock-release save-dir session)
+      (mevedel-workspace-clear-registry)
       (delete-directory save-dir t)))
 
   :doc "Worktree acceptance preserves the source Mode and validated branch"
   (let* ((save-dir (make-temp-file "mevedel-plan-worktree-accept-" t))
-         (session (mevedel-session--create
-                   :authority-mode 'pid-lock
-                   :name "source" :save-path save-dir
+         (session (test-mevedel-session-persistence--leased-session save-dir
+                   :name "source"
                    :permission-mode 'ask :plan-mode t))
          (data-buffer (generate-new-buffer " *plan-worktree-accept*"))
          dispatched)
@@ -1523,6 +1524,8 @@
                            (plist-get (plist-get retry :selection)
                                       :branch)))))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (mevedel-session-persistence-lock-release save-dir session)
+      (mevedel-workspace-clear-registry)
       (delete-directory save-dir t)))
 
   :doc "feedback preserves Plan and selection while requiring a replacement"
@@ -1530,7 +1533,6 @@
                       :execution goal :mode edits
                       :goal-token-budget 4321))
          (session (mevedel-session--create
-                   :authority-mode 'pid-lock
                    :name "test" :plan-mode t
                    :plan-metadata
                    (list :status 'proposed :proposal-id '(1 2 "h")
@@ -1549,7 +1551,6 @@
 
   :doc "cancellation retains a draft but discards approval selection"
   (let* ((session (mevedel-session--create
-                   :authority-mode 'pid-lock
                    :name "test" :plan-mode t
                    :plan-metadata
                    '(:status proposed :proposal-id (1 2 "h")
@@ -1567,9 +1568,9 @@
   (:doc "resolves explicit, local, and paired data-buffer sessions")
   ,test
   (test)
-  (let ((explicit (mevedel-session--create :authority-mode 'pid-lock :name "explicit"))
-        (local (mevedel-session--create :authority-mode 'pid-lock :name "local"))
-        (paired (mevedel-session--create :authority-mode 'pid-lock :name "paired"))
+  (let ((explicit (mevedel-session--create :name "explicit"))
+        (local (mevedel-session--create :name "local"))
+        (paired (mevedel-session--create :name "paired"))
         (data-buffer (generate-new-buffer " *mevedel-plan-session*")))
     (unwind-protect
         (progn
@@ -1590,7 +1591,6 @@
   (test)
   (let ((session
          (mevedel-session--create
-          :authority-mode 'pid-lock
           :name "main" :plan-mode t :plan-metadata '(:status proposed))))
     (mevedel-plan-mode--deactivate session)
     (should-not (mevedel-session-plan-mode session))
@@ -1622,7 +1622,6 @@
   (test)
   (let ((session
          (mevedel-session--create
-          :authority-mode 'pid-lock
           :name "main"
           :plan-metadata '(:status proposed :proposal-id (1 2 "h")
                            :selection (:mode edits)))))
@@ -1675,7 +1674,7 @@
   (:doc "builds one root interaction with a callable outcome callback")
   ,test
   (test)
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "main"))
+  (let* ((session (mevedel-session--create :name "main"))
          (selection '(:location here :context current
                       :execution direct :mode ask))
          (entry
@@ -1698,7 +1697,7 @@
                "uncommitted changes"
                (mevedel-plan-mode--worktree-warning entry)))))
   (let* ((session (mevedel-session--create
-                   :authority-mode 'pid-lock :name "test"
+                   :name "test"
                    :working-directory default-directory))
          (entry (list :selection (list :location 'worktree)
                       :chat-buffer (current-buffer)
@@ -1720,7 +1719,7 @@
 (mevedel-deftest mevedel-plan-mode--worktree-dirty-p
   (:doc "redraws reuse the checked source state until the selection changes")
   (let* ((session (mevedel-session--create
-                   :authority-mode 'pid-lock :name "test"
+                   :name "test"
                    :working-directory default-directory))
          (entry (list :selection (list :location 'worktree)
                       :chat-buffer (current-buffer)
@@ -1749,7 +1748,6 @@
   (test)
   (let* ((session
           (mevedel-session--create
-           :authority-mode 'pid-lock
            :name "main" :plan-mode t :permission-mode 'ask))
          (chat-buffer (generate-new-buffer " *mevedel-plan-accept-data*"))
          (view-buffer (generate-new-buffer " *mevedel-plan-accept-view*"))

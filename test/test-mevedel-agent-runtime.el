@@ -234,7 +234,7 @@
   :doc "a synchronous same-message retry failure retains its newly reported notice"
   (let* ((parent (generate-new-buffer " *agent-retry-parent*"))
          (child (generate-new-buffer " *agent-retry-child*"))
-         (session (mevedel-session--create :name "main" :authority-mode 'pid-lock))
+         (session (mevedel-session--create :name "main"))
          (agent (mevedel-agent-runtime-test--agent))
          (configuration (mevedel-agent-runtime-test--configuration agent))
          retry)
@@ -1189,7 +1189,7 @@ Each element is (NAME SEARCH-RESULT IN-TOOLCALL-ROSTER-P)."
   (test)
   :doc "keeps the terminal answer separate from Bash output in either arrival order"
   (dolist (response-first-p '(nil t))
-    (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+    (let* ((session (mevedel-session--create))
            (invocation (mevedel-agent-runtime-test--invocation))
            (record (mevedel-agent-record--create
                     :path "/root/explore" :parent-path "/root"
@@ -1247,7 +1247,7 @@ Each element is (NAME SEARCH-RESULT IN-TOOLCALL-ROSTER-P)."
 
 (mevedel-deftest mevedel-agent-runtime-queue-execution-completion/meta
   (:doc "forwards structural metadata to the working agent's mailbox record")
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+  (let* ((session (mevedel-session--create))
          (invocation (mevedel-agent-runtime-test--invocation))
          (record (mevedel-agent-record--create
                   :path "/root/explore" :parent-path "/root"
@@ -1273,7 +1273,7 @@ Each element is (NAME SEARCH-RESULT IN-TOOLCALL-ROSTER-P)."
 
 (mevedel-deftest mevedel-agent-runtime-queue-execution-completion/read
   (:doc "does not forward a completion the working agent already read")
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+  (let* ((session (mevedel-session--create))
          (invocation (mevedel-agent-runtime-test--invocation))
          (record (mevedel-agent-record--create
                   :path "/root/explore" :parent-path "/root"
@@ -1328,7 +1328,7 @@ Each element is (NAME SEARCH-RESULT IN-TOOLCALL-ROSTER-P)."
     (should (equal '((t nil 1)) acks)))
   :doc "the mailbox path forwards the acknowledgement and its pending marker"
   (dolist (marker '(pending t))
-    (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+    (let* ((session (mevedel-session--create))
            (invocation (mevedel-agent-runtime-test--invocation))
            (path (mevedel-agent-invocation-require-path invocation))
            (ack (lambda (&rest _) nil))
@@ -1444,7 +1444,7 @@ Each element is (NAME SEARCH-RESULT IN-TOOLCALL-ROSTER-P)."
              (mevedel-session-publication-barrier session)
              (should (equal '((t nil)) acks))))))))
   :doc "a rejected deferred preparation acknowledges failure once even if teardown repeats it"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+  (let* ((session (mevedel-session--create))
          (invocation (mevedel-agent-runtime-test--invocation))
          failure acks)
     (setf (mevedel-agent-invocation-parent-session invocation) session
@@ -1725,7 +1725,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
   ,test
   (test)
   :doc "successful retained-idle settlement closes owned tasks before parent RESULT"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+  (let* ((session (mevedel-session--create))
          (invocation (mevedel-agent-runtime-test--invocation))
          (record (mevedel-agent-record--create
                   :path "/root/explore" :parent-path "/root"
@@ -1762,7 +1762,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
 
   :doc "failed or interrupted retained-idle settlement keeps owned work recoverable"
   (dolist (status '(error aborted))
-    (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+    (let* ((session (mevedel-session--create))
            (invocation (mevedel-agent-runtime-test--invocation))
            (record (mevedel-agent-record--create
                     :path "/root/explore" :parent-path "/root"
@@ -2364,7 +2364,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
   ,test
   (test)
   :doc "a held publication gate queues settlement and its run receives a fresh token"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+  (let* ((session (mevedel-session--create))
          (invocation (mevedel-agent-runtime-test--invocation))
          (buffer (generate-new-buffer " *settle-gate*"))
          queued settled gate-held)
@@ -2394,7 +2394,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
                          settled)))
       (kill-buffer buffer)))
   :doc "an open gate settles in place and hands its token on"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+  (let* ((session (mevedel-session--create))
          (invocation (mevedel-agent-runtime-test--invocation))
          settled)
     (setf (mevedel-agent-invocation-parent-session invocation) session)
@@ -2408,7 +2408,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
       (mevedel-agent-runtime--settle invocation "answer" nil 'owned))
     (should (equal '(("answer" owned)) settled)))
   :doc "the token is forwarded to the publication owner's defer decision"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+  (let* ((session (mevedel-session--create))
          (invocation (mevedel-agent-runtime-test--invocation))
          seen)
     (setf (mevedel-agent-invocation-parent-session invocation) session)
@@ -2423,7 +2423,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
       (mevedel-agent-runtime--settle invocation "answer" nil 'owned))
     (should (eq 'owned seen)))
   :doc "a nested settlement of the same turn is never deferred"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+  (let* ((session (mevedel-session--create))
          (invocation (mevedel-agent-runtime-test--invocation))
          (mevedel-agent-control-settling (list invocation))
          settled)
@@ -2436,7 +2436,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
       (mevedel-agent-runtime--settle invocation "inner"))
     (should (equal '("inner") settled)))
   :doc "a deferred settlement reports no response to its caller"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+  (let* ((session (mevedel-session--create))
          (invocation (mevedel-agent-runtime-test--invocation)))
     (setf (mevedel-agent-invocation-parent-session invocation) session)
     (cl-letf (((symbol-function 'mevedel-session-publication-defer)
@@ -2444,8 +2444,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
       (should-not (mevedel-agent-runtime--settle invocation "answer"))))
   :doc "a queued failure keeps its workspace after the origin buffer dies"
   (let* ((workspace (mevedel-workspace--create :root "/project/origin/"))
-         (session (mevedel-session--create :authority-mode 'pid-lock
-                                           :workspace workspace))
+         (session (mevedel-session--create :workspace workspace))
          (invocation (mevedel-agent-runtime-test--invocation))
          (origin (generate-new-buffer " *agent diagnostic origin*"))
          queued warning)
@@ -2473,7 +2472,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
     (should-not (mevedel-agent-invocation-runtime-settled-p invocation)))
   :doc "raw deferred acknowledgements run once on precommit and postcommit errors"
   (dolist (committed '(nil t))
-    (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+    (let* ((session (mevedel-session--create))
            (invocation (mevedel-agent-runtime-test--invocation))
            queued acks)
       (setf (mevedel-agent-invocation-parent-session invocation) session)
@@ -2502,7 +2501,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
   ,test
   (test)
   :doc "the gate token reaches finalization, the settle callback and the control commit"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+  (let* ((session (mevedel-session--create))
          (invocation (mevedel-agent-runtime-test--invocation))
          seen)
     (setf (mevedel-agent-invocation-parent-session invocation) session
@@ -2523,7 +2522,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
   ,test
   (test)
   :doc "a held gate defers abort and settlement together and still returns the response"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+  (let* ((session (mevedel-session--create))
          (invocation (mevedel-agent-runtime-test--invocation))
          queued log gate-held)
     (setf (mevedel-agent-invocation-parent-session invocation) session
@@ -2556,7 +2555,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
       (should (equal "stop"
                      (mevedel-agent-invocation-terminal-reason invocation)))))
   :doc "an open gate interrupts in place and returns the settled response"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+  (let* ((session (mevedel-session--create))
          (invocation (mevedel-agent-runtime-test--invocation)))
     (setf (mevedel-agent-invocation-parent-session invocation) session)
     (cl-letf (((symbol-function 'mevedel-session-publication-defer)

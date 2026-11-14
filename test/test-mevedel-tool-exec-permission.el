@@ -362,7 +362,6 @@ target-native absolute and home paths qualify through the session target"
                                               (let* ((target (mevedel-execution-target-create remote-root))
                                                      (session
                                                       (mevedel-session--create
-                                                       :authority-mode 'pid-lock
                                                        :execution-target target
                                                        :working-directory remote-root))
                                                      (_ (setf (mevedel-execution-target-environment target)
@@ -575,7 +574,6 @@ additive child permissions are available only to batch Eval"
   (let* ((grant '(:path "/tmp/mevedel-direct" :access read))
          (session
           (mevedel-session--create
-           :authority-mode 'pid-lock
            :name "direct" :resource-grants (list grant))))
     (should
      (equal (list grant)
@@ -601,7 +599,6 @@ additive child permissions are available only to batch Eval"
              :file-system ,profile :action allow)))
          (session
           (mevedel-session--create
-           :authority-mode 'pid-lock
            :name "remembered" :resource-grants nil)))
     (should
      (equal
@@ -672,7 +669,7 @@ additive child permissions are available only to batch Eval"
   :doc "saves command paths and independent paths without duplicating authority"
   (let* ((command-grant '(:path "/tmp/command-cache" :access write :recursive t))
          (independent '(:path "/tmp/shared-input" :access read))
-         (session (mevedel-session--create :authority-mode 'pid-lock :name "scopes"))
+         (session (mevedel-session--create :name "scopes"))
          (request
           `(:operation-pattern "make report" :remember-patterns ("make:*")
             :remember-cell ((:operation t :file-system (,command-grant)
@@ -685,7 +682,7 @@ additive child permissions are available only to batch Eval"
                               :file-system))))
   :doc "independent paths can be remembered without authorizing any command"
   (let* ((grant '(:path "/tmp/shared-input" :access read))
-         (session (mevedel-session--create :authority-mode 'pid-lock :name "independent"))
+         (session (mevedel-session--create :name "independent"))
          (request `(:operation-pattern "make report" :remember-patterns ("make:*")
                     :remember-cell ((:resource-grants (,grant))))))
     (mevedel-tool-exec-permission--apply-remembered-authority
@@ -694,7 +691,7 @@ additive child permissions are available only to batch Eval"
     (should-not (mevedel-session-permission-rules session)))
   :doc "binds a compound command profile to the complete workload"
   (let* ((command "pwd && package fetch dependencies")
-         (session (mevedel-session--create :authority-mode 'pid-lock :name "compound"))
+         (session (mevedel-session--create :name "compound"))
          (request
           `(:operation-pattern ,command
                                :remember-patterns ("pwd" "package fetch:*")
@@ -778,7 +775,6 @@ additive child permissions are available only to batch Eval"
              :file-system ((:path ,path :access write)) :action allow)))
          (session
           (mevedel-session--create
-           :authority-mode 'pid-lock
            :name "write"
            :resource-grants `((:path ,path :access write)))))
     (should
@@ -1358,7 +1354,6 @@ network authority proceeds without a prompt"
 the matching command and its network request proceed without a prompt"
   (let* ((session
           (mevedel-session--create
-           :authority-mode 'pid-lock
            :name "network"
            :permission-mode 'ask
            :permission-rules
@@ -1437,7 +1432,6 @@ selected operation and network authority are reused by another session"
   :doc "sandbox off:
 network authority changes no boundary and does not prompt"
   (let* ((session (mevedel-session--create
-                   :authority-mode 'pid-lock
                    :name "off" :sandbox-mode 'off))
          (mevedel--session session)
          (mevedel-permission-mode 'ask)
@@ -1810,7 +1804,6 @@ the exact expression and selected network authority are reused together"
                (make-temp-file "mevedel-scoped-permission-log-" t)))
          (origin "/root/worker")
          (session (mevedel-session--create
-                   :authority-mode 'pid-lock
                    :name "main" :save-path dir :permission-mode 'ask))
          (request (mevedel-request--create
                    :session session :origin origin))
@@ -1949,7 +1942,7 @@ full escalation prompts without a directly authored qualified rule"
     (should (eq 'allow outcome)))
   :doc "SSH host retry approval: allow-once does not authorize a later invocation"
   (let* ((session (mevedel-session--create
-                   :authority-mode 'pid-lock :name "ssh-host-retry"
+                   :name "ssh-host-retry"
                    :sandbox-mode 'required))
          (mevedel--session session)
          (mevedel-permission-mode 'edits)
@@ -1977,7 +1970,6 @@ full escalation prompts without a directly authored qualified rule"
   :doc "sandbox off:
 full escalation adds no boundary prompt but ordinary command authority remains"
   (let* ((session (mevedel-session--create
-                   :authority-mode 'pid-lock
                    :name "off" :sandbox-mode 'off))
          (mevedel--session session)
          (mevedel-permission-mode 'ask)
@@ -2015,7 +2007,7 @@ an exact user-authored escalation rule skips the prompt"
   :doc "one-shot qualified allow:
 an inherited escalation rule still requires one-time sandbox approval"
   (let* ((session (mevedel-session--create
-                   :authority-mode 'pid-lock :name "one-shot-escalation"
+                   :name "one-shot-escalation"
                    :permission-mode 'ask :sandbox-mode 'best-effort))
          (mevedel--session session)
          ;; A dynamic fallback must not replace this session's Ask authority.
@@ -2134,7 +2126,7 @@ a harvested command substitution cannot hide behind a broad allow"
     (should (eq 'deny outcome)))
   :doc "session approval:
 the prompt stores an exact execution-level-qualified pattern rule"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "full-escalation"))
+  (let* ((session (mevedel-session--create :name "full-escalation"))
          (mevedel--session session)
          (mevedel-permission-mode 'ask)
          (mevedel-permission-rules nil)
@@ -2241,7 +2233,6 @@ the decision log identifies complete confinement bypass authority"
   (let* ((dir (file-name-as-directory
                (make-temp-file "mevedel-full-escalation-log-" t)))
          (session (mevedel-session--create
-                   :authority-mode 'pid-lock
                    :name "full-escalation" :save-path dir))
          (mevedel--session session)
          (mevedel-permission-log-enabled t)
@@ -2372,7 +2363,6 @@ default Bash keeps bare dot inspection automatic"
   (let* ((dir (file-name-as-directory
                (make-temp-file "mevedel-bash-log-" t)))
          (session (mevedel-session--create
-                   :authority-mode 'pid-lock
                    :name "main" :save-path dir
                    :permission-mode 'ask))
          (mevedel-permission-rules
@@ -2399,9 +2389,8 @@ default Bash keeps bare dot inspection automatic"
                                (plist-get entry :specifier-value)))))
       (delete-directory dir t)))
   :doc "side Bash decisions forward no command-derived values to parent audit"
-  (let* ((parent (mevedel-session--create :authority-mode 'pid-lock :name "parent"))
+  (let* ((parent (mevedel-session--create :name "parent"))
          (session (mevedel-session--create
-                   :authority-mode 'pid-lock
                    :name "side" :audit-session parent
                    :permission-mode 'ask))
          (mevedel-permission-rules
@@ -2581,7 +2570,7 @@ default Bash keeps bare dot inspection automatic"
               (mevedel-tool-exec-permission--eval-prompt-result
                'unexpected nil nil "(+ 1 2)" nil)))
   :doc "applies stored Eval outcomes through the canonical rule writer"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "eval-prompt")))
+  (let ((session (mevedel-session--create :name "eval-prompt")))
     (should (eq 'allow
                 (mevedel-tool-exec-permission--eval-prompt-result
                  'allow-session session nil "(+ 1 2)" nil)))
@@ -2630,7 +2619,7 @@ default Bash keeps bare dot inspection automatic"
                (mevedel-user-dir (file-name-concat root "global"))
                (mevedel-permission--store-cache (make-hash-table :test #'equal))
                (workspace (mevedel-workspace--create :type 'project :root root))
-               (session (mevedel-session--create :authority-mode 'pid-lock
+               (session (mevedel-session--create
                                                :name "literal" :workspace workspace))
                (mode (if (eq authority 'escalated) 'full-auto 'ask))
                (mevedel-permission-rules nil)
@@ -2695,7 +2684,6 @@ default Bash keeps bare dot inspection automatic"
   (let* ((dir (file-name-as-directory
                (make-temp-file "mevedel-eval-log-" t)))
          (session (mevedel-session--create
-                   :authority-mode 'pid-lock
                    :name "main" :save-path dir
                    :permission-mode 'full-auto))
          (mevedel-permission-rules nil)
@@ -2747,7 +2735,6 @@ default Bash keeps bare dot inspection automatic"
   (let* ((target (mevedel-execution-target-create
                   "/ssh:user@host:/srv/project/"))
          (session (mevedel-session--create
-                   :authority-mode 'pid-lock
                    :name "remote-eval"
                    :execution-target target
                    :working-directory "/ssh:user@host:/srv/project/"))
@@ -2804,7 +2791,6 @@ default Bash keeps bare dot inspection automatic"
 
   :doc "explicit context Eval uses context mode without ambient session"
   (let* ((session (mevedel-session--create
-                   :authority-mode 'pid-lock
                    :name "test" :permission-mode 'full-auto))
          (context (mevedel-permission--invocation-context
                    :tool-name "Eval"
@@ -2923,7 +2909,7 @@ default Bash keeps bare dot inspection automatic"
               (mevedel-tool-exec-permission--bash-prompt-result
                'unexpected nil nil "make test" nil nil)))
   :doc "routes scoped Bash outcomes through the canonical rule writer"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "bash-prompt")))
+  (let ((session (mevedel-session--create :name "bash-prompt")))
     (should (eq 'allow
                 (mevedel-tool-exec-permission--bash-prompt-result
                  'allow-session session nil "make test"

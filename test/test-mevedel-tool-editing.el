@@ -23,7 +23,7 @@
 			(workspace (mevedel-workspace--create :root directory))
 			(session (mevedel-session--create :save-path directory
 							  :workspace workspace :working-directory directory
-							  :permission-mode 'full-auto :authority-mode 'pid-lock))
+							  :permission-mode 'full-auto ))
 			(buffer (generate-new-buffer " *editing-tools-test*"))
 			(mevedel-shared-editing--runtimes (make-hash-table :test #'equal))
 			(mevedel-artifact-lease--held (make-hash-table :test #'equal))
@@ -110,7 +110,7 @@
           (workspace (mevedel-workspace--create :root directory))
           (session (mevedel-session--create :save-path directory
                                             :workspace workspace :working-directory directory
-                                            :permission-mode 'full-auto :authority-mode 'pid-lock))
+                                            :permission-mode 'full-auto ))
           (buffer (generate-new-buffer " *editing-tools-test*"))
           (mevedel-shared-editing--runtimes (make-hash-table :test #'equal))
           (mevedel-artifact-lease--held (make-hash-table :test #'equal))

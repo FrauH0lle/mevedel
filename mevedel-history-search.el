@@ -106,16 +106,11 @@ The final yielded value is (:ready SOURCES), using relative public names."
           (iter-yield 'discovery)
           (let ((controls (mevedel-session-persistence--control-artifacts entries-valid))
                 listings observations)
-            (if (eq mode 'portable)
-                (progn
-                  (iter-yield 'discovery)
-                  (setq listings (mevedel-session-persistence--lease-listings entries-valid))
-                  (iter-yield 'discovery)
-                  (setq observations
-                        (mevedel-session-publication-read-batch entries-valid listings)))
-              (iter-yield 'discovery)
-              (setq observations
-                    (mevedel-session-persistence-read-sidecar-batch entries-valid)))
+            (iter-yield 'discovery)
+            (setq listings (mevedel-session-persistence--lease-listings entries-valid))
+            (iter-yield 'discovery)
+            (setq observations
+                  (mevedel-session-publication-read-batch entries-valid listings))
             (dolist (path entries-valid)
               (iter-yield 'discovery)
               (let* ((entry
@@ -128,13 +123,12 @@ The final yielded value is (:ready SOURCES), using relative public names."
                 (when (or (null entry) (eq (plist-get entry :kind) 'incompatible))
                   (cl-incf skipped))
                 (when (and entry (not (eq (plist-get entry :kind) 'incompatible)))
-                  (dolist (logical (mevedel-session-artifacts--cold-segments path mode publication))
+                  (dolist (logical (mevedel-session-artifacts--cold-segments publication))
                     (let* ((name (concat (file-name-nondirectory path) "/" logical))
                            (artifact (cdr (assoc logical (plist-get publication :artifacts)))))
                       (when (or (null selected-source) (equal logical selected-source))
                         (push (list :name name :key (file-name-concat path logical)
-                                    :path (if publication (plist-get artifact :published)
-                                            (file-name-concat path logical))
+                                    :path (plist-get artifact :published)
                                     :digest (plist-get artifact :sha256)) sources)))))))))))
     (setq sources (sort sources :key (lambda (source) (plist-get source :name))
                         :lessp #'string-lessp))

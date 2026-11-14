@@ -60,7 +60,7 @@ BODY sees WORKSPACE, SESSION and the local functions `run', `text' and
           (workspace (mevedel-workspace--create :root directory))
           (session (mevedel-session--create :save-path directory
                                             :workspace workspace :working-directory directory
-                                            :permission-mode 'full-auto :authority-mode 'pid-lock))
+                                            :permission-mode 'full-auto ))
           (buffer (generate-new-buffer " *artifact-backend-test*"))
           (mevedel-artifact-backend--registry (make-hash-table :test #'equal))
           (mevedel-shared-editing--runtimes (make-hash-table :test #'equal))

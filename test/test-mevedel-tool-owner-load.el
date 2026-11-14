@@ -143,7 +143,6 @@
                                   :type 'test :id root :root root
                                   :name "cold-exec"))
                       (session (mevedel-session--create
-                                :authority-mode 'pid-lock
                                 :execution-target
                                 (mevedel-execution-target-create root)
                                 :save-path root

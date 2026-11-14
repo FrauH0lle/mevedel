@@ -203,14 +203,12 @@ add more, and we don't want to act on actions we don't understand).")
   "Return non-nil when SESSION uses the portable lease authority."
   (eq (mevedel-session-authority-mode-for-session session) 'portable))
 
-(defun mevedel-session-codec-validate-authority-mode
-    (mode workspace-plist)
-  "Validate MODE against the persisted WORKSPACE-PLIST category."
-  (unless (memq mode '(portable pid-lock))
+(defun mevedel-session-codec-validate-authority-mode (mode)
+  "Validate the sole persisted authority MODE, `portable'."
+  (when (eq mode 'pid-lock)
+    (error "Pre-lease session requires migration with scripts/migrate-sessions.el"))
+  (unless (eq mode 'portable)
     (error "Invalid session authority mode: %S" mode))
-  (let ((type (plist-get workspace-plist :type)))
-    (when (and (memq type '(project file)) (not (eq mode 'portable)))
-      (error "Project and file sessions require portable authority")))
   mode)
 
 (defun mevedel-session-codec-authority-mode-for-path
@@ -225,8 +223,7 @@ an error rather than an implicit PID-lock fallback."
   (unless (and (stringp session-dir)
                (file-name-absolute-p session-dir))
     (error "Session path is unavailable: %S" session-dir))
-  (let* ((lock (file-name-concat session-dir ".lock"))
-         (lease (file-name-concat session-dir ".lease"))
+  (let* ((lease (file-name-concat session-dir ".lease"))
          ;; A decided profile needs no inference probes, and every control
          ;; probe is one target process.
          (decided (or explicit-mode
@@ -235,39 +232,22 @@ an error rather than an implicit PID-lock fallback."
                             session))))
          (mode
           (or decided
-              (let ((lock-exists
-                     (mevedel-session-control-fs-path-exists-p lock))
-                    (lease-exists
-                     (mevedel-session-control-fs-path-exists-p lease)))
-                (cond
-                 ((and lock-exists lease-exists)
-                  (error "Session has both PID lock and portable lease: %s"
-                         session-dir))
-                 (lease-exists 'portable)
-                 (lock-exists 'pid-lock)
-                 (t
+              (progn
+                (mevedel-session-durability--assert-no-pid-lock session-dir)
+                (if (mevedel-session-control-fs-path-exists-p lease)
+                    'portable
                   (let ((sidecar
                          (file-name-concat session-dir "session.meta.el")))
                     (unless (mevedel-session-control-fs-path-exists-p sidecar)
                       (error "Session authority profile is unavailable: %s"
                              session-dir))
-                    (let* ((plist (mevedel-session-codec-read sidecar))
-                           (mode (plist-get plist :authority-mode)))
+                    (let ((plist (mevedel-session-codec-read sidecar)))
                       (mevedel-session-codec-validate-authority-mode
-                       mode (plist-get plist :workspace))))))))))
-    ;; Only a decided profile can disagree with the directory: an inferred
-    ;; one was derived from these very artifacts and already failed closed on
-    ;; a mixed directory.  Probe just the artifact that would contradict it.
+                       (plist-get plist :authority-mode)))))))))
+    ;; Preserve the transaction's batched proof of legacy `.lock' absence.
     (when decided
-      (pcase mode
-        ;; The same proof the durability transaction memoizes, stated
-        ;; there once: enumerating a workspace reaches this for every
-        ;; session, and inside a transaction the probe is already paid.
-        ('portable
-         (mevedel-session-durability--assert-no-pid-lock session-dir))
-        ('pid-lock
-         (when (mevedel-session-control-fs-path-exists-p lease)
-           (error "PID-lock session has a portable lease: %s" session-dir)))))
+      (mevedel-session-codec-validate-authority-mode mode)
+      (mevedel-session-durability--assert-no-pid-lock session-dir))
     mode))
 
 
@@ -579,8 +559,7 @@ The resulting plist is round-trippable via
         (workspace-plist
          (mevedel-session-codec--workspace-to-plist
           (mevedel-session-workspace session))))
-    (mevedel-session-codec-validate-authority-mode
-     authority-mode workspace-plist)
+    (mevedel-session-codec-validate-authority-mode authority-mode)
     (unless (and (stringp target-incarnation)
                  (string-match-p "\\S-" target-incarnation))
       (error "Target incarnation is not available"))
@@ -781,8 +760,7 @@ it had then, or nil, and when it closed."
           (error "Invalid external submitted-input boundary")))
       (push (car entry) scopes)))
   (mevedel-session-codec-validate-authority-mode
-   (plist-get plist :authority-mode)
-   (plist-get plist :workspace))
+   (plist-get plist :authority-mode))
   (let ((incarnation (plist-get plist :target-incarnation)))
     (unless (and (stringp incarnation)
                  (string-match-p "\\S-" incarnation))

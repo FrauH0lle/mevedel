@@ -49,7 +49,7 @@
                      :type 'test :id "long-lines" :root base :name "long-lines"
                      :file-cache (mevedel-test-file-cache-create)))
          (session (mevedel-session--create
-                   :authority-mode 'pid-lock :save-path save
+                   :save-path save
                    :touched-files (make-hash-table :test #'equal)
                    :working-directory base :workspace workspace
                    :permission-mode 'full-auto))

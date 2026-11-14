@@ -63,12 +63,9 @@
 
 ;; `mevedel-session-codec'
 (declare-function mevedel-session-codec-deserialize "mevedel-session-codec" (plist workspace))
-(declare-function mevedel-session-codec-portable-authority-p "mevedel-session-codec" (session))
 (declare-function mevedel-session-codec-read "mevedel-session-codec" (path))
 (declare-function mevedel-session-codec-write "mevedel-session-codec" (path plist))
 (autoload 'mevedel-session-codec-deserialize "mevedel-session-codec")
-(autoload 'mevedel-session-codec-portable-authority-p
-  "mevedel-session-codec")
 (autoload 'mevedel-session-codec-read "mevedel-session-codec")
 (autoload 'mevedel-session-codec-write "mevedel-session-codec")
 
@@ -81,13 +78,18 @@
   "mevedel-session-durability")
 
 ;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence--execution-successor-ids "mevedel-session-persistence" (text))
+(declare-function mevedel-session-persistence--reconcile-lost-execution-file "mevedel-session-persistence" (path text &optional successor-execution-ids artifact-callback))
 (declare-function mevedel-session-persistence-allocate-session-id "mevedel-session-persistence" (sessions-dir))
 (declare-function mevedel-session-persistence-find-live-buffer "mevedel-session-persistence" (session-id buf-name))
 (declare-function mevedel-session-persistence-lock-acquire "mevedel-session-persistence" (session-dir buffer-name &optional session))
 (declare-function mevedel-session-persistence-lock-release "mevedel-session-persistence" (session-dir &optional session))
-(declare-function mevedel-session-persistence-reconcile-lost-execution-segments "mevedel-session-persistence" (session &optional exclude-path artifact-callback))
 (declare-function mevedel-session-persistence-restore "mevedel-session-persistence" (session-dir &optional lifecycle-source session-override workspace))
 (declare-function mevedel-session-persistence-write-current-buffer-atomically "mevedel-session-persistence" (path))
+(autoload 'mevedel-session-persistence--execution-successor-ids
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence--reconcile-lost-execution-file
+  "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-allocate-session-id
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-find-live-buffer
@@ -95,8 +97,6 @@
 (autoload 'mevedel-session-persistence-lock-acquire
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-lock-release
-  "mevedel-session-persistence")
-(autoload 'mevedel-session-persistence-reconcile-lost-execution-segments
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-restore
   "mevedel-session-persistence")
@@ -587,9 +587,23 @@ caches never become fork authority."
         (mevedel-session-artifacts-stabilize-gptel-bounds))
       (set-buffer-modified-p t)
       (mevedel-session-artifacts-save-buffer-silently))
-    (mevedel-session-persistence-reconcile-lost-execution-segments
-     child (mevedel-session-artifacts-segment-path
-            staging-path picked-segment))
+    ;; The private child has staged copies, not an immutable publication yet.
+    (let ((successor-ids
+           (mevedel-session-persistence--execution-successor-ids
+            (with-current-buffer staging-buffer (buffer-string)))))
+      (cl-loop for segment downfrom (1- picked-segment) to 1
+               for path = (mevedel-session-artifacts-segment-path
+                           staging-path segment)
+               for text = (when (file-regular-p path)
+                            (with-temp-buffer
+                              (insert-file-contents path)
+                              (buffer-string)))
+               when text
+               do (mevedel-session-persistence--reconcile-lost-execution-file
+                   path text successor-ids)
+               and do
+               (dolist (id (mevedel-session-persistence--execution-successor-ids text))
+                 (cl-pushnew id successor-ids :test #'equal))))
     (when picked-cum-turn
       (dolist (entry
                (mevedel-session-rewind-state-at-turn
@@ -631,9 +645,7 @@ caches never become fork authority."
     (child buffer staging-buffer parent-save-path staging-path new-save-path
            picked-segment picked-cum-turn additional-roots)
   "Stage, publish, and restore CHILD as one session-artifact transaction."
-  (let ((portable-p
-         (mevedel-session-codec-portable-authority-p child))
-        child-buffer published committed)
+  (let (child-buffer published committed)
     (unwind-protect
         (progn
           (unless (mevedel-session-persistence-lock-acquire
@@ -642,30 +654,22 @@ caches never become fork authority."
           (mevedel-session-fork--stage-fork
            child buffer staging-buffer parent-save-path staging-path
            picked-segment picked-cum-turn additional-roots)
-          (if portable-p
-              (progn
-                ;; A fork starts a new publication history.  Publish its
-                ;; complete staged snapshot before the owned lease and
-                ;; immutable control state move together into discoverability.
-                (mevedel-session-publication-publish
-                 child
-                 (mevedel-session-rewind-rewind-publication-artifacts
-                  child staging-buffer staging-path))
-                (mevedel-session-durability-call-with-reserved-lease
-                 child
-                 (lambda ()
-                   (rename-file (directory-file-name staging-path)
-                                (directory-file-name new-save-path))
-                   (setq published t)
-                   ;; Reservation finalization must address the moved lease.
-                   (setf (mevedel-session-save-path child) new-save-path)))
-                (setf
-                 (mevedel-session-publication child)
-                 (mevedel-session-publication-read new-save-path)))
-            (mevedel-session-persistence-lock-release staging-path child)
-            (rename-file (directory-file-name staging-path)
-                         (directory-file-name new-save-path))
-            (setf (mevedel-session-save-path child) new-save-path))
+          ;; A fork starts a new publication history. Publish its complete
+          ;; staged snapshot before the lease and control state move together.
+          (mevedel-session-publication-publish
+           child
+           (mevedel-session-rewind-rewind-publication-artifacts
+            child staging-buffer staging-path))
+          (mevedel-session-durability-call-with-reserved-lease
+           child
+           (lambda ()
+             (rename-file (directory-file-name staging-path)
+                          (directory-file-name new-save-path))
+             (setq published t)
+             ;; Reservation finalization must address the moved lease.
+             (setf (mevedel-session-save-path child) new-save-path)))
+          (setf (mevedel-session-publication child)
+                (mevedel-session-publication-read new-save-path))
           (setq published t)
           (with-current-buffer staging-buffer
             (set-buffer-modified-p nil)
@@ -705,9 +709,8 @@ caches never become fork authority."
           (if remaining
               (ignore-errors
                 (mevedel-session-persistence-lock-release remaining child))
-            (when portable-p
-              (ignore-errors
-                (mevedel-session-durability-forget-removed-session child))))))
+            (ignore-errors
+              (mevedel-session-durability-forget-removed-session child)))))
       (when (buffer-live-p staging-buffer)
         (with-current-buffer staging-buffer
           (set-buffer-modified-p nil)
@@ -868,17 +871,10 @@ Return descriptions of malformed grants and rules dropped from the child."
           (file-name-as-directory
            (expand-file-name
             (mevedel-session-worktree-directory child))))
-         (history-dir
-          (file-name-concat
-           (mevedel-session-save-path source) "file-history"))
-         (portable-p
-          (mevedel-session-codec-portable-authority-p source))
          (restored 0)
          plan
          unrestored
          external)
-    (unless (or portable-p (file-readable-p history-dir))
-      (error "Captured file-history store is unreadable: %s" history-dir))
     ;; Validate the complete plan before the first child-worktree write.
     (dolist (entry
              (mevedel-session-rewind-state-at-turn source cum-turn))

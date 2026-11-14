@@ -2858,7 +2858,7 @@ work in flight genuinely unprovable rather than merely finished."
           ;; mode even when the stored sandbox preference says the opposite.
           (dolist (mode '(edits full-auto))
             (let* ((session (mevedel-session--create
-                             :authority-mode 'pid-lock :execution-target target
+                             :execution-target target
                              :working-directory root :permission-mode mode
                              :sandbox-mode (if (eq mode 'edits) 'off 'required)))
                    (result (mevedel-execution-run-one-shot

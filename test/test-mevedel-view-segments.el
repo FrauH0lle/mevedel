@@ -12,6 +12,9 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-session-artifacts)
+(require 'mevedel-session-test-support
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name)) "mevedel-session-test-support"))
 (require 'mevedel-structs)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-transcript-audit)
@@ -71,13 +74,20 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
                          (prin1-to-string bounds)))))
     (write-region (point-min) (point-max) path nil 'silent)))
 
+(defun mevedel-view-segments-test--publish (session &rest paths)
+  "Publish explicit archive PATHS for read-only projection in SESSION."
+  (mevedel-session-publication-publish
+   session (append (mapcar (lambda (path)
+                             (list :path path :content
+                                   (mevedel-session-artifacts-read-file-raw path))) paths)
+                   '((:path "session.meta.el" :content "(:fixture archive-only)" :commit-marker t))) t))
+
 (defmacro mevedel-view-segments-test--with-view (&rest body)
   "Run BODY in a rendered three-segment view with two archived segments."
   (declare (indent 0) (debug t))
   `(let* ((directory (make-temp-file "mevedel-view-segments-" t))
           (session
-           (mevedel-session--create
-            :authority-mode 'pid-lock
+           (test-mevedel-session-persistence--leased-session directory
             :name "segments"
             :save-path (file-name-as-directory directory)
             :current-segment 3
@@ -87,12 +97,16 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
               (3 . ((:cum-turn 3 :preview "live prompt")))))))
      (unwind-protect
          (progn
+           (setf (mevedel-workspace-name (mevedel-session-workspace session)) "mevedel")
            (mevedel-view-segments-test--write
             (mevedel-session-artifacts-segment-path directory 1)
             "First prompt" "Archived answer one" "fork-1" 1)
            (mevedel-view-segments-test--write
             (mevedel-session-artifacts-segment-path directory 2)
             "Second prompt" "Archived answer two" "fork-2" 2)
+           (mevedel-view-segments-test--publish
+            session (mevedel-session-artifacts-segment-path directory 1)
+            (mevedel-session-artifacts-segment-path directory 2))
            (mevedel-view-test--with-buffers
              (with-current-buffer data-buf
                (setq-local mevedel--session session)
@@ -102,10 +116,12 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
                (setq-local mevedel--session session)
                (mevedel-view--full-rerender)
                ,@body)))
+       (mevedel-session-durability-lease-release directory session)
+       (mevedel-workspace-clear-registry)
        (delete-directory directory t))))
 
-(defun mevedel-view-segments-test--write-repeated (path)
-  "Write two identical prompts with distinct response bounds to PATH."
+(defun mevedel-view-segments-test--write-repeated (path session)
+  "Write and publish two identical prompts with distinct bounds at SESSION PATH."
   (with-temp-buffer
     (org-mode)
     (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
@@ -123,6 +139,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
                        (prin1-to-string
                         (list (cons 'response (nreverse bounds))))))
       (write-region (point-min) (point-max) path nil 'silent)
+      (mevedel-view-segments-test--publish session path)
       (goto-char (point-min))
       (dotimes (_ 2)
         (search-forward "Same prompt")
@@ -154,6 +171,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
               "#+begin_summary mevedel-role=compaction-summary\n"
               "Archived handoff\n#+end_summary\n\n"
               "Second prompt\nArchived answer two\n"))
+    (mevedel-view-segments-test--publish session (mevedel-session-artifacts-segment-path directory 2))
     (mevedel-view-go-to-segment 2)
     (should (= 2 (mevedel-view-segments-current-number)))
     (should (string-search "conversation compacted" (buffer-string)))
@@ -222,8 +240,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
   (let* ((directory (make-temp-file "mevedel-view-segment-gap-" t))
          (missing (mevedel-session-artifacts-segment-path directory 2))
          (session
-          (mevedel-session--create
-           :authority-mode 'pid-lock
+          (test-mevedel-session-persistence--leased-session directory
            :name "segments"
            :save-path (file-name-as-directory directory)
            :current-segment 3
@@ -236,6 +253,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
           (mevedel-view-segments-test--write
            (mevedel-session-artifacts-segment-path directory 1)
            "First prompt" "Archived answer one" "fork-1" 1)
+          (mevedel-view-segments-test--publish session (mevedel-session-artifacts-segment-path directory 1))
           (mevedel-view-test--with-buffers
             (with-current-buffer data-buf
               (setq-local mevedel--session session)
@@ -252,13 +270,14 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
                 (should (string-search missing
                                        (error-message-string error)))
                 (should (equal before (buffer-string)))))))
+      (mevedel-session-durability-lease-release directory session)
+      (mevedel-workspace-clear-registry)
       (delete-directory directory t)))
 
   :doc "does not split a complete archived response at a stale saved bound"
   (let* ((directory (make-temp-file "mevedel-view-stale-bound-" t))
          (session
-          (mevedel-session--create
-           :authority-mode 'pid-lock
+          (test-mevedel-session-persistence--leased-session directory
            :name "segments"
            :save-path (file-name-as-directory directory)
            :current-segment 2
@@ -271,6 +290,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
            (mevedel-session-artifacts-segment-path directory 1)
            "Archived prompt" "Complete archived answer."
            "fork-1" 1 (length "Complete"))
+          (mevedel-view-segments-test--publish session (mevedel-session-artifacts-segment-path directory 1))
           (mevedel-view-test--with-buffers
             (with-current-buffer data-buf
               (setq-local mevedel--session session)
@@ -284,6 +304,8 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
                                      (buffer-string)))
               (should (= 1 (how-many "^You$" (point-min)
                                      (mevedel-view--input-marker-position)))))))
+      (mevedel-session-durability-lease-release directory session)
+      (mevedel-workspace-clear-registry)
       (delete-directory directory t)))
 
   :doc "is defined by the historical segment owner"
@@ -317,6 +339,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
     (with-temp-file (mevedel-session-artifacts-segment-path directory 2)
       (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n"
               "Second prompt\n#+begin_reasoning\nArchived thought\n#+end_reasoning\n"))
+    (mevedel-view-segments-test--publish session (mevedel-session-artifacts-segment-path directory 2))
     (mevedel-view-test--insert-composer-draft "> live draft\nsecond line" 4)
     (mevedel-view-go-to-segment 2)
     (should (string-search "Archived thought" (buffer-string)))
@@ -355,8 +378,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
   :doc "direct selection bypasses a missing intervening segment"
   (let* ((directory (make-temp-file "mevedel-view-segment-picker-" t))
          (session
-          (mevedel-session--create
-           :authority-mode 'pid-lock
+          (test-mevedel-session-persistence--leased-session directory
            :name "segments"
            :save-path (file-name-as-directory directory)
            :current-segment 3
@@ -369,6 +391,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
           (mevedel-view-segments-test--write
            (mevedel-session-artifacts-segment-path directory 1)
            "First prompt" "Archived answer one" "fork-1" 1)
+          (mevedel-view-segments-test--publish session (mevedel-session-artifacts-segment-path directory 1))
           (mevedel-view-test--with-buffers
             (with-current-buffer data-buf
               (setq-local mevedel--session session)
@@ -380,6 +403,8 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
               (mevedel-view-go-to-segment 1)
               (should (string-search "Archived answer one"
                                      (buffer-string))))))
+      (mevedel-session-durability-lease-release directory session)
+      (mevedel-workspace-clear-registry)
       (delete-directory directory t))))
 
 (mevedel-deftest mevedel-view-segments-jump-to-prompt ()
@@ -389,7 +414,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
   (save-window-excursion
     (mevedel-view-segments-test--with-view
       (let* ((path (mevedel-session-artifacts-segment-path directory 1))
-             (positions (mevedel-view-segments-test--write-repeated path))
+             (positions (mevedel-view-segments-test--write-repeated path session))
              (window (selected-window)))
         (set-window-buffer window view-buf)
         (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
@@ -420,7 +445,10 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
 
   :doc "a missing archive does not replace the live view"
   (mevedel-view-segments-test--with-view
-    (delete-file (mevedel-session-artifacts-segment-path directory 1))
+    (mevedel-session-publication-publish
+     session '((:path "segment-0001.chat.org" :delete t)
+               (:path "session.meta.el" :content "(:fixture archive-only)"
+                :commit-marker t)) t)
     (let ((before (buffer-string)))
       (should-error (mevedel-view-segments-jump-to-prompt 1 44)
                     :type 'user-error)
@@ -461,7 +489,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
   :doc "materializes a pending target and ignores obsolete batch callbacks"
   (mevedel-view-segments-test--with-view
     (let ((pos (car (mevedel-view-segments-test--write-repeated
-                     (mevedel-session-artifacts-segment-path directory 1)))))
+                     (mevedel-session-artifacts-segment-path directory 1) session))))
       (mevedel-view-go-to-segment 1)
       (mevedel-view-render-batched-full)
       (should mevedel-view-render--batch)
@@ -555,8 +583,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
   (test)
   :doc "a resident fileless agent never navigates into parent session archives"
   (let* ((directory (make-temp-file "mevedel-fileless-agent-" t))
-         (session (mevedel-session--create
-                   :save-path directory :authority-mode 'pid-lock
+         (session (test-mevedel-session-persistence--leased-session directory
                    :current-segment 3))
          (data (generate-new-buffer " *fileless agent data*"))
          (view (generate-new-buffer " *fileless agent view*")))
@@ -565,6 +592,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
           (mevedel-view-segments-test--write
            (mevedel-session-artifacts-segment-path directory 1)
            "Parent prompt" "Parent answer" "fork-1" 1)
+          (mevedel-view-segments-test--publish session (mevedel-session-artifacts-segment-path directory 1))
           (with-current-buffer data
             (setq-local mevedel--session session)
             (org-mode)
@@ -592,6 +620,8 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
             (should-not (string-search "Parent answer" (buffer-string)))))
       (when (buffer-live-p view) (kill-buffer view))
       (when (buffer-live-p data) (kill-buffer data))
+      (mevedel-session-durability-lease-release directory session)
+      (mevedel-workspace-clear-registry)
       (delete-directory directory t))))
 
 (mevedel-deftest mevedel-view-segments-chats-line ()

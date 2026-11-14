@@ -18,6 +18,7 @@
 (require 'mevedel-persistence)
 (require 'mevedel-session-publication)
 (require 'mevedel-session-recovery)
+(require 'mevedel-session-durability)
 
 
 (defun test-mevedel-rewind--publish-backups (session &rest pairs)
@@ -1431,7 +1432,7 @@ them are set, so the committing save keeps them."
           (should-not (file-exists-p (file-name-concat tempdir "outside.txt"))))
       (delete-directory tempdir t))))
 
-(mevedel-deftest mevedel-session-rewind--commit-remote-rewind ()
+(mevedel-deftest mevedel-session-rewind--commit-rewind ()
   ,test
   (test)
   :doc "commits one replacement head without moving remote control state"
@@ -1496,7 +1497,7 @@ them are set, so the committing save keeps them."
                        'mevedel-session-rewind--refresh-restored-buffers)
                       #'ignore))
                   (should
-                   (mevedel-session-rewind--commit-remote-rewind
+                   (mevedel-session-rewind--commit-rewind
                     session buffer target nil)))
                 (should
                  (equal generation
@@ -1602,7 +1603,7 @@ them are set, so the committing save keeps them."
                       (lambda (&rest _) (push 'buffers followed))))
                   (mevedel-test--with-captured-diagnostics warning
                     (should
-                     (mevedel-session-rewind--commit-remote-rewind
+                     (mevedel-session-rewind--commit-rewind
                       session buffer target nil))))
                 ;; The head is committed, so the failed install degrades to
                 ;; a warning that names its own frame, and every later
@@ -1709,7 +1710,7 @@ them are set, so the committing save keeps them."
                               reservations)
                         (funcall reserve-function actual-session function))))
                   (should-error
-                   (mevedel-session-rewind--commit-remote-rewind
+                   (mevedel-session-rewind--commit-rewind
                     session buffer target plan)))
                 (should (= 2 (length reservations)))
                 (should-not (mevedel-session-pending-publication session))
@@ -1774,7 +1775,7 @@ them are set, so the committing save keeps them."
                 (setf (mevedel-session-publication session) nil)
                 (write-region "before" nil path nil 'silent)
                 (let ((err (should-error
-                            (mevedel-session-rewind--commit-remote-rewind
+                            (mevedel-session-rewind--commit-rewind
                              session buffer target plan))))
                   (should (string-match-p "requires a committed publication"
                                           (error-message-string err))))
@@ -1783,7 +1784,7 @@ them are set, so the committing save keeps them."
                 (setq unpublished nil)
                 (setf (mevedel-session-publication session) publication)
                 (let ((err (should-error
-                            (mevedel-session-rewind--commit-remote-rewind
+                            (mevedel-session-rewind--commit-rewind
                              session buffer target plan))))
                   (should (equal "Injected staging failure"
                                  (error-message-string err)))))
@@ -1828,7 +1829,7 @@ them are set, so the committing save keeps them."
                   (head (plist-get (mevedel-session-publication session) :head)))
               (should (plist-get target :fork-point-id))
               (should (= 1 (length plan)))
-              (should (mevedel-session-rewind--commit-remote-rewind
+              (should (mevedel-session-rewind--commit-rewind
                        session buffer target plan 'after))
               (should (equal "post-turn" (mevedel-session-artifacts--file-text path)))
               (should (= 1 (mevedel-session-turn-count session)))
@@ -1921,14 +1922,15 @@ them are set, so the committing save keeps them."
   ,test
   (test)
   :doc "promises captured-state redo exactly where heads stay published"
-  (should (equal "conversation and captured-file redo"
-                 (mevedel-session-rewind--redo-availability
-                  (mevedel-session--create :authority-mode 'portable))))
-  :doc "promises no redo for a PID-lock session"
-  (should (equal "no redo"
-                 (mevedel-session-rewind--redo-availability
-                  (mevedel-session--create :authority-mode 'pid-lock))))
-  :doc "promises no redo when no authority mode is recorded yet"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (should (equal "conversation and captured-file redo"
+                       (mevedel-session-rewind--redo-availability
+                        (mevedel-session-create "redo" workspace))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "promises no redo for a workspace-free session"
   (should (equal "no redo"
                  (mevedel-session-rewind--redo-availability
                   (mevedel-session--create)))))
@@ -2015,10 +2017,10 @@ them are set, so the committing save keeps them."
         (delete-directory local-root t))
       (mevedel-workspace-clear-registry)))
 
-  :doc "returns nothing for a PID-lock session"
+  :doc "returns nothing for a workspace-free session"
   (should-not
    (mevedel-session-rewind-published-heads
-    (mevedel-session--create :authority-mode 'pid-lock))))
+    (mevedel-session--create))))
 
 (mevedel-deftest mevedel-session-rewind-restore-head ()
   ,test
@@ -2391,8 +2393,8 @@ them are set, so the committing save keeps them."
     (should (equal backups rolled-back))
     (should-not (mevedel-session-pending-publication session)))
 
-  :doc "refuses a PID-lock session"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock)))
+  :doc "refuses a workspace-free session"
+  (let ((session (mevedel-session--create)))
     (should-error
      (mevedel-session-rewind-restore-head
       session (current-buffer) ".publications/generation-x/manifest.el")

@@ -59,7 +59,7 @@
                        (mevedel-session-working-directory session)))))))
 
 (mevedel-deftest mevedel-session-authority-mode-for-session
-  (:doc "normalizes workspace authority once and rejects unset or mismatched state")
+  (:doc "normalizes durable workspaces, permits workspace-free state, and rejects obsolete modes")
   (let* ((workspace
           (mevedel-workspace--create
            :type 'project :id "project" :root "/tmp/project/"
@@ -72,10 +72,31 @@
     (should-error
      (mevedel-session-authority-mode-for-session session)
      :type 'error)
-    (should-error
+    (should-not
      (mevedel-session-authority-mode-for-session
-      (mevedel-session--create))
+      (mevedel-session--create)))
+    (setf (mevedel-session-authority-mode session) 'unknown)
+    (should-error
+     (mevedel-session-authority-mode-for-session session)
      :type 'error)))
+
+(mevedel-deftest mevedel-session-authority-mode-for-workspace ()
+  ,test
+  (test)
+  :doc "all workspace types share portable authority"
+  (dolist (type '(project file custom))
+    (should (eq 'portable
+                (mevedel-session-authority-mode-for-workspace
+                 (mevedel-workspace--create :type type)))))
+  :doc "workspace-free sessions claim no durable authority"
+  (let ((session (mevedel-session--create)))
+    (should-not (mevedel-session-authority-mode-for-workspace nil))
+    (should-not (mevedel-session-durability--portable-session-p session))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (should (mevedel-session-artifacts-assert-mutation-authority session))
+      (should (mevedel-session-artifacts-assert-new-mutation-authority session)))
+    (should-not (mevedel-session-save-path session))))
 
 (mevedel-deftest mevedel-session-audit-target ()
   ,test

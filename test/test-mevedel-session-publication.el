@@ -1811,14 +1811,21 @@ and its segment path."
                 "Could not collect published generations.*Injected scan failure"
                 captured)))))
 
-  :doc "refuses without the lease and for a PID-lock session"
+  :doc "refuses without a workspace or an owned lease"
   (should-not
    (test-mevedel-publication--collect
-    (mevedel-session--create :authority-mode 'pid-lock)))
-  (should-not
-   (test-mevedel-publication--collect
-    (mevedel-session--create :authority-mode 'portable
-                             :save-path "/tmp/mevedel-absent/"))))
+    (mevedel-session--create)))
+  (let* ((root (make-temp-file "mevedel-collection-no-lease-" t))
+         (session (mevedel-session-create
+                   "unowned" (mevedel-workspace--create
+                              :type 'file :id root :root root))))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) root)
+          (should (mevedel-session-codec-portable-authority-p session))
+          (should-not (mevedel-session-durability-lease-owned-p session))
+          (should-not (test-mevedel-publication--collect session)))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-publication--cached-generation
   (:doc "Caches compact observations only after a successful immutable read")
@@ -2181,7 +2188,7 @@ and its segment path."
                                    mevedel-session-publication--diagnostic-backlog))))))
 
   :doc "a session that does not publish through the lease holds nothing"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock))
+  (let ((session (mevedel-session--create))
         (holds 0) (ran nil))
     (cl-letf (((symbol-function 'mevedel-session-durability-call-with-held-lease)
                (lambda (_s fn) (setq holds (1+ holds)) (funcall fn))))

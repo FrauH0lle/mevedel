@@ -216,12 +216,12 @@
   ,test
   (test)
   :doc "a session with no checkpoint state has no pending message and stays uninitialized"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock)))
+  (let ((session (mevedel-session--create)))
     (should-not
      (mevedel-session-checkpoint-pending-message-p session "/root" "m1"))
     (should-not (mevedel-session-checkpoint-state session)))
   :doc "a consumed message is pending for its conversation only"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock)))
+  (let ((session (mevedel-session--create)))
     (mevedel-session-checkpoint-consume
      session "/root" (list (test-mevedel-session-checkpoint--mail "m1")))
     (should (mevedel-session-checkpoint-pending-message-p session "/root" "m1"))
@@ -232,7 +232,7 @@
     (should-not
      (mevedel-session-checkpoint-pending-message-p session "/root" nil)))
   :doc "an installed candidate retires the message unless a publication proof remains"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock
+  (let ((session (mevedel-session--create
                                           :publication-active-p t)))
     (mevedel-session-checkpoint-consume
      session "/root" (list (test-mevedel-session-checkpoint--mail "m1")))
@@ -246,7 +246,7 @@
     (should-not (mevedel-session-checkpoint-pending-message-p
                  session "/root" "m1")))
   :doc "an installed candidate with no outstanding publication retires the message"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock)))
+  (let ((session (mevedel-session--create)))
     (mevedel-session-checkpoint-consume
      session "/root" (list (test-mevedel-session-checkpoint--mail "m1")))
     (mevedel-session-checkpoint-install

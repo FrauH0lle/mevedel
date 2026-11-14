@@ -348,17 +348,10 @@ inherited history.  A queued-mail wake prompt is not an assignment."
                 relative-path save-path))
               (canonical-path (expand-file-name relative-path save-path))
               (buffer-path buffer-file-name)
-              ((if (mevedel-session-codec-portable-authority-p session)
-                   (and (equal (expand-file-name buffer-path)
-                               canonical-path)
-                        (mevedel-session-artifacts-artifact-present-p
-                         session relative-path))
-                 (and (mevedel--same-file-p buffer-path canonical-path)
-                      (file-regular-p canonical-path)
-                      (not (file-symlink-p canonical-path))
-                      (file-writable-p canonical-path)
-                      (file-writable-p
-                       (file-name-directory canonical-path)))))
+              ((mevedel-session-codec-portable-authority-p session))
+              ((equal (expand-file-name buffer-path) canonical-path))
+              ((mevedel-session-artifacts-artifact-present-p
+                session relative-path))
               (task-heading (mevedel-compact-evidence-agent-task-heading invocation))
               (first-output
                (cl-find-if

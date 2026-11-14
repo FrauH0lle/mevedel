@@ -4,6 +4,10 @@
 
 ;;; Code:
 
+(require 'mevedel-session-test-support
+         (file-name-concat (file-name-directory
+                            (or buffer-file-name load-file-name byte-compile-current-file))
+                           "mevedel-session-test-support"))
 (require 'ert)
 (require 'cl-lib)
 (require 'mcp)
@@ -16,6 +20,7 @@
 (require 'mevedel-agent-persistence)
 (require 'mevedel-agents)
 (require 'mevedel-tools)
+(require 'mevedel-tool-fs)
 (require 'mevedel-tool-fs-read)
 (require 'mevedel-skills-core)
 (require 'mevedel-system)
@@ -222,7 +227,7 @@
                      :type 'test :id "completion" :root default-directory
                      :name "completion"))
          (session (mevedel-session--create
-                   :authority-mode 'pid-lock :save-path default-directory
+                   :save-path default-directory
                    :workspace workspace))
          (resource-root-function
           (symbol-function 'mevedel-resource--root)))
@@ -266,7 +271,7 @@
                  :name "remote" :source-file (concat remote "/SKILL.md")
                  :source-dir remote))
          (session (mevedel-session--create
-                   :authority-mode 'pid-lock :skills (list skill)
+                   :skills (list skill)
                    :workspace workspace)))
     (cl-letf (((symbol-function 'mevedel-skills-skill-enabled-p)
                (lambda (&rest _)
@@ -300,7 +305,7 @@
   :doc "returns an opaque attempt whose execution keeps the authored address"
   (let* ((save-path (make-temp-file "mevedel-resource-session-" t))
          (local (file-name-concat save-path "local"))
-         (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
+         (session (mevedel-session--create :save-path save-path))
          (address "work://notes.md")
          path seen-address)
     (unwind-protect
@@ -328,7 +333,7 @@
   :doc "rejects symlink escapes before the handler receives an attempt"
   (let* ((save-path (make-temp-file "mevedel-resource-session-" t))
          (outside (make-temp-file "mevedel-resource-outside-" t))
-         (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path)))
+         (session (mevedel-session--create :save-path save-path)))
     (unwind-protect
         (progn
           (make-directory (file-name-concat save-path "local") t)
@@ -346,7 +351,7 @@
   :doc "returns a file-backed address's file, nothing for a listing, and leaves no attempt"
   (let* ((save-path (make-temp-file "mevedel-resource-visit-" t))
          (local (file-name-concat save-path "local"))
-         (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
+         (session (mevedel-session--create :save-path save-path))
          (before (hash-table-count mevedel-resource--attempt-table)))
     (unwind-protect
         (progn
@@ -382,7 +387,7 @@
   (test)
   :doc "reads items and libraries, greps text, and refuses missing items and other operations"
   (let* ((save-path (make-temp-file "mevedel-resource-shared-" t))
-         (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
+         (session (mevedel-session--create :save-path save-path))
          (context (list :session session))
          (execute (lambda (operation address)
                     (mevedel-resource-execute
@@ -419,7 +424,7 @@
   (test)
   :doc "encodes artifact path components while retaining separators"
   (let* ((save-path (make-temp-file "mevedel-resource-artifact-" t))
-         (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
+         (session (mevedel-session--create :save-path save-path))
          (directory (file-name-concat save-path "tool-results" "part one"))
          (path (file-name-concat directory "result.txt")))
     (unwind-protect
@@ -435,7 +440,7 @@
   (test)
   :doc "prepares a new local ApplyPatch target without materializing its root"
   (let* ((save-path (make-temp-file "mevedel-resource-patch-" t))
-         (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
+         (session (mevedel-session--create :save-path save-path))
          (address "work://notes/new.txt")
          (local-root (file-name-concat save-path "local"))
          (expected (file-name-concat local-root "notes" "new.txt")))
@@ -458,7 +463,7 @@
   (test)
   :doc "includes the authored address without exposing session storage"
   (let* ((save-path (make-temp-file "mevedel-resource-validation-" t))
-         (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
+         (session (mevedel-session--create :save-path save-path))
          (address "work://notes/../bad.txt")
          message)
     (unwind-protect
@@ -512,7 +517,7 @@
   (test)
   (let* ((save-path (make-temp-file "mevedel-resource-lifecycle-" t))
          (outside (make-temp-file "mevedel-resource-outside-" t))
-         (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
+         (session (mevedel-session--create :save-path save-path))
          (local-root (file-name-concat save-path "local"))
          (artifact-root (file-name-concat save-path "tool-results"))
          (pending (file-name-concat artifact-root
@@ -593,7 +598,7 @@
   (test)
   :doc "lists local and artifact roots through logical addresses"
   (let* ((save-path (make-temp-file "mevedel-resource-provider-" t))
-         (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
+         (session (test-mevedel-session-persistence--leased-session save-path))
          (local-root (file-name-concat save-path "local"))
          (artifact-root (file-name-concat save-path "tool-results")))
     (unwind-protect
@@ -634,6 +639,8 @@
              (mevedel-resource-prepare
               'apply-patch "work://" (list :session session))
              :type 'mevedel-resource-error)))
+      (mevedel-session-persistence-lock-release save-path session)
+      (mevedel-workspace-clear-registry)
       (delete-directory save-path t))))
 
 (mevedel-deftest mevedel-resource-mevedel-provider ()
@@ -1049,7 +1056,8 @@
   ,test
   (test)
   :doc "hydrates a persisted retained conversation when no live buffer exists"
-  (let* ((root (make-temp-file "mevedel-resource-cold-history-" t))
+  (let* ((_ (mevedel-tool-fs--register))
+         (root (make-temp-file "mevedel-resource-cold-history-" t))
          (agents-dir (file-name-concat root "agents"))
          (conversation (file-name-concat agents-dir "reviewer.chat.org"))
          (agent (mevedel-agent--create
@@ -1058,21 +1066,31 @@
                  :max-turns nil :hook-rules nil :frozen-p t))
          (configuration
           (mevedel-agent-configuration--create
-           :agent agent :request-locals nil))
+           :agent agent
+           :request-locals
+           (mevedel-agent-configuration-request-locals
+            (test-mevedel-session-persistence--agent-configuration))))
          (record (mevedel-agent-record--create
                   :id "cold-reviewer" :path "/root/reviewer"
                   :parent-path "/root" :role "reviewer"
                   :configuration configuration :activity 'idle
                   :conversation-location "agents/reviewer.chat.org"))
-         (session (mevedel-session--create :authority-mode 'pid-lock :save-path root))
+         (session (test-mevedel-session-persistence--leased-session root))
          (root-buffer (generate-new-buffer " *mevedel-resource-cold-root*")))
     (unwind-protect
         (progn
           (make-directory agents-dir t)
-          (with-temp-file conversation
-            (insert "Cold retained decision\n"))
           (mevedel-session--set-agent-registry
            session (list (cons "/root/reviewer" record)))
+          (mevedel-session-publication-publish
+           session
+           (list (list :path conversation :content "Cold retained decision\n")
+                 (list :path (mevedel-session-artifacts-segment-path root 1)
+                       :content "")
+                 (list :path (mevedel-session-artifacts-sidecar-path root)
+                       :content (mevedel-session-artifacts-printed-value
+                                 (mevedel-session-codec-serialize session))
+                       :commit-marker t)) t)
           (with-current-buffer root-buffer
             (org-mode)
             (setq-local mevedel--session session))
@@ -1088,6 +1106,8 @@
       (mevedel-agent-control-teardown-session session)
       (when (buffer-live-p root-buffer)
         (kill-buffer root-buffer))
+      (mevedel-session-persistence-lock-release root session)
+      (mevedel-workspace-clear-registry)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-resource-memory-provider ()

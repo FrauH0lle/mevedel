@@ -6,6 +6,11 @@
 
 ;;; Code:
 
+(require 'mevedel-session-test-support
+         (file-name-concat (file-name-directory
+                            (or buffer-file-name load-file-name byte-compile-current-file))
+                           "mevedel-session-test-support"))
+
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -45,6 +50,16 @@
 ;;
 ;;; Activation
 
+(defun mevedel-view-test--publish (session path body)
+  "Commit archived fixture BODY at PATH under SESSION's real lease."
+  (mevedel-session-publication-publish
+   session
+   (list (list :path path :content body)
+         (list :path (file-name-concat (mevedel-session-save-path session) "session.meta.el")
+               :content (mevedel-session-artifacts-printed-value
+                         (mevedel-session-codec-serialize session))
+               :commit-marker t))))
+
 (mevedel-deftest mevedel-view--status-recovery-body ()
   ,test
   (test)
@@ -61,7 +76,6 @@
                     :settled-result "Provider failed"))
            (session (mevedel-session--create
                      :name "main" :root-buffer data-buf
-                     :authority-mode 'pid-lock
                      :agent-registry (list (cons "/root/explore" record)))))
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
@@ -815,9 +829,8 @@
   (test)
   :doc "a copied two-prompt tail cannot pin its later prompt over earlier content"
   (let* ((directory (make-temp-file "mevedel-sticky-tail-" t))
-         (session (mevedel-session--create
-                   :authority-mode 'pid-lock :name "tail"
-                   :save-path (file-name-as-directory directory)
+         (session (test-mevedel-session-persistence--leased-session directory
+                   :name "tail"
                    :current-segment 2))
          (path (mevedel-session-artifacts-segment-path directory 1)))
     (unwind-protect
@@ -843,7 +856,7 @@
             (setf (mevedel-session-prompt-index session)
                   (list (cons 1 (mevedel-session-artifacts-collect-prompts
                                  (current-buffer)))))
-            (write-region (point-min) (point-max) path nil 'silent))
+            (mevedel-view-test--publish session path (buffer-string)))
           (save-window-excursion
             (mevedel-view-test--with-buffers
               (with-current-buffer data-buf
@@ -878,15 +891,15 @@
                 (set-window-start nil (line-beginning-position) t)
                 (should (string-search "Second copied prompt"
                                        (mevedel-view--sticky-prompt-line)))))))
+      (mevedel-session-persistence-lock-release directory session)
+      (mevedel-workspace-clear-registry)
       (delete-directory directory t)))
 
   :doc "a compacted continuation pins its source prompt, but clear does not"
   (let* ((directory (make-temp-file "mevedel-sticky-continuation-" t))
          (path (mevedel-session-artifacts-segment-path directory 1))
-         (session (mevedel-session--create
-                   :authority-mode 'pid-lock
+         (session (test-mevedel-session-persistence--leased-session directory
                    :name "continuation"
-                   :save-path (file-name-as-directory directory)
                    :current-segment 2))
          prompt-position indexed)
     (unwind-protect
@@ -898,7 +911,7 @@
             (insert "Original prompt with a second line\nMore details\n")
             (setq indexed (car (mevedel-session-artifacts-collect-prompts
                                 (current-buffer))))
-            (write-region (point-min) (point-max) path nil 'silent))
+            (mevedel-view-test--publish session path (buffer-string)))
           (setf (mevedel-session-prompt-index session)
                 (list (cons 1 (list (append indexed '(:cum-turn 1))))))
           (save-window-excursion
@@ -926,10 +939,9 @@
                 ;; A second compacted segment has no indexed prompt of its
                 ;; own, but still belongs to the original conversation.
                 (with-current-buffer data-buf
-                  (write-region
-                   (point-min) (point-max)
-                   (mevedel-session-artifacts-segment-path directory 2)
-                   nil 'silent)
+                  (mevedel-view-test--publish
+                   session (mevedel-session-artifacts-segment-path directory 2)
+                   (buffer-string))
                   (setf (mevedel-session-current-segment session) 3)
                   (let ((inhibit-read-only t))
                     (erase-buffer)
@@ -972,15 +984,14 @@
                 ;; An empty fresh segment is a /clear boundary, even if
                 ;; it is subsequently compacted into a new live segment.
                 (with-temp-buffer
-                  (write-region (point-min) (point-max)
-                                (mevedel-session-artifacts-segment-path
-                                 directory 2) nil 'silent))
+                  (mevedel-view-test--publish
+                   session (mevedel-session-artifacts-segment-path directory 2)
+                   (buffer-string)))
                 (with-current-buffer data-buf
-                  (write-region
-                   (point-min) (point-max)
-                   (mevedel-session-artifacts-segment-path directory 3)
-                   nil 'silent)
-                  (setf (mevedel-session-current-segment session) 4))
+                  (setf (mevedel-session-current-segment session) 4)
+                  (mevedel-view-test--publish
+                   session (mevedel-session-artifacts-segment-path directory 3)
+                   (buffer-string)))
                 (mevedel-view--full-rerender)
                 (should-not (mevedel-view--continuation-prompt))
                 (with-current-buffer data-buf
@@ -989,6 +1000,8 @@
                     (insert "Fresh after clear\n")))
                 (mevedel-view--full-rerender)
                 (should-not (mevedel-view--sticky-prompt-line))))))
+      (mevedel-session-persistence-lock-release directory session)
+      (mevedel-workspace-clear-registry)
       (delete-directory directory t))))
 
 (mevedel-deftest mevedel-view--prompt-header-runs ()

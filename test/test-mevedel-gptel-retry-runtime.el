@@ -17,6 +17,10 @@
 (require 'mevedel-hooks)
 (require 'mevedel-tools)
 (require 'mevedel-reminders)
+(require 'mevedel-session-test-support
+         (file-name-concat (file-name-directory
+                            (or buffer-file-name load-file-name byte-compile-current-file))
+                           "mevedel-session-test-support"))
 
 (defmacro mevedel-retry-runtime-test--with-agent (responses &rest body)
   "Run BODY with RESPONSES and a real retained agent's terminal lifecycle.
@@ -26,6 +30,7 @@ runtime.  BEFORE-RESULT can interrupt inside an accepted terminal callback."
   (declare (indent 1) (debug t))
   `(mevedel-retry-test--with-http ,responses
      (let* ((directory (make-temp-file "mevedel-retry-runtime-" t))
+            (session (test-mevedel-session-persistence--leased-session directory))
             (parent-buffer (generate-new-buffer " *retry-runtime-parent*"))
             (relative "agents/retry-runtime.chat.org")
             (transcript (expand-file-name relative directory))
@@ -53,7 +58,7 @@ runtime.  BEFORE-RESULT can interrupt inside an accepted terminal callback."
              (make-directory (file-name-directory transcript) t)
              (with-temp-file transcript (insert ""))
              (setf (mevedel-session-save-path session) directory
-                   (mevedel-session-authority-mode session) 'pid-lock
+                   (mevedel-request-session request) session
                    (mevedel-session-root-buffer session) parent-buffer
                    (mevedel-session-agent-transcripts session)
                    (list (cons "retry-runtime" (list :status 'running)))
@@ -62,11 +67,14 @@ runtime.  BEFORE-RESULT can interrupt inside an accepted terminal callback."
                      (push (list :visible visible :event event) results)
                      nil))
              (with-current-buffer parent-buffer
+               (org-mode)
                (setq-local mevedel--session session)
                (setq-local mevedel-subagent-stop-functions
                            (list (lambda (event)
                                    (push (plist-get event :status) stop-statuses)))))
+             (mevedel-session-artifacts-save session parent-buffer)
              (with-current-buffer data-buf
+               (setq-local mevedel--session session)
                (setq-local buffer-file-name transcript)
                (setq-local mevedel--agent-invocation invocation)
                (set-visited-file-modtime))
@@ -99,6 +107,8 @@ runtime.  BEFORE-RESULT can interrupt inside an accepted terminal callback."
            (with-current-buffer data-buf (set-buffer-modified-p nil))
            (kill-buffer data-buf))
          (kill-buffer parent-buffer)
+         (mevedel-session-persistence-lock-release directory session)
+         (mevedel-workspace-clear-registry)
          (delete-directory directory t)))))
 
 (ert-deftest mevedel-gptel-retry-runtime/success-keeps-native-done ()
@@ -123,7 +133,8 @@ runtime.  BEFORE-RESULT can interrupt inside an accepted terminal callback."
     (should-not gptel--request-alist)
     (should-not mevedel-gptel-retry--states)
     (with-temp-buffer
-      (insert-file-contents transcript)
+      (insert (decode-coding-string
+               (mevedel-session-artifacts-read-artifact session relative t) 'utf-8-unix))
       (should (string-search "Recovered answer" (buffer-string)))
       (should-not (string-search "Abandoned output" (buffer-string))))
     (funcall saved-callback "Late abandoned text" saved-info)

@@ -52,7 +52,7 @@
   :doc "dismissal removes only the notice and schedules a save"
   (let* ((issue '(:id "agent:a" :message "Failed" :blocking nil))
          (blocker '(:id "authentication" :message "Sign in" :blocking t))
-         (session (mevedel-session--create :authority-mode 'pid-lock
+         (session (mevedel-session--create
                    :recovery-issues (list issue blocker)))
          saved)
     (cl-letf (((symbol-function 'mevedel-recovery-save)

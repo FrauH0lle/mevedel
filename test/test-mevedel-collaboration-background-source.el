@@ -8,6 +8,9 @@
 (require 'helpers
          (file-name-concat
           (file-name-directory (or load-file-name buffer-file-name)) "helpers"))
+(require 'mevedel-session-test-support
+         (file-name-concat
+          (file-name-directory (or load-file-name buffer-file-name)) "mevedel-session-test-support"))
 (require 'gptel)
 (require 'mevedel-collaboration)
 (require 'mevedel-collaboration-guest)
@@ -16,8 +19,8 @@
 (require 'mevedel-view-audit)
 (require 'mevedel-agents)
 
-(defun mevedel-background-source-test--write (path)
-  "Write a canonical nested execution source archive to PATH."
+(defun mevedel-background-source-test--write (session path)
+  "Write and publish SESSION's canonical nested source archive at PATH."
   (with-temp-buffer
     (org-mode)
     (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
@@ -30,14 +33,18 @@
                                :execution-output "retained output"))))
              "outer"))
     (mevedel-session-artifacts-stabilize-gptel-bounds)
-    (write-region (point-min) (point-max) path nil 'silent)))
+    (write-region (point-min) (point-max) path nil 'silent)
+    (mevedel-session-publication-publish
+     session (list (list :path path :content (buffer-string))
+                   '(:path "session.meta.el" :content "(:fixture archive-only)"
+                     :commit-marker t)) t)))
 
 (mevedel-deftest mevedel-background-source-native-lookup
   (:doc "Pure native source helpers find nested root and child archive rows without selecting a view")
   (dolist (agent '(nil t))
     (let* ((root (make-temp-file "mevedel-background-source-" t))
            (data (generate-new-buffer " *background source live*"))
-           (session (mevedel-session--create :save-path root :authority-mode 'pid-lock
+           (session (test-mevedel-session-persistence--leased-session root
                                             :current-segment 3))
            (agents (file-name-concat root "agents"))
            (archive (if agent (file-name-concat agents "worker.compact-0001.chat.org")
@@ -51,7 +58,7 @@
               (setq-local mevedel--session session)
               (insert "current transcript\n")
               (goto-char 4))
-            (mevedel-background-source-test--write archive)
+            (mevedel-background-source-test--write session archive)
             (let ((buffers (buffer-list))
                   (window (selected-window)))
               (let* ((record (mevedel-view-audit-execution-record session data "exec-old" agent))
@@ -66,13 +73,15 @@
               (should (= 4 (with-current-buffer data (point))))
               (should-not (cl-set-difference (buffer-list) buffers))))
         (kill-buffer data)
+        (mevedel-session-durability-lease-release root session)
+        (mevedel-workspace-clear-registry)
         (delete-directory root t)))))
 
 (mevedel-deftest mevedel-background-source-dispatch
   (:doc "Every authenticated tier locates an exact native source; foreign identities are unavailable")
   (let* ((root (make-temp-file "mevedel-background-locate-" t))
          (data (generate-new-buffer " *background locate live*"))
-         (session (mevedel-session--create :save-path root :authority-mode 'pid-lock
+         (session (test-mevedel-session-persistence--leased-session root
                                           :current-segment 3))
          (room (list :session session :data-buffer data :transport 'transport))
          (guest (list :writable nil))
@@ -82,7 +91,7 @@
           (with-current-buffer data
             (setq-local mevedel--session session)
             (setq buffer-file-name (mevedel-session-artifacts-segment-path root 3)))
-          (mevedel-background-source-test--write (mevedel-session-artifacts-segment-path root 1))
+          (mevedel-background-source-test--write session (mevedel-session-artifacts-segment-path root 1))
           (cl-letf (((symbol-function 'mevedel-collaboration--guest) (lambda (&rest _) guest))
                     ((symbol-function 'mevedel-collaboration--room-for-session) (lambda (_) room))
                     ((symbol-function 'mevedel-transport-run-at-time)
@@ -113,6 +122,8 @@
              room 1 '(:t "background-locate" :reqId 12 :owner "/root" :id "exec-old"))
             (should-not sent)))
       (kill-buffer data)
+      (mevedel-session-durability-lease-release root session)
+      (mevedel-workspace-clear-registry)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-background-source-agent-and-child
@@ -120,7 +131,7 @@
   (let* ((root (make-temp-file "mevedel-background-child-source-" t))
          (data (generate-new-buffer " *background parent source*"))
          (child (generate-new-buffer " *background child source*"))
-         (session (mevedel-session--create :save-path root :authority-mode 'pid-lock :current-segment 4))
+         (session (test-mevedel-session-persistence--leased-session root :current-segment 4))
          (invocation (mevedel-agent-invocation--create :parent-tool-use-id "launch/1"))
          (record (mevedel-agent-record--create :path "/root/child" :parent-path "/root"
                                               :invocation invocation :conversation-buffer child))
@@ -138,7 +149,7 @@
             (setq-local mevedel--session session)
             (setq buffer-file-name (file-name-concat agents "worker.chat.org")))
           (mevedel-background-source-test--write
-           (file-name-concat agents "worker.compact-0001.chat.org"))
+           session (file-name-concat agents "worker.compact-0001.chat.org"))
           (let ((reply (mevedel-collaboration--background-source
                         room '(:owner "/root/child" :id "exec-old"))))
             (should (equal "/root/child" (plist-get reply :owner)))
@@ -161,6 +172,8 @@
                          room '(:path "/root/child" :owner "/root" :id "ambiguous"))))
       (kill-buffer child)
       (kill-buffer data)
+      (mevedel-session-durability-lease-release root session)
+      (mevedel-workspace-clear-registry)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-background-source-departed-guest

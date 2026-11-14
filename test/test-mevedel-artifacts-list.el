@@ -39,7 +39,7 @@
         :workspace (and session (mevedel-session-workspace session))))
 
 (defmacro mevedel-artifacts-list-test--with-store (&rest body)
-  "Run BODY with `workspace', `store', and a pid-lock `session' in it."
+  "Run BODY with `workspace', `store', and a process-local `session' in it."
   (declare (indent 0) (debug t))
   `(let* ((root (file-name-as-directory
                  (make-temp-file "mevedel-artifacts-cockpit-" t)))
@@ -47,7 +47,7 @@
                                                 :root root :name "proj"))
           (store (mevedel-artifact-store-directory workspace))
           (session (mevedel-session--create :name "main" :workspace workspace
-                                            :authority-mode 'pid-lock))
+                                            ))
           (view (generate-new-buffer " *artifacts-list-view*"))
           (data (generate-new-buffer " *artifacts-list-data*")))
      (unwind-protect (progn ,@body)

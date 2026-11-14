@@ -406,12 +406,11 @@ operations through a target-side directory descriptor pinning the parent
 while the relative operation runs; `mevedel-session-control-transfer.el`
 coordinates cooperative control transfer above the transfer records --
 persistence calls it for polling, admission, and committed-state adoption.  `mevedel-session-save-as.el` owns the portable
-Save As transaction and live-session adoption.  Project sessions use the same
+Save As transaction and live-session adoption.  Project and file-workspace sessions use the same
 authority profile on local and TRAMP targets: a renewable `.lease/` and an
-immutable publication head.  File-workspace sessions use the explicit
-`pid-lock` profile and `.lock` instead.  The persisted session profile, not
-`file-remote-p`, selects every acquire, release, sweep, and cleanup path;
-mixed control artifacts fail closed.  The persistence facade and its codec,
+immutable publication head.  Workspace-free sessions have no durable authority.
+The runtime has no PID-lock reader or writer; legacy file sessions require
+explicit standalone migration. Mixed control artifacts fail closed. The persistence facade and its codec,
 artifact, Rewind, and Fork owners form the workflow layer above that boundary.
 
 Before a mutating managed Bash child can start on a portable project target, the execution module
@@ -904,11 +903,9 @@ and other retained state. The artifact and diagnostics directories themselves
 are excluded. Live buffers, input rings, drafts, and gptel file contexts also
 retain files. References are conservative basename matches; unrelated mentions
 can retain a file. References outside managed workspace state are not tracked.
-A live foreign session owner (a PID lock held by another live process,
-an unreadable or cross-host lock, or a live portable lease), linked candidate
-directories, or an incomplete search postpone collection. PID locks held by this
-Emacs, whose buffers are searched directly, and stale locks whose same-host
-holder is dead do not. Unknown filenames and files over 32 MiB are retained; a
+A live foreign session lease, unreadable authority, linked candidate
+directories, or an incomplete search postpone collection. Sessions owned by this
+Emacs have their live buffers searched directly. Unknown filenames and files over 32 MiB are retained; a
 file changed since selection is skipped. Cleanup runs even without public journal
 entries and never calls a model.
 

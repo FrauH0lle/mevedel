@@ -6,6 +6,11 @@
 
 ;;; Code:
 
+(require 'mevedel-session-test-support
+         (file-name-concat (file-name-directory
+                            (or buffer-file-name load-file-name byte-compile-current-file))
+                           "mevedel-session-test-support"))
+
 (require 'gptel-request)
 (require 'mevedel-compact-evidence)
 (require 'mevedel-compact-run)
@@ -55,6 +60,16 @@
 ## Skills Invoked
 - (none)"
   "Valid handoff summary used by Plan handoff tests.")
+
+(defun mevedel-plan-handoff-test--publish (session path body)
+  "Commit fixture BODY at PATH with SESSION's genuine sidecar."
+  (mevedel-session-publication-publish
+   session
+   (list (list :path path :content body)
+         (list :path (file-name-concat (mevedel-session-save-path session) "session.meta.el")
+               :content (mevedel-session-artifacts-printed-value
+                         (mevedel-session-codec-serialize session))
+               :commit-marker t))))
 
 (mevedel-deftest mevedel-plan-handoff-reserved-goal-id
   (:doc "reserves only Here handoffs; a Worktree source hands its Goal to the fork")
@@ -435,15 +450,14 @@
   :doc "Here uses handoff semantics through aggressive compaction"
   (let* ((save-dir (make-temp-file "mevedel-plan-summary-save-" t))
          (path (file-name-concat save-dir "local" "plans" "accepted.md"))
-         (session (mevedel-session--create
-                   :authority-mode 'pid-lock
-                   :name "source" :save-path save-dir))
+         (session (test-mevedel-session-persistence--leased-session save-dir
+                   :name "source" ))
          (buffer (generate-new-buffer " *mevedel-plan-summary-here*"))
          captured-source captured-focus applied dispatched)
     (unwind-protect
         (progn
           (make-directory (file-name-directory path) t)
-          (write-region "# Accepted" nil path nil 'silent)
+          (mevedel-plan-handoff-test--publish session path "# Accepted")
           (cl-letf (((symbol-function 'mevedel-compact-target-main-target)
                      (lambda ()
                        (list :previous-summary "Prior state"
@@ -486,6 +500,8 @@
           (should (string-match-p "# Accepted" captured-focus))
           (should (string-match-p "Use \\$tdd exactly" captured-focus)))
       (kill-buffer buffer)
+      (mevedel-session-persistence-lock-release save-dir session)
+      (mevedel-workspace-clear-registry)
       (delete-directory save-dir t))))
 
 (mevedel-deftest mevedel-retry-plan-implementation

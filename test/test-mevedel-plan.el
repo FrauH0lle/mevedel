@@ -12,6 +12,28 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-session-test-support
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name)) "mevedel-session-test-support"))
+
+(defun mevedel-plan-test--session (directory &rest slots)
+  "Initialize a real leased plan writer at DIRECTORY with caller SLOTS.
+The current temporary buffer owns its lease cleanup."
+  (let ((session (apply #'test-mevedel-session-persistence--leased-session directory slots)))
+    (org-mode)
+    (setq-local mevedel--session session
+                mevedel--workspace (mevedel-session-workspace session))
+    (mevedel-session-set-root-buffer session (current-buffer))
+    (add-hook 'kill-buffer-hook
+              (lambda ()
+                (mevedel-session-durability-lease-release directory session)
+                (mevedel-workspace-clear-registry)) nil t)
+    (mevedel-session-artifacts-assert-mutation-authority session (current-buffer))
+    (mevedel-session-publication-publish
+     session (list (list :path "session.meta.el" :commit-marker t
+                         :content (mevedel-session-artifacts-printed-value
+                                   (mevedel-session-artifacts--live-sidecar session (current-buffer))))) t)
+    session))
 
 (mevedel-deftest mevedel-plan-validate
   (:doc "normalizes nonblank plans and rejects invalid input")
@@ -74,7 +96,7 @@
   ,test
   (test)
   (let ((session
-         (mevedel-session--create :authority-mode 'pid-lock :name "test" :plan-metadata '(:old t))))
+         (mevedel-session--create :name "test" :plan-metadata '(:old t))))
     (mevedel-plan--metadata-put session :new 1)
     (should (equal '(:old t :new 1)
                    (mevedel-session-plan-metadata session)))))
@@ -110,7 +132,7 @@
     (unwind-protect
         (let ((session
                (mevedel-session--create
-                :authority-mode 'pid-lock :name "test" :save-path save-dir)))
+                :name "test" :save-path save-dir)))
           (should (equal (file-name-concat save-dir "local" "plans" "current.md")
                          (mevedel-plan-current-path session)))
           (should (equal (file-name-concat save-dir "goals" "g1" "current.md")
@@ -138,7 +160,6 @@
   (test)
   (let ((session
          (mevedel-session--create
-          :authority-mode 'pid-lock
           :name "test"
           :save-path "/ssh:box:/srv/project/.mevedel/sessions/main/")))
     (should
@@ -157,7 +178,7 @@
   ,test
   (test)
   (let* ((session
-          (mevedel-session--create :authority-mode 'pid-lock :name "test" :save-path "/tmp/session/"))
+          (mevedel-session--create :name "test" :save-path "/tmp/session/"))
          (body "# Accepted")
          (artifact
           (list :path "plans/accepted.md" :hash (mevedel-plan-hash body))))
@@ -179,13 +200,15 @@
     (unwind-protect
         (with-temp-buffer
           (let* ((session
-                  (mevedel-session--create :authority-mode 'pid-lock :name "test" :save-path save-dir))
+                  (mevedel-plan-test--session save-dir :name "test"))
                  (artifact
                   (mevedel-plan-write-current "# Plan" session
                                               (current-buffer)
                                               "goals/g1/current.md")))
-            (should (file-exists-p
-                     (file-name-concat save-dir "goals" "g1" "current.md")))
+            (mevedel-session-artifacts-publish-sidecar-state session (current-buffer))
+            (should (mevedel-session-artifacts-artifact-present-p
+                     session "goals/g1/current.md" t))
+            (should (equal "# Plan" (mevedel-plan-read-artifact session artifact)))
             (should (equal "goals/g1/current.md"
                            (plist-get artifact :path)))
             (should-not (plist-member artifact :absolute-path))
@@ -215,9 +238,7 @@
     (unwind-protect
         (with-temp-buffer
           (let* ((session
-                  (mevedel-session--create
-                   :authority-mode 'pid-lock :name "test"
-                   :save-path save-dir))
+                  (mevedel-plan-test--session save-dir :name "test"))
                  (artifact
                   (mevedel-plan-write-current
                    "# Plan" session (current-buffer)))
@@ -230,6 +251,7 @@
                      (plist-get accepted :path)))
             (should (file-exists-p
                      (file-name-concat save-dir (plist-get accepted :path))))
+            (should (equal "# Plan" (mevedel-plan-read-artifact session accepted)))
             ;; Every archive stays serializable as a canonical address.
             (should (string-prefix-p
                      "work://plans/accepted-"
@@ -241,15 +263,17 @@
                                  (plist-get accepted :path)))
               (should (file-exists-p
                        (file-name-concat save-dir
-                                         (plist-get accepted :path)))))
+                                         (plist-get accepted :path))))
+              (should (equal "# Plan" (mevedel-plan-read-artifact session accepted))))
             ;; A caller-chosen destination is deterministic and immutable.
             (let ((named (mevedel-plan-archive-accepted
                           artifact session "goals/g1/cycle-001-plan.md")))
+              (mevedel-session-artifacts-publish-sidecar-state session (current-buffer))
               (should (equal "goals/g1/cycle-001-plan.md"
                              (plist-get named :path)))
-              (should (file-exists-p
-                       (file-name-concat
-                        save-dir "goals" "g1" "cycle-001-plan.md"))))
+              (should (mevedel-session-artifacts-artifact-present-p
+                       session "goals/g1/cycle-001-plan.md" t))
+              (should (equal "# Plan" (mevedel-plan-read-artifact session named))))
             (should-error
              (mevedel-plan-archive-accepted '(:path "local/plans/current.md")
                                             session)
@@ -268,7 +292,6 @@
           (write-region "# Poisoned cache" nil path nil 'silent)
           (let ((session
                  (mevedel-session--create
-                  :authority-mode 'pid-lock
                   :name "test" :save-path save-dir
                   :plan-metadata '(:path "current.md"))))
             (cl-letf (((symbol-function
@@ -290,7 +313,7 @@
   (:doc "records current and accepted artifact descriptors")
   ,test
   (test)
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test" :turn-count 3)))
+  (let ((session (mevedel-session--create :name "test" :turn-count 3)))
     (mevedel-plan-mark-accepted
      session '(:path "current.md" :hash "current-h")
      '(:path "accepted.md" :hash "h"))
@@ -313,10 +336,8 @@
   (let ((save-dir (make-temp-file "mevedel-plan-archive-fail-" t)))
     (unwind-protect
         (with-temp-buffer
-          (let* ((session (mevedel-session--create
-                           :authority-mode 'pid-lock
+          (let* ((session (mevedel-plan-test--session save-dir
                            :name "test"
-                           :save-path save-dir
                            :permission-mode 'full-auto
                            :turn-count 4))
                  (markdown "# Plan\n\nDo it.")
@@ -347,10 +368,8 @@
   (let ((save-dir (make-temp-file "mevedel-plan-accept-" t)))
     (unwind-protect
         (with-temp-buffer
-          (let ((session (mevedel-session--create
-                          :authority-mode 'pid-lock
+          (let ((session (mevedel-plan-test--session save-dir
                           :name "test"
-                          :save-path save-dir
                           :permission-mode 'full-auto
                           :turn-count 4)))
             (let* ((result (mevedel-plan-accept
@@ -375,7 +394,9 @@
                                          (plist-get current :path))))
               (should (file-exists-p
                        (file-name-concat save-dir
-                                         (plist-get accepted :path)))))
+                                         (plist-get accepted :path))))
+              (should (equal "# Plan\n\nDo it." (mevedel-plan-read-artifact session current)))
+              (should (equal "# Plan\n\nDo it." (mevedel-plan-read-artifact session accepted))))
             ;; Explicit destinations let a Goal cycle own its own artifacts.
             (let* ((result (mevedel-plan-accept
                             "# Plan\n\nDo it." session (current-buffer) t
@@ -383,14 +404,16 @@
                             "goals/g1/cycle-001-plan.md"))
                    (current (plist-get result :current))
                    (accepted (plist-get result :accepted)))
+              (mevedel-session-artifacts-publish-sidecar-state session (current-buffer))
               (should (equal "goals/g1/current.md" (plist-get current :path)))
               (should (equal "goals/g1/cycle-001-plan.md"
                              (plist-get accepted :path)))
-              (should (file-exists-p
-                       (file-name-concat save-dir "goals" "g1" "current.md")))
-              (should (file-exists-p
-                       (file-name-concat
-                        save-dir "goals" "g1" "cycle-001-plan.md"))))))
+              (should (mevedel-session-artifacts-artifact-present-p
+                       session "goals/g1/current.md" t))
+              (should (mevedel-session-artifacts-artifact-present-p
+                       session "goals/g1/cycle-001-plan.md" t))
+              (should (equal "# Plan\n\nDo it." (mevedel-plan-read-artifact session current)))
+              (should (equal "# Plan\n\nDo it." (mevedel-plan-read-artifact session accepted))))))
       (delete-directory save-dir t))))
 
 (provide 'test-mevedel-plan)

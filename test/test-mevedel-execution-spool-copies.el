@@ -89,7 +89,7 @@ The shared Read helper waits at most ten seconds and cancels on unwind."
             (delete-file child-gzip)
             (should (equal digest (secure-hash 'sha256
                                                (mevedel-session-artifacts-read-file-raw parent-gzip))))
-            (let ((parent (mevedel-session--create :authority-mode 'pid-lock
+            (let ((parent (mevedel-session--create :authority-mode 'portable
                                                    :save-path parent-path)))
               (test-mevedel-execution-spool-copies--read parent)))
         (test-mevedel-session-persistence--release-and-kill buffer session)

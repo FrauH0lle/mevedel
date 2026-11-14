@@ -192,7 +192,7 @@ under its origin id."
           (workspace (mevedel-workspace--create :root directory))
           (session (mevedel-session--create :save-path directory
                                             :workspace workspace :working-directory directory
-                                            :permission-mode 'full-auto :authority-mode 'pid-lock))
+                                            :permission-mode 'full-auto ))
           (buffer (generate-new-buffer " *remote-artifact-test*"))
           (origin (mevedel-remote-artifact-test--origin))
           (mevedel-user-dir (file-name-as-directory (file-name-concat directory "user")))

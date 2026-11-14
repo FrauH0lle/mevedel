@@ -113,7 +113,7 @@
              (readiness (list :status (if reason 'blocked 'ready)
                               :reason reason :sandbox-mode 'required))
              (session (mevedel-session--create
-                       :authority-mode 'pid-lock :execution-target target
+                       :execution-target target
                        :permission-mode 'edits))
              (full-probes 0) (observations 0))
         (setq-local mevedel--session session)
@@ -139,7 +139,7 @@
     (with-temp-buffer
       (let* ((target (mevedel-execution-target-create "/ssh:review.invalid:/srv/project/"))
              (session (mevedel-session--create
-                       :authority-mode 'pid-lock :execution-target target
+                       :execution-target target
                        :permission-mode 'edits :sandbox-mode 'best-effort))
              observed)
         (setq-local mevedel--session session)

@@ -46,7 +46,7 @@
   (let* ((root (make-temp-file "mevedel-monitor-permission-" t))
          (session (mevedel-session--create
                    :name "monitor-permission" :permission-mode 'ask
-                   :sandbox-mode 'off :authority-mode 'pid-lock
+                   :sandbox-mode 'off
                    :working-directory root))
          (request (mevedel-request--create
                    :id "monitor-request" :session session))

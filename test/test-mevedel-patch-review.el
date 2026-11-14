@@ -1561,11 +1561,12 @@ adopt prompt.  Returns the messages the session produced."
     (unwind-protect
         (mevedel-view-test--with-buffers
           (let* ((workspace (mevedel-workspace--create
-                             :type 'test :id root :root root :name "rollback"
+                             :type 'file :id root :root root :name "rollback"
                              :file-cache (mevedel-test-file-cache-create)))
-                 (session (mevedel-session--create
-                           :name "rollback" :session-id "rollback-id" :workspace workspace
-                           :working-directory root :permission-mode 'ask))
+                 (session (let ((session (mevedel-session-create
+                                          "rollback" workspace root "rollback-id")))
+                            (setf (mevedel-session-permission-mode session) 'ask)
+                            session))
                  (first-address "work://first/one.txt")
                  (second-address "work://second/two.txt")
                  (patch (string-join
@@ -1630,7 +1631,9 @@ adopt prompt.  Returns the messages the session produced."
               (dolist (buffer (list first-buffer second-buffer))
                 (when (buffer-live-p buffer)
                   (with-current-buffer buffer (set-buffer-modified-p nil))
-                  (kill-buffer buffer))))))
+                  (kill-buffer buffer)))
+              (when-let* ((save-path (mevedel-session-save-path session)))
+                (mevedel-session-persistence-lock-release save-path session)))))
       ;; Killing the view buffers records telemetry under the session's
       ;; save path, so the directory goes only after them.
       (delete-directory root t))))
@@ -1735,11 +1738,12 @@ adopt prompt.  Returns the messages the session produced."
     (unwind-protect
         (mevedel-view-test--with-buffers
           (let* ((workspace (mevedel-workspace--create
-                             :type 'test :id root :root root :name "local-visit"
+                             :type 'file :id root :root root :name "local-visit"
                              :file-cache (mevedel-test-file-cache-create)))
-                 (session (mevedel-session--create
-                           :name "local-visit" :session-id "local-visit-id" :workspace workspace
-                           :working-directory root :permission-mode 'ask))
+                 (session (let ((session (mevedel-session-create
+                                          "local-visit" workspace root "local-visit-id")))
+                            (setf (mevedel-session-permission-mode session) 'ask)
+                            session))
                  (address "work://notes/one.txt")
                  (patch (string-join
                          (list "*** Begin Patch"
@@ -1783,7 +1787,9 @@ adopt prompt.  Returns the messages the session produced."
                   (should (equal local-path (buffer-file-name visited)))
                   (should (= 3 (with-current-buffer visited
                                  (line-number-at-pos)))))
-              (when (buffer-live-p visited) (kill-buffer visited)))))
+              (when (buffer-live-p visited) (kill-buffer visited))
+              (when-let* ((save-path (mevedel-session-save-path session)))
+                (mevedel-session-persistence-lock-release save-path session)))))
       ;; Killing the view buffers records telemetry under the session's
       ;; save path, so the directory goes only after them.
       (delete-directory root t))))

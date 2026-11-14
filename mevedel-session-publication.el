@@ -289,8 +289,8 @@ Refuse teardown while frozen publication recovery remains unresolved."
   t)
 
 (defun mevedel-session-publication-async-eligible-p (session)
-  "Return non-nil for a materialized local portable SESSION.
-Cold materialization, remote targets and PID-lock sessions stay synchronous."
+  "Return non-nil for a materialized local durable SESSION.
+Cold materialization and remote targets stay synchronous."
   (and (not (mevedel-session-publication-stopping-p session))
        (mevedel-session-save-path session)
        (not (file-remote-p (mevedel-session-save-path session)))
