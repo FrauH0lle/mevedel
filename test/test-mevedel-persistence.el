@@ -56,7 +56,7 @@
                    (mevedel-instruction-test--create-note-in
                     source-buffer (match-beginning 0) (match-end 0))
                    'mevedel-uuid))
-            (mevedel--write-instructions-file snapshot root t t t)
+            (mevedel--write-instructions-file snapshot root t)
             (mevedel--clear-instruction-state workspace)
             (erase-buffer)
             (insert current)

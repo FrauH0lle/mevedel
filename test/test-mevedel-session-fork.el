@@ -670,9 +670,9 @@
                     staging-path 2)))
           (should (file-exists-p
                    (mevedel-session-artifacts-sidecar-path staging-path)))
-          (should (file-exists-p
-                   (mevedel-session-artifacts-instructions-current-path
-                    staging-path)))
+          ;; The workspace store owns notes: a fork copies no snapshot.
+          (should-not (file-exists-p
+                       (file-name-concat staging-path "instructions")))
           (should-not (file-exists-p (file-name-concat staging-path "artifacts")))
           ;; Mutation authority belongs to `--publish-fork' and must already
           ;; exist before this staging helper starts target writes.

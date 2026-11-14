@@ -1182,7 +1182,7 @@
               (when unreadable
                 (mevedel--clear-instruction-state workspace)
                 (write-region "Unreadable store" nil store nil 'silent)
-                (mevedel-session-artifacts-load-instructions session data-buf))
+                (mevedel-session-artifacts-load-instructions session))
               (mevedel-session-artifacts-save session data-buf nil t)
               (when unreadable
                 (write-region saved nil store nil 'silent)))

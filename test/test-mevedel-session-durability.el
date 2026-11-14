@@ -4300,7 +4300,7 @@
 (mevedel-deftest mevedel-session-artifacts-save/remote ()
   ,test
   (test)
-  :doc "canonical remote save publishes segment, snapshots, and sidecar target-side"
+  :doc "canonical remote save publishes segment and sidecar target-side"
   (let* ((host "canonical-save-host")
          (local-root (file-name-as-directory
                       (make-temp-file "mevedel-remote-save-" t)))
@@ -4319,18 +4319,15 @@
             (let* ((save-path (mevedel-session-save-path session))
                    (segment (file-name-concat
                              save-path "segment-0001.chat.org"))
-                   (sidecar (file-name-concat save-path "session.meta.el"))
-                   (current (file-name-concat
-                             save-path "instructions" "current.el")))
+                   (sidecar (file-name-concat save-path "session.meta.el")))
               (should-not (file-exists-p segment))
               (should (mevedel-session-artifacts-artifact-present-p
                        session "segment-0001.chat.org" t))
               (should (file-exists-p sidecar))
-              ;; Instruction snapshots, like transcripts, live only in the
-              ;; publication.
-              (should-not (file-exists-p current))
-              (should (mevedel-session-artifacts-artifact-present-p
-                       session "instructions/current.el" t))
+              ;; The workspace store owns notes: no instruction snapshot is
+              ;; published.
+              (should-not (mevedel-session-artifacts-artifact-present-p
+                           session "instructions/current.el" t))
               (should (equal "remote transcript"
                              (with-temp-buffer
                                (insert (mevedel-session-artifacts-read-artifact
@@ -4352,7 +4349,7 @@
 (mevedel-deftest mevedel-session-artifacts-rotate-segment/remote ()
   ,test
   (test)
-  :doc "remote rotation publishes old, new, instructions, and sidecar together"
+  :doc "remote rotation publishes old, new, and sidecar together"
   (let* ((host "rotate-host")
          (local-root (file-name-as-directory
                       (make-temp-file "mevedel-remote-rotate-" t)))

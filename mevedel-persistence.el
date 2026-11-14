@@ -175,8 +175,7 @@ Instructions are only saved if they are associated with a buffer that has an
 associated file on disk.  In other words, instructions in ethereal buffers are
 not saved."
   (interactive (list (read-file-name "Save instruction list to file: ")))
-  (funcall #'mevedel--write-instructions-file path (file-name-directory path)
-           nil nil t))
+  (mevedel--write-instructions-file path (file-name-directory path) t))
 
 (defun mevedel--instruction-id-state-plist ()
   "Return the current instruction ID state as a serializable plist."
@@ -301,12 +300,10 @@ would lose all of them at once."
      (prin1-to-string save-file))))
 
 (defun mevedel--write-instructions-file
-    (path &optional base-directory write-empty quiet include-original-content)
-  "Write current workspace instruction snapshot to PATH.
+    (path &optional base-directory include-original-content)
+  "Write the current workspace instruction export to PATH.
 
 BASE-DIRECTORY is passed to `mevedel--serialize-instructions'.
-When WRITE-EMPTY is non-nil, write an empty snapshot instead of
-skipping the file.  When QUIET is non-nil, suppress user messages.
 When INCLUDE-ORIGINAL-CONTENT is non-nil, include full buffer
 contents for position patching if the file changes before restore.
 Returns the number of saved instructions."
@@ -315,21 +312,15 @@ Returns the number of saved instructions."
          (file-alist (plist-get save-file :files))
          (saved-instruction-count
           (mevedel--instructions-saved-count file-alist)))
-    (if (not (zerop saved-instruction-count))
-        (progn
-          (mevedel-persistence--write-save-file path save-file)
-          (unless quiet
-            (let ((file-count (length file-alist)))
-              (message "Wrote %d mevedel instruction%s from %d file%s to %s"
-                       saved-instruction-count
-                       (if (= 1 saved-instruction-count) "" "s")
-                       file-count
-                       (if (= 1 file-count) "" "s")
-                       path))))
-      (when write-empty
-        (mevedel-persistence--write-save-file path save-file))
-      (when (and (not quiet) (called-interactively-p 'any))
-        (message "No mevedel instructions to save")))
+    (unless (zerop saved-instruction-count)
+      (mevedel-persistence--write-save-file path save-file)
+      (let ((file-count (length file-alist)))
+        (message "Wrote %d mevedel instruction%s from %d file%s to %s"
+                 saved-instruction-count
+                 (if (= 1 saved-instruction-count) "" "s")
+                 file-count
+                 (if (= 1 file-count) "" "s")
+                 path)))
     saved-instruction-count))
 
 ;;;###autoload
@@ -1680,8 +1671,9 @@ a listing): resolving a workspace must not open a connection."
   "Durably record that SESSION is rewinding to SURVIVING-TURN turns.
 The Rewind discards SESSION's activity from turn PRUNE-FROM on.  Call
 before Rewind's first irreversible step.  Return non-nil when an intent
-was recorded, nil when the workspace keeps no active store.  Signal when
-the intent cannot be recorded, which aborts the Rewind."
+was recorded or when the store file does not exist yet (`none': nothing
+to record, memory holds the only copy), nil when the workspace keeps no
+store.  Signal when the intent cannot be recorded, which aborts the Rewind."
   (let ((workspace (mevedel-session-workspace session))
         (tries 0) result)
     (when (mevedel-instruction-store--applicable-p workspace)
@@ -1716,14 +1708,14 @@ the intent cannot be recorded, which aborts the Rewind."
                  (setq result 'recorded)))))))
       (unless result
         (error "Instruction store kept changing while recording a Rewind"))
-      (eq result 'recorded))))
+      result)))
 
 (defun mevedel-instruction-store-rewind-end (session committed)
   "Resolve SESSION's Rewind intent after its outcome is known.
 COMMITTED non-nil means the Rewind passed its commit point: prune the
 session's discarded activity from the store, then reinstall source
-presentations with held-back writes replayed over that store.  The historical
-snapshot is not the workspace's current set.  Otherwise drop the intent."
+presentations with held-back writes replayed over that store.  Without a
+store file, prune the live notes directly.  Otherwise drop the intent."
   (let ((workspace (mevedel-session-workspace session)))
     (when (mevedel-instruction-store--applicable-p workspace)
       (if committed
@@ -1754,9 +1746,14 @@ snapshot is not the workspace's current set.  Otherwise drop the intent."
                       (mevedel-instruction-store--observe
                        workspace nil
                        (plist-get current :data))
-                      (setq settled t))))
+                      (setq settled t))
+                  ;; No store file: memory is the only copy of the notes.
+                  (when (eq 'absent (plist-get current :status))
+                    (mevedel-notes-rewind-live
+                     workspace (mevedel-session-session-id session)
+                     (or (mevedel-session-turn-count session) 0)))))
               (unless settled
-                ;; Memory may hold the historical snapshot's presentations.
+                ;; Memory may hold presentations no store record matches.
                 ;; Without a base, the next write cannot delete anything.
                 (mevedel-instruction-store--forget workspace))))
         (mevedel-instruction-store--settle

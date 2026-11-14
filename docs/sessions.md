@@ -156,8 +156,8 @@ operation retries, and native exports.
 Notes likewise live in the workspace's instruction store,
 `<workspace>/.mevedel/instructions.el`
 ([ADR 0130](adr/0130-keep-instructions-in-a-workspace-store.md)). A session
-keeps `instructions/turn-NNNNNN.el` snapshots as history and, for now,
-`instructions/current.el`; neither is the current set once the store exists.
+writes no instruction snapshots; the `instructions/` files of sessions saved by
+older versions are ignored.
 
 Conversation compaction has its own doc in
 [`compaction.md`](compaction.md). This page describes the session
@@ -536,7 +536,7 @@ Layout:
 Project sessions use the portable authority profile on both local and TRAMP
 targets: `.lease/` and immutable `.publications/` are authoritative, while
 the fixed sidecar is a discovery cache. Root and canonical agent transcripts,
-file history, and instruction snapshots exist as logical manifest entries
+and file history exist as logical manifest entries
 without an additional fixed copy. Old fixed
 transcripts are ignored, including their modification times; this change does
 not delete them. Numbered agent compaction archives still receive a physical
@@ -2872,7 +2872,7 @@ of consuming history. Where a session lives and what it talks to -- save path,
 execution target, working directory -- stays live and is never adopted from the
 snapshot.
 
-Redo returns the transcript, sidecar state, instruction snapshots, retained
+Redo returns the transcript, sidecar state, retained
 agent transcripts, and persisted tool results, and it restores captured
 working-tree files in the same transaction. Captured bytes live in published
 `file-history` artifacts indexed by the sidecar's per-turn snapshots: a Rewind

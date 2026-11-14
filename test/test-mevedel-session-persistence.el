@@ -5562,7 +5562,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                      2))
                   ((symbol-function
                     'mevedel-session-artifacts-load-instructions)
-                   (lambda (_session _buffer)
+                   (lambda (_session)
                      (push 'instructions events))))
           (should
            (= 2
@@ -6780,9 +6780,6 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                 (lambda (&rest _) t))
                ((symbol-function 'mevedel-session-artifacts-ensure-files)
                 (lambda (&rest _) tempdir))
-               ((symbol-function
-                 'mevedel-session-artifacts--instruction-artifacts)
-                (lambda (&rest _) nil))
                ((symbol-function 'mevedel-session-publication-committed-p)
                 (lambda (&rest _) nil))
                ((symbol-function 'mevedel-session-publication-prune-committed)

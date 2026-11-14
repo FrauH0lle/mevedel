@@ -10,6 +10,7 @@
           (file-name-directory (or buffer-file-name load-file-name))
           "mevedel-session-test-support"))
 (require 'mevedel-turn)
+(require 'mevedel-session-checkpoint)
 
 (mevedel-deftest mevedel-session-artifacts-call-with-checkpoint ()
 		 ,test
@@ -66,7 +67,7 @@
 			   (should (memq #'mevedel--turn-save deferred))
 			   (should (= 1 (mevedel-session-turn-count session)))
 			   (when failed-save
-			     (cl-letf (((symbol-function 'mevedel-session-artifacts--instruction-artifacts)
+			     (cl-letf (((symbol-function 'mevedel-session-checkpoint-capture)
 					(lambda (&rest _) (setq entered t) (error "Injected staging failure"))))
 			       (mevedel-test--with-captured-diagnostics nil
 									(mevedel--turn-save fsm)))

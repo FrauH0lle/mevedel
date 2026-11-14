@@ -92,16 +92,10 @@
 (autoload 'mevedel-permission-invalidate-target-grants "mevedel-permissions")
 
 ;; `mevedel-persistence'
-(declare-function mevedel--load-instructions-file "mevedel-persistence" (path &optional base-directory confirm quiet workspace))
-(declare-function mevedel--serialize-instructions "mevedel-persistence" (&optional base-directory include-original-content))
-(declare-function mevedel--write-instructions-file "mevedel-persistence" (path &optional base-directory write-empty quiet include-original-content))
 (declare-function mevedel-instruction-store-applied-backups "mevedel-persistence" (session))
 (declare-function mevedel-instruction-store-restore "mevedel-persistence" (session))
 (declare-function mevedel-instruction-store-sync "mevedel-persistence" (workspace))
 (declare-function mevedel-instruction-store-touch "mevedel-persistence" (&optional workspace))
-(autoload 'mevedel--load-instructions-file "mevedel-persistence")
-(autoload 'mevedel--serialize-instructions "mevedel-persistence")
-(autoload 'mevedel--write-instructions-file "mevedel-persistence")
 (autoload 'mevedel-instruction-store-applied-backups "mevedel-persistence")
 (autoload 'mevedel-instruction-store-restore "mevedel-persistence")
 (autoload 'mevedel-instruction-store-sync "mevedel-persistence")
@@ -2194,46 +2188,12 @@ cannot leave stale request configuration behind."
 
 
 ;;
-;;; Instruction snapshots
+;;; Workspace instruction store
 
-(defun mevedel-session-artifacts-instructions-dir (save-path)
-  "Return the instruction snapshot directory under SAVE-PATH."
-  (file-name-concat save-path "instructions"))
-
-(defun mevedel-session-artifacts-instructions-current-path (save-path)
-  "Return the current instruction snapshot path under SAVE-PATH."
-  (file-name-concat
-   (mevedel-session-artifacts-instructions-dir save-path)
-   "current.el"))
-
-(defun mevedel-session-artifacts-instructions-turn-path (save-path turn)
-  "Return the instruction snapshot path for TURN under SAVE-PATH."
-  (file-name-concat
-   (mevedel-session-artifacts-instructions-dir save-path)
-   (format "turn-%06d.el" turn)))
-
-(defun mevedel-session-artifacts-save-instructions
-    (session buffer &optional current-only)
-  "Persist current instruction state for SESSION and BUFFER.
-
-Writes `instructions/current.el' and, unless CURRENT-ONLY is non-nil, a
-turn-specific snapshot used by rewind/fork when the session has a turn count.
-Then writes the workspace instruction store, which owns the current set."
-  (when-let* ((save-path (mevedel-session-save-path session)))
-    (let ((dir (mevedel-session-artifacts-instructions-dir save-path))
-          (workspace-root (mevedel-workspace-root
-                           (mevedel-session-workspace session)))
-          (turn (mevedel-session-turn-count session)))
-      (make-directory dir t)
-      (with-current-buffer buffer
-        (mevedel--write-instructions-file
-         (mevedel-session-artifacts-instructions-current-path save-path)
-         workspace-root t t t)
-        (when (and (not current-only) (integerp turn))
-          (mevedel--write-instructions-file
-           (mevedel-session-artifacts-instructions-turn-path save-path turn)
-           workspace-root t t nil)))
-      (mevedel-session-artifacts--sync-instruction-store session))))
+(defun mevedel-session-artifacts-save-instructions (session)
+  "Write SESSION's workspace instructions to the workspace store."
+  (when (mevedel-session-save-path session)
+    (mevedel-session-artifacts--sync-instruction-store session)))
 
 (defun mevedel-session-artifacts--sync-instruction-store (session)
   "Write SESSION's workspace instructions to the workspace store.
@@ -2249,84 +2209,21 @@ A failure is reported; the session save itself already succeeded."
        (mevedel-diagnostic-message (mevedel-diagnostic-scope session) "Instructions not written to the store: %s"
                 (error-message-string err))))))
 
-(defun mevedel-session-artifacts-load-instructions
-    (session buffer &optional turn snapshot-only)
-  "Restore SESSION instruction snapshot into BUFFER's workspace.
-
-When TURN is non-nil, restore the turn-specific snapshot; otherwise restore
-`instructions/current.el'.  SNAPSHOT-ONLY bypasses the workspace store and
-clears workspace instructions when the snapshot is missing, as Rewind requires.
-
-Without TURN or SNAPSHOT-ONLY, this is resume: a workspace with an
-instruction store loads the store; old session snapshots are ignored."
-  (when-let* ((save-path (mevedel-session-save-path session))
-              (store (if (or turn snapshot-only)
-                         'snapshot
-                       (condition-case err
-                           (mevedel-instruction-store-restore session)
-                         (error
-                          (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
-                           'mevedel
-                           (format "Could not restore workspace instructions: %s"
-                                   (error-message-string err))
-                           :warning)
-                          nil)))))
-   (if (not (eq store 'snapshot))
-       store
-    (let* ((path (if turn
-                     (mevedel-session-artifacts-instructions-turn-path
-                      save-path turn)
-                   (mevedel-session-artifacts-instructions-current-path
-                    save-path)))
-           (logical (file-relative-name path save-path))
-           (portable-p
-            (mevedel-session-codec-portable-authority-p session))
-           (present-p
-            (if portable-p
-                (mevedel-session-artifacts-artifact-present-p
-                 session logical)
-              (file-exists-p path))))
-      (if present-p
-        (condition-case err
-            (let ((source path)
-                  inspection
-                  temporary)
-              (unwind-protect
-                  (progn
-                    (when portable-p
-                      (setq
-                       inspection
-                       (mevedel-session-artifacts-find-artifact-noselect
-                        session logical t)
-                       temporary
-                       (make-temp-file "mevedel-instructions-" nil ".el")
-                       source temporary)
-                      (with-current-buffer inspection
-                        (let ((coding-system-for-write
-                               (or buffer-file-coding-system 'utf-8-unix)))
-                          (write-region
-                           (point-min) (point-max) temporary nil 'silent))))
-                    (with-current-buffer buffer
-                      (mevedel--load-instructions-file
-                       source
-                       (mevedel-workspace-root
-                        (mevedel-session-workspace session))
-                       nil t
-                       (mevedel-session-workspace session))))
-                (when (buffer-live-p inspection)
-                  (kill-buffer inspection))
-                (when (and temporary (file-exists-p temporary))
-                  (delete-file temporary))))
-          (error
-           (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
-            'mevedel
-            (format "Could not restore instruction snapshot %s: %s"
-                    path (error-message-string err))
-            :warning)
-           nil))
-        (when snapshot-only
-          (mevedel--clear-instruction-state (mevedel-session-workspace session))
-          (list :restored 0 :lost 0 :total 0)))))))
+(defun mevedel-session-artifacts-load-instructions (session)
+  "Resume SESSION's workspace instructions from the workspace store.
+Return the store restore outcome, or nil when the workspace keeps no store
+or the restore failed.  Session instruction snapshots of older sessions are
+ignored."
+  (when (mevedel-session-save-path session)
+    (condition-case err
+        (mevedel-instruction-store-restore session)
+      (error
+       (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
+        'mevedel
+        (format "Could not restore workspace instructions: %s"
+                (error-message-string err))
+        :warning)
+       nil))))
 
 
 ;;
@@ -2590,30 +2487,6 @@ continues to wait for the root turn's completed-turn publication boundary."
              (setf (mevedel-agent-invocation-sidecar-dirty invocation) nil)
              t)))))))
 
-(defun mevedel-session-artifacts--instruction-artifacts (session buffer)
-  "Return SESSION instruction snapshot artifacts derived from BUFFER."
-  (let* ((save-path (mevedel-session-save-path session))
-         (workspace-root
-          (mevedel-workspace-root (mevedel-session-workspace session)))
-         (turn (mevedel-session-turn-count session)))
-    (with-current-buffer buffer
-      (append
-       (list
-        (list :path
-              (mevedel-session-artifacts-instructions-current-path
-               save-path)
-              :content
-              (mevedel-session-artifacts-printed-value
-               (mevedel--serialize-instructions workspace-root t))))
-       (when (integerp turn)
-         (list
-          (list :path
-                (mevedel-session-artifacts-instructions-turn-path
-                 save-path turn)
-                :content
-                (mevedel-session-artifacts-printed-value
-               (mevedel--serialize-instructions workspace-root nil)))))))))
-
 (defun mevedel-session-artifacts--sidecar-artifact (session buffer &optional checkpoint)
   "Return SESSION's sidecar publication artifact derived from BUFFER.
 
@@ -2752,7 +2625,6 @@ Edits made after capture remain modified.  Nothing is published here."
         saved-transcript-p frozen-proof unchanged
         frozen-tick frozen-modification-tick
         checkpoint
-        instructions
         (mevedel-session-artifacts--critical-artifacts nil)
         (mevedel-session-artifacts--collecting-critical-artifacts-p t))
     ;; Finish I/O-backed preparation before freezing the transcript and every
@@ -2764,8 +2636,6 @@ Edits made after capture remain modified.  Nothing is published here."
        (or (mevedel-session-turn-count session) 0)
        (mevedel-request-file-snapshots mevedel--current-request)
        (mevedel-request-untracked-effects mevedel--current-request)))
-    (setq instructions
-          (mevedel-session-artifacts--instruction-artifacts session buffer))
     (with-current-buffer buffer
       (when (buffer-modified-p)
         (run-hooks 'before-save-hook)
@@ -2827,8 +2697,7 @@ Edits made after capture remain modified.  Nothing is published here."
             (append
              (and segment-artifact (list segment-artifact))
              (nreverse mevedel-session-artifacts--critical-artifacts)
-             (mevedel-session-artifacts--obsolete-snapshot-artifacts session)
-             instructions))
+             (mevedel-session-artifacts--obsolete-snapshot-artifacts session)))
            ;; Compare payloads once.  The same selection decides whether a
            ;; save is needed and supplies its publication; hashing a changed
            ;; transcript again here only duplicates encoding and allocation.
@@ -3034,7 +2903,7 @@ the caller's gate token."
                   (mevedel-diagnostic-scope session)
                   'file-history-cleanup "File history cleanup failed: %s"
                   (error-message-string err))))
-              (mevedel-session-artifacts-save-instructions session buffer)
+              (mevedel-session-artifacts-save-instructions session)
               (mevedel-session-persistence-notify-session-event
                session 'save-history)
               (mevedel-session-save-path session)))
@@ -3597,8 +3466,8 @@ a private copy, so a failed preparation leaves SESSION unchanged."
 
 OLD-SEGMENT receives already finalized and indexed OLD-TEXT.
 NEW-SEGMENT receives NEW-TEXT.
-Instruction snapshots and the sidecar join the same batch, with the sidecar
-last as its commit marker.  REQUIRE-COMMIT rejects reentrant publication.
+The sidecar joins the same batch as its commit marker.
+REQUIRE-COMMIT rejects reentrant publication.
 CHECKPOINT carries the identities and root fields frozen with these segments."
   (with-current-buffer buffer
     (let ((coding buffer-file-coding-system))
@@ -3610,9 +3479,6 @@ CHECKPOINT carries the identities and root fields frozen with these segments."
       (setq buffer-file-name new-segment
             buffer-file-truename nil)
       (let* ((frozen-tick (buffer-chars-modified-tick))
-             ;; Ancillary state can advance during instruction I/O.  Read it
-             ;; afterwards, while keeping the already frozen root candidate.
-             (instructions (mevedel-session-artifacts--instruction-artifacts session buffer))
              (sidecar
               (mevedel-session-artifacts--sidecar-artifact
                session buffer checkpoint)))
@@ -3624,7 +3490,6 @@ CHECKPOINT carries the identities and root fields frozen with these segments."
                 (list
                  (list :path old-segment :content old-text :coding coding)
                  (list :path new-segment :content new-text :coding coding))
-                instructions
                 (list sidecar))
                require-commit t)
               (mevedel-session-artifacts--set-visited-segment-file new-segment frozen-tick))
@@ -3665,7 +3530,7 @@ SNAPSHOT comes from `mevedel-session-artifacts--segment-file-snapshot'."
 
 Advance SESSION's segment number and build the successor in a temporary
 buffer.  Portable project sessions publish the finalized predecessor,
-successor, instructions, and sidecar in one immutable head.  File-workspace
+successor, and sidecar in one immutable head.  File-workspace
 sessions save the predecessor, atomically publish the successor, finalize
 the predecessor, commit the sidecar, then save instructions.  Publication
 repoints BUFFER's visited-file state; PENDING-TEXT is restored only in the
@@ -3833,7 +3698,7 @@ successor segment."
                    (mevedel-session-artifacts-build-sidecar session buffer checkpoint))
                   (mevedel-session-checkpoint-install session checkpoint)
                   (setq committed t)
-                  (mevedel-session-artifacts-save-instructions session buffer))
+                  (mevedel-session-artifacts-save-instructions session))
                 (setq committed t))
               (when (fboundp 'mevedel-telemetry-record)
                 (mevedel-telemetry-record
@@ -4026,7 +3891,7 @@ CLEAR also closes the current chat and rearms automatic naming."
                        (mevedel-session-artifacts-build-sidecar session buffer checkpoint))
                       (mevedel-session-checkpoint-install session checkpoint)
                       (setq committed t)
-                      (mevedel-session-artifacts-save-instructions session buffer))
+                      (mevedel-session-artifacts-save-instructions session))
                     (setq committed t))
                   (goto-char (point-max))
                   (mevedel-compact-estimation-clear-baseline)

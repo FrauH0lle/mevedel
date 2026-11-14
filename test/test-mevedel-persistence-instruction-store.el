@@ -820,7 +820,27 @@ The overlay properties are what preparing a change leaves behind."
     (should (equal 2 (test-mevedel-instruction-store--prepared-turn workspace uuid)))
     (should (mevedel-instruction-store-owes-p session))
     (should (mevedel-instruction-store-settle-session session))
-    (should-not (test-mevedel-instruction-store--prepared-turn workspace uuid))))
+    (should-not (test-mevedel-instruction-store--prepared-turn workspace uuid)))
+  :doc "without a store file a committed Rewind prunes the live notes"
+  ;; Rule 6: replaces the Rewind-time snapshot load, the only thing that
+  ;; pruned notes when no store file existed (`rewind-begin' returned nil).
+  (test-mevedel-instruction-store--with-rewind (workspace session uuid)
+    (delete-file (mevedel-instruction-store-path workspace))
+    (should (mevedel-instruction-store-rewind-begin session 1 2))
+    (setf (mevedel-session-turn-count session) 1)
+    (mevedel-instruction-store-rewind-end session t)
+    (let ((live (mevedel--instruction-with-uuid uuid workspace)))
+      (should-not (overlay-get live 'mevedel-note-prepared-change))
+      (should (eq 'sent (overlay-get live 'mevedel-note-state))))
+    ;; The prune wrote no store file.
+    (should-not (file-exists-p (mevedel-instruction-store-path workspace))))
+  :doc "control: without a store file a rolled-back Rewind keeps the live activity"
+  (test-mevedel-instruction-store--with-rewind (workspace session uuid)
+    (delete-file (mevedel-instruction-store-path workspace))
+    (should (mevedel-instruction-store-rewind-begin session 1 2))
+    (mevedel-instruction-store-rewind-end session nil)
+    (should (overlay-get (mevedel--instruction-with-uuid uuid workspace)
+                         'mevedel-note-prepared-change))))
 
 (mevedel-deftest mevedel-instruction-store-settle-session (:quiet t)
   ,test

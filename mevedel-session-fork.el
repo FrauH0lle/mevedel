@@ -38,7 +38,6 @@
 (declare-function mevedel-session-artifacts-assert-mutation-authority "mevedel-session-artifacts" (session &optional buffer))
 (declare-function mevedel-session-artifacts-read-artifact "mevedel-session-artifacts" (session logical &optional committed-only))
 (declare-function mevedel-session-artifacts-save-buffer-silently "mevedel-session-artifacts" ())
-(declare-function mevedel-session-artifacts-save-instructions "mevedel-session-artifacts" (session buffer &optional current-only))
 (declare-function mevedel-session-artifacts-segment-path "mevedel-session-artifacts" (save-path n))
 (declare-function mevedel-session-artifacts-sessions-dir "mevedel-session-artifacts" (workspace))
 (declare-function mevedel-session-artifacts-sidecar-path "mevedel-session-artifacts" (save-path))
@@ -52,8 +51,6 @@
 (autoload 'mevedel-session-artifacts-read-artifact
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-save-buffer-silently
-  "mevedel-session-artifacts")
-(autoload 'mevedel-session-artifacts-save-instructions
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-segment-path
   "mevedel-session-artifacts")
@@ -617,7 +614,6 @@ caches never become fork authority."
     (mevedel-session-codec-write
      (mevedel-session-artifacts-sidecar-path staging-path)
      (mevedel-session-artifacts--live-sidecar child staging-buffer))
-    (mevedel-session-artifacts-save-instructions child buffer)
     (let* ((saved
             (mevedel-session-codec-read
              (mevedel-session-artifacts-sidecar-path staging-path)))

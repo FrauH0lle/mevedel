@@ -2349,14 +2349,13 @@ component and retries once."
 (defun mevedel-session-publication--fixed-artifact-p (artifact)
   "Return non-nil when ARTIFACT is also written to its fixed target file.
 
-Transcripts, file history and instruction snapshots are read through the
+Transcripts and file history are read through the
 immutable publication (or owned staging before its marker), never fixed
 files.  The small discovery sidecar and ordinary artifact files keep their
 fixed path."
   (not (or (plist-get artifact :delete)
            (when-let* ((logical (plist-get artifact :logical)))
              (or (string-prefix-p "file-history/" logical)
-                 (string-prefix-p "instructions/" logical)
                  (and (string-match-p
                        "\\`\\(?:segment-[0-9]+\\|agents/.+\\)\\.chat\\.org\\'"
                        logical)

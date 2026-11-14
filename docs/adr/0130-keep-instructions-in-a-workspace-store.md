@@ -13,8 +13,7 @@ its original directive-activity scope is historical.
 anchors, authorship, lifecycle, conversation links, waiting prepared changes,
 recently-closed records and display-id state live in
 `<workspace>/.mevedel/instructions.el` on the
-execution target. Sessions keep their `instructions/turn-NNNNNN.el` snapshots
-and `current.el` as history. Ordinary resume loads
+execution target. Sessions write no instruction snapshots. Ordinary resume loads
 the store; it no longer loads or clears the workspace set from a session.
 Conversations live in their sessions, not the store. There is no directive record
 kind, frozen-history reader or old-data conversion.
@@ -76,7 +75,7 @@ writing. An absent store is told apart from a corrupt one. An unreadable store
 is reported once and read again only at the next observation point, not after
 every command. A failed write is likewise not retried after every command: a
 workspace waits `mevedel-session-checkpoint-interval` seconds, while exit and
-session saves still try. Exports and session snapshots carry the same `:format`, so an
+session saves still try. Exports carry the same `:format`, so an
 export from another installation imports here. A file
 written before they carried it imports only on the version that wrote it.
 
@@ -119,7 +118,8 @@ An unreadable store is such a failure, never "no intent". After commit,
 rewinding a note conversation to zero surviving turns returns sent notes to
 unsent and clears prepared changes from discarded turns. Text, anchors,
 conversation links remain. Source presentations
-come from the store rather than the historical snapshot. Until
+come from the store. Without a store file, Rewind prunes the live notes in
+memory the same way. Until
 then Rewind holds back writes to its own workspace's store only. Changes in
 that workspace are still recorded and written afterwards; other workspaces
 keep writing.
@@ -204,3 +204,17 @@ state at a recognized VCS or project.el root, and reports missing `.gitignore`
 coverage without changing ignore policy. Arbitrary directories still do not
 become workspaces merely because a note was created there; those notes stay in
 memory and announce that limitation once.
+
+### 2026-11-14: Remove session instruction snapshots
+
+Sessions no longer write `instructions/current.el` or
+`instructions/turn-NNNNNN.el`, publish them, copy them in a fork, or read them
+at resume, Rewind or Redo. The snapshots duplicated the store as a second
+source of truth: Rewind and Redo could load a historical set over the
+workspace's current notes, and resume never read them. The old-data migration
+that needed them was removed on 2026-11-12. Saving them cost about 3 ms at 10
+annotated files and about 52 ms at 200. Rewind always settles and prunes
+through the store; when no store file exists yet, it prunes the live notes in
+memory. Redo settles the store for the restored turn count instead of loading
+the head's snapshot. Old snapshot files stay on disk and are ignored. The user
+approved the removal; `mevedel-save-instructions` remains the export command.

@@ -10,8 +10,8 @@
 ;; all three.  The real save and load producers run against real files in a
 ;; temporary workspace.
 ;;
-;; Every case first asserts a control: the session snapshot really holds
-;; (or lacks) the data, so the store, not the snapshot, carries the result.
+;; Every case first asserts a control: the store really holds the data and
+;; the session wrote no snapshot, so the store alone carries the result.
 
 ;;; Code:
 
@@ -87,7 +87,7 @@ Returns the session."
 Mirrors the call in `mevedel-session-persistence--restore-buffer'."
   (with-current-buffer data
     (setq-local mevedel--workspace workspace)
-    (mevedel-session-artifacts-load-instructions session data)))
+    (mevedel-session-artifacts-load-instructions session)))
 
 (defun test-mevedel-instruction-ws--note (source text line)
   "Create note TEXT on LINE of SOURCE and return its overlay."
@@ -115,13 +115,16 @@ Mirrors the call in `mevedel-session-persistence--restore-buffer'."
     (list (plist-get properties 'mevedel-note-session-id)
           (plist-get (plist-get properties 'mevedel-note-prepared-change) :id))))
 
-(defun test-mevedel-instruction-ws--snapshot-text (session)
-  "Return the raw current instruction snapshot text of SESSION."
+(defun test-mevedel-instruction-ws--store-text (workspace)
+  "Return the raw workspace store text of WORKSPACE."
   (with-temp-buffer
-    (insert-file-contents
-     (mevedel-session-artifacts-instructions-current-path
-      (mevedel-session-save-path session)))
+    (insert-file-contents (mevedel-instruction-store-path workspace))
     (buffer-string)))
+
+(defun test-mevedel-instruction-ws--no-snapshot-p (session)
+  "Return non-nil when SESSION wrote no instruction snapshot."
+  (not (file-exists-p
+        (file-name-concat (mevedel-session-save-path session) "instructions"))))
 
 (mevedel-deftest test-mevedel-instruction-ws-resume-drops-other-session
   (:quiet t)
@@ -135,9 +138,10 @@ Mirrors the call in `mevedel-session-persistence--restore-buffer'."
       (test-mevedel-instruction-ws--note source "made in B" 2)
       (let ((b (test-mevedel-instruction-ws--save "b" workspace data)))
         (push b sessions)
-        ;; Control: B's file really holds B's note.
+        ;; Control: the store holds B's note; B wrote no snapshot.
         (should (string-match-p "made in B"
-                                (test-mevedel-instruction-ws--snapshot-text b)))
+                                (test-mevedel-instruction-ws--store-text workspace)))
+        (should (test-mevedel-instruction-ws--no-snapshot-p b))
         (should (= 2 (test-mevedel-instruction-ws--note-count workspace source)))
         ;; Resume A; the unchanged workspace still owns B's notes.
         (test-mevedel-instruction-ws--resume a workspace data)
@@ -155,12 +159,10 @@ Mirrors the call in `mevedel-session-persistence--restore-buffer'."
     (let ((a (test-mevedel-instruction-ws--save "a" workspace data)))
       (push a sessions)
       (test-mevedel-instruction-ws--note source "created, then Emacs exits" 2)
-      ;; Control: the live workspace has both, the only session snapshot
-      ;; has one; the workspace store is the other carrier.
+      ;; Control: the live workspace has both and the session wrote no
+      ;; snapshot; the workspace store is the carrier.
       (should (= 2 (length (mevedel-notes-open workspace))))
-      (should-not (string-match-p
-                   "then Emacs exits"
-                   (test-mevedel-instruction-ws--snapshot-text a)))
+      (should (test-mevedel-instruction-ws--no-snapshot-p a))
       (should (file-exists-p (mevedel-instruction-store-path workspace)))
       ;; Restart: fresh registry, then resume the only session.
       (with-current-buffer source (set-buffer-modified-p nil))
@@ -187,11 +189,12 @@ Mirrors the call in `mevedel-session-persistence--restore-buffer'."
                    '(:id "change-1" :session-id "ran-in-b" :turn 1))
       (setq b (test-mevedel-instruction-ws--save "b" workspace data))
       (push b sessions)
-      ;; Control: B's file carries the activity, A's does not.
+      ;; Control: the store carries the activity; neither session wrote a
+      ;; snapshot.
       (should (string-match-p "ran-in-b"
-                              (test-mevedel-instruction-ws--snapshot-text b)))
-      (should-not (string-match-p "ran-in-b"
-                                  (test-mevedel-instruction-ws--snapshot-text a)))
+                              (test-mevedel-instruction-ws--store-text workspace)))
+      (should (test-mevedel-instruction-ws--no-snapshot-p a))
+      (should (test-mevedel-instruction-ws--no-snapshot-p b))
       (test-mevedel-instruction-ws--resume b workspace data)
       (let ((via-b (test-mevedel-instruction-ws--activity workspace)))
         (should (equal '("ran-in-b" "change-1") via-b))
