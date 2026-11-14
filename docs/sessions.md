@@ -1167,7 +1167,15 @@ expired lease without a prompt, because renewal cannot
 run inside blocking target I/O and confirming a takeover from oneself is
 meaningless; the exclusive creation of the next generation still refuses the
 reclaim when another client claimed the lease meanwhile.  Taking over another
-client's expired lease still requires explicit confirmation.  The renewal
+client's expired lease still requires explicit confirmation, with one
+exception: every lease record names its holder by host identity (boot ID,
+machine ID and PID namespace), PID and Linux process start ticks, and a
+client on that same host reclaims an `active` or `claiming` lease at once,
+expired or not, when that PID is gone or reused.  A record from another host,
+an unavailable process list or missing holder evidence is uncertain liveness
+and waits for expiry.  A `publishing` lease never qualifies, because the dead
+holder's child writer may still run.  Journal recovery and cleanup assessment
+treat such a lease as abandoned and expired respectively.  The renewal
 heartbeat performs that reclaim itself: a machine that suspends longer than
 the lease duration stops its timer but not the target clock, so it wakes with
 its own record already expired and nobody else claiming it.  Reporting a lost

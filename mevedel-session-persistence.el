@@ -981,7 +981,7 @@ when another client changed the record or owns its mutation lock."
                         (let ((print-length nil) (print-level nil))
                           (prin1 (list :pid (emacs-pid) :hostname (system-name)
                                        :emacs-invocation-time mevedel-session-persistence--emacs-invocation-time
-                                       :process-identity (mevedel-session-persistence--pid-identity (emacs-pid))
+                                       :process-identity (mevedel-session-durability--pid-identity (emacs-pid))
                                        :buffer buffer-name) (current-buffer))))
                       (rename-file temporary lock-path t))
                   (delete-file lock-path))
@@ -1006,56 +1006,6 @@ Signal on a competing replacement so a caller cannot assume ownership."
           (read (current-buffer)))
       (error nil))))
 
-(defun mevedel-session-persistence--pid-alive-p (pid)
-  "Return non-nil unless PID is provably absent from the current host.
-An unavailable process list is not evidence that a holder is dead."
-  ;; Process inspection follows `default-directory' through file handlers.
-  ;; These PIDs belong to the Emacs host, not a remote workspace.
-  (let ((default-directory "/"))
-    (condition-case nil
-        (let ((pids (list-system-processes)))
-          (or (not (and (integerp pid) (> pid 0)))
-              (null pids)
-              (memq pid pids)))
-      (error t))))
-
-(defconst mevedel-session-persistence--process-identity-regexp
-  (concat "\\`[0-9a-f]\\{8\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-"
-          "[0-9a-f]\\{4\\}-[0-9a-f]\\{12\\}:\\(?:0\\|[1-9][0-9]*\\)\\'")
-  "Shape of a Linux boot ID and process start tick count.")
-
-(defun mevedel-session-persistence--pid-identity (pid)
-  "Return PID's clock-independent process identity on this host, or nil.
-Linux supplies a boot UUID and the process start ticks since boot.  Unlike
-wall-clock start times, these survive time-zone and clock changes.  Hosts
-without this evidence cannot prove PID reuse and keep live locks active."
-  (when (and (integerp pid) (> pid 0))
-    (let ((default-directory "/"))
-      (condition-case nil
-          (let* ((boot (with-temp-buffer
-                         (insert-file-contents "/proc/sys/kernel/random/boot_id")
-                         (string-trim (buffer-string))))
-                 (case-fold-search nil)
-                 (start
-                  (with-temp-buffer
-                    (insert-file-contents
-                     (file-name-concat "/proc" (number-to-string pid) "stat"))
-                    ;; The command (field 2) can contain spaces and closing
-                    ;; parentheses.  Only the last closing delimiter is safe.
-                    (goto-char (point-max))
-                    (when (search-backward ") " nil t)
-                      (forward-char 2)
-                      ;; The remaining fields start at 3; starttime is 22.
-                      (nth 19 (split-string
-                               (buffer-substring-no-properties
-                                (point) (point-max)))))))
-                 (identity (and start (concat boot ":" start))))
-            (and identity
-                 (string-match-p mevedel-session-persistence--process-identity-regexp
-                                 identity)
-                 identity))
-        (error nil)))))
-
 (defun mevedel-session-persistence--same-host-lock-active-p (lock-info)
   "Return non-nil if same-host LOCK-INFO describes an active holder.
 
@@ -1064,13 +1014,13 @@ process identity differs from the lock holder's recorded identity.  Missing
 or malformed evidence keeps the lock active rather than risking data loss."
   (let ((pid (plist-get lock-info :pid)))
     (or (not (and (integerp pid) (> pid 0)))
-        (when (mevedel-session-persistence--pid-alive-p pid)
+        (when (mevedel-session-durability--pid-alive-p pid)
           (let ((recorded (plist-get lock-info :process-identity))
-                (current (mevedel-session-persistence--pid-identity pid))
+                (current (mevedel-session-durability--pid-identity pid))
                 (case-fold-search nil))
             (or (not (and (stringp recorded)
                           (string-match-p
-                           mevedel-session-persistence--process-identity-regexp
+                           mevedel-session-durability--process-identity-regexp
                            recorded)))
                 (not current)
                 (equal recorded current)))))))

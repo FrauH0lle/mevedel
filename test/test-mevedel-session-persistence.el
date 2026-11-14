@@ -2590,9 +2590,9 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
   ,test
   (test)
   :doc "keeps malformed PIDs active without probing them"
-  (cl-letf (((symbol-function 'mevedel-session-persistence--pid-alive-p)
+  (cl-letf (((symbol-function 'mevedel-session-durability--pid-alive-p)
              (lambda (&rest _) (ert-fail "Invalid PID was probed")))
-            ((symbol-function 'mevedel-session-persistence--pid-identity)
+            ((symbol-function 'mevedel-session-durability--pid-identity)
              (lambda (&rest _) (ert-fail "Invalid PID identity was read"))))
     (dolist (pid '(nil 0 -1 1.5 "123"))
       (should (mevedel-session-persistence--same-host-lock-active-p
@@ -2601,9 +2601,9 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                      (test-mevedel-session-persistence--identity 1))))))
   :doc "returns nil for dead PIDs whatever identity they recorded"
   (cl-letf (((symbol-function
-              'mevedel-session-persistence--pid-alive-p)
+              'mevedel-session-durability--pid-alive-p)
              (lambda (&rest _) nil))
-            ((symbol-function 'mevedel-session-persistence--pid-identity)
+            ((symbol-function 'mevedel-session-durability--pid-identity)
              (lambda (&rest _) nil)))
     (dolist (recorded (list nil "garbage"
                             (test-mevedel-session-persistence--identity 7)))
@@ -2615,9 +2615,9 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
   ;; Wall time is diagnostic only: a stamp a month old, as a holder in a
   ;; time zone west of this Emacs used to look, proves nothing.
   (cl-letf (((symbol-function
-              'mevedel-session-persistence--pid-alive-p)
+              'mevedel-session-durability--pid-alive-p)
              (lambda (&rest _) t))
-            ((symbol-function 'mevedel-session-persistence--pid-identity)
+            ((symbol-function 'mevedel-session-durability--pid-identity)
              (lambda (_) (test-mevedel-session-persistence--identity 7))))
     (dolist (stamp (list (format-time-string
                           "%FT%H-%M-%S"
@@ -2630,9 +2630,9 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
               :emacs-invocation-time stamp)))))
   :doc "treats a live PID as stale when its identity proves another incarnation"
   (cl-letf (((symbol-function
-              'mevedel-session-persistence--pid-alive-p)
+              'mevedel-session-durability--pid-alive-p)
              (lambda (&rest _) t))
-            ((symbol-function 'mevedel-session-persistence--pid-identity)
+            ((symbol-function 'mevedel-session-durability--pid-identity)
              (lambda (_) (test-mevedel-session-persistence--identity 7))))
     ;; An earlier start in this boot, or the same ticks in another boot.
     (dolist (recorded (list (test-mevedel-session-persistence--identity 6)
@@ -2644,9 +2644,9 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
               :emacs-invocation-time "2026-04-23T14-30-15")))))
   :doc "keeps a live PID active when its current identity is unavailable"
   (cl-letf (((symbol-function
-              'mevedel-session-persistence--pid-alive-p)
+              'mevedel-session-durability--pid-alive-p)
              (lambda (&rest _) t))
-            ((symbol-function 'mevedel-session-persistence--pid-identity)
+            ((symbol-function 'mevedel-session-durability--pid-identity)
              (lambda (_) nil)))
     (should
      (mevedel-session-persistence--same-host-lock-active-p
@@ -2654,9 +2654,9 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
             :process-identity (test-mevedel-session-persistence--identity 6)))))
   :doc "keeps a live PID active when the recorded identity proves nothing"
   (cl-letf (((symbol-function
-              'mevedel-session-persistence--pid-alive-p)
+              'mevedel-session-durability--pid-alive-p)
              (lambda (&rest _) t))
-            ((symbol-function 'mevedel-session-persistence--pid-identity)
+            ((symbol-function 'mevedel-session-durability--pid-identity)
              (lambda (_) (test-mevedel-session-persistence--identity 7))))
     (let ((valid (test-mevedel-session-persistence--identity 6)))
       ;; A lock from before identities, with a reuse-looking wall time,
@@ -2716,10 +2716,10 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                          :buffer "*reused*")
                    (current-buffer)))
           (cl-letf (((symbol-function
-                      'mevedel-session-persistence--pid-alive-p)
+                      'mevedel-session-durability--pid-alive-p)
                      (lambda (&rest _) t))
                     ((symbol-function
-                      'mevedel-session-persistence--pid-identity)
+                      'mevedel-session-durability--pid-identity)
                      (lambda (_) (test-mevedel-session-persistence--identity 7))))
             (should-not
              (mevedel-session-persistence--active-lock-p tempdir))))
@@ -2744,7 +2744,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
               (should (= (emacs-pid) (plist-get plist :pid)))
               (should (equal "*test-buf*" (plist-get plist :buffer)))
               ;; The holder records its own incarnation for reuse proofs.
-              (should (equal (mevedel-session-persistence--pid-identity
+              (should (equal (mevedel-session-durability--pid-identity
                               (emacs-pid))
                              (plist-get plist :process-identity))))))
       (delete-directory tempdir t)))
@@ -2833,10 +2833,10 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                     ((symbol-function 'y-or-n-p)
                      (lambda (&rest _) t))
                     ((symbol-function
-                      'mevedel-session-persistence--pid-alive-p)
+                      'mevedel-session-durability--pid-alive-p)
                      (lambda (&rest _) t))
                     ((symbol-function
-                      'mevedel-session-persistence--pid-identity)
+                      'mevedel-session-durability--pid-identity)
                      (lambda (pid)
                        (if (eql pid 12345)
                            (test-mevedel-session-persistence--identity 7)
@@ -2863,7 +2863,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                    (current-buffer)))
           (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
                     ((symbol-function
-                      'mevedel-session-persistence--pid-alive-p)
+                      'mevedel-session-durability--pid-alive-p)
                      (lambda (&rest _) nil)))
             (should (mevedel-session-persistence-lock-acquire
                      tempdir "*new-buf*"
@@ -2885,7 +2885,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                    (current-buffer)))
           (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) nil))
                     ((symbol-function
-                      'mevedel-session-persistence--pid-alive-p)
+                      'mevedel-session-durability--pid-alive-p)
                      (lambda (&rest _) nil)))
             (should-error
              (mevedel-session-persistence-lock-acquire
@@ -2919,9 +2919,9 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                            (lambda (&rest _) (ert-fail "Unexpected stale prompt")))
                           ((symbol-function 'read-char-choice)
                            (lambda (&rest _) (ert-fail "Unexpected conflict prompt")))
-                          ((symbol-function 'mevedel-session-persistence--pid-alive-p)
+                          ((symbol-function 'mevedel-session-durability--pid-alive-p)
                            (lambda (_) reused))
-                          ((symbol-function 'mevedel-session-persistence--pid-identity)
+                          ((symbol-function 'mevedel-session-durability--pid-identity)
                            (lambda (_) (test-mevedel-session-persistence--identity 7)))
                           ((symbol-function 'mevedel-session-persistence--change-lock)
                            (lambda (lock expected buffer)
@@ -3039,7 +3039,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                          :buffer "*gone*")
                    (current-buffer)))
           (cl-letf (((symbol-function
-                      'mevedel-session-persistence--pid-alive-p)
+                      'mevedel-session-durability--pid-alive-p)
                      (lambda (&rest _) nil)))
             (mevedel-session-persistence--sweep-stale-locks workspace))
           (should-not (file-exists-p stale-lock)))
@@ -3063,10 +3063,10 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                          :buffer "*reused*")
                    (current-buffer)))
           (cl-letf (((symbol-function
-                      'mevedel-session-persistence--pid-alive-p)
+                      'mevedel-session-durability--pid-alive-p)
                      (lambda (&rest _) t))
                     ((symbol-function
-                      'mevedel-session-persistence--pid-identity)
+                      'mevedel-session-durability--pid-identity)
                      (lambda (_) (test-mevedel-session-persistence--identity 7))))
             (mevedel-session-persistence--sweep-stale-locks workspace))
           (should-not (file-exists-p stale-lock)))
@@ -3086,7 +3086,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
             (prin1 (list :pid (emacs-pid)
                          :hostname (system-name)
                          :process-identity
-                         (mevedel-session-persistence--pid-identity (emacs-pid))
+                         (mevedel-session-durability--pid-identity (emacs-pid))
                          :emacs-invocation-time
                          (format-time-string
                           "%FT%H-%M-%S"
@@ -5296,10 +5296,10 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                                  :buffer "*old-buf*")
                            (current-buffer))))
                 (cl-letf (((symbol-function
-                            'mevedel-session-persistence--pid-alive-p)
+                            'mevedel-session-durability--pid-alive-p)
                            (lambda (&rest _) t))
                           ((symbol-function
-                            'mevedel-session-persistence--pid-identity)
+                            'mevedel-session-durability--pid-identity)
                            (lambda (_)
                              (test-mevedel-session-persistence--identity 7))))
                   (let ((deleted
@@ -6834,16 +6834,16 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
              (mevedel-session-persistence-resume-id workspace "../escape"))))
       (delete-directory root t))))
 
-(mevedel-deftest mevedel-session-persistence--pid-alive-p
+(mevedel-deftest mevedel-session-durability--pid-alive-p
   (:doc "distinguishes a live process from an actually exited child")
   ,test
   (test)
-  (should (mevedel-session-persistence--pid-alive-p (emacs-pid)))
+  (should (mevedel-session-durability--pid-alive-p (emacs-pid)))
   (let* ((child (make-process :name "session-dead-pid" :command '("true") :noquery t))
          (pid (process-id child)))
     (while (process-live-p child) (accept-process-output child 0.01))
     (should (integerp pid))
-    (should-not (mevedel-session-persistence--pid-alive-p pid)))
+    (should-not (mevedel-session-durability--pid-alive-p pid)))
   :doc "requires successful local enumeration to prove a PID dead"
   (let ((default-directory "/ssh:unreachable:/project/"))
     (dolist (observation '(error nil (123 456) (456)))
@@ -6853,12 +6853,12 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                    (if (eq observation 'error)
                        (error "Process enumeration unavailable")
                      observation))))
-        (should (eq (not (null (mevedel-session-persistence--pid-alive-p 123)))
+        (should (eq (not (null (mevedel-session-durability--pid-alive-p 123)))
                     (not (equal observation '(456))))))))
   :doc "invalid PIDs never count as proven dead"
   (cl-letf (((symbol-function 'list-system-processes) (lambda () '(123))))
     (dolist (pid '(nil 0 -1 1.5 "123"))
-      (should (mevedel-session-persistence--pid-alive-p pid)))))
+      (should (mevedel-session-durability--pid-alive-p pid)))))
 
 (defun test-mevedel-session-persistence--with-proc (files function)
   "Call FUNCTION while reads of the `/proc' names in FILES use real fixtures.
@@ -6898,11 +6898,11 @@ every byte and error.  Other files are read normally."
                      " ")
           "\n"))
 
-(mevedel-deftest mevedel-session-persistence--pid-identity ()
+(mevedel-deftest mevedel-session-durability--pid-identity ()
   ,test
   (test)
   :doc "identifies live processes stably and distinctly, and not dead ones"
-  (let ((self (mevedel-session-persistence--pid-identity (emacs-pid)))
+  (let ((self (mevedel-session-durability--pid-identity (emacs-pid)))
         (child (make-process :name "session-identity-holder"
                              :command '("sleep" "60") :noquery t
                              :sentinel #'ignore)))
@@ -6910,10 +6910,10 @@ every byte and error.  Other files are read normally."
         (progn
           (unless self (ert-skip "Process identity is unavailable on this host"))
           (should (string-match-p
-                   mevedel-session-persistence--process-identity-regexp self))
-          (should (equal self (mevedel-session-persistence--pid-identity
+                   mevedel-session-durability--process-identity-regexp self))
+          (should (equal self (mevedel-session-durability--pid-identity
                                (emacs-pid))))
-          (let ((other (mevedel-session-persistence--pid-identity
+          (let ((other (mevedel-session-durability--pid-identity
                         (process-id child))))
             (should (stringp other))
             (should-not (equal self other))
@@ -6927,19 +6927,19 @@ every byte and error.  Other files are read normally."
                           (< (float-time) deadline))
                 (accept-process-output nil 0.01)))
             (should-not (memq pid (list-system-processes)))
-            (should-not (mevedel-session-persistence--pid-identity pid))))
+            (should-not (mevedel-session-durability--pid-identity pid))))
       (when (process-live-p child) (delete-process child))))
   :doc "reads only local /proc, even from a remote workspace"
-  (let ((local (mevedel-session-persistence--pid-identity (emacs-pid))))
+  (let ((local (mevedel-session-durability--pid-identity (emacs-pid))))
     (unless local (ert-skip "Process identity is unavailable on this host"))
     (let ((default-directory "/ssh:unreachable:/project/"))
-      (should (equal local (mevedel-session-persistence--pid-identity
+      (should (equal local (mevedel-session-durability--pid-identity
                             (emacs-pid))))))
   :doc "never reads anything for invalid PIDs"
   (cl-letf (((symbol-function 'insert-file-contents)
              (lambda (&rest _) (ert-fail "Invalid PID read /proc"))))
     (dolist (pid '(nil 0 -1 1.5 "123"))
-      (should-not (mevedel-session-persistence--pid-identity pid))))
+      (should-not (mevedel-session-durability--pid-identity pid))))
   :doc "takes the start ticks after the last parenthesis of the command"
   (let ((boot "0f1e2d3c-4b5a-4968-8776-655443322110"))
     (dolist (command '("emacs" "a b" "x) (y" ") 1 2 3 ("))
@@ -6950,7 +6950,7 @@ every byte and error.  Other files are read normally."
             . ,(test-mevedel-session-persistence--stat command "777")))
          (lambda ()
            (should (equal (concat boot ":777")
-                          (mevedel-session-persistence--pid-identity 4242))))))))
+                          (mevedel-session-durability--pid-identity 4242))))))))
   :doc "fails closed on unavailable or malformed /proc evidence"
   (let ((boot "0f1e2d3c-4b5a-4968-8776-655443322110")
         (stat (test-mevedel-session-persistence--stat "emacs" "777")))
@@ -6980,7 +6980,7 @@ every byte and error.  Other files are read normally."
            files
            (lambda ()
              (should-not
-              (mevedel-session-persistence--pid-identity 4242))))))))
+              (mevedel-session-durability--pid-identity 4242))))))))
 
 (mevedel-deftest mevedel-session-persistence-call-with-abandoned-lock ()
   ,test
