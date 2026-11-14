@@ -649,6 +649,31 @@
     (should (string-search "bytes over" captured))
     (should-not (string-search "secret" captured))))
 
+(mevedel-deftest mevedel-collaboration--send-ui-requests/oversized
+  (:doc "a greeting skips an oversized pending request and still sends the later ones")
+  (with-temp-buffer
+    (insert "requests")
+    (let* ((requests (make-hash-table :test #'eql))
+           (room (list :transport 'transport :ui-requests requests))
+           (sent nil)
+           captured)
+      (dolist (entry '((1 . "huge") (2 . "small")))
+        (let ((overlay (make-overlay 1 2)))
+          (overlay-put overlay 'mevedel--remote (list :body (cdr entry)))
+          (puthash (car entry) overlay requests)))
+      (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                 (lambda (_transport _peer frame)
+                   ;; The transport refuses the first request as over the bound.
+                   (if (equal "huge" (plist-get frame :body))
+                       (signal 'mevedel-collaboration-frame-too-large
+                               (list "1048576 bytes over the 1048540-byte bound"))
+                     (push (plist-get frame :reqId) sent)
+                     t))))
+        (mevedel-test--with-captured-diagnostics captured
+          (mevedel-collaboration--send-ui-requests room 7)))
+      (should (equal '(2) sent))
+      (should (string-search "Collaboration frame not sent" captured)))))
+
 (mevedel-deftest mevedel-collaboration--publish/repeated
   (:doc "unchanged publishes preserve the revision for the next change and joins")
   (with-temp-buffer

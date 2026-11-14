@@ -57,6 +57,8 @@
                   "mevedel-collaboration" (room))
 (declare-function mevedel-collaboration--skip-oversize
                   "mevedel-collaboration" (room send))
+(declare-function mevedel-collaboration--send-guarded
+                  "mevedel-collaboration" (room peer frame))
 (defvar mevedel-collaboration--attachment-extensions)
 (defvar mevedel-collaboration--duplicate-prompt-window)
 (defvar mevedel-collaboration--max-attachment-bytes)
@@ -518,8 +520,8 @@ One guest's failed send does not keep the others from hearing it."
       (when (plist-get guest :writable)
         (list :models (mevedel-collaboration--model-labels)))))
     (cl-loop for rest on chunks do
-             (mevedel-collaboration--transport-send
-              transport peer
+             (mevedel-collaboration--send-guarded
+              room peer
               (mevedel-collaboration--records-frame
                (list :t "snapshot-chunk") (car rest) (null (cdr rest)))))))
 
@@ -682,8 +684,8 @@ must not collect a decision it may not see by reconnecting."
         (when (or (null audience)
                   (mevedel-collaboration--audience-peer-p
                    room peer audience))
-          (mevedel-collaboration--transport-send
-           (plist-get room :transport) peer
+          (mevedel-collaboration--send-guarded
+           room peer
            (mevedel-collaboration--ui-request-frame request-id overlay)))))))
 
 (defun mevedel-collaboration-retire-permission-requests (session entries)

@@ -25,6 +25,7 @@
 (declare-function mevedel-collaboration--records-frame "mevedel-collaboration-guest" (meta chunk final))
 ;; `mevedel-collaboration-transport'
 (declare-function mevedel-collaboration--transport-send "mevedel-collaboration-transport" (transport peer frame))
+(declare-function mevedel-collaboration--send-guarded "mevedel-collaboration" (room peer frame))
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-read-segment "mevedel-session-artifacts" (session number))
 (declare-function mevedel-session-artifacts-session-chats "mevedel-session-artifacts" (session))
@@ -121,7 +122,7 @@ Cache immutable segment metadata, never a second transcript store."
                  (let ((frame (mevedel-collaboration--records-frame
                                meta (car rest) (null (cdr rest)))))
                    (if peer
-                       (mevedel-collaboration--transport-send (plist-get room :transport) peer frame)
+                       (mevedel-collaboration--send-guarded room peer frame)
                      (mevedel-collaboration--broadcast room frame))))))
     artifacts))
 

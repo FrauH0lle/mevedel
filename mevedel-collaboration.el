@@ -652,6 +652,15 @@ The diagnostic for ROOM carries only the sizes, never frame content."
       "Collaboration frame not sent: %s" (error-message-string err))
      nil)))
 
+(defun mevedel-collaboration--send-guarded (room peer frame)
+  "Send FRAME to PEER through ROOM's transport, skipping it if too large.
+Loops that send several frames use this per frame, so one oversized
+frame costs only itself."
+  (mevedel-collaboration--skip-oversize
+   room (lambda ()
+          (mevedel-collaboration--transport-send
+           (plist-get room :transport) peer frame))))
+
 (defun mevedel-collaboration--broadcast (room frame)
   "Broadcast FRAME to every guest in ROOM when the transport is live."
   (when-let* ((transport (plist-get room :transport))
@@ -771,8 +780,8 @@ GUEST caches the last state sent so an unchanged queue costs nothing."
   (when-let* ((state (mevedel-collaboration--guest-queue-state room guest)))
     (when (or force (not (equal state (plist-get guest :queue-state))))
       (plist-put guest :queue-state state)
-      (mevedel-collaboration--transport-send
-       (plist-get room :transport) peer
+      (mevedel-collaboration--send-guarded
+       room peer
        (append (list :t "queue"
                      :pending (plist-get state :pending)
                      :paused (plist-get state :paused))
