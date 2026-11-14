@@ -203,10 +203,15 @@ Return a plist holding its socket, room key and received frames."
                              (plist-get consumer :key)
                              (cdr (mevedel-collaboration--envelope-unpack
                                    (websocket-frame-payload frame))))))
-            (plist-put consumer :texts
-                       (append (plist-get consumer :texts) (list text))))))))
+            ;; The connection's challenge binds every frame the consumer
+            ;; sends; it is not part of any exchange.
+            (let ((parsed (mevedel-artifact-room-test--parse text)))
+              (if (equal "challenge" (alist-get 't parsed))
+                  (plist-put consumer :challenge (alist-get 'challenge parsed))
+                (plist-put consumer :texts
+                           (append (plist-get consumer :texts) (list text))))))))))
     (should (mevedel-relay-test--pump
-             (lambda () (websocket-openp (plist-get consumer :ws)))))
+             (lambda () (plist-get consumer :challenge))))
     consumer))
 
 (defun mevedel-artifact-room-test--write-token (consumer)
@@ -214,9 +219,9 @@ Return a plist holding its socket, room key and received frames."
   (mevedel-collaboration--base64url (substring (plist-get consumer :secret) 32 48)))
 
 (defun mevedel-artifact-room-test--send (consumer frame)
-  "Send fixture FRAME from CONSUMER, sealed, as wire frames.
+  "Send fixture FRAME from CONSUMER, sealed and bound to its connection.
 An editing frame's body travels as the chunked transfer it stands for."
-  (let ((texts
+  (let ((wire
          (if (and (equal "editing" (alist-get 't frame)) (assq 'body frame))
              (let* ((data (base64-encode-string
                            (encode-coding-string
@@ -228,21 +233,26 @@ An editing frame's body travels as the chunked transfer it stands for."
                     (offset 0) chunks)
                (while (< offset total)
                  (let ((end (min total (+ offset 65536))))
-                   (push (json-serialize
-                          `((t . "editing") (reqId . ,(alist-get 'reqId frame))
-                            (offset . ,offset) (total . ,total)
-                            (data . ,(substring data offset end))))
+                   (push `((t . "editing") (reqId . ,(alist-get 'reqId frame))
+                           (offset . ,offset) (total . ,total)
+                           (data . ,(substring data offset end)))
                          chunks)
                    (setq offset end)))
                (nreverse chunks))
-           (list (json-serialize frame :false-object :false :null-object :null)))))
-    (dolist (text texts)
+           (list frame))))
+    (dolist (part wire)
+      (plist-put consumer :seq (1+ (or (plist-get consumer :seq) 0)))
       (websocket-send
        (plist-get consumer :ws)
        (make-websocket-frame
         :opcode 'binary :completep t
         :payload (mevedel-collaboration--envelope-pack
-                  0 (mevedel-collaboration--seal (plist-get consumer :key) text)))))))
+                  0 (mevedel-collaboration--seal
+                     (plist-get consumer :key)
+                     (json-serialize
+                      (append part `((challenge . ,(plist-get consumer :challenge))
+                                     (seq . ,(plist-get consumer :seq))))
+                      :false-object :false :null-object :null))))))))
 
 (defun mevedel-artifact-room-test--frames (consumer)
   "Return the frames CONSUMER received, parsed like fixture frames.
@@ -448,7 +458,7 @@ An editing transfer appears once, complete, as its `body' shorthand."
       (unwind-protect
           (progn
             (mevedel-artifact-room-test--send
-             consumer '((t . "hello") (proto . 3) (name . "viewer")
+             consumer `((t . "hello") (proto . ,mevedel-collaboration--protocol-version) (name . "viewer")
                         (guestId . "privacy-consumer")))
             (should
              (equal (mapcar #'cdr (mevedel-artifact-room-test--fixture
@@ -498,10 +508,10 @@ An editing transfer appears once, complete, as its `body' shorthand."
       (unwind-protect
           (progn
             (mevedel-artifact-room-test--send
-             view '((t . "hello") (proto . 3) (name . "viewer")
+             view `((t . "hello") (proto . ,mevedel-collaboration--protocol-version) (name . "viewer")
                     (guestId . "consumer-view")))
             (mevedel-artifact-room-test--send
-             edit `((t . "hello") (proto . 3) (name . "owner?")
+             edit `((t . "hello") (proto . ,mevedel-collaboration--protocol-version) (name . "owner?")
                     (guestId . "consumer-edit")
                     (writeToken . ,(mevedel-artifact-room-test--write-token edit))))
             (should (eq t (alist-get 'readOnly
@@ -522,7 +532,7 @@ STATE and PORT are the stub relay's."
   (let ((consumer (mevedel-artifact-room-test--consumer
                    port (plist-get links (if (eq tier 'edit) :link-edit :link-view)))))
     (mevedel-artifact-room-test--send
-     consumer `((t . "hello") (proto . 3) (name . "remote agent")
+     consumer `((t . "hello") (proto . ,mevedel-collaboration--protocol-version) (name . "remote agent")
                 (guestId . "consumer-0001")
                 ,@(when (eq tier 'edit)
                     `((writeToken . ,(mevedel-artifact-room-test--write-token

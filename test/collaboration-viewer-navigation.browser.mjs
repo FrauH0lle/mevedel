@@ -199,9 +199,14 @@ async function open(browser, {lobbyRunning = true, records = [], sharedItem = nu
     const guest = {agentArtifacts: new Set(), agentFetches: 0};
     page.joined.push(id);
     page.push[id] = async frame => socket.send(await seal(keys[id], frame));
+    // Bind the connection as the host does; unbound frames are dropped.
+    let last = 0;
+    page.push[id]({t: 'challenge', challenge: 'c'});
     socket.onMessage(async message => {
       if (typeof message === 'string') return;
-      const frame = await unseal(keys[id], message);
+      const {challenge, seq, ...frame} = await unseal(keys[id], message);
+      if (challenge !== 'c' || !(seq > last)) return;
+      last = seq;
       page.received.push({room: id, connection, frame});
       answers[id]?.(frame, async reply => socket.send(await seal(keys[id], reply)), guest);
     });

@@ -20,6 +20,11 @@
 ;; machine slept or changed networks is redialed instead of looking open
 ;; forever.  Each dial gets a deadline too, so one that stalls is retried
 ;; instead of connecting forever.
+;;
+;; The relay may record and replay sealed frames, so every guest frame is
+;; bound to its connection: on `peer-joined' the host sends that peer a
+;; random challenge, and the peer's frames must echo it with a sequence
+;; number above the previous one.  Others are refused before delivery.
 
 ;;; Code:
 
@@ -27,6 +32,14 @@
   (require 'cl-lib))
 
 (require 'json)
+
+(defvar mevedel-collaboration--protocol-version)
+
+;; `mevedel-collaboration'
+(declare-function mevedel-collaboration--base64url "mevedel-collaboration" (bytes))
+(declare-function mevedel-collaboration--random-bytes "mevedel-collaboration" (count))
+(autoload 'mevedel-collaboration--base64url "mevedel-collaboration")
+(autoload 'mevedel-collaboration--random-bytes "mevedel-collaboration")
 
 ;; `mevedel-transport'
 (declare-function mevedel-transport-busy-p "mevedel-transport" (&optional path))
@@ -234,6 +247,8 @@ count as drops; undecryptable or malformed input is dropped silently."
                          :on-frame (plist-get callbacks :on-frame)
                          :on-control (plist-get callbacks :on-control)
                          :on-state (plist-get callbacks :on-state)
+                         ;; Peer id -> (CHALLENGE . LAST-SEQ) of its connection.
+                         :peers (make-hash-table :test #'eql)
                          :inbound-at nil
                          :keepalive-timer nil)))
     (mevedel-collaboration--transport-dial transport)
@@ -406,6 +421,27 @@ share this queue so a departure cannot overtake an earlier hello."
             (discard)))))))
 
 
+(defun mevedel-collaboration--transport-refusal (transport peer frame)
+  "Return nil when guest FRAME belongs to PEER's current TRANSPORT connection.
+Otherwise return the frame that refuses it.  A frame without a challenge
+comes from a client of an older protocol; one with a stale challenge or a
+sequence number at or below the last accepted was replayed or reordered."
+  (let ((binding (gethash peer (plist-get transport :peers)))
+        (seq (plist-get frame :seq)))
+    (cond
+     ((not (plist-get frame :challenge))
+      (list :t "error"
+            :message (format "protocol mismatch: host speaks %d"
+                             mevedel-collaboration--protocol-version)))
+     ((and binding
+           (equal (plist-get frame :challenge) (car binding))
+           (natnump seq)
+           (> seq (cdr binding)))
+      (setcdr binding seq)
+      nil)
+     (t (list :t "notice"
+              :message "The host refused a frame that was replayed or out of order on this connection")))))
+
 (defun mevedel-collaboration--transport-receive (transport frame)
   "Decode websocket FRAME for TRANSPORT and dispatch it."
   (condition-case nil
@@ -417,17 +453,35 @@ share this queue so a departure cannot overtake an earlier hello."
                             (plist-get transport :key) (cdr envelope)))
                      (decoded (mevedel-collaboration--frame-decode text))
                      (callback (plist-get transport :on-frame)))
-           (mevedel-collaboration--transport-deliver
-            transport callback (car envelope) decoded)))
+           (let* ((peer (car envelope))
+                  (refusal (mevedel-collaboration--transport-refusal
+                            transport peer decoded)))
+             (if refusal
+                 (mevedel-collaboration--transport-deliver
+                  transport #'mevedel-collaboration--transport-send
+                  transport peer refusal)
+               (mevedel-collaboration--transport-deliver
+                transport callback peer decoded)))))
         ('text
          (when-let* ((control (mevedel-collaboration--frame-decode
                                (websocket-frame-text frame)))
                      (event (pcase (plist-get control :t)
                               ("peer-joined" 'peer-joined)
-                              ("peer-left" 'peer-left)))
-                     (callback (plist-get transport :on-control)))
-           (mevedel-collaboration--transport-deliver
-            transport callback event (plist-get control :peer)))))
+                              ("peer-left" 'peer-left))))
+           (let ((peer (plist-get control :peer))
+                 (peers (plist-get transport :peers)))
+             (if (eq event 'peer-left)
+                 (remhash peer peers)
+               ;; A fresh challenge per connection, a reconnect included.
+               (let ((challenge (mevedel-collaboration--base64url
+                                 (mevedel-collaboration--random-bytes 16))))
+                 (puthash peer (cons challenge 0) peers)
+                 (mevedel-collaboration--transport-deliver
+                  transport #'mevedel-collaboration--transport-send
+                  transport peer (list :t "challenge" :challenge challenge))))
+             (when-let* ((callback (plist-get transport :on-control)))
+               (mevedel-collaboration--transport-deliver
+                transport callback event peer))))))
     (error nil)))
 
 (defun mevedel-collaboration--transport-down (transport ws)
@@ -438,6 +492,8 @@ WS is nil when dialing failed before a connection was created."
     (mevedel-collaboration--transport-cancel-connect-timer transport)
     (plist-put transport :ws nil)
     (plist-put transport :state 'down)
+    ;; The relay drops every guest with the host; each rejoins afresh.
+    (clrhash (plist-get transport :peers))
     (mevedel-collaboration--transport-discard-input transport)
     (when ws
       (ignore-errors (mevedel--delete-process (websocket-conn ws))))

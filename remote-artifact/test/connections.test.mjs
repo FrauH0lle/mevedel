@@ -157,5 +157,5 @@ test('a protocol mismatch reaches the tool result', async (t) => {
   const result = await callTool('read_artifact', { name: 'snt-pipeline' },
     { env: { ...env }, connect: (entry, ctx) => pool.connect({ ...entry, link: old.link('view') }, ctx) });
   assert.ok(result.isError);
-  assert.match(result.content[0].text, /origin speaks protocol 4, this package speaks 3; update one/);
+  assert.match(result.content[0].text, /origin speaks protocol 5, this package speaks 4; update one/);
 });

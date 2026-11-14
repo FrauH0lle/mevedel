@@ -370,6 +370,12 @@
           (should-not fired))
       (cancel-timer timer))))
 
+(defun test-mevedel-collaboration-transport--peers (peer)
+  "Return a peer table binding PEER's connection to challenge \"c\"."
+  (let ((peers (make-hash-table :test #'eql)))
+    (puthash peer (cons "c" 0) peers)
+    peers))
+
 (mevedel-deftest mevedel-collaboration--transport-open
   (:doc "delivers sealed frames and control messages both ways through a relay")
   (mevedel-relay-test--with-stub-relay (state port server)
@@ -396,6 +402,7 @@
             (should-not (mevedel-collaboration--transport-silent-p transport))
             ;; A guest joins: the host sees the relay control message.
             (let* ((guest-frames nil)
+                   (challenge nil)
                    (guest (websocket-open
                            (format
                             "ws://127.0.0.1:%d/r/roomroomroomroom?role=guest"
@@ -403,42 +410,50 @@
                            :on-message
                            (lambda (_ws frame)
                              (push frame guest-frames)))))
+              (cl-labels
+                  ((decode (frame)
+                     (mevedel-collaboration--frame-decode
+                      (mevedel-collaboration--unseal
+                       key (cdr (mevedel-collaboration--envelope-unpack
+                                 (websocket-frame-payload frame))))))
+                   ;; A guest frame of TYPE bound to this connection.
+                   (bound (peer type seq)
+                     (make-websocket-frame
+                      :opcode 'binary :completep t
+                      :payload (mevedel-collaboration--envelope-pack
+                                peer (mevedel-collaboration--seal
+                                      key (json-encode
+                                           (list :t type :proto 4
+                                                 :challenge challenge
+                                                 :seq seq)))))))
               (unwind-protect
                   (progn
                     (should (mevedel-relay-test--pump
                              (lambda () (equal controls
                                                '((peer-joined . 1))))))
+                    ;; The host binds the connection with a fresh challenge.
+                    (should (mevedel-relay-test--pump (lambda () guest-frames)))
+                    (setq challenge
+                          (plist-get (decode (car guest-frames)) :challenge))
+                    (should (equal "challenge"
+                                   (plist-get (decode (car guest-frames)) :t)))
+                    (should (= 22 (length challenge)))
+                    (setq guest-frames nil)
                     ;; Guest -> host: sealed hello arrives decoded with the
                     ;; relay-assigned peer id even when the guest lies.
-                    (websocket-send
-                     guest
-                     (make-websocket-frame
-                      :opcode 'binary
-                      :payload (mevedel-collaboration--envelope-pack
-                                999
-                                (mevedel-collaboration--seal
-                                 key "{\"t\":\"hello\",\"proto\":3}"))
-                      :completep t))
+                    (websocket-send guest (bound 999 "hello" 1))
                     (should (mevedel-relay-test--pump (lambda () frames)))
                     (should (equal 1 (caar frames)))
                     (should (equal "hello" (plist-get (cdar frames) :t)))
                     ;; Host -> guest: targeted and broadcast envelopes
                     ;; arrive sealed and unseal to the sent frame.
                     (should (mevedel-collaboration--transport-send
-                             transport 1 (list :t "welcome" :proto 3)))
+                             transport 1 (list :t "welcome" :proto 4)))
                     (should (mevedel-collaboration--transport-send
                              transport 0 (list :t "record")))
                     (should (mevedel-relay-test--pump
                              (lambda () (= 2 (length guest-frames)))))
-                    (let ((decoded
-                           (mapcar
-                            (lambda (frame)
-                              (mevedel-collaboration--frame-decode
-                               (mevedel-collaboration--unseal
-                                key
-                                (cdr (mevedel-collaboration--envelope-unpack
-                                      (websocket-frame-payload frame))))))
-                            (nreverse guest-frames))))
+                    (let ((decoded (mapcar #'decode (nreverse guest-frames))))
                       (should (equal '("welcome" "record")
                                      (mapcar (lambda (frame)
                                                (plist-get frame :t))
@@ -452,18 +467,38 @@
                       :payload (mevedel-collaboration--envelope-pack
                                 1 "garbage-not-sealed")
                       :completep t))
-                    (websocket-send
-                     guest
-                     (make-websocket-frame
-                      :opcode 'binary
-                      :payload (mevedel-collaboration--envelope-pack
-                                1 (mevedel-collaboration--seal
-                                   key "{\"t\":\"abort\"}"))
-                      :completep t))
-                    (should (mevedel-relay-test--pump (lambda () frames)))
-                    (should (= 1 (length frames)))
-                    (should (equal "abort" (plist-get (cdar frames) :t))))
-                (websocket-close guest))
+                    (let ((abort (bound 1 "abort" 2)))
+                      (websocket-send guest abort)
+                      (should (mevedel-relay-test--pump (lambda () frames)))
+                      (should (= 1 (length frames)))
+                      (should (equal "abort" (plist-get (cdar frames) :t)))
+                      ;; The same sealed bytes again, a frame from an older
+                      ;; client and one from another connection are refused
+                      ;; with a reply, never delivered.
+                      (setq guest-frames nil)
+                      (websocket-send guest abort)
+                      (websocket-send
+                       guest
+                       (make-websocket-frame
+                        :opcode 'binary :completep t
+                        :payload (mevedel-collaboration--envelope-pack
+                                  1 (mevedel-collaboration--seal
+                                     key "{\"t\":\"hello\",\"proto\":3}"))))
+                      (setq challenge "AAAAAAAAAAAAAAAAAAAAAA")
+                      (websocket-send guest (bound 1 "abort" 3))
+                      (should (mevedel-relay-test--pump
+                               (lambda () (= 3 (length guest-frames)))))
+                      (should (= 1 (length frames)))
+                      (should (equal
+                               '(("notice" . "The host refused a frame that was replayed or out of order on this connection")
+                                 ("error" . "protocol mismatch: host speaks 4")
+                                 ("notice" . "The host refused a frame that was replayed or out of order on this connection"))
+                               (mapcar (lambda (frame)
+                                         (let ((frame (decode frame)))
+                                           (cons (plist-get frame :t)
+                                                 (plist-get frame :message))))
+                                       (reverse guest-frames))))))
+                (websocket-close guest)))
               ;; Guest departure reaches the host as peer-left.
               (should (mevedel-relay-test--pump
                        (lambda () (assq 'peer-left controls))))))
@@ -478,13 +513,15 @@
          (key (make-string 32 5))
          nested delivered
          (transport (list :state 'open :key key
+                          :peers (test-mevedel-collaboration-transport--peers 1)
                           :on-frame (lambda (_peer _frame)
                                       (setq nested (mevedel-transport-nested-p))
                                       (setq delivered (mevedel-session-control-fs-read-file path)))))
          (frame (make-websocket-frame
                  :opcode 'binary :completep t
                  :payload (mevedel-collaboration--envelope-pack
-                           1 (mevedel-collaboration--seal key "{\"t\":\"store-list\"}")))))
+                           1 (mevedel-collaboration--seal
+                              key "{\"t\":\"store-list\",\"challenge\":\"c\",\"seq\":1}")))))
     (unwind-protect
         (progn
           (mevedel-transport--handler-advice
@@ -500,7 +537,8 @@
 
   :doc "queued frames, new arrivals and nested peer departure retain arrival order"
   (let* ((key (make-string 32 5))
-         (transport (list :state 'open :key key))
+         (transport (list :state 'open :key key
+                          :peers (test-mevedel-collaboration-transport--peers 1)))
          seen)
     (plist-put transport :on-control
                (lambda (event _peer) (push event seen)))
@@ -523,7 +561,9 @@
                                   :opcode 'binary :completep t
                                   :payload (mevedel-collaboration--envelope-pack
                                             1 (mevedel-collaboration--seal
-                                               key (json-encode (list :n number))))))))
+                                               key (json-encode
+                                                    (list :n number :challenge "c"
+                                                          :seq number))))))))
           (mevedel-transport--handler-advice
            (lambda ()
              (let (timer-list timer-idle-list)
@@ -559,7 +599,9 @@
 (mevedel-deftest mevedel-collaboration--transport-discard-input
   (:doc "disconnect and stop discard queued callbacks and fence a late timer")
   (dolist (action '(down stopped))
-    (let ((transport (list :state 'open :backoff 60)) delivered)
+    (let ((transport (list :state 'open :backoff 60
+                           :peers (make-hash-table :test #'eql)))
+          delivered)
       (unwind-protect
           (progn
             (mevedel-transport--handler-advice

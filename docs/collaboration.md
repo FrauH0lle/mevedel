@@ -76,6 +76,20 @@ An owner link appends a further 16-byte owner token. Authority follows
 possession of the link, and each tier is a prefix of the next, so the
 secret's length alone tells the viewer which one it holds.
 
+The relay cannot read or forge frames, but it sees every sealed one, so a
+relay that records and replays them is in scope. The host binds each guest
+connection: when the relay reports a joined peer, the host sends it a sealed
+`challenge` of 16 random bytes. The guest sends its `hello` only after that,
+and every guest frame echoes the challenge with a `seq` above the previous
+one. The host checks both before any room sees the frame. A frame without a
+challenge is answered `protocol mismatch`; one bearing another connection's
+challenge, or a `seq` at or below the last accepted, gets a notice that it
+was replayed or out of order. So recorded frames, the owner's `hello`
+included, act once, on their own connection. A reconnect is a new
+connection with a fresh challenge. The relay can still drop, delay or
+withhold frames and replay host frames to a guest, which may show stale
+content but cannot make the host act.
+
 ## The owner link
 
 The owner link exists for the case the other two do not cover: the host is
@@ -118,7 +132,9 @@ than through the command allowlist:
   An id that is not in the retained ledger and is at or below the highest
   id the host has forgotten is refused as stale and never performed,
   even if the host never saw it, because it cannot tell it from a
-  forgotten repeat. Higher ids it has not seen fork normally. If the
+  forgotten repeat. Higher ids it has not seen fork normally. The ledger
+  serves the viewer's own retries, each a new frame; a relay repeating a
+  recorded frame is refused before it, by the connection binding. If the
   fork is saved but its room cannot start, the host closes the child's
   buffers in Emacs, releases its lock and keeps the saved session. The
   refusal names its session id and says to open it in Emacs with
@@ -794,7 +810,7 @@ A consumer's hello is admitted by the room key and write token like any
 room's. The room answers with its own welcome only:
 
 ```json
-{"t": "welcome", "proto": 3, "room": "artifact", "id": "ID",
+{"t": "welcome", "proto": 4, "room": "artifact", "id": "ID",
  "kind": "whiteboard", "title": "TITLE", "readOnly": false}
 ```
 

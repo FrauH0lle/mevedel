@@ -72,3 +72,8 @@ editing request or reply, `{"t": "editing", "reqId": N, "body": VALUE}`,
 stands for the chunked transfer `{"t": "editing", "reqId": N, "offset",
 "total", "data"}` whose `data` slices join to base64 of VALUE's UTF-8 JSON.
 Object key order is not significant.
+
+The fixtures leave out the connection binding every exchange runs inside:
+the origin first sends `{"t": "challenge", "challenge": C}`, and every
+consumer wire frame, each editing chunk included, also carries `"challenge":
+C` and a `"seq"` above the previous one (see `relay/README.md`).

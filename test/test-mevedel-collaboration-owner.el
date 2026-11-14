@@ -42,11 +42,17 @@ the room.  START replaces the child's room dial."
          (room (list :session (plist-get fixture :session)
                      :guests guests :transport 'relay))
          (key (make-string 32 5))
+         (peers (make-hash-table :test #'eql))
          (transport (list :state 'open :key key
+                          :peers peers
                           :on-frame (lambda (peer frame)
                                       (mevedel-collaboration--on-frame
                                        data-buffer peer frame))))
+         (seq 0)
          sent children)
+    ;; Both peers' connections are bound, as after the relay's peer-joined.
+    (puthash 2 (cons "c2" 0) peers)
+    (puthash 3 (cons "c3" 0) peers)
     (puthash 2 (list :name "Writer" :writable t :owner nil :guest-id "w") guests)
     (puthash 3 (list :name "Owner" :writable t :owner t :guest-id "o") guests)
     (unwind-protect
@@ -87,8 +93,8 @@ the room.  START replaces the child's room dial."
                                (or peer 3)
                                (mevedel-collaboration--seal
                                 key
-                                (format "{\"t\":\"fork\",\"reqId\":%d,\"forkPoint\":\"fixture-fork\"}"
-                                        request-id)))))))))
+                                (format "{\"t\":\"fork\",\"reqId\":%d,\"forkPoint\":\"fixture-fork\",\"challenge\":\"c%d\",\"seq\":%d}"
+                                        request-id (or peer 3) (cl-incf seq))))))))))
       (dolist (child children)
         (when (buffer-live-p child)
           (let ((view (buffer-local-value 'mevedel--view-buffer child)))

@@ -164,6 +164,10 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
     const send = async (frame) => { for (const f of wire(frame)) socket.write(wsFrame(2, await seal(f))); };
     senders.add(send);
     socket.on('close', () => senders.delete(send));
+    // Bind the connection as the origin does; unbound frames are dropped.
+    const challenge = randomBytes(16).toString('base64url');
+    let lastSeq = 0;
+    send({ t: 'challenge', challenge });
     // The host ends the room: goodbye, then the relay closes it.
     const leave = async (why) => {
       for (const { from, frame: origin } of fixture('goodbye').frames) {
@@ -181,8 +185,10 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
       if (opcode === 8) { socket.end(); return; }
       if (opcode !== 2) return;
       inbound = inbound.then(async () => {
-        const frame = await unseal(payload);
-        if (!frame) return;
+        const bound = await unseal(payload);
+        if (!bound || bound.challenge !== challenge || !(bound.seq > lastSeq)) return;
+        lastSeq = bound.seq;
+        const { challenge: _challenge, seq: _seq, ...frame } = bound;
         if (frame.t === 'editing') {
           const parts = (transfers.get(frame.reqId) ?? '') + frame.data;
           if (parts.length < frame.total) { transfers.set(frame.reqId, parts); return; }
@@ -199,8 +205,8 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
 
     const answer = async (frame) => {
       if (frame.t === 'hello') {
-        if (mode === 'mismatch') { await send({ t: 'error', message: 'protocol mismatch: host speaks 4' }); return; }
-        if (mode === 'session') { await send({ t: 'welcome', proto: 3, readOnly: false, recordCount: 0 }); return; }
+        if (mode === 'mismatch') { await send({ t: 'error', message: 'protocol mismatch: host speaks 5' }); return; }
+        if (mode === 'session') { await send({ t: 'welcome', proto: 4, readOnly: false, recordCount: 0 }); return; }
         if (mode === 'lobby') { await send({ t: 'lobby', project: 'proj', sessions: [], omitted: 0 }); return; }
         const [hello] = fixture('hello').frames;
         writable = frame.writeToken === b64url(writeToken);

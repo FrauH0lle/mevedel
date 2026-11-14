@@ -34,7 +34,7 @@
   const notificationsApi = window.mevedelViewerNotifications;
   const {base64urlDecode, base64urlEncode, importKey, parseFragment} = transportApi;
 
-  const PROTO = 3;
+  const PROTO = 4;
   const GIVE_UP_MS = 3 * 60 * 1000;
   // Covers the host's relay dial after it hands out a new room's link.
   const JOIN_GRACE_MS = 5 * 1000;

@@ -183,11 +183,19 @@ async function seal(key, peer, frame) {
   return envelope.buffer;
 }
 
-async function unseal(key, data) {
+async function unsealRaw(key, data) {
   const bytes = new Uint8Array(data);
   const plaintext = await crypto.subtle.decrypt(
     {name: 'AES-GCM', iv: bytes.slice(4, 16)}, key, bytes.slice(16));
   return JSON.parse(decoder.decode(plaintext));
+}
+
+// A frame the viewer sent, after checking it is bound to its connection.
+async function unseal(key, data) {
+  const {challenge, seq, ...frame} = await unsealRaw(key, data);
+  assert.equal(typeof challenge, 'string');
+  assert.ok(Number.isInteger(seq) && seq > 0);
+  return frame;
 }
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -243,8 +251,9 @@ async function testTransportLifecycle() {
           });
         }),
         decrypt: (_algorithm, _key, sealed) => {
-          const plaintext = new TextEncoder().encode(
-            JSON.stringify({id: sealed[0]}));
+          // Payload byte 9 stands for the host's challenge frame.
+          const plaintext = new TextEncoder().encode(JSON.stringify(
+            sealed[0] === 9 ? {t: 'challenge', challenge: 'c'} : {id: sealed[0]}));
           if (sealed[0] !== 3) return Promise.resolve(plaintext);
           return new Promise(resolve => {
             finishDecrypts.push(() => resolve(plaintext));
@@ -263,22 +272,32 @@ async function testTransportLifecycle() {
     },
     onGiveUp() {}, async onOpen() { opens++; },
   });
+  const bindSocket = socket => {
+    const challenge = new Uint8Array(33);
+    challenge[16] = 9;
+    socket.dispatch('message', {data: challenge.buffer});
+  };
   transport.connect();
   const stale = sockets[0];
+  // Nothing is sent before the host's challenge binds the socket; the
+  // hello waits for it, not for the socket to open.
+  stale.dispatch('open');
+  assert.equal(await transport.send({t: 'unbound'}), false);
+  assert.equal(finishSeals.length, 0);
+  bindSocket(stale);
+  await waitFor(() => finishSeals.length, 'stale hello encryption');
   const pending = transport.send({t: 'late'});
-  await waitFor(() => finishSeals.length, 'stale frame encryption');
   stale.close();
   retry();
   const current = sockets[1];
-  current.dispatch('open');
+  bindSocket(current);
   await waitFor(() => finishSeals.length === 2,
                 'replacement hello beside stale encryption');
-  finishSeals.splice(
-    finishSeals.findIndex(item => item.frame.t === 'hello'), 1)[0].finish();
+  assert.deepEqual(finishSeals.map(item => item.frame.t), ['hello', 'hello']);
+  finishSeals.splice(1, 1)[0].finish();
   await waitFor(() => opens === 1, 'replacement open continuation');
   assert.equal(current.sent.length, 1);
-  finishSeals.splice(
-    finishSeals.findIndex(item => item.frame.t === 'late'), 1)[0].finish();
+  finishSeals.shift().finish();
   assert.equal(await pending, false);
   assert.equal(stale.sent.length, 0);
   assert.equal(current.sent.length, 1);
@@ -286,7 +305,7 @@ async function testTransportLifecycle() {
   current.close();
   retry();
   const replacement = sockets[2];
-  replacement.dispatch('open');
+  bindSocket(replacement);
   await waitFor(() => finishSeals.length, 'stale hello encryption');
   replacement.close();
   retry();
@@ -297,6 +316,10 @@ async function testTransportLifecycle() {
   assert.equal(latest.sent.length, 0);
   assert.equal(opens, 1);
 
+  bindSocket(latest);
+  await waitFor(() => finishSeals.length, 'latest hello encryption');
+  finishSeals.shift().finish();
+  await waitFor(() => opens === 2, 'latest open continuation');
   const firstSend = transport.send({t: 'first'});
   const secondFrame = {t: 'second', answers: ['original']};
   const secondSend = transport.send(secondFrame);
@@ -304,13 +327,17 @@ async function testTransportLifecycle() {
   await waitFor(() => finishSeals.length, 'first ordered encryption');
   assert.equal(finishSeals.length, 1);
   assert.equal(finishSeals[0].frame.t, 'first');
+  // Every frame echoes the socket's challenge with a rising sequence number.
+  assert.equal(finishSeals[0].frame.challenge, 'c');
+  assert.equal(finishSeals[0].frame.seq, 2);
   finishSeals.shift().finish();
   await waitFor(() => finishSeals.length, 'second ordered encryption');
   assert.equal(finishSeals[0].frame.t, 'second');
+  assert.equal(finishSeals[0].frame.seq, 3);
   assert.deepEqual(finishSeals[0].frame.answers, ['original']);
   finishSeals.shift().finish();
   assert.deepEqual(await Promise.all([firstSend, secondSend]), [true, true]);
-  assert.equal(latest.sent.length, 2);
+  assert.equal(latest.sent.length, 3);
 
   // A failed send is reported to its caller without poisoning queued work.
   const failedSend = assert.rejects(transport.send({t: 'failed'}),
@@ -325,7 +352,7 @@ async function testTransportLifecycle() {
   assert.equal(finishSeals[0].frame.t, 'recovered');
   finishSeals.shift().finish();
   assert.equal(await recoveredSend, true);
-  assert.equal(latest.sent.length, 3);
+  assert.equal(latest.sent.length, 4);
 
   const bad = new Uint8Array(33);
   bad[16] = 1;
@@ -1501,12 +1528,28 @@ async function main() {
   const first = sockets[0];
   assert.match(first.url, new RegExp(`/r/${roomId}\\?role=guest$`));
 
-  // Hello is sealed and carries the write token.
+  let delivered = 0;
+  const deliverTo = async (socket, frame) => {
+    socket.dispatch('message', {data: await seal(key, 1, frame)});
+    delivered++;
+    // Wait until the viewer's serialized inbound chain has consumed it.
+    await waitFor(() => context.window.mevedelViewerApplied === delivered,
+                  'frame application');
+  };
+  const deliver = frame => deliverTo(first, frame);
+
+  // Hello waits for the host's challenge, echoes it, and carries the
+  // write token.
   first.dispatch('open');
+  await tick();
+  assert.equal(first.sent.length, 0, 'no hello before the challenge');
+  await deliver({t: 'challenge', challenge: 'challenge-one'});
   await waitFor(() => first.sent.length === 1, 'sealed hello');
-  const hello = await unseal(key, first.sent[0]);
+  const hello = await unsealRaw(key, first.sent[0]);
   assert.equal(hello.t, 'hello');
-  assert.equal(hello.proto, 3);
+  assert.equal(hello.proto, 4);
+  assert.equal(hello.challenge, 'challenge-one');
+  assert.equal(hello.seq, 1);
   assert.equal(hello.writeToken, base64url(writeToken));
   assert.equal(hello.ownerToken, base64url(ownerToken));
   assert.equal(typeof hello.name, 'string');
@@ -1520,16 +1563,6 @@ async function main() {
   // match this guest's own queued entries across reconnects.
   assert.match(hello.guestId, /^[A-Za-z0-9_-]{8,64}$/);
   assert.equal(storage.get('mevedel-guest-id'), hello.guestId);
-
-  let delivered = 0;
-  const deliverTo = async (socket, frame) => {
-    socket.dispatch('message', {data: await seal(key, 1, frame)});
-    delivered++;
-    // Wait until the viewer's serialized inbound chain has consumed it.
-    await waitFor(() => context.window.mevedelViewerApplied === delivered,
-                  'frame application');
-  };
-  const deliver = frame => deliverTo(first, frame);
 
   // Welcome for a writable guest reveals the composer; the snapshot loads
   // through final-flagged chunks with live updates queued behind it.
@@ -2779,8 +2812,14 @@ async function main() {
   // subscription is replaced before its endpoint is registered again.
   pushKey[1] = 1;
   sockets[1].dispatch('open');
+  // A reconnect is bound afresh: its hello echoes the new challenge and
+  // restarts the sequence.
+  await deliverTo(sockets[1], {t: 'challenge', challenge: 'challenge-two'});
   await waitFor(() => sockets[1].sent.length === 2, 'second hello and push subscription');
-  assert.equal((await unseal(key, sockets[1].sent[0])).t, 'hello');
+  const secondHello = await unsealRaw(key, sockets[1].sent[0]);
+  assert.equal(secondHello.t, 'hello');
+  assert.equal(secondHello.challenge, 'challenge-two');
+  assert.equal(secondHello.seq, 1);
   assert.equal((await unseal(key, sockets[1].sent[1])).t, 'push-subscribe');
   assert.equal(unsubscribeCount, 1);
 
@@ -3103,6 +3142,7 @@ async function main() {
   await waitFor(() => sockets.length === dialed + 1, 'artifact link dial');
   const artifactSocket = sockets.at(-1);
   artifactSocket.dispatch('open');
+  artifactSocket.dispatch('message', {data: await seal(key, 1, {t: 'challenge', challenge: 'c'})});
   await waitFor(() => artifactSocket.sent.length >= 1, 'artifact link hello');
   nodes['terminal-title'].textContent = '';
   artifactSocket.dispatch('message', {data: await seal(key, 1, {

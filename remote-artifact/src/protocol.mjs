@@ -6,7 +6,7 @@
 // replies travel as chunked transfers of base64 UTF-8 JSON.
 
 /** The protocol version this package speaks, checked by the origin at hello. */
-export const PROTOCOL = 3;
+export const PROTOCOL = 4;
 
 const CHUNK = 65536;
 

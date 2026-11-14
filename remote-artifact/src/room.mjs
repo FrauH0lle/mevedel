@@ -7,6 +7,10 @@
 //
 // An origin that ends the room says goodbye with a reason first; every
 // pending and later request fails with what that reason means.
+//
+// The relay may record and replay sealed frames, so the origin binds each
+// connection with a challenge: hello waits for it, and every frame echoes
+// it with a rising sequence number.
 import { parseLink } from './link.mjs';
 import { EditingAssembler, PROTOCOL, editingFrames, importKey, seal, unseal } from './protocol.mjs';
 
@@ -32,6 +36,8 @@ export class Room {
   #pending = new Map();
   #nextId = 1;
   #closed = null;
+  #challenge = null;
+  #seq = 0;
 
   constructor(ws, key, link) {
     this.#ws = ws;
@@ -46,10 +52,12 @@ export class Room {
   /* Why the connection ended, such as the origin's goodbye, or null. */
   get ended() { return this.#closed; }
 
-  /* Send FRAME sealed, in order. */
+  /* Send FRAME sealed, in order, bound to this connection's challenge. */
   send(frame) {
     this.#outbound = this.#outbound.then(async () => {
-      if (this.#ws.readyState === WebSocket.OPEN) this.#ws.send(await seal(this.#key, frame));
+      if (this.#ws.readyState !== WebSocket.OPEN || !this.#challenge) return;
+      this.#seq += 1;
+      this.#ws.send(await seal(this.#key, { ...frame, challenge: this.#challenge, seq: this.#seq }));
     });
     return this.#outbound;
   }
@@ -84,6 +92,14 @@ export class Room {
       try {
         const frame = await unseal(this.#key, envelope);
         if (!frame) return;
+        if (frame.t === 'challenge') {
+          // Only the first: a connection's binding never changes.
+          if (!this.#challenge && typeof frame.challenge === 'string') {
+            this.#challenge = frame.challenge;
+            this.onBound?.();
+          }
+          return;
+        }
         if (frame.t === 'editing' && frame.reqId !== 'event') {
           const body = this.#assembler.add(frame);
           const pending = body !== undefined && this.#pending.get(frame.reqId);
@@ -158,10 +174,10 @@ export async function openRoom(link, { name, guestId, timeoutMs = 10000 } = {}) 
         fail(goodbye(frame.reason));
       }
     };
-    ws.addEventListener('open', () => {
+    room.onBound = () => {
       room.send({ t: 'hello', proto: PROTOCOL, name, guestId,
         ...(parsed.writeToken ? { writeToken: Buffer.from(parsed.writeToken).toString('base64url') } : {}) });
-    });
+    };
     ws.addEventListener('message', (event) => {
       // Unsealed text frames are relay controls such as room-closed.
       if (typeof event.data !== 'string') room.receive(event.data);

@@ -6,10 +6,18 @@ envelopes between them and serves the static viewer. It never holds a room
 key: every session payload is AES-256-GCM sealed end to end, and the key
 travels only in the share link's URL fragment.
 
-The sealed host/viewer payload protocol is **3**. Update the Emacs host and
+The sealed host/viewer payload protocol is **4**. Update the Emacs host and
 viewer together. Rebuild the relay binary after viewer changes because the
 assets are embedded; reload browser tabs after updating. Tool presentation
 metadata does not change the relay's content-blind forwarding contract.
+
+Every guest frame is bound to its connection, so a relay that records sealed
+frames cannot replay them. On `peer-joined` the host sends that peer
+`{"t":"challenge","challenge":"<22 base64url chars>"}`; the guest sends
+`hello` only after it and adds `"challenge"` and an increasing `"seq"`,
+starting at 1, to every frame. The host answers a frame without a challenge
+with `error` `protocol mismatch: host speaks 4`, and a stale challenge or a
+`seq` at or below the last accepted with a `notice`; neither is acted on.
 
 Viewer destination links keep content selectors after the bearer fragment,
 for example `#ROOM.SECRET?artifact=STORE-ID&version=2`. The viewer imports the
