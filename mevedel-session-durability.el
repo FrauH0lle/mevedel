@@ -278,42 +278,63 @@ without this evidence cannot prove PID reuse and keep live holders active."
                  identity))
         (error nil)))))
 
-(defvar mevedel-session-durability--host
-  (let ((default-directory "/"))
-    (ignore-errors
-      (let ((namespace (file-symlink-p "/proc/self/ns/pid"))
-            (read (lambda (file)
-                    (with-temp-buffer
-                      (insert-file-contents file)
-                      (string-trim (buffer-string))))))
-        (and (stringp namespace)
-             (format "%s/%s/%s"
-                     (funcall read "/proc/sys/kernel/random/boot_id")
-                     (funcall read "/etc/machine-id")
-                     namespace)))))
-  "This Emacs host's boot, machine and PID-namespace identity, or nil.
-Only within one such identity can a recorded PID be checked for liveness.")
+(defvar mevedel-session-durability--host-cache nil
+  "Cons of the PID that computed `mevedel-session-durability--host' and its value.
+Keyed by PID so a dumped or forked image never reuses its creator's identity.")
+
+(defun mevedel-session-durability--host ()
+  "Return this Emacs host's boot, machine and PID-namespace identity, or nil.
+Only within one such identity can a recorded PID be checked for liveness."
+  (unless (eql (car mevedel-session-durability--host-cache) (emacs-pid))
+    (setq mevedel-session-durability--host-cache
+          (cons (emacs-pid)
+                (let ((default-directory "/"))
+                  (ignore-errors
+                    (let ((namespace (file-symlink-p "/proc/self/ns/pid"))
+                          (read (lambda (file)
+                                  (with-temp-buffer
+                                    (insert-file-contents file)
+                                    (string-trim (buffer-string))))))
+                      (and (stringp namespace)
+                           (format "%s/%s/%s"
+                                   (funcall read "/proc/sys/kernel/random/boot_id")
+                                   (funcall read "/etc/machine-id")
+                                   namespace))))))))
+  (cdr mevedel-session-durability--host-cache))
 
 (defun mevedel-session-durability--process-holder (pid)
-  "Return PID's host-scoped holder identity, or nil when it is unprovable."
-  (when-let* ((host mevedel-session-durability--host)
+  "Return this user's PID as a host-scoped holder identity, or nil.
+Nil means the identity is unprovable on this host."
+  (when-let* ((host (mevedel-session-durability--host))
               (process (mevedel-session-durability--pid-identity pid)))
-    (list :host host :pid pid :process process)))
+    (list :host host :uid (user-uid) :pid pid :process process)))
 
-(defvar mevedel-session-durability--holder
-  (mevedel-session-durability--process-holder (emacs-pid))
-  "This client's holder identity, recorded in every lease it writes.")
+(defvar mevedel-session-durability--holder-cache nil
+  "Cons of this Emacs's PID and its holder identity.")
+
+(defun mevedel-session-durability--holder ()
+  "Return this client's holder identity, recorded in every lease it writes."
+  (unless (eql (car mevedel-session-durability--holder-cache) (emacs-pid))
+    (setq mevedel-session-durability--holder-cache
+          (cons (emacs-pid)
+                (mevedel-session-durability--process-holder (emacs-pid)))))
+  (cdr mevedel-session-durability--holder-cache))
 
 (defun mevedel-session-durability--holder-dead-p (lease)
   "Return non-nil when LEASE's holder process provably died on this host.
-The record must name this host's boot, machine and PID namespace, and its
-PID must be gone or reused.  Missing, foreign or unreadable evidence is
-uncertain liveness and returns nil, so such leases wait for expiry."
+The record must name this host's boot, machine and PID namespace and this
+user, and its PID must be gone or reused.  The process list is complete only
+for one's own processes: `hidepid' or `ProtectProc' hide other users'.
+Missing, foreign or unreadable evidence is uncertain liveness and returns
+nil, so such leases wait for expiry."
   (let* ((holder (plist-get lease :holder))
-         (pid (and (proper-list-p holder) (plist-get holder :pid)))
-         (process (and (proper-list-p holder) (plist-get holder :process))))
-    (and mevedel-session-durability--host
-         (equal mevedel-session-durability--host (plist-get holder :host))
+         (holder (and (proper-list-p holder) holder))
+         (pid (plist-get holder :pid))
+         (process (plist-get holder :process))
+         (host (mevedel-session-durability--host)))
+    (and host
+         (equal host (plist-get holder :host))
+         (eql (user-uid) (plist-get holder :uid))
          (natnump pid) (> pid 0)
          (stringp process)
          (or (not (mevedel-session-durability--pid-alive-p pid))
@@ -606,7 +627,7 @@ defaults to GENERATION."
         ;; several machines, so name the holder in terms the user shares.
         :host (mevedel-session-durability--client-host)
         ;; Lets a later client on this host reclaim a crashed holder at once.
-        :holder mevedel-session-durability--holder
+        :holder (mevedel-session-durability--holder)
         :renewed-at now
         :expires-at (+ now mevedel-session-lease-seconds)
         :buffer buffer-name))

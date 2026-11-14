@@ -713,10 +713,12 @@ holder identity is recorded by an owner lease acquired before the call."
                    (process-id process))
             (ert-skip "No provable process identity on this host"))
           (let ((mevedel-session-durability--client-id (make-string 64 ?a))
-                (mevedel-session-durability--holder
-                 (mevedel-session-durability--process-holder
-                  (process-id process))))
-            (should (mevedel-session-durability-lease-acquire root "*owner*")))
+                (holder (mevedel-session-durability--process-holder
+                         (process-id process))))
+            ;; The real writer records the child as this lease's holder.
+            (cl-letf (((symbol-function 'mevedel-session-durability--holder)
+                       (lambda () holder)))
+              (should (mevedel-session-durability-lease-acquire root "*owner*"))))
           (funcall function root process))
       (when (process-live-p process) (delete-process process))
       (delete-directory root t))))
@@ -774,8 +776,24 @@ holder identity is recorded by an owner lease acquired before the call."
   (test-mevedel-session-durability--with-holder
    (lambda (root process)
      (test-mevedel-session-durability--kill-holder process)
-     (let ((mevedel-session-durability--client-id (make-string 64 ?b))
-           (mevedel-session-durability--host "other-boot/other-machine/pid:[1]"))
+     (let ((mevedel-session-durability--client-id (make-string 64 ?b)))
+       (cl-letf (((symbol-function 'mevedel-session-durability--host)
+                  (lambda () "other-boot/other-machine/pid:[1]")))
+         (should-not (mevedel-session-durability-lease-acquire root "*new*"))))))
+
+  :doc "never reclaims a dead holder recorded by another user"
+  ;; Hidden /proc entries (hidepid, ProtectProc) make other users' live
+  ;; processes look absent, so only the holder's own user may judge it.
+  (test-mevedel-session-durability--with-holder
+   (lambda (root process)
+     (test-mevedel-session-durability--kill-holder process)
+     (let* ((directory (mevedel-session-durability--lease-path root))
+            (head (mevedel-session-durability--lease-head directory)))
+       (mevedel-session-durability--write-generation
+        directory (plist-put (copy-sequence head) :holder
+                             (plist-put (copy-sequence (plist-get head :holder))
+                                        :uid (1+ (user-uid))))))
+     (let ((mevedel-session-durability--client-id (make-string 64 ?b)))
        (should-not (mevedel-session-durability-lease-acquire root "*new*")))))
 
   :doc "never reclaims when the holder's liveness is uncertain"
@@ -792,6 +810,19 @@ holder identity is recorded by an owner lease acquired before the call."
          (mevedel-session-durability--write-generation
           directory (plist-put (copy-sequence head) :holder nil))
          (should-not (mevedel-session-durability-lease-acquire root "*new*")))))))
+
+(mevedel-deftest mevedel-session-durability--holder
+  (:doc "never reuses a holder computed by another process, such as a dump")
+  (let ((mevedel-session-durability--holder-cache
+         (cons (1+ (emacs-pid)) (list :pid (1+ (emacs-pid)))))
+        (mevedel-session-durability--host-cache
+         (cons (1+ (emacs-pid)) "dumping-boot/dumping-machine/pid:[1]")))
+    (let ((holder (mevedel-session-durability--holder)))
+      (unless holder (ert-skip "No provable process identity on this host"))
+      (should (eql (emacs-pid) (plist-get holder :pid)))
+      (should (eql (user-uid) (plist-get holder :uid)))
+      (should-not (equal "dumping-boot/dumping-machine/pid:[1]"
+                         (plist-get holder :host))))))
 
 (mevedel-deftest mevedel-session-durability--abandoned-head-p ()
   ,test

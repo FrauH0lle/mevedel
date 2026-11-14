@@ -1169,11 +1169,15 @@ meaningless; the exclusive creation of the next generation still refuses the
 reclaim when another client claimed the lease meanwhile.  Taking over another
 client's expired lease still requires explicit confirmation, with one
 exception: every lease record names its holder by host identity (boot ID,
-machine ID and PID namespace), PID and Linux process start ticks, and a
-client on that same host reclaims an `active` or `claiming` lease at once,
-expired or not, when that PID is gone or reused.  A record from another host,
-an unavailable process list or missing holder evidence is uncertain liveness
-and waits for expiry.  A `publishing` lease never qualifies, because the dead
+machine ID and PID namespace), user ID, PID and Linux process start ticks,
+computed by the writing process itself, and a client of the same user on
+that same host reclaims an `active` or `claiming` lease at once, expired or
+not, when that PID is gone or reused.  This assumes the process list is
+complete for one's own user; `hidepid` and `ProtectProc` hide only other
+users' processes, so another user's holder never qualifies.  A record from
+another host, an unavailable process list or missing holder evidence is
+uncertain liveness and waits for expiry.  A `publishing` lease never
+qualifies, because the dead
 holder's child writer may still run.  Journal recovery and cleanup assessment
 treat such a lease as abandoned and expired respectively.  The renewal
 heartbeat performs that reclaim itself: a machine that suspends longer than
