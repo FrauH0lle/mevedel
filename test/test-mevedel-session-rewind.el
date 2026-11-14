@@ -16,6 +16,7 @@
 (require 'mevedel-session-rewind)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-persistence)
+(require 'mevedel-session-publication)
 (require 'mevedel-session-recovery)
 
 
@@ -1378,203 +1379,6 @@ them are set, so the committing save keeps them."
       (mevedel-workspace-clear-registry))))
 
 
-(mevedel-deftest mevedel-session-rewind--commit-rewind ()
-  ,test
-  (test)
-  :doc "post-publication failure rolls back files, transcript, sidecar, and session state"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-session-persistence--make-tempdir-workspace)
-    (unwind-protect
-        (let* ((session (mevedel-session-create "main" workspace))
-               (buf (generate-new-buffer "*test-rewind-rollback*"))
-               (path-a (file-name-concat tempdir "a.el"))
-               (path-b (file-name-concat tempdir "b.el"))
-               target)
-          (unwind-protect
-              (with-current-buffer buf
-                (org-mode)
-                (setq-local mevedel--session session)
-                (insert "First prompt\n")
-                (insert (propertize "First reply.\n" 'gptel 'response))
-                (setf (mevedel-session-turn-count session) 1)
-                (mevedel-session-artifacts-save session buf t)
-                (setq target
-                      (copy-sequence
-                       (cdar
-                        (mevedel-session-rewind--prompt-candidates
-                         session))))
-                (let ((backup-a
-                       (mevedel-session-artifacts--file-history-backup-name "old-a"))
-                      (backup-b
-                       (mevedel-session-artifacts--file-history-backup-name "old-b")))
-                  (mevedel-session-artifacts--file-history-write-backup
-                   (mevedel-session-save-path session) backup-a "old-a")
-                  (mevedel-session-artifacts--file-history-write-backup
-                   (mevedel-session-save-path session) backup-b "old-b")
-                  (setf (mevedel-session-file-snapshots session)
-                        `((1 . ((,path-a . (:backup-name ,backup-a
-                                          :version 1))
-                                (,path-b . (:backup-name ,backup-b
-                                          :version 1)))))))
-                (goto-char (point-max))
-                (insert "Second prompt\n")
-                (insert (propertize "Second reply.\n" 'gptel 'response))
-                (setf (mevedel-session-turn-count session) 2)
-                (mevedel-session-artifacts-save session buf t)
-                (write-region "new-a" nil path-a nil 'silent)
-                (write-region "new-b" nil path-b nil 'silent)
-                (mevedel-session-codec-write
-                 (mevedel-session-artifacts-sidecar-path
-                  (mevedel-session-save-path session))
-                 (mevedel-session-artifacts-build-sidecar session buf))
-                (let* ((plan
-                        (mevedel-session-rewind-restore-plan session 1 t))
-                       (before-buffer (buffer-string))
-                       (before-state
-                        (mevedel-session-codec-serialize session))
-                       (sidecar-path
-                        (mevedel-session-artifacts-sidecar-path
-                         (mevedel-session-save-path session)))
-                       (before-sidecar
-                        (mevedel-session-artifacts--file-text sidecar-path)))
-                  (cl-letf*
-                      ((install
-                        (symbol-function
-                         'mevedel-session-rewind--install-rewind-buffer))
-                       ((symbol-function
-                         'mevedel-session-rewind--install-rewind-buffer)
-                        (lambda (&rest args)
-                          (apply install args)
-                          (error "Injected publication failure"))))
-                    (should-error
-                     (mevedel-session-rewind--commit-rewind
-                      session buf target plan)))
-                  (should (equal before-buffer (buffer-string)))
-                  (should (equal before-state
-                                 (mevedel-session-codec-serialize
-                                  session)))
-                  (should (equal before-sidecar
-                                 (mevedel-session-artifacts--file-text
-                                  sidecar-path)))
-                  (should
-                   (equal "new-a"
-                          (mevedel-session-artifacts--file-text path-a)))
-                  (should
-                   (equal "new-b"
-                          (mevedel-session-artifacts--file-text path-b)))))
-            (test-mevedel-session-persistence--release-and-kill
-             buf session)))
-      (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry)))
-  :doc "pre-restore failure does not overwrite a concurrent file edit"
-  (let* ((tempdir
-          (file-name-as-directory
-           (make-temp-file "mevedel-rewind-pre-restore-" t)))
-         (save-path (file-name-as-directory
-                     (file-name-concat tempdir "session")))
-         (path (file-name-concat tempdir "tracked.el"))
-         (workspace
-          (mevedel-workspace--create
-           :type 'file :id "rewind" :root tempdir :name "rewind"))
-         (session
-          (mevedel-session--create
-           :name "main"
-           :workspace workspace
-           :save-path save-path
-           :current-segment 1
-           :turn-count 1))
-         (buffer (generate-new-buffer " *rewind-pre-restore*"))
-         (target '(:segment 1 :turn 1 :cum-turn 1
-                   :fork-point-id "point"))
-         (plan (list (list :path path :action 'overwrite))))
-    (unwind-protect
-        (progn
-          (make-directory save-path t)
-          (write-region "before" nil path nil 'silent)
-          (with-current-buffer buffer
-            (insert "transcript"))
-          (cl-letf
-              (((symbol-function
-                 'mevedel-session-rewind--rewind-candidate)
-                (lambda (&rest _) (copy-sequence session)))
-               ((symbol-function
-                 'mevedel-session-rewind--stage-rewind)
-                (lambda (&rest _)
-                  (write-region "concurrent" nil path nil 'silent)
-                  (error "Injected staging failure"))))
-            (should-error
-             (mevedel-session-rewind--commit-rewind
-              session buffer target plan)))
-          (should
-           (equal "concurrent"
-                  (mevedel-session-artifacts--file-text path))))
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer))
-      (delete-directory tempdir t)))
-  :doc "boundary after rechecks with the post-turn plan instead of a false captured-files error"
-  (let* ((tempdir
-          (file-name-as-directory
-           (make-temp-file "mevedel-rewind-boundary-after-" t)))
-         (save-path (file-name-as-directory
-                     (file-name-concat tempdir "session")))
-         (path (file-name-concat tempdir "tracked.el"))
-         (workspace
-          (mevedel-workspace--create
-           :type 'file :id "rewind" :root tempdir :name "rewind"))
-         (session
-          (mevedel-session--create
-           :name "main"
-           :workspace workspace
-           :save-path save-path
-           :current-segment 1
-           :turn-count 1))
-         (buffer (generate-new-buffer " *rewind-boundary-after*"))
-         (target '(:segment 1 :turn 1 :cum-turn 1
-                   :fork-point-id "point")))
-    (unwind-protect
-        (progn
-          (make-directory save-path t)
-          (write-region "external edit" nil path nil 'silent)
-          (let ((pre (mevedel-session-artifacts--file-history-backup-name "pre-turn"))
-                (post (mevedel-session-artifacts--file-history-backup-name "post-turn")))
-            (mevedel-session-artifacts--file-history-write-backup
-             save-path pre "pre-turn")
-            (mevedel-session-artifacts--file-history-write-backup
-             save-path post "post-turn")
-            (setf (mevedel-session-file-snapshots session)
-                  `((1 . ((,path . (:backup-name ,post
-                                   :pre-backup-name ,pre
-                                   :version 1)))))))
-          (with-current-buffer buffer
-            (insert "transcript"))
-          (let ((plan (mevedel-session-rewind-restore-plan session 1)))
-            (should (= 1 (length plan)))
-            (cl-letf
-                (((symbol-function
-                   'mevedel-session-rewind--rewind-candidate)
-                  (lambda (&rest _) (copy-sequence session)))
-                 ((symbol-function
-                   'mevedel-session-rewind--stage-rewind)
-                  (lambda (_session _candidate _target staging-path
-                           _staging-buffer)
-                    (make-directory staging-path t)))
-                 ((symbol-function
-                   'mevedel-session-rewind--install-rewind-buffer)
-                  #'ignore)
-                 ((symbol-function
-                   'mevedel-session-rewind--refresh-restored-buffers)
-                  #'ignore))
-              (should
-               (mevedel-session-rewind--commit-rewind
-                session buffer target plan 'after)))
-            (should
-             (equal "post-turn"
-                    (mevedel-session-artifacts--file-text path)))))
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer))
-      (delete-directory tempdir t))))
-
-
 (mevedel-deftest mevedel-session-rewind-materialize-publication ()
   ,test
   (test)
@@ -1930,7 +1734,109 @@ them are set, so the committing save keeps them."
         (kill-buffer buffer))
       (when (file-directory-p local-root)
         (delete-directory local-root t))
-      (mevedel-workspace-clear-registry))))
+      (mevedel-workspace-clear-registry)))
+  :doc "pre-restore failure preserves a concurrent edit only after staging is reached"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let* ((session (mevedel-session-create "main" workspace))
+           (buffer (generate-new-buffer " *rewind-pre-restore*"))
+           (path (file-name-concat tempdir "tracked.el")))
+      (unwind-protect
+          (with-current-buffer buffer
+            (org-mode)
+            (setq-local mevedel--session session)
+            (insert "First prompt\n")
+            (insert (propertize "First reply.\n" 'gptel 'response))
+            (setf (mevedel-session-turn-count session) 1)
+            (mevedel-session-artifacts-save session buffer t)
+            (let* ((target (copy-sequence
+                            (cdar (mevedel-session-rewind--prompt-candidates
+                                   session))))
+                   (plan (list (list :path path :action 'overwrite)))
+                   (head (plist-get (mevedel-session-publication session) :head))
+                   (text (buffer-string))
+                   (state (mevedel-session-codec-serialize session))
+                   (publication (mevedel-session-publication session))
+                   (read-publication
+                    (symbol-function 'mevedel-session-publication-read))
+                   staging-reached unpublished)
+              (cl-letf
+                  (((symbol-function 'mevedel-session-publication-read)
+                    (lambda (&rest args)
+                      (unless unpublished (apply read-publication args))))
+                   ((symbol-function 'mevedel-session-rewind--stage-rewind)
+                    (lambda (&rest _)
+                      (setq staging-reached t)
+                      (write-region "concurrent" nil path nil 'silent)
+                      (error "Injected staging failure"))))
+                ;; An unpublished fixture's early error is not this regression.
+                (setq unpublished t)
+                (setf (mevedel-session-publication session) nil)
+                (write-region "before" nil path nil 'silent)
+                (let ((err (should-error
+                            (mevedel-session-rewind--commit-remote-rewind
+                             session buffer target plan))))
+                  (should (string-match-p "requires a committed publication"
+                                          (error-message-string err))))
+                (should-not staging-reached)
+                (should (equal "before" (mevedel-session-artifacts--file-text path)))
+                (setq unpublished nil)
+                (setf (mevedel-session-publication session) publication)
+                (let ((err (should-error
+                            (mevedel-session-rewind--commit-remote-rewind
+                             session buffer target plan))))
+                  (should (equal "Injected staging failure"
+                                 (error-message-string err)))))
+              (should staging-reached)
+              (should (equal "concurrent" (mevedel-session-artifacts--file-text path)))
+              (should (equal head (plist-get (mevedel-session-publication session)
+                                             :head)))
+              (should (equal text (buffer-string)))
+              (should (equal state (mevedel-session-codec-serialize session)))))
+        (test-mevedel-session-persistence--release-and-kill buffer session)
+        (delete-directory tempdir t)
+        (mevedel-workspace-clear-registry))))
+  :doc "boundary after rechecks the published post-turn plan instead of the pre-turn plan"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let* ((session (mevedel-session-create "main" workspace))
+           (buffer (generate-new-buffer " *rewind-boundary-after*"))
+           (path (file-name-concat tempdir "tracked.el"))
+           (pre (mevedel-session-artifacts--file-history-backup-name "pre-turn"))
+           (post (mevedel-session-artifacts--file-history-backup-name "post-turn")))
+      (unwind-protect
+          (with-current-buffer buffer
+            (org-mode)
+            (setq-local mevedel--session session
+                        gptel-backend (test-mevedel-session-persistence--agent-backend)
+                        gptel-model 'test-model)
+            (gptel-mode 1)
+            (insert "First prompt\n")
+            (insert (propertize "First reply.\n" 'gptel 'response))
+            (setf (mevedel-session-turn-count session) 1)
+            (mevedel-session-artifacts-save session buffer t)
+            (setf (mevedel-session-file-snapshots session)
+                  `((1 . ((,path . (:backup-name ,post :pre-backup-name ,pre
+                                   :version 1))))))
+            (test-mevedel-rewind--publish-backups
+             session pre "pre-turn" post "post-turn")
+            (write-region "external edit" nil path nil 'silent)
+            (let ((target (copy-sequence
+                           (cdar (mevedel-session-rewind--prompt-candidates
+                                  session))))
+                  (plan (mevedel-session-rewind-restore-plan session 1))
+                  (head (plist-get (mevedel-session-publication session) :head)))
+              (should (plist-get target :fork-point-id))
+              (should (= 1 (length plan)))
+              (should (mevedel-session-rewind--commit-remote-rewind
+                       session buffer target plan 'after))
+              (should (equal "post-turn" (mevedel-session-artifacts--file-text path)))
+              (should (= 1 (mevedel-session-turn-count session)))
+              (should-not
+               (equal head (plist-get (mevedel-session-publication session) :head)))))
+        (test-mevedel-session-persistence--release-and-kill buffer session)
+        (delete-directory tempdir t)
+        (mevedel-workspace-clear-registry)))))
 
 
 (mevedel-deftest mevedel-session-rewind--rewind-confirmation ()

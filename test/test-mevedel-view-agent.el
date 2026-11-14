@@ -13,6 +13,7 @@
           "helpers"))
 (require 'mevedel-agent-control)
 (require 'mevedel-agents)
+(require 'mevedel-session-artifacts)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-tool-ui)

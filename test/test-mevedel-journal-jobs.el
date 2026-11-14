@@ -78,6 +78,7 @@
             (path (file-name-concat (mevedel-journal-capture--directory workspace (plist-get capture :id)) "capture.json"))
             (record (json-parse-string (mevedel-session-control-fs-read-file path)))
             (claim (mevedel-journal-claim-acquire (mevedel-journal-process--attempts workspace capture) 120)))
+       (puthash "source-kind" "client" record)
        (puthash "source-client" (make-string 64 ?0) record)
        (write-region (json-serialize record) nil path nil 'silent)
        (should (mevedel-journal-claim-settle claim 'completed

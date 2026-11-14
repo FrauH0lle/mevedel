@@ -21,6 +21,7 @@
 (require 'mevedel-workspace)
 (require 'mevedel-permission-rules)
 (require 'mevedel-session-artifacts)
+(require 'mevedel-session-durability)
 (require 'mevedel-instruction-test-support
          (file-name-concat
           (file-name-directory

@@ -21,7 +21,10 @@
           "mevedel-session-test-support"))
 
 (require 'mevedel-compact-evidence)
+(require 'mevedel-collaboration)
 (require 'mevedel-journal-evidence)
+(require 'mevedel-session-artifacts)
+(require 'mevedel-session-durability)
 
 (mevedel-deftest mevedel-session-artifacts--restore-segment-file ()
   ,test

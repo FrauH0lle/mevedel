@@ -15,6 +15,7 @@
 (require 'mevedel-agents)
 (require 'mevedel-compact-evidence)
 (require 'mevedel-compact-target)
+(require 'mevedel-session-artifacts)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-tools)

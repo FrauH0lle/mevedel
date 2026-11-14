@@ -10,6 +10,8 @@
 (require 'mevedel-execution)
 (require 'mevedel-execution-scheduler)
 (require 'mevedel-sandbox)
+(require 'mevedel-session-artifacts)
+(require 'mevedel-session-durability)
 (require 'mevedel-structs)
 (require 'helpers
          (file-name-concat

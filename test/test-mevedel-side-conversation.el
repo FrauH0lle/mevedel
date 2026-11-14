@@ -25,6 +25,10 @@
 (require 'mevedel)
 (require 'mevedel-permission-rules)
 (require 'mevedel-side-conversation)
+(require 'mevedel-session-artifacts)
+(require 'mevedel-session-control-transfer)
+(require 'mevedel-session-durability)
+(require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-utilities)
 (require 'mevedel-view)
@@ -848,6 +852,7 @@
                           mevedel--session session)
               (insert "*** Parent prompt\n"
                       (propertize "Parent answer\n" 'gptel 'response)))
+            (mevedel-session-control-transfer-register-root-buffer session data-buf)
             (with-current-buffer view-buf
               (setq-local mevedel--session session)
               (goto-char (mevedel-view--input-start))
@@ -883,7 +888,15 @@
                               (mevedel-session-audit-session
                                mevedel--session)))
                   (let ((events
-                         (mevedel-session-telemetry-pending session)))
+                         (append
+                          (mevedel-session-telemetry-pending session)
+                          (with-temp-buffer
+                            (insert-file-contents (mevedel-telemetry-path session))
+                            (let (entries)
+                              (condition-case nil
+                                  (while t (push (read (current-buffer)) entries))
+                                (end-of-file))
+                              (nreverse entries))))))
                     (dolist (event '(tool-received tool-finished))
                       (should
                        (cl-find event events
@@ -906,7 +919,31 @@
                   (mevedel-side-conversation--handle-terminal fsm)
                   (should-not mevedel--current-request)
                   (should (= 1 (mevedel-session-turn-count
-                                mevedel--session))))))))
+                                mevedel--session)))
+                  (unwind-protect
+                      (progn
+                        (setf (mevedel-session-pending-publication session) '(:batches nil))
+                        (should-error (mevedel-session-artifacts-assert-mutation-authority
+                                       mevedel--session) :type 'user-error)
+                        (should-error (mevedel-session-artifacts-assert-new-mutation-authority
+                                       mevedel--session) :type 'user-error))
+                    (setf (mevedel-session-pending-publication session) nil))
+                  (unwind-protect
+                      (progn
+                        (setf (mevedel-session-control-transfer session) '(:state quiescing))
+                        (should-error (mevedel-session-artifacts-assert-new-mutation-authority
+                                       mevedel--session) :type 'user-error))
+                    (setf (mevedel-session-control-transfer session) nil))
+                  (mevedel-session-persistence-lock-release
+                   (mevedel-session-save-path session) session)
+                  (let ((mevedel-session-durability--client-id (make-string 64 ?b)))
+                    (should (mevedel-session-durability-lease-acquire
+                             (mevedel-session-save-path session) "*foreign parent owner*")))
+                  (should-error (mevedel-session-artifacts-assert-mutation-authority
+                                 mevedel--session) :type 'user-error)
+                  (should-error (mevedel-session-artifacts-assert-new-mutation-authority
+                                 mevedel--session) :type 'user-error)
+                  (should-not (mevedel-session-save-path mevedel--session)))))))
       (delete-directory root t)))
   :doc "applies the frozen active-request deny to fresh side file mentions"
   (let* ((root (make-temp-file "mevedel-btw-file-deny-" t))

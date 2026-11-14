@@ -556,11 +556,12 @@
          (root-b (concat "/mevedelmock:plugin-b:" root))
          (workspace-a (mevedel-plugins-test--workspace root-a))
          (workspace-b (mevedel-plugins-test--workspace root-b))
-         (session-a (mevedel-session-create "main" workspace-a root-a))
+         session-a
          (mevedel-session-durability--disclosed-targets
           (make-hash-table :test #'equal)))
     (unwind-protect
         (mevedel-test--with-local-shell-tramp '("plugin-a" "plugin-b")
+          (setq session-a (mevedel-session-create "main" workspace-a root-a))
           (unwind-protect
               (let* ((plugin-root
                       (file-name-concat

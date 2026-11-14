@@ -13,6 +13,9 @@
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-collaboration-artifact)
 (require 'mevedel-session-artifacts)
+(require 'mevedel-session-persistence)
+(require 'mevedel-session-publication)
+(require 'mevedel-workspace-identity)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-ptc)
@@ -569,8 +572,9 @@ The fixtures write segments directly instead of publishing generations."
 (mevedel-deftest mevedel-collaboration-execution-dedup-lazy-archive-reads
   (:doc "text-only publishes avoid archive I/O and source changes invalidate memoized ids")
   (let* ((directory (make-temp-file "mevedel-dedup-reads-" t))
-         (session (mevedel-session--create :name "dedup-reads" :save-path directory
-                                          :authority-mode 'pid-lock :current-segment 2))
+         (workspace (mevedel-workspace--create
+                     :type 'file :id directory :root directory :name "dedup"))
+         (session (mevedel-session-create "dedup-reads" workspace))
          (data (generate-new-buffer " *dedup read live*"))
          (reloaded (generate-new-buffer " *dedup read reloaded*"))
          (path (mevedel-session-artifacts-segment-path directory 1))
@@ -583,11 +587,17 @@ The fixtures write segments directly instead of publishing generations."
          (reads 0))
     (unwind-protect
         (progn
-          (with-temp-file path (insert mailbox))
+          (mevedel-workspace-identity-ensure directory)
+          (setf (mevedel-session-save-path session) directory
+                (mevedel-session-current-segment session) 2)
           (with-current-buffer data
             (delay-mode-hooks (org-mode))
             (setq-local mevedel--session session)
             (insert "ordinary streamed text\n"))
+          (mevedel-session-artifacts-assert-mutation-authority session data)
+          (mevedel-session-publication-publish
+           session (list (list :path path :content mailbox)))
+          (mevedel-session-artifacts-save session data)
           (with-current-buffer reloaded
             (delay-mode-hooks (org-mode))
             (setq-local mevedel--session session)
@@ -619,7 +629,9 @@ The fixtures write segments directly instead of publishing generations."
             (should (= 2 reads))
             ;; Replaced segment evidence changes the source fingerprint; the
             ;; live record is no longer suppressed by stale archive state.
-            (with-temp-file path (insert "no execution remains\n"))
+            (mevedel-session-publication-publish
+             session (list (list :path path :content "no execution remains\n")))
+            (mevedel-session-artifacts-save session data)
             (should (cl-find "execution"
                              (mevedel-collaboration--canonical-records data)
                              :key (lambda (record) (plist-get record :kind))
@@ -627,10 +639,11 @@ The fixtures write segments directly instead of publishing generations."
             (should (= 3 reads))
             ;; Compaction adds a new earlier source.  It invalidates the
             ;; memo even while the live text and execution ID stay the same.
-            (with-temp-file (mevedel-session-artifacts-segment-path
-                             directory 2)
-              (insert mailbox))
             (setf (mevedel-session-current-segment session) 3)
+            (mevedel-session-publication-publish
+             session (list (list :path (mevedel-session-artifacts-segment-path directory 2)
+                                 :content mailbox)))
+            (mevedel-session-artifacts-save session data)
             (should-not (cl-find "execution"
                                  (mevedel-collaboration--canonical-records data)
                                  :key (lambda (record) (plist-get record :kind))
@@ -640,6 +653,7 @@ The fixtures write segments directly instead of publishing generations."
             (should (= 5 reads))))
       (kill-buffer data)
       (kill-buffer reloaded)
+      (mevedel-session-persistence-lock-release directory session)
       (delete-directory directory t))))
 
 ;;; test-mevedel-collaboration-history.el ends here

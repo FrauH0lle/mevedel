@@ -46,6 +46,13 @@
 ;;
 ;;; Request lifecycle
 
+(defun test-mevedel-request--begin-in-memory (session)
+  "Admit SESSION for request-state tests that have no durable conversation."
+  ;; Lease admission is exercised by the real-storage and remote-lease cases.
+  (cl-letf (((symbol-function 'mevedel-session-artifacts-assert-mutation-authority)
+             #'ignore))
+    (mevedel-request-begin session)))
+
 (mevedel-deftest mevedel-current-origin ()
   ,test
   (test)
@@ -153,7 +160,7 @@
     (let* ((ws (mevedel-workspace-get-or-create
                 'file "/tmp/p1/" "/tmp/p1/" "p1"))
            (session (mevedel-session-create "main" ws))
-           (req (mevedel-request-begin session)))
+           (req (test-mevedel-request--begin-in-memory session)))
       (should (mevedel-request-p req))
       (should (eq req mevedel--current-request))
       (should (eq session (mevedel-request-session req)))
@@ -170,7 +177,7 @@
       (cl-letf (((symbol-function
                   'mevedel-session-persistence-start-checkpoints)
                  (lambda () (cl-incf started))))
-        (mevedel-request-begin session))
+        (test-mevedel-request--begin-in-memory session))
       (should (= 1 started))))
 
   :doc "asks to keep the machine awake while the turn runs"
@@ -181,7 +188,7 @@
            (updates 0))
       (cl-letf (((symbol-function 'mevedel-sleep-update)
                  (lambda (&rest _) (cl-incf updates))))
-        (mevedel-request-begin session))
+        (test-mevedel-request--begin-in-memory session))
       (should (= 1 updates))))
 
   :doc "rejects admission while a lost turn is still settling"
@@ -197,7 +204,7 @@
                 'file "/tmp/p1/" "/tmp/p1/" "p1"))
            (session (mevedel-session-create "main" ws)))
       (setf (mevedel-session-turn-count session) 4)
-      (let ((req (mevedel-request-begin session)))
+      (let ((req (test-mevedel-request--begin-in-memory session)))
         (should (= 5 (mevedel-request-turn req)))
         (should (= 4 (mevedel-session-turn-count session))))))
 
@@ -209,7 +216,7 @@
       (mevedel-recovery-report session "request" 'authentication "Failed" nil)
       (mevedel-recovery-report session "agent:a" 'request "Agent a failed" nil)
       (mevedel-session-set-pending-input-failure-paused session t)
-      (mevedel-request-begin session)
+      (test-mevedel-request--begin-in-memory session)
       (should-not (mevedel-session-recovery-issues session))
       (should-not (mevedel-session-pending-input-failure-paused session))
       (mevedel-request-end)
@@ -217,7 +224,7 @@
       (setf (mevedel-session-pending-steering session)
             (list (list :id 1 :input "lost" :state 'failed-turn)))
       (mevedel-session-set-pending-input-failure-paused session t)
-      (mevedel-request-begin session)
+      (test-mevedel-request--begin-in-memory session)
       (should (mevedel-session-pending-input-failure-paused session))
       (mevedel-request-end)
       (setf (mevedel-session-pending-steering session) nil)
@@ -235,7 +242,7 @@
                   (mevedel-agent-invocation--create :path "/root/child"))
       (mevedel-recovery-report session "authentication" 'authentication "Sign in" t)
       (mevedel-recovery-report session "request" 'request "Root failed" nil)
-      (mevedel-request-begin session)
+      (test-mevedel-request--begin-in-memory session)
       (should (= 2 (length (mevedel-session-recovery-issues session))))))
 
   :doc "records agent origin when request begins in a sub-agent buffer"
@@ -248,7 +255,7 @@
       (setf (mevedel-agent-invocation-agent-id inv) "verifier--abc")
       (setf (mevedel-agent-invocation-path inv) "/root/verifier")
       (setq-local mevedel--agent-invocation inv)
-      (let ((req (mevedel-request-begin session)))
+      (let ((req (test-mevedel-request--begin-in-memory session)))
         (should (equal "/root/verifier"
                        (mevedel-request-origin req)))
         (should (eq 'idle
@@ -259,10 +266,10 @@
     (let* ((ws (mevedel-workspace-get-or-create
                 'file "/tmp/p1/" "/tmp/p1/" "p1"))
            (session (mevedel-session-create "main" ws))
-           (req1 (mevedel-request-begin session))
+           (req1 (test-mevedel-request--begin-in-memory session))
            diagnostics
            (req2 (mevedel-test--with-captured-messages diagnostics
-                   (mevedel-request-begin session))))
+                   (test-mevedel-request--begin-in-memory session))))
       (should (string-match-p "stale request found" diagnostics))
       (should (eq req2 mevedel--current-request))
       (should-not (eq req1 req2))))
@@ -273,7 +280,7 @@
                 'file "/tmp/p1/" "/tmp/p1/" "p1"))
            (session (mevedel-session-create "main" ws))
            (outcomes nil)
-           (request (mevedel-request-begin session)))
+           (request (test-mevedel-request--begin-in-memory session)))
       (setf (mevedel-session-permission-queue session)
             (list (list :kind 'generic
                         :tool-name "Read"
@@ -291,7 +298,7 @@
                         (lambda (outcome)
                           (push (cons 'plan outcome) outcomes))))
       (mevedel-test--with-captured-messages nil
-        (mevedel-request-begin session))
+        (test-mevedel-request--begin-in-memory session))
       (should (null (mevedel-session-permission-queue session)))
       (should (null (mevedel-session-pending-plan-approval session)))
       (should (equal '((plan . aborted) (permission . aborted))
@@ -750,7 +757,10 @@
    :after-each
    (mevedel-workspace-clear-registry)
    (setq mevedel--current-request nil))
-  ,test
+  ;; These cases isolate teardown from lease admission (covered above).
+  (cl-letf (((symbol-function 'mevedel-session-artifacts-assert-mutation-authority)
+             #'ignore))
+    ,test)
   (test)
   :doc "clears buffer-local"
   (with-temp-buffer
@@ -998,7 +1008,10 @@
    :after-each
    (mevedel-workspace-clear-registry)
    (setq mevedel--current-request nil))
-  ,test
+  ;; Queue ownership is independent of the persistence admission guard.
+  (cl-letf (((symbol-function 'mevedel-session-artifacts-assert-mutation-authority)
+             #'ignore))
+    ,test)
   (test)
 
   :doc "request end sweeps only request-owned permissions and keeps plan approvals"

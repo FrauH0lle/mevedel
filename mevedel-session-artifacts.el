@@ -1817,10 +1817,11 @@ the new directory when SESSION was moved, nil otherwise."
   "Return non-nil when SESSION may start durable mutation from BUFFER.
 
 A session whose working directory vanished first moves to its workspace root.
-Pending critical publication blocks every session.  A portable project session
+Pending critical publication blocks every session.  A portable session
 also materializes its directory when necessary and must own its live lease.
 Every execution target is incarnation-fenced before mutation.  Shallow
-materialization always uses SESSION's root buffer."
+materialization uses SESSION's root buffer, or its durable audit parent's."
+  (setq session (mevedel-session-audit-target session))
   (mevedel-session-artifacts-recover-working-directory session)
   (let ((buffer
          (or buffer
@@ -1876,6 +1877,7 @@ materialization always uses SESSION's root buffer."
 
 Existing requests and durability settlement continue through the ordinary
 authority gate; callers use this narrower guard at admission boundaries."
+  (setq session (mevedel-session-audit-target session))
   ;; Hydrate the durable transfer state before admitting a restarted owner.
   ;; Do not run the owner-side drain/release path here: admission must only
   ;; observe state, and settlement remains responsible for releasing it.

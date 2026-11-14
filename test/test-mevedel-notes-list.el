@@ -13,6 +13,7 @@
 (require 'mevedel-persistence)
 (require 'mevedel-permission-rules)
 (require 'mevedel-permissions)
+(require 'mevedel-session-persistence)
 (require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
@@ -454,15 +455,20 @@
     (kill-buffer (find-buffer-visiting second))
     (let ((session (mevedel-session-create "denied" workspace))
           (mevedel-permission-rules nil))
-      (mevedel-permission--add-session-rule session (list "Read" :path second :action 'deny))
-      (dolist (text '("@note:2" "@note:{review}"))
-        (let* ((prepared (mevedel-mentions-prepare-user-input text session))
-               (expansion (mevedel-mentions-expand-user-input prepared session))
-               (body (mapconcat (lambda (item) (plist-get item :body))
-                                (plist-get expansion :reminder-items) "\n")))
-          (should (string-match-p "permission denied" body))
-          (should-not (string-match-p "second code" body))
-          (should-not (find-buffer-visiting second))))))
+      (unwind-protect
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (mevedel-permission--add-session-rule session (list "Read" :path second :action 'deny))
+            (dolist (text '("@note:2" "@note:{review}"))
+              (let* ((prepared (mevedel-mentions-prepare-user-input text session))
+                     (expansion (mevedel-mentions-expand-user-input prepared session))
+                     (body (mapconcat (lambda (item) (plist-get item :body))
+                                      (plist-get expansion :reminder-items) "\n")))
+                (should (string-match-p "permission denied" body))
+                (should-not (string-match-p "second code" body))
+                (should-not (find-buffer-visiting second)))))
+        (mevedel-session-persistence-lock-release
+         (mevedel-session-save-path session) session))))
   :doc "unreadable note sources report locally without blocking other tag matches"
   (mevedel-notes-list-test--workspace
     (dolist (file (list first second))

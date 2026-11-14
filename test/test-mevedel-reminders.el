@@ -12,8 +12,10 @@
 (require 'gptel-request)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
+(require 'mevedel-workspace-identity)
 (require 'mevedel-permissions)
 (require 'mevedel-session-persistence)
+(require 'mevedel-session-publication)
 (require 'mevedel-file-state)
 (require 'mevedel-tool-fs)
 (require 'mevedel-compact)
@@ -1632,6 +1634,7 @@ this collapses both shapes to the delivered text."
                             "accepted-20260813-120000.md")))
     (unwind-protect
         (progn
+          (mevedel-workspace-identity-ensure tmp)
           (make-directory (file-name-directory plan-path) t)
           (write-region "# Current draft" nil plan-path nil 'silent)
           (write-region "# Accepted\n\nDo it." nil accepted-path nil 'silent)
@@ -1641,6 +1644,15 @@ this collapses both shapes to the delivered text."
                 '(:path "local/plans/current.md"
                   :accepted-path "local/plans/accepted-20260813-120000.md"
                   :status accepted :accepted-turn 5))
+          (with-temp-buffer
+            (org-mode)
+            (setq-local mevedel--session session)
+            (insert "Plan accepted\n")
+            (mevedel-session-artifacts-assert-mutation-authority session)
+            (mevedel-session-publication-publish
+             session (list (list :path accepted-path :content "# Accepted\n\nDo it.")))
+            (mevedel-session-artifacts-save session (current-buffer)))
+          (write-region "# Poisoned accepted cache" nil accepted-path nil 'silent)
           (should (funcall (mevedel-reminder-trigger r) session))
           (let ((content (funcall (mevedel-reminder-content r) session)))
             (should (string-match-p
@@ -1650,6 +1662,7 @@ this collapses both shapes to the delivered text."
             (should-not (string-match-p "work://plans/current.md" content))
             (should-not (string-match-p (regexp-quote tmp) content))
             (should (string-match-p "# Accepted" content))
+            (should-not (string-match-p "Poisoned" content))
             (should-not (string-match-p "# Current draft" content)))
           ;; An active Goal suppresses this reminder only when it already carries
           ;; the exact accepted plan reference.
@@ -1662,6 +1675,7 @@ this collapses both shapes to the delivered text."
           (setf (mevedel-goal-plan-reference (mevedel-session-goal session))
                 "local/plans/accepted-20260813-120000.md")
           (should-not (funcall (mevedel-reminder-trigger r) session)))
+      (mevedel-session-persistence-lock-release tmp session)
       (delete-directory tmp t)))
 
   :doc "waits until after the acceptance turn before firing"

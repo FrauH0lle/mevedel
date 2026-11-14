@@ -19,7 +19,8 @@ session-owned publication job whose callbacks run across event-loop turns. The
 acknowledgement still means what it meant: it runs once, after the new head is
 authoritative and adopted (success) or after a definitive rollback (failure).
 Until then the records are tentative and hidden, and the producer keeps the
-output it would otherwise have consumed. Remote, file-backed and PID-lock
+output it would otherwise have consumed. Local project and file-workspace
+sessions qualify on the same terms. Remote
 background arrivals share one synchronous commit at the next transport-safe
 timer opportunity. They queue before mutation in the existing preparation gate;
 each producer is acknowledged only after the shared commit succeeds. Arrivals
@@ -104,8 +105,8 @@ retains consumed records in a per-conversation ledger and merges them back into
 ordinary sidecars until that receiving transcript commits. Transcript writers
 capture an opaque candidate at byte freeze; only actual head adoption installs
 it, including retry. A root checkpoint cannot retire an agent's consumption,
-and arrivals or consumption after capture remain pending. File sessions write
-the transcript before the matching sidecar and install after that sidecar write.
+and arrivals or consumption after capture remain pending. Project and
+file-workspace sessions install the candidate only after the matching head commits.
 Settled ToolCall audit rows use the same per-conversation deferred-removal rule.
 
 Queued sidecars are reprojected through the current committed owner before
@@ -186,7 +187,7 @@ producer acknowledgements and private carrier cleanup catch cancellation at
 their asynchronous boundary so a quit cannot strand a job or its successor.
 The synchronous agent writer drains before checkpoint exclusion and capture,
 not after freezing an overlapping job's tentative state.
-Cold, remote and file-backed checkpoints remain synchronous.
+Cold and remote checkpoints remain synchronous.
 [Sessions](../sessions.md) owns the persistence and recovery contract.
 
 Preparation shares disposable derived caches between the ordinary synchronous
@@ -235,6 +236,12 @@ transactional journal.
 
 All revisions belong to ADR 0112:
 
+- **2026-11-14 shared portable authority:** file-workspace sessions now use
+  the project-session lease and publication protocol. Materialized local file
+  sessions therefore qualify for the same asynchronous mailbox and automatic
+  transcript checkpoint jobs. Cold materialization and remote checkpoints stay
+  synchronous. The earlier file/PID exclusions below describe the measured
+  implementations at those dates, not the current scope.
 - **2026-10-31 finishing ownership correction:** review reproduced a mailbox
   wake during the first job's cleanup with a successor still queued. Clearing
   the job and active-publication slots before acknowledgement did not mean the

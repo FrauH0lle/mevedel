@@ -405,8 +405,9 @@ the new copy.  The caller must keep SOURCE closed throughout conversion."
 
 (defun mevedel-migrate-session--lease-file (directory data)
   "Publish converted PID-lock file session DIRECTORY as one lease generation.
-DATA is its converted sidecar.  Every plain session file becomes a published
-artifact and is removed; hidden control state and diagnostic logs stay plain.
+DATA is its converted sidecar.  Immutable-only artifacts lose their fixed
+copies; ordinary resources retain them.  Execution spools, hidden control
+state and diagnostic logs stay outside the publication.
 The lease is released afterwards, as a closed session's is."
   (let* ((directory (file-name-as-directory directory))
          (files (cl-remove-if
@@ -415,6 +416,7 @@ The lease is released afterwards, as a closed session's is."
                      (or (cl-some (lambda (part) (string-prefix-p "." part))
                                   (split-string relative "/"))
                          (string-suffix-p "-log.el" relative)
+                         (string-prefix-p "tool-results/executions/" relative)
                          (equal relative "session.meta.el"))))
                  (directory-files-recursively directory "." nil)))
          (workspace (mevedel-workspace--create
@@ -439,7 +441,10 @@ The lease is released afterwards, as a closed session's is."
                       :content (mevedel-session-artifacts-printed-value data)
                       :commit-marker t))))
       (mevedel-session-durability-lease-release directory owner))
-    (mapc #'delete-file files)))
+    (dolist (file files)
+      (unless (mevedel-session-publication--fixed-artifact-p
+               (list :logical (file-relative-name file directory)))
+        (delete-file file)))))
 
 (defconst mevedel-migrate-artifacts--comments-prefix
   "artifacts/shared-editing/artifact-comments/"

@@ -414,6 +414,7 @@
        (mevedel-test-journal-capture--turn session buffer "Second request" "Second result")
        (mevedel-journal-capture-seal session buffer 'session-end)
        (let ((record (json-parse-string (mevedel-session-control-fs-read-file path))))
+         (puthash "source-kind" "client" record)
          (puthash "source-client" (make-string 64 ?0) record)
          (puthash "created" "2000-01-01T00:00:00Z" (gethash "metadata" record))
          (write-region (json-serialize record) nil path nil 'silent))

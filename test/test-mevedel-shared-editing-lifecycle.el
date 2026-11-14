@@ -44,7 +44,9 @@
           ;; actual live segment before exercising a fresh Rewind transaction.
           (with-current-buffer buffer
             (erase-buffer)
-            (insert-file-contents (mevedel-session-artifacts-segment-path parent-path 3))
+            (insert (decode-coding-string
+                     (mevedel-session-artifacts-read-artifact
+                      session "segment-0003.chat.org" t) 'utf-8-unix))
             (mevedel-transcript-restore-properties))
           (test-mevedel-shared-editing-call
            buffer '(:action "create" :id "board" :kind "whiteboard" :title "Original"

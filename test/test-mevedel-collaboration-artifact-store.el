@@ -128,9 +128,20 @@
                                    :created-at "2026-10-10T12:00:00+0000"
                                    :updated-at "2026-10-10T12:00:00+0000"
                                    :attached-artifacts '("page" "page")))))
-              (make-directory directory t)
-              (mevedel-session-codec-write
-               (mevedel-session-artifacts-sidecar-path directory) sidecar)))
+              (let ((saved-session (mevedel-session-create id workspace)))
+                (setf (mevedel-session-save-path saved-session) directory
+                      (mevedel-session-session-id saved-session) id)
+                (unwind-protect
+                    (progn
+                      (make-directory directory t)
+                      (should (mevedel-session-durability-lease-acquire
+                               directory "*saved catalog*" saved-session))
+                      (mevedel-session-publication-publish
+                       saved-session
+                       (list (list :path (mevedel-session-artifacts-sidecar-path directory)
+                                   :content (mevedel-session-artifacts-printed-value sidecar)
+                                   :commit-marker t))))
+                  (mevedel-session-persistence-lock-release directory saved-session)))))
           (with-current-buffer buffer (setq-local mevedel--session session))
           (let* ((snapshot (mevedel-collaboration--store-snapshot workspace t))
                  (rows (mevedel-collaboration--store-rows lobby snapshot)))

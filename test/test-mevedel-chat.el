@@ -1801,26 +1801,43 @@
           (setq-local mevedel-compact-run-cancel
                       (lambda () (error "Injected cancellation failure")))
           (should-error (mevedel-abort buffer))
-          (with-temp-buffer
-            (insert-file-contents
-             (mevedel-session-artifacts-segment-path
-              (mevedel-session-save-path session) 1))
-            (should (string-search "Partial answer" (buffer-string))))
-          ;; A later sidecar failure must remain retryable even though the
-          ;; transcript itself is already saved and no longer modified.
+          (should (string-search
+                   "Partial answer"
+                   (mevedel-session-artifacts-read-artifact
+                    session "segment-0001.chat.org" t)))
+          ;; A failed publication must remain retryable even when the
+          ;; transcript was already saved and is no longer modified.
           (setq mevedel-compact-run-cancel nil)
-          (let ((sidecar (mevedel-session-artifacts-sidecar-path
-                          (mevedel-session-save-path session))))
-            (delete-file sidecar)
-            (make-directory sidecar)
-            (let (diagnostics)
-              (mevedel-test--with-captured-diagnostics diagnostics
-                (mevedel-abort buffer))
-              (should (string-search "Could not auto-save" diagnostics)))
+          (setf (mevedel-session-name session) "retry-name")
+          (let* ((publications (file-name-concat
+                                (mevedel-session-save-path session) ".publications"))
+                 (head (plist-get (mevedel-session-publication session) :head)))
+            (should-not (buffer-modified-p))
+            (set-file-modes publications #o500)
+            (unwind-protect
+                (let (diagnostics)
+                  (should-not (file-writable-p publications))
+                  (mevedel-test--with-captured-diagnostics diagnostics
+                    (mevedel-abort buffer))
+                  (should (string-search "Could not auto-save" diagnostics)))
+              (set-file-modes publications #o700))
             (should mevedel-session--save-failed)
-            (delete-directory sidecar)
+            (should (equal head (plist-get
+                                (mevedel-session-publication-read
+                                 (mevedel-session-save-path session)) :head)))
+            (should (mevedel-session-pending-publication session))
+            (mevedel-session-publication-retry session)
             (should (mevedel-session-persistence-autosave-buffer buffer))
-            (should-not mevedel-session--save-failed)))
+            (should-not mevedel-session--save-failed)
+            (should (string-search
+                     "Partial answer"
+                     (mevedel-session-artifacts-read-artifact
+                      session "segment-0001.chat.org" t)))
+            (should (equal "retry-name"
+                           (plist-get
+                            (read (mevedel-session-artifacts-read-artifact
+                                   session "session.meta.el" t))
+                            :session-name)))))
       (mevedel-session-persistence-lock-release
        (mevedel-session-save-path session) session)
       (with-current-buffer buffer (set-buffer-modified-p nil))
