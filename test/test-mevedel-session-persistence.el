@@ -2504,6 +2504,100 @@
   (test-mevedel-session-persistence--cold-agent-tree-round-trip))
 
 
+(mevedel-deftest mevedel-session-persistence-restore/portable-closed-segments (:quiet t)
+  ,test
+  (test)
+  :doc "a project restore repairs stale rows in its published closed segments"
+  (cl-destructuring-bind (workspace . tempdir)
+      (let ((r (file-name-as-directory (make-temp-file "mevedel-restore-portable-" t)))) (cons (test-mevedel-session-persistence--make-workspace r) r))
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf     (generate-new-buffer "*test-data-buf*"))
+               session-dir restored)
+          (unwind-protect
+              (progn
+                (with-current-buffer buf
+                  (org-mode)
+                  (insert "First user prompt\n")
+                  (insert
+                   (test-mevedel-session-persistence--execution-tool-block
+                    "stale-call"
+                    '(:execution-id "exec-stale" :state running
+                      :status success :live-execution-p t
+                      :output-tail "你好 😀 café")))
+                  (insert
+                   (test-mevedel-session-persistence--execution-tool-block
+                    "tail-call"
+                    '(:execution-id "exec-tail" :state running
+                      :status success :live-execution-p t
+                      :output-tail "你好 😀 café")))
+                  (mevedel-session-artifacts-stabilize-gptel-bounds)
+                  (mevedel-session-artifacts-save session buf)
+                  (mevedel-session-artifacts-rotate-segment
+                   session buf "Earlier conversation")
+                  (insert "Second user prompt\n")
+                  (insert
+                   (test-mevedel-session-persistence--execution-tool-block
+                    "current-call"
+                    '(:execution-id "exec-current" :state running
+                      :status success :live-execution-p t)))
+                  (insert
+                   (test-mevedel-session-persistence--execution-tool-block
+                    "tail-call"
+                    '(:execution-id "exec-tail" :state completed
+                      :status success :live-execution-p nil)))
+                  (insert
+                   (mevedel--format-hook-audit-record
+                    '(:type execution-completion
+                      :tool-use-id "archived-call"
+                      :render-data (:execution-id "exec-stale"
+                                    :state completed
+                                    :live-execution-p nil))))
+                  (mevedel-session-artifacts-stabilize-gptel-bounds)
+                  (mevedel-session-artifacts-save session buf))
+                (setq session-dir (mevedel-session-save-path session))
+                ;; Release the lock + kill the buffer (the test buffer didn't
+                ;; go through chat-buffer-init-common so the kill-hook isn't
+                ;; installed; we mirror its work manually).
+                (test-mevedel-session-persistence--release-and-kill
+                 buf session)
+                (setq buf nil)
+                (should (file-exists-p session-dir))
+                (setq restored (mevedel-session-persistence-restore
+                                session-dir))
+                (should (buffer-live-p restored))
+                (with-current-buffer restored
+                  (should (derived-mode-p 'org-mode))
+                  (should (bound-and-true-p gptel-mode))
+                  (should mevedel--session)
+                  (should (equal "main"
+                                 (mevedel-session-name mevedel--session)))
+                  (should (= 2 (mevedel-session-current-segment
+                                mevedel--session)))
+                  (should-not (mevedel-session-execution-state
+                               mevedel--session))
+                  (should (string-match-p "Second user prompt"
+                                          (buffer-string)))
+                  (should (string-match-p ":state lost"
+                                          (buffer-string))))
+                (with-temp-buffer
+                  (insert (decode-coding-string
+                           (mevedel-session-artifacts-read-artifact
+                            (buffer-local-value 'mevedel--session restored)
+                            "segment-0001.chat.org" t)
+                           'utf-8-unix))
+                  (goto-char (point-min))
+                  (should (= 2 (how-many ":state archived")))
+                  ;; Non-ASCII output survives the repair unescaped.
+                  (should (= 2 (how-many (regexp-quote "你好 😀 café")))))
+            (test-mevedel-session-persistence--release-and-kill
+             buf session)
+            (test-mevedel-session-persistence--release-and-kill
+             restored
+             (and restored (buffer-local-value 'mevedel--session restored)))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))))
+
 (mevedel-deftest mevedel-session-persistence-restore/unsettled-mutation (:quiet t)
   ,test
   (test)
