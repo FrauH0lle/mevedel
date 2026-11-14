@@ -200,7 +200,8 @@ for it; duplicate or late continuations cannot start a cancelled turn."
          (event-key (list 'acp-events dispatch-key))
          ;; Native identities of calls the adapter announced on stdout.
          (announced (make-hash-table :test #'equal))
-         pending draining server connection configuration finished cancellation-held started terminal-pending)
+         pending draining server connection configuration finished cancellation-held started terminal-pending
+         last-end last-send)
     (unless (and (buffer-live-p buffer)
                  (if root-p
                      (and (eq request (buffer-local-value 'mevedel--current-request buffer))
@@ -278,7 +279,20 @@ for it; duplicate or late continuations cannot start a cancelled turn."
              ;; The loop leaves work behind only for a turn it no longer owns.
              (when (and pending (not finished))
                (finish '(:status interrupted)))))
-         (prompt (input)
+         (note (event &rest props)
+           ;; Timing evidence for the adapter's silent exits; metadata only.
+           (when-let* (((buffer-live-p buffer))
+                       (session (buffer-local-value 'mevedel--session buffer)))
+             (let ((now (float-time)))
+               (apply #'mevedel-telemetry-record session event
+                      :request-id (and admission (mevedel-request-id admission))
+                      :since-end-turn-ms (and last-end (round (* 1000 (- now last-end))))
+                      :since-send-ms (and last-send (round (* 1000 (- now last-send))))
+                      props))))
+         (prompt (input &optional outcome)
+           (note 'acp-prompt-send :continuation (and outcome t)
+                 :queued-handover (and (plist-get outcome :queued-handover) t))
+           (setq last-send (float-time))
            (setf (mevedel-engine-info request)
                  (plist-put (mevedel-engine-info request) :mevedel-acp-prompted t))
            (mevedel-acp-prompt
@@ -297,6 +311,7 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                  (mevedel-acp-turn--event request event))
                t))
             (lambda (outcome)
+              (setq last-end (float-time))
               (setq terminal-pending t)
               (enqueue
                (lambda ()
@@ -309,7 +324,7 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                           (plist-get outcome :next-prompt)
                           (not (cancelled))
                           (not (plist-get (mevedel-engine-info request) :mevedel-end-turn)))
-                     (prompt (plist-get outcome :next-prompt))
+                     (prompt (plist-get outcome :next-prompt) outcome)
                    (finish outcome))) t))))
          (finish (outcome)
            (when (and (not finished) (eq 'success (plist-get outcome :status)))
@@ -541,6 +556,14 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                                              (mevedel-mcp-hook-command server)))
                               (unless (plist-get (mevedel-engine-info request) :mevedel-native-isolated)
                                 (setq configuration (plist-put configuration :compaction t)))
+                              (setq configuration
+                                    (plist-put configuration :exit-observer
+                                               (lambda (process)
+                                                 (note 'acp-process-exit
+                                                       :adapter-exit-code (and (eq 'exit (process-status process))
+                                                                               (process-exit-status process))
+                                                       :adapter-signal (and (eq 'signal (process-status process))
+                                                                            (process-exit-status process))))))
                               (unless (or finished (not (owned)))
                                 (setq connection
                                       (mevedel-acp-open
