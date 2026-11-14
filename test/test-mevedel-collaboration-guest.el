@@ -1757,7 +1757,7 @@ as presence may interleave, so only notices are returned."
                      :opcode 'binary :completep t
                      :payload (mevedel-collaboration--envelope-pack 0 sealed)))))
                (refusals (guest)
-                 (cl-count "The host refused a frame that was replayed or out of order on this connection"
+                 (cl-count "The host ignored a frame the relay repeated or reordered."
                            (plist-get guest :frames)
                            :key (lambda (frame) (plist-get frame :message))
                            :test #'equal)))
@@ -1802,7 +1802,7 @@ as presence may interleave, so only notices are returned."
                    ;; Replayed on the original connection ...
                    (send-all original recorded)
                    (mevedel-relay-test--pump
-                    (lambda () (= (refusals original) (length recorded))) 2)
+                    (lambda () (= (refusals original) 1)) 2)
                    (push (refusals original) refused)
                    (websocket-close (plist-get original :ws))
                    (should (mevedel-relay-test--pump
@@ -1811,13 +1811,13 @@ as presence may interleave, so only notices are returned."
                    (let ((replay (test-mevedel-collaboration-guest--connect room port)))
                      (send-all replay recorded)
                      (mevedel-relay-test--pump
-                      (lambda () (= (refusals replay) (length recorded))) 2)
+                      (lambda () (= (refusals replay) 1)) 2)
                      (push (refusals replay) refused))))
              (kill-buffer view))
           ;; The host acted once, for the original frames only ...
           (should (equal expected (reverse acted)))
-          ;; ... and told each replaying connection why, frame by frame.
-          (should (equal (list (length frames) (length frames)) refused)))))))))
+          ;; ... and told each replaying connection why, once.
+          (should (equal (list 1 1) refused)))))))))
 
 (provide 'test-mevedel-collaboration-guest)
 ;;; test-mevedel-collaboration-guest.el ends here

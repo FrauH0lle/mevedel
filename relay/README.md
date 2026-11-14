@@ -15,9 +15,11 @@ Every guest frame is bound to its connection, so a relay that records sealed
 frames cannot replay them. On `peer-joined` the host sends that peer
 `{"t":"challenge","challenge":"<22 base64url chars>"}`; the guest sends
 `hello` only after it and adds `"challenge"` and an increasing `"seq"`,
-starting at 1, to every frame. The host answers a frame without a challenge
-with `error` `protocol mismatch: host speaks 4`, and a stale challenge or a
-`seq` at or below the last accepted with a `notice`; neither is acted on.
+starting at 1, to every frame. The host acts on no other frame and answers
+only the first per connection: one without a challenge with `error`
+`protocol mismatch: host speaks 4`, a stale challenge or a `seq` at or below
+the last accepted with a `notice`, and one from a peer the relay never
+announced with a `notice` that the connection is not bound yet.
 
 Viewer destination links keep content selectors after the bearer fragment,
 for example `#ROOM.SECRET?artifact=STORE-ID&version=2`. The viewer imports the

@@ -81,10 +81,11 @@ relay that records and replays them is in scope. The host binds each guest
 connection: when the relay reports a joined peer, the host sends it a sealed
 `challenge` of 16 random bytes. The guest sends its `hello` only after that,
 and every guest frame echoes the challenge with a `seq` above the previous
-one. The host checks both before any room sees the frame. A frame without a
+one. The host checks both before any room sees the frame and ignores any
+other frame, answering only the first per connection. A frame without a
 challenge is answered `protocol mismatch`; one bearing another connection's
-challenge, or a `seq` at or below the last accepted, gets a notice that it
-was replayed or out of order. So recorded frames, the owner's `hello`
+challenge, or a `seq` at or below the last accepted, gets a notice that the
+relay repeated or reordered it. So recorded frames, the owner's `hello`
 included, act once, on their own connection. A reconnect is a new
 connection with a fresh challenge. The relay can still drop, delay or
 withhold frames and replay host frames to a guest, which may show stale

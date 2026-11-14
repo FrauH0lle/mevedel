@@ -373,8 +373,35 @@
 (defun test-mevedel-collaboration-transport--peers (peer)
   "Return a peer table binding PEER's connection to challenge \"c\"."
   (let ((peers (make-hash-table :test #'eql)))
-    (puthash peer (cons "c" 0) peers)
+    (puthash peer (list "c" 0 nil) peers)
     peers))
+
+(mevedel-deftest mevedel-collaboration--transport-refusal
+  (:doc "answers a binding's first refusal by cause, then drops silently")
+  (let ((transport (list :peers (test-mevedel-collaboration-transport--peers 1))))
+    ;; A peer the relay never announced hears once that it is unbound.
+    (should (equal '(:t "notice" :message "The host ignored a frame from a connection it has not bound yet.")
+                   (mevedel-collaboration--transport-refusal
+                    transport 2 '(:t "abort" :challenge "c" :seq 1))))
+    (should (eq t (mevedel-collaboration--transport-refusal
+                   transport 2 '(:t "abort" :challenge "c" :seq 2))))
+    ;; An older client is told the protocol, once.
+    (should (equal "protocol mismatch: host speaks 4"
+                   (plist-get (mevedel-collaboration--transport-refusal
+                               transport 1 '(:t "hello" :proto 3))
+                              :message)))
+    (should (eq t (mevedel-collaboration--transport-refusal
+                   transport 1 '(:t "abort" :challenge "x" :seq 9))))
+    ;; Refusals never block the binding's own frames.
+    (should-not (mevedel-collaboration--transport-refusal
+                 transport 1 '(:t "abort" :challenge "c" :seq 1)))
+    ;; Unbound peers are remembered only up to the bound.
+    (let ((mevedel-collaboration--max-unbound-peers 3))
+      (should (consp (mevedel-collaboration--transport-refusal
+                      transport 3 '(:t "abort" :challenge "c" :seq 1))))
+      (should (eq t (mevedel-collaboration--transport-refusal
+                     transport 4 '(:t "abort" :challenge "c" :seq 1))))
+      (should-not (gethash 4 (plist-get transport :peers))))))
 
 (mevedel-deftest mevedel-collaboration--transport-open
   (:doc "delivers sealed frames and control messages both ways through a relay")
@@ -473,8 +500,8 @@
                       (should (= 1 (length frames)))
                       (should (equal "abort" (plist-get (cdar frames) :t)))
                       ;; The same sealed bytes again, a frame from an older
-                      ;; client and one from another connection are refused
-                      ;; with a reply, never delivered.
+                      ;; client and one from another connection are never
+                      ;; delivered; only the first refusal is answered.
                       (setq guest-frames nil)
                       (websocket-send guest abort)
                       (websocket-send
@@ -484,15 +511,25 @@
                         :payload (mevedel-collaboration--envelope-pack
                                   1 (mevedel-collaboration--seal
                                      key "{\"t\":\"hello\",\"proto\":3}"))))
-                      (setq challenge "AAAAAAAAAAAAAAAAAAAAAA")
-                      (websocket-send guest (bound 1 "abort" 3))
+                      (let ((own challenge))
+                        (setq challenge "AAAAAAAAAAAAAAAAAAAAAA")
+                        (websocket-send guest (bound 1 "abort" 3))
+                        ;; A valid frame afterwards still arrives: ordering
+                        ;; proves the refused ones were handled first.
+                        (setq challenge own)
+                        (websocket-send guest (bound 1 "set-name" 4)))
+                      (should (mevedel-relay-test--pump (lambda () (= 2 (length frames)))))
+                      (should (equal "set-name" (plist-get (cdar frames) :t)))
+                      ;; Every refusal was sent before that delivery; a host
+                      ;; marker sent now arrives after all of them.
+                      (should (mevedel-collaboration--transport-send
+                               transport 1 (list :t "marker")))
                       (should (mevedel-relay-test--pump
-                               (lambda () (= 3 (length guest-frames)))))
-                      (should (= 1 (length frames)))
+                               (lambda () (equal "marker"
+                                                 (plist-get (decode (car guest-frames)) :t)))))
+                      (pop guest-frames)
                       (should (equal
-                               '(("notice" . "The host refused a frame that was replayed or out of order on this connection")
-                                 ("error" . "protocol mismatch: host speaks 4")
-                                 ("notice" . "The host refused a frame that was replayed or out of order on this connection"))
+                               '(("notice" . "The host ignored a frame the relay repeated or reordered."))
                                (mapcar (lambda (frame)
                                          (let ((frame (decode frame)))
                                            (cons (plist-get frame :t)

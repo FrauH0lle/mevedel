@@ -247,7 +247,7 @@ count as drops; undecryptable or malformed input is dropped silently."
                          :on-frame (plist-get callbacks :on-frame)
                          :on-control (plist-get callbacks :on-control)
                          :on-state (plist-get callbacks :on-state)
-                         ;; Peer id -> (CHALLENGE . LAST-SEQ) of its connection.
+                         ;; Peer id -> (CHALLENGE LAST-SEQ REFUSED) of its connection.
                          :peers (make-hash-table :test #'eql)
                          :inbound-at nil
                          :keepalive-timer nil)))
@@ -421,26 +421,41 @@ share this queue so a departure cannot overtake an earlier hello."
             (discard)))))))
 
 
+(defconst mevedel-collaboration--max-unbound-peers 256
+  "Unbound peers remembered as already told, so each hears once.")
+
 (defun mevedel-collaboration--transport-refusal (transport peer frame)
   "Return nil when guest FRAME belongs to PEER's current TRANSPORT connection.
-Otherwise return the frame that refuses it.  A frame without a challenge
+Otherwise return t to drop it silently, or the frame that refuses it.
+Only a binding's first refusal is answered.  A frame without a challenge
 comes from a client of an older protocol; one with a stale challenge or a
-sequence number at or below the last accepted was replayed or reordered."
-  (let ((binding (gethash peer (plist-get transport :peers)))
-        (seq (plist-get frame :seq)))
+sequence number at or below the last accepted was repeated or reordered."
+  ;; A binding is (CHALLENGE LAST-SEQ REFUSED); CHALLENGE is nil for a
+  ;; peer the relay never announced.
+  (let* ((peers (plist-get transport :peers))
+         (binding (gethash peer peers))
+         (challenge (plist-get frame :challenge))
+         (seq (plist-get frame :seq)))
     (cond
-     ((not (plist-get frame :challenge))
-      (list :t "error"
-            :message (format "protocol mismatch: host speaks %d"
-                             mevedel-collaboration--protocol-version)))
-     ((and binding
-           (equal (plist-get frame :challenge) (car binding))
-           (natnump seq)
-           (> seq (cdr binding)))
-      (setcdr binding seq)
+     ((and (car binding) (equal challenge (car binding))
+           (natnump seq) (> seq (cadr binding)))
+      (setf (cadr binding) seq)
       nil)
-     (t (list :t "notice"
-              :message "The host refused a frame that was replayed or out of order on this connection")))))
+     ((nth 2 binding) t)
+     ((not binding)
+      (if (>= (hash-table-count peers) mevedel-collaboration--max-unbound-peers)
+          t
+        (puthash peer (list nil 0 t) peers)
+        (list :t "notice"
+              :message "The host ignored a frame from a connection it has not bound yet.")))
+     (t
+      (setf (nth 2 binding) t)
+      (if challenge
+          (list :t "notice"
+                :message "The host ignored a frame the relay repeated or reordered.")
+        (list :t "error"
+              :message (format "protocol mismatch: host speaks %d"
+                               mevedel-collaboration--protocol-version)))))))
 
 (defun mevedel-collaboration--transport-receive (transport frame)
   "Decode websocket FRAME for TRANSPORT and dispatch it."
@@ -456,12 +471,14 @@ sequence number at or below the last accepted was replayed or reordered."
            (let* ((peer (car envelope))
                   (refusal (mevedel-collaboration--transport-refusal
                             transport peer decoded)))
-             (if refusal
-                 (mevedel-collaboration--transport-deliver
-                  transport #'mevedel-collaboration--transport-send
-                  transport peer refusal)
+             (cond
+              ((consp refusal)
                (mevedel-collaboration--transport-deliver
-                transport callback peer decoded)))))
+                transport #'mevedel-collaboration--transport-send
+                transport peer refusal))
+              ((not refusal)
+               (mevedel-collaboration--transport-deliver
+                transport callback peer decoded))))))
         ('text
          (when-let* ((control (mevedel-collaboration--frame-decode
                                (websocket-frame-text frame)))
@@ -475,7 +492,7 @@ sequence number at or below the last accepted was replayed or reordered."
                ;; A fresh challenge per connection, a reconnect included.
                (let ((challenge (mevedel-collaboration--base64url
                                  (mevedel-collaboration--random-bytes 16))))
-                 (puthash peer (cons challenge 0) peers)
+                 (puthash peer (list challenge 0 nil) peers)
                  (mevedel-collaboration--transport-deliver
                   transport #'mevedel-collaboration--transport-send
                   transport peer (list :t "challenge" :challenge challenge))))
