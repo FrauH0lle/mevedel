@@ -53,6 +53,7 @@
 (require 'mevedel-transcript-audit)
 (require 'mevedel-chat)
 (require 'mevedel-view)
+(require 'websocket)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-input-files)
 (require 'mevedel-view-render)
@@ -1823,6 +1824,77 @@ as presence may interleave, so only notices are returned."
           (should (equal expected (reverse acted)))
           ;; ... and told each replaying connection why, once.
           (should (equal (list 1 1) refused)))))))))
+
+(defun test-mevedel-collaboration-guest--capturing-transport (body)
+  "Call BODY with a live-looking transport and a function returning sent frames.
+Peer 1 is bound with the longest nonce a guest may have, so every frame
+for it carries the most the transport adds.  Frames come back decoded."
+  (let* ((key (make-string 32 ?k))
+         (peers (make-hash-table :test #'eql))
+         (transport (list :state 'open :key key :peers peers
+                          ;; A real struct: compiled callers inline its accessors.
+                          :ws (websocket-inner-create :url "ws://relay" :conn 'conn)))
+         sent)
+    (puthash 1 (list "c" 1 nil (make-string mevedel-collaboration--max-guest-nonce-chars ?n))
+             peers)
+    (cl-letf (((symbol-function 'websocket-openp) (lambda (_ws) t))
+              ((symbol-function 'process-send-string)
+               (lambda (_process bytes) (push bytes sent))))
+      (funcall body transport
+               (lambda ()
+                 (mapcar (lambda (bytes)
+                           (mevedel-collaboration--frame-decode
+                            (mevedel-collaboration--unseal
+                             key (cdr (mevedel-collaboration--envelope-unpack
+                                       (websocket-frame-payload
+                                        (websocket-read-frame bytes)))))))
+                         (reverse sent)))))))
+
+(mevedel-deftest mevedel-collaboration--send-chunked/guest-nonce
+  (:doc "sends a file larger than one frame complete to a guest whose frames carry its nonce")
+  (test-mevedel-collaboration-guest--capturing-transport
+   (lambda (transport frames)
+     (let ((content (apply #'unibyte-string
+                           (cl-loop for index below (* 900 1024)
+                                    collect (% (* index 7) 256)))))
+       (should (mevedel-collaboration--send-chunked
+                transport 1 (list :t "file" :reqId 7 :path "big.bin") content))
+       (let ((received (funcall frames)))
+         (should (> (length received) 1))
+         (should (equal (make-string mevedel-collaboration--max-guest-nonce-chars ?n)
+                        (plist-get (car received) :nonce)))
+         (should (eq t (plist-get (car (last received)) :final)))
+         (should (equal content
+                        (base64-decode-string
+                         (mapconcat (lambda (frame) (plist-get frame :data))
+                                    received))))
+         ;; Should a budget ever undercount again, the sender fails loudly,
+         ;; which the file and artifact handlers turn into a refusal.
+         (let ((mevedel-collaboration--max-frame-json-bytes
+                (+ mevedel-collaboration--max-wire-json-bytes 1000)))
+           (should-error (mevedel-collaboration--send-chunked
+                          transport 1 (list :t "file" :reqId 8 :path "big.bin") content)
+                         :type 'mevedel-collaboration-frame-too-large)))))))
+
+(mevedel-deftest mevedel-collaboration--snapshot-chunks/guest-nonce
+  (:doc "a snapshot chunk filled to the bound still reaches a guest whose frames carry its nonce")
+  (test-mevedel-collaboration-guest--capturing-transport
+   (lambda (transport frames)
+     (let* ((overhead (mevedel-collaboration--snapshot-frame-overhead))
+            (record (list :id "assistant-x" :kind "assistant" :revision 0 :text ""))
+            (base (string-bytes (json-encode (mevedel-collaboration--json-record record)))))
+       ;; One record that fills its chunk's frame to the caller budget exactly.
+       (setq record (plist-put record :text
+                               (make-string (- mevedel-collaboration--max-frame-json-bytes
+                                               overhead base)
+                                            ?x)))
+       (let* ((chunks (mevedel-collaboration--snapshot-chunks (list record)))
+              (frame (mevedel-collaboration--records-frame
+                      (list :t "snapshot-chunk") (car chunks) nil)))
+         (should (= 1 (length (car chunks))))
+         (should (= (string-bytes frame) mevedel-collaboration--max-frame-json-bytes))
+         (should (mevedel-collaboration--transport-send transport 1 frame))
+         (should (= 1 (length (plist-get (car (funcall frames)) :records)))))))))
 
 (provide 'test-mevedel-collaboration-guest)
 ;;; test-mevedel-collaboration-guest.el ends here

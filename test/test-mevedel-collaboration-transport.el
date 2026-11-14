@@ -729,7 +729,7 @@
         (mevedel-collaboration--transport-stop transport)))))
 
 (mevedel-deftest mevedel-collaboration--transport-send
-  (:doc "drops a frame over the wire bound instead of sending it")
+  (:doc "refuses a frame over the wire bound loudly, and fits one at the caller budget with a guest's longest nonce")
   (let* ((sent nil)
          ;; A real struct: compiled callers inline its accessors.
          (transport (list :state 'open :ws (websocket-inner-create :url "ws://relay" :conn 'conn)
@@ -752,12 +752,29 @@
       (setq sent (cdr sent))
       ;; The relay must refuse an oversized frame by closing the connection
       ;; it arrived on, and for the host that ends the room for every guest.
-      (should-not
+      ;; Sending it signals rather than losing it silently.
+      (should-error
        (mevedel-collaboration--transport-send
         transport 1
         (list :t "record"
-              :text (make-string mevedel-collaboration--max-message-bytes ?x))))
-      (should (= 1 (length sent))))))
+              :text (make-string mevedel-collaboration--max-message-bytes ?x)))
+       :type 'mevedel-collaboration-frame-too-large)
+      (should (= 1 (length sent)))
+      ;; A frame filled to the caller budget still fits once the transport
+      ;; adds the longest nonce a guest may have, encoded or not.
+      (let* ((nonce (make-string mevedel-collaboration--max-guest-nonce-chars ?n))
+             (peers (make-hash-table :test #'eql))
+             (head "{\"t\":\"record\",\"text\":\"")
+             (full (concat head
+                           (make-string (- mevedel-collaboration--max-frame-json-bytes
+                                           (length head) 2)
+                                        ?x)
+                           "\"}")))
+        (puthash 1 (list "c" 1 nil nonce) peers)
+        (plist-put transport :peers peers)
+        (should (= (string-bytes full) mevedel-collaboration--max-frame-json-bytes))
+        (should (mevedel-collaboration--transport-send transport 1 full))
+        (should (= 2 (length sent)))))))
 
 (mevedel-deftest mevedel-collaboration--websocket-frame
   (:doc "frames every length class as a masked binary frame websocket.el reads back")
