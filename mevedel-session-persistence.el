@@ -504,11 +504,24 @@ to Emacs auto-save alone."
    (mevedel-session-control-fs-physical-path path)
    (buffer-substring-no-properties (point-min) (point-max))))
 
-(defun mevedel-session-persistence--execution-successor-ids (path)
-  "Return structured execution ids present in transcript PATH."
-  (when (file-regular-p path)
+(defun mevedel-session-persistence--segment-text (session path)
+  "Return SESSION's committed transcript text at PATH, or nil when absent.
+Portable transcripts live in the publication, not at PATH itself."
+  (if (mevedel-session-codec-portable-authority-p session)
+      (when (mevedel-session-artifacts-artifact-present-p
+             session (file-name-nondirectory path) t)
+        (mevedel-session-artifacts-read-artifact
+         session (file-name-nondirectory path) t))
+    (when (file-regular-p path)
+      (with-temp-buffer
+        (insert-file-contents path)
+        (buffer-string)))))
+
+(defun mevedel-session-persistence--execution-successor-ids (text)
+  "Return structured execution ids present in transcript TEXT."
+  (when text
     (with-temp-buffer
-      (insert-file-contents path)
+      (insert text)
       (delay-mode-hooks (org-mode))
       (mevedel-transcript-restore-properties)
       (let (ids)
@@ -535,14 +548,14 @@ to Emacs auto-save alone."
         ids))))
 
 (defun mevedel-session-persistence--reconcile-lost-execution-file
-    (path &optional successor-execution-ids artifact-callback)
-  "Mark stale running execution rows in transcript PATH as lost.
+    (path text &optional successor-execution-ids artifact-callback)
+  "Mark stale running execution rows in transcript PATH with TEXT as lost.
 
 When ARTIFACT-CALLBACK is non-nil, pass it the repaired replacement instead
 of writing PATH directly."
-  (when (file-regular-p path)
+  (when text
     (with-temp-buffer
-      (insert-file-contents path)
+      (insert text)
       (delay-mode-hooks (org-mode))
       (mevedel-transcript-restore-properties)
       (let ((count
@@ -570,24 +583,24 @@ ARTIFACT-CALLBACK has the meaning described by
         (successor-ids
          (and exclude-path
               (mevedel-session-persistence--execution-successor-ids
-               exclude-path)))
+               (mevedel-session-persistence--segment-text
+                session exclude-path))))
         (count 0))
     (cl-loop for segment downfrom (mevedel-session-current-segment session) to 1
              for path = (mevedel-session-artifacts-segment-path
                          save-path segment)
-             unless (and exclude-path
-                         (string= (expand-file-name path)
-                                  (expand-file-name exclude-path)))
-             when (file-exists-p path)
+             for text = (unless (and exclude-path
+                                     (string= (expand-file-name path)
+                                              (expand-file-name exclude-path)))
+                          (mevedel-session-persistence--segment-text session path))
+             when text
              do (cl-incf
                  count
                  (or (mevedel-session-persistence--reconcile-lost-execution-file
-                      path successor-ids artifact-callback)
+                      path text successor-ids artifact-callback)
                      0))
              and do
-             (dolist (id
-                      (mevedel-session-persistence--execution-successor-ids
-                       path))
+             (dolist (id (mevedel-session-persistence--execution-successor-ids text))
                (cl-pushnew id successor-ids :test #'equal)))
     count))
 
