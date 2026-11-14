@@ -9,6 +9,7 @@
 ;;; Code:
 
 (require 'mevedel-execution)
+(require 'mevedel-execution-process)
 (require 'mevedel-session-test-support
          (file-name-concat
           (file-name-directory
@@ -94,6 +95,38 @@ The shared Read helper waits at most ten seconds and cancels on unwind."
         (test-mevedel-session-persistence--release-and-kill buffer session)
         (delete-directory root t)
         (mevedel-workspace-clear-registry)))))
+
+(mevedel-deftest mevedel-execution-session-live-spools
+  (:doc "names only unfinished executions' spools, as absolute paths")
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-live-spools-" t)))
+         (records (make-hash-table :test #'equal))
+         (session (mevedel-session--create
+                   :execution-state (mevedel-execution--state-create :records records)))
+         (record
+          (lambda (id &rest slots)
+            (puthash id
+                     (apply #'mevedel-execution--record-create
+                            :execution-id id
+                            :child (mevedel-execution-process--child-create
+                                    :spool-path (concat root "x/../" id ".log"))
+                            slots)
+                     records))))
+    (unwind-protect
+        (progn
+          (funcall record "running")
+          (funcall record "stopping" :stop-p t)
+          (funcall record "finished" :finished-p t)
+          (funcall record "undelivered" :finished-p t :delivery-pending-p t)
+          (puthash "childless" (mevedel-execution--record-create
+                                :execution-id "childless")
+                   records)
+          (should (equal (list (concat root "running.log")
+                               (concat root "stopping.log"))
+                         (sort (mevedel-execution-session-live-spools session)
+                               #'string<)))
+          (should-not (mevedel-execution-session-live-spools
+                       (mevedel-session--create))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-execution-spool-copies/portable-save-as
   (:quiet t
