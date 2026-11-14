@@ -149,7 +149,7 @@ function host(lobbyRunning, records, sharedItem, coldAgent, archives) {
     },
     [sessionRoom.id]: (frame, reply, guest) => {
       if (frame.t === 'hello') {
-        reply({t: 'welcome', proto: 3, readOnly: !frame.writeToken, workspace: 'ws',
+        reply({t: 'welcome', proto: 4, readOnly: !frame.writeToken, workspace: 'ws',
                project: 'proj', lobby: lobbyRunning, recordCount: records.length});
         reply({t: 'snapshot-chunk', records, final: true});
         reply({t: 'status', name: 'Feature work', busy: false});
@@ -160,7 +160,7 @@ function host(lobbyRunning, records, sharedItem, coldAgent, archives) {
     },
     [forkRoom.id]: (frame, reply) => {
       if (frame.t === 'hello') {
-        reply({t: 'welcome', proto: 3, readOnly: false, workspace: 'ws',
+        reply({t: 'welcome', proto: 4, readOnly: false, workspace: 'ws',
                project: 'proj', lobby: lobbyRunning, recordCount: 0});
         reply({t: 'snapshot-chunk', records: [], final: true});
         reply({t: 'status', name: 'Implement plan', busy: false});

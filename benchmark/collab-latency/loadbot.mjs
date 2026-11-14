@@ -58,6 +58,11 @@ export class Guest {
     this.pending = new Map();
     this.transfers = new Map();
     this.seq = 0;
+    // The host's challenge binds this connection; every frame echoes it with
+    // a rising frame sequence number and this socket's own nonce.
+    this.challenge = null;
+    this.frameSeq = 0;
+    this.nonce = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString('base64url');
     this.outbound = Promise.resolve();
     this.inbound = Promise.resolve();
   }
@@ -72,10 +77,6 @@ export class Guest {
     }, 'the final snapshot');
     this.ws.addEventListener('close', (event) => this.fail(new Error(`closed ${event.code}`)));
     this.ws.addEventListener('error', () => this.fail(new Error('websocket error')));
-    this.ws.addEventListener('open', () => {
-      this.send({ t: 'hello', proto: 3, name: `bot-${this.index}`, guestId: `bot-${this.index}-${process.pid}`,
-                  writeToken: Buffer.from(this.creds.write).toString('base64url') });
-    }, { once: true });
     this.on((frame, at) => this.editingFrame(frame, at));
     this.ws.addEventListener('message', (event) => {
       if (typeof event.data === 'string') return;
@@ -85,6 +86,17 @@ export class Guest {
         const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: bytes.slice(4, 16) },
                                                   this.key, bytes.slice(16));
         const frame = JSON.parse(new TextDecoder().decode(plain));
+        if (frame.t === 'challenge') {
+          // Hello waits for the first challenge; later ones are ignored.
+          if (!this.challenge && typeof frame.challenge === 'string') {
+            this.challenge = frame.challenge;
+            this.send({ t: 'hello', proto: 4, name: `bot-${this.index}`, guestId: `bot-${this.index}-${process.pid}`,
+                        writeToken: Buffer.from(this.creds.write).toString('base64url') });
+          }
+          return;
+        }
+        // Another nonce marks a frame sent to another connection.
+        if ('nonce' in frame && frame.nonce !== this.nonce) return;
         for (const handler of this.handlers) handler(frame, at);
       }).catch((error) => this.fail(error));
     });
@@ -114,7 +126,7 @@ export class Guest {
     return () => this.handlers.delete(handler);
   }
   send(frame) {
-    const text = JSON.stringify(frame);
+    const text = JSON.stringify({ ...frame, challenge: this.challenge, seq: ++this.frameSeq, nonce: this.nonce });
     this.outbound = this.outbound.then(async () => {
       if (this.error) throw this.error;
       const iv = crypto.getRandomValues(new Uint8Array(12));

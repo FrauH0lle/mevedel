@@ -1582,7 +1582,7 @@ async function main() {
 
   // Welcome for a writable guest reveals the composer; the snapshot loads
   // through final-flagged chunks with live updates queued behind it.
-  await deliver({t: 'welcome', proto: 3, readOnly: false, recordCount: 3,
+  await deliver({t: 'welcome', proto: 4, readOnly: false, recordCount: 3,
                  workspace: 'ws',
                  commands: [{name: 'plan', kind: 'command', hint: '[prompt]'},
                             {name: 'review', kind: 'skill', hint: '[target]'},
@@ -2891,7 +2891,7 @@ async function main() {
   assert.equal(skillTurn.disclosures.get('root/attachment:base').open, true);
   assert.equal(nodes.transcript.children.filter(turn => turn.dataset.recordId === 'parity-call').length, 1);
   const reconnectSent = sockets[1].sent.length;
-  await deliverTo(sockets[1], {t: 'welcome', proto: 3, readOnly: false, recordCount: 2});
+  await deliverTo(sockets[1], {t: 'welcome', proto: 4, readOnly: false, recordCount: 2});
   await waitFor(() => sockets[1].sent.length > reconnectSent, 'reconnected shared item catalog');
   const reconnectedCatalog = await unseal(key, sockets[1].sent[reconnectSent]);
   assert.equal(reconnectedCatalog.t, 'editing');
@@ -3162,7 +3162,7 @@ async function main() {
   await waitFor(() => artifactSocket.sent.length >= 1, 'artifact link hello');
   nodes['terminal-title'].textContent = '';
   artifactSocket.dispatch('message', {data: await seal(key, 1, {
-    t: 'welcome', proto: 3, room: 'artifact', id: 'snt-pipeline', kind: 'whiteboard',
+    t: 'welcome', proto: 4, room: 'artifact', id: 'snt-pipeline', kind: 'whiteboard',
     title: 'SNT analysis pipeline', readOnly: false})});
   await waitFor(() => textOf(nodes['terminal-title']) === 'Artifact link', 'artifact link notice');
   assert.equal(textOf(nodes['terminal-message']), 'Paste this link into mevedel or an MCP client.');
