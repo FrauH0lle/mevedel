@@ -106,57 +106,68 @@
 		    (mevedel-session-persistence-autosave-buffer (current-buffer)))))
 
 (mevedel-deftest mevedel-session-persistence-autosave (:quiet t)
-		 ,test
-		 (test)
-		 :doc "native auto-save contains a failed write and retries after repair"
-		 (let* ((root (make-temp-file "mevedel-autosave-retry-" t))
-			(workspace
-			 (test-mevedel-session-persistence--make-file-workspace root))
-			(bad (mevedel-session-create "bad" workspace))
-			(good (mevedel-session-create "good" workspace))
-			(bad-buffer (generate-new-buffer " *bad-save*"))
-			(good-buffer (generate-new-buffer " *good-save*")))
-		   (unwind-protect
-		       (progn
-			 (dolist (pair (list (cons bad bad-buffer) (cons good good-buffer)))
-			   (with-current-buffer (cdr pair)
-			     (mevedel-chat-prepare-transcript-buffer)
-			     (setq-local mevedel--session (car pair))
-			     (setq-local mevedel--workspace workspace)
-			     (insert "Prompt\n")
-			     (mevedel-session-artifacts-save (car pair) (cdr pair))
-			     (goto-char (point-max))
-			     (insert (propertize "Latest text\n" 'gptel 'response))))
-			 (let ((path (mevedel-session-artifacts-sidecar-path
-				      (mevedel-session-save-path bad))))
-			   (delete-file path)
-			   (make-directory path)
-			   (cl-letf (((symbol-function 'buffer-list)
-				      (lambda (&optional _frame)
-					(list bad-buffer good-buffer))))
-			     (run-hooks 'auto-save-hook)
-                             (with-timeout (2 (ert-fail "Auto-save remained queued"))
-                               (while (> (hash-table-count mevedel-session-persistence--autosaves) 0)
-                                 (sleep-for .002)))
-			     (should (buffer-local-value
-				      'mevedel-session--save-failed bad-buffer))
-			     (should (string-search
-				      "Latest text"
-				      (mevedel-session-artifacts-read-artifact
-				       good "segment-0001.chat.org" t)))
-			     ;; The transcript write may have succeeded before its
-			     ;; sidecar failed; retry must not depend on modified-p.
-			     (delete-directory path)
-			     (run-hooks 'auto-save-hook)
-                             (with-timeout (2 (ert-fail "Auto-save remained queued"))
-                               (while (> (hash-table-count mevedel-session-persistence--autosaves) 0)
-                                 (sleep-for .002)))
-			     (should-not (buffer-local-value
-					  'mevedel-session--save-failed bad-buffer))
-			     (should (file-regular-p path)))))
-		     (test-mevedel-session-persistence--release-and-kill bad-buffer bad)
-		     (test-mevedel-session-persistence--release-and-kill good-buffer good)
-		     (delete-directory root t))))
+  ,test
+  (test)
+  :doc "native auto-save contains a failed lease publication and retries after repair"
+  (let* ((root (make-temp-file "mevedel-autosave-retry-" t))
+         (workspace (test-mevedel-session-persistence--make-file-workspace root))
+         (bad (mevedel-session-create "bad" workspace))
+         (good (mevedel-session-create "good" workspace))
+         (bad-buffer (generate-new-buffer " *bad-save*"))
+         (good-buffer (generate-new-buffer " *good-save*"))
+         publications)
+    (unwind-protect
+        (progn
+          (dolist (pair (list (cons bad bad-buffer) (cons good good-buffer)))
+            (with-current-buffer (cdr pair)
+              (mevedel-chat-prepare-transcript-buffer)
+              (setq-local mevedel--session (car pair) mevedel--workspace workspace)
+              (insert "Prompt\n")
+              (mevedel-session-artifacts-save (car pair) (cdr pair))
+              (goto-char (point-max))
+              (insert (propertize "Latest text\n" 'gptel 'response))))
+          (setq publications (file-name-concat
+                              (mevedel-session-save-path bad) ".publications"))
+          (let ((head (plist-get (mevedel-session-publication bad) :head)))
+            (set-file-modes publications #o500)
+            (should-not (file-writable-p publications))
+            (cl-letf (((symbol-function 'buffer-list)
+                       (lambda (&optional _frame) (list bad-buffer good-buffer))))
+              (run-hooks 'auto-save-hook)
+              (with-timeout (5 (ert-fail "Auto-save remained queued"))
+                (while (or (> (hash-table-count mevedel-session-persistence--autosaves) 0)
+                           (mevedel-session-publication-busy-p bad)
+                           (mevedel-session-publication-busy-p good))
+                  (accept-process-output nil .002)))
+              (should (buffer-local-value 'mevedel-session--save-failed bad-buffer))
+              (should (equal head (plist-get
+                                  (mevedel-session-publication-read
+                                   (mevedel-session-save-path bad)) :head)))
+              (should-not (string-search
+                           "Latest text" (mevedel-session-artifacts-read-artifact
+                                          bad "segment-0001.chat.org" t)))
+              (should (string-search
+                       "Latest text" (mevedel-session-artifacts-read-artifact
+                                      good "segment-0001.chat.org" t)))
+              ;; Frozen lease recovery requires explicit retry before new writes.
+              (should (mevedel-session-pending-publication bad))
+              (with-current-buffer bad-buffer (set-buffer-modified-p nil))
+              (set-file-modes publications #o700)
+              (mevedel-session-publication-retry bad)
+              (run-hooks 'auto-save-hook)
+              (with-timeout (5 (ert-fail "Auto-save remained queued"))
+                (while (or (> (hash-table-count mevedel-session-persistence--autosaves) 0)
+                           (mevedel-session-publication-busy-p bad))
+                  (accept-process-output nil .002)))
+              (should-not (buffer-local-value 'mevedel-session--save-failed bad-buffer))
+              (should (string-search
+                       "Latest text" (mevedel-session-artifacts-read-artifact
+                                      bad "segment-0001.chat.org" t)))
+              (should-not (mevedel-session-pending-publication bad)))))
+      (when publications (set-file-modes publications #o700))
+      (test-mevedel-session-persistence--release-and-kill bad-buffer bad)
+      (test-mevedel-session-persistence--release-and-kill good-buffer good)
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-persistence-release-on-kill (:quiet t)
 		 ,test
@@ -328,9 +339,9 @@
                      (lambda (&optional _frame) (list buffer))))
             (mevedel-session-persistence--checkpoint-tick)
             (with-timeout (2 (ert-fail "Checkpoint remained queued"))
-              (while (> (hash-table-count
-                         mevedel-session-persistence--autosaves)
-                        0)
+              (while (or (> (hash-table-count
+                             mevedel-session-persistence--autosaves) 0)
+                         (mevedel-session-publication-busy-p session))
                 (sleep-for .002))))
           (should (string-search
                    "Streaming text"

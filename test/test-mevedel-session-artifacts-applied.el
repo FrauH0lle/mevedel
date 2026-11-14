@@ -56,7 +56,17 @@ PORTABLE selects a portable session over a file one."
   "Capture current bytes under SESSION's TURN for PAIRS of path and pre-content."
   (let ((table (make-hash-table :test #'equal)))
     (while pairs (puthash (pop pairs) (pop pairs) table))
-    (mevedel-session-artifacts-snapshot-modified session turn table)))
+    ;; Portable pre-images become readable only once published, as
+    ;; `mevedel-session-artifacts-record-applied' publishes its own.
+    (let ((mevedel-session-artifacts--collecting-critical-artifacts-p
+           (mevedel-session-codec-portable-authority-p session))
+          (mevedel-session-artifacts--critical-artifacts nil))
+      (mevedel-session-artifacts-snapshot-modified session turn table)
+      (when mevedel-session-artifacts--critical-artifacts
+        (mevedel-session-publication-publish
+         session (nreverse mevedel-session-artifacts--critical-artifacts) t)
+        (mevedel-session-artifacts-save
+         session (mevedel-session-root-buffer session) nil t)))))
 
 (defun test-mevedel-applied--entry (session turn path)
   "Return SESSION's TURN checkpoint plist for PATH."
@@ -67,8 +77,8 @@ PORTABLE selects a portable session over a file one."
   ,test
   (test)
   :doc "entries for untouched paths survive the turn re-snapshot"
-  (dolist (portable '(nil t))
-    (test-mevedel-applied--with-session portable
+  (progn
+    (test-mevedel-applied--with-session nil
       (let ((a (test-mevedel-applied--file root "a.txt" "a1"))
             (b (test-mevedel-applied--file root "b.txt" "b1")))
         (test-mevedel-applied--seed session 1 b "b0")
@@ -108,9 +118,9 @@ PORTABLE selects a portable session over a file one."
       (should (equal "c1" (mevedel-session-artifacts-read-backup
                            session (plist-get (test-mevedel-applied--entry session 1 c)
                                               :pre-backup-name))))))
-  :doc "backups are readable from file and portable sessions"
-  (dolist (portable '(nil t))
-    (test-mevedel-applied--with-session portable
+  :doc "backups are readable from the committed publication"
+  (progn
+    (test-mevedel-applied--with-session nil
       (let ((a (test-mevedel-applied--file root "a.txt" "a1")))
         (test-mevedel-applied--file root "a.txt" "a2")
         (mevedel-session-artifacts-record-applied
@@ -119,12 +129,7 @@ PORTABLE selects a portable session over a file one."
           (should (equal "a2" (mevedel-session-artifacts-read-backup
                                session (plist-get entry :backup-name))))
           (should (equal "a1" (mevedel-session-artifacts-read-backup
-                               session (plist-get entry :pre-backup-name))))
-          (unless portable
-            (should (file-exists-p
-                     (file-name-concat (mevedel-session-save-path session)
-                                       "file-history"
-                                       (plist-get entry :backup-name)))))))))
+                               session (plist-get entry :pre-backup-name))))))))
   :doc "application backups only on request, from the change's own bytes"
   (test-mevedel-applied--with-session nil
     (let ((a (test-mevedel-applied--file root "a.txt" "a1"))
@@ -203,10 +208,14 @@ PORTABLE selects a portable session over a file one."
           (save (symbol-function 'mevedel-session-artifacts-save)))
       (test-mevedel-applied--seed session 1 a "a0")
       (test-mevedel-applied--file root "a.txt" "a2")
-      (delete-file (file-name-concat
-                    (mevedel-session-save-path session) "file-history"
-                    (plist-get (test-mevedel-applied--entry session 1 a)
-                               :pre-backup-name)))
+      (delete-file
+       (plist-get
+        (cdr (assoc (file-name-concat
+                     "file-history"
+                     (plist-get (test-mevedel-applied--entry session 1 a)
+                                :pre-backup-name))
+                    (plist-get (mevedel-session-publication session) :artifacts)))
+        :published))
       (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
                  (lambda (&rest args) (cl-incf saves) (apply save args))))
         (should-error

@@ -136,57 +136,6 @@
 		      (should-not (mevedel-session-save-path session))
 		      (should-not (mevedel-journal-capture-list (mevedel-session-workspace session) t)))))
 
-		 :doc "precommit sidecar failure rolls back clear without sealing its checkpoint"
-		 (mevedel-test-journal-capture--with-session
-		  (lambda (session buffer)
-		    (setf (mevedel-session-naming-state session) 'attempted)
-		    (mevedel-test-journal-capture--turn session buffer "Request" "Completed result")
-		    (let* ((workspace (mevedel-session-workspace session))
-			   (capture (car (mevedel-journal-capture-list workspace)))
-			   (save-path (mevedel-session-save-path session))
-			   (sidecar (mevedel-session-artifacts-sidecar-path save-path))
-			   (before-sidecar (mevedel-session-control-fs-read-file sidecar))
-			   (write (symbol-function 'mevedel-session-codec-write))
-			   failed)
-		      (with-current-buffer buffer
-			(let ((before (buffer-string)) (before-file buffer-file-name))
-			  (cl-letf (((symbol-function 'mevedel-session-codec-write)
-				     (lambda (&rest args)
-				       (if failed (apply write args)
-					 (setq failed t)
-					 (error "Injected precommit sidecar failure")))))
-			    (should-error (mevedel-cmd--clear nil)))
-			  (should failed)
-			  (should (equal before (buffer-string)))
-			  (should (equal before-file buffer-file-name))))
-		      (should (= 1 (mevedel-session-current-segment session)))
-		      (should (eq 'attempted (mevedel-session-naming-state session)))
-		      (should (equal before-sidecar (mevedel-session-control-fs-read-file sidecar)))
-		      (should-not (file-exists-p (mevedel-session-artifacts-segment-path save-path 2)))
-		      (should (equal (list capture) (mevedel-journal-capture-list workspace)))
-		      (should-not (mevedel-journal-capture-trigger workspace capture))
-		      (should (mevedel-journal-pins-present-p save-path)))))
-
-		 :doc "postcommit failure still seals clear and retains the durable naming reset"
-		 (mevedel-test-journal-capture--with-session
-		  (lambda (session buffer)
-		    (setf (mevedel-session-naming-state session) 'attempted)
-		    (mevedel-test-journal-capture--turn session buffer "Request" "Completed result")
-		    (let* ((workspace (mevedel-session-workspace session))
-			   (capture (car (mevedel-journal-capture-list workspace))))
-		      (with-current-buffer buffer
-			(cl-letf (((symbol-function 'mevedel-session-artifacts-save-instructions)
-				   (lambda (&rest _) (error "Injected postcommit failure"))))
-			  (should-error (mevedel-cmd--clear nil))))
-		      (should (= 2 (mevedel-session-current-segment session)))
-		      (should (eq 'pending (mevedel-session-naming-state session)))
-		      (let ((sidecar (mevedel-session-codec-read
-				      (mevedel-session-artifacts-sidecar-path (mevedel-session-save-path session)))))
-			(should (= 2 (plist-get sidecar :current-segment)))
-			(should (eq 'pending (plist-get sidecar :naming-state))))
-		      (should (eq 'clear (mevedel-journal-capture-trigger workspace capture)))
-		      (should (equal (list capture) (mevedel-journal-capture-list workspace))))))
-
 		 :doc "checkpoint and seal diagnostics do not fail a successful clear"
 		 (dolist (seam '(mevedel-journal-capture-checkpoint mevedel-journal-capture--write-seal))
 		   (mevedel-test-journal-capture--with-session
@@ -310,51 +259,6 @@
 			    (should (member old-head (mevedel-journal-pins-heads directory))))
 			(let ((mevedel-journal-enabled nil))
 			  (test-mevedel-session-persistence--release-and-kill resumed resumed-session)))))))
-
-(mevedel-deftest mevedel-cmd--clear-journal-quit ()
-		 (let ((phase ,phase))
-		   (mevedel-test-journal-capture--with-session
-		    (lambda (session buffer)
-		      (setf (mevedel-session-naming-state session) 'attempted)
-		      (mevedel-test-journal-capture--turn session buffer "Request" "Completed result")
-		      (let* ((workspace (mevedel-session-workspace session))
-			     (capture (car (mevedel-journal-capture-list workspace)))
-			     (directory (mevedel-session-save-path session))
-			     (seam (if (eq phase 'before-commit)
-				       'mevedel-session-codec-write
-				     'mevedel-session-artifacts-save-instructions))
-			     (original (symbol-function seam))
-			     injected)
-			(with-current-buffer buffer
-			  (let ((old-text (buffer-string)) (old-file buffer-file-name))
-			    (cl-letf (((symbol-function seam)
-				       (lambda (&rest args)
-					 (if injected (apply original args)
-					   (setq injected t)
-					   (signal 'quit nil)))))
-			      (should (eq 'quit (condition-case nil
-						    (progn (mevedel-cmd--clear nil) 'returned)
-						  (quit 'quit)))))
-			    (should injected)
-			    (ert-info ((format "Quit phase: %s" phase))
-				      (if (eq phase 'before-commit)
-					  (progn
-					    (should (= 1 (mevedel-session-current-segment session)))
-					    (should (eq 'attempted (mevedel-session-naming-state session)))
-					    (should (equal old-text (buffer-string)))
-					    (should (equal old-file buffer-file-name))
-					    (should-not (file-exists-p (mevedel-session-artifacts-segment-path directory 2)))
-					    (should-not (mevedel-journal-capture-trigger workspace capture)))
-					(should (= 2 (mevedel-session-current-segment session)))
-					(should (eq 'pending (mevedel-session-naming-state session)))
-					(should (eq 'clear (mevedel-journal-capture-trigger workspace capture)))))))
-			(should (equal (list capture) (mevedel-journal-capture-list workspace)))
-			(should (mevedel-journal-pins-present-p directory))))))
-		 (phase)
-		 :doc "quit after PID-lock commit still seals clear"
-		 'after-commit
-		 :doc "quit before PID-lock commit restores naming and transcript without sealing"
-		 'before-commit)
 
 (mevedel-deftest mevedel-cmd--clear-journal-portable-quit (:quiet t)
 		 (let ((phase ,phase))

@@ -33,7 +33,7 @@
           (child (mevedel-agent-record--create
                   :path "/root/child" :conversation-buffer data))
           (session (mevedel-session--create
-                    :name "archive" :save-path directory :authority-mode 'pid-lock
+                    :name "archive" :save-path directory :authority-mode 'portable
                     :current-segment 3
                     :workspace (mevedel-workspace--create
                                 :type 'file :id "archive" :root directory)
@@ -67,7 +67,23 @@
              (mevedel-session-artifacts-stabilize-gptel-bounds)
              (write-region (point-min) (point-max) archive nil 'silent))
            (puthash 1 (list :ready t :writable nil) guests)
-           (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+           ;; The archive is a raw file here, not a published generation.
+           (cl-letf (((symbol-function 'mevedel-session-artifacts-transcript-segments)
+                      (lambda (_session live &rest _)
+                        ;; Only a file-backed child with an archive on disk has one.
+                        (when (and (buffer-local-value 'buffer-file-name live)
+                                   (file-exists-p archive))
+                          (list (list :number 1 :status 'readable :current-p nil
+                                      :logical "agents/child.compact-0001.chat.org")
+                                (list :number 2 :status 'readable :current-p t)))))
+                     ((symbol-function 'mevedel-session-artifacts-find-artifact-noselect)
+                      (lambda (_session logical &rest _)
+                        (let ((buffer (generate-new-buffer " *raw archive*")))
+                          (with-current-buffer buffer
+                            (insert-file-contents (file-name-concat directory logical))
+                            (delay-mode-hooks (org-mode)))
+                          buffer)))
+                     ((symbol-function 'mevedel-collaboration--transport-send)
                       (lambda (_transport _peer frame)
                         (push (mevedel-test--frame frame) sent) t)))
              (cl-labels ((fetch (frame &optional peer)

@@ -42,14 +42,13 @@ the workspace store's durable Rewind intent
 `SessionStart(rewind)` context epoch without ending the live session; cancelled
 or rolled-back operations start no epoch.
 
-Portable project sessions expose Redo by republishing a selected immutable head
-as a new head. It restores the head's conversation artifacts, sidecar state,
+Project and file-workspace sessions expose Redo by republishing a selected
+immutable head as a new head. It restores the head's conversation artifacts, sidecar state,
 retained agent transcripts, persisted tool results, and captured working-tree
 files. Sessions keep no instruction snapshots, so Redo settles the workspace
 store for the restored turn count instead of loading a historical note set
 ([ADR 0130](0130-keep-instructions-in-a-workspace-store.md)). It does not
-recover uncaptured effects. File sessions using PID locks have no published
-heads and no Redo.
+recover uncaptured effects.
 
 Redo preparation and confirmation read immutable bytes without reserving the
 lease. The reserved transaction then rechecks the current head and confirmed
@@ -75,9 +74,8 @@ and retained-file marking rather than restarting completed work. Retention
 criteria remain unchanged; deletion reserves ownership and is capped per batch.
 Repeated saves within a turn reuse checkpoint versions and timestamps. Snapshot
 names address raw contents, so equal before/after images across paths and turns
-share stored bytes. Immutable published heads retain their own references. PID
-stores collect unindexed generated content only after sidecar commit, preserving
-the previous durable state when a save fails.
+share stored bytes. Immutable published heads retain their own references,
+preserving the previous durable state when a save fails.
 
 ## Rationale and consequences
 
@@ -89,9 +87,10 @@ session's unrelated edits; overlapping changes still require a user decision.
 
 Rewind and Redo share user vocabulary, but use different evidence: Rewind derives
 turn-exact boundaries from prompt/checkpoint history, while Redo selects stored
-publication states that may no longer appear in that history. Unifying their
-storage machinery would exclude PID-lock sessions, lose boundaries without a
-published head, or offer partial streamed responses as complete turns.
+publication states that may no longer appear in that history. Both now commit
+through the shared portable authority, but their selection remains distinct:
+Rewind retains turn-exact boundaries while Redo excludes incomplete streamed
+responses.
 
 Immutable publication makes Redo possible without consuming the state it leaves.
 Collection must follow artifact references rather than age alone because new
@@ -100,6 +99,12 @@ manifests can retain bytes in older generation directories.
 ## Decision history
 
 All revisions below belong to ADR 0072.
+
+- **Shared portable authority, 2026-11-14:** file-workspace sessions moved from
+  PID locks and directory-swap Rewind to the same lease and replacement-head
+  transaction as project sessions. Their retained heads now support Redo too.
+  This supersedes the earlier PID-store distinction without changing the
+  turn boundaries or captured-file coverage.
 
 - **Notes and checked reversal, 2026-11-12:** the earlier decision restored
   whole captured files and rejected selective directive undo for fear of losing

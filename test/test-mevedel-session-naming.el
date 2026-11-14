@@ -12,7 +12,9 @@
                                   byte-compile-current-file))
           "mevedel-session-test-support"))
 (require 'mevedel-sandbox)
+(require 'mevedel-session-artifacts)
 (require 'mevedel-session-naming)
+(require 'mevedel-session-publication)
 (require 'mevedel-skills-ui)
 
 (defmacro test-mevedel-session-naming--with-session (&rest body)
@@ -439,24 +441,30 @@ Each call is a plist of :backend, :model, :effort, :prompt, :callback,
     (mevedel-session-artifacts-save session buffer)
     (let ((text (buffer-string))
           (path buffer-file-name)
-          (sidecar (mevedel-session-artifacts-sidecar-path
-                    (mevedel-session-save-path session)))
-          (write (symbol-function 'mevedel-session-control-fs-write-file)))
-      (cl-letf (((symbol-function 'mevedel-session-control-fs-write-file)
-                 (lambda (file text &rest args)
-                   (if (equal file sidecar)
-                       (signal 'file-error '("Injected sidecar write failure"))
-                     (apply write file text args)))))
+          (sidecar (lambda ()
+                     (car (read-from-string
+                           (mevedel-session-artifacts-read-artifact
+                            session "session.meta.el" t)))))
+          (head (plist-get (mevedel-session-publication session) :head))
+          injected)
+      (should (eq 'attempted (plist-get (funcall sidecar) :naming-state)))
+      (should (equal "Old input" (plist-get (funcall sidecar) :naming-input)))
+      (cl-letf (((symbol-function 'mevedel-session-publication--publish-artifact)
+                 (lambda (_artifact)
+                   (setq injected t)
+                   (signal 'file-error '("Injected sidecar publication failure")))))
         (should-error (mevedel-cmd--clear nil) :type 'file-error))
+      (should injected)
+      (should (equal head (plist-get (mevedel-session-publication session) :head)))
       (should (= 1 (mevedel-session-current-segment session)))
       (should (equal path buffer-file-name))
       (should (equal text (buffer-string)))
       (should (eq 'attempted (mevedel-session-naming-state session)))
       (should (equal "Old input" (mevedel-session-naming-input session)))
       (should (eq 'attempted
-                  (plist-get (mevedel-session-codec-read sidecar) :naming-state)))
+                  (plist-get (funcall sidecar) :naming-state)))
       (should (equal "Old input"
-                     (plist-get (mevedel-session-codec-read sidecar) :naming-input)))))
+                     (plist-get (funcall sidecar) :naming-input)))))
   :doc "a post-commit presentation error cannot roll back the new naming state"
   (test-mevedel-session-naming--with-session
     (mevedel-session-artifacts-save session buffer)
@@ -1056,7 +1064,7 @@ Each call is a plist of :backend, :model, :effort, :prompt, :callback,
     (let* ((session (mevedel-session-create "main" workspace))
            (buffer (generate-new-buffer " *rename-publication*"))
            (publish-function
-            (symbol-function 'mevedel-session-artifacts-publish-text))
+            (symbol-function 'mevedel-session-artifacts-publish-sidecar-state))
            published)
       (unwind-protect
           (with-current-buffer buffer
@@ -1064,20 +1072,24 @@ Each call is a plist of :backend, :model, :effort, :prompt, :callback,
             (setq-local mevedel--session session)
             (insert "transcript\n")
             (mevedel-session-artifacts-save session buffer)
-            (cl-letf
-                (((symbol-function
-                   'mevedel-session-artifacts-publish-text)
-                  (lambda (actual-session path content &optional coding)
-                    (push path published)
-                    (funcall publish-function
-                             actual-session path content coding))))
-              (mevedel-rename-session "renamed"))
-            (should
-             (equal
-              (list
-               (mevedel-session-artifacts-sidecar-path
-                (mevedel-session-save-path session)))
-              published)))
+            (let ((head (plist-get (mevedel-session-publication session) :head)))
+              (cl-letf
+                  (((symbol-function
+                     'mevedel-session-artifacts-publish-sidecar-state)
+                    (lambda (actual-session root-buffer &optional token)
+                      (push (list actual-session root-buffer) published)
+                      (funcall publish-function actual-session root-buffer token))))
+                (mevedel-rename-session "renamed"))
+              (should (equal (list (list session buffer)) published))
+              (should-not
+               (equal head (plist-get (mevedel-session-publication session) :head)))
+              (should
+               (equal "renamed"
+                      (plist-get
+                       (mevedel-session-codec-read
+                        (mevedel-session-artifacts-sidecar-path
+                         (mevedel-session-save-path session)))
+                       :session-name)))))
         (test-mevedel-session-persistence--release-and-kill buffer session)
         (delete-directory tempdir t)
         (mevedel-workspace-clear-registry)))))
@@ -1358,6 +1370,8 @@ Each call is a plist of :backend, :model, :effort, :prompt, :callback,
   (test-mevedel-session-naming--with-session
     (let ((timer-function (symbol-function 'run-at-time))
           (mevedel-transport-retry-seconds 0.01)
+          ;; The spy times the 30 s reply deadline; keep lease renewal apart.
+          (mevedel-session-lease-renewal-seconds 31)
           deadlines calls events)
       (cl-letf (((symbol-function 'run-at-time)
                  (lambda (time repeat function &rest args)
@@ -1389,7 +1403,9 @@ Each call is a plist of :backend, :model, :effort, :prompt, :callback,
                                       :outcome)))))
   :doc "a synchronous reply settles without starting a deadline"
   (test-mevedel-session-naming--with-session
-    (let ((timer-function (symbol-function 'run-at-time)) deadline)
+    (let ((timer-function (symbol-function 'run-at-time))
+          (mevedel-session-lease-renewal-seconds 31)
+          deadline)
       (cl-letf (((symbol-function 'run-at-time)
                  (lambda (time repeat function &rest args)
                    (if (equal time 30) (setq deadline t)

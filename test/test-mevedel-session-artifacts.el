@@ -21,7 +21,10 @@
           "mevedel-session-test-support"))
 
 (require 'mevedel-compact-evidence)
+(require 'mevedel-collaboration)
 (require 'mevedel-journal-evidence)
+(require 'mevedel-session-artifacts)
+(require 'mevedel-session-durability)
 
 (mevedel-deftest mevedel-session-artifacts--restore-segment-file ()
   ,test
@@ -954,10 +957,11 @@
                   (should (file-directory-p (file-name-concat path "agents")))
                   (should (file-directory-p
                            (file-name-concat path "file-history")))
-                  ;; `ensure-files' leaves sidecar writing to `save'
+                  ;; `ensure-files' leaves publishing to `save'
                   ;; (one write instead of two on first materialization).
-                  (should (file-exists-p
-                           (file-name-concat path "segment-0001.chat.org")))
+                  (mevedel-session-artifacts-save session buf)
+                  (should (mevedel-session-artifacts-artifact-present-p
+                           session "segment-0001.chat.org" t))
                   ;; Struct fields populated
                   (should (mevedel-session-session-id session))
                   (should (mevedel-session-created-at session))
@@ -1051,15 +1055,11 @@
                   (should (equal (file-name-concat
                                   path "segment-0001.chat.org")
                                  buffer-file-name))
-                  (should
-                   (file-exists-p
-                    (file-name-concat path "segment-0001.chat.org")))
-                  (let ((segment-file buffer-file-name))
-                    (should (string-match-p
-                             "Hello after shallow materialization"
-                             (with-temp-buffer
-                               (insert-file-contents segment-file)
-                               (buffer-string)))))))
+                  (mevedel-session-artifacts-save session data-buf)
+                  (should (string-match-p
+                           "Hello after shallow materialization"
+                           (mevedel-session-artifacts-read-artifact
+                            session "segment-0001.chat.org" t)))))
             (when (buffer-live-p wrong-buf) (kill-buffer wrong-buf))
             (when (buffer-live-p data-buf) (kill-buffer data-buf))))
       (delete-directory tempdir t)
@@ -1168,36 +1168,6 @@
       (test-mevedel-session-persistence--release-and-kill buffer session)
       (mevedel-workspace-clear-registry)
       (delete-directory root t)))
-  :doc "PID snapshot cleanup follows durable commit and preserves failed-save recovery"
-  (cl-destructuring-bind (session . root)
-      (test-mevedel-session-persistence--make-materialized-session)
-    (unwind-protect
-        (with-current-buffer "*test-data-buf*"
-          (let* ((path (file-name-concat root "changing.txt"))
-                 (pre (make-hash-table :test #'equal))
-                 old-backup pre-backup)
-            (setq-local mevedel--session session)
-            (setq-local mevedel--current-request (mevedel-request--create :file-snapshots pre))
-            (puthash path "before" pre)
-            (write-region "first" nil path nil 'silent)
-            (mevedel-session-artifacts-save session (current-buffer))
-            (let ((entry (cdr (assoc path (cdr (assoc 0 (mevedel-session-file-snapshots session)))))))
-              (setq old-backup (mevedel-session-artifacts-backup-path
-                                (mevedel-session-save-path session) (plist-get entry :backup-name))
-                    pre-backup (mevedel-session-artifacts-backup-path
-                                (mevedel-session-save-path session) (plist-get entry :pre-backup-name))))
-            (write-region "second" nil path nil 'silent)
-            (cl-letf (((symbol-function 'mevedel-session-codec-write)
-                       (lambda (&rest _) (error "Injected sidecar failure"))))
-              (should-error (mevedel-session-artifacts-save session (current-buffer))))
-            (should (equal "first" (mevedel-session-artifacts-read-file-raw old-backup)))
-            (should (equal "before" (mevedel-session-artifacts-read-file-raw pre-backup)))
-            (mevedel-session-artifacts-save session (current-buffer))
-            (should-not (file-exists-p old-backup))
-            (should (equal "before" (mevedel-session-artifacts-read-file-raw pre-backup)))
-            (should (= 2 (length (directory-files (file-name-directory old-backup) nil "^[^.]"))))
-            (setq-local mevedel--current-request nil)))
-      (test-mevedel-session-persistence--cleanup root)))
   :doc "assigns stable fork-point identity only to settled responses"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
@@ -1285,7 +1255,8 @@
                 (should-not create-lockfiles)
                 (let ((entries (directory-files
                                 (mevedel-session-save-path session))))
-                  (should (member "segment-0001.chat.org" entries))
+                  (should (mevedel-session-artifacts-artifact-present-p
+                           session "segment-0001.chat.org" t))
                   (should-not
                    (seq-find (lambda (entry)
                                (or (string-suffix-p "~" entry)
@@ -1439,16 +1410,10 @@
                 (with-current-buffer view-buf
                   (should-not buffer-file-name)
                   (should-not buffer-file-truename))
-                (let ((segment-path
-                       (mevedel-session-artifacts-segment-path
-                        (mevedel-session-save-path session) 1)))
-                  (should (file-exists-p segment-path))
-                  (with-temp-buffer
-                    (insert-file-contents segment-path)
-                    (should (string-match-p "Persist data prompt"
-                                            (buffer-string)))
-                    (should-not (string-match-p "Working view chrome"
-                                                (buffer-string))))))
+                (let ((segment (mevedel-session-artifacts-read-artifact
+                                session "segment-0001.chat.org" t)))
+                  (should (string-match-p "Persist data prompt" segment))
+                  (should-not (string-match-p "Working view chrome" segment))))
             (when (buffer-live-p view-buf)
               (with-current-buffer view-buf (set-buffer-modified-p nil))
               (kill-buffer view-buf))
@@ -1513,11 +1478,9 @@
                 (mevedel-test--with-shifted-clock
                   (insert "First prompt\n")
                   (mevedel-session-artifacts-save session buf)
-                  (let* ((segment (buffer-file-name))
-                         (segment-text
-                          (with-temp-buffer
-                            (insert-file-contents segment)
-                            (buffer-string)))
+                  (let* ((segment-text
+                          (mevedel-session-artifacts-read-artifact
+                           session "segment-0001.chat.org" t))
                          (first-updated
                           (mevedel-session-updated-at session)))
                     (setq mevedel-test--timestamp-offset 2)
@@ -1531,9 +1494,8 @@
                     ;; modification for the next settlement save.
                     (should (buffer-modified-p))
                     (should (equal segment-text
-                                   (with-temp-buffer
-                                     (insert-file-contents segment)
-                                     (buffer-string))))
+                                   (mevedel-session-artifacts-read-artifact
+                                    session "segment-0001.chat.org" t)))
                     ;; The sidecar itself was rewritten.
                     (should-not (equal first-updated
                                        (mevedel-session-updated-at session)))
@@ -2457,59 +2419,21 @@
           (with-current-buffer buf
             (should new-path)
             (should (= 2 (mevedel-session-current-segment session)))
-            (should (file-exists-p new-path))
-            ;; Old segment file still exists.
-            (let ((seg1 (mevedel-session-artifacts-segment-path
-                         (mevedel-session-save-path session) 1)))
-              (should (file-exists-p seg1))
-              ;; Old segment got finalized property
-              (with-temp-buffer
-                (insert-file-contents seg1)
-                (should (string-match-p "MEVEDEL_SEGMENT_FINALIZED_AT"
-                                        (buffer-string)))))
+            (should (mevedel-session-artifacts-artifact-present-p
+                     session (file-name-nondirectory new-path) t))
+            ;; Old segment still exists and got the finalized property.
+            (should (string-match-p
+                     "MEVEDEL_SEGMENT_FINALIZED_AT"
+                     (mevedel-session-artifacts-read-artifact
+                      session "segment-0001.chat.org" t)))
             ;; New buffer points at the new segment file.
-            (should (file-equal-p new-path buffer-file-name))
+            (should (equal new-path buffer-file-name))
             ;; Buffer body contains the summary.
             (should (string-match-p "Summary of the prior conversation."
                                     (buffer-string)))
             ;; Buffer also contains the segment-2 number property.
             (should (string-match-p "MEVEDEL_SEGMENT_NUMBER:[ \t]*2"
                                     (buffer-string)))))
-      (test-mevedel-session-persistence--cleanup tempdir)))
-  :doc "refreshes matching stale visited modtime before editing"
-  (cl-destructuring-bind (session . tempdir)
-      (test-mevedel-session-persistence--make-materialized-session)
-    (unwind-protect
-        (let ((buf (get-buffer "*test-data-buf*")))
-          (with-current-buffer buf
-            (set-file-times buffer-file-name (time-add (current-time) 5))
-            (should-not (verify-visited-file-modtime buf)))
-          (should (mevedel-session-artifacts-rotate-segment
-                   session buf "Summary after stale modtime."))
-          (with-current-buffer buf
-            (should (verify-visited-file-modtime buf))))
-      (test-mevedel-session-persistence--cleanup tempdir)))
-  :doc "refreshes matching stale visited modtime before deleting pending text"
-  (cl-destructuring-bind (session . tempdir)
-      (test-mevedel-session-persistence--make-materialized-session)
-    (unwind-protect
-        (let ((buf (get-buffer "*test-data-buf*")))
-          (with-current-buffer buf
-            (set-visited-file-modtime)
-            (set-buffer-modified-p nil)
-            (goto-char (point-max))
-            (insert "\nPending prompt")
-            (set-file-times buffer-file-name (time-add (current-time) 5))
-            (should-not (verify-visited-file-modtime buf)))
-                  (cl-letf (((symbol-function 'ask-user-about-supersession-threat)
-                             (lambda (&rest _args)
-                               (error "Supersession prompt"))))
-            (should (mevedel-session-artifacts-rotate-segment
-                     session buf "Summary after stale pending text."
-                     :pending-text "\nPending prompt")))
-          (with-current-buffer buf
-            (should (string-suffix-p "Pending prompt\n" (buffer-string)))
-            (should (verify-visited-file-modtime buf))))
       (test-mevedel-session-persistence--cleanup tempdir)))
   :doc "noninteractive publication:
 rotation never saves through a rebound temporary visited filename or prompts"
@@ -2538,37 +2462,10 @@ rotation never saves through a rebound temporary visited filename or prompts"
                   (mevedel-session-artifacts-rotate-segment
                    session buf "Noninteractive summary.")))
           (with-current-buffer buf
-            (should (file-equal-p new-path buffer-file-name))
+            (should (equal new-path buffer-file-name))
             (should (equal (file-truename new-path) buffer-file-truename))
             (should (verify-visited-file-modtime buf))
             (should-not (buffer-modified-p))))
-      (test-mevedel-session-persistence--cleanup tempdir)))
-  :doc "signals a controlled error when current segment differs on disk"
-  (cl-destructuring-bind (session . tempdir)
-      (test-mevedel-session-persistence--make-materialized-session)
-    (unwind-protect
-        (let ((buf (get-buffer "*test-data-buf*")))
-          (with-current-buffer buf
-            (write-region "external edit\n" nil buffer-file-name nil 'silent)
-            (should-not (verify-visited-file-modtime buf)))
-          (should-error
-           (mevedel-session-artifacts-rotate-segment
-            session buf "Summary should not be written.")
-           :type 'error))
-      (test-mevedel-session-persistence--cleanup tempdir)))
-  :doc "signals a controlled error when current segment was deleted on disk"
-  (cl-destructuring-bind (session . tempdir)
-      (test-mevedel-session-persistence--make-materialized-session)
-    (unwind-protect
-        (let ((buf (get-buffer "*test-data-buf*")))
-          (with-current-buffer buf
-            (delete-file buffer-file-name)
-            (should-not (file-exists-p buffer-file-name)))
-          (should-error
-           (mevedel-session-artifacts-rotate-segment
-            session buf "Summary should not be written.")
-           :type 'error)
-          (should (= 1 (mevedel-session-current-segment session))))
       (test-mevedel-session-persistence--cleanup tempdir)))
   :doc "sidecar reflects bumped current-segment after rotation"
   (cl-destructuring-bind (session . tempdir)
@@ -2589,13 +2486,10 @@ rotation never saves through a rebound temporary visited filename or prompts"
         (let ((buf (get-buffer "*test-data-buf*")))
           (mevedel-session-artifacts-rotate-segment session buf "Summary A.")
           (mevedel-session-artifacts-rotate-segment session buf "Summary B.")
-          (let ((dir (mevedel-session-save-path session)))
-            (should (file-exists-p
-                     (mevedel-session-artifacts-segment-path dir 1)))
-            (should (file-exists-p
-                     (mevedel-session-artifacts-segment-path dir 2)))
-            (should (file-exists-p
-                     (mevedel-session-artifacts-segment-path dir 3)))
+          (progn
+            (dolist (n '(1 2 3))
+              (should (mevedel-session-artifacts-artifact-present-p
+                       session (format "segment-%04d.chat.org" n) t)))
             (should (= 3 (mevedel-session-current-segment session)))))
       (test-mevedel-session-persistence--cleanup tempdir)))
   :doc "no-op when session is not materialized"
@@ -2631,8 +2525,9 @@ rotation never saves through a rebound temporary visited filename or prompts"
             (should new-path)
             (should-not mevedel-compact-estimation--known-token-baseline)
             (should (= 2 (mevedel-session-current-segment session)))
-            (should (file-exists-p new-path))
-            (should (file-equal-p new-path buffer-file-name))
+            (should (mevedel-session-artifacts-artifact-present-p
+                     session (file-name-nondirectory new-path) t))
+            (should (equal new-path buffer-file-name))
             (should (string-match-p "MEVEDEL_SEGMENT_NUMBER:[ \t]*2"
                                     (buffer-string)))
             (should-not (string-match-p "Initial prompt" (buffer-string)))
@@ -2640,31 +2535,12 @@ rotation never saves through a rebound temporary visited filename or prompts"
                                         (buffer-string)))
             (let ((live (buffer-substring-no-properties
                          (point-min) (point-max))))
-              (with-temp-buffer
-                (insert-file-contents new-path)
-                (should (equal live (buffer-string)))))
-            (let ((seg1 (mevedel-session-artifacts-segment-path
-                         (mevedel-session-save-path session) 1)))
-              (should (file-exists-p seg1))
-              (with-temp-buffer
-                (insert-file-contents seg1)
-                (should (string-match-p "Initial prompt"
-                                        (buffer-string)))
-                (should (string-match-p "MEVEDEL_SEGMENT_FINALIZED_AT"
-                                        (buffer-string)))))))
-      (test-mevedel-session-persistence--cleanup tempdir)))
-  :doc "refreshes matching stale visited modtime before fresh segment edit"
-  (cl-destructuring-bind (session . tempdir)
-      (test-mevedel-session-persistence--make-materialized-session)
-    (unwind-protect
-        (let ((buf (get-buffer "*test-data-buf*")))
-          (with-current-buffer buf
-            (set-file-times buffer-file-name (time-add (current-time) 5))
-            (should-not (verify-visited-file-modtime buf)))
-          (should (mevedel-session-artifacts-start-fresh-segment
-                   session buf))
-          (with-current-buffer buf
-            (should (verify-visited-file-modtime buf))))
+              (should (equal live (mevedel-session-artifacts-read-artifact
+                                   session (file-name-nondirectory new-path) t))))
+            (let ((seg1 (mevedel-session-artifacts-read-artifact
+                         session "segment-0001.chat.org" t)))
+              (should (string-match-p "Initial prompt" seg1))
+              (should (string-match-p "MEVEDEL_SEGMENT_FINALIZED_AT" seg1)))))
       (test-mevedel-session-persistence--cleanup tempdir)))
   :doc "clear closes the chat under its title; compaction rotation does not"
   (cl-destructuring-bind (session . tempdir)
@@ -2699,7 +2575,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
       (test-mevedel-session-persistence--make-materialized-session)
     (unwind-protect
         (let ((buf (get-buffer "*test-data-buf*")))
-          (cl-letf (((symbol-function 'mevedel-session-artifacts--publish-segment-text)
+          (cl-letf (((symbol-function 'mevedel-session-artifacts--publish-remote-segment-transition)
                      (lambda (&rest _) (error "Injected publication failure"))))
             (should-error (mevedel-session-artifacts-start-fresh-segment
                            session buf :clear t)))
@@ -2769,7 +2645,8 @@ rotation never saves through a rebound temporary visited filename or prompts"
                (old-segment (with-current-buffer buf buffer-file-name))
                (old-text (with-current-buffer buf
                            (buffer-substring (point-min) (point-max)))))
-                  (cl-letf (((symbol-function 'mevedel-session-codec-write)
+                  (cl-letf (((symbol-function
+                              'mevedel-session-artifacts--publish-remote-segment-transition)
                              (lambda (&rest _)
                                (error "Sidecar write failed"))))
             (should-error
@@ -2777,47 +2654,45 @@ rotation never saves through a rebound temporary visited filename or prompts"
               session buf "Summary that will not commit.")))
           (with-current-buffer buf
             (should (= 1 (mevedel-session-current-segment session)))
-            (should (file-equal-p old-segment buffer-file-name))
+            (should (equal old-segment buffer-file-name))
             (should (equal old-text
                            (buffer-substring (point-min) (point-max)))))
           (should-not
-           (file-exists-p
-            (mevedel-session-artifacts-segment-path
-             (mevedel-session-save-path session) 2))))
+           (mevedel-session-artifacts-artifact-present-p
+            session "segment-0002.chat.org" t)))
       (test-mevedel-session-persistence--cleanup tempdir)))
 
-  :doc "retains committed rotation when instructions fail after sidecar publish"
+  :doc "retains committed rotation when a post-commit step fails"
   (cl-destructuring-bind (session . tempdir)
       (test-mevedel-session-persistence--make-materialized-session)
     (unwind-protect
-        (let* ((buf (get-buffer "*test-data-buf*"))
-               (sidecar (mevedel-session-artifacts-sidecar-path
-                         (mevedel-session-save-path session))))
+        (let ((buf (get-buffer "*test-data-buf*")))
           (cl-letf (((symbol-function
-                      'mevedel-session-artifacts-save-instructions)
-                             (lambda (&rest _)
-                               (error "Instruction save failed"))))
+                      'mevedel-collaboration-notify-history-changed)
+                     (lambda (&rest _)
+                       (error "Notification failed"))))
             (should-error
              (mevedel-session-artifacts-rotate-segment
-              session buf "Summary that will not commit.")))
-          (let ((plist (mevedel-session-codec-read sidecar)))
+              session buf "Summary that stays committed.")))
+          (let ((plist (car (read-from-string
+                             (mevedel-session-artifacts-read-artifact
+                              session "session.meta.el" t)))))
             (should (= 2 (mevedel-session-current-segment session)))
             (should (= 2 (plist-get plist :current-segment)))
             (should (equal (mevedel-session-prompt-index session)
                            (plist-get plist :prompt-index))))
           (with-current-buffer buf
             (should
-             (file-equal-p
+             (equal
               (mevedel-session-artifacts-segment-path
                (mevedel-session-save-path session) 2)
               buffer-file-name)))
           (should
-           (file-exists-p
-            (mevedel-session-artifacts-segment-path
-             (mevedel-session-save-path session) 2))))
+           (mevedel-session-artifacts-artifact-present-p
+            session "segment-0002.chat.org" t)))
       (test-mevedel-session-persistence--cleanup tempdir)))
 
-  :doc "restores pending prompt when predecessor save fails"
+  :doc "restores pending prompt when the transition fails"
   (cl-destructuring-bind (session . tempdir)
       (test-mevedel-session-persistence--make-materialized-session)
     (unwind-protect
@@ -2828,16 +2703,17 @@ rotation never saves through a rebound temporary visited filename or prompts"
               (goto-char (point-max))
               (insert "Pending prompt\n"))
             (set-buffer-modified-p t))
-                  (cl-letf (((symbol-function 'save-buffer)
-                             (lambda (&rest _)
-                               (error "Save failed"))))
+          (cl-letf (((symbol-function
+                      'mevedel-session-artifacts--publish-remote-segment-transition)
+                     (lambda (&rest _)
+                       (error "Publication failed"))))
             (should-error
              (mevedel-session-artifacts-rotate-segment
               session buf "Summary."
               :pending-text "Pending prompt\n")))
           (with-current-buffer buf
             (should (= 1 (mevedel-session-current-segment session)))
-            (should (file-equal-p old-segment buffer-file-name))
+            (should (equal old-segment buffer-file-name))
             (should (string-match-p "Pending prompt" (buffer-string)))))
       (test-mevedel-session-persistence--cleanup tempdir))))
 
@@ -2846,13 +2722,11 @@ rotation never saves through a rebound temporary visited filename or prompts"
   ,test
   (test)
   :doc "failed rotation and fresh transitions restore index and predecessor bytes"
-  (dolist (portable '(nil t))
+  (progn
     (dolist (fresh '(nil t))
      (dolist (interruption '(error quit))
       (let* ((root (make-temp-file "mevedel-index-rollback-" t))
-             (workspace (if portable
-                            (test-mevedel-session-persistence--make-workspace root)
-                          (test-mevedel-session-persistence--make-file-workspace root)))
+             (workspace (test-mevedel-session-persistence--make-workspace root))
              (session (mevedel-session-create "main" workspace))
              (buffer (generate-new-buffer " *index-rollback*")))
         (unwind-protect
@@ -2866,11 +2740,8 @@ rotation never saves through a rebound temporary visited filename or prompts"
                     (bytes (mevedel-session-artifacts-read-artifact
                             session "segment-0001.chat.org" t))
                     (head (plist-get (mevedel-session-publication session) :head))
-                    (failure (if portable
-                                 'mevedel-session-checkpoint-capture
-                               'mevedel-session-codec-write)))
-                ;; Both failures occur after the finalized index was prepared;
-                ;; the file failure also rolls back finalized predecessor bytes.
+                    (failure 'mevedel-session-checkpoint-capture))
+                ;; The failure occurs after the finalized index was prepared.
                 (cl-letf (((symbol-function failure)
                            (lambda (&rest _) (signal interruption nil))))
                   (should
@@ -2900,13 +2771,10 @@ rotation never saves through a rebound temporary visited filename or prompts"
 (mevedel-deftest mevedel-session-artifacts-rotate-segment-quit (:quiet t)
   ,test
   (test)
-  :doc "quit retains committed file or portable transitions and pending portable publication"
-  (dolist (phase '(file-committed portable-committed portable-pending))
-    (let* ((portable (not (eq phase 'file-committed)))
-           (root (make-temp-file "mevedel-rotation-quit-" t))
-           (workspace (if portable
-                          (test-mevedel-session-persistence--make-workspace root)
-                        (test-mevedel-session-persistence--make-file-workspace root)))
+  :doc "quit retains committed portable transitions and pending portable publication"
+  (dolist (phase '(portable-committed portable-pending))
+    (let* ((root (make-temp-file "mevedel-rotation-quit-" t))
+           (workspace (test-mevedel-session-persistence--make-workspace root))
            (session (mevedel-session-create "main" workspace))
            (buffer (generate-new-buffer " *rotation-quit*")))
       (unwind-protect
@@ -2921,19 +2789,16 @@ rotation never saves through a rebound temporary visited filename or prompts"
             (let* ((head (plist-get (mevedel-session-publication session) :head))
                    (transition (symbol-function
                                 'mevedel-session-artifacts--publish-remote-segment-transition))
-                   (seam (if portable
-                             'mevedel-session-artifacts--publish-remote-segment-transition
-                           'mevedel-session-artifacts-save-instructions)))
+                   (seam 'mevedel-session-artifacts--publish-remote-segment-transition))
               (cl-letf (((symbol-function seam)
                          (lambda (&rest args)
                            (should inhibit-quit)
-                           (when portable
-                             (if (eq phase 'portable-pending)
-                                 (cl-letf (((symbol-function
-                                             'mevedel-session-publication--commit-marker-publication)
-                                            (lambda (&rest _) (error "Injected publication failure"))))
-                                   (condition-case nil (apply transition args) (error nil)))
-                               (apply transition args)))
+                           (if (eq phase 'portable-pending)
+                               (cl-letf (((symbol-function
+                                           'mevedel-session-publication--commit-marker-publication)
+                                          (lambda (&rest _) (error "Injected publication failure"))))
+                                 (condition-case nil (apply transition args) (error nil)))
+                             (apply transition args))
                            (signal 'quit nil))))
                 (should (eq 'quit
                             (condition-case nil
@@ -3072,16 +2937,13 @@ rotation never saves through a rebound temporary visited filename or prompts"
           (mevedel-session-artifacts-rotate-segment
            session buf "Summary."
            :pending-text "Pending prompt\n")
-          (let ((seg1 (mevedel-session-artifacts-segment-path
-                       (mevedel-session-save-path session) 1))
-                (seg2 (mevedel-session-artifacts-segment-path
-                       (mevedel-session-save-path session) 2)))
-            (with-temp-buffer
-              (insert-file-contents seg1)
-              (should-not (string-match-p "Pending prompt" (buffer-string))))
-            (with-temp-buffer
-              (insert-file-contents seg2)
-              (should-not (string-match-p "Pending prompt" (buffer-string))))
+          (progn
+            (dolist (logical '("segment-0001.chat.org" "segment-0002.chat.org"))
+              (should-not
+               (string-match-p
+                "Pending prompt"
+                (mevedel-session-artifacts-read-artifact
+                 session logical t))))
             (with-current-buffer buf
               (should (string-match-p "Pending prompt" (buffer-string)))
               (should-not (buffer-modified-p)))))
@@ -3092,12 +2954,10 @@ rotation never saves through a rebound temporary visited filename or prompts"
   ,test
   (test)
   :doc "rotation and fresh segments index completed evidence at finalized positions"
-  (dolist (portable '(nil t))
+  (progn
     (dolist (fresh '(nil t))
       (let* ((tempdir (make-temp-file "mevedel-rotation-evidence-" t))
-             (workspace (if portable
-                            (test-mevedel-session-persistence--make-workspace tempdir)
-                          (test-mevedel-session-persistence--make-file-workspace tempdir)))
+             (workspace (test-mevedel-session-persistence--make-workspace tempdir))
              (session (mevedel-session-create "main" workspace))
              (buf (generate-new-buffer " *rotation-evidence*")))
         (unwind-protect
@@ -3194,29 +3054,6 @@ rotation never saves through a rebound temporary visited filename or prompts"
             (should (equal "Next real prompt"
                            (plist-get (car seg2) :preview)))))
       (test-mevedel-session-persistence--cleanup tempdir))))
-
-
-(mevedel-deftest mevedel-session-artifacts-ensure-files-acquires-lock ()
-  ,test
-  (test)
-  :doc "lazy materialization writes the .lock file"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-session-persistence--make-tempdir-workspace)
-    (unwind-protect
-        (let* ((session (mevedel-session-create "main" workspace))
-               (buf     (generate-new-buffer "*test-data-buf*")))
-          (unwind-protect
-              (with-current-buffer buf
-                (org-mode)
-                (insert "Hi\n")
-                (let ((path (mevedel-session-artifacts-ensure-files
-                             session buf)))
-                  (should (file-exists-p
-                           (mevedel-session-persistence--lock-path path)))))
-            (with-current-buffer buf (set-buffer-modified-p nil))
-            (kill-buffer buf)))
-      (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry))))
 
 
 (mevedel-deftest mevedel-session-artifacts-project-materialization ()
@@ -3488,36 +3325,6 @@ rotation never saves through a rebound temporary visited filename or prompts"
 (mevedel-deftest mevedel-session-artifacts-read-artifact ()
   ,test
   (test)
-  :doc "reads local artifacts from their fixed logical paths"
-  (let* ((root
-          (file-name-as-directory
-           (make-temp-file "mevedel-local-artifact-resolver-" t)))
-         (workspace
-          (test-mevedel-session-persistence--make-file-workspace root))
-         (session (mevedel-session-create "resolver" workspace))
-         (session-dir
-          (file-name-as-directory (file-name-concat root "session")))
-         (segment (file-name-concat session-dir "segment-0001.chat.org")))
-    (make-directory session-dir t)
-    (setf (mevedel-session-save-path session) session-dir
-          (mevedel-session-publication session)
-          '(:artifacts
-            (("segment-0001.chat.org"
-              :published "/must/not/be/read"
-              :sha256
-              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))))
-    (unwind-protect
-        (progn
-          (write-region "fixed" nil segment nil 'silent)
-          (should
-           (equal "fixed"
-                  (mevedel-session-artifacts-read-artifact
-                   session "segment-0001.chat.org")))
-          (should-error
-           (mevedel-session-artifacts-read-artifact session "../escape")))
-      (when (file-directory-p root)
-        (delete-directory root t))
-      (mevedel-workspace-clear-registry)))
   :doc "resolves remote staged owner bytes or verified committed bytes"
   (let* ((root
           (file-name-as-directory
@@ -3552,6 +3359,8 @@ rotation never saves through a rebound temporary visited filename or prompts"
                                      (mevedel-session-artifacts-read-artifact
                                       session "segment-0001.chat.org"))))
                     (should (zerop checks)))
+                  (should-error
+                   (mevedel-session-artifacts-read-artifact session "../escape"))
                   (should
                    (equal "committed"
                           (mevedel-session-artifacts-read-artifact
@@ -3593,32 +3402,6 @@ rotation never saves through a rebound temporary visited filename or prompts"
 (mevedel-deftest mevedel-session-artifacts-artifact-present-p ()
   ,test
   (test)
-  :doc "uses fixed logical-path existence for local sessions"
-  (let* ((root
-          (file-name-as-directory
-           (make-temp-file "mevedel-local-artifact-present-" t)))
-         (workspace
-          (test-mevedel-session-persistence--make-file-workspace root))
-         (session (mevedel-session-create "resolver" workspace))
-         (session-dir
-          (file-name-as-directory (file-name-concat root "session")))
-         (logical "plans/current.md")
-         (path (file-name-concat session-dir logical)))
-    (setf (mevedel-session-save-path session) session-dir)
-    (unwind-protect
-        (progn
-          (should-not
-           (mevedel-session-artifacts-artifact-present-p session logical))
-          (make-directory (file-name-directory path) t)
-          (write-region "plan" nil path nil 'silent)
-          (should
-           (mevedel-session-artifacts-artifact-present-p session logical))
-          (should-error
-           (mevedel-session-artifacts-artifact-present-p
-            session ".publications/escape")))
-      (when (file-directory-p root)
-        (delete-directory root t))
-      (mevedel-workspace-clear-registry)))
   :doc "uses remote staged or captured membership without fixed-cache fallback"
   (let* ((root
           (file-name-as-directory
@@ -3644,6 +3427,9 @@ rotation never saves through a rebound temporary visited filename or prompts"
                           (list :path sidecar :content "sidecar"
                                 :commit-marker t))))
                   (delete-file segment)
+                  (should-error
+                   (mevedel-session-artifacts-artifact-present-p
+                    session ".publications/escape"))
                   (should
                    (mevedel-session-artifacts-artifact-present-p
                     session "segment-0001.chat.org"))
@@ -3734,39 +3520,34 @@ rotation never saves through a rebound temporary visited filename or prompts"
 (mevedel-deftest mevedel-session-artifacts-publish-text ()
   ,test
   (test)
-  :doc "writes local bytes atomically and returns their path"
-  (let* ((root (make-temp-file "mevedel-publish-text-" t))
-         (path (file-name-concat root "state.el"))
-         (workspace
-          (test-mevedel-session-persistence--make-file-workspace root))
-         (session (mevedel-session-create "publish" workspace)))
+  :doc "publishes text under the lease"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
     (unwind-protect
-        (progn
+        (let ((path (file-name-concat (mevedel-session-save-path session)
+                                      "state.el")))
           (should
-           (equal path
-                  (mevedel-session-artifacts-publish-text
-                   session path "local state\n" 'utf-8-unix)))
+           (mevedel-session-artifacts-publish-text
+            session path "local state\n" 'utf-8-unix))
           (should
            (equal "local state\n"
-                  (with-temp-buffer
-                    (insert-file-contents path)
-                    (buffer-string)))))
-      (delete-directory root t)))
-  :doc "writes unibyte content as the same raw bytes"
-  (let* ((root (make-temp-file "mevedel-publish-bytes-" t))
-         (path (file-name-concat root "page.pdf"))
-         (bytes (concat (unibyte-string #x89 ?P ?N ?G ?\r ?\n #x1a ?\n #xff #x00 #xc3 #x28)
-                        "tail"))
-         (session (mevedel-session-create
-                   "publish" (test-mevedel-session-persistence--make-file-workspace root))))
+                  (mevedel-session-artifacts-read-artifact
+                   session "state.el"))))
+      (test-mevedel-session-persistence--cleanup tempdir)))
+  :doc "publishes unibyte content as the same raw bytes"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
     (unwind-protect
-        (progn
+        (let ((path (file-name-concat (mevedel-session-save-path session)
+                                      "page.pdf"))
+              (bytes (concat (unibyte-string #x89 ?P ?N ?G ?\r ?\n #x1a ?\n
+                                             #xff #x00 #xc3 #x28)
+                             "tail")))
           (mevedel-session-artifacts-publish-text session path bytes)
-          (should (equal bytes (with-temp-buffer
-                                 (set-buffer-multibyte nil)
-                                 (insert-file-contents-literally path)
-                                 (buffer-string)))))
-      (delete-directory root t)))
+          (should (equal bytes
+                         (mevedel-session-artifacts-read-artifact
+                          session "page.pdf"))))
+      (test-mevedel-session-persistence--cleanup tempdir)))
   :doc "returns the remote queue outcome without claiming publication"
   (let* ((target
           (mevedel-execution-target-create "/ssh:user@host:/srv/project/"))
@@ -5010,90 +4791,6 @@ With DIRECTIVE, wrap the turn in old directive boundary records."
       (mevedel-workspace-clear-registry))))
 
 
-(mevedel-deftest mevedel-session-artifacts-self-heal-crash-restore ()
-  ,test
-  (test)
-  :doc "restore repairs and persists predecessor coordinates across file transition crash windows"
-  (let* ((root (make-temp-file "mevedel-rotation-crash-" t))
-         (workspace (test-mevedel-session-persistence--make-file-workspace root))
-         (session (mevedel-session-create "main" workspace))
-         (buffer (generate-new-buffer " *rotation-crash*"))
-         (mevedel-journal-enabled nil)
-         restored restored-session)
-    (unwind-protect
-        (let (directory predecessor)
-          (with-current-buffer buffer
-            (org-mode)
-            (setq-local mevedel--session session)
-            (insert "Request\n" (propertize "Completed response\n" 'gptel 'response))
-            (setf (mevedel-session-turn-count session) 1)
-            (mevedel-session-artifacts-save session buffer t)
-            (setq directory (mevedel-session-save-path session)
-                  predecessor buffer-file-name)
-            ;; A nonlocal exit bypasses caught-error rollback, leaving
-            ;; the same files a process crash at this write would leave.
-            (should
-             (eq 'crashed
-                 (catch 'crash
-                   (cl-letf (((symbol-function 'mevedel-session-codec-write)
-                              (lambda (&rest _) (throw 'crash 'crashed))))
-                     (mevedel-session-artifacts-rotate-segment session buffer "Summary")))))
-            (let ((state (mevedel-session-codec-read
-                          (mevedel-session-artifacts-sidecar-path directory))))
-              (should (= 1 (plist-get state :current-segment))))
-            (should (file-exists-p (mevedel-session-artifacts-segment-path directory 2))))
-          (test-mevedel-session-persistence--release-and-kill buffer session)
-          (setq buffer nil)
-          (mevedel-test--with-captured-diagnostics nil
-            (setq restored (mevedel-session-persistence-restore directory nil nil workspace)))
-          (setq restored-session (buffer-local-value 'mevedel--session restored))
-          (should (= 2 (mevedel-session-current-segment restored-session)))
-          (let* ((index (mevedel-session-prompt-index restored-session))
-                 (state (mevedel-session-codec-read
-                         (mevedel-session-artifacts-sidecar-path directory)))
-                 (prompt (cadr (assoc 1 index))))
-            (should (equal index (plist-get state :prompt-index)))
-            (should (= 2 (plist-get state :current-segment)))
-            (with-temp-buffer
-              (insert-file-contents predecessor)
-              (org-mode)
-              (mevedel-transcript-restore-properties)
-              (should (org-entry-get (point-min) "MEVEDEL_SEGMENT_FINALIZED_AT"))
-              (let ((span (car (mevedel-session-artifacts-fork-point-spans (current-buffer)))))
-                (should (= (plist-get prompt :transcript-cutoff)
-                           (plist-get span :transcript-cutoff)))))
-            (let ((evidence (mevedel-journal-evidence-turns
-                             restored-session
-                             (list (list :number 1 :segment 1
-                                         :fork-point (plist-get prompt :fork-point-id)
-                                         :start (plist-get prompt :pos)
-                                         :end (plist-get prompt :transcript-cutoff))))))
-              (should (string-search "Completed response" (plist-get evidence :text)))
-              (should-not (plist-get evidence :unavailable)))
-            ;; A turn indexed past its committed bytes is named, not fatal.
-            (let ((evidence (mevedel-journal-evidence-turns
-                             restored-session
-                             (list (list :number 1 :segment 1
-                                         :fork-point (plist-get prompt :fork-point-id)
-                                         :start (plist-get prompt :pos)
-                                         :end (plist-get prompt :transcript-cutoff))
-                                   (list :number 2 :segment 1 :fork-point nil
-                                         :start (* 10 1000 1000)
-                                         :end (* 11 1000 1000))))))
-              (should (string-search "Completed response" (plist-get evidence :text)))
-              (should (string-search "Completed turn 2; source: segment-0001.chat.org: evidence unavailable"
-                                     (plist-get evidence :text)))
-              (should (equal '(2) (plist-get evidence :unavailable))))
-            ;; Recovery is complete: an ordinary second inspection must not
-            ;; rewrite the already-finalized predecessor or its index.
-            (should-not (mevedel-session-artifacts-self-heal-segment-counter
-                         restored-session directory))
-            (should (equal index (mevedel-session-prompt-index restored-session)))))
-      (test-mevedel-session-persistence--release-and-kill buffer session)
-      (test-mevedel-session-persistence--release-and-kill restored restored-session)
-      (delete-directory root t)
-      (mevedel-workspace-clear-registry))))
-
 (mevedel-deftest mevedel-session-artifacts/file-history-roundtrip ()
   ,test
   (test)
@@ -5157,24 +4854,23 @@ With DIRECTIVE, wrap the turn in old directive boundary records."
                                                  :backup-name))
                          (pre-backup-name
                           (plist-get (cdr file-entry) :pre-backup-name))
-                         (backup-path (mevedel-session-artifacts-backup-path
-                                       (mevedel-session-save-path session)
-                                       backup-name))
-                         (pre-backup-path
-                          (mevedel-session-artifacts-backup-path
-                           (mevedel-session-save-path session)
-                           pre-backup-name)))
+                         (backup-logical
+                          (file-name-concat "file-history" backup-name))
+                         (pre-backup-logical
+                          (file-name-concat "file-history" pre-backup-name)))
                     (should snaps)
                     (should backup-name)
                     (should pre-backup-name)
-                    (should (file-exists-p backup-path))
-                    (should (file-exists-p pre-backup-path))
-                    (with-temp-buffer
-                      (insert-file-contents-literally backup-path)
-                      (should (equal "MODIFIED\n" (buffer-string))))
-                    (with-temp-buffer
-                      (insert-file-contents-literally pre-backup-path)
-                      (should (equal "ORIGINAL\n" (buffer-string))))))
+                    (should (mevedel-session-artifacts-artifact-present-p
+                             session backup-logical t))
+                    (should (mevedel-session-artifacts-artifact-present-p
+                             session pre-backup-logical t))
+                    (should (equal "MODIFIED\n"
+                                   (mevedel-session-artifacts-read-artifact
+                                    session backup-logical t)))
+                    (should (equal "ORIGINAL\n"
+                                   (mevedel-session-artifacts-read-artifact
+                                    session pre-backup-logical t)))))
               (mevedel-request-end))))
       (test-mevedel-session-persistence--cleanup tempdir))))
 

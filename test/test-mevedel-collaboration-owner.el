@@ -22,6 +22,7 @@
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-models)
 (require 'mevedel-session-artifacts)
+(require 'mevedel-session-durability)
 (require 'mevedel-structs)
 (require 'websocket)
 (require 'mevedel-session-test-support
@@ -186,7 +187,7 @@ the room.  START replaces the child's room dial."
 
 (mevedel-deftest mevedel-collaboration--handle-fork/room-failure
   (:doc "keeps a published fork whose room fails, but no live child, and says how to open it")
-  (let (view lock)
+  (let (view session-directory)
     (test-mevedel-collaboration--fork-harness
      (lambda (h)
      (let ((sent (plist-get h :sent))
@@ -205,12 +206,16 @@ the room.  START replaces the child's room dial."
                        (mevedel-session-workspace
                         (plist-get (plist-get h :fixture) :session))))))
          (should-not (buffer-live-p child-buffer))
-         ;; The view and the session lock go with it: nothing of the child
+         ;; The view and session authority go with it: nothing of the child
          ;; stays live or claimed in this Emacs.
          (should (bufferp view))
          (should-not (buffer-live-p view))
-         (should (stringp lock))
-         (should-not (file-exists-p lock))
+         (should (stringp session-directory))
+         (should (eq 'released
+                     (plist-get
+                      (mevedel-session-durability--lease-head
+                       (mevedel-session-durability--lease-path session-directory))
+                      :status)))
          (should (eq :json-false (plist-get reply :ok)))
          (should (string-match-p "injected dial failure" (plist-get reply :message)))
          (should (string-match-p "M-x mevedel" (plist-get reply :message)))
@@ -225,12 +230,11 @@ the room.  START replaces the child's room dial."
          (should (= 1 (length (funcall children))))
          (should (equal reply (cdar (funcall sent)))))))
      (lambda (session buffer)
-       ;; The child holds its view and lock when its room is dialed.
+       ;; The child holds its view and lease when its room is dialed.
        (setq view (buffer-local-value 'mevedel--view-buffer buffer)
-             lock (mevedel-session-persistence--lock-path
-                   (mevedel-session-save-path session)))
+             session-directory (mevedel-session-save-path session))
        (should (buffer-live-p view))
-       (should (file-exists-p lock))
+       (should (mevedel-session-durability-lease-owned-p session))
        (error "Injected dial failure")))))
 
 (mevedel-deftest mevedel-collaboration--handle-session-models
@@ -327,25 +331,28 @@ the room.  START replaces the child's room dial."
         (kill-buffer view)))))
 
 (mevedel-deftest mevedel-collaboration--discard-created-session/real-session
-  (:doc "releases a real paired session's lock when it discards the pair")
+  (:doc "releases a real paired session's lease when it discards the pair")
   ;; Discarding the data buffer kills its view, whose hook kills the data
   ;; buffer again.  That nested kill must not end the data buffer before
-  ;; its remaining hooks, the lock release among them, have run.
+  ;; its remaining hooks, the lease release among them, have run.
   (test-mevedel-collaboration--fork-harness
    (lambda (h)
      (funcall (plist-get h :receive) 3)
      (let* ((buffer (car (funcall (plist-get h :children))))
             (view (buffer-local-value 'mevedel--view-buffer buffer))
-            (lock (mevedel-session-persistence--lock-path
-                   (mevedel-session-save-path
-                    (buffer-local-value 'mevedel--session buffer)))))
+            (session (buffer-local-value 'mevedel--session buffer))
+            (directory (mevedel-session-save-path session)))
        (should (buffer-live-p view))
-       (should (file-exists-p lock))
+       (should (mevedel-session-durability-lease-owned-p session))
        (cl-letf (((symbol-function 'mevedel-collaboration--stop-internal) #'ignore))
          (mevedel-collaboration--discard-created-session nil buffer))
        (should-not (buffer-live-p buffer))
        (should-not (buffer-live-p view))
-       (should-not (file-exists-p lock))))))
+       (should (eq 'released
+                   (plist-get
+                    (mevedel-session-durability--lease-head
+                     (mevedel-session-durability--lease-path directory))
+                    :status)))))))
 
 (mevedel-deftest mevedel-collaboration--owner
   (:doc "grants owner authority only to a peer holding both tokens")

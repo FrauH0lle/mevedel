@@ -133,8 +133,26 @@ Without CONTENT the artifact's file is missing.  Return the file's path."
     (when content (write-region content nil path nil 'silent))
     path))
 
+(defmacro mevedel-test--raw-segments (&rest body)
+  "Run BODY with archive segments served from raw files under the save path.
+The fixtures write segments directly instead of publishing generations."
+  (declare (indent 0))
+  `(cl-letf (((symbol-function 'mevedel-session-artifacts-artifact-present-p)
+              (lambda (session logical &rest _)
+                (file-exists-p
+                 (expand-file-name logical (mevedel-session-save-path session)))))
+             ((symbol-function 'mevedel-session-artifacts-find-artifact-noselect)
+              (lambda (session logical &rest _)
+                (let ((buffer (generate-new-buffer " *raw segment*")))
+                  (with-current-buffer buffer
+                    (insert-file-contents
+                     (expand-file-name logical (mevedel-session-save-path session)))
+                    (delay-mode-hooks (org-mode)))
+                  buffer))))
+     ,@body))
+
 (defmacro mevedel-test--with-discussion-room (&rest body)
-  "Run BODY with ROOM: a live PID-lock session, a writable guest and artifacts.
+  "Run BODY with ROOM: a live portable session, a writable guest and artifacts.
 DIRECTORY is the workspace root, WORKSPACE its file workspace with store
 artifacts schema, notes and gone, and SENT collects outgoing frames."
   (declare (indent 0))
@@ -172,7 +190,7 @@ artifacts schema, notes and gone, and SENT collects outgoing frames."
             sent)
        (puthash 1 guest (plist-get room :guests))
        (setf (mevedel-session-save-path session) (file-name-concat directory "session")
-             (mevedel-session-authority-mode session) 'pid-lock)
+             (mevedel-session-authority-mode session) 'portable)
        (with-current-buffer data-buf
          (setq-local mevedel--session session mevedel--workspace workspace))
        (mevedel-session-set-pending-input-paused session t)
@@ -181,7 +199,7 @@ artifacts schema, notes and gone, and SENT collects outgoing frames."
                       (lambda (_transport peer frame) (push (cons peer frame) sent) t))
                      ;; The fake save path has no committed sidecar to update.
                      ((symbol-function 'mevedel-recovery-save-now) #'ignore))
-             ,@body)
+             (mevedel-test--raw-segments ,@body))
          (delete-directory directory t)))))
 
 (defconst mevedel-test--discussion-anchor
@@ -503,9 +521,10 @@ artifacts schema, notes and gone, and SENT collects outgoing frames."
                                 :questionId)))
       (should-not (mevedel-collaboration-discussions--question-known-p data-buf item "other"))))
   :doc "finds a request accepted before compaction; an unreadable archive leaves others unknown"
-  (let* ((directory (make-temp-file "discussion-retry-" t))
+  (mevedel-test--raw-segments
+    (let* ((directory (make-temp-file "discussion-retry-" t))
          (session (mevedel-session--create :save-path directory :current-segment 2
-                                           :authority-mode 'pid-lock))
+                                           :authority-mode 'portable))
          (shared (list :kind "document" :itemId "artifact:doc" :discussionId "general"
                        :messageId "q1" :questionId "q1" :text "Question")))
     (unwind-protect
@@ -534,7 +553,7 @@ artifacts schema, notes and gone, and SENT collects outgoing frames."
           (should-error (mevedel-collaboration-discussions--question-known-p
                          (current-buffer) "artifact:doc" "q2")
                         :type 'user-error))
-      (delete-directory directory t)))
+      (delete-directory directory t))))
   :doc "a message this action stored skips the retry lookup; a retried one uses it"
   (mevedel-test--with-discussion-room
     (let ((lookups 0))
@@ -687,7 +706,7 @@ answers in DATA-BUF."
             board)
        (puthash 1 guest (plist-get room :guests))
        (setf (mevedel-session-save-path session) (file-name-concat directory "session")
-             (mevedel-session-authority-mode session) 'pid-lock)
+             (mevedel-session-authority-mode session) 'portable)
        (with-current-buffer data-buf
          (setq-local mevedel--session session mevedel--workspace workspace
                      mevedel--view-buffer view-buf))

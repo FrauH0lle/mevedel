@@ -571,13 +571,19 @@ Return the new workspace struct."
             (mevedel-session-artifacts-save session (current-buffer) nil t)
             (delete-file (mevedel-instruction-store-path workspace))
             (mevedel--clear-instruction-state workspace)
-            (let ((stale (mevedel-session-artifacts-backup-path
-                          (mevedel-session-save-path session) (secure-hash 'sha256 "stale"))))
-              (make-directory (file-name-directory stale) t)
-              (write-region "stale" nil stale nil 'silent)
+            (let* ((logical (file-name-concat "file-history" (secure-hash 'sha256 "stale")))
+                   (stale (file-name-concat (mevedel-session-save-path session) logical)))
+              (mevedel-session-publication-publish
+               session
+               (list (list :path stale :content "stale")
+                     (list :path (mevedel-session-artifacts-sidecar-path
+                                  (mevedel-session-save-path session))
+                           :content (mevedel-session-artifacts-read-artifact session "session.meta.el" t)
+                           :commit-marker t)))
+              (should (equal "stale" (mevedel-session-artifacts-read-artifact session logical t)))
               (should-not (file-exists-p (mevedel-instruction-store-path workspace)))
               (mevedel-session-artifacts-save session (current-buffer) nil t)
-              (should-not (file-exists-p stale))))
+              (should-not (assoc logical (plist-get (mevedel-session-publication session) :artifacts)))))
         (mevedel-session-persistence-lock-release (mevedel-session-save-path session) session)))))
 
 (mevedel-deftest mevedel-instruction-store-flush (:quiet t)

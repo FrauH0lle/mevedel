@@ -21,6 +21,7 @@
 (require 'mevedel-pipeline)
 (require 'mevedel-sandbox)
 (require 'mevedel-session-artifacts)
+(require 'mevedel-session-control-transfer)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-tool-task)
@@ -2295,6 +2296,9 @@ ARTIFACT-P selects whether its sidecar counts as committed."
                 (mevedel-agent-invocation-runtime-settle-callback invocation)
                 (lambda (&rest _)
                   (setq settled (1+ (or settled 0)))))
+          (with-current-buffer parent
+            (setq-local mevedel--session session))
+          (mevedel-session-control-transfer-register-root-buffer session parent)
           (with-current-buffer child
             (setq-local mevedel--session session)
             (setq-local mevedel--agent-invocation invocation)
@@ -2350,6 +2354,8 @@ ARTIFACT-P selects whether its sidecar counts as committed."
           (should-not
            (mevedel-execution-owner-live-p session "/root/explore")))
       (mevedel-execution-teardown-session session)
+      (mevedel-session-persistence-lock-release
+       (mevedel-session-save-path session) session)
       (when (buffer-live-p child) (kill-buffer child))
       (when (buffer-live-p parent) (kill-buffer parent))
       (delete-directory root t))))

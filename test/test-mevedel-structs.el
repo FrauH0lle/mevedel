@@ -525,17 +525,22 @@
 
   :doc "request end keeps session-scoped grants"
   (with-temp-buffer
-    (let* ((ws (mevedel-workspace-get-or-create
-                'file "/tmp/p1/" "/tmp/p1/" "p1"))
+    (let* ((root (make-temp-file "mevedel-dropped-grants-" t))
+           (ws (mevedel-workspace-get-or-create 'file root root "p1"))
            (session (mevedel-session-create "main" ws))
            (path "/tmp/dropped.txt")
            (expanded (expand-file-name path)))
-      (setq-local mevedel--session session)
-      (mevedel-session-activate-dropped-file-grants session (list path))
-      (mevedel-request-begin session)
-      (mevedel-request-end)
-      (should (equal (list expanded)
-                     (mevedel-session-active-dropped-file-grants session))))))
+      (unwind-protect
+          (progn
+            (setq-local mevedel--session session)
+            (mevedel-session-activate-dropped-file-grants session (list path))
+            (mevedel-request-begin session)
+            (mevedel-request-end)
+            (should (equal (list expanded)
+                           (mevedel-session-active-dropped-file-grants session))))
+        (mevedel-session-persistence-lock-release
+         (mevedel-session-save-path session) session)
+        (delete-directory root t)))))
 
 (mevedel-deftest mevedel-session-generate-id ()
   ,test

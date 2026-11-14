@@ -707,7 +707,7 @@ Deleting removes a saved session's directory for good, under the safety rules
 of expired-session cleanup without its age cap. A session live in this Emacs
 is closed first, since its buffer would save it back; its room ends, so guests
 there see "Session deleted". One still running a turn is refused until the
-turn stops, and so is one whose lock or lease another client may still hold or
+turn stops, and so is one whose lease another client may still hold or
 whose journal captures are pending. After a deletion every lobby guest
 receives a fresh listing.
 
@@ -724,19 +724,20 @@ Guests act while nobody may be at the keyboard, so lobby frames run with
 `inhibit-interaction`, and a failing lobby frame is answered to its sender as
 in a room; the lobby keeps running. Cold session restoration does not
 initialize optional view power monitoring or its battery/D-Bus backend.
-Opening a file-workspace session automatically reclaims a same-host PID lock
-when the host proves its PID is dead or its process
-identity proves PID reuse. Replacement checks that the observed holder has not
-changed; a competing replacement refuses the open. Live, foreign-host,
-malformed or unprovable locks still need a decision in Emacs, as do portable
-lease takeovers requiring confirmation. Other steps that would prompt refuse
-the request instead of waiting. A clean exit releases session locks. Rooms
+Project and file-workspace sessions share portable leases. Opening either
+automatically reclaims an `active` or `claiming` lease when the same user's
+same-host holder is provably dead or its process identity proves PID reuse.
+Generation election checks the observed holder; a competing claim refuses the
+open. Other lease takeovers requiring confirmation need a decision in Emacs;
+an unexpired live or foreign lease cannot be forcibly taken over. Other steps
+that would prompt refuse the request instead of waiting. A clean exit releases
+session leases. Rooms
 follow the same no-prompt rule; see
 [questions nobody can answer](#questions-nobody-can-answer).
 
 PID-reuse proof uses Linux's boot ID and process start ticks, not a wall-clock
 timestamp. A live PID with missing or unavailable identity evidence remains
-protected, including locks written without that evidence. See
+protected; missing or malformed holder evidence cannot prove death. See
 [session locking](sessions.md#locking).
 
 In the browser, a lobby link renders the session list in place of the

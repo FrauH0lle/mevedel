@@ -13,6 +13,7 @@
           "helpers"))
 (require 'mevedel-agent-control)
 (require 'mevedel-agents)
+(require 'mevedel-session-artifacts)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-tool-ui)
@@ -128,7 +129,7 @@
               (make-directory (file-name-concat root "agents") t)
               (write-region "* Agent Task: cold\nRetained response\n" nil
                             (file-name-concat root relative) nil 'silent)
-              (setf (mevedel-session-authority-mode session) 'pid-lock
+              (setf (mevedel-session-authority-mode session) 'portable
                     (mevedel-session-save-path session) root
                     (mevedel-session-root-buffer session) data-buf
                     (mevedel-session-agent-registry session) (list (cons path record))
@@ -144,7 +145,14 @@
                 (goto-char (mevedel-view--input-start))
                 (insert "> draft\nsecond line")
                 (let ((before (buffer-string)))
-                  (mevedel-view-open-agent-transcript path)
+                  ;; The cold transcript is a raw file here, not a published generation.
+                  (cl-letf (((symbol-function 'mevedel-session-artifacts-artifact-present-p)
+                             (lambda (&rest _) t))
+                            ((symbol-function 'mevedel-session-artifacts-read-artifact)
+                             (lambda (_session logical &rest _)
+                               (mevedel-session-artifacts-read-file-raw
+                                (file-name-concat root logical)))))
+                    (mevedel-view-open-agent-transcript path))
                   (setq agent-view (window-buffer (selected-window)))
                   (with-current-buffer agent-view
                     (should (eq 'prepare (plist-get mevedel-view-render--batch :phase)))

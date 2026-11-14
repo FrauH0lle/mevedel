@@ -568,16 +568,15 @@ spanning lines")))
            (mevedel-skills--dispatch-slash-command))))
                 (should (= 2 (mevedel-session-current-segment session)))
                 (should (< (mevedel-compact-estimation-estimate-tokens) 1000))
-                (should (file-equal-p
-                         (file-name-concat
-                          save-path "segment-0002.chat.org")
-                         buffer-file-name))
+                (should (equal (file-name-concat
+                                save-path "segment-0002.chat.org")
+                               buffer-file-name))
                 (should-not (string-match-p "Old response" (buffer-string)))
                 (should (equal "clear" start-source))
-                (with-temp-buffer
-                  (insert-file-contents seg1)
-                  (should (string-match-p "Old response" (buffer-string)))
-                  (should-not (string-match-p "/clear" (buffer-string))))
+                (let ((old (mevedel-session-artifacts-read-artifact
+                            session "segment-0001.chat.org" t)))
+                  (should (string-match-p "Old response" old))
+                  (should-not (string-match-p "/clear" old)))
                 (let* ((sidecar
                         (mevedel-session-artifacts-sidecar-path save-path))
                        (plist (mevedel-session-codec-read sidecar))
@@ -587,55 +586,7 @@ spanning lines")))
       (when (file-directory-p tempdir)
         (delete-directory tempdir t))))
 
-  :doc "`/clear' refreshes stale visited metadata before slash deletion"
-  (let* ((session (mevedel-skills-test--make-session))
-         (tempdir (make-temp-file "mevedel-clear-stale-test-" t))
-         (save-path (file-name-as-directory tempdir))
-         (seg1 (file-name-concat save-path "segment-0001.chat.org")))
-    (unwind-protect
-        (progn
-          (test-mevedel-skills-ui--materialize-workspace session tempdir)
-          (setf (mevedel-session-save-path session) save-path)
-          (setf (mevedel-session-session-id session) "clear-stale-test")
-          (setf (mevedel-session-current-segment session) 1)
-          (setf (mevedel-session-created-at session) "2026-05-08T10-00-00")
-          (setf (mevedel-session-updated-at session) "2026-05-08T10-00-00")
-          (with-temp-buffer
-            (org-mode)
-            (let ((mevedel-slash-commands mevedel-slash-commands))
-              (setq mevedel--session session)
-              (setq buffer-file-name seg1)
-              (insert (propertize "Old response" 'gptel 'response) "\n\n")
-              (write-region (point-min) (point-max) buffer-file-name nil 'silent)
-              (set-visited-file-modtime)
-              (set-buffer-modified-p nil)
-              (insert "/clear")
-              (set-file-times buffer-file-name (time-add (current-time) 5))
-              (should-not (verify-visited-file-modtime (current-buffer)))
-              (cl-letf (((symbol-function
-                          'mevedel-session-artifacts-save-instructions)
-                         (lambda (&rest _args) nil))
-                        ((symbol-function 'mevedel-version)
-                         (lambda (&rest _args) "test-version"))
-	                        ((symbol-function 'ask-user-about-supersession-threat)
-	                         (lambda (&rest _args)
-	                           (error "Supersession prompt"))))
-                (goto-char (point-max))
-                (should (eq 'local (mevedel-test--with-captured-messages nil
-           (mevedel-skills--dispatch-slash-command))))
-                (should (= 2 (mevedel-session-current-segment session)))
-                (should (file-equal-p
-                         (file-name-concat
-                          save-path "segment-0002.chat.org")
-                         buffer-file-name))
-                (should-not (string-match-p "Old response" (buffer-string)))
-                (with-temp-buffer
-                  (insert-file-contents seg1)
-                  (should-not (string-match-p "/clear" (buffer-string))))))))
-      (when (file-directory-p tempdir)
-        (delete-directory tempdir t))))
-
-  :doc "`/clear' refreshes stale visited metadata before direct rotation"
+  :doc "`/clear' rotates directly to a fresh segment"
   (let* ((session (mevedel-skills-test--make-session))
          (tempdir (make-temp-file "mevedel-clear-direct-stale-test-" t))
          (save-path (file-name-as-directory tempdir))
@@ -654,11 +605,6 @@ spanning lines")))
               (setq mevedel--session session)
               (setq buffer-file-name seg1)
               (insert "Completed turn\n")
-              (write-region (point-min) (point-max) seg1 nil 'silent)
-              (set-visited-file-modtime)
-              (set-buffer-modified-p nil)
-              (set-file-times seg1 (time-add (current-time) 5))
-              (should-not (verify-visited-file-modtime (current-buffer)))
               (cl-letf (((symbol-function
                           'mevedel-session-artifacts-save-instructions)
                          (lambda (&rest _args) nil))
@@ -670,10 +616,9 @@ spanning lines")))
                 (mevedel-test--with-captured-messages nil
                   (mevedel-cmd--clear nil))
                 (should (= 2 (mevedel-session-current-segment session)))
-                (should (file-equal-p
-                         (file-name-concat
-                          save-path "segment-0002.chat.org")
-                         buffer-file-name))))))
+                (should (equal (file-name-concat
+                                save-path "segment-0002.chat.org")
+                               buffer-file-name))))))
       (when (file-directory-p tempdir)
         (delete-directory tempdir t)))))
 

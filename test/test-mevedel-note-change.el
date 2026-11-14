@@ -564,13 +564,11 @@
       (should entry)
       (should-not (cdr (assq 8 turns)))
       (should (equal "before\nold\nafter\nuser addition\n"
-                     (mevedel-test--read-file
-                      (mevedel-session-artifacts-backup-path
-                       (mevedel-session-save-path session) (plist-get entry :pre-backup-name)))))
+                     (mevedel-session-artifacts-read-artifact
+                      session (file-name-concat "file-history" (plist-get entry :pre-backup-name)) t)))
       (should (equal "before\nnew\nafter\nuser addition\n"
-                     (mevedel-test--read-file
-                      (mevedel-session-artifacts-backup-path
-                       (mevedel-session-save-path session) (plist-get entry :backup-name)))))))
+                     (mevedel-session-artifacts-read-artifact
+                      session (file-name-concat "file-history" (plist-get entry :backup-name)) t)))))
   :doc "manual merge retains the actual unsaved source and confirmed result in file history"
   (mevedel-note-change-test--with-note
     (setf (mevedel-session-turn-count session) 3)
@@ -592,13 +590,11 @@
            (entry (cdr (assoc file (cdr (assq 3 (plist-get saved :file-snapshots)))))))
       (should entry)
       (should (equal "before\nmy old\nafter\n"
-                     (mevedel-test--read-file
-                      (mevedel-session-artifacts-backup-path
-                       (mevedel-session-save-path session) (plist-get entry :pre-backup-name)))))
+                     (mevedel-session-artifacts-read-artifact
+                      session (file-name-concat "file-history" (plist-get entry :pre-backup-name)) t)))
       (should (equal "before\nmanual resolution\nafter\n"
-                     (mevedel-test--read-file
-                      (mevedel-session-artifacts-backup-path
-                       (mevedel-session-save-path session) (plist-get entry :backup-name))))))))
+                     (mevedel-session-artifacts-read-artifact
+                      session (file-name-concat "file-history" (plist-get entry :backup-name)) t))))))
 
 (mevedel-deftest mevedel-note-merge-creation
   (:quiet t)

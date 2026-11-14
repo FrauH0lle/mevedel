@@ -1888,6 +1888,20 @@ root for the client doing the restore."
     (mevedel-workspace-get-or-create
      (plist-get saved :type) root root (plist-get saved :name))))
 
+(defconst mevedel-session-persistence--pre-lease-message
+  "Session %s predates file sessions on the portable lease; close it and run scripts/migrate-sessions.el on it"
+  "Format for an unmigrated PID-lock file session, given its directory.")
+
+(defun mevedel-session-persistence--pre-lease-p (session-dir)
+  "Return non-nil when SESSION-DIR is a file session from before the lease.
+It has a PID lock or a plain sidecar, but no lease.  Only failure paths ask."
+  (and (not (mevedel-session-control-fs-path-exists-p
+             (file-name-concat session-dir ".lease")))
+       (or (mevedel-session-control-fs-path-exists-p
+            (file-name-concat session-dir ".lock"))
+           (mevedel-session-control-fs-path-exists-p
+            (mevedel-session-artifacts-sidecar-path session-dir)))))
+
 (defun mevedel-session-persistence-restore
     (session-dir &optional lifecycle-source session-override workspace)
   "Restore the chat buffer for the session at SESSION-DIR.
@@ -1926,9 +1940,12 @@ mentions-shown reset to empty hash tables on load."
                    (mevedel-session-authority-mode-for-workspace
                     workspace))
               (and cold-sidecar
-                   (mevedel-session-codec-validate-authority-mode
-                    (plist-get cold-sidecar :authority-mode)
-                    (plist-get cold-sidecar :workspace)))
+                   (if (eq 'pid-lock (plist-get cold-sidecar :authority-mode))
+                       (user-error mevedel-session-persistence--pre-lease-message
+                                   session-dir)
+                     (mevedel-session-codec-validate-authority-mode
+                      (plist-get cold-sidecar :authority-mode)
+                      (plist-get cold-sidecar :workspace))))
               (and (mevedel-session-control-fs-path-exists-p
                     (file-name-concat session-dir ".lease"))
                    'portable)
@@ -1938,15 +1955,24 @@ mentions-shown reset to empty hash tables on load."
               (error "Session authority profile is unavailable: %s"
                      session-dir)))
          (_authority-check
-          (mevedel-session-codec-authority-mode-for-path
-           session-dir session-override authority-mode))
+          (condition-case err
+              (mevedel-session-codec-authority-mode-for-path
+               session-dir session-override authority-mode)
+            (error
+             (if (mevedel-session-persistence--pre-lease-p session-dir)
+                 (user-error mevedel-session-persistence--pre-lease-message
+                             session-dir)
+               (signal (car err) (cdr err))))))
          (portable-p (eq authority-mode 'portable))
          (publication
          (when portable-p
             (or (mevedel-session-publication-read session-dir)
-                (user-error
-                 "Portable session has no committed publication: %s"
-                 session-dir))))
+                (if (mevedel-session-persistence--pre-lease-p session-dir)
+                    (user-error mevedel-session-persistence--pre-lease-message
+                                session-dir)
+                  (user-error
+                   "Portable session has no committed publication: %s"
+                   session-dir)))))
          (sidecar-path
           (if portable-p
               (plist-get publication :sidecar)
@@ -2358,14 +2384,24 @@ outcome yields an incompatible record.  Signal when a probe failed or ENTRY's
 controls contradict AUTHORITY-MODE; the caller records that as an
 `undiscoverable' row, which stays visible but is never inspected."
   (let ((portable-p (eq authority-mode 'portable)))
-    (when-let* ((err (plist-get observation :error)))
-      (signal (car err) (cdr err)))
     (when-let* ((failed
                  (seq-find (lambda (result)
                              (not (memq (plist-get result :status)
                                         '(ok absent))))
                            control-results)))
       (mevedel-session-control-fs-program-value failed))
+    ;; A PID lock or a plain sidecar without any lease is an old file session.
+    (if (and portable-p
+             (eq 'absent (plist-get (nth 1 control-results) :status))
+             (or (eq 'ok (plist-get (nth 0 control-results) :status))
+                 (eq 'ok (plist-get (nth 2 control-results) :status))))
+        (mevedel-session-persistence--incompatible-entry
+         entry authority-mode
+         (list :status 'unsupported
+               :diagnostic (format mevedel-session-persistence--pre-lease-message
+                                   entry)))
+    (when-let* ((err (plist-get observation :error)))
+      (signal (car err) (cdr err)))
     (when (seq-find (lambda (result) (eq (plist-get result :status) 'ok))
                     control-results)
       ;; A PID profile only needs proof that no portable lease exists. Reuse
@@ -2402,7 +2438,7 @@ controls contradict AUTHORITY-MODE; the caller records that as an
                 :summary (plist-get status :summary)
                 :publication publication)
         (mevedel-session-persistence--incompatible-entry
-         entry authority-mode status publication sidecar)))))
+         entry authority-mode status publication sidecar))))))
 
 (defun mevedel-session-persistence--enumerate-sessions
     (workspace &optional cached)

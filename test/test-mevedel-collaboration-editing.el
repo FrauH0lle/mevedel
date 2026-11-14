@@ -64,7 +64,7 @@
 		 (:doc "Incomplete transfers clean up and authority is checked after assembly and before commit")
 		 (let* ((directory (make-temp-file "mevedel-editing-transfer-" t))
 			(workspace (mevedel-workspace--create :type 'file :id "w" :root directory :name "w"))
-			(session (mevedel-session--create :save-path directory :authority-mode 'pid-lock
+			(session (mevedel-session--create :save-path directory :authority-mode 'portable
 							  :workspace workspace))
 			(mevedel-shared-editing--runtimes (make-hash-table :test #'equal))
 			(mevedel-artifact-lease--held (make-hash-table :test #'equal))

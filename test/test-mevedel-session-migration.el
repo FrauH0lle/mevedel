@@ -9,6 +9,8 @@
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
                            "mevedel-session-test-support"))
 (require 'mevedel-plan-handoff)
+(require 'mevedel-execution-spool)
+(require 'mevedel-tool-fs-read)
 ;; Name the source: stale bytecode beside the script would otherwise shadow the
 ;; converter under test.
 (require 'mevedel-migrate-session
@@ -548,17 +550,48 @@
         (should-not (file-exists-p destination))
         (should (equal before (mevedel-migrate-session--hash (file-name-concat source "session.meta.el")))))))
 
-  :doc "converts an unlocked file-workspace session without a publication lease"
+  :doc "converts an unlocked PID-lock file session to a released lease publication"
   (mevedel-migration-test--with-source "v0.5.9"
     (delete-directory (file-name-concat source ".lease") t)
     (delete-directory (file-name-concat source ".publications") t)
     (setq old (plist-put old :authority-mode 'pid-lock))
     (setf (plist-get (plist-get old :workspace) :type) 'file)
     (mevedel-migrate-session--write (file-name-concat source "session.meta.el") old)
+    (make-directory (file-name-concat source "agents") t)
+    (with-temp-file (file-name-concat source "segment-0001.chat.org") (insert "* Old turn\n"))
+    (with-temp-file (file-name-concat source "agents/worker.chat.org") (insert "Agent text\n"))
+    (dolist (logical '("segment-0001.compact-1.chat.org" "agents/worker.compact-1.chat.org"))
+      (with-temp-file (file-name-concat source logical) (insert "Retained compaction archive\n")))
+    (with-temp-file (file-name-concat source "telemetry-log.el") (insert "()\n"))
     (should (= 1 (mevedel-migrate-session-copy source destination)))
     (should (equal mevedel-session-codec-format-version
                    (plist-get (mevedel-session-codec-read
-                               (file-name-concat destination "session.meta.el")) :version))))
+                               (file-name-concat destination "session.meta.el")) :version)))
+    ;; The copy is a closed lease session: released head, published files.
+    (should (eq 'portable (mevedel-session-codec-authority-mode-for-path destination)))
+    (should (eq 'released
+                (plist-get (mevedel-session-durability--lease-head
+                            (mevedel-session-durability--lease-path destination))
+                           :status)))
+    (let ((publication (mevedel-session-publication-read destination)))
+      (should (eq 'portable (plist-get (mevedel-session-codec-read
+                                        (plist-get publication :sidecar))
+                                       :authority-mode)))
+      (dolist (logical '("segment-0001.chat.org" "agents/worker.chat.org"))
+        (should (equal (mevedel-migrate-artifacts--bytes (file-name-concat source logical))
+                       (mevedel-session-artifacts--read-published-artifact
+                        publication logical)))
+        (should-not (file-exists-p (file-name-concat destination logical))))
+      (dolist (logical '("segment-0001.compact-1.chat.org" "agents/worker.compact-1.chat.org"))
+        (should (file-regular-p (file-name-concat destination logical)))
+        (let ((bytes (mevedel-migrate-artifacts--bytes (file-name-concat source logical))))
+          (should (equal bytes (mevedel-migrate-artifacts--bytes
+                                (file-name-concat destination logical))))
+          (should (equal bytes (mevedel-session-artifacts--read-published-artifact
+                                publication logical))))))
+    ;; Diagnostic logs stay plain files; the source keeps its PID layout.
+    (should (file-exists-p (file-name-concat destination "telemetry-log.el")))
+    (should-not (file-exists-p (file-name-concat source ".lease"))))
 
   :doc "never overwrites an existing destination or copies into itself"
   (mevedel-migration-test--with-source "v0.5.9"
@@ -631,6 +664,122 @@
       (should (equal mevedel-session-codec-format-version
                      (plist-get (mevedel-migrate-session--read
                                  (file-name-concat source "session.meta.el")) :version)))))
+
+  :doc "PID migration resumes real history, retains plain resources and supports Save As"
+  (cl-destructuring-bind (workspace . root)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let* ((session (mevedel-session-create "legacy" workspace))
+           (id (mevedel-session-session-id session))
+           (source (file-name-as-directory
+                    (file-name-concat root ".mevedel" "sessions" id)))
+           (plan (file-name-concat source "local" "plans" "current.md"))
+           (spool (file-name-concat source "tool-results" "executions" "retained.log"))
+           (gzip (concat spool ".gz"))
+           transcript restored resumed)
+      (unwind-protect
+          (cl-labels
+              ((check-resources
+                (owner)
+                (dolist (row '(("work://plans/current.md" . "Keep this migration plan")
+                               ("artifact://executions/retained.log" . "retained execution line")))
+                  (let* ((address (car row))
+                         (attempt (mevedel-resource-prepare 'read address (list :session owner)))
+                         (mevedel-resource-current-attempts (list (cons address attempt)))
+                         (mevedel--session owner)
+                         (result (mevedel-test--read
+                                  (list :file_path address :offset 1 :limit 2))))
+                    (should-not (eq 'error (plist-get result :status)))
+                    (should (string-search (cdr row) (plist-get result :result)))))))
+            (setf (mevedel-session-save-path session) source
+                  (mevedel-session-naming-state session) 'explicit
+                  (mevedel-session-turn-count session) 2
+                  (mevedel-session-permission-rules session)
+                  '(("Read" :path "**/*.el" :action allow))
+                  (mevedel-session-tasks session)
+                  (list (mevedel-task--create :id 1 :subject "Retained task" :status 'completed)))
+            (make-directory source t)
+            (with-temp-buffer
+              (org-mode)
+              (insert "First legacy prompt\n"
+                      (propertize "Retained assistant answer\n" 'gptel 'response)
+                      "Second legacy prompt\n")
+              (mevedel-session-artifacts-stabilize-gptel-bounds)
+              (setq transcript (buffer-substring-no-properties (point-min) (point-max)))
+              (write-region (point-min) (point-max)
+                            (mevedel-session-artifacts-segment-path source 1) nil 'silent))
+            ;; PID sessions and lease sessions shared this version; shape selects conversion.
+            (mevedel-migrate-session--write
+             (file-name-concat source "session.meta.el")
+             (plist-put (mevedel-session-codec-serialize session) :authority-mode 'pid-lock))
+            (make-directory (file-name-directory plan) t)
+            (write-region "Keep this migration plan\n" nil plan nil 'silent)
+            (make-directory (file-name-directory spool) t)
+            (with-temp-file spool
+              (dotimes (_ 4096) (insert "retained execution line\n")))
+            (with-temp-buffer
+              (should (eq 0 (call-process "timeout" nil t nil "10" "python3"
+                                          mevedel-execution-spool--worker "--compress" spool))))
+            (ert-info ("Compressed fixture exists before migration")
+              (should (file-exists-p gzip)))
+            (delete-file spool)
+            ;; The same input must not resume through a hidden runtime compatibility path.
+            (let ((err (should-error (mevedel-session-persistence-restore source) :type 'user-error)))
+              (should (string-search "scripts/migrate-sessions.el" (error-message-string err))))
+            (should-not (file-exists-p (file-name-concat source ".lease")))
+            (let ((command-line-args-left (list "--" source)))
+              (should (string-search "MIGRATED"
+                                     (with-output-to-string (mevedel-migrate-session-main))))
+              (should-not command-line-args-left))
+            (should (test-mevedel-session-persistence--lease-released-p source))
+            (ert-info ("Standalone migration retains the fixed plan")
+              (should (file-regular-p plan)))
+            (ert-info ("Standalone migration retains the compressed execution spool")
+              (should (file-regular-p gzip)))
+            (let ((publication (mevedel-session-publication-read source)))
+              (should-not (assoc "tool-results/executions/retained.log.gz"
+                                 (plist-get publication :artifacts))))
+            (mevedel-workspace-clear-registry)
+            (setq restored (mevedel-session-persistence-restore source)
+                  resumed (buffer-local-value 'mevedel--session restored))
+            (with-current-buffer restored
+              (should (derived-mode-p 'org-mode))
+              (should (bound-and-true-p gptel-mode))
+              (should-not buffer-read-only)
+              (should (equal transcript (buffer-substring-no-properties (point-min) (point-max))))
+              (goto-char (point-min))
+              (search-forward "Retained assistant answer")
+              (should (eq 'response (get-text-property (1- (point)) 'gptel))))
+            (should (equal id (mevedel-session-session-id resumed)))
+            (should (equal "legacy" (mevedel-session-name resumed)))
+            (should (eq 'file (mevedel-workspace-type (mevedel-session-workspace resumed))))
+            (should (equal root (mevedel-session-working-directory resumed)))
+            (should (= 2 (mevedel-session-turn-count resumed)))
+            (should (= 1 (mevedel-session-current-segment resumed)))
+            (should (equal (mevedel-session-permission-rules session)
+                           (mevedel-session-permission-rules resumed)))
+            (should (equal "Retained task"
+                           (mevedel-task-subject (car (mevedel-session-tasks resumed)))))
+            (should (eq 'portable (mevedel-session-authority-mode resumed)))
+            (should (mevedel-session-durability-lease-owned-p resumed))
+            (check-resources resumed)
+            (with-current-buffer restored
+              (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "migrated-copy")))
+                (mevedel-save-session t)))
+            (should-not (equal source (mevedel-session-save-path resumed)))
+            (should (test-mevedel-session-persistence--lease-released-p source))
+            (should (file-regular-p gzip))
+            (should (mevedel-session-durability-lease-owned-p resumed))
+            (check-resources resumed)
+            (with-current-buffer restored (set-buffer-modified-p nil))
+            (should (kill-buffer restored))
+            (should-not (buffer-live-p restored))
+            (should-not (mevedel-session-durability-lease-owned-p resumed))
+            (should-not (mevedel-session-lease-renewal-timer resumed))
+            (should (test-mevedel-session-persistence--lease-released-p
+                     (mevedel-session-save-path resumed))))
+        (test-mevedel-session-persistence--release-and-kill restored resumed)
+        (delete-directory root t)
+        (mevedel-workspace-clear-registry))))
 
   :doc "help needs no directory and invalid argument lists fail"
   (let ((command-line-args-left '("--" "--help")))

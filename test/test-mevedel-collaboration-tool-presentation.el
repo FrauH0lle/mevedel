@@ -698,7 +698,7 @@
       (should (equal original parsed))))
   :doc "nested terminal output and failure survive closing and reopening the transcript"
   (let* ((path (make-temp-file "mevedel-guest-ptc-reload-"))
-         (session (mevedel-session--create :authority-mode 'pid-lock
+         (session (mevedel-session--create :authority-mode 'portable
                                            :name "guest-ptc-reload"))
          (buffer (find-file-noselect path))
          (mevedel-tool--registry (copy-hash-table mevedel-tool--registry)))

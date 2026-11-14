@@ -950,16 +950,10 @@
                 (with-current-buffer view-buf
                   (should-not buffer-file-name)
                   (should-not buffer-file-truename))
-                (let ((segment-path
-                       (mevedel-session-artifacts-segment-path
-                        (mevedel-session-save-path session) 1)))
-                  (should (file-exists-p segment-path))
-                  (with-temp-buffer
-                    (insert-file-contents segment-path)
-                    (should (string-match-p "Exit hook data prompt"
-                                            (buffer-string)))
-                    (should-not (string-match-p "Exit hook view chrome"
-                                                (buffer-string))))))
+                (let ((segment (mevedel-session-artifacts-read-artifact
+                                session "segment-0001.chat.org" t)))
+                  (should (string-match-p "Exit hook data prompt" segment))
+                  (should-not (string-match-p "Exit hook view chrome" segment))))
             (when (buffer-live-p view-buf)
               (with-current-buffer view-buf (set-buffer-modified-p nil))
               (kill-buffer view-buf))
@@ -993,21 +987,21 @@
                     (set-buffer-modified-p nil)))
                 (dolist (session (list live-session expired-session))
                   (test-mevedel-session-persistence--expire-session session))
-                (mevedel-session-persistence-lock-release
-                 (mevedel-session-save-path expired-session)
-                 expired-session)
+                (test-mevedel-session-persistence--release-and-kill
+                 expired-buf expired-session)
                 (cl-letf (((symbol-function 'buffer-list)
                            (lambda (&optional _frame) (list live-buf))))
-                  (let ((noninteractive nil)) (mevedel-session-persistence--kill-emacs-hook)))
+                  (test-mevedel-session-persistence--call-later
+                   (lambda ()
+                     (let ((noninteractive nil))
+                       (mevedel-session-persistence--kill-emacs-hook)))))
                 (should-not
                  (file-directory-p
                   (mevedel-session-save-path expired-session)))
                 (should
                  (file-directory-p (mevedel-session-save-path live-session)))
-                (should-not
-                 (file-exists-p
-                  (mevedel-session-persistence--lock-path
-                   (mevedel-session-save-path live-session)))))
+                (should (test-mevedel-session-persistence--lease-released-p
+                         (mevedel-session-save-path live-session))))
             (test-mevedel-session-persistence--release-and-kill
              live-buf live-session)
             (test-mevedel-session-persistence--release-and-kill
@@ -1076,9 +1070,8 @@
                     (let ((noninteractive nil)) (mevedel-session-persistence--kill-emacs-hook)))
                   (should (file-directory-p save-path))
                   (should (file-directory-p sidecar))
-                  (should-not
-                   (file-exists-p
-                    (mevedel-session-persistence--lock-path save-path)))))
+                  (should (test-mevedel-session-persistence--lease-released-p
+                           save-path))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)))
       (delete-directory tempdir t)
@@ -1117,18 +1110,20 @@
               (set-buffer-modified-p nil)))
           (let ((save-path (mevedel-session-save-path expired-session)))
             (test-mevedel-session-persistence--expire-session expired-session)
-            (mevedel-session-persistence-lock-release save-path expired-session))
+            (test-mevedel-session-persistence--release-and-kill
+             expired-buf expired-session))
           (make-directory bad-sessions t)
           (set-file-modes bad-sessions 0)
           (cl-letf (((symbol-function 'buffer-list)
                      (lambda (&optional _frame) (list live-buf))))
-            (let ((noninteractive nil)) (mevedel-session-persistence--kill-emacs-hook)))
+            (test-mevedel-session-persistence--call-later
+             (lambda ()
+               (let ((noninteractive nil))
+                 (mevedel-session-persistence--kill-emacs-hook)))))
           (should-not
            (file-directory-p (mevedel-session-save-path expired-session)))
-          (should-not
-           (file-exists-p
-            (mevedel-session-persistence--lock-path
-             (mevedel-session-save-path live-session)))))
+          (should (test-mevedel-session-persistence--lease-released-p
+                   (mevedel-session-save-path live-session))))
       (when (file-exists-p bad-sessions)
         (set-file-modes bad-sessions #o700))
       (test-mevedel-session-persistence--release-and-kill
@@ -1265,7 +1260,7 @@
                        (buffer-local-value 'mevedel--session restored)))
         (delete-directory tempdir t)
         (mevedel-workspace-clear-registry))))
-  :doc "only PID-lock restore heals a disk counter ahead of the saved sidecar"
+  :doc "restore ignores a disk segment written outside the publication"
   (dolist (make-workspace
            '(test-mevedel-session-persistence--make-file-workspace
              test-mevedel-session-persistence--make-workspace))
@@ -1273,7 +1268,6 @@
            (workspace (funcall make-workspace root))
            (session (mevedel-session-create "main" workspace))
            (buffer (generate-new-buffer " *restore-counter*"))
-           (portable-p (eq 'project (mevedel-workspace-type workspace)))
            restored)
       (unwind-protect
           (progn
@@ -1289,16 +1283,12 @@
                             nil 'silent)
               (setq restored (mevedel-session-persistence-restore directory nil nil workspace))
               (with-current-buffer restored
-                (should (= (if portable-p 1 2)
-                           (mevedel-session-current-segment mevedel--session)))
-                (should (string-match-p (if portable-p "Saved transcript" "Newer disk transcript")
-                                        (buffer-string))))
-              (with-temp-buffer
-                (insert (mevedel-session-artifacts-read-artifact
-                         session (file-name-nondirectory predecessor) t))
-                (should (eq (not portable-p)
-                            (not (null (string-match-p "MEVEDEL_SEGMENT_FINALIZED_AT"
-                                                       (buffer-string)))))))))
+                (should (= 1 (mevedel-session-current-segment mevedel--session)))
+                (should (string-match-p "Saved transcript" (buffer-string))))
+              (should-not (string-match-p
+                           "MEVEDEL_SEGMENT_FINALIZED_AT"
+                           (mevedel-session-artifacts-read-artifact
+                            session (file-name-nondirectory predecessor) t)))))
         (test-mevedel-session-persistence--release-and-kill buffer session)
         (test-mevedel-session-persistence--release-and-kill
          restored (and (buffer-live-p restored)
@@ -1423,9 +1413,9 @@
                   (should (string-match-p ":state lost"
                                           (buffer-string))))
                 (with-temp-buffer
-                  (insert-file-contents
-                   (mevedel-session-artifacts-segment-path
-                    session-dir 1))
+                  (insert (mevedel-session-artifacts-read-artifact
+                           (buffer-local-value 'mevedel--session restored)
+                           "segment-0001.chat.org" t))
                   (goto-char (point-min))
                   (should (= 2 (how-many ":state archived"))))
             (test-mevedel-session-persistence--release-and-kill
@@ -1477,11 +1467,11 @@
                                 kill-buffer-hook)))
             (should probed)
             (should-not started)
-            (with-temp-buffer
-              (insert-file-contents segment-1)
-              (should-not
-               (string-match-p "MEVEDEL_SEGMENT_FINALIZED_AT"
-                               (buffer-string))))
+            (should-not
+             (string-match-p "MEVEDEL_SEGMENT_FINALIZED_AT"
+                             (mevedel-session-artifacts-read-artifact
+                              (buffer-local-value 'mevedel--session restored)
+                              (file-name-nondirectory segment-1) t)))
             (with-temp-buffer
               (insert-file-contents segment-2)
               (should (equal "Unpublished transcript\n" (buffer-string)))))
@@ -2214,17 +2204,15 @@
     (let (restored)
       (unwind-protect
           (progn
-            (let* ((sidecar-path
-                    (mevedel-session-artifacts-sidecar-path session-dir))
-                   (sidecar
-                    (mevedel-session-codec-read sidecar-path)))
-              (plist-put sidecar :fork-type 'worktree)
-              (plist-put sidecar :forked-from-session-id "source-id")
-              (plist-put sidecar :worktree-source-root tempdir)
-              (plist-put sidecar :worktree-directory missing-dir)
-              (plist-put sidecar :worktree-branch "worktree/main-fork-1")
-              (plist-put sidecar :worktree-base-commit "abc123")
-              (mevedel-session-codec-write sidecar-path sidecar))
+            (test-mevedel-session-persistence--edit-published-sidecar
+             workspace session-dir
+             (lambda (sidecar)
+               (plist-put sidecar :fork-type 'worktree)
+               (plist-put sidecar :forked-from-session-id "source-id")
+               (plist-put sidecar :worktree-source-root tempdir)
+               (plist-put sidecar :worktree-directory missing-dir)
+               (plist-put sidecar :worktree-branch "worktree/main-fork-1")
+               (plist-put sidecar :worktree-base-commit "abc123")))
             (let* ((entry
                     (car
                      (mevedel-session-persistence-list-sessions workspace)))
@@ -2251,8 +2239,8 @@
             (let* ((summary
                     (plist-get
                      (mevedel-session-persistence--read-summary
-                      (mevedel-session-artifacts-sidecar-path
-                       session-dir))
+                      (plist-get (mevedel-session-publication-read session-dir)
+                                 :sidecar))
                      :summary))
                    (display
                     (mevedel-session-persistence--format-session-candidate
@@ -3407,17 +3395,14 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                (error-message-string
                 (should-error (mevedel-save-session t) :type 'user-error))))
       (should (mevedel-session-pending-follow-ups session))))
-  :doc "save-as canonically publishes the parent and cloned sidecar"
+  :doc "save-as canonically publishes the parent once"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (let* ((session (mevedel-session-create "main" workspace))
            (buffer (generate-new-buffer " *save-as-publication*"))
            (save-function
             (symbol-function 'mevedel-session-artifacts-save))
-           (publish-function
-            (symbol-function 'mevedel-session-artifacts-publish-text))
-           (canonical-saves 0)
-           published)
+           (canonical-saves 0))
       (unwind-protect
           (with-current-buffer buffer
             (org-mode)
@@ -3434,20 +3419,9 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                  ((symbol-function 'mevedel-session-artifacts-save)
                   (lambda (&rest arguments)
                     (cl-incf canonical-saves)
-                    (apply save-function arguments)))
-                 ((symbol-function
-                   'mevedel-session-artifacts-publish-text)
-                  (lambda (actual-session path content &optional coding)
-                    (push path published)
-                    (funcall publish-function
-                             actual-session path content coding))))
+                    (apply save-function arguments))))
               (mevedel-save-session t))
             (should (= 1 canonical-saves))
-            (should
-             (member
-              (mevedel-session-artifacts-sidecar-path
-               (mevedel-session-save-path session))
-              published))
             (should-not (mevedel-session-dedicated-artifact session))
             (should-not (buffer-modified-p)))
         (test-mevedel-session-persistence--release-and-kill buffer session)
@@ -4268,96 +4242,82 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
 (mevedel-deftest mevedel-session-persistence--enumerate-sessions ()
   ,test
   (test)
-  :doc "isolates failed control probes to their own visible session row"
-  (let* ((root (make-temp-file "mevedel-enumerate-controls-" t))
-         (bad (file-name-as-directory (file-name-concat root "bad")))
-         (good (file-name-as-directory (file-name-concat root "good")))
-         (workspace
-          (test-mevedel-session-persistence--make-file-workspace root))
-         (mevedel-session-persistence--list-sessions-cache
-          (make-hash-table :test #'equal)))
-    (unwind-protect
-        (progn
-          (make-directory bad)
-          (make-directory good)
-          (cl-letf
-              (((symbol-function 'mevedel-session-artifacts-sessions-dir)
-                (lambda (_) root))
-               ((symbol-function 'mevedel-session-control-fs-run-program)
-                (lambda (_)
-                  (list
-                   (list :path (file-name-concat bad ".lock")
-                         :status 'failed :diagnostic "symlink refused")
-                   (list :path (file-name-concat bad ".lease") :status 'absent)
-                   (list :path (file-name-concat bad "session.meta.el")
-                         :status 'ok)
-                   (list :path (file-name-concat good ".lock") :status 'absent)
-                   (list :path (file-name-concat good ".lease") :status 'absent)
-                   (list :path (file-name-concat good "session.meta.el")
-                         :status 'ok))))
-               ((symbol-function
-                 'mevedel-session-codec-authority-mode-for-path)
-                (lambda (&rest _) 'pid-lock))
-               ((symbol-function 'mevedel-session-persistence--read-summary)
-                (lambda (_)
-                  '(:status current
-                    :summary (:session-id "good" :updated-at "2026")))))
-            (let* ((result
-                    (mevedel-session-persistence--enumerate-sessions workspace))
-                   (incompatible (car (plist-get result :incompatible))))
-              (should (= 1 (length (plist-get result :sessions))))
-              (should (equal bad (plist-get incompatible :save-path)))
-              (should (eq 'undiscoverable (plist-get incompatible :status)))
-              (should (string-match-p
-                       "symlink refused"
-                       (plist-get incompatible :diagnostic))))))
-      (when (file-directory-p root)
-        (delete-directory root t))
-      (mevedel-workspace-clear-registry)))
-  :doc "keeps a current session listed beside an unsupported one on disk"
-  (let* ((root (make-temp-file "mevedel-enumerate-mixed-" t))
-         (old (file-name-as-directory (file-name-concat root "old")))
-         (good (file-name-as-directory (file-name-concat root "good")))
-         (workspace
-          (test-mevedel-session-persistence--make-file-workspace root))
-         (mevedel-session-persistence--list-sessions-cache
-          (make-hash-table :test #'equal))
-         (mevedel-session-persistence--summary-cache
-          (make-hash-table :test #'equal)))
-    (unwind-protect
-        (progn
-          (make-directory old)
-          (make-directory good)
-          (mevedel-session-codec-write
-           (file-name-concat old "session.meta.el")
-           '(:version "v0.5.3" :updated-at "2026-01-01T00-00-00"))
-          (mevedel-session-codec-write
-           (file-name-concat good "session.meta.el")
-           (test-mevedel-session-persistence--complete-sidecar
-            '(:session-name "good" :session-id "good-1"
-              :updated-at "2026-02-01T00-00-00")))
-          (cl-letf (((symbol-function 'mevedel-session-artifacts-sessions-dir)
-                     (lambda (_) root)))
-            (let* ((result
-                    (mevedel-session-persistence--enumerate-sessions workspace))
-                   (incompatible (car (plist-get result :incompatible))))
-              (should (equal (list good)
-                             (mapcar (lambda (item) (plist-get item :save-path))
-                                     (plist-get result :sessions))))
-              (should (= 1 (length (plist-get result :incompatible))))
-              (should (equal old (plist-get incompatible :save-path)))
-              (should (eq 'unsupported (plist-get incompatible :status)))
-              (should (equal "v0.5.3" (plist-get incompatible :version)))
-              (should (equal "2026-01-01T00-00-00"
-                             (plist-get incompatible :updated-at)))
-              (should (equal (list good)
-                             (mapcar (lambda (item) (plist-get item :save-path))
-                                     (mevedel-session-persistence-list-sessions
-                                      workspace)))))))
-      (when (file-directory-p root)
-        (delete-directory root t))
-      (mevedel-workspace-clear-registry))))
+  :doc "keeps a current session listed beside an unpublished old one on disk"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let* ((session (mevedel-session-create "good" workspace))
+           (buffer (generate-new-buffer " *enumerate-mixed*"))
+           (mevedel-session-persistence--list-sessions-cache
+            (make-hash-table :test #'equal))
+           (mevedel-session-persistence--summary-cache
+            (make-hash-table :test #'equal)))
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer
+              (org-mode)
+              (insert "Current\n")
+              (mevedel-session-artifacts-save session buffer))
+            (let* ((good (file-name-as-directory (mevedel-session-save-path session)))
+                   (old (file-name-as-directory
+                         (file-name-concat
+                          (mevedel-session-artifacts-sessions-dir workspace) "old"))))
+              (make-directory old)
+              (mevedel-session-codec-write
+               (file-name-concat old "session.meta.el")
+               '(:version "v0.5.3" :updated-at "2026-01-01T00-00-00"))
+              (let* ((result (mevedel-session-persistence--enumerate-sessions workspace))
+                     (incompatible (car (plist-get result :incompatible))))
+                (should (equal (list good)
+                               (mapcar (lambda (item)
+                                         (file-name-as-directory (plist-get item :save-path)))
+                                       (plist-get result :sessions))))
+                (should (= 1 (length (plist-get result :incompatible))))
+                (should (equal old (file-name-as-directory
+                                    (plist-get incompatible :save-path))))
+                ;; A plain sidecar without a lease is an unmigrated session.
+                (should (eq 'unsupported (plist-get incompatible :status)))
+                (should (string-search "migrate-sessions.el"
+                                       (plist-get incompatible :diagnostic))))))
+        (test-mevedel-session-persistence--release-and-kill buffer session)
+        (delete-directory tempdir t)
+        (mevedel-workspace-clear-registry)))))
 
+
+(mevedel-deftest mevedel-session-persistence/pre-lease-file-session (:quiet t)
+  ,test
+  (test)
+  :doc "an unmigrated PID-lock file session points discovery and resume at migration"
+  (dolist (lock '(nil t))
+    (cl-destructuring-bind (workspace . tempdir)
+        (test-mevedel-session-persistence--make-tempdir-workspace)
+      (unwind-protect
+          (let* ((mevedel-session-persistence--list-sessions-cache
+                  (make-hash-table :test #'equal))
+                 (old (file-name-as-directory
+                       (file-name-concat
+                        (mevedel-session-artifacts-sessions-dir workspace) "old"))))
+            (make-directory old t)
+            (mevedel-session-codec-write
+             (file-name-concat old "session.meta.el")
+             (test-mevedel-session-persistence--complete-sidecar
+              (list :session-id "old" :authority-mode 'pid-lock
+                    :workspace (list :type 'file))))
+            (write-region "* Old turn\n" nil
+                          (file-name-concat old "segment-0001.chat.org") nil 'silent)
+            (when lock
+              (write-region "(:pid 1)" nil (file-name-concat old ".lock") nil 'silent))
+            (let ((row (car (plist-get
+                             (mevedel-session-persistence--enumerate-sessions workspace)
+                             :incompatible))))
+              (should (eq 'unsupported (plist-get row :status)))
+              (should (string-search "migrate-sessions.el" (plist-get row :diagnostic))))
+            (should (string-search
+                     "migrate-sessions.el"
+                     (cadr (should-error
+                            (mevedel-session-persistence-restore old nil nil workspace)
+                            :type 'user-error)))))
+        (delete-directory tempdir t)
+        (mevedel-workspace-clear-registry)))))
 
 (mevedel-deftest mevedel-session-persistence-list-sessions (:quiet t)
   ,test
@@ -5045,11 +5005,12 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                                              (time-subtract (current-time) (* 14 86400))))
               (mevedel-session-codec-write sidecar metadata)
               (mevedel-journal-pins-retain directory capture nil)
-              (mevedel-session-persistence-lock-release directory session)
-              (should (= 0 (mevedel-session-persistence-cleanup-expired workspace t)))
+              ;; An open conversation is never swept; close it as a user would.
+              (test-mevedel-session-persistence--release-and-kill buffer session)
+              (should (= 0 (test-mevedel-session-persistence--cleanup-later workspace)))
               (should (file-directory-p directory))
               (mevedel-journal-pins-release directory capture)
-              (should (= 1 (mevedel-session-persistence-cleanup-expired workspace t)))
+              (should (= 1 (test-mevedel-session-persistence--cleanup-later workspace)))
               (should-not (file-directory-p directory))))
         (when (buffer-live-p buffer)
           (with-current-buffer buffer (set-buffer-modified-p nil))
@@ -5070,8 +5031,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
             (with-current-buffer buffer (org-mode) (insert "Saved source\n"))
             (mevedel-session-artifacts-save session buffer)
             (test-mevedel-session-persistence--expire-session session)
-            (mevedel-session-persistence-lock-release
-             (mevedel-session-save-path session) session)
+            (test-mevedel-session-persistence--release-and-kill buffer session)
             (let* ((sidecar (mevedel-session-artifacts-sidecar-path
                              (mevedel-session-save-path session)))
                    (metadata (mevedel-session-codec-read sidecar)))
@@ -5081,9 +5041,9 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                        (lambda (_workspace session-id id)
                          (equal (list session-id id)
                                 (list (mevedel-session-session-id session) "flow")))))
-              (should (= 0 (mevedel-session-persistence-cleanup-expired workspace t))))
+              (should (= 0 (test-mevedel-session-persistence--cleanup-later workspace))))
             (should (file-directory-p (mevedel-session-save-path session)))
-            (should (= 1 (mevedel-session-persistence-cleanup-expired workspace t))))
+            (should (= 1 (test-mevedel-session-persistence--cleanup-later workspace))))
         (when (buffer-live-p buffer)
           (with-current-buffer buffer (set-buffer-modified-p nil))
           (kill-buffer buffer))
@@ -5131,14 +5091,12 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                                                  (* 14 24 60 60)))))
                   (plist-put plist :updated-at forged)
                   (mevedel-session-codec-write sidecar plist))
-                ;; Release locks so cleanup can delete the dirs.
-                (mevedel-session-persistence-lock-release
-                 (mevedel-session-save-path s1) s1)
-                (mevedel-session-persistence-lock-release
-                 (mevedel-session-save-path s2) s2)
+                ;; Close both so cleanup may delete the expired one.
+                (test-mevedel-session-persistence--release-and-kill b1 s1)
+                (test-mevedel-session-persistence--release-and-kill b2 s2)
                 (let ((deleted
-                       (mevedel-session-persistence-cleanup-expired
-                        workspace t)))
+                       (test-mevedel-session-persistence--cleanup-later
+                        workspace)))
                   (should (= 1 deleted))
                   (should-not (file-directory-p
                                (mevedel-session-save-path s1)))
@@ -5179,10 +5137,10 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                   (cl-remf plist :plan-mode)
                   (plist-put plist :updated-at forged)
                   (mevedel-session-codec-write sidecar plist)
-                  (mevedel-session-persistence-lock-release save-path session)
+                  (test-mevedel-session-persistence--release-and-kill buf session)
                   (should (= 1
-                             (mevedel-session-persistence-cleanup-expired
-                              workspace t)))
+                             (test-mevedel-session-persistence--cleanup-later
+                              workspace)))
                   (should-not (file-directory-p save-path))))
             (when (buffer-live-p buf)
               (with-current-buffer buf (set-buffer-modified-p nil))
@@ -5214,8 +5172,8 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                   (delete-file sidecar)
                   (set-file-times save-path old-time)
                   (should (= 1
-                             (mevedel-session-persistence-cleanup-expired
-                              workspace t)))
+                             (test-mevedel-session-persistence--cleanup-later
+                              workspace)))
                   (should-not (file-directory-p save-path))))
             (when (buffer-live-p buf)
               (with-current-buffer buf (set-buffer-modified-p nil))
@@ -5249,7 +5207,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                                                 (* 30 24 60 60)))))
                   (plist-put plist :updated-at forged)
                   (mevedel-session-codec-write sidecar plist))
-                ;; The lock from save still exists with our PID — live.
+                ;; The open conversation still holds its live lease.
                 (let ((deleted
                        (mevedel-session-persistence-cleanup-expired
                         workspace t)))
@@ -5354,59 +5312,6 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
       (when (file-directory-p local-root)
         (delete-directory local-root t))
       (mevedel-workspace-clear-registry)))
-  :doc "deletes expired sessions whose same-host lock has a reused PID"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-session-persistence--make-tempdir-workspace)
-    (unwind-protect
-        (let* ((mevedel-session-max-age-days 7)
-               (mevedel-session-keep-recent-count nil)
-               (mevedel-session-persistence--cleanup-throttle
-                (make-hash-table :test #'equal))
-               (s (mevedel-session-create "reused" workspace))
-               (b (generate-new-buffer "*test-reused-buf*")))
-          (unwind-protect
-              (progn
-                (with-current-buffer b
-                  (org-mode)
-                  (insert "Hi\n")
-                  (mevedel-session-artifacts-save s b))
-                (let* ((path      (mevedel-session-save-path s))
-                       (sidecar   (mevedel-session-artifacts-sidecar-path
-                                   path))
-                       (plist     (mevedel-session-codec-read sidecar))
-                       (old-time  (time-subtract (current-time)
-                                                 (* 30 24 60 60)))
-                       (forged    (format-time-string "%FT%H-%M-%S"
-                                                       old-time))
-                       (lock-path (mevedel-session-persistence--lock-path
-                                   path)))
-                  (plist-put plist :updated-at forged)
-                  (mevedel-session-codec-write sidecar plist)
-                  (with-temp-file lock-path
-                    (prin1 (list :pid 12345
-                                 :hostname (system-name)
-                                 :process-identity
-                                 (test-mevedel-session-persistence--identity 6)
-                                 :buffer "*old-buf*")
-                           (current-buffer))))
-                (cl-letf (((symbol-function
-                            'mevedel-session-durability--pid-alive-p)
-                           (lambda (&rest _) t))
-                          ((symbol-function
-                            'mevedel-session-durability--pid-identity)
-                           (lambda (_)
-                             (test-mevedel-session-persistence--identity 7))))
-                  (let ((deleted
-                         (mevedel-session-persistence-cleanup-expired
-                          workspace t)))
-                    (should (= 1 deleted))
-                    (should-not (file-directory-p
-                                 (mevedel-session-save-path s))))))
-            (when (buffer-live-p b)
-              (with-current-buffer b (set-buffer-modified-p nil))
-              (kill-buffer b))))
-      (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry)))
   :doc "keeps the newest sessions regardless of age"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
@@ -5441,12 +5346,12 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                                                   (* (cdr spec)
                                                      24 60 60)))))
                     (plist-put plist :updated-at forged)
-                    (mevedel-session-codec-write sidecar plist)
-                    (mevedel-session-persistence-lock-release
-                     path (car spec))))
+                    (mevedel-session-codec-write sidecar plist)))
+                (test-mevedel-session-persistence--release-and-kill b1 s1)
+                (test-mevedel-session-persistence--release-and-kill b2 s2)
                 (let ((deleted
-                       (mevedel-session-persistence-cleanup-expired
-                        workspace t)))
+                       (test-mevedel-session-persistence--cleanup-later
+                        workspace)))
                   (should (= 1 deleted))
                   (should-not (file-directory-p
                                (mevedel-session-save-path s1)))
@@ -5547,16 +5452,18 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                   (mevedel-session-artifacts-save session buf))
                 (let ((save-path (mevedel-session-save-path session)))
                   (test-mevedel-session-persistence--expire-session session)
-                  (mevedel-session-persistence-lock-release save-path session)
+                  (test-mevedel-session-persistence--release-and-kill buf session)
                   (should (timerp (mevedel-session-persistence-schedule-cleanup
                                    workspace)))
                   ;; Nothing runs inside the command that offered it.
                   (should (file-directory-p save-path))
-                  (with-timeout (2 (ert-fail "Cleanup remained queued"))
-                    (while (> (hash-table-count
-                               mevedel-session-persistence--cleanups)
-                              0)
-                      (sleep-for .002)))
+                  (test-mevedel-session-persistence--call-later
+                   (lambda ()
+                     (with-timeout (2 (ert-fail "Cleanup remained queued"))
+                       (while (> (hash-table-count
+                                  mevedel-session-persistence--cleanups)
+                                 0)
+                         (sleep-for .002)))))
                   (should-not (file-directory-p save-path))
                   (should-not (mevedel-session-persistence-schedule-cleanup
                                workspace))))
@@ -5793,8 +5700,8 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
           (cl-letf (((symbol-function
                       'mevedel-session-artifacts-build-sidecar)
                      (lambda (_session _buffer &optional _checkpoint) '(:sidecar t)))
-                    ((symbol-function 'mevedel-session-codec-write)
-                     (lambda (_path _sidecar) (push 'write events))))
+                    ((symbol-function 'mevedel-session-publication-publish)
+                     (lambda (&rest _) (push 'write events))))
             (should
              (eq buffer
                  (mevedel-session-persistence--finish-restored-buffer
@@ -6160,12 +6067,15 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                 (test-mevedel-session-persistence--release-and-kill
                  buf session)
                 (setq buf nil)
+                ;; The published sidecar is the authority, not the cache.
                 (delete-file
-                 (mevedel-session-artifacts-sidecar-path session-dir))
-                (should-error
-                 (mevedel-session-persistence-restore
-                  session-dir nil nil workspace)
-                 :type 'user-error))
+                 (plist-get (mevedel-session-publication-read session-dir)
+                            :sidecar))
+                (should (string-match-p
+                         "Invalid session publication sidecar"
+                         (cadr (should-error
+                                (mevedel-session-persistence-restore
+                                 session-dir nil nil workspace))))))
             (ignore-errors
               (test-mevedel-session-persistence--release-and-kill
                buf session)))
@@ -6189,13 +6099,15 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                  buf session)
                 (setq buf nil)
                 (write-region "this is not a plist" nil
-                              (mevedel-session-artifacts-sidecar-path
-                               session-dir)
+                              (plist-get (mevedel-session-publication-read
+                                          session-dir)
+                                         :sidecar)
                               nil 'silent)
-                (should-error
-                 (mevedel-session-persistence-restore
-                  session-dir nil nil workspace)
-                 :type 'user-error))
+                (should (string-match-p
+                         "Invalid session publication sidecar"
+                         (cadr (should-error
+                                (mevedel-session-persistence-restore
+                                 session-dir nil nil workspace))))))
             (ignore-errors
               (test-mevedel-session-persistence--release-and-kill
                buf session)))
@@ -7075,60 +6987,6 @@ every byte and error.  Other files are read normally."
            (lambda ()
              (should-not
               (mevedel-session-durability--pid-identity 4242))))))))
-
-(mevedel-deftest mevedel-session-persistence-call-with-abandoned-lock ()
-  ,test
-  (test)
-  :doc "keeps live, foreign, and unreadable PID locks and releases temporary authority"
-  (mevedel-test-journal-capture--with-session
-   (lambda (session buffer)
-     (mevedel-test-journal-capture--turn session buffer "Request" "Result")
-     (let* ((directory (mevedel-session-save-path session))
-            (path (file-name-concat directory ".lock"))
-            called)
-       (should-not (mevedel-session-persistence-call-with-abandoned-lock directory (lambda () (setq called t))))
-       (should-not called)
-       (dolist (text '("unreadable lock" "(:hostname \"another-host\" :pid 123)"))
-         (write-region text nil path nil 'silent)
-         (should-not (mevedel-session-persistence-call-with-abandoned-lock directory (lambda () (setq called t))))
-         (should (equal text (mevedel-session-control-fs-read-file path))))
-       (delete-file path)
-       (should-error
-        (mevedel-session-persistence-call-with-abandoned-lock
-         directory (lambda () (setq called t) (error "Injected callback failure"))))
-       (should called)
-       (should-not (file-exists-p path))
-       (let* ((process (make-process :name "journal-dead-holder" :command '("true") :noquery t))
-              (pid (process-id process)))
-         (while (process-live-p process) (accept-process-output process 0.01))
-         (should (integerp pid))
-         (with-temp-file path
-           (prin1 (list :pid pid :hostname (system-name)
-                        :emacs-invocation-time mevedel-session-persistence--emacs-invocation-time
-                        :buffer "old source") (current-buffer)))
-         (should (mevedel-session-persistence-call-with-abandoned-lock directory (lambda () t)))
-         (should-not (file-exists-p path))))))
-  :doc "a resume replacing the observed stale holder prevents abandoned recovery"
-  (mevedel-test-journal-capture--with-session
-   (lambda (session buffer)
-     (mevedel-test-journal-capture--turn session buffer "Request" "Result")
-     (let* ((directory (mevedel-session-save-path session))
-            (path (file-name-concat directory ".lock"))
-            (stale (list :pid 99999999 :hostname (system-name) :buffer "stale"))
-            called)
-       (write-region (prin1-to-string stale) nil path nil 'silent)
-       (cl-letf (((symbol-function 'mevedel-session-persistence--same-host-lock-active-p)
-                  (lambda (_)
-                    ;; A normal resume wins after recovery observed stale
-                    ;; state, before recovery attempts its checked takeover.
-                    (mevedel-session-persistence--write-lock path "resumed" stale)
-                    nil)))
-         (should-not (mevedel-session-persistence-call-with-abandoned-lock
-                      directory (lambda () (setq called t)))))
-       (should-not called)
-       (should (equal "resumed" (plist-get (mevedel-session-persistence--read-lock path) :buffer)))
-       (should-not (mevedel-session-persistence--change-lock path stale nil))
-       (should (equal "resumed" (plist-get (mevedel-session-persistence--read-lock path) :buffer)))))))
 
 (mevedel-deftest mevedel-session-persistence--sidecar-summary ()
   ,test

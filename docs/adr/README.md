@@ -129,7 +129,7 @@ to the decision bearing that ID.
 | 0097 | Store durable sessions with their execution target | [ADR 0097](0097-store-durable-sessions-with-their-execution-target.md) |
 | 0098 | Store unsettled mutation in the session lease | [ADR 0098](0098-store-unsettled-mutation-in-the-session-lease.md) |
 | 0099 | Project live collaboration from host-authoritative state | [ADR 0099](0099-project-live-collaboration-from-host-authoritative-state.md) |
-| 0100 | Use one portable authority for project sessions | [ADR 0100](0100-portable-project-session-authority.md) |
+| 0100 | Use one portable authority for project and file sessions | [ADR 0100](0100-portable-project-session-authority.md) |
 | 0101 | Carry control operations as one pinned program | [ADR 0101](0101-carry-control-operations-as-one-pinned-program.md) |
 | 0102 | Settle remote stops by zombie-aware probing | [ADR 0102](0102-settle-remote-stops-by-zombie-aware-probing.md) |
 | 0103 | Spawn remote Bash on a private channel | [ADR 0103](0103-spawn-remote-bash-on-a-private-channel.md) |

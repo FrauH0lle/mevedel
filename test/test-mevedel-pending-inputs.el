@@ -50,7 +50,12 @@
        (with-current-buffer view-buf
          (setq-local mevedel--session session))
        (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-recovery-save) #'ignore)) ,@body)
+          (cl-letf (((symbol-function 'mevedel-recovery-save) #'ignore)
+                    ((symbol-function 'mevedel-session-artifacts-assert-mutation-authority)
+                     #'ignore)
+                    ((symbol-function 'mevedel-session-durability-lease-owned-p)
+                     (lambda (&rest _) t)))
+            ,@body)
          (when-let* ((cockpit
                       (get-buffer mevedel-pending-inputs-buffer-name)))
            ;; Killing the cockpit resumes delivery, and a real drain
@@ -1769,7 +1774,6 @@
   (test)
   :doc "blocks fallback drainage for approval and Goal handoff ownership"
   (let ((session (mevedel-session--create
-                  :authority-mode 'pid-lock
                   :name "main" :pending-plan-approval 'plan)))
     (should (mevedel-view--follow-up-auto-drain-blocked-p session))
     (setf (mevedel-session-pending-plan-approval session) nil)
@@ -1777,7 +1781,6 @@
      (mevedel-view--follow-up-auto-drain-blocked-p session)))
   (let ((here
          (mevedel-session--create
-          :authority-mode 'pid-lock
           :name "here"
           :plan-metadata
           '(:implementation-retry
@@ -1785,7 +1788,6 @@
              :selection (:location here :execution goal)))))
         (source
          (mevedel-session--create
-          :authority-mode 'pid-lock
           :name "source"
           :plan-metadata
           '(:implementation-retry
@@ -1796,7 +1798,6 @@
   (let* ((goal (mevedel-goal--create :id "goal" :status 'paused))
          (session
           (mevedel-session--create
-           :authority-mode 'pid-lock
            :name "paused" :goal goal
            :pending-follow-ups
            '((:input "held" :queued-at-goal-id "goal")))))
@@ -1808,7 +1809,6 @@
       (setf (mevedel-goal-status goal) status)
       (should (mevedel-view--follow-up-auto-drain-blocked-p session))))
   (let ((session (mevedel-session--create
-                  :authority-mode 'pid-lock
                   :name "failed" :pending-input-failure-paused t)))
     (should (mevedel-view--follow-up-auto-drain-blocked-p session))))
 

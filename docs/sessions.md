@@ -1,8 +1,8 @@
 # Sessions and persistence
 
 Sessions retain conversation, request configuration, agent state, and captured
-filesystem changes across saves and resumes. Project sessions publish state on
-their execution target; file-backed sessions use their own storage authority.
+filesystem changes across saves and resumes. Project and file-workspace sessions
+publish state through the same portable lease on their execution target.
 Compaction, Rewind, and Fork each preserve different parts of that state.
 
 ## Note conversations
@@ -334,7 +334,7 @@ flowchart TD
     F --> G[Restore data and render the view]
 ```
 
-File-backed sessions use the separate PID-lock profile described below. File
+File-backed sessions use the same portable lease as project sessions. File
 snapshots are captured at mutation boundaries; saving persists that evidence.
 [Compaction](compaction.md), [Rewind](#rewind), and [Fork](#fork)
 use the persistence contracts described in their sections.
@@ -458,9 +458,8 @@ and its deferred ToolCall retirement IDs. Only that candidate's IDs may be
 excluded from its sidecar. Mail delivered after the freeze remains pending for
 a later checkpoint. Candidates travel with staged sidecar artifacts through
 queueing, failure, and retry; serialization or a queued save's return does not
-install them. Project sessions install the candidate only when its actual
-published head commits. File-backed sessions install after the matching fixed
-transcript and sidecar writes succeed. Restore and committed-state adoption seed
+install them. Project and file-workspace sessions install the candidate only
+when its actual published head commits. Restore and committed-state adoption seed
 a new checkpoint epoch, invalidating candidates from the previous owner state.
 
 Before a queued sidecar commits, its frozen data is projected against the
@@ -541,10 +540,11 @@ without an additional fixed copy. Old fixed
 transcripts are ignored, including their modification times; this change does
 not delete them. Numbered agent compaction archives still receive a physical
 recovery copy before the live buffer is rewritten. File-workspace
-sessions use the separate `pid-lock` profile and `.lock`; they do not create a
-lease or publication tree.  A session directory containing both control
-artifacts, or a persisted authority profile that disagrees with its workspace
-category, is rejected rather than guessed.
+sessions use the same lease and publication tree.  A session directory
+containing both a `.lock` and a lease, or a persisted authority profile that
+disagrees with its workspace category, is rejected rather than guessed; a
+`.lock` or plain sidecar without a lease is an unmigrated file session (see
+[explicit migration](#explicit-session-migration)).
 
 Retired local execution output may use lossless gzip storage behind stable
 `artifact://executions/*.log` handles. Compression runs outside the editor and
@@ -989,8 +989,8 @@ The package release is `0.5.0`; its persisted session format is independently
 `v0.5.15`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
 execution-target incarnation are
 required by that session format:
-project sessions persist `portable`, while file-workspace sessions
-persist `pid-lock`.  Portable project sessions always persist a non-empty
+project and file-workspace sessions persist `portable`.  Portable sessions
+always persist a non-empty
 `:target-incarnation`, including local sessions; the local and TRAMP probes use
 one canonical boot-id, machine-id, PID-1 start, and hostname payload, without
 client-specific TRAMP spelling or Emacs build details.  Resume restores the
@@ -1261,9 +1261,6 @@ Portable saves write these snapshots only into immutable publications, without
 an additional fixed copy. Rewind and WorktreeFork read the committed artifact;
 fork staging can still materialize a fixed cache. Existing caches are not pruned
 by this change.
-PID sessions remove unindexed content-addressed backups only after the replacement
-sidecar commits. A failed sidecar write therefore leaves the previous checkpoint
-bytes available; cleanup failure is diagnostic and retried on a later save.
 Snapshot contents remain raw and owner-only. Readers resolve the names in the
 checkpoint index; saving does not rewrite existing archived history.
 
@@ -1655,8 +1652,9 @@ Delivering a background command's completion or monitor batch to its owner's
 mailbox and automatic root or agent transcript checkpoints do not block the
 editor on target programs. Only a materialized local portable session qualifies: its
 save path is local, its authority is portable, a committed publication with a
-sidecar exists, its root buffer is live, and it is not stopping. Remote,
-file-backed and PID-lock background deliveries instead coalesce arrivals for
+sidecar exists, its root buffer is live, and it is not stopping. Local file
+workspaces qualify on the same terms as local project workspaces. Remote
+background deliveries instead coalesce arrivals for
 the next transport-safe timer opportunity and commit them together through the
 synchronous writer above. They use the same mutation preparation gate, without
 changing their storage authority or format. Before that opportunity, arrivals
@@ -1906,8 +1904,8 @@ bytes first and refuses the kill if publication is failed or unresolved. The
 existing session exit query likewise drains accepted jobs and refuses pending
 recovery; there is no second agent exit query. If teardown bypasses the buffer
 query and its final save still fails, the kill hook writes the unpublished
-transcript to a temporary recovery file and warns with its path. Cold, remote
-and file-backed checkpoints keep their previous synchronous path.
+transcript to a temporary recovery file and warns with its path. Cold and remote
+checkpoints keep their synchronous path.
 
 Gate ownership is explicit. A queued preparation runs with a fresh token that
 is held in a session slot only while it runs and is passed to the preparation
@@ -2170,9 +2168,8 @@ diagnostics.  Publication is held active meanwhile, so a critical publisher
 reached from a sentinel queues and is published through the ordinary reserved
 path afterwards.
 
-Local Fork and Rewind retain their same-filesystem directory transactions and
-rollback trees.  Portable project lifecycle commits use the immutable
-publication head instead.  A portable project fork acquires one fresh child
+Project and file-workspace lifecycle commits use the immutable publication
+head. A fork acquires one fresh child
 lease in hidden staging,
 publishes a complete `:replace t` child snapshot, then moves the staged tree
 with its `.lease/` and `.publications/` control state while the bounded lease is
@@ -2182,7 +2179,7 @@ The replacement manifest contains the selected transcript, accepted-plan
 evidence, retained agent transcripts, file-history artifacts, and any other
 logical entries of the Source's committed manifest, never its fixed caches.
 
-Portable project Rewind does not rename or exchange the session directory.  It
+Rewind does not rename or exchange the session directory. It
 materializes only logical committed artifacts, excludes `.lease/` and
 `.publications/` by construction, restores project files under a bounded lease
 reservation, then commits the complete rewound snapshot with one `:replace t`
@@ -2191,12 +2188,12 @@ revalidates the same authority before rolling project files back.  Incomplete
 rollback fails closed visibly and retains recovery bytes; the control trees
 and current lease generation are never copied, moved, or replaced.
 
-Portable project Rename commits only the display-name metadata against the
+Rename commits only the display-name metadata against the
 current publication head. The session ID, directory, lease generation, and
 artifact paths stay fixed. A failure before commit restores the in-memory name;
 a failure after commit retains the committed name and reports the failure.
 
-Portable project Save As captures the parent's current committed publication
+Save As captures the parent's current committed publication
 through the `mevedel-session-save-as.el` transaction while holding its lease.
 That module materializes only the manifest's logical artifacts in hidden child
 staging, acquires a fresh child lease before writing them, commits one complete
@@ -2446,12 +2443,9 @@ reload, including staging buffers without gptel save hooks. These repair saves
 rewrite only `GPTEL_BOUNDS`, not gptel's full save state: hydration precedes the
 chat setup that keeps gptel's request configuration out of the drawer.
 
-After acquiring a PID lock, resume reconciles the sidecar segment counter with
-the files on disk and finalizes the predecessor when recovering a newer segment.
-Recovery persists the repaired counter and prompt index in the sidecar, so a
-second resume reads the same predecessor coordinates.
-Portable sessions instead restore the committed publication head; unpublished
-segment files never advance their counter. Read-only inspection repairs neither.
+Project and file-workspace sessions restore the committed publication head;
+unpublished segment files never advance their counter. Read-only inspection
+repairs neither.
 
 An active persisted Goal is restored `paused`, with an explicit session-resumed
 reason; opening a session never dispatches Goal work. `/goal resume` is required
@@ -2529,6 +2523,18 @@ format. To retire old support, remove the oldest prefix of steps and their
 unused conversion functions; the first remaining source becomes the minimum
 supported version. Retained steps do not need rewriting. Runtime readers and
 writers still accept only the current schema.
+
+File sessions used a PID lock (`.lock`, plain transcript files) before they
+moved to the portable lease within v0.5.15. Like the Worktree retry repair,
+this conversion follows the session's shape rather than its version: a
+closed `pid-lock` sidecar becomes `portable`, and the converted copy publishes
+transcripts, agent transcripts, file history and plans as one immutable
+generation under a lease it then releases. Plans and numbered compaction
+archives retain their plain copies for resource readers and recovery. Retained
+execution spools under `tool-results/executions/`, hidden control state and
+`*-log.el` diagnostic logs stay plain files outside the publication. The runtime
+does not read unmigrated file sessions: the chooser lists them as unsupported
+and resume refuses them, both naming this script.
 
 #### Safety and backups
 
@@ -2633,8 +2639,7 @@ untouched and are ignored by ordinary resume.
 ### Incompatible session inspection
 
 Session discovery reuses control observations only within its current
-enumeration. In particular, a pinned probe that found no portable lease is
-sufficient for that enumeration's PID profile check. Failed probes and
+enumeration. Failed probes and
 contradictory controls still reject the entry; a later discovery probes again.
 An activated successor can prune lease generations between the batch's listing
 and record reads. If those observations yield no live record, discovery checks
@@ -2662,11 +2667,9 @@ composer, gptel mode, or Mevedel view. It opens an unbacked, unmodified,
 read-only bare Org buffer with saving, autosave, backups, and lockfiles disabled.
 Persisted presets and `GPTEL_BOUNDS` are not restored.
 
-For a PID-lock file-workspace session, inspection enumerates the actual
-canonical `segment-NNNN.chat.org` regular files, preserves gaps, orders them by
-segment number, and reads the selected fixed file. For a portable project
-session, it enumerates only the canonical segment entries in the already
-validated immutable publication manifest and verifies the recorded SHA-256
+For project and file-workspace sessions, inspection enumerates only the
+canonical segment entries in the already validated immutable publication
+manifest and verifies the recorded SHA-256
 before display. Mutable fixed portable caches are never fallback evidence. A
 single authoritative segment opens directly; several prompt in chronological
 order with the newest as default; zero authoritative segments fail closed.
@@ -2715,10 +2718,10 @@ that exact finalized text before the transition sidecar is prepared. Existing
 continuation entries pointing into the predecessor are refreshed by fork-point
 identity, including when later prompts share the segment. A missing indexed
 completion fails preparation rather than silently removing completed evidence.
-Portable publication commits text and index together. File-workspace transitions
-publish the successor and frozen finalized predecessor before committing the
-sidecar; instruction saving follows that commit. An error or quit before commit
-restores the predecessor's original bytes and index. After commit, or while a
+Project and file-workspace transitions publish the successor, frozen finalized
+predecessor and matching sidecar together; instruction saving follows that
+commit. An error or quit before commit restores the predecessor's original
+bytes and index. After commit, or while a
 portable publication remains pending, cleanup retains the new text/index pair.
 Keyboard quit is deferred through publication bookkeeping and rollback.
 
@@ -2777,18 +2780,15 @@ Creation, deletion and binary changes require the
 complete recorded post-state to match, unless the file already equals the
 recorded pre-state and needs no write. See
 [ADR 0131](adr/0131-rewind-reverts-recorded-changes.md) for the revised policy.
-File-workspace sessions stage and swap a session directory with a rollback
-tree.  Portable project sessions leave the directory and control state in
-place and commit one complete replacement manifest through the owned lease
-head.
+Project and file-workspace sessions leave the directory and control state in
+place and commit one complete replacement manifest through the owned lease head.
 The impact lists the discarded prompt suffix in order, alongside affected files
 and every known gap. Former directive turns in old sessions are ordinary turns.
 Only the force path overwrites external working-tree changes. Git HEAD and
 the index are not changed, so the impact identifies staged files whose index
 content will diverge from the restored working tree. Failure before the commit
-point rolls back both session and file changes, including a live transcript
-already replaced during local publication. Portable project rollback first
-revalidates
+point leaves the prior session head authoritative and rolls back file changes.
+Rollback first revalidates
 the same lease authority and never substitutes fixed session caches for the
 captured manifest. A failed rollback reports every inconsistent path and
 promotes its temporary repair directory to the target-side specialized
@@ -2799,7 +2799,7 @@ turns that ran Bash, Eval, Agent or SendMessage. These effects appear once per
 tool, with the number of discarded turns; file capture gaps remain separate.
 Gaps do not disable Rewind and are never presented as restored paths. Rewind creates no child session. A portable
 session's superseded head stays published, so `mevedel-redo` can restore its
-conversation as described below; a PID-lock session has no redo. Existing
+conversation as described below. Existing
 child sessions and worktrees are not removed; children forked after the target
 become detached from the Source's visible history.
 
@@ -2903,10 +2903,9 @@ rechecks the confirmed file plan, backs up current contents, and restores the
 files; the head CAS follows, and any failure before it rolls those files back.
 Declining the confirmation mutates nothing.
 
-A PID-lock file session publishes no immutable heads and therefore has no redo,
-which is why the Rewind confirmation promises conversation and captured-file
-redo for a portable session and none for a file session. Redo refuses under the same
-stable-source conditions as Rewind, and a failed buffer install degrades to a
+Project and file-workspace sessions both retain immutable heads, so their
+Rewind confirmations offer conversation and captured-file redo. Redo refuses
+under the same stable-source conditions as Rewind, and a failed buffer install degrades to a
 warning naming its own frame rather than abandoning the refreshes that follow
 a committed head.
 
@@ -3076,26 +3075,19 @@ repository's common exclude file. The generated entries are:
 
 ### Locking
 
-File-workspace `.lock` files prevent concurrent edits. Same-host active lock →
-break / read-only / abort prompt; same-host stale lock → prompt to
-break; cross-host → break / read-only / abort prompt. Same-host locks
-are stale when their PID is dead or their recorded process identity differs
-from the live process's identity. On Linux that identity is the kernel boot
-UUID plus `/proc/PID/stat`'s start tick count; time zones, daylight saving and
-wall-clock adjustments cannot turn the same process into a different holder.
-The lock's invocation timestamp is diagnostic only. Missing or malformed
-identity evidence, including on hosts without these `/proc` records, keeps a
-live PID active. Locks written without identity evidence can still be reclaimed
-when their PID is dead, but cannot establish PID reuse. Malformed PIDs and
-failed or unavailable process enumeration are not evidence of a dead holder. Process
-checks run on the Emacs host even when the current directory is remote.
-[Lobby opens](collaboration.md#the-lobby) reclaim provably stale same-host
-locks without confirmation, using the same checked replacement; ordinary
-Emacs acquisition retains the prompt. This does not change portable leases.
+Project and file-workspace sessions use the same portable `.lease/` generations
+for concurrent-edit protection. They never create `.lock` files; existing PID
+sessions require [explicit migration](#explicit-session-migration).
+Same-user, same-host proven dead or reused holders of `active` or `claiming`
+leases are reclaimed immediately, including through
+[lobby opens](collaboration.md#the-lobby).
+Missing, malformed or foreign identity evidence is not proof of death.
+Publishing leases wait for expiry and confirmation because a child writer may
+still run. Forcing an unexpired live or foreign lease is unavailable; read-only
+inspection and cooperative control transfer remain available.
 
-Portable project sessions never use client PIDs as liveness authority.  Their `.lease/`
-directory contains portable generation records with an opaque client id,
-renewal and expiry times, and a diagnostic buffer name.  A record is authority
+Each generation records an opaque client id, renewal and expiry times, holder
+identity, and a diagnostic buffer name. A record is authority
 only while its timestamps are finite nonnegative numbers: these are file bytes
 another machine wrote, and an infinite expiry would never expire while a NaN
 fails every comparison it is put to, so either one is rejected rather than
@@ -3124,8 +3116,8 @@ cannot commit over a newer owner.  The current head can be read uncached before
 a session object exists without acquiring or mutating the lease.
 
 Each generation also carries the required boolean `:unsettled-mutation` latch.
-Managed mutation on a portable project target sets it before child launch.
-Renewal, publishing,
+Managed mutation on a project or file-workspace target sets it before child
+launch. Renewal, publishing,
 release, and takeover preserve it. Setting or clearing it claims the next
 generation from the exact owned head, so it also fences older writers. Proven
 settlement clears it only after no other armed mutating record remains; an
@@ -3139,9 +3131,10 @@ takeover before mutation admission. This preserves manual repair material
 until the successor explicitly confirms destructive abandonment.
 
 The persisted states are `claiming`, `active`, `publishing`, `released`, and
-`aborted`.  Unexpired claiming, active, and publishing records fence other
-clients.  An interrupted claiming or publishing record remains bounded by its
-expiry, and its takeover still requires explicit confirmation.  A non-owner
+`aborted`. Unexpired claiming, active, and publishing records fence other
+clients, except for proven dead-holder reclaim of claiming and active records.
+Other interrupted records remain bounded by expiry, and takeover of another
+client's expired record requires explicit confirmation. A non-owner
 may inspect the last published state read-only.  Killing the owning data buffer
 cancels its renewal timer and marks only that client's active or inactive
 publishing generation released; it never interrupts live publication or
@@ -3190,7 +3183,7 @@ queue abandoned-checkpoint recovery before processing, so work sealed at exit is
 processed when a session next opens. See [memory](memory-journal.md#digest-generation).
 It repairs unready captures and seals frozen completed work under temporary source
 authority, without resuming a conversation or retaining authority during inference.
-Live or foreign PID holders, unreadable locks, live portable leases, publishing
+Unreadable authority records, live portable leases, publishing
 leases, unresolved mutation, and reserved transfers are left for normal session
 recovery. Expired ordinary portable owners are fenced through generation election;
 the committed session head is preserved. Recovery completes interrupted superseded
@@ -3217,7 +3210,7 @@ nothing new, while the daily repeat keeps a long-running Emacs from retaining
 sessions indefinitely. Expired session cleanup removes its `local/`
 scratch directory with the rest of the session. `nil` disables cleanup.
 
-File-workspace cleanup skips active locks. Portable project cleanup skips a
+Project and file-workspace cleanup skips a
 session open in this Emacs and otherwise deletes through
 `mevedel-session-durability-delete-abandoned`: the lease head must be absent,
 released without a control-transfer reservation, or an expired active or

@@ -1630,8 +1630,9 @@ Return non-nil only when deleted; automatic cleanup never prompts."
          deleted)
     (when (and (memq (plist-get assessment :state) '(available expired))
                (null (plist-get assessment :reasons))
-               (< (or (plist-get head :renewed-at) 0)
-                  (- (plist-get assessment :now) max-age-seconds)))
+               ;; A zero cap deletes a session released this very second.
+               (<= (or (plist-get head :renewed-at) 0)
+                   (- (plist-get assessment :now) max-age-seconds)))
       (mevedel-session-durability--ensure-lease-directory directory)
       (when-let* ((lease (mevedel-session-durability--claim-next
                           directory head "session cleanup")))

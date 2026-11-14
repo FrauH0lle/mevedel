@@ -15,6 +15,7 @@
 (require 'mevedel-pipeline)
 (require 'mevedel-sandbox)
 (require 'mevedel-session-persistence)
+(require 'mevedel-session-publication)
 (require 'mevedel-skills-prompt)
 (require 'mevedel-structs)
 (require 'mevedel-tool-exec-permission)
@@ -26,6 +27,7 @@
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
 (require 'mevedel-workspace)
+(require 'mevedel-workspace-identity)
 (require 'mevedel-worktree)
 (require 'mevedel-session-artifacts)
 (require 'helpers
@@ -748,9 +750,6 @@
 		 :doc "drops redundant saved system prompts and restores the frozen prompt"
 		 (let* ((root (file-name-as-directory
 			       (make-temp-file "mevedel-agent-hydrate-" t)))
-			;; Hydration reads the fixed transcript path this test
-			;; stages; a portable project session would require a
-			;; published artifact instead.
 			(workspace (mevedel-workspace--create
 				    :type 'file :id root :root root :name "agent"))
 			(session (mevedel-session-create "main" workspace root))
@@ -775,14 +774,20 @@
 			buffer)
 		   (unwind-protect
 		       (progn
-			 (make-directory (file-name-directory transcript) t)
-			 (write-region
-			  ":PROPERTIES:\n:GPTEL_SYSTEM: Expanded stale prompt\n:END:\nConversation\n"
-			  nil transcript nil 'silent)
+			         (mevedel-workspace-identity-ensure root)
 			 (with-current-buffer parent-buffer
+				   (org-mode)
+				   (insert "Parent conversation\n")
 			   (setq-local mevedel--session session)
 			   (setq-local mevedel--workspace workspace))
 			 (setf (mevedel-session-save-path session) transcript-dir)
+                         (mevedel-session-artifacts-assert-mutation-authority
+                          session parent-buffer)
+                         (mevedel-session-publication-publish
+                          session
+                          (list (list :path transcript
+                                      :content ":PROPERTIES:\n:GPTEL_SYSTEM: Expanded stale prompt\n:END:\nConversation\n")))
+                         (mevedel-session-artifacts-save session parent-buffer)
                          (mevedel-session-artifacts-install-gptel-save-state-advice)
 			 (let ((original
 				(symbol-function
@@ -815,6 +820,7 @@
 		       (kill-buffer buffer))
 		     (when (buffer-live-p parent-buffer)
 		       (kill-buffer parent-buffer))
+			     (mevedel-session-persistence-lock-release transcript-dir session)
 		     (delete-directory transcript-dir t)
 		     (delete-directory root t))))
 

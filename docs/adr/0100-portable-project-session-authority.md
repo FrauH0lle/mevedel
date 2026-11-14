@@ -1,19 +1,24 @@
-# Use one portable authority for project sessions
+# Use one portable authority for project and file sessions
 
 Status: accepted
 
 ## Decision
 
-Project sessions use one persisted `:authority-mode portable` profile.  The profile is valid for both local and TRAMP access
+Project and file-workspace sessions use one persisted `:authority-mode portable`
+profile.  The profile is valid for both local and TRAMP access
 to the same execution target.  Ownership is a renewable `.lease/`; committed
-state is addressed by an immutable publication head.  Project sessions do not
-create or interpret `.lock`.
+state is addressed by an immutable publication head.  Sessions do not create
+`.lock`; a `.lock` or plain sidecar without a lease is an unmigrated file
+session that only the migration script reads.  Sessions persist and validate
+a non-empty target incarnation.
 
-File-workspace sessions retain the separate `:authority-mode pid-lock`
-profile and `.lock` authority.  They do not create a portable lease or
-publication tree. Both profiles persist and validate a non-empty target
-incarnation; the profile chooses ownership mechanics, not whether target
-identity is checked.
+Every lease record names its holder by host identity (boot ID, machine ID,
+PID namespace), user ID, PID and process start ticks.  A client of the same
+user on the same host reclaims an `active` or `claiming` lease at once when
+that process is provably gone or reused; any other or uncertain evidence
+waits for expiry, and a `publishing` lease always does.
+Forced takeover of an unexpired live or foreign holder is unavailable; this
+dead-holder reclaim is not a general forced-break operation.
 
 All authority operations receive the session's explicit profile.  Path
 remoteness is only a transport/path concern and cannot choose lock acquisition,
@@ -23,7 +28,7 @@ Cold discovery verifies the committed profile before reading state; a mixed
 
 Archived execution completion uses that same profile: portable sessions read
 the authoritative artifact and publish transcript plus sidecar, independent of
-path remoteness. PID-lock sessions replace the transcript atomically.
+path remoteness.
 
 Portable sessions persist a non-empty target-incarnation fingerprint.  Local
 and TRAMP probes construct the same canonical boot-id, machine-id, PID-1 start,
@@ -35,8 +40,8 @@ Incarnation fencing checks target identity and reachability independently of
 child confinement. A missing sandbox must not prevent permission-mode changes;
 request and execution admission enforce the chosen confinement requirement.
 
-Retention applies to both profiles with the same age cap and newest-session
-floor. A portable session is deleted only through its own lease protocol: an
+Retention applies to both workspace categories with the same age cap and
+newest-session floor. A portable session is deleted only through its own lease protocol: an
 abandoned head (absent, released without a transfer reservation, or an expired
 active or claiming record without unsettled mutation) must also have its last
 renewal older than the cap. Unreadable or unsupported generation records are
@@ -69,6 +74,26 @@ standalone migration does not change the runtime authority or codec contract. Se
 [Sessions](../sessions.md) for the current storage contract.
 
 ## Decision history
+
+On 2026-11-14 Roland decided to keep one session-ownership implementation:
+file-workspace sessions moved from the PID-lock profile to the portable
+lease, replacing the earlier decision that kept both profiles. A matched
+measurement (compiled, CPU-pinned, six processes per tree, local disk, median)
+timed the editor command loop, not just wall time.  The auto-save checkpoint
+runs asynchronously on the lease: its longest single block fell from 11.9 ms
+(small transcript) and 20.0 ms (200 turns) under the PID lock to 7.1 ms and
+7.2 ms, although total Lisp time per checkpoint rose to 22.1 and 28.4 ms.  The
+synchronous writer used at turn settlement and explicit saves grew from 11.9
+and 20.0 ms to 42.7 and 49.4 ms in one block, resume from 36.2 and 45.7 ms to
+159.0 and 163.9 ms, and an idle lease renewal costs 4.1 ms every 30 s.  These
+are the costs project sessions already paid. Immediate reclaim of a proven
+same-host dead holder moved into the lease as described above, so those
+`active` and `claiming` leases no longer wait for the 90 s expiry and a
+confirmation. This does not reproduce the PID lock's forced-break option:
+forced takeover of an unexpired foreign or live holder remains unavailable.
+Uncertain holders and `publishing` leases still wait for expiry and the
+applicable confirmation. Existing PID-lock file sessions convert through the
+migration script.
 
 The original migration commands required separate session/artifact invocations,
 new destination directories, and a manual swap. The user requested a single

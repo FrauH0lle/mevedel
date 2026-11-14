@@ -407,29 +407,55 @@ SEEN-SCRATCHES extended with this query's root."
          (session (car source))
          (directory (mevedel-session-save-path session))
          (file (file-name-concat directory "segment-0001.chat.org"))
-         (stamp (file-attribute-modification-time (file-attributes file)))
          (args '(:path "history://saved" :pattern "version" :output_mode "content")))
     (unwind-protect
         (progn
           (should (string-search "version ONE" (plist-get (test-mevedel-history-search--query workspace 'grep args) :result)))
           (should (= 1 (hash-table-count mevedel-history-search--cache)))
-          (with-temp-buffer
-            (insert-file-contents file)
+          (with-current-buffer (cdr source)
             (goto-char (point-min))
             (search-forward "ONE")
             (replace-match "TWO" t t)
-            (write-region (point-min) (point-max) file nil 'silent))
-          (set-file-times file stamp)
+            (mevedel-session-artifacts-save session (current-buffer)))
           (should (string-search "version TWO" (plist-get (test-mevedel-history-search--query workspace 'grep args) :result)))
-          (make-directory (file-name-concat directory ".lease"))
+          ;; Fixed caches cannot replace the committed transcript.
+          (write-region "Observed version BAD.\n" nil file nil 'silent)
+          (should (string-search "version TWO" (plist-get (test-mevedel-history-search--query workspace 'grep args) :result)))
+          (let* ((publication (mevedel-session-publication-read directory))
+                 (published (plist-get (cdr (assoc "segment-0001.chat.org"
+                                                   (plist-get publication :artifacts)))
+                                       :published))
+                 (stamp (file-attribute-modification-time (file-attributes published)))
+                 (bytes (with-temp-buffer
+                          (insert-file-contents-literally published)
+                          (buffer-string))))
+            (unwind-protect
+                (progn
+                  (with-temp-buffer
+                    (insert bytes)
+                    (goto-char (point-min))
+                    (search-forward "TWO")
+                    (replace-match "BAD" t t)
+                    (write-region (point-min) (point-max) published nil 'silent))
+                  (set-file-times published stamp)
+                  (should (= (string-bytes bytes)
+                             (file-attribute-size (file-attributes published))))
+                  (let ((result (test-mevedel-history-search--query workspace 'grep args)))
+                    (should (eq 'error (plist-get result :status)))
+                    (should-not (string-search "version TWO" (plist-get result :result)))))
+              (let ((coding-system-for-write 'no-conversion))
+                (write-region bytes nil published nil 'silent)))
+            (let ((moved (concat published ".moved")))
+              (rename-file published moved)
+              (make-symbolic-link moved published)
+              (unwind-protect
+                  (should-not (string-search "version TWO" (plist-get (test-mevedel-history-search--query workspace 'grep args) :result)))
+                (delete-file published)
+                (rename-file moved published))))
+          ;; A mixed authority directory must never be used as saved history.
+          (write-region "legacy lock" nil (file-name-concat directory ".lock") nil 'silent)
           (should-not (string-search "version" (plist-get (test-mevedel-history-search--query workspace 'grep args) :result)))
-          (delete-directory (file-name-concat directory ".lease"))
-          (let ((moved (concat file ".moved")))
-            (rename-file file moved)
-            (make-symbolic-link moved file)
-            (should-not (string-search "version TWO" (plist-get (test-mevedel-history-search--query workspace 'grep args) :result)))
-            (delete-file file)
-            (rename-file moved file))
+          (delete-file (file-name-concat directory ".lock"))
           (let ((moved (file-name-concat root "moved-session")))
             (rename-file (directory-file-name directory) moved)
             (make-symbolic-link moved (directory-file-name directory))
@@ -885,59 +911,6 @@ SEEN-SCRATCHES extended with this query's root."
               (should (string-search "Results truncated (limit: 2, offset: 1)" text))
               ;; Two page lines, one skipped line, one truncation sentinel.
               (should (<= rewrites 4)))))
-      (dolist (source sources)
-        (test-mevedel-session-persistence--release-and-kill (cdr source) (car source)))
-      (mevedel-execution-teardown-all)
-      (delete-directory root t)
-      (mevedel-workspace-clear-registry))))
-
-(mevedel-deftest mevedel-session-persistence-read-sidecar-batch (:quiet t)
-  ,test
-  (test)
-  :doc "batches fresh PID metadata and rejects changed schema with a warm cache"
-  (let* ((root (make-temp-file "mevedel-history-pid-metadata-" t))
-         (workspace (test-mevedel-session-persistence--make-file-workspace root))
-         (mevedel-history-search--cache (make-hash-table :test #'equal))
-         (mevedel-history-search--cache-bytes 0)
-         sources scratches)
-    (unwind-protect
-        (progn
-          (dotimes (index 6)
-            (push (test-mevedel-history-search--source
-                   workspace (format "source-%d" index)
-                   (format "Batch evidence canary-%d\n" index)) sources))
-          ;; Control probes, sidecars and transcripts: every query, including
-          ;; the cold first one.
-          (dotimes (_ 3)
-            (setq scratches
-                  (test-mevedel-history-search--check-batched-query
-                   (file-name-directory
-                    (directory-file-name
-                     (mevedel-session-save-path (caar sources))))
-                   (lambda ()
-                     (plist-get
-                      (test-mevedel-history-search--query
-                       workspace 'grep '(:path "history://saved" :pattern "Batch evidence"
-                                               :output_mode "content"))
-                      :result))
-                   3 scratches)))
-          (let* ((path (file-name-concat (mevedel-session-save-path (caar sources))
-                                         "session.meta.el"))
-                 (attributes (file-attributes path))
-                 (stamp (file-attribute-modification-time attributes))
-                 (size (file-attribute-size attributes))
-                 (replacement "(:version 0)"))
-            (with-temp-file path
-              (insert replacement (make-string (- size (length replacement)) ?\s)))
-            (set-file-times path stamp)
-            (should (= size (file-attribute-size (file-attributes path))))
-            (let ((text (plist-get
-                         (test-mevedel-history-search--query
-                          workspace 'grep '(:path "history://saved" :pattern "Batch evidence"
-                                                  :output_mode "content")) :result)))
-              (should-not (string-search "canary-5" text))
-              (should (string-search "canary-0" text))
-              (should (string-search "Skipped 1" text)))))
       (dolist (source sources)
         (test-mevedel-session-persistence--release-and-kill (cdr source) (car source)))
       (mevedel-execution-teardown-all)

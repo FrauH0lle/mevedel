@@ -20,6 +20,8 @@
 (require 'mevedel-tool-fs-read)
 (require 'mevedel-workspace)
 (require 'mevedel-permission-rules)
+(require 'mevedel-session-artifacts)
+(require 'mevedel-session-durability)
 (require 'mevedel-instruction-test-support
          (file-name-concat
           (file-name-directory
@@ -419,7 +421,12 @@ Returns (buffer . overlay)."
 
 (mevedel-deftest mevedel--handle-file-mention
   (:doc "`mevedel--handle-file-mention' handles files, dirs, missing, and readable")
-  ,test
+  ;; In-memory fixtures have no root buffer or save path for lease admission.
+  (cl-letf (((symbol-function 'mevedel-session-artifacts-assert-mutation-authority)
+             #'ignore)
+            ((symbol-function 'mevedel-session-durability-lease-owned-p)
+             (lambda (&rest _) t)))
+    ,test)
   (test)
   :doc "missing file yields graceful placeholder with explanatory reminder"
   (let* ((directory (make-temp-file "mevedel-missing-file-" t))

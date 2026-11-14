@@ -369,12 +369,8 @@ publication."
                :attached-artifacts nil
                :dedicated-artifact nil
                :messages nil)))
-    (let ((overrides plist))
-      (while plist
-        (setq sidecar (plist-put sidecar (pop plist) (pop plist))))
-      (when (and (not (plist-member overrides :authority-mode))
-                 (eq (plist-get (plist-get sidecar :workspace) :type) 'file))
-        (setq sidecar (plist-put sidecar :authority-mode 'pid-lock))))
+    (while plist
+      (setq sidecar (plist-put sidecar (pop plist) (pop plist))))
     sidecar))
 
 
@@ -432,6 +428,50 @@ installs the real hook)."
     (with-current-buffer buf (set-buffer-modified-p nil))
     (kill-buffer buf)))
 
+
+(defun test-mevedel-session-persistence--edit-published-sidecar
+    (workspace session-dir function)
+  "Republish closed SESSION-DIR's sidecar after FUNCTION edits its plist.
+The lease publication is the sidecar's authority, not the directory cache.
+WORKSPACE owns SESSION-DIR."
+  (let* ((sidecar (mevedel-session-codec-read
+                   (plist-get (mevedel-session-publication-read session-dir)
+                              :sidecar)))
+         (owner (mevedel-session-create
+                 (plist-get sidecar :session-name) workspace)))
+    (setf (mevedel-session-session-id owner) (plist-get sidecar :session-id)
+          (mevedel-session-save-path owner) session-dir)
+    (unless (mevedel-session-persistence-lock-acquire
+             session-dir "*edit-sidecar*" owner)
+      (error "Fixture could not lease %s" session-dir))
+    (unwind-protect
+        (mevedel-session-publication-publish
+         owner
+         (list (list :path (mevedel-session-artifacts-sidecar-path session-dir)
+                     :content (mevedel-session-artifacts-printed-value
+                               (funcall function sidecar))
+                     :commit-marker t)))
+      (mevedel-session-persistence-lock-release session-dir owner))))
+
+(defun test-mevedel-session-persistence--call-later (function)
+  "Call FUNCTION with the target clock thirty days ahead.
+Lease cleanup also requires the last renewal to be older than the cap."
+  (let ((later (+ (floor (float-time)) (* 30 24 60 60))))
+    (cl-letf (((symbol-function 'mevedel-session-durability--target-time)
+               (lambda (&optional _) later)))
+      (funcall function))))
+
+(defun test-mevedel-session-persistence--cleanup-later (workspace)
+  "Force WORKSPACE's expiry sweep with the target clock thirty days ahead."
+  (test-mevedel-session-persistence--call-later
+   (lambda () (mevedel-session-persistence-cleanup-expired workspace t))))
+
+(defun test-mevedel-session-persistence--lease-released-p (save-path)
+  "Return non-nil when SAVE-PATH's lease head is released."
+  (eq 'released
+      (plist-get (mevedel-session-durability--lease-head
+                  (mevedel-session-durability--lease-path save-path))
+                 :status)))
 
 (defun test-mevedel-session-persistence--expire-session (session)
   "Set SESSION's persisted update time to fourteen days ago."
@@ -533,18 +573,23 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                      :parent-path "/root" :role "default"
                      :configuration configuration :activity 'idle
                      :conversation-location "agents/bad.chat.org")))
-              (make-directory agents-dir t)
-              (write-region
-               "* Conversation Summary\nIndependent compacted history.\n\n* Agent Task: idle\nOld answer.\n"
-               nil idle-file nil 'silent)
-              (with-temp-buffer
-                (org-mode)
-                (insert "* Agent Task: active\n")
-                (insert (propertize "Partial abandoned response.\n"
-                                    'gptel 'response))
-                (mevedel-session-artifacts-stabilize-gptel-bounds)
-                (write-region (point-min) (point-max)
-                              active-file nil 'silent))
+              (ignore agents-dir)
+              ;; Agent transcripts are lease publications, not loose files.
+              (mevedel-session-publication-publish
+               session
+               (list
+                (list :path idle-file
+                      :content "* Conversation Summary\nIndependent compacted history.\n\n* Agent Task: idle\nOld answer.\n")
+                (list :path active-file
+                      :content
+                      (with-temp-buffer
+                        (org-mode)
+                        (insert "* Agent Task: active\n")
+                        (insert (propertize "Partial abandoned response.\n"
+                                            'gptel 'response))
+                        (mevedel-session-artifacts-stabilize-gptel-bounds)
+                        (buffer-substring-no-properties
+                         (point-min) (point-max))))))
               (setf (mevedel-session-agent-turn-capacity session) 7
                     (mevedel-session-agent-transcripts session)
                     `(("opaque-idle" :agent-path "/root/idle"
@@ -564,20 +609,20 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                (mevedel-agent-control-block-turn
                 session "/root/active" 'permission-blocked))
               (with-current-buffer root
-                (mevedel-session-artifacts-save session root))
-              (let* ((sidecar (file-name-concat session-dir
-                                                 "session.meta.el"))
-                     (persisted (mevedel-session-codec-read sidecar))
-                     (bad-entry
+                (mevedel-session-artifacts-save session root)))
+            (test-mevedel-session-persistence--release-and-kill root session)
+            (setq root nil)
+            (test-mevedel-session-persistence--edit-published-sidecar
+             workspace session-dir
+             (lambda (persisted)
+               (setf (plist-get
                       (cl-find-if
                        (lambda (entry)
                          (equal "/root/bad" (plist-get entry :path)))
-                       (plist-get persisted :agent-registry))))
-                (setf (plist-get bad-entry :conversation-location)
-                      "../escape.chat.org")
-                (mevedel-session-codec-write sidecar persisted)))
-            (test-mevedel-session-persistence--release-and-kill root session)
-            (setq root nil)
+                       (plist-get persisted :agent-registry))
+                      :conversation-location)
+                     "../escape.chat.org")
+               persisted))
             (let ((dispatches 0))
               (cl-letf (((symbol-function 'mevedel-agent-runtime-dispatch)
                          (lambda (&rest _)
@@ -843,30 +888,27 @@ The result is a plist whose :tempdir owns every created file."
         ;; Every path below is derived from this one: without it the writes
         ;; below are relative and land in the working tree.
         (should parent-path)
-        (make-directory (file-name-concat parent-path "agents") t)
-        (make-directory (file-name-concat parent-path "local" "plans") t)
-        (write-region "# Parent plan\n" nil
-                      (file-name-concat parent-path "local" "plans/current.md")
-                      nil 'silent)
-        (write-region eligible-transcript nil
-                      (file-name-concat parent-path
-                                        "agents/eligible.chat.org")
-                      nil 'silent)
-        (write-region "eligible recovery archive\n" nil
-                      (file-name-concat
-                       parent-path
-                       "agents/eligible.compact-0001.chat.org")
-                      nil 'silent)
-        (write-region "future transcript\n" nil
-                      (file-name-concat parent-path
-                                        "agents/future.chat.org")
-                      nil 'silent)
-        (write-region "kept backup\n" nil
-                      (mevedel-session-artifacts-backup-path
-                       parent-path "keep@v1") nil 'silent)
-        (write-region "future backup\n" nil
-                      (mevedel-session-artifacts-backup-path
-                       parent-path "future@v2") nil 'silent)
+        ;; Stage the parent's plan, agent transcripts and backups for the
+        ;; committing save below; the publication tree is the only reader.
+        (mevedel-session-publication-publish
+         session
+         (list
+          (list :path (file-name-concat parent-path "local" "plans/current.md")
+                :content "# Parent plan\n")
+          (list :path (file-name-concat parent-path "agents/eligible.chat.org")
+                :content eligible-transcript)
+          (list :path (file-name-concat
+                       parent-path "agents/eligible.compact-0001.chat.org")
+                :content "eligible recovery archive\n")
+          (list :path (file-name-concat parent-path "agents/future.chat.org")
+                :content "future transcript\n")
+          (list :path (mevedel-session-artifacts-backup-path
+                       parent-path "keep@v1")
+                :content "kept backup\n")
+          (list :path (mevedel-session-artifacts-backup-path
+                       parent-path "future@v2")
+                :content "future backup\n"))
+         t)
         (setf (mevedel-session-plan-metadata session)
               '(:path "local/plans/current.md" :status presented))
         (setf (mevedel-session-prompt-index session)
@@ -920,25 +962,29 @@ The result is a plist whose :tempdir owns every created file."
         (with-current-buffer source-agent-buffer
           (setq-local mevedel--session session)
           (setq-local mevedel--agent-invocation source-invocation))
-        (mevedel-session-codec-write
-         (mevedel-session-artifacts-sidecar-path parent-path)
-         (mevedel-session-artifacts-build-sidecar session buf))
-        (with-temp-buffer
-          (insert-file-contents
-           (mevedel-session-artifacts-segment-path parent-path 2))
-          (org-mode)
-          (mevedel-transcript-restore-properties)
-          (goto-char (point-max))
-          (insert
-           (mevedel--format-hook-audit-record
-            '(:type fork-point :fork-point-id "fixture-fork"
-              :segment 2 :turn 1 :file-turn 1 :cum-turn 2
-              :captured-file-turn 2)))
-          (mevedel-session-artifacts-stabilize-gptel-bounds)
-          (write-region nil nil
-                        (mevedel-session-artifacts-segment-path
-                         parent-path 2)
-                        nil 'silent))
+        (mevedel-session-publication-publish
+         session
+         (list
+          (list :path (mevedel-session-artifacts-segment-path parent-path 2)
+                :coding 'utf-8-unix
+                :content
+                (with-temp-buffer
+                  (insert (decode-coding-string
+                           (mevedel-session-artifacts-read-artifact
+                            session "segment-0002.chat.org" t)
+                           'utf-8-unix))
+                  (org-mode)
+                  (mevedel-transcript-restore-properties)
+                  (goto-char (point-max))
+                  (insert
+                   (mevedel--format-hook-audit-record
+                    '(:type fork-point :fork-point-id "fixture-fork"
+                      :segment 2 :turn 1 :file-turn 1 :cum-turn 2
+                      :captured-file-turn 2)))
+                  (mevedel-session-artifacts-stabilize-gptel-bounds)
+                  (buffer-string))))
+         t)
+        (mevedel-session-artifacts-save session buf nil t)
         (mevedel-session-rewind-load-rewind-target
          session buf
          '(:segment 2 :fork-point-id "fixture-fork"
@@ -949,8 +995,11 @@ The result is a plist whose :tempdir owns every created file."
         (setq-local mevedel--data-buffer buf))
       (let* ((sessions-dir
               (mevedel-session-artifacts-sessions-dir workspace))
-             (parent-lock
-              (mevedel-session-persistence--lock-path parent-path)))
+             (committed
+              (lambda (logical)
+                (decode-coding-string
+                 (mevedel-session-artifacts-read-artifact session logical t)
+                 'utf-8-unix))))
         (list
          :workspace workspace
          :tempdir tempdir
@@ -960,24 +1009,15 @@ The result is a plist whose :tempdir owns every created file."
          :sessions-dir sessions-dir
          :parent-id parent-id
          :parent-path parent-path
-         :parent-lock parent-lock
-         :parent-lock-state
-         (mevedel-session-persistence--read-lock parent-lock)
          :eligible-transcript eligible-transcript
          :source-agent-record
          (cdr (assoc "/root/eligible"
                      (mevedel-session-agent-registry session)))
          :source-agent-buffer source-agent-buffer
          :source-invocation source-invocation
-         :parent-sidecar-text
-         (mevedel-session-artifacts--file-text
-          (mevedel-session-artifacts-sidecar-path parent-path))
-         :parent-segment-1-text
-         (mevedel-session-artifacts--file-text
-          (mevedel-session-artifacts-segment-path parent-path 1))
-         :parent-segment-2-text
-         (mevedel-session-artifacts--file-text
-          (mevedel-session-artifacts-segment-path parent-path 2))
+         :parent-sidecar-text (funcall committed "session.meta.el")
+         :parent-segment-1-text (funcall committed "segment-0001.chat.org")
+         :parent-segment-2-text (funcall committed "segment-0002.chat.org")
          :session-state
          (copy-tree (mevedel-session-codec-serialize session))
          :session-save-path (mevedel-session-save-path session)

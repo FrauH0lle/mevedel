@@ -19,10 +19,11 @@
                             (or load-file-name buffer-file-name))
                            "mevedel-execution-test-helpers"))
 
-(defun test-mevedel-mail-batch--fixture (remote body)
-  "Call BODY with a materialized session, optionally on a REMOTE mock target."
+(defun test-mevedel-mail-batch--fixture (body)
+  "Call BODY with a materialized session on a mock TRAMP target."
   (let* ((local-root (file-name-as-directory (make-temp-file "mail-batch-" t)))
-         (root (if remote (concat "/mevedelmock:mail-batch:" local-root) local-root))
+         ;; Warm local file sessions now use async jobs, not the batch writer.
+         (root (concat "/mevedelmock:mail-batch:" local-root))
          (timers (append timer-list timer-idle-list))
          (buffers (buffer-list))
          (mevedel-transport--pending (make-hash-table :test #'equal))
@@ -79,10 +80,8 @@
 (mevedel-deftest mevedel-agent-control-mail-batch (:quiet t)
   ,test
   (test)
-  :doc "file and TRAMP batches share one commit; a crash before the next retains prior mail"
-  (dolist (remote '(nil t))
-    (test-mevedel-mail-batch--fixture
-     remote
+  :doc "TRAMP lease batches share one commit; a crash before the next retains prior mail"
+  (test-mevedel-mail-batch--fixture
      (lambda (session)
        (let ((commit (symbol-function 'mevedel-agent-control-commit-session))
              (commits 0) acks)
@@ -113,11 +112,10 @@
                (should (equal saved (test-mevedel-mail-batch--restored session))))
              (mevedel-session-publication-stopping session)
              (should (= commits 2))
-             (should (= 4 (length (test-mevedel-mail-batch--restored session))))))))))
+             (should (= 4 (length (test-mevedel-mail-batch--restored session)))))))))
 
   :doc "failed shared commit acknowledges every producer once and rolls back only its mail"
   (test-mevedel-mail-batch--fixture
-   nil
    (lambda (session)
      (test-mevedel-mail-batch--send session "prior" #'ignore)
      (mevedel-session-publication-barrier session)
@@ -140,7 +138,6 @@
 
   :doc "synchronous mail drains accepted batches before capturing its own sidecar"
   (test-mevedel-mail-batch--fixture
-   nil
    (lambda (session)
      (let (ack)
        (test-mevedel-mail-batch--send session "monitor" (lambda (ok _) (setq ack ok)))
@@ -151,7 +148,6 @@
 
   :doc "nested arrivals commit in the next batch even if a producer acknowledgement quits"
   (test-mevedel-mail-batch--fixture
-   nil
    (lambda (session)
      (let ((commit (symbol-function 'mevedel-agent-control-commit-session))
            (commits 0) snapshots acks diagnostics)
@@ -181,7 +177,6 @@
   (test)
   :doc "real Monitor producers retain lines until the shared commit and retry failed output"
   (test-mevedel-mail-batch--fixture
-   nil
    (lambda (session)
      (let* ((root (mevedel-session-save-path session))
             (mevedel-execution-mailbox-delivery-function
