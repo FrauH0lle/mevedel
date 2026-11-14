@@ -149,7 +149,7 @@ function host(lobbyRunning, records, sharedItem, coldAgent, archives) {
     },
     [sessionRoom.id]: (frame, reply, guest) => {
       if (frame.t === 'hello') {
-        reply({t: 'welcome', proto: 3, readOnly: !frame.writeToken, workspace: 'ws',
+        reply({t: 'welcome', proto: 4, readOnly: !frame.writeToken, workspace: 'ws',
                project: 'proj', lobby: lobbyRunning, recordCount: records.length});
         reply({t: 'snapshot-chunk', records, final: true});
         reply({t: 'status', name: 'Feature work', busy: false});
@@ -160,7 +160,7 @@ function host(lobbyRunning, records, sharedItem, coldAgent, archives) {
     },
     [forkRoom.id]: (frame, reply) => {
       if (frame.t === 'hello') {
-        reply({t: 'welcome', proto: 3, readOnly: false, workspace: 'ws',
+        reply({t: 'welcome', proto: 4, readOnly: false, workspace: 'ws',
                project: 'proj', lobby: lobbyRunning, recordCount: 0});
         reply({t: 'snapshot-chunk', records: [], final: true});
         reply({t: 'status', name: 'Implement plan', busy: false});
@@ -199,9 +199,14 @@ async function open(browser, {lobbyRunning = true, records = [], sharedItem = nu
     const guest = {agentArtifacts: new Set(), agentFetches: 0};
     page.joined.push(id);
     page.push[id] = async frame => socket.send(await seal(keys[id], frame));
+    // Bind the connection as the host does; unbound frames are dropped.
+    let last = 0;
+    page.push[id]({t: 'challenge', challenge: 'c'});
     socket.onMessage(async message => {
       if (typeof message === 'string') return;
-      const frame = await unseal(keys[id], message);
+      const {challenge, seq, nonce: _nonce, ...frame} = await unseal(keys[id], message);
+      if (challenge !== 'c' || !(seq > last)) return;
+      last = seq;
       page.received.push({room: id, connection, frame});
       answers[id]?.(frame, async reply => socket.send(await seal(keys[id], reply)), guest);
     });

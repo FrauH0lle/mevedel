@@ -43,6 +43,7 @@
 (require 'mevedel-collaboration-lobby)
 (require 'mevedel-collaboration-owner)
 (require 'mevedel-pending-inputs)
+(require 'mevedel-permission-mode)
 (require 'mevedel-prompt-submission)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-persistence)
@@ -1480,16 +1481,21 @@ whose `:frames' are the decoded frames it received."
           (when-let* ((text (mevedel-collaboration--unseal
                              key (cdr (mevedel-collaboration--envelope-unpack
                                        (websocket-frame-payload frame))))))
-            (plist-put guest :frames
-                       (append (plist-get guest :frames)
-                               (list (mevedel-collaboration--frame-decode
-                                      text)))))))))
+            ;; As a browser does: drop a frame for another connection and
+            ;; strip this one's nonce, which every helper frame carries.
+            (let ((decoded (mevedel-collaboration--frame-decode text)))
+              (when (member (plist-get decoded :nonce) '(nil "guest-nonce"))
+                (cl-remf decoded :nonce)
+                (plist-put guest :frames
+                           (append (plist-get guest :frames) (list decoded))))))))))
     (push (plist-get guest :ws) test-mevedel-collaboration-guest--sockets)
     (should (mevedel-relay-test--pump
              (lambda () (websocket-openp (plist-get guest :ws)))))
     (when tokens
       (let ((guests (plist-get room :guests))
             (before (hash-table-count (plist-get room :guests))))
+        (should (mevedel-relay-test--pump
+                 (lambda () (test-mevedel-collaboration-guest--challenge guest))))
         (test-mevedel-collaboration-guest--send
          guest
          (append (list :t "hello" :proto mevedel-collaboration--protocol-version
@@ -1508,15 +1514,27 @@ whose `:frames' are the decoded frames it received."
                  (lambda () (> (hash-table-count guests) before))))))
     guest))
 
+(defun test-mevedel-collaboration-guest--challenge (guest)
+  "Return the challenge the host bound GUEST's connection with, or nil."
+  (plist-get (cl-find "challenge" (plist-get guest :frames)
+                      :key (lambda (frame) (plist-get frame :t)) :test #'equal)
+             :challenge))
+
 (defun test-mevedel-collaboration-guest--send (guest frame)
-  "Send FRAME from GUEST, sealed in an envelope, as a browser does."
+  "Send FRAME from GUEST, sealed and bound to its connection, as a browser does."
+  (plist-put guest :seq (1+ (or (plist-get guest :seq) 0)))
   (websocket-send
    (plist-get guest :ws)
    (make-websocket-frame
     :opcode 'binary :completep t
     :payload (mevedel-collaboration--envelope-pack
               0 (mevedel-collaboration--seal
-                 (plist-get guest :key) (json-serialize frame))))))
+                 (plist-get guest :key)
+                 (json-serialize
+                  (append frame
+                          (list :challenge (test-mevedel-collaboration-guest--challenge guest)
+                                :seq (plist-get guest :seq)
+                                :nonce "guest-nonce"))))))))
 
 (defun test-mevedel-collaboration-guest--exchange (guest frame)
   "Send FRAME then a store listing request from GUEST.
@@ -1708,6 +1726,103 @@ as presence may interleave, so only notices are returned."
         (mevedel-collaboration--on-state (current-buffer) 'open)
         (mevedel-collaboration--on-state (current-buffer) 'down)
         (should-not warnings)))))
+
+(mevedel-deftest mevedel-collaboration--admit-hello/relay-replay
+  (:quiet t
+   :doc "refuses an owner's recorded sealed frames a relay replays on the same or a new connection")
+  (dolist (kind '(lobby room))
+    (ert-info ((format "%s" kind))
+      (test-mevedel-collaboration-guest--with-surface
+       kind
+       (lambda (room port)
+         (let* ((key (plist-get room :key))
+                (frames
+                 (cons (list :t "hello" :proto mevedel-collaboration--protocol-version
+                             :name "Owner"
+                             :writeToken (mevedel-collaboration--base64url
+                                          (plist-get room :write-token))
+                             :ownerToken (mevedel-collaboration--base64url
+                                          (plist-get room :owner-token)))
+                       (if (eq kind 'lobby)
+                           (list '(:t "new-session" :reqId 1 :prompt "Delete the cache"))
+                         (list '(:t "set-mode" :mode "full-auto")
+                               '(:t "prompt" :text "Deploy now")))))
+                (expected (if (eq kind 'lobby)
+                              '((new-session "Delete the cache" t))
+                            '((set-mode full-auto) (prompt "Deploy now"))))
+                (view (generate-new-buffer " *guest-frame-view*"))
+                acted refused)
+          (cl-labels
+              ((send-all (guest recorded)
+                 (dolist (sealed recorded)
+                   (websocket-send
+                    (plist-get guest :ws)
+                    (make-websocket-frame
+                     :opcode 'binary :completep t
+                     :payload (mevedel-collaboration--envelope-pack 0 sealed)))))
+               (refusals (guest)
+                 (cl-count "The host ignored a frame the relay repeated or reordered."
+                           (plist-get guest :frames)
+                           :key (lambda (frame) (plist-get frame :message))
+                           :test #'equal)))
+           (unwind-protect
+               (cl-letf (((symbol-function 'mevedel-collaboration--create-guest-session)
+                          (lambda (_room _peer guest _id _name prompt &rest _)
+                            (push (list 'new-session prompt (plist-get guest :owner))
+                                  acted)))
+                         ((symbol-function 'mevedel-permission-mode-transition)
+                          (lambda (mode) (push (list 'set-mode mode) acted)))
+                         ((symbol-function 'mevedel-collaboration--publish-status) #'ignore)
+                         ((symbol-function 'mevedel-view-enqueue-external-follow-up)
+                          (lambda (_buffer text &rest _)
+                            (push (list 'prompt text) acted)
+                            nil)))
+                 (when-let* ((data-buffer (plist-get room :data-buffer)))
+                   (with-current-buffer data-buffer
+                     (setq-local mevedel--view-buffer view)))
+                 (let* ((original (test-mevedel-collaboration-guest--connect room port))
+                        ;; The original connection's challenge; a host
+                        ;; that issues none (before the fix) gets none.
+                        (challenge
+                         (progn (mevedel-relay-test--pump
+                                 (lambda () (test-mevedel-collaboration-guest--challenge
+                                             original))
+                                 1)
+                                (test-mevedel-collaboration-guest--challenge original)))
+                        (seq 0)
+                        ;; What a recording relay keeps: each frame's sealed bytes.
+                        (recorded
+                         (mapcar (lambda (frame)
+                                   (mevedel-collaboration--seal
+                                    key (json-serialize
+                                         (if challenge
+                                             (append frame (list :challenge challenge
+                                                                 :seq (cl-incf seq)
+                                                                 :nonce "guest-nonce"))
+                                           frame))))
+                                 frames)))
+                   (send-all original recorded)
+                   (should (mevedel-relay-test--pump
+                            (lambda () (= (length acted) (length expected)))))
+                   ;; Replayed on the original connection ...
+                   (send-all original recorded)
+                   (mevedel-relay-test--pump
+                    (lambda () (= (refusals original) 1)) 2)
+                   (push (refusals original) refused)
+                   (websocket-close (plist-get original :ws))
+                   (should (mevedel-relay-test--pump
+                            (lambda () (not (websocket-openp (plist-get original :ws))))))
+                   ;; ... and on a new one, after the original has gone.
+                   (let ((replay (test-mevedel-collaboration-guest--connect room port)))
+                     (send-all replay recorded)
+                     (mevedel-relay-test--pump
+                      (lambda () (= (refusals replay) 1)) 2)
+                     (push (refusals replay) refused))))
+             (kill-buffer view))
+          ;; The host acted once, for the original frames only ...
+          (should (equal expected (reverse acted)))
+          ;; ... and told each replaying connection why, once.
+          (should (equal (list 1 1) refused)))))))))
 
 (provide 'test-mevedel-collaboration-guest)
 ;;; test-mevedel-collaboration-guest.el ends here

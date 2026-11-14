@@ -163,8 +163,8 @@ export const tools = [
           origin = typeof room.welcome.origin === 'string' ? room.welcome.origin : undefined;
           room.close();
         } catch (error) {
-          // The generic error and the goodbyes already say so; others get the prefix.
-          reach = error.message.startsWith('Origin unavailable')
+          // The generic error, the goodbyes and an older origin say so; others get the prefix.
+          reach = /^Origin (unavailable|may run)/.test(error.message)
             ? `o${error.message.slice(1)}` : `origin unavailable: ${error.message}`;
         }
         origin ||= new URL(found.link).hostname;

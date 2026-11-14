@@ -143,7 +143,6 @@
 The source descriptor signature is checked before each use; this is never
 used to authorize a guest result fetch or persisted as execution state.")
 
-(defconst mevedel-collaboration--protocol-version 3)
 (defconst mevedel-collaboration--max-record-text-bytes
   (/ (- (* 1 1024 1024) 4096) 6)
   "Raw text bytes one projected record carries.

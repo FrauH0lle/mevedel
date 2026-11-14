@@ -69,7 +69,9 @@ it, reuses the connection for later calls, and closes it after 5 idle minutes
 so an open client does not keep the origin awake. The next call reconnects
 transparently. If the origin speaks another protocol version, tools fail with
 "origin speaks protocol N, this package speaks M; update one": update the
-package (or the origin's mevedel) so both match.
+package (or the origin's mevedel) so both match. An origin too old to bind
+the connection never answers; after the open timeout tools fail with "Origin
+may run an older protocol; update mevedel on the host".
 
 Tools:
 

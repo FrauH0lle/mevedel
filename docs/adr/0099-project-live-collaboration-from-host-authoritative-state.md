@@ -70,6 +70,9 @@ Conversation Fork at a settled assistant response, which the projection names by
 its stable fork point. The host runs the native fork transaction with its
 admission checks, leaves the source session unchanged, and performs each request
 id at most once per admitted connection. Retries receive the recorded outcome.
+Every guest frame is bound to its connection by a host challenge and a rising
+sequence number, so a relay cannot replay recorded frames on that connection or
+another.
 A fork whose room cannot start stays saved and is named in the refusal.
 
 The workspace lobby lets writable guests open listed sessions through the
@@ -337,3 +340,15 @@ The following changes belong to ADR 0099 unless another ID is named.
   connection. A failed room start had also left the published child's buffer
   live; the host now discards the live child but keeps the saved fork for the
   owner who asked for it.
+- **Connection-bound guest frames, 2026-11-14:** the per-connection request-id
+  ledger stopped repeats only within one connection. An audit and an ERT
+  reproduction showed that a relay recording an owner's `hello` and a
+  `new-session` with a first prompt could replay them later as a new peer, which
+  the host admitted as owner and acted on again; a replayed `set-mode` or
+  `prompt` likewise ran again inside a live share. Sealing protects
+  confidentiality, not freshness. The host now sends each joining peer a random
+  16-byte challenge, and every guest frame must echo it with a sequence number
+  above the previous one. The host transport refuses other frames before any
+  lobby, session or artifact room sees them. Protocol 4 deployed host, viewer and
+  remote-artifact package together, without an old-protocol path: an open tab of
+  the previous viewer is refused as a protocol mismatch and must reload.

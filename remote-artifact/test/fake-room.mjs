@@ -90,6 +90,7 @@ function wsFrame(opcode, payload) {
  *   session   a session room (a welcome without a room kind)
  *   lobby     a lobby (a lobby listing instead of a welcome)
  *   mismatch  an origin speaking another protocol version
+ *   old       an origin of protocol 3: it never sends a challenge
  *   absent    no origin: the relay closes the room with 4004
  *   goodbye   an artifact room that ends itself when a request arrives:
  *             it sends the goodbye fixture with REASON, then the relay
@@ -111,9 +112,15 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
   const writeToken = randomBytes(16);
   const key = await webcrypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt', 'decrypt']);
   const received = [];
+  // Every sealed frame the origin sent: { connection, frame, bytes }, as a
+  // recording relay keeps them.
+  const sent = [];
+  const writers = new Map();
+  let held = null;
   let connections = 0;
   const sockets = new Set();
   const senders = new Set();
+  const repliers = new Set();
   const goodbyes = new Set();
   const examples = (name) => ({ ...fixture(name).bindings, ...bindings });
 
@@ -145,6 +152,7 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
   const server = http.createServer((_req, res) => { res.writeHead(404); res.end(); });
   server.on('upgrade', (req, socket) => {
     connections++;
+    const connection = connections;
     sockets.add(socket);
     socket.on('close', () => sockets.delete(socket));
     socket.on('error', () => {});
@@ -161,9 +169,27 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
       closeWith(4004);
       return;
     }
-    const send = async (frame) => { for (const f of wire(frame)) socket.write(wsFrame(2, await seal(f))); };
-    senders.add(send);
-    socket.on('close', () => senders.delete(send));
+    // A frame for this consumer alone carries back its nonce; broadcasts do not.
+    let nonce = null;
+    const sendWire = async (frame, back) => {
+      for (const f of wire(frame)) {
+        const out = back ? { ...f, nonce: back } : f;
+        const bytes = await seal(out);
+        sent.push({ connection, frame: out, bytes });
+        socket.write(wsFrame(2, bytes));
+      }
+    };
+    const send = (frame) => sendWire(frame, nonce);
+    senders.add(sendWire);
+    repliers.add(send);
+    writers.set(connection, (bytes) => socket.write(wsFrame(2, bytes)));
+    socket.on('close', () => {
+      senders.delete(sendWire); repliers.delete(send); writers.delete(connection);
+    });
+    // Bind the connection as the origin does; unbound frames are dropped.
+    const challenge = randomBytes(16).toString('base64url');
+    let lastSeq = 0;
+    if (mode !== 'old') send({ t: 'challenge', challenge });
     // The host ends the room: goodbye, then the relay closes it.
     const leave = async (why) => {
       for (const { from, frame: origin } of fixture('goodbye').frames) {
@@ -181,8 +207,11 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
       if (opcode === 8) { socket.end(); return; }
       if (opcode !== 2) return;
       inbound = inbound.then(async () => {
-        const frame = await unseal(payload);
-        if (!frame) return;
+        const bound = await unseal(payload);
+        if (!bound || bound.challenge !== challenge || !(bound.seq > lastSeq)) return;
+        lastSeq = bound.seq;
+        if (!nonce && typeof bound.nonce === 'string') nonce = bound.nonce;
+        const { challenge: _challenge, seq: _seq, nonce: _nonce, ...frame } = bound;
         if (frame.t === 'editing') {
           const parts = (transfers.get(frame.reqId) ?? '') + frame.data;
           if (parts.length < frame.total) { transfers.set(frame.reqId, parts); return; }
@@ -199,8 +228,8 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
 
     const answer = async (frame) => {
       if (frame.t === 'hello') {
-        if (mode === 'mismatch') { await send({ t: 'error', message: 'protocol mismatch: host speaks 4' }); return; }
-        if (mode === 'session') { await send({ t: 'welcome', proto: 3, readOnly: false, recordCount: 0 }); return; }
+        if (mode === 'mismatch') { await send({ t: 'error', message: 'protocol mismatch: host speaks 5' }); return; }
+        if (mode === 'session') { await send({ t: 'welcome', proto: 4, readOnly: false, recordCount: 0 }); return; }
         if (mode === 'lobby') { await send({ t: 'lobby', project: 'proj', sessions: [], omitted: 0 }); return; }
         const [hello] = fixture('hello').frames;
         writable = frame.writeToken === b64url(writeToken);
@@ -215,6 +244,7 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
         return;
       }
       if (frame.t === 'editing') {
+        await held;
         if (mode === 'goodbye') {
           await leave(reason);
           return;
@@ -245,13 +275,22 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
     roomId,
     writeToken: b64url(writeToken),
     received,
+    sent,
     get connections() { return connections; },
+    /* Write recorded sealed BYTES to CONNECTION, as a replaying relay can. */
+    inject: (connection, bytes) => writers.get(connection)(bytes),
+    /* Hold editing answers until the returned function is called. */
+    hold: () => {
+      let release;
+      held = new Promise((resolve) => { release = resolve; });
+      return () => { held = null; release(); };
+    },
     /* Send every connected consumer a change event BODY, as the origin does. */
     event: async (body) => {
       for (const send of senders) await send({ t: 'editing', reqId: 'event', body });
     },
-    /* Send every connected consumer the raw FRAME, bypassing chunking. */
-    raw: async (frame) => { for (const send of senders) await send(frame); },
+    /* Send every connected consumer the raw FRAME as a reply to it, bypassing chunking. */
+    raw: async (frame) => { for (const send of repliers) await send(frame); },
     goodbye: async (why, { back = false } = {}) => {
       await Promise.all([...goodbyes].map((leave) => leave(why)));
       if (!back) mode = 'absent';

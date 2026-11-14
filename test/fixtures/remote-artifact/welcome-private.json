@@ -6,7 +6,7 @@
       "from": "origin",
       "frame": {
         "t": "welcome",
-        "proto": 3,
+        "proto": 4,
         "room": "artifact",
         "id": "$ID",
         "kind": "whiteboard",

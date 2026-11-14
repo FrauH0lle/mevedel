@@ -76,6 +76,41 @@ An owner link appends a further 16-byte owner token. Authority follows
 possession of the link, and each tier is a prefix of the next, so the
 secret's length alone tells the viewer which one it holds.
 
+The relay cannot read or forge frames, but it sees every sealed one, so a
+relay that records and replays them is in scope. The host binds each guest
+connection: when the relay reports a joined peer, the host sends it a sealed
+`challenge` of 16 random bytes. The guest sends its `hello` only after that,
+and every guest frame echoes the challenge with a `seq` above the previous
+one. The host checks both before any room sees the frame and ignores any
+other frame, answering only the first per connection. A frame without a
+challenge is answered `protocol mismatch`; one bearing another connection's
+challenge, or a `seq` at or below the last accepted, gets a notice that the
+relay repeated or reordered it. So recorded frames, the owner's `hello`
+included, act once, on their own connection. A reconnect is a new
+connection with a fresh challenge. The other way, every guest frame also
+carries a random `nonce` the guest drew for this socket; the host refuses a
+frame without one, keeps the first it accepts, then accepts only frames
+bearing it, and adds it to
+every frame it sends that guest alone. A relay that hands another socket a
+live guest's recorded challenge therefore cannot speak with that guest's
+authority: the host refuses its frames.
+A guest drops any frame bearing another nonce, so a reply, link or file the
+host once sent another connection cannot be replayed as an answer to this
+one; the remote-artifact package also takes a request's answer only from a
+frame bearing its own nonce. A guest takes only the first `challenge` on a
+socket. Broadcasts carry no nonce, and the host broadcasts only a bounded
+list of frame types (`mevedel-collaboration--broadcast-types`): `record`,
+`remove`, `notice`, `status`, `store-artifacts`, `agents`, `history-index`,
+`goal`, `tasks`, `background-work`, `discussions`, `bye`, and shared-editing
+change events (`editing` with `reqId` `event`); any other type must name its
+peer. The relay can therefore still drop, delay or withhold frames, end
+connections, hand a fresh socket an old challenge so the host refuses it,
+and replay any of those broadcasts. A replay can show a stale transcript,
+status, store, goal, task list or notice, and a replayed `bye` ends a live
+viewer's session with its old reason, such as `revoked`. That is denial of
+service and a false display; it cannot make the host act or answer a
+request.
+
 ## The owner link
 
 The owner link exists for the case the other two do not cover: the host is
@@ -118,7 +153,9 @@ than through the command allowlist:
   An id that is not in the retained ledger and is at or below the highest
   id the host has forgotten is refused as stale and never performed,
   even if the host never saw it, because it cannot tell it from a
-  forgotten repeat. Higher ids it has not seen fork normally. If the
+  forgotten repeat. Higher ids it has not seen fork normally. The ledger
+  serves the viewer's own retries, each a new frame; a relay repeating a
+  recorded frame is refused before it, by the connection binding. If the
   fork is saved but its room cannot start, the host closes the child's
   buffers in Emacs, releases its lock and keeps the saved session. The
   refusal names its session id and says to open it in Emacs with
@@ -794,7 +831,7 @@ A consumer's hello is admitted by the room key and write token like any
 room's. The room answers with its own welcome only:
 
 ```json
-{"t": "welcome", "proto": 3, "room": "artifact", "id": "ID",
+{"t": "welcome", "proto": 4, "room": "artifact", "id": "ID",
  "kind": "whiteboard", "title": "TITLE", "readOnly": false}
 ```
 
