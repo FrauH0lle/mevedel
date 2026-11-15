@@ -826,7 +826,7 @@ require copying or discarding native history. Read-only following remains availa
 For adapter crashes, diagnostic logs default to `~/.mevedel/claude-agent-logs`
 on the Emacs host, controlled by `mevedel-claude-code-agent-log-directory`;
 an inherited `CLAUDE_AGENT_LOGS` value takes precedence. See
-[Claude subscription setup](../README.md#claude-promax-subscriptions) for configuration.
+[Claude subscription setup](https://github.com/FrauH0lle/mevedel/blob/master/README.md#claude-promax-subscriptions) for configuration.
 
 The gptel HTTP request-controls menu is unavailable for a selected external
 provider, including direct `gptel-menu`, prefixed send and mevedel's bridge menu.
