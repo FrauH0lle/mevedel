@@ -1109,14 +1109,24 @@ STATUS is the completion exit status."
              (list :kind 'file :token token
                    :path (mevedel-resource-normalize-file-path abs-path)))))))))
 
+(defun mevedel-mentions--token-start ()
+  "Return the start of the whitespace-delimited token ending at point.
+For mentions whose names cannot contain whitespace."
+  (save-excursion (skip-chars-backward "^ \t\n") (point)))
+
 (defun mevedel-file-capf ()
   "Completion-at-point function for @file: mentions.
 Provides hierarchical directory-by-directory file completion.
 When a file is selected, replaces @file:path with the absolute path."
   (save-excursion
     (let ((orig-point (point)))
-      ;; Look back to find @file: pattern
-      (when (re-search-backward "@file:" (line-beginning-position) t)
+      ;; Paths may contain spaces, so search the whole line, but stop once
+      ;; point is past a completed (bound) mention.
+      (when (and (re-search-backward "@file:" (line-beginning-position) t)
+                 (not (and (get-text-property (point) 'mevedel-mention-binding)
+                           (< (next-single-property-change
+                               (point) 'mevedel-mention-binding nil orig-point)
+                              orig-point))))
         (let* ((prefix-start (point))  ; Start of @file:
                (path-start (+ prefix-start 6))  ; Position after @file:
                (path-end (progn
@@ -1289,7 +1299,7 @@ using each agent's description as the candidate annotation."
   (when (and (boundp 'mevedel-agent--registry) mevedel-agent--registry)
     (save-excursion
       (let ((orig-point (point)))
-        (when (re-search-backward "@agent:" (line-beginning-position) t)
+        (when (re-search-backward "@agent:" (mevedel-mentions--token-start) t)
           (let* ((prefix-start (point))
                  (name-start (+ prefix-start 7))
                  (name-end (progn
@@ -1376,7 +1386,7 @@ Requires mcp.el to be loaded; returns nil otherwise."
   (when (and (featurep 'mcp) (fboundp 'mcp-hub-get-servers))
     (save-excursion
       (let ((orig-point (point)))
-        (when (re-search-backward "@mcp:" (line-beginning-position) t)
+        (when (re-search-backward "@mcp:" (mevedel-mentions--token-start) t)
           (let* ((prefix-start (point))
                  (after-prefix (+ prefix-start 5))
                  (tail (buffer-substring-no-properties after-prefix orig-point))

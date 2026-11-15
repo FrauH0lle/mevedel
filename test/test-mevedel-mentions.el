@@ -1231,6 +1231,11 @@ Returns (buffer . overlay)."
   (with-temp-buffer
     (insert "plain text")
     (goto-char (point-max))
+    (should (null (mevedel-agent-capf))))
+
+  :doc "returns nil for text typed after a finished mention"
+  (with-temp-buffer
+    (insert "@agent:explorer go")
     (should (null (mevedel-agent-capf)))))
 
 (mevedel-deftest mevedel--handle-mcp-mention
@@ -1481,6 +1486,29 @@ Returns (buffer . overlay)."
 (mevedel-deftest mevedel-file-capf ()
   ,test
   (test)
+  :doc "paths may contain spaces, but text after a completed mention is not completed"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-capf-space-" t)))
+         (workspace (mevedel-workspace--create
+                     :type 'file :id root :root root :name "capf-space")))
+    (make-directory (expand-file-name "My Dir" root))
+    (with-temp-file (expand-file-name "My Dir/a.txt" root) (insert "a\n"))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-workspace)
+                   (lambda (&optional _buffer) workspace)))
+          (with-temp-buffer
+            (insert "@file:My Dir/")
+            (should (member "My Dir/a.txt" (nth 2 (mevedel-file-capf)))))
+          ;; A region spanning the space kept Corfu open showing \"No match\".
+          (with-temp-buffer
+            (insert "@file:My Dir/a.txt")
+            (mevedel-mention-bindings-set
+             (point-min) (point)
+             (list :kind 'file :token "@file:My Dir/a.txt"
+                   :path (expand-file-name "My Dir/a.txt" root)))
+            (insert " seems th")
+            (should-not (mevedel-file-capf))))
+      (delete-directory root t)))
+
   :doc "completion stays inside the session's allowed roots"
   ;; The candidate list is built from whatever the user typed, expanded
   ;; against the workspace root, with no containment test: `../' walks to the
@@ -1738,6 +1766,13 @@ Returns (buffer . overlay)."
     (with-temp-buffer
       (insert "plain text")
       (goto-char (point-max))
+      (should (null (mevedel-mcp-capf)))))
+
+  :doc "returns nil for text typed after a finished mention"
+  (cl-letf (((symbol-function 'mcp-hub-get-servers)
+             (lambda () (list (list :name "alpha" :status 'connected)))))
+    (with-temp-buffer
+      (insert "@mcp:alpha more")
       (should (null (mevedel-mcp-capf))))))
 
 
