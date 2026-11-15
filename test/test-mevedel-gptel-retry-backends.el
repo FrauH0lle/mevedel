@@ -459,7 +459,9 @@ Bind `delays' to the actual delays requested by retry scheduling."
 (ert-deftest mevedel-gptel-retry--parse-stream/native-gemini-header-only-filter ()
   "A fresh process filter can receive Gemini headers before any JSON."
   (mevedel-retry-test--with-http nil
-    (let ((spec (nth 2 mevedel-retry-backends-test--wire-cases))
+    (let (;; Force headers across multiple filter deliveries.
+          (read-process-output-max 10)
+          (spec (nth 2 mevedel-retry-backends-test--wire-cases))
           done caught results)
       (mevedel-retry-backends-test--configure
        (plist-get spec :constructor) (plist-get spec :data) t)
@@ -470,18 +472,19 @@ Bind `delays' to the actual delays requested by retry scheduling."
               :sentinel #'ignore
               :filter
               (lambda (_process headers)
-                (condition-case err
-                    (with-temp-buffer
-                      (insert headers)
-                      (goto-char (point-min))
-                      (push (gptel-curl--parse-stream backend (gptel-fsm-info fsm)) results)
-                      (push (point) results)
-                      (save-excursion
-                        (goto-char (point-max))
-                        (insert (plist-get spec :stream-success)))
-                      (push (gptel-curl--parse-stream backend (gptel-fsm-info fsm)) results))
-                  (error (setq caught err)))
-                (setq done t)))))
+                (unless done
+                  (condition-case err
+                      (with-temp-buffer
+                        (insert headers)
+                        (goto-char (point-min))
+                        (push (gptel-curl--parse-stream backend (gptel-fsm-info fsm)) results)
+                        (push (point) results)
+                        (save-excursion
+                          (goto-char (point-max))
+                          (insert (plist-get spec :stream-success)))
+                        (push (gptel-curl--parse-stream backend (gptel-fsm-info fsm)) results))
+                    (error (setq caught err)))
+                  (setq done t))))))
         (unwind-protect
             (progn
               (let ((deadline (+ (float-time) 5)))

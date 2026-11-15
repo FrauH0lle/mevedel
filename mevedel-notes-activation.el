@@ -135,8 +135,7 @@ Indexed remote roots are read once in the background, never in this hook."
                              (file-name-directory file) ".mevedel/instructions.el"))
                     ;; `locate-dominating-file' may abbreviate a HOME root.
                     (root (expand-file-name located)))
-          (if-let* ((key (mevedel-notes-activation--cached-key file root)))
-              (mevedel-notes-activation--present file key)
+          (unless (mevedel-notes-activation--cached-key file root)
             (when-let* ((data
                          ;; A load hint only; persistence validates the record.
                          (condition-case nil
