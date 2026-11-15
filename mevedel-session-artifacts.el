@@ -2031,6 +2031,36 @@ correct when gptel grows new config properties."
                    (funcall orig-delete pom property)))))
       (funcall fn))))
 
+(defvar-local mevedel-session-artifacts--raw-utf-8-reported nil
+  "Non-nil once this buffer's decoded raw UTF-8 bytes were reported.")
+
+(defun mevedel-session-artifacts--decode-raw-utf-8 ()
+  "Decode raw UTF-8 byte runs in the current buffer, keeping their properties.
+A unibyte string inserted into a multibyte buffer leaves each multibyte
+character as several raw-byte characters.  Transcripts are written as UTF-8
+and read back decoded, so bounds counted over those bytes drift by every
+extra byte.  Invalid sequences stay raw; their length survives the round trip.
+Return (COUNT . FIRST): runs whose length changed and the first one's start."
+  (let ((count 0) (inhibit-read-only t) first)
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "[\x3fff80-\x3fffff]+" nil t)
+        (let* ((beg (match-beginning 0))
+               ;; Decoding drops properties; keep each run inside one `gptel' run.
+               (end (copy-marker (next-single-property-change
+                                  beg 'gptel nil (match-end 0))
+                                 t))
+               (length (- end beg))
+               (props (text-properties-at beg)))
+          (decode-coding-region beg end 'utf-8-unix)
+          (set-text-properties beg end props)
+          (when (< (- end beg) length)
+            (cl-incf count)
+            (setq first (or first beg)))
+          (goto-char end)
+          (set-marker end nil))))
+    (cons count first)))
+
 (defun mevedel-session-artifacts-stabilize-gptel-bounds ()
   "Rewrite `GPTEL_BOUNDS' until Org property drawer offsets settle.
 
@@ -2055,6 +2085,13 @@ bounds no longer change."
                  (attempts 0))
              ;; Drawer edits shift existing properties along with the text.
              ;; Structural classification is needed once, not once per offset.
+             (pcase-let ((`(,count . ,first) (mevedel-session-artifacts--decode-raw-utf-8)))
+               (when (and (> count 0) (not mevedel-session-artifacts--raw-utf-8-reported))
+                 (setq mevedel-session-artifacts--raw-utf-8-reported t)
+                 (mevedel-diagnostic-warning
+                  (mevedel-diagnostic-scope (current-buffer)) 'mevedel
+                  (format "Decoded %d raw UTF-8 byte run(s) in the transcript, first at %d; a unibyte string was inserted"
+                          count first))))
              (mevedel-transcript-normalize-properties)
              (while (and (not done) (< attempts 8))
                (setq attempts (1+ attempts))

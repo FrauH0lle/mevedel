@@ -72,6 +72,48 @@
                                      (match-beginning 0) 'gptel))))))
       (delete-file file))))
 
+(mevedel-deftest mevedel-session-artifacts-stabilize-gptel-bounds/raw-utf-8 ()
+  ,test
+  (test)
+  :doc "decodes raw UTF-8 bytes so restored bounds match the reloaded text"
+  ;; A unibyte tool result left `·' as two raw bytes; the file decodes them as
+  ;; one character, which shifted every later bound by one per character.
+  (let ((file (make-temp-file "mevedel-bounds-raw-" nil ".org"))
+        (warnings 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-diagnostic-warning)
+                   (lambda (&rest _) (cl-incf warnings))))
+          (with-temp-buffer
+            (org-mode)
+            (insert ":PROPERTIES:\n:END:\n\nPrompt\n")
+            (insert (propertize
+                     (string-to-multibyte
+                      (encode-coding-string "Weekly · all models\n" 'utf-8))
+                     'gptel '(tool . "call-1")))
+            (insert (propertize "Answer after the tool\n" 'gptel 'response))
+            (mevedel-session-artifacts-stabilize-gptel-bounds)
+            (mevedel-session-artifacts-stabilize-gptel-bounds)
+            (should (= 1 warnings))
+            (goto-char (point-min))
+            (should-not (re-search-forward "[\x3fff80-\x3fffff]" nil t))
+            (let ((coding-system-for-write 'utf-8-unix))
+              (write-region (point-min) (point-max) file nil 'silent)))
+          (with-temp-buffer
+            (insert-file-contents file)
+            (org-mode)
+            (mevedel-transcript-restore-properties)
+            (goto-char (point-min))
+            (search-forward "Weekly · all models")
+            (should (equal '(tool . "call-1")
+                           (get-text-property (match-beginning 0) 'gptel)))
+            (should (equal '(tool . "call-1")
+                           (get-text-property (1- (match-end 0)) 'gptel)))
+            (search-forward "Answer after the tool")
+            (should (eq 'response (get-text-property (match-beginning 0) 'gptel)))
+            (should-not (eq 'response
+                            (get-text-property (1- (match-beginning 0)) 'gptel)))))
+      (delete-file file))))
+
 (mevedel-deftest mevedel-session-artifacts-finalized-segment-text ()
   ,test
   (test)

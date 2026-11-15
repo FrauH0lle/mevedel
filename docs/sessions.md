@@ -554,6 +554,11 @@ first appends it to `segment-repair-backups.el` as one plist per line with
 `:time`, `:segment` and `:content`, rotating into one `.1` archive above 64 MiB.
 A failed backup is reported and does not block the repair.
 
+Saving a transcript decodes raw UTF-8 byte runs, which a unibyte string
+inserted into the buffer leaves behind, before computing `GPTEL_BOUNDS`; the
+file is read back decoded, so bounds counted over the bytes would drift. The
+first such repair in a buffer emits one diagnostic warning naming its position.
+
 Retired local execution output may use lossless gzip storage behind stable
 `artifact://executions/*.log` handles. Compression runs outside the editor and
 does not rewrite old sessions. Save As copies retained gzip evidence just like
