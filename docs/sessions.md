@@ -1166,6 +1166,10 @@ Capturing a manifest canonicalizes its session root once and qualifies each
 validated relative artifact name beneath it. It does not repeatedly canonicalize
 the shared directories for every artifact. Actual reads still prove physical
 containment on the target and verify the required artifact digests.
+Scalar, batched and asynchronous lease readers refresh once when a nonempty
+listing yields no head and a fresh generation-name set differs. Unchanged
+unreadable records are not reread. If the changed, nonempty set still yields
+no head, the reader reports instability rather than inferring absent ownership.
 Portable lease expiry and transfer deadlines use the target filesystem clock at
 whole-second resolution, so clients with skewed wall clocks cannot change one
 another's authority and lease durations are configured in whole seconds.  A

@@ -62,8 +62,9 @@
               ;; Invoke the actual request-local tool adapter and real rg helper.
               (funcall (gptel-tool-function tool) (lambda (text) (setq result text))
                        "workspace" "." (if (eq operation 'glob) "**/completion.*" "Completion needle"))
+              ;; Match the 1 ms step timer instead of delaying every slice by 10 ms.
               (with-timeout (10 (ert-fail "Search did not settle"))
-                (while (not result) (accept-process-output nil 0.01)))
+                (while (not result) (accept-process-output nil 0.001)))
               (should (string-prefix-p "[Partial source snapshot" result))
               (should (string-match-p "docs/completion.md" result))
               (should (string-match-p "docs/nested/completion.md" result))
@@ -75,7 +76,7 @@
             (funcall (gptel-tool-function grep) (lambda (text) (setq result text))
                      "workspace" "." "Never present in any source")
             (with-timeout (10 (ert-fail "Missing-pattern search did not settle"))
-              (while (not result) (accept-process-output nil 0.01)))
+              (while (not result) (accept-process-output nil 0.001)))
             (should (string-prefix-p "[Partial source snapshot" result))
             (should-not (string-match-p "docs/completion.md\\|src/completion.el" result)))
           ;; The visit bound includes directories and rejected private entries,

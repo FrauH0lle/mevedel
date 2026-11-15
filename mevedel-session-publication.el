@@ -1851,28 +1851,15 @@ LISTINGS must be observations from this discovery, never a retained cache."
     (let ((records (mevedel-session-durability--read-records paths)))
       (dolist (row rows)
         (let* ((count (length (plist-get row :paths)))
-               (lease (mevedel-session-durability--head-of-records
-                       (seq-take records count))))
+               (row-records (seq-take records count)))
           (setq records (nthcdr count records))
           (unless (plist-get row :error)
             (condition-case err
-                (progn
-                  ;; A successor prunes its predecessors after activation.
-                  ;; If our listed records disappeared before their reads,
-                  ;; prove the name set changed and refresh once.  Do not
-                  ;; retry unchanged malformed records or any manifest error.
-                  (when (and (null lease) (> count 0))
-                    (let ((fresh-paths
-                           (mevedel-session-durability--generation-paths
-                            (mevedel-session-durability--lease-path
-                             (plist-get row :directory)))))
-                      (unless (equal fresh-paths (plist-get row :paths))
-                        (setq lease
-                              (mevedel-session-durability--head-of-records
-                               (mevedel-session-durability--read-records
-                                fresh-paths)))
-                        (when (and fresh-paths (null lease))
-                          (error "Portable session lease changed during discovery")))))
+                (let ((lease
+                       (mevedel-session-durability--resolve-lease-head
+                        (mevedel-session-durability--lease-path
+                         (plist-get row :directory))
+                        (plist-get row :paths) row-records)))
                   (when lease
                     (unless (mevedel-session-durability--valid-lease-p lease)
                       (error "Invalid portable session lease"))
