@@ -10,6 +10,7 @@
 
 (require 'mevedel-artifact-store)
 (require 'mevedel-artifact-lease)
+(require 'mevedel-resource)
 (require 'mevedel-session-control-fs)
 (require 'mevedel-chat)
 (require 'mevedel-session-test-support
@@ -581,6 +582,41 @@ It has a page, its primary file, and a binary asset.  Return its directory."
       (should (= 0 (plist-get row :versions)))
       (should (= 5 (plist-get row :size)))))
 
+  :doc "sharing observations distinguish absent entries and refuse final or parent links"
+  (mevedel-artifact-store-test--with-workspace
+    (mevedel-artifact-store-create-meta workspace "a" "index.html")
+    (let* ((directory (mevedel-artifact-store-bookkeeping-directory workspace "a"))
+           (link (file-name-concat directory "link"))
+           (saved (file-name-concat root "saved-state"))
+           (outside (mevedel-artifact-store-test--write root "credentials" "private")))
+      (should (plist-member (car (mevedel-artifact-store-list workspace)) :shared))
+      (should-not (plist-get (car (mevedel-artifact-store-list workspace)) :shared))
+      (write-region "private" nil link nil 'silent)
+      (should (eq t (plist-get (car (mevedel-artifact-store-list workspace)) :shared)))
+      (delete-file link)
+      (dolist (target (list outside (file-name-concat root "absent")))
+        (make-symbolic-link target link)
+        (should-error (mevedel-artifact-store-list workspace) :type 'file-error)
+        (delete-file link))
+      (let ((paths-exist (symbol-function 'mevedel-session-control-fs-paths-exist)))
+        (dolist (linked '(nil t))
+          ;; Replace the parent after metadata was read, before its new proof.
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-paths-exist)
+                     (lambda (paths)
+                       (rename-file directory saved)
+                       (when linked (make-symbolic-link saved directory))
+                       (unwind-protect (funcall paths-exist paths)
+                         (when linked (delete-file directory))
+                         (rename-file saved directory)))))
+            (if linked
+                (should-error (mevedel-artifact-store-list workspace) :type 'file-error)
+              (should-not (plist-get (car (mevedel-artifact-store-list workspace))
+                                     :shared))))))
+      (rename-file directory saved)
+      (make-symbolic-link saved directory)
+      (should-not (mevedel-artifact-store-list workspace))
+      (should (equal "private" (mevedel-artifact-store--read-bytes outside)))))
+
   :doc "batched listings leave out artifacts whose bookkeeping or file is linked"
   (mevedel-artifact-store-test--with-workspace
     (let* ((session (mevedel-session--create :workspace workspace))
@@ -615,6 +651,7 @@ It has a page, its primary file, and a binary asset.  Return its directory."
            (programs 0))
       (mevedel-artifact-store-create-meta workspace "a" "nested/x.md")
       (mevedel-artifact-store-create-meta workspace "b" "absent.md")
+      (mevedel-artifact-store-test--write store ".state/a/link" "private")
       ;; Select the remote listing branch while exercising real pinned target
       ;; operations locally, including absent files and refused symlinks.
       (cl-letf (((symbol-function 'file-remote-p)
@@ -627,9 +664,11 @@ It has a page, its primary file, and a binary asset.  Return its directory."
                    (cl-incf programs)
                    (apply run-program args))))
         (let ((rows (mevedel-artifact-store-list workspace)))
-          (should (= 3 programs))
+          (should (= 4 programs))
           (should (equal '("a" "b") (mapcar (lambda (row) (plist-get row :id)) rows)))
           (should (= 5 (plist-get (car rows) :size)))
+          (should (eq t (plist-get (car rows) :shared)))
+          (should-not (plist-get (cadr rows) :shared))
           (should (plist-get (cadr rows) :missing)))
         (let ((saved (file-name-concat root "saved.md")))
           (rename-file source saved)

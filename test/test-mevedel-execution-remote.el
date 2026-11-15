@@ -1332,11 +1332,24 @@ connection charges for, so the program path is proved here too."
                                                                      "exec setsid sleep 300' & "
                                                                      "printf ready; exec sleep 300"))
                                                        :yield-time-ms 10))
-                                                (setq group-id (plist-get (plist-get result :facts) :group-id))
+                                                ;; Keep the detached holder reachable for cleanup if the marker never arrives.
                                                 (test-mevedel-execution--wait
                                                  (lambda () (file-exists-p holder-file)))
                                                 (setq holder-pid
                                                       (test-mevedel-execution--read-pid holder-file))
+                                                ;; An early yield can precede delivery of the remote group marker.
+                                                (test-mevedel-execution--wait
+                                                 (lambda ()
+                                                   (setq group-id
+                                                         (plist-get
+                                                          (plist-get
+                                                           (test-mevedel-execution--observe
+                                                            session
+                                                            (plist-get (plist-get result :facts) :execution-id)
+                                                            :wait-ms 0)
+                                                           :facts)
+                                                          :group-id))
+                                                   (and (integerp group-id) (> group-id 0))))
                                                 ;; Observe the fixture's zombie instead of assuming
                                                 ;; the short-lived child ran within 0.3 seconds.
                                                 (test-mevedel-execution--wait

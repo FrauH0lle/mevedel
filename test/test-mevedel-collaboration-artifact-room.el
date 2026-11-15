@@ -301,6 +301,36 @@ An editing transfer appears once, complete, as its `body' shorthand."
 ;;
 ;;; Sharing
 
+(mevedel-deftest mevedel-collaboration-artifact-room--choose
+  (:doc "filters real catalog sharing observations without scalar probes")
+  (let* ((root (make-temp-file "mevedel-artifact-choose-" t))
+         (workspace (mevedel-workspace--create :type 'file :id root :root root))
+         (mevedel-artifact-store-changed-functions nil)
+         (expected '("shared")))
+    (unwind-protect
+        (progn
+          (dolist (id '("shared" "private"))
+            (let ((directory (mevedel-artifact-store-artifact-directory workspace id)))
+              (make-directory directory t)
+              (write-region "page" nil (file-name-concat directory "index.html") nil 'silent)
+              (mevedel-artifact-store-create-meta workspace id "index.html")))
+          (let ((link (mevedel-artifact-store-link-path workspace "shared")))
+            (write-region "private" nil link nil 'silent)
+            (cl-letf (((symbol-function 'mevedel-workspace-current) (lambda () workspace))
+                      ((symbol-function 'mevedel-artifact-store-shared-p)
+                       (lambda (&rest _) (ert-fail "Unexpected scalar sharing probe")))
+                      ((symbol-function 'completing-read)
+                       (lambda (_prompt choices &rest _)
+                         (should (equal expected (sort (mapcar #'cdr choices) #'string<)))
+                         (caar choices))))
+              (should (equal "shared" (mevedel-collaboration-artifact-room--choose t)))
+              (setq expected '("private" "shared"))
+              (should (member (mevedel-collaboration-artifact-room--choose) expected))
+              (delete-file link)
+              (should-error (mevedel-collaboration-artifact-room--choose t)
+                            :type 'user-error))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-collaboration-artifact-room-share
   ()
   ,test

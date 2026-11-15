@@ -5379,10 +5379,15 @@ holder identity is recorded by an owner lease acquired before the call."
     (dolist (name '(".mevedel-control-fs-Ab09Zx.extra"
                     ".mevedel-control-fs-staged-too-long"
                     ".mevedel-unrelated-Ab09Zx"
+                    ".mevedel-control-clock-Ab09Zx"
                     ".MEVEDEL-CONTROL-FS-Ab09Zx"
                     ".mevedel-control-fs-STAGED-Ab09Zx"))
       (let ((path (file-name-concat lease-dir name)))
         (write-region "unknown evidence" nil path nil 'silent)
+        (should (equal (list 'error (format "Unknown portable lease entry: %s" name))
+                       (should-error
+                        (mevedel-session-durability-lease-acquire directory "unknown")
+                        :type 'error)))
         (should (eq 'unknown
                     (plist-get (mevedel-session-durability-cleanup-assessment directory) :state)))
         (should-not (mevedel-session-durability-delete-abandoned directory 0))
@@ -5654,6 +5659,80 @@ holder identity is recorded by an owner lease acquired before the call."
                              (with-temp-buffer (insert-file-contents path) (buffer-string))))))
         (mevedel-session-durability--cancel-renewal session)
         (delete-directory root t)))))
+
+(mevedel-deftest mevedel-session-durability-lease-acquire/clock-scratch ()
+  (let* ((operation ,operation)
+         (root (make-temp-file "mevedel-clock-scratch-" t))
+         (directory (file-name-concat root ".lease"))
+         (bin (file-name-concat root "bin"))
+         (ready (file-name-concat root "ready"))
+         (continue (file-name-concat root "continue"))
+         (captured (file-name-concat root "captured"))
+         (stat (executable-find "stat"))
+         (session (test-mevedel-session-durability--local-session root))
+         child settled marker)
+    (unwind-protect
+        (progn
+          (make-directory directory)
+          (make-directory bin)
+          (setf (mevedel-session-save-path session) root)
+          ;; Only the asynchronous producer inherits this pause, not acquisition.
+          (with-temp-file (file-name-concat bin "stat")
+            (insert
+             "#!/bin/sh\nset -eu\n"
+             (format "printf '%%s/%%s' \"$(pwd -P)\" \"$4\" > %s\n"
+                     (shell-quote-argument captured))
+             (format ": > %s\n" (shell-quote-argument ready))
+             "waited=0\n"
+             (format "while test ! -e %s; do\n" (shell-quote-argument continue))
+             "  sleep 0.01\n  waited=$((waited + 1))\n"
+             "  test \"$waited\" -lt 3000 || exit 79\ndone\n"
+             (format "exec %s \"$@\"\n" (shell-quote-argument stat))))
+          (set-file-modes (file-name-concat bin "stat") #o700)
+          (let ((process-environment (copy-sequence process-environment)))
+            (setenv "PATH" (concat bin path-separator (getenv "PATH")))
+            (setq child
+                  (mevedel-session-control-fs-run-program-async
+                   (list (list :op operation :path directory
+                               :content (when (eq operation 'before-time)
+                                          "9999999999")))
+                   (lambda (results error) (setq settled (list results error))))))
+          (should (processp child))
+          (with-timeout (10 (ert-fail "Target clock never reached stat"))
+            (while (not (file-exists-p ready))
+              (accept-process-output nil 0.01)))
+          (setq marker (with-temp-buffer
+                         (insert-file-contents captured)
+                         (buffer-string)))
+          (should (equal directory (directory-file-name (file-name-directory marker))))
+          (should (file-regular-p marker))
+          (should (process-live-p child))
+          (should-not settled)
+          (should (mevedel-session-durability-lease-acquire root "overlap" session))
+          (should (mevedel-session-durability-lease-owned-p session))
+          (should (file-regular-p marker))
+          (should (process-live-p child))
+          (should-not settled)
+          (write-region "" nil continue nil 'silent)
+          (with-timeout (10 (ert-fail "Target clock never settled"))
+            (while (not settled) (accept-process-output nil 0.01)))
+          (should-not (cadr settled))
+          (should (eq 'ok (plist-get (caar settled) :status)))
+          (when (eq operation 'target-time)
+            (should (integerp (plist-get (caar settled) :value)))
+            (should (> (plist-get (caar settled) :value) 0)))
+          (should-not (file-exists-p marker)))
+      (write-region "" nil continue nil 'silent)
+      (unless (mevedel-session-control-fs-wait-async)
+        (when (and child (process-live-p child)) (delete-process child))
+        (mevedel-session-control-fs-wait-async))
+      (mevedel-session-durability--cancel-renewal session)
+      (delete-directory root t)))
+  (operation)
+  :doc "target-time scratch remains non-authoritative during real acquisition"
+  'target-time
+  :doc "before-time scratch remains non-authoritative during real acquisition"
+  'before-time)
 
 (provide 'test-mevedel-session-durability)
 ;;; test-mevedel-session-durability.el ends here

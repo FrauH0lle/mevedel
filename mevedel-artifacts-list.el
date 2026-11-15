@@ -39,8 +39,6 @@
                   "mevedel-artifact-store" (workspace id new-id))
 (declare-function mevedel-artifact-store-restore-version
                   "mevedel-artifact-store" (workspace id n &optional session-id actor callback))
-(declare-function mevedel-artifact-store-shared-p
-                  "mevedel-artifact-store" (workspace id))
 (declare-function mevedel-artifact-store-version-path
                   "mevedel-artifact-store" (workspace id n))
 (declare-function mevedel-artifact-store-versions
@@ -50,7 +48,6 @@
 (autoload 'mevedel-artifact-store-delete "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-duplicate "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-restore-version "mevedel-artifact-store")
-(autoload 'mevedel-artifact-store-shared-p "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-version-path "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-versions "mevedel-artifact-store")
 (defvar mevedel-artifact-store-item-kinds)
@@ -186,10 +183,7 @@ Artifacts shared through artifact links are marked `:shared'."
               (append (list :name (replace-regexp-in-string
                                    "[\n\r\t]+" " " (plist-get row :title))
                             :row (plist-get row :id)
-                            :attached (and (member (plist-get row :id) attached) t)
-                            :shared (and (mevedel-artifact-store-shared-p
-                                          workspace (plist-get row :id))
-                                         t))
+                            :attached (and (member (plist-get row :id) attached) t))
                       ;; A whiteboard or document is edited live, not as a file.
                       (when (memq (plist-get row :kind) mevedel-artifact-store-item-kinds)
                         (list :item (plist-get row :id)))

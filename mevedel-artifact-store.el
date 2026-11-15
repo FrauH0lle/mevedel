@@ -677,8 +677,10 @@ not record ID as its own, such as one a copied `meta.el' names, is kept."
 (defun mevedel-artifact-store-list (workspace)
   "Return WORKSPACE's artifacts as plists, newest modification first.
 Each has :id, :kind, :title, :file, :dedicated-session, :path, :size,
-:modified and :versions; a missing primary file has :missing t.  An
-artifact whose metadata cannot be read is left out."
+:modified, :versions and boolean :shared; a missing primary file has
+:missing t.  Sharing observes credential entry existence, not authority.
+An artifact whose metadata cannot be read is left out.  Refused sharing
+paths signal an error, including symbolic links."
   (let* ((ids (mevedel-artifact-store-ids workspace))
          (store (mevedel-artifact-store-directory workspace))
          (root (mevedel-workspace-root workspace))
@@ -747,6 +749,17 @@ artifact whose metadata cannot be read is left out."
         (mapcar (lambda (row)
                   (list :op 'path-exists-p :path (plist-get row :path) :optional t))
                 rows))))
+    ;; Keep probes separate so metadata reads retain their archive transfer.
+    (let ((remaining rows))
+      (while remaining
+        (let ((batch (cl-loop repeat 32 while remaining collect (pop remaining))))
+          (cl-mapc
+           (lambda (row shared) (nconc row (list :shared shared)))
+           batch
+           (mevedel-session-control-fs-paths-exist
+            (mapcar (lambda (row)
+                      (file-name-concat store ".state" (plist-get row :id) "link"))
+                    batch))))))
     (dolist (row rows)
       (unless (plist-get row :missing)
         (let ((attributes (file-attributes (plist-get row :path))))
