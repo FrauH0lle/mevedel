@@ -1092,7 +1092,7 @@ With SHARED, offer only the shared ones."
                            when (and (memq (plist-get row :kind)
                                            mevedel-collaboration-artifact-room--kinds)
                                      (or (not shared)
-                                         (mevedel-artifact-store-shared-p workspace id)))
+                                         (plist-get row :shared)))
                            collect (cons (format "%s (%s %s)" (plist-get row :title)
                                                  (plist-get row :kind) id)
                                          id))))

@@ -68,35 +68,36 @@
                (propertize "Answer\n" 'gptel 'response))
        (mevedel-session-artifacts-save session buffer)
        (let ((clock (current-time)))
-         (cl-letf (((symbol-function 'current-time) (lambda () clock)))
-           (dotimes (iteration 4)
-             (pcase iteration
-               (0 (goto-char (point-max))
-                  (insert (propertize "Appended answer\n" 'gptel 'response)))
-               (1 (goto-char (mevedel-session-artifacts-content-start buffer))
-                  (insert "Middle prompt edit\n"))
-               (2 (delete-region (- (point-max) 8) (point-max)))
-               (3 (goto-char (point-max))
-                  (insert "<agent-result sender=\"/root/a\">\nResult\n</agent-result>\n")))
-             (let ((incremental
-                    (mevedel-session-artifacts-call-with-checkpoint
-                     session
-                     (lambda ()
-                       (mevedel-session-artifacts-prepare-save session buffer nil t))))
-                   full)
-               ;; Drop every derived cache but not committed/checkpoint state.
-               ;; The second capture must independently derive the same proof.
-               (setq mevedel-transcript--normalized-tick nil
-                     mevedel-transcript--normalization-cache nil
-                     mevedel-session-artifacts--prompt-cache nil)
-               (mevedel-session-bounds--reset)
-               (setq full
-                     (mevedel-session-artifacts-call-with-checkpoint
-                      session
-                      (lambda ()
-                        (mevedel-session-artifacts-prepare-save session buffer nil t))))
-               (should (equal (plist-get incremental :artifacts)
-                              (plist-get full :artifacts))))))))))
+         (mevedel-test--with-shifted-clock
+           (cl-letf (((symbol-function 'current-time) (lambda () clock)))
+             (dotimes (iteration 4)
+               (pcase iteration
+                 (0 (goto-char (point-max))
+                    (insert (propertize "Appended answer\n" 'gptel 'response)))
+                 (1 (goto-char (mevedel-session-artifacts-content-start buffer))
+                    (insert "Middle prompt edit\n"))
+                 (2 (delete-region (- (point-max) 8) (point-max)))
+                 (3 (goto-char (point-max))
+                    (insert "<agent-result sender=\"/root/a\">\nResult\n</agent-result>\n")))
+               (let ((incremental
+                      (mevedel-session-artifacts-call-with-checkpoint
+                       session
+                       (lambda ()
+                         (mevedel-session-artifacts-prepare-save session buffer nil t))))
+                     full)
+                 ;; Drop every derived cache but not committed/checkpoint state.
+                 ;; The second capture must independently derive the same proof.
+                 (setq mevedel-transcript--normalized-tick nil
+                       mevedel-transcript--normalization-cache nil
+                       mevedel-session-artifacts--prompt-cache nil)
+                 (mevedel-session-bounds--reset)
+                 (setq full
+                       (mevedel-session-artifacts-call-with-checkpoint
+                        session
+                        (lambda ()
+                          (mevedel-session-artifacts-prepare-save session buffer nil t))))
+                 (should (equal (plist-get incremental :artifacts)
+                                (plist-get full :artifacts)))))))))))
   :doc "unchanged bytes prepare no publication and finish without changing the head"
   (test-mevedel-publication-async--fixture
    (lambda (session buffer)

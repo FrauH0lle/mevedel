@@ -47,7 +47,6 @@
                   "mevedel-artifact-store" (workspace id &optional meta))
 (declare-function mevedel-artifact-store-restore-version
                   "mevedel-artifact-store" (workspace id n &optional session-id actor callback))
-(declare-function mevedel-artifact-store-shared-p "mevedel-artifact-store" (workspace id))
 (declare-function mevedel-artifact-store-version-path
                   "mevedel-artifact-store" (workspace id n))
 (declare-function mevedel-artifact-store-versions
@@ -65,7 +64,6 @@
 (autoload 'mevedel-artifact-store-meta "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-primary-path "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-restore-version "mevedel-artifact-store")
-(autoload 'mevedel-artifact-store-shared-p "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-version-path "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-versions "mevedel-artifact-store")
 
@@ -490,12 +488,12 @@ mutation can acknowledge.  Resolve rooms and read the store when publishing."
   "Read WORKSPACE's store once for a listing or notification fanout.
 COUNT-ATTACHMENTS includes lobby attachment counts.  CACHED uses the last
 session discovery for this decoration; live buffers always override it.
-The snapshot also records which artifacts are shared through links."
+The catalog's sharing observations also record which artifacts have links."
   (let ((artifacts (mevedel-artifact-backend-catalog workspace))
         (counts (make-hash-table :test #'equal))
         shared)
     (dolist (row artifacts)
-      (when (mevedel-artifact-store-shared-p workspace (plist-get row :id))
+      (when (plist-get row :shared)
         (push (plist-get row :id) shared)))
     (when (and artifacts count-attachments)
       (let ((sessions (make-hash-table :test #'equal)))
