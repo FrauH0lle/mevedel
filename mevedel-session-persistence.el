@@ -182,6 +182,8 @@
 ;; `mevedel-session-control-fs'
 (defvar mevedel-session-control-fs--async-wait)
 (declare-function mevedel-session-control-fs-async-busy-p "mevedel-session-control-fs" (directory))
+(declare-function mevedel-session-control-fs-append-rotating "mevedel-session-control-fs"
+                  (path content max-bytes))
 (declare-function mevedel-session-control-fs-path-exists-p "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-physical-path "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-program-value "mevedel-session-control-fs" (result))
@@ -189,6 +191,8 @@
 (declare-function mevedel-session-control-fs-tree-sizes "mevedel-session-control-fs" (paths))
 (declare-function mevedel-session-control-fs-wait-async "mevedel-session-control-fs" (&optional seconds))
 (declare-function mevedel-session-control-fs-write-file "mevedel-session-control-fs" (path content))
+(autoload 'mevedel-session-control-fs-append-rotating
+  "mevedel-session-control-fs")
 (autoload 'mevedel-session-control-fs-path-exists-p
   "mevedel-session-control-fs")
 (autoload 'mevedel-session-control-fs-physical-path
@@ -542,6 +546,32 @@ Portable transcripts live in the publication, not at PATH itself."
             (cl-pushnew id ids :test #'equal)))
         ids))))
 
+(defconst mevedel-session-persistence--segment-backup-max-bytes
+  (* 64 1024 1024)
+  "Rotation size of `segment-repair-backups.el'; at most twice this is kept.")
+
+(defun mevedel-session-persistence--back-up-segment (path text)
+  "Append transcript PATH's TEXT to its session's repair backups.
+Closed segments change only through repairs, and publication cleanup drops
+the replaced copy within a few saves; this keeps it for diagnosis and
+rollback.  A failed backup is reported and does not block the repair."
+  (condition-case err
+      (let ((print-escape-newlines t) (print-length nil) (print-level nil))
+        (mevedel-session-control-fs-append-rotating
+         (mevedel-session-control-fs-physical-path
+          (file-name-concat (file-name-directory path) "segment-repair-backups.el"))
+         (concat (prin1-to-string
+                  (list :time (format-time-string "%FT%T%z")
+                        :segment (file-name-nondirectory path)
+                        :content (substring-no-properties text)))
+                 "\n")
+         mevedel-session-persistence--segment-backup-max-bytes))
+    (error
+     (mevedel-diagnostic-warning
+      (mevedel-diagnostic-scope path) 'mevedel
+      (format "Could not back up %s before repairing it: %s"
+              (file-name-nondirectory path) (error-message-string err))))))
+
 (defun mevedel-session-persistence--reconcile-lost-execution-file
     (path text &optional successor-execution-ids artifact-callback)
   "Mark stale running execution rows in transcript PATH with TEXT as lost.
@@ -557,6 +587,7 @@ of writing PATH directly."
               (mevedel-tool-render-data-reconcile-lost-executions
               (current-buffer) successor-execution-ids)))
         (when (> count 0)
+          (mevedel-session-persistence--back-up-segment path text)
           (mevedel-session-artifacts-stabilize-gptel-bounds)
           (if artifact-callback
               (funcall

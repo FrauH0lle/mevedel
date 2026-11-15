@@ -519,6 +519,7 @@ Layout:
   hook-log.el                        ; one hook execution plist per line
   permission-log.el                  ; permission/request diagnostic plists
   repair-log.el                      ; redacted tool-input validation telemetry
+  segment-repair-backups.el          ; closed-segment text before a resume repair
   telemetry-log.el                   ; correlated lifecycle events, one plist/line
   diagnostics/run-*/                 ; resource reports; local sessions only
   file-history/                      ; optional materialized backup cache
@@ -545,6 +546,13 @@ containing both a `.lock` and a lease, or a persisted authority profile that
 disagrees with its workspace category, is rejected rather than guessed; a
 `.lock` or plain sidecar without a lease is an unmigrated file session (see
 [explicit migration](#explicit-session-migration)).
+
+Resume marks stale running executions in closed segments as lost or archived and
+republishes those segments. Publication cleanup keeps only the newest
+generations, so the replaced text would disappear within a few saves; resume
+first appends it to `segment-repair-backups.el` as one plist per line with
+`:time`, `:segment` and `:content`, rotating into one `.1` archive above 64 MiB.
+A failed backup is reported and does not block the repair.
 
 Retired local execution output may use lossless gzip storage behind stable
 `artifact://executions/*.log` handles. Compression runs outside the editor and

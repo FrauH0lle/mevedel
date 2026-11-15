@@ -2615,6 +2615,16 @@
                   (should (= 2 (how-many ":state archived")))
                   ;; Non-ASCII output survives the repair unescaped.
                   (should (= 2 (how-many (regexp-quote "你好 😀 café")))))
+                ;; The replaced closed segment survives publication cleanup.
+                (with-temp-buffer
+                  (insert-file-contents
+                   (file-name-concat session-dir "segment-repair-backups.el"))
+                  (goto-char (point-min))
+                  (let ((record (read (current-buffer))))
+                    (should (equal "segment-0001.chat.org" (plist-get record :segment)))
+                    (should (string-match-p ":state running" (plist-get record :content)))
+                    (should (string-match-p (regexp-quote "你好 😀 café")
+                                            (plist-get record :content)))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)
             (test-mevedel-session-persistence--release-and-kill

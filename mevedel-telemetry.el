@@ -209,7 +209,9 @@ profile file larger and cost a little more per sample."
     :interaction-id :issue-count
     :kind :lane :largest-buffer-chars :largest-buffer-hash :largest-buffer-mode
     :largest-buffer-process :limit
-    :max-ms :message-chars :message-hash :mode :model :model-context-source :model-context-window :modes
+    :loaded-at
+    :max-ms :mevedel-commit :message-chars :message-hash :mode :model :model-context-source
+    :model-context-window :modes
     :native-resource-capture :native-resource-report-bytes :nested-call-count
     :network
     :new-count :new-segment :note-cycle-attempted :note-cycle-count :note-cycle-deferred

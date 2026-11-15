@@ -1122,6 +1122,34 @@
 				   '((("/root/agent" "/workspace/AGENTS.md") . "agent"))))
 			   (mevedel--run-session-start-hooks "resume"))
 			 (should-not (mevedel-session-workspace-instruction-hashes session)))
+			     (delete-directory root t)))
+
+		 :doc "records the loaded code's revision once per start"
+		 ;; A running Emacs keeps its loaded code while the checkout moves on.
+		 (let* ((root (file-name-as-directory
+			       (make-temp-file "mevedel-chat-runtime-" t)))
+			(workspace (mevedel-workspace--create
+				    :type 'project :id root :root root :name "runtime"))
+			(session (mevedel-session-create "main" workspace root))
+			(mevedel-session-start-hook nil)
+			(mevedel-hook-rules nil)
+			events)
+		   (require 'mevedel-telemetry)
+		   (unwind-protect
+		       (cl-letf (((symbol-function 'mevedel-telemetry-record)
+				  (lambda (_session event &rest props)
+				    (when (eq event 'session-runtime) (push props events)))))
+			 (with-temp-buffer
+			   (setq-local mevedel--session session)
+			   (setq-local mevedel--workspace workspace)
+			   (mevedel--run-session-start-hooks "resume"))
+			 (should (= 1 (length events)))
+			 (let ((props (car events)))
+			   (should (equal "resume" (plist-get props :boundary)))
+			   (should (stringp (plist-get props :loaded-at)))
+			   ;; Tests load mevedel from its Git checkout.
+			   (should (string-match-p "\\`[0-9a-f]\\{40\\}\\'"
+						   (plist-get props :mevedel-commit)))))
 		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-start-hooks-wait

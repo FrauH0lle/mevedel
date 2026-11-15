@@ -135,6 +135,13 @@ full telemetry. Other concurrently live sessions remain on the normal tier.
 
 ## Covered lifecycle boundaries
 
+Each session start and resume records one `session-runtime` event. Its
+`:boundary` is the start source; `:loaded-at` and `:mevedel-commit` say when
+this Emacs loaded `mevedel` and which commit its source checkout had then
+(nil outside a Git checkout). A running Emacs keeps executing that code while
+the checkout moves on, so compare a session's evidence against this commit,
+not the checkout's current HEAD.
+
 Request settlement `:duration-ms` remains end-to-end wall-clock latency,
 including user waits. Interaction events separately identify whether active
 work was paused. The request-progress display and persisted request summary use

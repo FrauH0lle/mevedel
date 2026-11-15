@@ -50,6 +50,22 @@
 (require 'mevedel-models)
 (require 'mevedel-claude-code-backend)
 
+(defconst mevedel--load-provenance
+  (list :loaded-at (format-time-string "%FT%T%z")
+        :commit
+        (ignore-errors
+          (when-let* ((file (or load-file-name buffer-file-name))
+                      (root (locate-dominating-file
+                             (mevedel-library-source-directory file) ".git"))
+                      ((not (file-remote-p root))))
+            (with-temp-buffer
+              (let ((default-directory (expand-file-name root)))
+                (when (zerop (call-process "git" nil t nil "rev-parse" "HEAD"))
+                  (string-trim (buffer-string))))))))
+  "When this Emacs loaded `mevedel', and the source checkout's commit then.
+A running Emacs keeps executing the code it loaded while its checkout moves
+on; session telemetry records this so diagnoses compare the right revision.")
+
 (mevedel-claude-code-register)
 
 ;; Top-level commands stay reachable through M-x as soon as the package is

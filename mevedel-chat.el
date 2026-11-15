@@ -75,6 +75,7 @@
 
 ;; `mevedel'
 (defvar mevedel-default-chat-preset)
+(defvar mevedel--load-provenance)
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-parent-data-buffer
@@ -225,6 +226,11 @@
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
+
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-record "mevedel-telemetry"
+                  (session event &rest props))
+(autoload 'mevedel-telemetry-record "mevedel-telemetry")
 
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-format
@@ -571,6 +577,12 @@ sessions keep their existing startup behavior and return nil."
            (mevedel-session-workspace-instruction-hashes mevedel--session))))
   (run-hooks 'mevedel-session-start-hook)
   (when (bound-and-true-p mevedel--session)
+    (mevedel-telemetry-record
+     mevedel--session 'session-runtime
+     :boundary source
+     :loaded-at (plist-get (bound-and-true-p mevedel--load-provenance) :loaded-at)
+     :mevedel-commit (plist-get (bound-and-true-p mevedel--load-provenance) :commit)
+     :emacs-version emacs-version)
     (let ((buffer (current-buffer))
           (workspace (or (and (boundp 'mevedel--workspace)
                               mevedel--workspace)
