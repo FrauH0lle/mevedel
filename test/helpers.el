@@ -20,6 +20,10 @@
 (require 'mevedel-tool-registry)
 (require 'tramp)
 
+;; Tests exercise the documented setup, where users enable visit restoration.
+(require 'mevedel-notes-activation)
+(mevedel-notes-global-mode 1)
+
 ;; Module-focused fixtures do not create journal jobs unless the journal
 ;; integration test explicitly enables the feature for its temporary workspace.
 (defvar mevedel-journal-enabled)

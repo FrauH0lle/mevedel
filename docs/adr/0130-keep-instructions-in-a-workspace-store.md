@@ -55,7 +55,10 @@ has since changed.
   workspace. It costs a state-directory check plus at most one read or hash:
   bounded I/O, but I/O. Callers avoid creating workspaces on hot paths such as
   redisplay, timers or process filters.
-- File visits are a separate, nonblocking activation path. A local roots-only
+- File visits are a separate, nonblocking activation path that the user enables
+  with `mevedel-notes-global-mode`. Presenting a file's notes first loads
+  `mevedel`, so the user's configuration of it, such as note keybindings,
+  applies before any note overlay exists. A local roots-only
   index remembers remote workspaces whose observed or written store has notes,
   and removes roots when their store has none. The first visit under an indexed
   root queues at most one background read per Emacs run; the hook performs no
@@ -218,3 +221,15 @@ through the store; when no store file exists yet, it prunes the live notes in
 memory. Redo settles the store for the restored turn count instead of loading
 the head's snapshot. Old snapshot files stay on disk and are ignored. The user
 approved the removal; `mevedel-save-instructions` remains the export command.
+
+### 2026-11-15: File-visit activation becomes an opt-in global mode
+
+The visit hook was added to `find-file-hook` by an autoload cookie, so reading
+the package autoloads changed every file visit, with no command to turn it off.
+The Elisp coding conventions require that loading a package not change editing
+behavior. It also let notes appear before `mevedel` loaded, so keybindings set in
+the user's `mevedel` configuration missed the first note overlays. The hook now
+belongs to `mevedel-notes-global-mode`, which users enable in their init; its
+visit check stays dependency-free and still needs no chat. Presenting notes now
+loads `mevedel` first. The user chose this over a default-on option that keeps
+the autoloaded hook.

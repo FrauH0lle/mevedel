@@ -382,8 +382,19 @@ by a background timer. Expiry never reverts file changes. Imported archived
 notes marked exempt from expiry do not count against these limits.
 
 Notes use the workspace instruction store, not a session's private state, and
-appear when their source file is opened, without starting a session. Restored
-taken notes remain paused; restoring notes does not start Buddy.
+appear when their source file is opened, without starting a session, once
+`mevedel-notes-global-mode` is enabled. Enable it in your init so it does not
+wait for `mevedel-install`; enabling it loads only a small hook and also shows
+notes in buffers that are already open:
+
+``` emacs-lisp
+(mevedel-notes-global-mode 1)
+```
+
+The first file with notes loads `mevedel` before showing them, so note
+keybindings set in your `mevedel` configuration (such as a `use-package`
+`:config` block) already apply. Restored taken notes remain paused; restoring
+notes does not start Buddy.
 The file-visit hook discovers local stores and restores remembered notes without
 remote I/O. A small local index (`$XDG_STATE_HOME/mevedel/remote-notes.el`, or
 `~/.local/state/mevedel/remote-notes.el`) remembers only remote workspace roots

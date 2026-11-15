@@ -195,7 +195,7 @@ Chat / view
   mevedel-note-source.el note anchor/presentation lifecycle and command-scoped replacement
   mevedel-overlay-ui.el       instruction overlay actions and rendering
   mevedel-notes.el            source note actions, labels and entry hints; owns the note lifecycle transitions (make, mark-sent, hold-change, record-applied, mark-stale, set-settings, keep), the note Rewind rule and the open-note queries
-  mevedel-notes-activation.el autoloaded file-visit restoration and roots-only remote note discovery
+  mevedel-notes-activation.el `mevedel-notes-global-mode` file-visit restoration and roots-only remote note discovery
   mevedel-note-conversation.el isolated durable note send/batch/reopen, composer controls and sent-input inspection
   mevedel-note-settings.el    persisted unsent settings and live session settings through the chat model picker
   mevedel-note-change.el      nonblocking prepared source changes, checked apply, detailed review and actual per-turn application history

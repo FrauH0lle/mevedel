@@ -37,6 +37,8 @@
                             tramp-ssh-controlmaster-options
                             ,(format "-F %s -o ControlMaster=auto -o ControlPath=%s -o ControlPersist=no"
                                      config (file-name-concat directory "ssh.%%C")))
+                      (require 'mevedel-notes-activation)
+                      (mevedel-notes-global-mode 1)
                       (let ((inhibit-message t)) ,form)))))))
       (unwind-protect
           (with-timeout (90 (ert-fail "Taken-note restart child timed out"))

@@ -11,8 +11,10 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
-(defun mevedel-notes-activation-test--cold (form)
-  "Run FORM with package autoloads in a fresh Emacs."
+(defun mevedel-notes-activation-test--cold (form &optional without-mode)
+  "Run FORM with package autoloads in a fresh Emacs.
+Enable `mevedel-notes-global-mode' first, as a user's init would, unless
+WITHOUT-MODE is non-nil."
   (with-temp-buffer
     (let ((process
            (make-process
@@ -42,6 +44,7 @@
                               (loaddefs-generate directory autoloads nil nil nil t)
                               (load autoloads nil t))
                           (delete-directory directory t)))
+                      ,@(unless without-mode '((mevedel-notes-global-mode 1)))
                       ,form))))))
       (with-timeout (60 (delete-process process) (ert-fail "Visit timed out"))
         (while (process-live-p process) (accept-process-output process 0.05)))
@@ -71,6 +74,66 @@
           (when (featurep feature) (error "Visit loaded %s" feature)))
         (when (file-exists-p ,(file-name-concat root ".mevedel"))
           (error "Visit created state")))))
+  :doc "without the global mode a visit installs no hook and shows no notes"
+  (progn
+    (make-directory (file-name-concat root ".mevedel"))
+    (mevedel-notes-activation-test--cold
+     `(progn
+        (require 'mevedel)
+        (with-current-buffer (find-file-noselect ,file)
+          (mevedel-note-create "Opt-in note"))))
+    (mevedel-notes-activation-test--cold
+     `(progn
+        (when (memq 'mevedel-notes-file-visit find-file-hook)
+          (error "Visit hook installed without the mode"))
+        (find-file-noselect ,file)
+        (dolist (feature '(mevedel mevedel-notes mevedel-persistence))
+          (when (featurep feature) (error "Visit loaded %s" feature))))
+     t))
+  :doc "enabling the mode shows notes in buffers already visiting files"
+  (progn
+    (make-directory (file-name-concat root ".mevedel"))
+    (mevedel-notes-activation-test--cold
+     `(progn
+        (require 'mevedel)
+        (with-current-buffer (find-file-noselect ,file)
+          (mevedel-note-create "Already open"))))
+    (mevedel-notes-activation-test--cold
+     `(let ((source (find-file-noselect ,file)))
+        (mevedel-notes-global-mode 1)
+        (with-current-buffer source
+          (unless (seq-some
+                   (lambda (ov)
+                     (string-match-p "Already open" (or (overlay-get ov 'after-string) "")))
+                   (overlays-in (point-min) (point-max)))
+            (error "Enabling the mode did not show the open buffer's note"))))
+     t))
+  :doc "configuration run after `mevedel' loads precedes the first note overlay"
+  (progn
+    (make-directory (file-name-concat root ".mevedel"))
+    (mevedel-notes-activation-test--cold
+     `(progn
+        (require 'mevedel)
+        (with-current-buffer (find-file-noselect ,file)
+          (mevedel-note-create "Configured note"))))
+    (mevedel-notes-activation-test--cold
+     `(let (overlays-at-config)
+        ;; Like a `use-package' :config block that rebinds note keys.
+        (with-eval-after-load 'mevedel
+          (setq overlays-at-config
+                (seq-count (lambda (buffer)
+                             (with-current-buffer buffer
+                               (seq-some (lambda (ov) (overlay-get ov 'after-string))
+                                         (overlays-in (point-min) (point-max)))))
+                           (buffer-list))))
+        (with-current-buffer (find-file-noselect ,file)
+          (unless (seq-some
+                   (lambda (ov)
+                     (string-match-p "Configured note" (or (overlay-get ov 'after-string) "")))
+                   (overlays-in (point-min) (point-max)))
+            (error "Note did not restore")))
+        (unless (eql 0 overlays-at-config)
+          (error "Configuration ran after note overlays: %S" overlays-at-config)))))
   :doc "a cold file visit restores persisted labels without a session or Buddy"
   (progn
     (make-directory (file-name-concat root ".mevedel"))

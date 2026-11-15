@@ -1,9 +1,11 @@
 ;;; mevedel-notes-activation.el --- Cheap note activation on file visits -*- lexical-binding: t -*-
 
 ;;; Commentary:
-;; The always-available visit hook has no package dependencies.  Presentation
-;; loads for remembered instructions or a nonempty local workspace store.
-;; A local roots-only index queues cold remote restoration outside the hook.
+;; `mevedel-notes-global-mode' installs a visit hook with no package
+;; dependencies.  Presentation loads `mevedel', so the user's configuration of
+;; it applies first, for remembered instructions or a nonempty local workspace
+;; store.  A local roots-only index queues cold remote restoration outside the
+;; hook.
 
 ;;; Code:
 
@@ -85,7 +87,16 @@
                (not (member closest mevedel-notes-activation--remote-attempted)))
       (push closest mevedel-notes-activation--remote-attempted)
       (run-at-time
-       0 nil #'mevedel-instruction-store-read-connected closest))))
+       0 nil (lambda ()
+               (require 'mevedel)
+               (mevedel-instruction-store-read-connected closest))))))
+
+(defun mevedel-notes-activation--present (file &optional key root)
+  "Present FILE's notes from KEY or ROOT after loading `mevedel'.
+Loading it first runs the user's configuration of `mevedel', such as note
+keybindings, before any note overlay exists."
+  (require 'mevedel)
+  (mevedel-instruction-store-visit file key root))
 
 (defun mevedel-notes-activation--cached-key (file &optional root)
   "Return FILE's remembered instruction key, or the key for exact ROOT.
@@ -117,7 +128,7 @@ Indexed remote roots are read once in the background, never in this hook."
     (let* ((file buffer-file-name)
            (key (mevedel-notes-activation--cached-key file)))
       (cond
-       (key (mevedel-instruction-store-visit file key))
+       (key (mevedel-notes-activation--present file key))
        ((file-remote-p file nil 'never) (mevedel-notes-activation--remote-visit file))
        (t
         (when-let* ((located (locate-dominating-file
@@ -125,7 +136,7 @@ Indexed remote roots are read once in the background, never in this hook."
                     ;; `locate-dominating-file' may abbreviate a HOME root.
                     (root (expand-file-name located)))
           (if-let* ((key (mevedel-notes-activation--cached-key file root)))
-              (mevedel-instruction-store-visit file key)
+              (mevedel-notes-activation--present file key)
             (when-let* ((data
                          ;; A load hint only; persistence validates the record.
                          (condition-case nil
@@ -135,10 +146,20 @@ Indexed remote roots are read once in the background, never in this hook."
                                (read (current-buffer)))
                            (error nil)))
                         ((plist-get data :files)))
-              (mevedel-instruction-store-visit file nil root)))))))))
+              (mevedel-notes-activation--present file nil root)))))))))
 
 ;;;###autoload
-(add-hook 'find-file-hook #'mevedel-notes-file-visit)
+(define-minor-mode mevedel-notes-global-mode
+  "Show notes in files as they are visited, without starting a chat.
+Enabling it also shows notes in buffers already visiting files."
+  :global t
+  :group 'mevedel
+  (if mevedel-notes-global-mode
+      (progn
+        (add-hook 'find-file-hook #'mevedel-notes-file-visit)
+        (dolist (buffer (buffer-list))
+          (with-current-buffer buffer (mevedel-notes-file-visit))))
+    (remove-hook 'find-file-hook #'mevedel-notes-file-visit)))
 
 (provide 'mevedel-notes-activation)
 ;;; mevedel-notes-activation.el ends here

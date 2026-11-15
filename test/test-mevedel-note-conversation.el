@@ -1316,6 +1316,8 @@
         `(progn
            (setq load-path ',load-path)
            (require 'mevedel)
+           (require 'mevedel-notes-activation)
+           (mevedel-notes-global-mode 1)
            (require 'gptel-openai)
            (require 'mevedel-persistence)
            (setq gptel-backend (gptel-make-openai "Notes" :key "test" :models '(test-model))

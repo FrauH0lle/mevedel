@@ -160,6 +160,9 @@ temporary one."
              (write-region ".mevedel/\n" nil ".gitignore" nil 'silent)
              (write-region "noted code\n" nil "source.el" nil 'silent)
              (should-not (featurep 'mevedel-notes))
+             ;; A user's init enables visit restoration without loading notes.
+             (mevedel-notes-global-mode 1)
+             (should-not (featurep 'mevedel-notes))
              (let ((source (find-file-noselect "source.el")))
                (with-current-buffer source (mevedel-note-create "Cold note"))
                (should (file-exists-p ".mevedel/instructions.el"))
