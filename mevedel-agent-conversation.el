@@ -920,6 +920,8 @@ returns nil.  TOKEN is the caller's gate ownership, which is exempt."
         (condition-case err
             (progn (mevedel-session-publication-barrier session token) t)
           (error
+           (setf (mevedel-agent-invocation-persistence-failure invocation)
+                 (format "publication gate: %s" (error-message-string err)))
            (mevedel-diagnostic-message (mevedel-diagnostic-scope session)
                     "Conversation save deferred for %s: %s"
                     (mevedel-agent-invocation-agent-id invocation)
@@ -931,6 +933,9 @@ returns nil.  TOKEN is the caller's gate ownership, which is exempt."
 The session's publication gate drains first, so a concurrent job cannot have
 captured a stale agent candidate.  TOKEN is the caller's publication gate
 ownership, handed to gated writers."
+  ;; A reason from an earlier save must not explain this one.
+  (when (mevedel-agent-invocation-p invocation)
+    (setf (mevedel-agent-invocation-persistence-failure invocation) nil))
   (when (and (mevedel-agent-invocation-p invocation)
              (not (mevedel-agent-conversation-fenced-p invocation))
              (mevedel-agent-conversation--drain-gate invocation token))
@@ -991,6 +996,8 @@ ownership, handed to gated writers."
 		  ;; Reached from a timer or sentinel inside a remote command:
 		  ;; the control filesystem refused to nest and nothing was
 		  ;; written, so write again once the transport is free.
+                  (setf (mevedel-agent-invocation-persistence-failure invocation)
+                        "control filesystem busy")
 		  (mevedel-transport-run-when-idle
                    (list 'agent-conversation-save
 			 (mevedel-agent-invocation-agent-id invocation))
@@ -998,6 +1005,8 @@ ownership, handed to gated writers."
                    (lambda () (mevedel-agent-conversation--write invocation)))
 		  nil)
 		 (error
+                  (setf (mevedel-agent-invocation-persistence-failure invocation)
+                        (error-message-string err))
 		  (mevedel-diagnostic-message (mevedel-diagnostic-scope session)
                            "Conversation save failed for %s: %S"
                            (mevedel-agent-invocation-agent-id invocation) err)

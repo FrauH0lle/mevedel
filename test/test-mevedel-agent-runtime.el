@@ -1639,7 +1639,10 @@ ARTIFACT-P selects whether its sidecar counts as committed."
       (delete-directory save-path t))))
 
 (mevedel-deftest mevedel-agent-runtime--setup-transcript
-  (:doc "allocates transcript names from authoritative artifact membership")
+  ()
+  ,test
+  (test)
+  :doc "allocates transcript names from authoritative artifact membership"
   (let* ((save-path
           (file-name-as-directory
            (make-temp-file "mevedel-agent-allocation-" t)))
@@ -1681,6 +1684,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
                          (mevedel-agent-invocation-transcript-relative-path
                           invocation)))
           (should (equal second (plist-get (cdr recorded) :path)))
+          (should-not (mevedel-agent-invocation-persistence-failure invocation))
           (should (equal (list first second) (nreverse checked)))
           (with-current-buffer child
             (should (equal second-fixed buffer-file-name))
@@ -1691,7 +1695,43 @@ ARTIFACT-P selects whether its sidecar counts as committed."
         (when (buffer-live-p buffer)
           (with-current-buffer buffer (set-buffer-modified-p nil))
           (kill-buffer buffer)))
-      (delete-directory save-path t))))
+      (delete-directory save-path t)))
+
+  :doc "records why no transcript was created instead of failing silently"
+  (let* ((parent (generate-new-buffer " *agent-allocation-parent*"))
+         (child (generate-new-buffer " *agent-allocation-child*"))
+         (session (mevedel-session--create :name "main"))
+         (invocation (mevedel-agent-runtime-test--invocation child))
+         (reason (lambda ()
+                   (mevedel-agent-runtime--setup-transcript invocation child)
+                   (mevedel-agent-invocation-persistence-failure invocation))))
+    (unwind-protect
+        (progn
+          (setf (mevedel-agent-invocation-parent-session invocation) session
+                (mevedel-agent-invocation-parent-data-buffer invocation) parent)
+          (with-current-buffer parent
+            (setq-local mevedel-session--read-only-mode t))
+          (should (equal "transcript setup: parent session is read-only"
+                         (funcall reason)))
+          (with-current-buffer parent
+            (setq-local mevedel-session--read-only-mode nil))
+          (let (message)
+            (cl-letf (((symbol-function
+                        'mevedel-session-persistence-shallow-ensure-files)
+                       (lambda (&rest _) (error "Lease is busy"))))
+              (mevedel-test--with-captured-diagnostics message
+                (should (equal "transcript setup: Lease is busy"
+                               (funcall reason)))))
+            (should (string-search "Lease is busy" message)))
+          (cl-letf (((symbol-function
+                      'mevedel-session-persistence-shallow-ensure-files)
+                     #'ignore))
+            (should (equal "transcript setup: session files could not be created"
+                           (funcall reason))))
+          (should-not (mevedel-agent-invocation-transcript-relative-path
+                       invocation)))
+      (kill-buffer child)
+      (kill-buffer parent))))
 
 (mevedel-deftest mevedel-agent-runtime--release-settled-state ()
   ,test

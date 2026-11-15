@@ -51,7 +51,10 @@
 			(lambda (&rest args)
 			  (cl-incf publications)
 			  (apply publisher args))))
+		      ;; An earlier failure reason does not survive a later save.
+		      (setf (mevedel-agent-invocation-persistence-failure inv) "stale")
 		      (should (mevedel-agent-conversation-save inv))
+		      (should-not (mevedel-agent-invocation-persistence-failure inv))
 		      ;; Exercise the native request setup without provider I/O.
 		      ;; Its frozen locals must not force a second transcript save.
 		      (cl-letf (((symbol-function 'gptel-request)
@@ -589,7 +592,10 @@ head and the unreadable observation are injected only while the job runs."
          (mevedel-test--with-captured-diagnostics message
            (should-not (mevedel-agent-conversation--drain-gate inv nil))))
        (should (string-match-p "default--prepare" message))
-       (should (string-match-p "unresolved" message))))))
+       (should (string-match-p "unresolved" message))
+       ;; Kept for the dispatch error that follows a failed first save.
+       (should (equal "publication gate: Outcome is unresolved"
+                      (mevedel-agent-invocation-persistence-failure inv)))))))
 
 (mevedel-deftest mevedel-agent-conversation--write/overlapping-job (:quiet t)
   ,test

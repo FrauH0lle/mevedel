@@ -2005,7 +2005,7 @@ the caller's optional override, without changing shared resource authority."
                        (error "Agent provider request did not start"))
                      (unless (mevedel-agent-record-conversation-location
                               record)
-                       (error "Agent conversation could not be persisted"))
+                       (error "Agent conversation location was not recorded"))
                      (settle (list :outcome 'success
                                    :record record
                                    ;; Launch snapshot: resolved before any
