@@ -409,6 +409,124 @@
         (throw 'found t)))
     nil))
 
+(defvar mevedel-provenance-test-ran nil
+  "Set non-nil if a descriptor's contents were evaluated.")
+
+(mevedel-deftest mevedel-library-provenance
+  ()
+  (let* ((root (make-temp-file "mevedel-provenance-" t))
+         (mevedel-provenance-test-ran nil)
+         (melpa-commit "0123456789abcdef0123456789abcdef01234567"))
+    (unwind-protect
+        (cl-labels
+            ((dir (&rest parts)
+               (let ((path (apply #'file-name-concat root parts)))
+                 (make-directory path t)
+                 path))
+             (library (directory version)
+               (let ((file (file-name-concat directory "fixture.el")))
+                 (with-temp-file file
+                   (insert ";;; fixture.el --- Fixture -*- lexical-binding: t -*-\n")
+                   (when version (insert ";; Version: " version "\n"))
+                   (insert "(provide 'fixture)\n"))
+                 file))
+             (descriptor (directory text)
+               (with-temp-file (file-name-concat directory "fixture-pkg.el")
+                 (insert text)))
+             (repository (directory)
+               (dolist (args '(("init" "--quiet") ("add" ".")
+                               ("-c" "user.name=Test"
+                                "-c" "user.email=test@example.invalid"
+                                "-c" "commit.gpgsign=false"
+                                "-c" "core.hooksPath=/dev/null"
+                                "commit" "--quiet" "-m" "fixture")))
+                 (let ((default-directory (file-name-as-directory directory)))
+                   (should (zerop (apply #'process-file "git" nil nil nil args)))))
+               (let ((default-directory (file-name-as-directory directory)))
+                 (string-trim
+                  (with-temp-buffer
+                    (process-file "git" nil t nil "rev-parse" "HEAD")
+                    (buffer-string)))))
+             (provenance (file) (mevedel-library-provenance file)))
+          ,test)
+      (delete-directory root t)))
+  (test)
+  :doc "a checkout root gives its commit and its header version"
+  (let* ((checkout (dir "checkout"))
+         (file (library checkout "1.2"))
+         (head (repository checkout)))
+    (should (equal (list :commit head :version "1.2") (provenance file))))
+
+  :doc "a straight or elpaca build directory follows its source symlink"
+  (let* ((checkout (dir "repos" "fixture"))
+         (source (library checkout "1.2"))
+         (head (repository checkout))
+         (build (dir "build" "fixture"))
+         (linked (file-name-concat build "fixture.el"))
+         (compiled (file-name-concat build "fixture.elc")))
+    (make-symbolic-link source linked)
+    (with-temp-file compiled (insert "compiled\n"))
+    (should (equal (list :commit head :version "1.2") (provenance linked)))
+    (should (equal (list :commit head :version "1.2") (provenance compiled))))
+
+  :doc "a package.el install inside another repository reports its descriptor"
+  (let* ((outer (dir "dotfiles"))
+         (package (dir "dotfiles" "elpa" "fixture-20260101.1"))
+         (file (library package "9.9")))
+    (descriptor package
+                (format "(define-package \"fixture\" \"20260101.1\"\n  \"Fixture.\"\n  '((emacs \"27.1\"))\n  :url \"https://example.invalid\"\n  :commit \"%s\")\n"
+                        melpa-commit))
+    (with-temp-file (file-name-concat outer "README") (insert "dotfiles\n"))
+    (should-not (equal melpa-commit (repository outer)))
+    (should (equal (list :commit melpa-commit :version "20260101.1")
+                   (provenance file))))
+
+  :doc "an ELPA descriptor without a commit gives a version only"
+  (let* ((package (dir "elpa" "fixture-1.0"))
+         (file (library package "9.9")))
+    (descriptor package "(define-package \"fixture\" \"1.0\" \"Fixture.\" nil)\n")
+    (should (equal (list :commit nil :version "1.0") (provenance file))))
+
+  :doc "a library with neither Git nor descriptor reports its header version"
+  (let ((file (library (dir "plain") "1.2")))
+    (should (equal (list :commit nil :version "1.2") (provenance file))))
+
+  :doc "a library saying nothing gives nil values, and a missing file does not signal"
+  (progn
+    (should (equal (list :commit nil :version nil)
+                   (provenance (library (dir "bare") nil))))
+    (should (equal (list :commit nil :version nil)
+                   (provenance (file-name-concat root "missing" "fixture.el"))))
+    (should (equal (list :commit nil :version nil) (provenance nil))))
+
+  :doc "without Git a checkout falls back to its descriptor"
+  (let* ((checkout (dir "checkout"))
+         (file (library checkout "1.2"))
+         (head (repository checkout)))
+    (descriptor checkout
+                (format "(define-package \"fixture\" \"3.0\" \"Fixture.\" nil :commit \"%s\")\n"
+                        melpa-commit))
+    (should (equal (list :commit head :version "3.0") (provenance file)))
+    (let ((exec-path nil))
+      (should (equal (list :commit melpa-commit :version "3.0") (provenance file)))))
+
+  :doc "a hostile or malformed descriptor is never evaluated and never trusted"
+  (let* ((package (dir "elpa" "fixture-1.0"))
+         (file (library package "1.2")))
+    (dolist (text (list "#.(setq mevedel-provenance-test-ran t)\n"
+                        "(setq mevedel-provenance-test-ran t)\n"
+                        "(define-package \"fixture\" 42 \"Fixture.\" nil)\n"
+                        (format "(define-package \"fixture\" \"%s\" \"Fixture.\" nil)\n"
+                                (make-string 80 ?9))
+                        "(define-package \"fixture\" \"1.0\"\n"))
+      (descriptor package text)
+      (should (equal (list :commit nil :version "1.2") (provenance file))))
+    (should-not mevedel-provenance-test-ran)
+    ;; A usable version survives a garbage commit, which is dropped.
+    (descriptor package
+                "(define-package \"fixture\" \"1.0\" \"Fixture.\" nil :commit \"not hex!\")\n")
+    (should (equal (list :commit nil :version "1.0") (provenance file)))))
+
 (mevedel-deftest mevedel-library-source-directory
   (:doc "resolves source siblings without mistaking compiled build files for roots")
   (let* ((root (make-temp-file "mevedel-library-layout-" t))

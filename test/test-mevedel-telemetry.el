@@ -1320,6 +1320,26 @@
     (delete-file sibling)
     (check-identity compiled nil))
 
+  :doc "reports no commit for a library inside another repository"
+  ;; Like a package.el install under a versioned `user-emacs-directory'.
+  (let ((nested (file-name-concat source-directory "elpa" name)))
+    (make-directory (file-name-directory nested) t)
+    (copy-file source nested)
+    (load nested nil t t)
+    (check-identity nested nil))
+
+  :doc "takes the commit of a package.el install from its descriptor"
+  (let* ((package (file-name-concat root "elpa" "fixture-20260101.1"))
+         (installed (file-name-concat package name))
+         (commit "0123456789abcdef0123456789abcdef01234567"))
+    (make-directory package t)
+    (copy-file source installed)
+    (with-temp-file (file-name-concat package "mevedel-telemetry-fixture-pkg.el")
+      (insert (format "(define-package \"mevedel-telemetry-fixture\" \"20260101.1\"\n  \"Fixture.\" nil :commit \"%s\")\n"
+                      commit)))
+    (load installed nil t t)
+    (check-identity installed commit))
+
   :doc "retains bytecode identity when the sibling source symlink is dangling"
   (progn
     (load compiled nil t t)

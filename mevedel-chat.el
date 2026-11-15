@@ -581,7 +581,14 @@ sessions keep their existing startup behavior and return nil."
      mevedel--session 'session-runtime
      :boundary source
      :loaded-at (plist-get (bound-and-true-p mevedel--load-provenance) :loaded-at)
-     :mevedel-commit (plist-get (bound-and-true-p mevedel--load-provenance) :commit)
+     :mevedel-commit (plist-get (bound-and-true-p mevedel--load-provenance)
+                                :mevedel-commit)
+     :mevedel-version (plist-get (bound-and-true-p mevedel--load-provenance)
+                                 :mevedel-version)
+     :gptel-commit (plist-get (bound-and-true-p mevedel--load-provenance)
+                              :gptel-commit)
+     :gptel-version (plist-get (bound-and-true-p mevedel--load-provenance)
+                               :gptel-version)
      :emacs-version emacs-version)
     (let ((buffer (current-buffer))
           (workspace (or (and (boundp 'mevedel--workspace)

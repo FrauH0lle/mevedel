@@ -51,20 +51,18 @@
 (require 'mevedel-claude-code-backend)
 
 (defconst mevedel--load-provenance
-  (list :loaded-at (format-time-string "%FT%T%z")
-        :commit
-        (ignore-errors
-          (when-let* ((file (or load-file-name buffer-file-name))
-                      (root (locate-dominating-file
-                             (mevedel-library-source-directory file) ".git"))
-                      ((not (file-remote-p root))))
-            (with-temp-buffer
-              (let ((default-directory (expand-file-name root)))
-                (when (zerop (call-process "git" nil t nil "rev-parse" "HEAD"))
-                  (string-trim (buffer-string))))))))
-  "When this Emacs loaded `mevedel', and the source checkout's commit then.
+  (let ((mevedel (mevedel-library-provenance
+                  (or load-file-name buffer-file-name)))
+        (gptel (mevedel-library-provenance (symbol-file 'gptel 'provide))))
+    (list :loaded-at (format-time-string "%FT%T%z")
+          :mevedel-commit (plist-get mevedel :commit)
+          :mevedel-version (plist-get mevedel :version)
+          :gptel-commit (plist-get gptel :commit)
+          :gptel-version (plist-get gptel :version)))
+  "When this Emacs loaded `mevedel', and what it loaded of it and gptel.
 A running Emacs keeps executing the code it loaded while its checkout moves
-on; session telemetry records this so diagnoses compare the right revision.")
+on; session telemetry records this so diagnoses compare the right revision.
+See `mevedel-library-provenance' for how installation methods are covered.")
 
 (mevedel-claude-code-register)
 

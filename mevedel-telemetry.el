@@ -103,13 +103,13 @@
 (declare-function mevedel-diagnostic-message "mevedel-utilities" (scope format-string &rest args))
 (declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
 (declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format-string &rest args))
-(declare-function mevedel-library-source-directory "mevedel-utilities" (file))
+(declare-function mevedel-library-provenance "mevedel-utilities" (file))
 (autoload 'mevedel--run-periodic-timer "mevedel-utilities")
 (autoload 'mevedel--ui-timer-cancel "mevedel-utilities")
 (autoload 'mevedel-diagnostic-message "mevedel-utilities")
 (autoload 'mevedel-diagnostic-scope "mevedel-utilities")
 (autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
-(autoload 'mevedel-library-source-directory "mevedel-utilities")
+(autoload 'mevedel-library-provenance "mevedel-utilities")
 
 ;; `mevedel-view-render'
 (defvar mevedel-view-render-debug)
@@ -210,7 +210,8 @@ profile file larger and cost a little more per sample."
     :kind :lane :largest-buffer-chars :largest-buffer-hash :largest-buffer-mode
     :largest-buffer-process :limit
     :loaded-at
-    :max-ms :mevedel-commit :message-chars :message-hash :mode :model :model-context-source
+    :max-ms :mevedel-commit :mevedel-version :message-chars :message-hash :mode :model
+    :model-context-source
     :model-context-window :modes
     :native-resource-capture :native-resource-report-bytes :nested-call-count
     :network
@@ -1458,12 +1459,13 @@ Return an opaque span plist accepted by `mevedel-telemetry-finish'."
           (secure-hash 'sha256 dirty-content))))
 
 (defun mevedel-telemetry--library-snapshot (feature)
-  "Return current disk artifact identity and checkout provenance for FEATURE.
+  "Return current disk artifact identity and installed provenance for FEATURE.
 Use loaded-feature history, never a different copy from `load-path'.
 Hash and size describe the artifact's disk bytes, not its bytes at load time.
-Git lookup follows sibling source and symlinks; the resulting commit does
-not establish source/bytecode equivalence.  Return nil for unavailable
-artifacts, or a nil commit when only provenance is unavailable."
+The commit comes from the source checkout, which the lookup reaches through
+sibling source and symlinks, or from the package descriptor of a package.el
+install; it does not establish source/bytecode equivalence.  Return nil for
+unavailable artifacts, or a nil commit when only provenance is unavailable."
   (ignore-errors
     (when-let* (((featurep feature))
                 (file (symbol-file feature 'provide))
@@ -1475,11 +1477,7 @@ artifacts, or a nil commit when only provenance is unavailable."
         (list :file-hash (secure-hash 'sha256 (current-buffer))
               :file-bytes (buffer-size)
               :git-head
-              (ignore-errors
-                (when-let* ((directory (mevedel-library-source-directory file))
-                            (root (locate-dominating-file directory ".git")))
-                  (mevedel-telemetry--process-output
-                   "git" "-C" (expand-file-name root) "rev-parse" "HEAD"))))))))
+              (plist-get (mevedel-library-provenance file) :commit))))))
 
 (defun mevedel-telemetry--record-environment (session boundary)
   "Record reproduction environment for SESSION at BOUNDARY."

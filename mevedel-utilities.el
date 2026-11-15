@@ -146,6 +146,85 @@ data, not resource descendants; it does not relax their containment checks."
     (file-name-directory
      (file-truename (if (and source (file-regular-p source)) source file)))))
 
+(defun mevedel--library-git-commit (file)
+  "Return the commit of library FILE's own Git checkout, or nil.
+Only a checkout rooted at FILE's source directory counts: a package installed
+inside another repository, such as a versioned `user-emacs-directory', must
+not report that repository's commit."
+  (ignore-errors
+    (when-let* ((directory (mevedel-library-source-directory file))
+                ((file-exists-p (file-name-concat directory ".git"))))
+      (with-temp-buffer
+        (let ((default-directory directory))
+          (when (zerop (call-process "git" nil t nil "rev-parse" "HEAD"))
+            (let ((commit (string-trim (buffer-string))))
+              (and (string-match-p "\\`[0-9a-f]\\{40,64\\}\\'" commit)
+                   commit))))))))
+
+(defun mevedel--library-descriptor (file)
+  "Return (VERSION . COMMIT) from the package descriptor beside library FILE.
+package.el, MELPA, ELPA, Nix and Guix install `NAME-pkg.el' with the library.
+It is read as data, never evaluated, and used only when it is a
+`define-package' form with a plain version; COMMIT is nil unless it is hex.
+Return nil without a usable descriptor."
+  (let ((name (concat (file-name-base file) "-pkg.el")))
+    (catch 'found
+      (dolist (directory (delete-dups
+                          (list (file-name-directory file)
+                                (mevedel-library-source-directory file))))
+        (let ((descriptor (file-name-concat directory name)))
+          (when (file-regular-p descriptor)
+            (when-let* ((form (ignore-errors
+                                (with-temp-buffer
+                                  (insert-file-contents-literally
+                                   descriptor nil 0 16384)
+                                  (let ((read-eval nil))
+                                    (read (current-buffer))))))
+                        ((eq (car-safe form) 'define-package))
+                        (version (nth 2 form))
+                        ((and (stringp version)
+                              (string-match-p "\\`[!-~]\\{1,64\\}\\'" version))))
+              (throw 'found
+                     (cons version
+                           (let ((commit (ignore-errors
+                                           (plist-get (nthcdr 5 form) :commit))))
+                             (and (stringp commit)
+                                  (string-match-p "\\`[0-9a-f]\\{7,64\\}\\'" commit)
+                                  commit)))))))))))
+
+(defun mevedel--library-header-version (file)
+  "Return the `Version:' header of library FILE's source, or nil.
+Bytecode has no headers, so look at its sibling source."
+  (let ((source (if (and (string-suffix-p ".elc" file)
+                         (file-regular-p (substring file 0 -1)))
+                    (substring file 0 -1)
+                  file)))
+    (when (and (string-suffix-p ".el" source) (file-regular-p source))
+      (with-temp-buffer
+        (insert-file-contents-literally source nil 0 4096)
+        (goto-char (point-min))
+        (when (re-search-forward
+               "^;+[ \t]*\\(?:Package-\\)?Version:[ \t]*\\([!-~]\\{1,64\\}\\)" nil t)
+          (match-string 1))))))
+
+;;;###autoload
+(defun mevedel-library-provenance (file)
+  "Return (:commit COMMIT :version VERSION) identifying loaded library FILE.
+Whatever installed the library, each value is nil only when nothing says.
+The commit comes from FILE's own Git checkout (straight, elpaca, package-vc or
+a manual clone), else from its package descriptor (MELPA).  The version
+comes from the descriptor, else the source's `Version:' header.  A checkout
+counts only when rooted at the library's source directory, so a package inside
+another repository never reports that repository's commit.  Remote files and
+unreadable metadata give nil rather than an error."
+  (or (ignore-errors
+        (when (and (stringp file) (not (file-remote-p file)))
+          (let ((descriptor (mevedel--library-descriptor file)))
+            (list :commit (or (mevedel--library-git-commit file) (cdr descriptor))
+                  :version (or (car descriptor)
+                               (mevedel--library-header-version file))))))
+      (list :commit nil :version nil)))
+
 
 ;;
 ;;; Path spelling

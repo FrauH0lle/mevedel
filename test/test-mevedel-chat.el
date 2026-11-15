@@ -1149,7 +1149,13 @@
 			   (should (stringp (plist-get props :loaded-at)))
 			   ;; Tests load mevedel from its Git checkout.
 			   (should (string-match-p "\\`[0-9a-f]\\{40\\}\\'"
-						   (plist-get props :mevedel-commit)))))
+						   (plist-get props :mevedel-commit)))
+			   (should (stringp (plist-get props :mevedel-version)))
+			   ;; gptel comes from a package.el install, which names its
+			   ;; commit and version in its descriptor.
+			   (should (string-match-p "\\`[0-9a-f]\\{7,64\\}\\'"
+						   (plist-get props :gptel-commit)))
+			   (should (stringp (plist-get props :gptel-version)))))
 		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-start-hooks-wait

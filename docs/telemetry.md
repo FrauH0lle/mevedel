@@ -136,11 +136,31 @@ full telemetry. Other concurrently live sessions remain on the normal tier.
 ## Covered lifecycle boundaries
 
 Each session start and resume records one `session-runtime` event. Its
-`:boundary` is the start source; `:loaded-at` and `:mevedel-commit` say when
-this Emacs loaded `mevedel` and which commit its source checkout had then
-(nil outside a Git checkout). A running Emacs keeps executing that code while
-the checkout moves on, so compare a session's evidence against this commit,
-not the checkout's current HEAD.
+`:boundary` is the start source and `:loaded-at` says when this Emacs loaded
+`mevedel`. `:mevedel-commit`, `:mevedel-version`, `:gptel-commit` and
+`:gptel-version` identify what it loaded of mevedel and gptel, captured once
+at that load. A running Emacs keeps executing the loaded code while the
+checkout moves on, so compare a session's evidence against these values, not
+against the checkout's current HEAD.
+
+Whatever installed a library is covered by one resolution order
+(`mevedel-library-provenance`):
+
+- **Commit:** the library's own Git checkout, followed through the symlinks of
+  a straight or elpaca build directory (straight, elpaca, package-vc, a manual
+  clone); otherwise the `:commit` in the package descriptor `NAME-pkg.el`
+  that MELPA writes beside the files.
+- **Version:** the descriptor's version; otherwise the source's `Version:`
+  header.
+
+A checkout counts only when it is rooted at the library's own source directory,
+so a package installed inside another repository, such as a versioned
+`user-emacs-directory`, never reports that repository's commit. The descriptor
+is read as data and used only as a `define-package` form with a plain version.
+A value no source states is nil. A checkout with uncommitted edits reports its
+HEAD only; the profiler's `reproduction-environment` event records the dirty
+state. GNU ELPA and elpaca follow the same rules, but only their directory
+shapes are tested.
 
 Request settlement `:duration-ms` remains end-to-end wall-clock latency,
 including user waits. Interaction events separately identify whether active
