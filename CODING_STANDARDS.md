@@ -170,6 +170,10 @@ Maintain one standalone session migration script outside the runtime loader:
 - When changing the persisted session format, update the script, its tests,
   and migration documentation in the same change. Keep legacy-format knowledge
   in the migration script, not in runtime readers or writers.
+- A step that deletes files selects them by explicit file family, never as
+  "everything not excluded", and its tests cover every family it keeps (such
+  as plans and retained execution output), each with a control that fails when
+  the step deletes that family. The same applies to cleanup and discard paths.
 
 ## ADRS ARE REVISABLE
 
