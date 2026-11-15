@@ -69,6 +69,9 @@
                   (process-put client 'answered t)
                   (push (substring input (+ 4 (string-match "\r\n\r\n" input))) requests)
                   (let ((response (or (pop remaining) mevedel-retry-test--success)))
+                    (if (and (stringp response) (string-prefix-p "HTTP/" response))
+                        ;; A complete raw response, such as a proxy error page.
+                        (process-send-string client response)
                     (let ((body (if (consp response) (apply #'concat response) response)))
                       (process-send-string
                        client (format "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s"
@@ -81,7 +84,7 @@
                                            (lambda ()
                                              (when (process-live-p client)
                                                (process-send-string client (apply #'concat (cdr response))))))
-                              chunk-timers)))))))))
+                              chunk-timers))))))))))
           (backend (gptel--make-openai-oauth
                     :name "Codex test" :header nil :stream t :models '(test-model)
                     ;; Pass the real auth guard without reading or refreshing

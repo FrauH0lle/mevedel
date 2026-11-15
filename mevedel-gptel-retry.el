@@ -5,7 +5,8 @@
 ;; Recover a failed native gptel sample without repeating turn preparation or
 ;; tools.  gptel still owns transport, parsing and successful transitions.
 ;; Request-local retry states park cleanup until an owned timer resends the
-;; prepared payload.  Only admitted mevedel requests participate; ACP and
+;; prepared payload.  Only admitted mevedel requests and retained agent turns,
+;; which their runtime owns without a root request, participate; ACP and
 ;; background requests retain their own recovery policies.
 
 ;;; Code:
@@ -131,6 +132,13 @@ Permanent structured errors take precedence over transport status and text."
 Responses events carry an explicit `\"error\": null' on success."
   (unless (memq value '(nil :null :json-false)) value))
 
+(defun mevedel-gptel-retry--owner-p (fsm request invocation)
+  "Return non-nil when root REQUEST or retained agent INVOCATION owns FSM.
+Retained agent turns have no root request: their runtime owns the machine."
+  (or request
+      (and (mevedel-agent-invocation-p invocation)
+           (eq fsm (mevedel-agent-invocation-runtime-fsm invocation)))))
+
 (defun mevedel-gptel-retry--live-p (state &optional info)
   "Return non-nil while STATE and optional attempt INFO own their request."
   (let* ((fsm (plist-get state :fsm))
@@ -146,7 +154,8 @@ Responses events carry an explicit `\"error\": null' on success."
                  (plist-get current :mevedel-retry-attempt)))
          (buffer-live-p buffer)
          (eq request (buffer-local-value 'mevedel--current-request buffer))
-         (not (mevedel-request-cancelled-p request))
+         (mevedel-gptel-retry--owner-p fsm request invocation)
+         (not (and request (mevedel-request-cancelled-p request)))
          (or (null invocation)
              (and (not (mevedel-agent-invocation-runtime-settled-p invocation))
                   (eq invocation (buffer-local-value 'mevedel--agent-invocation buffer)))))))
@@ -484,14 +493,17 @@ invocation has settled, aborts instead: its owner no longer accepts output."
   (let* ((info (gptel-fsm-info fsm))
          (buffer (plist-get info :buffer))
          (request (and (buffer-live-p buffer)
-                       (buffer-local-value 'mevedel--current-request buffer))))
+                       (buffer-local-value 'mevedel--current-request buffer)))
+         (invocation (or (plist-get info :mevedel-agent-invocation)
+                         (and (buffer-live-p buffer)
+                              (buffer-local-value 'mevedel--agent-invocation buffer)))))
     (if (or (plist-get info :mevedel-retry-cancelled)
             ;; Tools can finish after interruption settled the invocation.
-            (let ((invocation (plist-get info :mevedel-agent-invocation)))
-              (and (mevedel-agent-invocation-p invocation)
-                   (mevedel-agent-invocation-runtime-settled-p invocation))))
+            (and (mevedel-agent-invocation-p invocation)
+                 (mevedel-agent-invocation-runtime-settled-p invocation)))
         (gptel--fsm-transition fsm 'ABRT)
-      (if (not (and request (> mevedel-gptel-retry-max-retries 0)
+      (if (not (and (mevedel-gptel-retry--owner-p fsm request invocation)
+                    (> mevedel-gptel-retry-max-retries 0)
                     (not (mevedel-engine-external-p (plist-get info :backend)))))
           (progn
             (when-let* ((previous (plist-get info :mevedel-retry-state)))
@@ -513,7 +525,7 @@ invocation has settled, aborts instead: its owner no longer accepts output."
                                         (or callback (if (and gptel-use-curl (plist-get info :stream))
                                                          #'gptel-curl--stream-insert-response
                                                        #'gptel--insert-response)))
-                            :invocation (buffer-local-value 'mevedel--agent-invocation buffer))))
+                            :invocation invocation)))
           (when previous
             (plist-put previous :closed t)
             (plist-put previous :data nil)
@@ -556,7 +568,7 @@ invocation has settled, aborts instead: its owner no longer accepts output."
                     (unless (plist-get (gptel-fsm-info fsm) :mevedel-retry-state)
                       (mevedel-gptel-retry--abort-transports fsm))
                     nil)))
-          (unless (plist-get info :mevedel-retry-canceller)
+          (unless (or (null request) (plist-get info :mevedel-retry-canceller))
             (plist-put info :mevedel-retry-canceller t)
             (mevedel-request-push-canceller
              request (lambda ()

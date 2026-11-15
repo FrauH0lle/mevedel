@@ -144,6 +144,72 @@ runtime.  BEFORE-RESULT can interrupt inside an accepted terminal callback."
     (should-not (string-search "Late abandoned text"
                                (with-current-buffer data-buf (buffer-string))))))
 
+(ert-deftest mevedel-gptel-retry-runtime/http-503-error-page-recovers ()
+  "A non-JSON 503 page is retried before the agent turn can settle."
+  (let ((page "<html><body>503 Service Unavailable</body></html>"))
+    (mevedel-retry-runtime-test--with-agent
+        (list (format "HTTP/2 503\r\nContent-Type: text/html\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s"
+                      (string-bytes page) page)
+              mevedel-retry-test--success)
+      (gptel--fsm-transition fsm)
+      (mevedel-retry-test--drain-native)
+      (should (= 2 (length requests)))
+      (should (equal '(DONE) terminal-events))
+      (should (equal '(completed) stop-statuses))
+      (should (equal "Recovered answer" (plist-get (car results) :visible))))))
+
+(ert-deftest mevedel-gptel-retry-runtime/agent-dispatch-recovers-http-503 ()
+  "The real agent dispatch retries without a synthetic root request."
+  (let ((page "<html><body>503 Service Unavailable</body></html>"))
+    (mevedel-retry-runtime-test--with-agent
+        (list (format "HTTP/2 503\r\nContent-Type: text/html\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s"
+                      (string-bytes page) page)
+              mevedel-retry-test--success)
+      (let ((gptel--known-backends (list (cons "Codex test" backend)))
+            (gptel--openai-oauth-token-file (file-name-concat directory "token.el"))
+            (gptel--fsm-last nil)
+            (gptel-stream t)
+            (gptel-use-tools nil)
+            (gptel-system-prompt "Answer briefly."))
+        (with-temp-file gptel--openai-oauth-token-file
+          (prin1 (list :access_token "synthetic-local-only"
+                       :expires_at (+ (float-time) 3600)) (current-buffer)))
+        (setf (mevedel-agent-invocation-frozen-configuration invocation)
+              (mevedel-agent-configuration--create
+               :agent (mevedel-agent-invocation-agent invocation)
+               :request-locals
+               (mevedel-agent-exec-request-snapshot
+                (list :backend backend :model 'test-model :effort nil))))
+        (with-current-buffer data-buf
+          ;; Production retained agents own their invocation, not a root request.
+          (setq-local mevedel--current-request nil)
+          (insert "Hello"))
+        (mevedel-test--with-captured-diagnostics nil
+          (setq fsm (mevedel-agent-exec-run
+                     (lambda (response)
+                       (mevedel-agent-runtime--handle-provider-result invocation response))
+                     "explorer" "Runtime retry regression" invocation data-buf))
+          (mevedel-retry-test--drain-native t)
+          (should-not results)
+          (let ((state (plist-get (gptel-fsm-info fsm) :mevedel-retry-state)))
+            (should state)
+            (should-not (plist-get state :request))
+            (should (mevedel-gptel-retry--live-p state))
+            (unwind-protect
+                (progn
+                  (setf (mevedel-agent-invocation-runtime-fsm invocation) (gptel-make-fsm))
+                  (should-not (mevedel-gptel-retry--live-p state)))
+              (setf (mevedel-agent-invocation-runtime-fsm invocation) fsm)))
+          (mevedel-retry-test--drain-native))
+        (should (= 2 (length requests)))
+        (should (eq 'DONE (gptel-fsm-state fsm)))
+        (should (equal '(completed) stop-statuses))
+        (should (= 1 (length results)))
+        (should (equal "Recovered answer" (plist-get (car results) :visible)))
+        (should-not (buffer-local-value 'mevedel--current-request data-buf))
+        (should-not gptel--request-alist)
+        (should-not mevedel-gptel-retry--states)))))
+
 (ert-deftest mevedel-gptel-retry-runtime/nonstreaming-success-keeps-native-done ()
   "A native final string must settle the retained request without aborting it."
   (mevedel-retry-runtime-test--with-agent
@@ -301,8 +367,11 @@ runtime.  BEFORE-RESULT can interrupt inside an accepted terminal callback."
 
 (ert-deftest mevedel-gptel-retry-runtime/deadline-during-backoff ()
   (mevedel-retry-runtime-test--with-agent (list mevedel-retry-test--failure)
+    (with-current-buffer data-buf (setq-local mevedel--current-request nil))
     (gptel--fsm-transition fsm)
     (mevedel-retry-test--drain-native t)
+    (should (eq 'MRETRY (gptel-fsm-state fsm)))
+    (should scheduled)
     (should-not gptel--request-alist)
     (let ((entry (pop scheduled)))
       (mevedel-agent-runtime--budget-expired invocation 5)
