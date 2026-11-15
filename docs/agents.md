@@ -57,7 +57,13 @@ the repository's current worktree list; unrelated repositories, symlink escapes
 to unrelated directories, and paths naming another execution target are rejected.
 Subdirectories of a registered checkout are accepted. Validation happens before
 reservation for an explicit argument and again before each provider turn.
-Missing or no-longer-related directories fail rather than silently falling back.
+Missing or no-longer-related directories fail rather than silently falling back;
+the failure names the agent and the missing directory. `SendMessage` accepts the
+same `working_directory` argument to move a retained agent, for example after
+its worktree was removed: it is validated before delivery, a rejected value
+delivers nothing, a failed delivery leaves the agent where it was, and the new
+directory applies from the agent's next turn and
+persists like the original selection. A running turn keeps its directory.
 
 The selection is durable across retained follow-ups, save/restore, and Save As;
 children inherit it unless they select another directory. Conversation Fork and

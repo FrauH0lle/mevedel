@@ -147,7 +147,8 @@
            (plist-get args :target)
            (plist-get args :message)
            :parent-tool-use-id
-           (mevedel-pipeline-active-tool-use-id)))
+           (mevedel-pipeline-active-tool-use-id)
+           :working-directory (plist-get args :working_directory)))
          (delivery (plist-get outcome :delivery)))
     (list :result (if (eq delivery 'waiting)
                       "Agent starts when a slot frees."
@@ -400,7 +401,9 @@
     :args ((target string :optional
                    "Omit to message your immediate parent. Root must supply a target. Explicit canonical or relative descendant paths can address any retained agent.")
            (message string :required
-                    "Message body to deliver."))
+                    "Message body to deliver.")
+           (working_directory string :optional
+                              "Existing directory for the retained agent's later turns, validated like Agent's. Use it when the agent's directory was removed or its next task lives in another worktree."))
     :read-only-p t
     :groups (agents)
     :renderer '((success . mevedel-tool-ui--render-agent-interaction)))

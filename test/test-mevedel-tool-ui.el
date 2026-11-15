@@ -1442,9 +1442,11 @@
                    (setq captured (list session target message keys))
                    (list :path "/root/peer" :delivery delivery))))
         (let ((result (mevedel-tool-ui--send-message
-                       '(:target "peer" :message "Continue"))))
+                       '(:target "peer" :message "Continue"
+                         :working_directory "next/"))))
           (should (equal (list mevedel--session "peer" "Continue"
-                               '(:parent-tool-use-id "send/1"))
+                               '(:parent-tool-use-id "send/1"
+                                 :working-directory "next/"))
                          captured))
           (should (equal (if (eq delivery 'waiting)
                              "Agent starts when a slot frees." "")

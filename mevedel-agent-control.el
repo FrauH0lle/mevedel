@@ -1036,14 +1036,16 @@ transcript payload and hook audits."
     t))
 
 (cl-defun mevedel-agent-control-send-message
-    (session target message &key parent-tool-use-id)
+    (session target message &key parent-tool-use-id working-directory)
   "Deliver MESSAGE to TARGET in SESSION and report how.
 When TARGET is nil, use the caller's immediate parent; root must name a target.
 An idle agent starts its turn with MESSAGE as the prompt when the tree has
 capacity.  Otherwise MESSAGE is queued as canonical MAIL: an active agent
 reads it at its next boundary, the root may wake for it, and an idle agent
 starts once a slot frees.  PARENT-TOOL-USE-ID identifies the calling tool
-row of a started turn.  Return (:path PATH :delivery DELIVERY), DELIVERY
+row of a started turn.  WORKING-DIRECTORY moves the retained agent's later
+turns to another existing directory, validated as for `Agent'; a running
+turn keeps its directory.  Return (:path PATH :delivery DELIVERY), DELIVERY
 being `started', `queued', or `waiting' for a slot."
   (unless (and (stringp message) (not (string-empty-p message)))
     (user-error "SendMessage message must be non-empty plain text"))
@@ -1056,27 +1058,42 @@ being `started', `queued', or `waiting' for a slot."
          (recipient
           (mevedel-agent-control-resolve-path session sender target))
          (record (cdr (assoc recipient (mevedel-session-agent-registry session))))
-         (idle (and record (not (mevedel-agent-control--active-p record)))))
+         (idle (and record (not (mevedel-agent-control--active-p record))))
+         (previous-directory
+          (and record (mevedel-agent-record-working-directory record))))
     (mevedel-agent-control--assert-plan-steering session recipient record)
-    (if (and idle
-             (mevedel-agent-control--startable-p session record)
-             (mevedel-agent-control--capacity-p session))
-        (progn
-          (mevedel-agent-control--activate
-           session record message parent-tool-use-id)
-          (list :path recipient :delivery 'started))
-      (mevedel-agent-control--enqueue
-       session recipient
-       (append (list :type 'MAIL
-                     :sender sender
-                     :recipient recipient
-                     :payload message
-                     :timestamp (current-time))
-               ;; An agent turn this mail wakes keeps the sender's Plan limits.
-               (and record
-                    (mevedel-plan-read-only-p session)
-                    (list :plan-read-only t))))
-      (list :path recipient :delivery (if idle 'waiting 'queued)))))
+    (when working-directory
+      (unless (and record (not (equal recipient "/root")))
+        (user-error "SendMessage working_directory needs a retained agent target"))
+      ;; Resolve before any delivery so a rejected directory changes nothing.
+      (setf (mevedel-agent-record-working-directory record)
+            (mevedel-agent-directory-resolve session working-directory)))
+    (condition-case err
+        (if (and idle
+                 (mevedel-agent-control--startable-p session record)
+                 (mevedel-agent-control--capacity-p session))
+            (progn
+              (mevedel-agent-control--activate
+               session record message parent-tool-use-id)
+              (list :path recipient :delivery 'started))
+          (mevedel-agent-control--enqueue
+           session recipient
+           (append (list :type 'MAIL
+                         :sender sender
+                         :recipient recipient
+                         :payload message
+                         :timestamp (current-time))
+                   ;; An agent turn this mail wakes keeps the sender's Plan limits.
+                   (and record
+                        (mevedel-plan-read-only-p session)
+                        (list :plan-read-only t))))
+          (list :path recipient :delivery (if idle 'waiting 'queued)))
+      ((error quit)
+       ;; A failed delivery does not move the agent either.
+       (when working-directory
+         (setf (mevedel-agent-record-working-directory record) previous-directory)
+         (mevedel-agent-control--persist-session session))
+       (signal (car err) (cdr err))))))
 
 (defun mevedel-agent-control-enqueue-execution-result
     (session owner body &optional execution-id wake meta acknowledge)
@@ -1692,6 +1709,11 @@ Return rollback and post-commit delivery closures for INVOCATION."
   "Dispatch MESSAGE as RECORD's next provider turn in SESSION.
 PARENT-TOOL-USE-ID and PLAN-READ-ONLY are as in
 `mevedel-agent-control--activate'."
+  (when-let* ((directory (mevedel-agent-record-working-directory record))
+              ((not (file-directory-p directory))))
+    (user-error "Agent %s's working directory no longer exists: %s; \
+pass SendMessage working_directory to move it"
+                (mevedel-agent-record-path record) directory))
   (let ((buffer (mevedel-agent-persistence-ensure-conversation
                  session record (mevedel-session-root-buffer session))))
     (let ((configuration (mevedel-agent-record-configuration record)))
