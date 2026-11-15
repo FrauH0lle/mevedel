@@ -20,6 +20,128 @@
           "helpers"))
 (eval-when-compile (require 'tramp))
 
+(defun test-mevedel-utilities--with-proc (files function)
+  "Call FUNCTION while reads of the `/proc' names in FILES use real fixtures.
+FILES maps an absolute file name to the contents of a temporary fixture
+file, or to `missing' to leave that fixture absent, as for a process that
+has exited.  Only those names are redirected; the real reader produces
+every byte and error.  Other files are read normally."
+  (let ((directory (make-temp-file "mevedel-proc-fixture-" t))
+        (insert (symbol-function 'insert-file-contents))
+        (index 0)
+        redirects)
+    (unwind-protect
+        (progn
+          (dolist (entry files)
+            (let ((fixture (file-name-concat directory
+                                             (number-to-string (cl-incf index)))))
+              (unless (eq (cdr entry) 'missing)
+                (write-region (cdr entry) nil fixture nil 'silent))
+              (push (cons (car entry) fixture) redirects)))
+          (cl-letf (((symbol-function 'insert-file-contents)
+                     (lambda (file &rest args)
+                       (apply insert (or (cdr (assoc file redirects)) file)
+                              args))))
+            (funcall function)))
+      (delete-directory directory t))))
+
+(defun test-mevedel-utilities--stat (command start)
+  "Return a `/proc/4242/stat' line for COMMAND with starttime START."
+  (concat "4242 (" command ") "
+          (mapconcat #'identity
+                     (append '("S")
+                             (mapcar #'number-to-string
+                                     (number-sequence 4 21))
+                             (list start)
+                             (mapcar #'number-to-string
+                                     (number-sequence 23 52)))
+                     " ")
+          "\n"))
+
+(mevedel-deftest mevedel--process-identity ()
+  ,test
+  (test)
+  :doc "identifies live processes stably and distinctly, and not dead ones"
+  (let ((self (mevedel--process-identity (emacs-pid)))
+        (child (make-process :name "session-identity-holder"
+                             :command '("sleep" "60") :noquery t
+                             :sentinel #'ignore)))
+    (unwind-protect
+        (progn
+          (unless self (ert-skip "Process identity is unavailable on this host"))
+          (should (string-match-p
+                   mevedel--process-identity-regexp self))
+          (should (equal self (mevedel--process-identity
+                               (emacs-pid))))
+          (let ((other (mevedel--process-identity
+                        (process-id child))))
+            (should (stringp other))
+            (should-not (equal self other))
+            ;; Both run in this boot.
+            (should (equal (car (split-string self ":"))
+                           (car (split-string other ":")))))
+          (let ((pid (process-id child)))
+            (delete-process child)
+            (let ((deadline (+ (float-time) 5)))
+              (while (and (memq pid (list-system-processes))
+                          (< (float-time) deadline))
+                (accept-process-output nil 0.01)))
+            (should-not (memq pid (list-system-processes)))
+            (should-not (mevedel--process-identity pid))))
+      (when (process-live-p child) (delete-process child))))
+  :doc "reads only local /proc, even from a remote workspace"
+  (let ((local (mevedel--process-identity (emacs-pid))))
+    (unless local (ert-skip "Process identity is unavailable on this host"))
+    (let ((default-directory "/ssh:unreachable:/project/"))
+      (should (equal local (mevedel--process-identity
+                            (emacs-pid))))))
+  :doc "never reads anything for invalid PIDs"
+  (cl-letf (((symbol-function 'insert-file-contents)
+             (lambda (&rest _) (ert-fail "Invalid PID read /proc"))))
+    (dolist (pid '(nil 0 -1 1.5 "123"))
+      (should-not (mevedel--process-identity pid))))
+  :doc "takes the start ticks after the last parenthesis of the command"
+  (let ((boot "0f1e2d3c-4b5a-4968-8776-655443322110"))
+    (dolist (command '("emacs" "a b" "x) (y" ") 1 2 3 ("))
+      (ert-info ((format "command %S" command))
+        (test-mevedel-utilities--with-proc
+         `(("/proc/sys/kernel/random/boot_id" . ,(concat boot "\n"))
+           ("/proc/4242/stat"
+            . ,(test-mevedel-utilities--stat command "777")))
+         (lambda ()
+           (should (equal (concat boot ":777")
+                          (mevedel--process-identity 4242))))))))
+  :doc "fails closed on unavailable or malformed /proc evidence"
+  (let ((boot "0f1e2d3c-4b5a-4968-8776-655443322110")
+        (stat (test-mevedel-utilities--stat "emacs" "777")))
+      (dolist (files
+               `((("/proc/sys/kernel/random/boot_id" . missing)
+                  ("/proc/4242/stat" . ,stat))
+                 (("/proc/sys/kernel/random/boot_id" . ,(concat boot "\n"))
+                  ("/proc/4242/stat" . missing))
+                 (("/proc/sys/kernel/random/boot_id" . "not-a-boot-id\n")
+                  ("/proc/4242/stat" . ,stat))
+                 (("/proc/sys/kernel/random/boot_id" . "")
+                  ("/proc/4242/stat" . ,stat))
+                 (("/proc/sys/kernel/random/boot_id" . ,(upcase boot))
+                  ("/proc/4242/stat" . ,stat))
+                 (("/proc/sys/kernel/random/boot_id" . ,boot)
+                  ("/proc/4242/stat" . "4242 (emacs) S 1 2 3\n"))
+                 (("/proc/sys/kernel/random/boot_id" . ,boot)
+                  ("/proc/4242/stat" . "garbage"))
+                 (("/proc/sys/kernel/random/boot_id" . ,boot)
+                  ("/proc/4242/stat"
+                   . ,(test-mevedel-utilities--stat "emacs" "-7")))
+                 (("/proc/sys/kernel/random/boot_id" . ,boot)
+                  ("/proc/4242/stat"
+                   . ,(test-mevedel-utilities--stat "emacs" "7x")))))
+        (ert-info ((format "proc %S" files))
+          (test-mevedel-utilities--with-proc
+           files
+           (lambda ()
+             (should-not
+              (mevedel--process-identity 4242))))))))
+
 (mevedel-deftest mevedel--delete-process ()
   ,test
   (test)

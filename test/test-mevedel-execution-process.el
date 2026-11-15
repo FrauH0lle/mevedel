@@ -768,7 +768,106 @@
           (should (eq 'stopped (plist-get result :termination)))
           (should-not (zerop (plist-get result :exit-code))))
       (mevedel-execution-process-release child)
-      (delete-directory root t))))
+      (delete-directory root t)))
+
+  :doc "also terminates descendants that moved into their own process group"
+  ;; GNU `timeout' calls setpgid (0, 0) unless --foreground, so a signal to
+  ;; the shell's group alone never reaches it or the command it supervises.
+  (dolist (case '((escaped . "timeout 60 sh -c 'echo $$ > \"$0\"; exec sleep 600' \"$0\"; echo done")
+                  (escaped-remote-default . "timeout 60 sh -c 'echo $$ > \"$0\"; exec sleep 600' \"$0\"; echo done")
+                  (escaped-ignoring-term
+                   . "timeout 60 sh -c 'trap \"\" TERM; echo $$ > \"$0\"; while :; do sleep 1; done' \"$0\"; echo done")
+                  (control . "sh -c 'echo $$ > \"$0\"; exec sleep 600' \"$0\"; echo done")))
+    (let* ((root (make-temp-file "mevedel-process-stop-" t))
+           (spool (file-name-concat root "output"))
+           (pid-file (file-name-concat root "pid"))
+           (mevedel-execution-process--child-kill-delay 0.05)
+           result pid
+           (child
+            (mevedel-execution-process-create
+             :workdir root :spool-path spool
+             :terminal-function (lambda (_child value) (setq result value)))))
+      (unwind-protect
+          (progn
+            (write-region "" nil spool nil 'silent)
+            (mevedel-execution-process-start
+             child :name "mevedel-test-process-stop-descendant"
+             :command (list "sh" "-c" (cdr case) pid-file)
+             :coding 'utf-8-unix)
+            (test-mevedel-execution-process--wait
+             (lambda ()
+               (and (file-exists-p pid-file)
+                    (setq pid (string-to-number
+                               (with-temp-buffer
+                                 (insert-file-contents pid-file)
+                                 (buffer-string))))
+                    (> pid 0))))
+            (should (process-attributes pid))
+            (let* ((remote (eq (car case) 'escaped-remote-default))
+                   (default-directory
+                    (if remote "/ssh:process-table:/project/" default-directory))
+                   (file-name-handler-alist
+                    (cons
+                     (cons "\\`/ssh:process-table:"
+                           (lambda (operation &rest _args)
+                             (pcase operation
+                               ('file-remote-p "/ssh:process-table:")
+                               ((or 'list-system-processes 'process-attributes) nil)
+                               (_ (error "Unexpected remote operation: %S" operation)))))
+                     file-name-handler-alist)))
+              ;; An empty remote table must not hide the real local descendant.
+              (when remote
+                (should-not (list-system-processes))
+                (should-not (process-attributes pid)))
+              (should (mevedel-execution-process-stop child 'stopped)))
+            (test-mevedel-execution-process--wait (lambda () result))
+            ;; The record settles only once its descendants are gone.
+            (should-not (member (alist-get 'state (process-attributes pid))
+                                '("S" "R" "D" "T")))
+            (should (eq 'stopped (plist-get result :termination))))
+        (when (and pid (process-attributes pid))
+          (ignore-errors (signal-process pid 'KILL)))
+        (mevedel-execution-process-release child)
+        (delete-directory root t)))))
+
+(mevedel-deftest mevedel-execution-process--process-table
+  (:doc "indexes parent links and ignores vanished processes or missing parents")
+  (let ((attrs '((ppid . 1) (pgrp . 2))))
+    (cl-letf (((symbol-function 'list-system-processes) (lambda () '(2 3 4)))
+              ((symbol-function 'process-attributes)
+               (lambda (pid)
+                 (pcase pid (2 attrs) (3 '((pgrp . 3)))))))
+      (let ((table (mevedel-execution-process--process-table)))
+        (should (equal attrs (gethash 2 (car table))))
+        (should (= 1 (hash-table-count (car table))))
+        (should (equal '(2) (gethash 1 (cdr table))))
+        (should (= 1 (hash-table-count (cdr table))))))))
+
+(mevedel-deftest mevedel-execution-process--start-identity ()
+  ,test
+  (test)
+  :doc "stays equal across reads for one process and differs between processes"
+  (let* ((pid (emacs-pid))
+         (first (mevedel-execution-process--start-identity
+                 pid (process-attributes pid))))
+    (should first)
+    (dotimes (_ 200)
+      (should (equal first (mevedel-execution-process--start-identity
+                            pid (process-attributes pid)))))
+    (let ((process (make-process :name "mevedel-test-start-identity"
+                                 :command '("sleep" "30") :noquery t
+                                 :connection-type 'pipe)))
+      (unwind-protect
+          (should-not
+           (equal first (mevedel-execution-process--start-identity
+                         (process-id process)
+                         (process-attributes (process-id process)))))
+        (delete-process process))))
+  :doc "uses the stable host start attribute when /proc evidence is unavailable"
+  (cl-letf (((symbol-function 'mevedel--process-identity) (lambda (_pid) nil)))
+    (should (equal '(123 456)
+                   (mevedel-execution-process--start-identity
+                    42 '((start . (123 456))))))))
 
 (mevedel-deftest mevedel-execution-process--delete-spool ()
   ,test

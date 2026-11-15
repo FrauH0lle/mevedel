@@ -16,6 +16,7 @@
 ;; filesystem, so its feature is a hard load-time dependency rather than a
 ;; lazily reachable one.
 (require 'mevedel-session-control-fs)
+(require 'mevedel-utilities)
 
 ;; `files'
 (defvar remote-file-name-inhibit-cache)
@@ -259,43 +260,6 @@ An unavailable process list is not evidence that a holder is dead."
               (memq pid pids)))
       (error t))))
 
-(defconst mevedel-session-durability--process-identity-regexp
-  (concat "\\`[0-9a-f]\\{8\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-"
-          "[0-9a-f]\\{4\\}-[0-9a-f]\\{12\\}:\\(?:0\\|[1-9][0-9]*\\)\\'")
-  "Shape of a Linux boot ID and process start tick count.")
-
-(defun mevedel-session-durability--pid-identity (pid)
-  "Return PID's clock-independent process identity on this host, or nil.
-Linux supplies a boot UUID and the process start ticks since boot.  Unlike
-wall-clock start times, these survive time-zone and clock changes.  Hosts
-without this evidence cannot prove PID reuse and keep live holders active."
-  (when (and (integerp pid) (> pid 0))
-    (let ((default-directory "/"))
-      (condition-case nil
-          (let* ((boot (with-temp-buffer
-                         (insert-file-contents "/proc/sys/kernel/random/boot_id")
-                         (string-trim (buffer-string))))
-                 (case-fold-search nil)
-                 (start
-                  (with-temp-buffer
-                    (insert-file-contents
-                     (file-name-concat "/proc" (number-to-string pid) "stat"))
-                    ;; The command (field 2) can contain spaces and closing
-                    ;; parentheses.  Only the last closing delimiter is safe.
-                    (goto-char (point-max))
-                    (when (search-backward ") " nil t)
-                      (forward-char 2)
-                      ;; The remaining fields start at 3; starttime is 22.
-                      (nth 19 (split-string
-                               (buffer-substring-no-properties
-                                (point) (point-max)))))))
-                 (identity (and start (concat boot ":" start))))
-            (and identity
-                 (string-match-p mevedel-session-durability--process-identity-regexp
-                                 identity)
-                 identity))
-        (error nil)))))
-
 (defvar mevedel-session-durability--host-cache nil
   "Cons of the PID that computed `mevedel-session-durability--host' and its value.
 Keyed by PID so a dumped or forked image never reuses its creator's identity.")
@@ -324,7 +288,7 @@ Only within one such identity can a recorded PID be checked for liveness."
   "Return this user's PID as a host-scoped holder identity, or nil.
 Nil means the identity is unprovable on this host."
   (when-let* ((host (mevedel-session-durability--host))
-              (process (mevedel-session-durability--pid-identity pid)))
+              (process (mevedel--process-identity pid)))
     (list :host host :uid (user-uid) :pid pid :process process)))
 
 (defvar mevedel-session-durability--holder-cache nil
@@ -358,12 +322,12 @@ nil, so such leases wait for expiry."
          ;; Malformed identity evidence cannot prove reuse of a live PID.
          (stringp process)
          (let ((case-fold-search nil))
-           (string-match-p mevedel-session-durability--process-identity-regexp
+           (string-match-p mevedel--process-identity-regexp
                            process))
          ;; The identity must come from the boot the host names.
          (string-prefix-p (concat (car (split-string host "/")) ":") process)
          (or (not (mevedel-session-durability--pid-alive-p pid))
-             (let ((current (mevedel-session-durability--pid-identity pid)))
+             (let ((current (mevedel--process-identity pid)))
                (and current (not (equal current process))))))))
 
 (defcustom mevedel-session-durability-accept-target-storage nil

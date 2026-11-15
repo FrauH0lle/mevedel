@@ -2271,6 +2271,71 @@ ARTIFACT-P selects whether its sidecar counts as committed."
            (mevedel-agent-invocation-terminal-reason invocation)))
       (kill-buffer buffer)))
 
+  :doc "stops real yielded Bash on interrupt but leaves uninterrupted work running"
+  (dolist (interrupt-p '(nil t))
+    (let* ((root (make-temp-file "mevedel-agent-interrupt-yielded-" t))
+           (buffer (generate-new-buffer " *agent-interrupt-yielded*"))
+           (session (test-mevedel-execution--session root))
+           (invocation (mevedel-agent-runtime-test--invocation buffer))
+           (pid-file (file-name-concat root "sleep.pid"))
+           (owner (mevedel-agent-invocation-require-path invocation))
+           (mevedel-sandbox-mode 'off)
+           pid)
+      (unwind-protect
+          (progn
+            (setf (mevedel-agent-invocation-parent-session invocation) session)
+            (let* ((initial
+                    (test-mevedel-execution--start-managed
+                     session root
+                     (list "sh" "-c" "printf '%s' \"$$\" > \"$1\"; exec sleep 600"
+                           "agent-yielded" pid-file)
+                     :owner owner :owner-context invocation :data-buffer buffer))
+                   (facts (plist-get initial :facts))
+                   (id (plist-get facts :execution-id)))
+              (should (eq 'running (plist-get facts :state)))
+              (should (mevedel-execution--owned-yielded-record session owner id)))
+            (test-mevedel-execution--wait
+             (lambda ()
+               (and (file-exists-p pid-file)
+                    (> (setq pid (test-mevedel-execution--read-pid pid-file)) 0))))
+            (should-not (test-mevedel-execution--process-gone-p pid))
+            (if interrupt-p
+                (progn
+                  (cl-letf (((symbol-function
+                             'mevedel-session-persistence-update-transcript-entry)
+                            #'ignore)
+                           ((symbol-function 'mevedel-agent-conversation-save)
+                            #'ignore)
+                           ((symbol-function
+                             'mevedel-agent-conversation-record-activity)
+                            #'ignore)
+                           ((symbol-function 'mevedel-agent-conversation-refresh)
+                            #'ignore)
+                           ((symbol-function
+                             'mevedel-session-persistence-write-sidecar-now)
+                            #'ignore)
+                           ((symbol-function 'mevedel-agent-runtime--run-stop-hook)
+                            #'ignore))
+                    (mevedel-agent-runtime-interrupt invocation "stop yielded Bash"))
+                  (with-timeout (5 nil)
+                    (while (not (test-mevedel-execution--process-gone-p pid))
+                      (accept-process-output nil 0.02)))
+                  (should (test-mevedel-execution--process-gone-p pid))
+                  (should (mevedel-agent-invocation-runtime-settled-p invocation))
+                  (should (eq 'aborted
+                              (mevedel-agent-invocation-transcript-status invocation))))
+              (accept-process-output nil 0.05)
+              (should-not (test-mevedel-execution--process-gone-p pid))
+              (should-not (mevedel-agent-invocation-runtime-settled-p invocation))))
+        (mevedel-execution-teardown-session session)
+        (when pid
+          (test-mevedel-execution--wait
+           (lambda () (test-mevedel-execution--process-gone-p pid))))
+        (mevedel-session-persistence-lock-release
+         (mevedel-session-save-path session) session)
+        (when (buffer-live-p buffer) (kill-buffer buffer))
+        (delete-directory root t))))
+
   :doc "settles active and queued parallel Bash exactly once on interruption"
   (let* ((root (make-temp-file "mevedel-agent-interrupt-bash-" t))
          (child (generate-new-buffer " *agent-interrupt-bash*"))

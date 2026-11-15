@@ -438,7 +438,8 @@ request or requestless wait is aborted, its transcript is finalized as
 with outcome `interrupted` goes to the stable spawn parent. The payload includes
 the interruption reason, bounded useful partial work when available, and the
 saved transcript path when available. Request teardown cancels the active tool
-pipeline, terminates the target's child executions, and prevents its queued
+pipeline, stops all executions owned by the turn (including yielded Bash), as
+any ended turn does, and prevents its queued
 execution work from being admitted after the turn becomes terminal.
 Native ACP interruption waits for its bounded terminal acknowledgement before
 settling the retained turn, so its final usage remains accountable. The runtime
