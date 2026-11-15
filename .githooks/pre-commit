@@ -9,4 +9,8 @@ for variable in $git_variables; do
     unset "$variable"
 done
 # The pre-commit tier; the full suite runs before merge and in CI.
+# Eask on PATH works offline; MEVEDEL_TEST_JOBS limits the test workers.
+if command -v eask >/dev/null 2>&1; then
+    exec eask run script check -- --affected
+fi
 exec npx @emacs-eask/cli run script check -- --affected

@@ -22,6 +22,17 @@ REPORTS = ROOT / '.scratch/test-suite-performance'
 EASK = ['eask'] if shutil.which('eask') else ['npx', '--offline', '@emacs-eask/cli']
 
 
+def yield_to_oom_killer(path=Path('/proc/self/oom_score_adj')):
+    """Make this runner and the Emacs workers it starts the first OOM victims.
+
+    A memory-hungry suite must never get the user's editor killed instead.
+    Raising one's own score needs no privilege; systems without the file skip it."""
+    try:
+        path.write_text('1000')
+    except OSError:
+        pass
+
+
 def partition_tests(names, weights, jobs, files=None):
     """Balance known durations, assigning every discovered case exactly once.
 
@@ -146,11 +157,13 @@ def read_replay(path):
 
 
 def main():
+    yield_to_oom_killer()
     parser = argparse.ArgumentParser(description=__doc__)
     available_cpus = len(os.sched_getaffinity(0))
-    parser.add_argument('--jobs', type=int, default=min(8, available_cpus),
-                        help=f'worker limit (default: {min(8, available_cpus)}; '
-                             f'{available_cpus} CPUs available)')
+    parser.add_argument('--jobs', type=int,
+                        default=os.environ.get('MEVEDEL_TEST_JOBS') or min(8, available_cpus),
+                        help=f'worker limit (default: MEVEDEL_TEST_JOBS, else '
+                             f'{min(8, available_cpus)}; {available_cpus} CPUs available)')
     parser.add_argument('--durations', type=Path, default=REPORTS / 'latest-durations.csv')
     parser.add_argument('--output', type=Path)
     parser.add_argument('files', nargs='*', help='test files or quoted glob patterns (default: all)')

@@ -42,6 +42,39 @@ LIBRARIES = {
 
 
 class RunnerTests(unittest.TestCase):
+    def test_jobs_default_comes_from_environment_and_explicit_flag_wins(self):
+        for environment, arguments, message in (
+            ({'MEVEDEL_TEST_JOBS': '0'}, [], '--jobs must be positive'),
+            ({'MEVEDEL_TEST_JOBS': 'two'}, [], "invalid int value: 'two'"),
+            ({'MEVEDEL_TEST_JOBS': '0'}, ['--jobs', '3'], 'stop after jobs'),
+        ):
+            stderr = io.StringIO()
+            with self.subTest(environment=environment, arguments=arguments), \
+                 patch.dict(os.environ, environment, clear=True), \
+                 patch.object(sys, 'argv', ['run_tests.py', *arguments]), \
+                 patch.object(run_tests, 'yield_to_oom_killer'), \
+                 patch.object(run_tests, 'select_files',
+                              side_effect=ValueError('stop after jobs')), \
+                 contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as error:
+                run_tests.main()
+            self.assertEqual(error.exception.code, 2)
+            self.assertIn(message, stderr.getvalue())
+
+    def test_runner_volunteers_as_oom_victim(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'oom_score_adj'
+            run_tests.yield_to_oom_killer(path)
+            self.assertEqual(path.read_text(), '1000')
+            # A system without the file is skipped, not an error.
+            run_tests.yield_to_oom_killer(Path(directory) / 'missing' / 'oom_score_adj')
+        if Path('/proc/self/oom_score_adj').exists():
+            child = subprocess.run(
+                [sys.executable, '-c',
+                 'import run_tests; run_tests.yield_to_oom_killer(); '
+                 'print(open("/proc/self/oom_score_adj").read().strip())'],
+                cwd=Path(run_tests.__file__).parent, capture_output=True, text=True, check=True)
+            self.assertEqual(child.stdout.strip(), '1000')
+
     def test_affected_base_explicit_then_environment_then_master(self):
         for environment, arguments, expected in (
             ({}, ['--affected'], 'master'),
@@ -268,7 +301,8 @@ else:
                     result = subprocess.run(
                         [sys.executable, str(run_tests.ROOT / 'test/run_tests.py'), '--help'],
                         capture_output=True, text=True, check=True)
-                    self.assertIn(f'default: {min(8, count)}; {count} CPUs available',
+                    self.assertIn(f'default: MEVEDEL_TEST_JOBS, else {min(8, count)}; '
+                                  f'{count} CPUs available',
                                   ' '.join(result.stdout.split()))
         finally:
             os.sched_setaffinity(0, original)

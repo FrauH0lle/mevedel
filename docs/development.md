@@ -140,6 +140,7 @@ fast tier decides on its own when a change needs the full suite.
 | Before merging a branch into `master` | `eask run script check`, then `eask run script test -- --fresh-files` | full suite, then every file in a fresh Emacs |
 | Every push and pull request (CI) | both of the merge-time commands, as parallel jobs | full suite and fresh-file lane |
 | While iterating on a change | `python3 test/run_tests.py FILES` | the named files |
+| After only rewording a checked commit's message | `python3 scripts/check-standards.py` | none: standards and commit messages |
 
 - Do not run the full suite before an ordinary commit, even for a large or
   cross-cutting change: `--affected` selects the full suite itself when the
@@ -164,7 +165,12 @@ eask run script check -- --affected
 MEVEDEL_AFFECTED_BASE=BASE eask run script check -- --affected
 # Limit test concurrency on smaller machines:
 npx @emacs-eask/cli run script check -- --jobs 4
+# Or once for every run, including the pre-commit hook:
+export MEVEDEL_TEST_JOBS=4
 ```
+
+The test runner raises its own OOM score, so under memory pressure the kernel
+kills test Emacsen before your editor.
 
 The check first runs the deterministic standards checks below, cleans stale
 bytecode, compiles the package with `--strict` (warnings fail the command), then
@@ -189,8 +195,9 @@ never performed by Eask or CI. Before manually enabling the extension, move any
 shared `core.worktree` or `core.bare=true` setting to the primary checkout's
 `config.worktree`, as required by Git. To undo the hook, use
 `git config --worktree --unset core.hooksPath` (or restore your previous value).
-The hook requires Node/npx, Python 3, Emacs and installed Eask development
-dependencies, and runs `check -- --affected`. It checks the
+The hook requires Python 3, Emacs, installed Eask development dependencies and
+either `eask` on `PATH` or Node/npx, and runs `check -- --affected` (worker
+count from `MEVEDEL_TEST_JOBS`). It checks the
 working tree, not a temporary copy of the index: when partially staging files,
 ensure the staged change passes independently too. CI runs the check even when
 the hook is not installed or is bypassed; required branch checks are a separate
