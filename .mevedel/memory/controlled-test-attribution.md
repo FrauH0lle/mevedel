@@ -1,71 +1,101 @@
 ---
-name: "Establish test conditions before claiming coverage or causation"
-description: "Check starting state, delivered inputs, injection entry, exact assertions, and discriminating controls before attributing outcomes."
+name: "Establish test conditions before attributing failures or coverage"
+description: "Isolate failures without defaulting to harness blame; establish real fixture conditions, delivered inputs, negative controls, and equivalent baselines."
 type: feedback
 ---
 
-# Establish test conditions before claiming coverage or causation
+# Establish test conditions before attributing failures or coverage
 
-**Rule:** attribute failures, side effects, and coverage claims using recorded starting state, equivalent context, identified loaded sources, delivered test inputs, and actual assertion or skip conditions—not test names, aggregate status, visible end state, matching error substrings, or later green runs alone.
+**Rule:** isolate recurring failures before changing implementation, and attribute failures, side effects, and coverage using recorded starting state, equivalent context, identified loaded sources, delivered inputs, and actual assertions—not test names, aggregate status, matching error substrings, or later green runs alone.
 
-These are reusable lessons inferred from the observations and explicitly attributed user correction below. They do not require identical instrumentation or exhaustive end-to-end testing for every change.
+These are reusable lessons inferred from observed investigations and the explicitly attributed user correction below. They do not require exhaustive end-to-end testing or identical instrumentation for every change. Current verification requirements remain in maintained project documentation.
+
+## Isolate without defaulting to harness blame
+
+For repeated suite/log errors, isolate the responsible command, test file, group, or buffer lifecycle path before making the smallest justified change.
+
+Earlier investigations found apparent product failures caused by stale compiled artifacts, missing child-process load paths, or an isolated temporary root placed inside the checkout. Treat the harness as a hypothesis, not the default verdict.
+
+November 12 parallel-suite triage illustrates both sides:
+
+- Several timing-sensitive failures passed unchanged in isolation after concurrent full suites had raised system load. Staggering expensive checks can reduce interference.
+- The initial “load only” diagnosis was later corrected: a cold-compilation dependency defect and a fixture that removed global transport/hooks were real problems despite isolated green reruns.
+
+Compare unchanged tests in isolation and on an equivalent clean integration baseline. A failure reproducing only in a shared process can reveal contamination; a cold-start-only failure can reveal a real dependency gap. An isolated pass narrows conditions but does not exonerate the branch or prove load was the cause.
+
+For loaded-artifact and fresh compiled first-use investigation, use the separate runtime-provenance memory and maintained development guidance.
+
+## Establish fixture truth before trusting green results or rewriting failures
+
+Observed examples:
+
+- A permission fixture's dynamic binding never established buffer-local `Edits`; effective policy remained `Ask`/best-effort. Its green result did not exercise the intended denial. Covering confinement available and unavailable exposed the gap without weakening production guards.
+- A November 12 command-loop characterization omitted `pre-command-hook`, so replacement tracking was never armed. Running both pre-command and post-command hooks reversed its “disproved” conclusion.
+- A cold-restart fixture with a partial tool catalog exposed the same missing registration in production.
+- A session-opening regression was concealed by discarding pending journal captures in the fixture instead of questioning why routine sessions had acquired a recovery path.
+
+**Apply:** establish the real setup and lifecycle that arm the behavior, including the full command-hook cycle when relevant. Before expanding a catalog, discarding state, or otherwise “fixing” a failing fixture, check whether ordinary production use has the same failure. A failure caused by a new UX path can be design evidence, not fixture inconvenience.
+
+A passing suite is not independent certification of sensitive boundaries. In an earlier permissions investigation, independent review found held approvals bypassing new denies and late approval permitting Eval after cancellation despite 941/941 suite passes. Re-check the changed boundary independently when claiming those corrections are verified.
 
 ## Establish starting state before attributing a side effect
 
-**User correction, 2026-11-02:** the assistant interpreted the user's “Attached” response as evidence that an edit had attached a whiteboard to a session. The user corrected: “The board was attached from the very beginning.”
+**User correction, 2026-11-02:** the assistant interpreted “Attached” as evidence that an edit had attached a whiteboard. The user corrected: “The board was attached from the very beginning.”
 
-A subsequent live test used a different, initially unattached board. Its host-side attachment flag remained false after a plain read and became true after an acknowledged guest update. This supported the side effect in that controlled run; it did not make the original inference valid.
+A later controlled test began with a different, unattached board. Its host-side flag stayed false after a plain read and became true after an acknowledged guest update. That supported a transition in that run, not the original inference.
 
-**Apply:** record relevant pre-action and post-action state, preferably with a signal tied to the claimed transition. Confirmation of a visible state does not establish that the preceding action caused it. A host-side signal can establish attachment without establishing browser presentation, and one tested board does not establish a universal guarantee about remote edits.
+Record relevant pre-action and post-action state using a signal tied to the transition. A visible end state alone does not show what caused it. Host-side attachment does not establish browser presentation, and one tested board does not establish a universal remote-edit guarantee.
 
 ## Preserve equivalent context and intermittent counterexamples
 
-Controlled observations recorded 2026-10-13:
+Observed 2026-10-13:
 
-- A whole-prompt absence assertion rejected `artifact://` text from retained journal evidence, not necessarily current feature advertising. The same assertion failed on unchanged baseline sources with source-identity guards. Locate the matching text's origin and compare equivalent workspace context before blaming a prompt change.
-- An intermittent false-clean Git assertion reproduced in source-guarded immutable archives both before and after a resource change, despite earlier baseline checks passing 32/32 and 25/25. Frozen sources, matching dependency identities, environment controls, and captured failed assertions strengthened attribution; a finite green repetition count did not establish absence of the failure.
-- Injecting a 0.6-second delay before a real Bubblewrap probe reproduced four capability-gated skips; without the delay, the tests passed and real probes completed successfully. A probe deadline can yield an inconclusive unavailable result that tests report as a capability skip.
+- A prompt absence assertion matched retained journal evidence containing `artifact://`, not necessarily current feature advertising; it also failed on unchanged baseline sources.
+- An intermittent false-clean Git assertion reproduced in source-guarded immutable archives before and after a resource change despite earlier green baseline runs.
+- Injecting delay before a real Bubblewrap capability probe reproduced deadline-driven skips; without delay, real probes succeeded.
 
-**Apply:**
+Compare equivalent workspace context, sources, and dependencies. Retain intermittent counterexamples after green reruns and separate reproduction from mechanism. For capability skips, retain the actual condition and probe output: timeout is not demonstrated lack of support.
 
-- Compare baseline and changed sources under equivalent relevant context; identify the code and dependencies actually loaded.
-- Retain intermittent counterexamples after a green suite. Separate what reproduced from a proposed mechanism.
-- For capability skips, retain the condition and probe output. Deadline expiry is not demonstrated lack of support.
-
-**Limits:** the Git captures did not establish identical nanosecond mtimes or prove a racy-index cause. Historical Bubblewrap skips lasting approximately 0.501 seconds supported a deadline explanation, but their conditions and output were not captured; worker contention remained unproven. Later passing runs did not resolve either causal question.
+The Git evidence did not establish identical nanosecond mtimes or prove a racy-index cause. Historical roughly half-second capability skips supported a deadline hypothesis but lacked captured conditions/output; worker contention remained unproven.
 
 ## Prove injected failures and stubs reach the intended path
 
-Observed cases, 2026-10-13:
+Observed 2026-10-13:
 
-- Independent review reproduced a publication-failure false positive: a one-argument stub was called with two arguments. The resulting `wrong-number-of-arguments` diagnostic printed the lambda, including `"simulated publication failure"`, so a substring assertion passed without exercising the intended error. Re-review closed the false positive after the test checked stub entry and the exact warning.
-- A permission-queue Git test passed alongside reviewer tests but failed alone: loading the reviewer library overwrote its stub. Making the fixture's dependency explicit allowed the file to pass independently; removing the behavior under test then made the new regression fail.
+- A stub with the wrong arity produced `wrong-number-of-arguments`; the diagnostic printed its lambda containing the expected “simulated publication failure” substring. The assertion passed without exercising the intended error.
+- A Git test passed with reviewer tests but failed alone because loading the reviewer library overwrote its stub. An explicit fixture dependency and a negative control exposed the distinction.
 
-**Apply to stubbed and injected-failure tests:**
+For injected or stubbed failures:
 
-- Check an explicit injection-entry marker or equivalent evidence.
-- Assert the intended diagnostic, distinguishing it from incidental errors that print stub source.
-- Run the affected test file independently to expose load-order and autoload contamination.
-- Use a discriminating negative control: removing or bypassing the behavior being tested should make the regression fail.
+- Check injection entry explicitly.
+- Assert the intended diagnostic, not merely a substring that incidental errors can print.
+- Run affected files independently to expose load-order/autoload contamination, and together where shared-state contamination is relevant.
+- Use a discriminating negative control: removing or bypassing the tested behavior should make the regression fail.
 
-A matching error substring or a green combined run is insufficient proof that the intended failure path was exercised.
+Do not hide evidence in output filtering. A shared warning filter once swallowed an entire ERT assertion diagnostic; a separately named exact-message assertion kept the evidence visible without widening the filter.
 
-## Establish delivered browser input and consumer-visible effects
+## Compare the representation the consumer uses
 
-Version-specific automated observations recorded 2026-10-19:
+Observed 2026-09-21: parsed gptel tool schemas failed Lisp `equal` because property keys were fresh uninterned symbols, although serialized provider JSON was unchanged.
 
-- Before editor logic ran, Firefox 155 exposed zero clipboard files from a supplied one-file `ClipboardEvent` initializer and rejected fabricated touch capture with `Invalid pointer id`; Chromium 153 retained the file and accepted the sequence. Those failures established synthetic-input incompatibility, not broken genuine clipboard or touchscreen behavior.
-- With Playwright 1.63, native touch taps in Firefox and Chromium released before the first animation frame. Presence DOM created during pointer-down therefore did not establish a visibly rendered tip. Separating native lifecycle/capture checks from visible movement checks avoided a vacuous rendering assertion.
-- Isolated `Page.route` negative controls showed that repaired tests rejected ignored PNG input, blocked HTML paste, and disabled reduced-motion handling.
+For a claim of serialized schema/form stability, compare serialized payloads rather than assuming parsed object identity is meaningful. This does not make structural comparisons inappropriate when structure or identity is the actual contract.
 
-**Apply:** first establish what input reached the handler. A constructor accepting an initializer does not establish that its payload survived. Distinguish input delivery, event lifecycle, capture, rendered visibility, and physical integration. Use negative controls to show that the relevant behavior—not merely fixture setup—determines the assertion.
+## Establish delivered browser input and visible effects
 
-These probes did not establish physical touchscreen-dragging or OS-clipboard integration. Genuine touch capture can be implicit, so `hasPointerCapture` alone did not prove that the explicit production capture call caused it.
+Version-specific observations recorded 2026-10-19:
 
-## Reproduce selection-dependent context, not just current-buffer bindings
+- Firefox 155 exposed zero clipboard files from a supplied one-file `ClipboardEvent` initializer and rejected fabricated touch capture with `Invalid pointer id`; Chromium 153 retained the file and accepted the sequence. Those results established synthetic-input incompatibility, not broken genuine clipboard/touchscreen behavior.
+- With Playwright 1.63, native taps released before the first animation frame. Presence DOM created on pointer-down did not establish a visibly rendered tip.
+- Isolated `Page.route` negative controls rejected ignored PNG input, blocked HTML paste, and disabled reduced-motion behavior.
 
-Observed 2026-10-29 with real polymode on Emacs 31.1: `find-buffer-visiting` returned a file-named indirect child selected through `switch-to-buffer`, even when lookup ran inside `with-current-buffer` on the base buffer. Selecting the base reversed the result. A no-advice fixture and independent rerun established this without a disk change or second child, despite the function's documented base-buffer-only guarantee.
+First establish what input reached the handler. Constructor acceptance does not establish payload delivery. Separate event lifecycle, capture, rendered visibility, and physical integration. A genuine touch capture may be implicit, so `hasPointerCapture` alone does not prove the explicit production call caused it.
 
-**Apply:** when behavior may depend on selected buffers, windows, or recent-use ordering, reproduce the relevant selection transitions. Changing the current buffer alone is not equivalent.
+These probes did not establish physical touchscreen-dragging or OS-clipboard integration.
+
+## Reproduce selection-dependent context
+
+Observed 2026-10-29 with real polymode on Emacs 31.1: `find-buffer-visiting` returned a file-named indirect child selected through `switch-to-buffer`, even inside `with-current-buffer` on the base. Selecting the base reversed the result. A no-advice fixture and independent rerun established this without a disk change or second child, despite the documented base-buffer-only guarantee.
+
+When behavior can depend on selected buffers, windows, or recent-use ordering, reproduce those selection transitions. Changing the current buffer alone is not equivalent.
 
 This established an isolated mechanism, not the precise historical sequence after the reported `git switch`.

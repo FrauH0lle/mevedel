@@ -1,10 +1,10 @@
 ---
-name: "Reproduce performance with representative state without mutating the original"
-description: "Detached transcript fixtures can omit the expensive path; replay an isolated session copy and verify that restoration itself does not alter evidence."
+name: "Reproduce performance with representative state and actual deferred work"
+description: "Use isolated representative state, preserve the original, and count deferred work only when the real workflow requires it."
 type: feedback
 ---
 
-# Reproduce performance with representative state without mutating the original
+# Reproduce performance with representative state and actual deferred work
 
 **Rule:** a fast replay is not evidence about a stall unless it exercises the relevant session state and production paths. Restore an isolated copy of the affected session at the stalled state rather than assuming a transcript pasted into detached test buffers is representative.
 
@@ -16,6 +16,14 @@ type: feedback
 - Match loaded code, compilation state, dependencies, and necessary configuration before comparing timings. A faster interpreted or differently configured fixture is not a controlled comparison.
 - Distinguish batch render cost from graphical redisplay and queued-input latency; choose the environment appropriate to the claim.
 - Use a before/after comparison that actually reaches the costly path. A synthetic fixture remains useful for a narrow regression once its relationship to that path is established; restoring a full session is not mandatory for every performance test.
+
+## Count deferred work without inventing redundant work
+
+**Confirmed correction, recorded 2026-10-19:** a checkpoint benchmark initially forced an eventual root save even when the fallback implementation had already left the buffer clean. The parent caught the mismatch. The corrected comparison counted an eventual checkpoint only when the receiving buffer remained modified and drained observational saves only when actually pending. The earlier forced-save run was excluded from natural-workload evidence.
+
+**Reusable lesson:** when an optimization moves work to a later checkpoint, flush, or callback, include the deferred work required to reach the same completed outcome. But do not force redundant work on a variant that has already reached that outcome merely to make operation counts look symmetric.
+
+Record the completion condition and distinguish immediate-path improvement from end-to-end improvement. This applies to comparisons involving deferred work; it is not a requirement to add a checkpoint to every benchmark.
 
 ## Restoration can itself change the evidence
 

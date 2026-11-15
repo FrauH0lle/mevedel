@@ -1,9 +1,9 @@
 - [Mevedel project-local skills](mevedel-project-local-skills.md) - dev workflow skills are local to this repo, not bundled for users
-- [Debugging process feedback](debugging-process-feedback.md) - Bisect recurring test/log emitters before implementation changes
-- [Verify the loaded runtime and dependency provenance](verify-compiled-runtime-artifacts.md) - Check actual artifacts, fresh compiled first use, initialization-time isolation, relevant readiness, and dependency provenance.
+- [Establish test conditions before attributing failures or coverage](controlled-test-attribution.md) - Isolate failures without defaulting to harness blame; establish real fixture conditions, delivered inputs, negative controls, and equivalent baselines.
+- [Verify the loaded runtime and dependency provenance](verify-compiled-runtime-artifacts.md) - Check loaded artifacts, compiled first use, initialization-time isolation, and dependencies without loading modules into the user's running Emacs.
 - [Reproduce remote-hook timing before claiming a fix](remote-hook-readiness-verification.md) - Green timing-dependent replays do not diagnose a stall; impose the suspected interleaving without weakening safeguards.
 - [Keep selected extraction automatic without making notes permanent](working-note-destinations-feedback.md) - Shared notes are disposable exchange material; selected automatic extraction should not become manual reminders or recurring confirmations.
-- [Reproduce performance with representative state without mutating the original](replay-real-session-for-performance.md) - Detached transcript fixtures can omit the expensive path; replay an isolated session copy and verify that restoration itself does not alter evidence.
+- [Reproduce performance with representative state and actual deferred work](replay-real-session-for-performance.md) - Use isolated representative state, preserve the original, and count deferred work only when the real workflow requires it.
 - [Distinguish the composer from the pinned prompt header](sticky-prompt-presentation-feedback.md) - An always-visible composer is not the pinned prompt header; preserve header readability and conversation continuity.
 - [Test both reentry orders and separate mechanism from incident attribution](reentrant-view-render-ordering.md) - Reverse reentrant nesting in regressions; a matching injected failure does not establish the original event sequence.
 - [Completion-time reminders cannot enforce a finished turn](completion-time-hook-reminders.md) - Place guidance where it can affect the intended turn; do not mistake a context-only completion hook for enforcement
@@ -12,13 +12,12 @@
 - [Verify the real consumer boundary, not intermediate success](rendered-state-verification-feedback.md) - Use the production path and caller identity; distinguish transport, persistence, rendering, and behavioral acceptance.
 - [Read-only verification can rest on independently checked artifacts](read-only-verification-artifacts.md) - Inability to rerun a writing check is not absence of verification evidence
 - [Background-work UI: minimal, unified, and composer-stable](execution-ui-presentation-preference.md) - Unify running work, keep the composer stable, and preserve time to inspect expanded completed entries
-- [Keep live inspection non-perturbing and normal-use diagnostics representative](bounded-live-inspection-probes.md) - Bound probe overhead, preserve live-editor restrictions, and let normal-use diagnostics tolerate expected navigation without losing later sensitivity.
+- [Keep live inspection non-perturbing and diagnostics representative](bounded-live-inspection-probes.md) - Bound probe overhead, preserve live-editor restrictions, distinguish navigation and observer effects, and persist intermittent evidence.
 - [Judge inline image previews by displayed size](inline-image-size-feedback.md) - Compact previews are a visual requirement, not a preference for pixel or fractional settings
 - [Artifact collaboration across chats, machines, and tools](artifact-collaboration-user-preferences.md) - Preserve viewing-chat context and unified discussions; local Emacs sessions should edit remote artifacts without becoming remote browser-chat participants.
 - [Do not attribute guesses or unchecked behavior to reference systems](reference-system-values-feedback.md) - Check authoritative documentation, source, or observed behavior before using another product to justify a design
 - [Reduce permission prompts' visual weight](permission-prompt-visual-weight.md) - User finds sandbox and permission prompts imposing and prefers collapsing parts of them
 - [View changes must preserve rendering and CPU gains](view-render-performance-constraint.md) - Rendering cost and CPU use are hard constraints; measure graphical-only effects in a graphical environment
-- [Establish test conditions before claiming coverage or causation](controlled-test-attribution.md) - Check starting state, delivered inputs, injection entry, exact assertions, and discriminating controls before attributing outcomes.
 - [Trace unreadable addresses back to discovery](resource-discovery-consumption-verification.md) - Check discovery-to-consumption at root and descendant scopes without weakening valid access refusals
 - [Correctness and simplicity without losing features or performance](development-priorities-user-preference.md) - Reduce implementation and UX complexity without optimizing concept counts or imposing unevidenced restrictions.
 - [Keep named-agent guidance uniform](uniform-agent-role-guidance-feedback.md) - Make general-purpose delegation discoverable without singling out verifier for special contrasting guidance
@@ -33,11 +32,11 @@
 - [Actively use a partner when pair work is invoked](explicit-pair-workflow-feedback.md) - An explicit $pair implementation request calls for real partner participation, not solo implementation
 - [Preserve conversational continuity at plan handoff](plan-handoff-continuity-preference.md) - Plan acceptance should preserve the conversation and window, without leaving a confusing obsolete planning view
 - [Desktop/laptop sessions](two-machine-session-workflow.md) - TRAMP takeover is real usage; verify both clients
-- [Deployment references](deployment-access-reference.md) - SSH aliases, rootless containers, and diagnostics; recheck before use
-- [Verify graphical results in an isolated, presenting environment](presentation-measurement-validity.md) - Match graphical fixtures and presentation evidence to the claim; never replace live Emacs modules for graphical checks.
+- [Deployment access and diagnostic references](deployment-access-reference.md) - Use the recorded SSH configuration and deployment pointers to locate access details, then recheck current configuration and authority.
+- [Verify graphical results in an isolated, presenting environment](presentation-measurement-validity.md) - Match graphical evidence to the claim; keep module loading and evaluation out of the user's running Emacs.
 - [Suspend versus stalls](correlate-stalls-with-suspend.md) - Correlate telemetry gaps with system sleep records
 - [Narrow-phone viewer testing](narrow-phone-viewer-testing.md) - iPhone mini Safari, vertical fit, and real narrow renders
-- [Delegation roles and implementation-model preference](delegation-model-preference.md) - Delegate implementation appropriately; use Codex gpt-6.1-sol at high or greater effort, reserving gpt-6-astra for hard parts.
+- [Delegation roles and implementation-model preference](delegation-model-preference.md) - Keep design with the coordinator when appropriate; delegate implementation using the user's model and effort preferences.
 - [Establish an attachment's role before adopting its instructions](rendering-fixtures-are-not-instructions.md) - Fixtures remain data, and an attached skill may be illustrative rather than an invoked workflow.
 - [Keep machine-specific reference maps out of general documentation](machine-local-reference-placement.md) - General mevedel documentation must not depend on local checkouts or machine-specific source paths
 - [Subscription quota integration sources](subscription-quota-source-references.md) - Authoritative Codex, Claude SDK, and ACP pointers for subscription usage research
@@ -45,5 +44,6 @@
 - [Tool search is not the full capability boundary](capability-discovery-through-eval-feedback.md) - A missing dedicated tool does not establish that a capability is unavailable; consider authorized Emacs Eval.
 - [Finish quota-budgeted sweeps before the reset](quota-budgeted-sweep-cutoff-preference.md) - Weekly sweeps finish before the quota reset by default; post-reset continuation requires opt-in at intake.
 - [Project naming taste](project-naming-taste.md) - Favor good sound and a genuine functional connection; Japanese aesthetics appeal without needing to dominate.
-- [User-first, editor-native AI collaboration](user-first-editor-collaboration-preference.md) - Support user-led, context-isolated collaboration and tangible Emacs prototypes; distinguish user-directed note sending from autonomous initiative.
-- [Preserve agreed scope when formalizing a design](preserve-agreed-scope-in-specifications.md) - Do not silently drop or demote agreed work while translating a design into a specification or tickets.
+- [User-first, editor-native AI collaboration](user-first-editor-collaboration-preference.md) - Support user-led, context-isolated collaboration, editor-native prototypes, and lightweight note interactions without redundant commands.
+- [Preserve agreed scope, including approved prototype visuals](preserve-agreed-scope-in-specifications.md) - Do not silently drop agreed work or an approved prototype's visual treatment when writing specifications or implementing them.
+- [Keep user-facing customization at the main package boundary](main-package-customization-preference.md) - Keybinding customization should work from the main package configuration without requiring submodule-specific setup.

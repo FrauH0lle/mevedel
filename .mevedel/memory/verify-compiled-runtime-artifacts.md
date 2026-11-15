@@ -1,6 +1,6 @@
 ---
 name: "Verify the loaded runtime and dependency provenance"
-description: "Check actual artifacts, fresh compiled first use, initialization-time isolation, relevant readiness, and dependency provenance."
+description: "Check loaded artifacts, compiled first use, initialization-time isolation, and dependencies without loading modules into the user's running Emacs."
 type: feedback
 ---
 
@@ -10,10 +10,13 @@ type: feedback
 
 Captured environment observation, 2026-09-15: Emacs loaded separate compiled copies under `~/.emacs.d/straight/build/mevedel/`, while the build tree's `.el` files linked back to repository source. With `load-prefer-newer` nil, an older `.elc` still won after source edits.
 
-When verifying a live change:
-- Establish which artifact is actually loaded and test its behavior.
-- Hot-loading edited source is provisional: it does not rebuild the installed artifact or survive a restart.
+When verifying runtime behavior:
+
+- Establish which artifact is actually loaded and test its behavior in an authorized, isolated process.
+- Hot-loading edited source in an isolated test process is provisional: it does not rebuild the installed artifact or survive a restart.
 - Literal text searches and `symbol-file` alone do not establish behavior; macroexpansion can obscure source spellings.
+
+**User prohibition, preserved in the November 13 journal from the implement-spec prompt:** “Never load or evaluate mevedel modules in my running Emacs; test in separate Emacs processes.” Provenance investigation does not authorize replacing live modules, evaluating them in the user's editor, or adding instrumentation there. An isolated check is not a preliminary step that permits later live loading. A historical one-off request to load code is not standing authorization.
 
 ## Live availability is not cold-start correctness
 
@@ -51,7 +54,7 @@ Reusable inference: in this locally patched environment, repository/Eask checks 
 
 Correction recorded 2026-10-14: printed native-compiled function objects contain process-specific identity. Hashing `(prin1-to-string (symbol-function ...))` is therefore not a valid cross-process identity comparison; a mismatch alone does not demonstrate different loaded behavior.
 
-In that investigation, explicitly loading the live editor's native artifacts and checking `native-comp-function-p` and `subr-native-comp-unit` supported native-unit provenance. It did not establish equivalence with the user's live event sequence.
+In that investigation, explicitly loading the live editor's native artifacts and checking `native-comp-function-p` and `subr-native-comp-unit` supported native-unit provenance. It did not establish equivalence with the user's live event sequence. This historical observation is not permission to load modules in the user's running Emacs.
 
 ## Package-root and provenance checks need loaded-layout awareness
 

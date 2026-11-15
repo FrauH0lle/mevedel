@@ -1,6 +1,6 @@
 ---
 name: "Verify graphical results in an isolated, presenting environment"
-description: "Match graphical fixtures and presentation evidence to the claim; never replace live Emacs modules for graphical checks."
+description: "Match graphical evidence to the claim; keep module loading and evaluation out of the user's running Emacs."
 type: feedback
 ---
 
@@ -8,7 +8,11 @@ type: feedback
 
 ## Match verification to the claim without replacing live modules
 
-Verify Emacs view presentation in an isolated graphical Emacs before reporting a visual result. Batch tests and CSS mockups do not establish how Emacs renders faces. **Do not load worktree modules into the user's running Emacs for this purpose:** that would replace modules used by other sessions. Isolation is not a preliminary step that makes such replacement permissible.
+Verify Emacs view presentation in an isolated graphical Emacs before reporting a visual result. Batch tests and CSS mockups do not establish how Emacs renders faces.
+
+**User prohibition, preserved in the November 13 journal from the implement-spec prompt:** “Never load or evaluate mevedel modules in my running Emacs; test in separate Emacs processes.” In particular, do not load worktree modules into the user's running Emacs for graphical checks: that would replace modules used by other sessions. Isolation is not a preliminary step that makes later live replacement permissible.
+
+The user explicitly asked “Can you load the code into Emacs?” in turn 248. That was a one-off request, not a standing relaxation of the prohibition or authorization for future live loading. Use separate Emacs processes for subsequent testing; do not infer permission from that historical exception.
 
 During turn-separator work on 2026-10-19, mockups and batch tests missed that tool rows inherited `default`'s background and that strike-through on an extended newline reached the window edge. These were observed rendering differences, not user-selected styling rules.
 
@@ -16,7 +20,7 @@ Consult the graphical-check section of `docs/development.md` for the maintained 
 
 **Historical fixture correction, 2026-10-24:** copying `font-lock-face` to `face` was a workaround, not the preferred setup. Missing fontification was attributed to fixture buffer names beginning with a space; rename such fixtures rather than retaining the face-copy recipe.
 
-Static captures can establish appearance but do not establish hover behavior, frame timing, or sustained performance. Use checks appropriate to each claim. Keep live inspection bounded and non-perturbing; an earlier row-property dump returned 20 MB without being necessary to establish the visual result.
+Static captures can establish appearance but do not establish hover behavior, frame timing, or sustained performance. Use checks appropriate to each claim. Keep live inspection bounded and non-perturbing; an earlier row-property dump returned 20 MB without being necessary to establish the visual result. This does not authorize module evaluation or instrumentation in the live editor.
 
 ## Preserve realistic chrome in native geometry fixtures
 
