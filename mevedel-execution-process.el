@@ -44,11 +44,13 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--executable-find
                   "mevedel-utilities" (name &optional remote))
+(declare-function mevedel--process-identity "mevedel-utilities" (pid))
 (declare-function mevedel--run-periodic-timer
                   "mevedel-utilities" (scope period function &rest arguments))
 (declare-function mevedel--timer-pending-p "mevedel-utilities" (timer))
 (declare-function mevedel--ui-timer-cancel "mevedel-utilities" (timer))
 (autoload 'mevedel--executable-find "mevedel-utilities")
+(autoload 'mevedel--process-identity "mevedel-utilities")
 (autoload 'mevedel--run-periodic-timer "mevedel-utilities")
 (autoload 'mevedel--timer-pending-p "mevedel-utilities")
 (autoload 'mevedel--ui-timer-cancel "mevedel-utilities")
@@ -137,6 +139,7 @@
   direct-async-p
   diagnostic-scope
   error
+  escaped
   exit-code
   finished-p
   force-timer
@@ -363,18 +366,25 @@ Incomplete identity, an unreachable target, or an unexpected exit is
               ((process-live-p process)))
     (ignore-errors (delete-process process))))
 
-(defun mevedel-execution-process--signal-confined-group (child signal)
-  "Send SIGNAL to CHILD's foreground process group inside Bubblewrap."
-  (let ((outer-group-id (mevedel-execution-process--child-group-id child))
-        (children (make-hash-table :test #'eql))
-        (attributes (make-hash-table :test #'eql))
-        (pending (list (mevedel-execution-process--child-group-id child)))
-        group-id)
+(defun mevedel-execution-process--process-table ()
+  "Return a cons of process attributes and parent-to-children hash tables."
+  (let ((attributes (make-hash-table :test #'eql))
+        (children (make-hash-table :test #'eql)))
     (dolist (pid (list-system-processes))
       (when-let* ((attrs (process-attributes pid))
                   (parent (alist-get 'ppid attrs)))
         (puthash pid attrs attributes)
         (push pid (gethash parent children))))
+    (cons attributes children)))
+
+(defun mevedel-execution-process--signal-confined-group (child signal)
+  "Send SIGNAL to CHILD's foreground process group inside Bubblewrap."
+  (pcase-let* ((default-directory "/")
+               (outer-group-id (mevedel-execution-process--child-group-id child))
+               (`(,attributes . ,children)
+                (mevedel-execution-process--process-table))
+               (pending (list outer-group-id))
+               (group-id nil))
     (while (and pending (not group-id))
       (let ((pid (pop pending)))
         (dolist (child-pid (gethash pid children))
@@ -395,6 +405,51 @@ Incomplete identity, an unreachable target, or an unexpected exit is
       (condition-case nil
           (progn (signal-process (- group-id) signal) t)
         (error nil)))))
+
+(defun mevedel-execution-process--start-identity (pid attributes)
+  "Return a stable start identity for local PID with process ATTRIBUTES.
+Linux derives the `start' attribute from the current uptime, so it differs
+between calls; the start tick in /proc does not."
+  (or (mevedel--process-identity pid)
+      (alist-get 'start attributes)))
+
+(defun mevedel-execution-process--refresh-escaped (child)
+  "Record and return CHILD's live descendants outside its process group.
+A descendant such as GNU `timeout' moves itself into a new process group, so
+signalling the group alone never reaches it.  Entries are (PID . START);
+START pins identity so a recycled PID is never signalled.  Earlier entries
+stay roots because a stopped shell's escaped children are reparented away."
+  (pcase-let* ((default-directory "/")
+               (group-id (mevedel-execution-process--child-group-id child))
+               (own-group (alist-get 'pgrp (process-attributes (emacs-pid))))
+               (`(,attributes . ,children)
+                (mevedel-execution-process--process-table))
+               (seen (make-hash-table :test #'eql))
+               (pending nil)
+               (escaped nil))
+    (maphash (lambda (pid attrs)
+               (when (eql (alist-get 'pgrp attrs) group-id)
+                 (push pid pending)))
+             attributes)
+    (dolist (entry (mevedel-execution-process--child-escaped child))
+      (when-let* ((attrs (gethash (car entry) attributes))
+                  ((equal (cdr entry)
+                          (mevedel-execution-process--start-identity
+                           (car entry) attrs))))
+        (push (car entry) pending)))
+    (while pending
+      (let* ((pid (pop pending))
+             (attrs (gethash pid attributes)))
+        (unless (gethash pid seen)
+          (puthash pid t seen)
+          (unless (or (eql (alist-get 'pgrp attrs) group-id)
+                      (eql (alist-get 'pgrp attrs) own-group)
+                      (equal "Z" (alist-get 'state attrs)))
+            (push (cons pid (mevedel-execution-process--start-identity
+                             pid attrs))
+                  escaped))
+          (setq pending (append (gethash pid children) pending)))))
+    (setf (mevedel-execution-process--child-escaped child) escaped)))
 
 (defun mevedel-execution-process--signal (child signal)
   "Send SIGNAL to CHILD's process group when available."
@@ -433,7 +488,12 @@ Incomplete identity, an unreachable target, or an unexpected exit is
                 ;; escalation re-probes, and settles the outcome as unknown
                 ;; only once the ambiguity outlives it.
                 (_ -1))
-            (signal-process (- group-id) signal)))
+            ;; Walk before signalling: a stopped shell's escaped children
+            ;; are reparented and no longer reachable from its group.
+            (progn
+              (dolist (entry (mevedel-execution-process--refresh-escaped child))
+                (ignore-errors (signal-process (car entry) signal)))
+              (signal-process (- group-id) signal))))
          (remote (error "Remote process-group identity is unavailable"))
          ((process-live-p process) (signal-process process signal)))
       (error
@@ -460,10 +520,13 @@ Incomplete identity, an unreachable target, or an unexpected exit is
          (mevedel-execution-process--mark-unknown child err)
          nil)))
      ((not (eq system-type 'windows-nt))
-      (when group-id
-        (condition-case nil
-            (zerop (signal-process (- group-id) 0))
-          (error nil)))))))
+      (or (and group-id
+               (condition-case nil
+                   (zerop (signal-process (- group-id) 0))
+                 (error nil)))
+          (and (mevedel-execution-process--child-escaped child)
+               (mevedel-execution-process--refresh-escaped child)
+               t))))))
 
 (defun mevedel-execution-process--append-spool (child chunk)
   "Append CHUNK to CHILD's spool within the output cap.

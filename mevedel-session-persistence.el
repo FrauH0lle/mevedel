@@ -181,9 +181,9 @@
 
 ;; `mevedel-session-control-fs'
 (defvar mevedel-session-control-fs--async-wait)
-(declare-function mevedel-session-control-fs-async-busy-p "mevedel-session-control-fs" (directory))
 (declare-function mevedel-session-control-fs-append-rotating "mevedel-session-control-fs"
                   (path content max-bytes))
+(declare-function mevedel-session-control-fs-async-busy-p "mevedel-session-control-fs" (directory))
 (declare-function mevedel-session-control-fs-path-exists-p "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-physical-path "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-program-value "mevedel-session-control-fs" (result))

@@ -15,6 +15,7 @@
 (require 'mevedel-agents)
 (require 'mevedel-compact-evidence)
 (require 'mevedel-compact-target)
+(require 'mevedel-pending-inputs)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
@@ -2116,7 +2117,27 @@
     (should-not captured-agent)
     (should (eq configuration captured-configuration))
     (should (equal "call_followup" captured-tool-use-id))
-    (should (= 1 (length (mevedel-session-agent-registry session))))))
+    (should (= 1 (length (mevedel-session-agent-registry session)))))
+
+  :doc "a removed working directory fails before dispatch and names the fix"
+  (let* ((session (mevedel-agent-control-test--session))
+         (gone (make-temp-file "mevedel-agent-control-gone-" t))
+         (record (mevedel-agent-record--create
+                  :path "/root/reviewer" :parent-path "/root"
+                  :activity 'starting :working-directory gone))
+         dispatched)
+    (delete-directory gone)
+    (cl-letf (((symbol-function 'mevedel-agent-persistence-ensure-conversation)
+               (lambda (&rest _) (setq dispatched 'hydrated)))
+              ((symbol-function 'mevedel-agent-runtime-dispatch)
+               (lambda (&rest _) (setq dispatched t))))
+      (let ((err (should-error
+                  (mevedel-agent-control--dispatch-followup
+                   session record "Continue.")
+                  :type 'user-error)))
+        (should (string-search "/root/reviewer" (cadr err)))
+        (should (string-search "working_directory" (cadr err)))))
+    (should-not dispatched)))
 
 (mevedel-deftest mevedel-agent-control--normalize-context
   ()
@@ -2954,6 +2975,57 @@
 (mevedel-deftest mevedel-agent-control-send-message ()
   ,test
   (test)
+  :doc "working_directory moves a retained agent before delivery and validates first"
+  (let* ((base (file-name-as-directory
+                (file-truename (make-temp-file "mevedel-send-directory-" t))))
+         (next (file-name-as-directory (file-name-concat base "next")))
+         (session (mevedel-session-create
+                   "main"
+                   (mevedel-workspace--create
+                    :type 'file :id "send-directory" :root base
+                    :name "send-directory")))
+         (record (mevedel-agent-record--create
+                  :path "/root/reviewer" :parent-path "/root" :activity 'running
+                  :working-directory (file-name-concat base "removed/")))
+         queued)
+    (make-directory next)
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/reviewer" record)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-agent-control--enqueue)
+                   (lambda (_session recipient &rest _) (push recipient queued))))
+          (should-error
+           (mevedel-agent-control-send-message
+            session "/root/reviewer" "Review" :working-directory "absent")
+           :type 'user-error)
+          (should-not queued)
+          (should (equal (file-name-concat base "removed/")
+                         (mevedel-agent-record-working-directory record)))
+          (should-error
+           (mevedel-agent-control-send-message
+            session "/root" "Review" :working-directory next)
+           :type 'user-error)
+          (should-not queued)
+          ;; A delivery that fails after validation leaves the agent in place.
+          (let (persisted)
+            (cl-letf (((symbol-function 'mevedel-agent-control--enqueue)
+                       (lambda (&rest _) (error "Commit failed")))
+                      ((symbol-function 'mevedel-agent-control--persist-session)
+                       (lambda (_) (setq persisted t))))
+              (should-error
+               (mevedel-agent-control-send-message
+                session "/root/reviewer" "Review" :working-directory next)))
+            (should persisted))
+          (should (equal (file-name-concat base "removed/")
+                         (mevedel-agent-record-working-directory record)))
+          (should (equal '(:path "/root/reviewer" :delivery queued)
+                         (mevedel-agent-control-send-message
+                          session "/root/reviewer" "Review"
+                          :working-directory next)))
+          (should (equal '("/root/reviewer") queued))
+          (should (equal next (mevedel-agent-record-working-directory record))))
+      (delete-directory base t)))
+
   :doc "committed agent mail wakes the root but self-mail and child mail do not"
   (let* ((session (mevedel-agent-control-test--session))
          (sender (mevedel-agent-record--create

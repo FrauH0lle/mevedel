@@ -271,6 +271,43 @@ prefix argument, or when HERE is non-nil, insert it at point."
 ;;
 ;;; External helpers
 
+(defconst mevedel--process-identity-regexp
+  (concat "\\`[0-9a-f]\\{8\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-"
+          "[0-9a-f]\\{4\\}-[0-9a-f]\\{12\\}:\\(?:0\\|[1-9][0-9]*\\)\\'")
+  "Shape of a Linux boot ID and process start tick count.")
+
+(defun mevedel--process-identity (pid)
+  "Return PID's clock-independent process identity on this host, or nil.
+Linux supplies a boot UUID and the process start ticks since boot.  Unlike
+wall-clock start times, these survive time-zone and clock changes.  Hosts
+without this evidence cannot prove PID reuse and keep live holders active."
+  (when (and (integerp pid) (> pid 0))
+    (let ((default-directory "/"))
+      (condition-case nil
+          (let* ((boot (with-temp-buffer
+                         (insert-file-contents "/proc/sys/kernel/random/boot_id")
+                         (string-trim (buffer-string))))
+                 (case-fold-search nil)
+                 (start
+                  (with-temp-buffer
+                    (insert-file-contents
+                     (file-name-concat "/proc" (number-to-string pid) "stat"))
+                    ;; The command (field 2) can contain spaces and closing
+                    ;; parentheses.  Only the last closing delimiter is safe.
+                    (goto-char (point-max))
+                    (when (search-backward ") " nil t)
+                      (forward-char 2)
+                      ;; The remaining fields start at 3; starttime is 22.
+                      (nth 19 (split-string
+                               (buffer-substring-no-properties
+                                (point) (point-max)))))))
+                 (identity (and start (concat boot ":" start))))
+            (and identity
+                 (string-match-p mevedel--process-identity-regexp
+                                 identity)
+                 identity))
+        (error nil)))))
+
 (defun mevedel--delete-process (process)
   "Retire PROCESS without waiting for asynchronous network setup.
 Detach a connecting process and delete it once setup settles.  Delete any

@@ -74,8 +74,8 @@
 (defvar gptel-stream)
 
 ;; `mevedel'
-(defvar mevedel-default-chat-preset)
 (defvar mevedel--load-provenance)
+(defvar mevedel-default-chat-preset)
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-parent-data-buffer
@@ -577,19 +577,10 @@ sessions keep their existing startup behavior and return nil."
            (mevedel-session-workspace-instruction-hashes mevedel--session))))
   (run-hooks 'mevedel-session-start-hook)
   (when (bound-and-true-p mevedel--session)
-    (mevedel-telemetry-record
-     mevedel--session 'session-runtime
-     :boundary source
-     :loaded-at (plist-get (bound-and-true-p mevedel--load-provenance) :loaded-at)
-     :mevedel-commit (plist-get (bound-and-true-p mevedel--load-provenance)
-                                :mevedel-commit)
-     :mevedel-version (plist-get (bound-and-true-p mevedel--load-provenance)
-                                 :mevedel-version)
-     :gptel-commit (plist-get (bound-and-true-p mevedel--load-provenance)
-                              :gptel-commit)
-     :gptel-version (plist-get (bound-and-true-p mevedel--load-provenance)
-                               :gptel-version)
-     :emacs-version emacs-version)
+    (apply #'mevedel-telemetry-record
+           mevedel--session 'session-runtime
+           :boundary source :emacs-version emacs-version
+           (bound-and-true-p mevedel--load-provenance))
     (let ((buffer (current-buffer))
           (workspace (or (and (boundp 'mevedel--workspace)
                               mevedel--workspace)

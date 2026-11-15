@@ -795,7 +795,7 @@
           (dolist (shape '("- (TaskWrite [:tasks array]" "- (Imenu :file_path string)"
                            "- (EmacsDescribe :symbol string :aspect string [:kind string])"
                            "- (Agent :task_name string :message string"
-                           "- (SendMessage [:target string] :message string)"))
+                           "- (SendMessage [:target string] :message string [:working_directory string])"))
             (should (string-search shape listing)))
           (dolist (native '("(WriteStdin" "(Monitor" "(Bash" "(ToolCall"))
             (should-not (string-search native listing))))

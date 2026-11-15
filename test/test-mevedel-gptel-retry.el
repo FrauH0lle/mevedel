@@ -54,6 +54,20 @@
     (should (equal '(:input 82 :output 23 :cached 0) (plist-get (gptel-fsm-info fsm) :tokens)))
     (should-not (plist-get (gptel-fsm-info fsm) :mevedel-retry-exhausted)))
 
+  :doc "HTTP 503 with a non-JSON error page recovers like other 5xx failures"
+  (let ((page "<html><body>503 Service Unavailable</body></html>"))
+    (mevedel-retry-test--with-http
+        (list (format "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/html\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s"
+                      (string-bytes page) page)
+              mevedel-retry-test--success)
+      (gptel--fsm-transition fsm)
+      (mevedel-retry-test--drain-native)
+      (should (= 2 (length requests)))
+      (should (= 1 finished))
+      (should (= 0 failed))
+      (with-current-buffer data-buf
+        (should (equal "Recovered answer\n" (buffer-string))))))
+
   :doc "zero disables recovery and leaves the native error path unchanged"
   (let ((mevedel-gptel-retry-max-retries 0))
     (mevedel-retry-test--with-http

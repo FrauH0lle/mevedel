@@ -57,7 +57,13 @@ the repository's current worktree list; unrelated repositories, symlink escapes
 to unrelated directories, and paths naming another execution target are rejected.
 Subdirectories of a registered checkout are accepted. Validation happens before
 reservation for an explicit argument and again before each provider turn.
-Missing or no-longer-related directories fail rather than silently falling back.
+Missing or no-longer-related directories fail rather than silently falling back;
+the failure names the agent and the missing directory. `SendMessage` accepts the
+same `working_directory` argument to move a retained agent, for example after
+its worktree was removed: it is validated before delivery, a rejected value
+delivers nothing, a failed delivery leaves the agent where it was, and the new
+directory applies from the agent's next turn and
+persists like the original selection. A running turn keeps its directory.
 
 The selection is durable across retained follow-ups, save/restore, and Save As;
 children inherit it unless they select another directory. Conversation Fork and
@@ -438,7 +444,8 @@ request or requestless wait is aborted, its transcript is finalized as
 with outcome `interrupted` goes to the stable spawn parent. The payload includes
 the interruption reason, bounded useful partial work when available, and the
 saved transcript path when available. Request teardown cancels the active tool
-pipeline, terminates the target's child executions, and prevents its queued
+pipeline, stops all executions owned by the turn (including yielded Bash), as
+any ended turn does, and prevents its queued
 execution work from being admitted after the turn becomes terminal.
 Native ACP interruption waits for its bounded terminal acknowledgement before
 settling the retained turn, so its final usage remains accountable. The runtime

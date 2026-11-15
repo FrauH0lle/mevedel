@@ -23,10 +23,12 @@
 (require 'mevedel-collaboration-lobby)
 (require 'mevedel-collaboration-guest)
 (require 'mevedel-collaboration-projection)
+(require 'mevedel-collaboration-share)
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-session-persistence)
 (require 'mevedel-session-durability)
 (require 'mevedel-structs)
+(require 'mevedel-utilities)
 ;; Restoring a session loads the chat view.  Its first load initializes
 ;; D-Bus (through `battery'), which reads events and so cannot happen
 ;; inside a lobby frame; load it here so lease cases test ownership only.
@@ -185,7 +187,7 @@ captured prompts, and whether the restored buffer is live and read-only."
   "Return same-host holder evidence for PID with IDENTITY."
   (list :host (mevedel-session-durability--host) :uid (user-uid)
         :pid pid :process (or identity
-                             (mevedel-session-durability--pid-identity (emacs-pid)))))
+                             (mevedel--process-identity (emacs-pid)))))
 
 (defun mevedel-collaboration-lobby-test--holder ()
   "Start a live child process to stand in for a lease holder."
@@ -194,7 +196,7 @@ captured prompts, and whether the restored buffer is live and read-only."
 
 (defun mevedel-collaboration-lobby-test--identity (process)
   "Return PROCESS's current OS identity, skipping where none is available."
-  (or (mevedel-session-durability--pid-identity (process-id process))
+  (or (mevedel--process-identity (process-id process))
       (ert-skip "Process identity is unavailable on this host")))
 
 (defun mevedel-collaboration-lobby-test--other-identity (identity &optional boot)
@@ -220,7 +222,7 @@ after a reboot; otherwise keep the boot and move the start earlier."
   (let ((holder (plist-get (plist-get outcome :head) :holder)))
     (should (equal (emacs-pid) (plist-get holder :pid)))
     (should (equal (mevedel-session-durability--host) (plist-get holder :host)))
-    (should (equal (mevedel-session-durability--pid-identity (emacs-pid))
+    (should (equal (mevedel--process-identity (emacs-pid))
                    (plist-get holder :process)))))
 
 (defun mevedel-collaboration-lobby-test--should-inspect (outcome)

@@ -646,5 +646,18 @@ Bind request, backend, fsm, state and info for assertions."
       (should-not (plist-get diagnostic :type))
       (should-not (plist-get diagnostic :code)))))
 
+(mevedel-deftest mevedel-gptel-retry--owner-p ()
+  ,test
+  (test)
+  :doc "a root request owns its machine; without one, only the invocation's own FSM"
+  (let* ((fsm (gptel-make-fsm))
+         (other (gptel-make-fsm))
+         (invocation (mevedel-agent-invocation--create :runtime-fsm fsm)))
+    (should (mevedel-gptel-retry--owner-p fsm 'request nil))
+    (should (mevedel-gptel-retry--owner-p fsm nil invocation))
+    (should-not (mevedel-gptel-retry--owner-p other nil invocation))
+    (should-not (mevedel-gptel-retry--owner-p fsm nil nil))
+    (should-not (mevedel-gptel-retry--owner-p fsm nil 'not-an-invocation))))
+
 (provide 'test-mevedel-gptel-retry-policy)
 ;;; test-mevedel-gptel-retry-policy.el ends here

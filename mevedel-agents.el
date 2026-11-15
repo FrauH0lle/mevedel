@@ -486,6 +486,8 @@ and render-data markers are runtime-only caches for cheap live updates."
   (transcript-relative-path nil :type (or null string))
   (transcript-status nil :type (or null symbol))
   (sidecar-dirty nil :type boolean)
+  ;; Why transcript setup or its latest save failed, for error reports.
+  (persistence-failure nil :type (or null string))
   ;; Rules accumulate across nested skills (additive); model/effort are
   ;; last-writer-wins.  A fork starts with only the fork skill's own rules;
   ;; the parent's request rules never propagate to a child.

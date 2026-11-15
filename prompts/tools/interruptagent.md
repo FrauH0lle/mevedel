@@ -21,6 +21,8 @@ Interrupt a retained agent's current turn while keeping its conversation.
   receives one RESULT with outcome `interrupted`, the reason, and partial work.
 - The tool result reports only activity immediately before the call. Interruption
   does not undo completed edits or stop retained descendants.
+- Interrupting a turn stops its owned executions, including yielded Bash, as any
+  ended turn does; the agent stays retained.
 
 ### Examples of good usage
 

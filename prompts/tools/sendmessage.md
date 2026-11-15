@@ -21,6 +21,9 @@ Send a message to a retained agent, starting its turn if idle.
   scheduler. Self-mail does not start a turn.
 - The eventual terminal RESULT still goes to the recipient's original spawn
   parent. Do not send a duplicate final message.
+- `working_directory` moves a retained agent's later turns to another existing
+  directory, validated as for `Agent`. Use it when the agent's directory was
+  removed or its next task lives in another worktree; its conversation is kept.
 
 ### Examples of good usage
 

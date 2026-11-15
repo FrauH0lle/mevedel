@@ -277,72 +277,87 @@
             (assoc-delete-all
              agent-id (mevedel-session-agent-transcripts session))))))
 
+(defun mevedel-agent-runtime--create-transcript (invocation agent-buffer session save-path)
+  "Allocate, visit and register INVOCATION's transcript under SAVE-PATH.
+AGENT-BUFFER visits the transcript; SESSION records it as running."
+  (let* ((agent-id (mevedel-agent-invocation-agent-id invocation))
+         (agent
+          (mevedel-agent-invocation-agent invocation))
+         (agent-type (or (and agent (mevedel-agent-name agent))
+                         "agent"))
+         (bits (split-string agent-id "--" t))
+         (suffix (if-let* ((id-suffix (cadr bits)))
+                     (substring id-suffix 0 (min 8 (length id-suffix)))
+                   "anon"))
+         (timestamp (format-time-string "%FT%H-%M-%S"))
+         relative absolute)
+    (cl-loop
+     for n from 1
+     for candidate =
+     (format "agents/%s--%s--%s%s.chat.org"
+             agent-type timestamp suffix
+             (if (= n 1) "" (format "-%d" n)))
+     for path = (expand-file-name candidate save-path)
+     while (mevedel-session-artifacts-artifact-present-p
+            session candidate)
+     finally (setq relative candidate absolute path))
+    (with-current-buffer agent-buffer
+      ;; Visiting renames the buffer after the file; keep its
+      ;; hidden conversation name out of buffer lists.
+      (let ((name (buffer-name)))
+        (set-visited-file-name absolute t t)
+        (rename-buffer name t)))
+    (setf
+     (mevedel-agent-invocation-transcript-relative-path invocation)
+     relative
+     (mevedel-agent-invocation-sidecar-dirty invocation) t)
+    (let ((now (format-time-string "%FT%H-%M-%S")))
+      (mevedel-session-persistence-record-running-transcript
+       session
+       (cons agent-id
+             (list :agent-type agent-type
+                   :agent-path
+                   (mevedel-agent-invocation-path invocation)
+                   :description
+                   (mevedel-agent-invocation-description invocation)
+                   :path relative
+                   :status 'running
+                   :created-at now
+                   :updated-at now
+                   :parent-turn
+                   (mevedel-agent-invocation-parent-turn
+                    invocation)))))))
+
 (defun mevedel-agent-runtime--setup-transcript (invocation agent-buffer)
-  "Create and register INVOCATION's transcript for AGENT-BUFFER."
+  "Create and register INVOCATION's transcript for AGENT-BUFFER.
+When none can be created, record why as INVOCATION's persistence failure."
   (let ((session (mevedel-agent-invocation-parent-session invocation))
         (parent-buffer
-         (mevedel-agent-invocation-parent-data-buffer invocation))
-        (agent-id (mevedel-agent-invocation-agent-id invocation)))
-    (when (and session
-               (buffer-live-p agent-buffer)
-               (buffer-live-p parent-buffer)
-               (not (buffer-local-value
-                     'mevedel-session--read-only-mode parent-buffer)))
-      (condition-case err
-          (when-let* ((save-path
-                       (mevedel-session-persistence-shallow-ensure-files
-                        session parent-buffer)))
-            (let* ((agent
-                    (mevedel-agent-invocation-agent invocation))
-                   (agent-type (or (and agent (mevedel-agent-name agent))
-                                   "agent"))
-                   (bits (split-string agent-id "--" t))
-                   (suffix (if-let* ((id-suffix (cadr bits)))
-                               (substring id-suffix 0 (min 8 (length id-suffix)))
-                             "anon"))
-                   (timestamp (format-time-string "%FT%H-%M-%S"))
-                   relative absolute)
-              (cl-loop
-               for n from 1
-               for candidate =
-               (format "agents/%s--%s--%s%s.chat.org"
-                       agent-type timestamp suffix
-                       (if (= n 1) "" (format "-%d" n)))
-               for path = (expand-file-name candidate save-path)
-               while (mevedel-session-artifacts-artifact-present-p
-                      session candidate)
-               finally (setq relative candidate absolute path))
-              (with-current-buffer agent-buffer
-                ;; Visiting renames the buffer after the file; keep its
-                ;; hidden conversation name out of buffer lists.
-                (let ((name (buffer-name)))
-                  (set-visited-file-name absolute t t)
-                  (rename-buffer name t)))
-              (setf
-               (mevedel-agent-invocation-transcript-relative-path invocation)
-               relative
-               (mevedel-agent-invocation-sidecar-dirty invocation) t)
-              (let ((now (format-time-string "%FT%H-%M-%S")))
-                (mevedel-session-persistence-record-running-transcript
-                 session
-                 (cons agent-id
-                       (list :agent-type agent-type
-                             :agent-path
-                             (mevedel-agent-invocation-path invocation)
-                             :description
-                             (mevedel-agent-invocation-description invocation)
-                             :path relative
-                             :status 'running
-                             :created-at now
-                             :updated-at now
-                             :parent-turn
-                             (mevedel-agent-invocation-parent-turn
-                              invocation)))))))
-        (error
-         (mevedel-diagnostic-message
-          (mevedel-diagnostic-scope
-           (mevedel-agent-invocation-parent-session invocation))
-          "Transcript persistence setup failed: %S" err))))))
+         (mevedel-agent-invocation-parent-data-buffer invocation)))
+    (when-let* ((reason
+                 (cond
+                  ((not session) "no parent session")
+                  ((not (buffer-live-p agent-buffer)) "agent buffer is not live")
+                  ((not (buffer-live-p parent-buffer)) "parent buffer is not live")
+                  ((buffer-local-value 'mevedel-session--read-only-mode parent-buffer)
+                   "parent session is read-only")
+                  (t
+                   (condition-case err
+                       (if-let* ((save-path
+                                  (mevedel-session-persistence-shallow-ensure-files
+                                   session parent-buffer)))
+                           (progn
+                             (mevedel-agent-runtime--create-transcript
+                              invocation agent-buffer session save-path)
+                             nil)
+                         "session files could not be created")
+                     (error
+                      (mevedel-diagnostic-message
+                       (mevedel-diagnostic-scope session)
+                       "Transcript persistence setup failed: %S" err)
+                      (error-message-string err)))))))
+      (setf (mevedel-agent-invocation-persistence-failure invocation)
+            (concat "transcript setup: " reason)))))
 
 
 ;;
@@ -1155,7 +1170,9 @@ Return a marker at the start of the turn's Agent Task heading."
               (progn
                 (delete-region start (point-max))
                 (set-buffer-modified-p was-modified)
-                (error "Retained agent conversation could not be persisted"))
+                (error "Retained agent conversation could not be persisted: %s"
+                       (or (mevedel-agent-invocation-persistence-failure invocation)
+                           "save did not complete")))
             (mevedel-agent-runtime-abandon-persistence
              invocation))))
       heading)))
@@ -1321,7 +1338,10 @@ conversation's optional execution directory, never a resource grant."
                          (not
                           (mevedel-agent-invocation-transcript-relative-path
                            invocation)))
-                (error "Agent conversation could not be persisted"))
+                (error "Agent conversation could not be persisted: %s"
+                       (or (mevedel-agent-invocation-persistence-failure
+                            invocation)
+                           "first transcript save did not complete")))
               (let ((fsm
                      (mevedel-agent-exec-run
                       (apply-partially

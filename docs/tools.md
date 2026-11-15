@@ -1233,7 +1233,11 @@ instead use `bash --noprofile --norc -p -c` to avoid startup-file and environmen
 side effects. Managed Bash has no automatic timeout; use
 the native `timeout` command when the command itself needs a deadline. On Unix,
 Emacs places each child in a dedicated process group, and mevedel sends TERM
-followed by KILL to the whole group. On Windows it terminates the direct child.
+followed by KILL to the whole group. Local descendants that moved into a group
+of their own, as GNU `timeout` does, are found from the process table before
+each signal, pinned by start time, signalled with the group, and keep the record
+unsettled until they exit or the KILL escalation ends. On Windows it terminates
+the direct child.
 The result includes partial combined stdout/stderr and structured termination
 facts.
 
