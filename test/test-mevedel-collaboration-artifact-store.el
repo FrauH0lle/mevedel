@@ -12,6 +12,9 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-artifact-store)
+(require 'mevedel-artifact-backend)
+(require 'mevedel-session-control-fs)
+(require 'mevedel-session-persistence)
 (require 'mevedel-transport)
 (require 'mevedel-collaboration)
 (require 'mevedel-collaboration-artifact)
@@ -57,12 +60,18 @@
           (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
                      (lambda (operations &rest args)
                        (cl-incf programs)
+                       (should (<= (length operations) 32))
+                       (when (cl-find 'read operations :key (lambda (op) (plist-get op :op)))
+                         (should (cl-every (lambda (op) (eq 'read (plist-get op :op)))
+                                           operations)))
                        (cl-incf reads
                                 (cl-count "meta.el" operations :test #'equal
                                           :key (lambda (op)
                                                  (file-name-nondirectory
                                                   (plist-get op :path)))))
                        (apply read-program operations args)))
+                    ((symbol-function 'mevedel-artifact-store-shared-p)
+                     (lambda (&rest _) (ert-fail "Unexpected scalar sharing probe")))
                     ((symbol-function 'mevedel-collaboration--publish) #'ignore)
                     ((symbol-function 'mevedel-collaboration--broadcast)
                      (lambda (room frame) (push (cons room frame) frames))))
@@ -74,7 +83,7 @@
               (cancel-timer timer)
               (apply (timer--function timer) (timer--args timer))))
           (should (= 50 reads))
-          (should (<= programs 4))
+          (should (= programs 6))
           (should (= 3 (length frames)))
           (dolist (entry frames)
             (let* ((room (car entry))
@@ -97,8 +106,43 @@
       (mevedel-collaboration--artifact-stat-invalidate)
       (delete-directory root t))))
 
-(mevedel-deftest mevedel-collaboration--store-snapshot
-  (:doc "lobby counts merge one saved discovery with live attachments")
+(mevedel-deftest mevedel-collaboration--store-snapshot ()
+  ,test
+  (test)
+  :doc "consumes batched sharing observations instead of guarded per-row walks"
+  (let* ((root (make-temp-file "mevedel-store-sharing-" t))
+         (workspace (mevedel-workspace--create :type 'file :id root :root root))
+         (mevedel-artifact-store-changed-functions nil)
+         (mevedel-artifact-backend--registry (make-hash-table :test #'equal))
+         (mevedel-artifact-backend--restored (make-hash-table :test #'equal))
+         (link-path (symbol-function 'mevedel-artifact-store-link-path))
+         (walks 0))
+    (unwind-protect
+        (progn
+          (dolist (id '("shared" "private"))
+            (mevedel-artifact-store-create-meta workspace id "index.html"))
+          (write-region "private" nil (mevedel-artifact-store-link-path workspace "shared")
+                        nil 'silent)
+          (mevedel-artifact-backend-register
+           workspace "remote"
+           (list :catalog (lambda (_workspace _detail)
+                            (list (list :id "remote" :remote t :modified 0)))))
+          (cl-letf (((symbol-function 'mevedel-artifact-store-link-path)
+                     (lambda (&rest args)
+                       (cl-incf walks)
+                       (apply link-path args))))
+            ;; Negative control: the old snapshot's loop repeats guarded walks.
+            (dolist (row (mevedel-artifact-backend-catalog workspace))
+              (mevedel-artifact-store-shared-p workspace (plist-get row :id)))
+            (should (= 3 walks))
+            (setq walks 0)
+            (let ((snapshot (mevedel-collaboration--store-snapshot workspace)))
+              (should (equal '("shared") (plist-get snapshot :shared)))
+              (should (= 3 (length (plist-get snapshot :artifacts))))
+              (should (= 0 walks)))))
+      (delete-directory root t)))
+
+  :doc "lobby counts merge one saved discovery with live attachments"
   (let* ((root (make-temp-file "mevedel-store-counts-" t))
          (workspace (mevedel-workspace--create :type 'file :id root :root root))
          (mevedel-artifact-store-changed-functions nil)
