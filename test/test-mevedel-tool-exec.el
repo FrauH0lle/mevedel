@@ -18,6 +18,7 @@
 (require 'mevedel-tools)
 (require 'mevedel-execution)
 (require 'mevedel-execution-target)
+(require 'mevedel-hooks)
 (require 'mevedel-pipeline)
 (require 'mevedel-ptc-driver)
 (require 'mevedel-sandbox)
@@ -1614,6 +1615,112 @@ the execution boundary owns the session's single unavailable warning"
        (setq result (mevedel-tool-exec-test--handler-result r)))
      (list :expression "(princ \"hello world\")"))
     (should (string-match-p "STDOUT:\nhello world" result)))
+  :doc "captures live messages without suppressing downstream handlers or logging"
+  (let* ((result-file (make-temp-file "mevedel-eval-live-messages-"))
+         (process-environment (cons "TERM=xterm" process-environment))
+         (form
+          `(progn
+             (setq load-path ',load-path native-comp-jit-compilation nil)
+             (require 'mevedel-tool-exec)
+             (let* ((default-directory ,default-directory)
+                    downstream response
+                    (set-message-functions
+                     (list (lambda (text) (push text downstream) nil))))
+               (mevedel-tool-exec--eval-live
+                (lambda (value) (setq response value))
+                "(progn (message \"live hello\") (message \"live again\") 42)"
+                nil t)
+               (with-temp-file ,result-file
+                 (prin1 (list response (nreverse downstream)
+                              (with-current-buffer "*Messages*" (buffer-string)))
+                        (current-buffer))))
+             (kill-emacs 0)))
+         (child (make-process
+                 :name "mevedel-test-live-messages" :buffer nil :noquery t
+                 :connection-type 'pty
+                 :command (list (expand-file-name invocation-name invocation-directory)
+                                "-Q" "-nw" "--eval" (prin1-to-string form)))))
+    ;; Echo-area hooks do not run in batch Emacs, even with noninteractive bound.
+    (unwind-protect
+        (progn
+          (with-timeout (30 (error "Live message fixture timed out"))
+            (while (process-live-p child) (accept-process-output child 0.05)))
+          (should (zerop (process-exit-status child)))
+          (let* ((data (mevedel-tool-exec--eval-read-batch-result result-file))
+                 (result (plist-get (car data) :result)))
+            (should (string-search "Result:\n42" result))
+            (should (string-search "MESSAGES:\nlive hello\nlive again" result))
+            (should (equal '("live hello" "live again") (cadr data)))
+            (should (string-search "live hello\nlive again" (caddr data)))))
+      (when (process-live-p child) (delete-process child))
+      (delete-file result-file)))
+  :doc "returns batch messages on success"
+  (let (result)
+    (mevedel-tool-exec--eval
+     (lambda (value) (setq result (plist-get value :result)))
+     '(:expression "(progn (message \"batch hello\") 42)" :mode "batch"))
+    (with-timeout (30 (error "Batch messages timed out"))
+      (while (null result) (accept-process-output nil 0.05)))
+    (should (string-search "Result:\n42" result))
+    (should (string-search "MESSAGES:\nbatch hello" result)))
+  :doc "keeps injection results compact in both modes"
+  (dolist (mode '("live" "batch"))
+    (let (result)
+      (mevedel-tool-exec--eval
+       (lambda (value) (setq result (plist-get value :result)))
+       (list :expression "(progn (princ \"printed\") 42)"
+             :result-format "injection" :mode mode))
+      (with-timeout (30 (error "Injection result timed out"))
+        (while (null result) (accept-process-output nil 0.05)))
+      (should (string-prefix-p "42\n\nSTDOUT:\nprinted" result))
+      (should-not (string-search "Result:" result))
+      (should-not (string-search "BACKTRACE:" result))
+      (should-not (string-search "MESSAGES:" result))))
+  :doc "returns pre-error output and a bounded failing frame in both modes"
+  (dolist (mode '("live" "batch"))
+    (let (result)
+      (mevedel-tool-exec--eval
+       (lambda (value) (setq result (plist-get value :result)))
+       (list :expression "(progn (princ \"before failure\") (error \"failing frame\"))"
+             :mode mode))
+      (with-timeout (30 (error "Error result timed out"))
+        (while (null result) (accept-process-output nil 0.05)))
+      (should (string-prefix-p "Error:" result))
+      (should (string-search "STDOUT:\nbefore failure" result))
+      (let ((trace (cadr (split-string result "BACKTRACE:\n"))))
+        (should trace)
+        (setq trace (car (split-string trace "\n\n\\(?:Execution:\\|\\[sandbox:\\)")))
+        (should (string-search "error(\"failing frame\")" trace))
+        (should (<= (length trace) mevedel-tool-exec--eval-backtrace-chars)))))
+  :doc "visibly truncates deep and overlong backtraces in both modes"
+  (dolist (mode '("live" "batch"))
+    (dolist (expression
+             '("(funcall (letrec ((recur (lambda (n) (if (zerop n) (error \"deep\") (funcall recur (1- n)))))) recur) 50)"
+               "(error \"%s\" (make-string 10000 ?x))"))
+      (let (result)
+        (mevedel-tool-exec--eval
+         (lambda (value) (setq result (plist-get value :result)))
+         (list :expression expression :mode mode))
+        (with-timeout (30 (error "Truncated result timed out"))
+          (while (null result) (accept-process-output nil 0.05)))
+        (let ((trace (cadr (split-string result "BACKTRACE:\n"))))
+          (should trace)
+          (setq trace (car (split-string trace "\n\n\\(?:Execution:\\|\\[sandbox:\\)")))
+          (should (<= (length trace) mevedel-tool-exec--eval-backtrace-chars))
+          (should (<= (length (split-string trace "\n" t))
+                      (1+ mevedel-tool-exec--eval-backtrace-frames)))
+          (should (string-suffix-p mevedel-tool-exec--eval-backtrace-marker trace))))))
+  :doc "returns batch errors with unreadable error data"
+  (let (result)
+    (mevedel-tool-exec--eval
+     (lambda (value) (setq result (plist-get value :result)))
+     '(:expression "(signal 'wrong-type-argument (list 'numberp (current-buffer)))"
+       :mode "batch"))
+    (with-timeout (30 (error "Unreadable error timed out"))
+      (while (null result) (accept-process-output nil 0.05)))
+    (should (string-prefix-p "Error: Eval failed with error wrong-type-argument" result))
+    (should (string-search "#<buffer" result))
+    (should (string-search "BACKTRACE:" result)))
   :doc "passes large live output intact to the shared pipeline"
   (let (result)
     (mevedel-tool-exec--eval
@@ -1737,7 +1844,7 @@ the execution boundary owns the session's single unavailable warning"
   (let (result)
     (cl-letf (((symbol-function 'mevedel-tool-exec--eval-read-batch-result)
                (lambda (_file)
-                 '(:status error :text "Error: batch failure")))
+                 '(:status error :error "error: (\"Batch failure\")")))
               ((symbol-function 'mevedel-execution-start-one-shot)
                (lambda (callback &rest _args)
                  (funcall

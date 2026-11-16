@@ -326,8 +326,10 @@ delivery, execution ownership, or process lifecycle.
 
 ## Eval process and state
 
-Live Eval runs in the host Emacs. Restoring the window configuration does not
-undo variable assignments, buffer edits, files written, timers, or other side
+Live Eval runs on the host Emacs's main thread and can only be stopped by the
+user's `C-g`; long or uncertain work belongs in batch mode.
+Restoring the window configuration does not undo variable assignments,
+buffer edits, files written, timers, or other side
 effects. Use it only for effects within the authorized task. With UI preservation
 enabled, chat views restore their semantic cursor and reading positions after
 the frame layout is restored. A redraw during evaluation therefore does not let
@@ -351,7 +353,9 @@ have changed state before the error, so inspect relevant effects before retrying
 
 Only one top-level form is read. Compound forms can sequence related operations
 and share lexical bindings. `print`, `prin1`, and `princ` contribute STDOUT;
-`message` goes to Emacs diagnostics instead. Unprintable objects appear as
+`message` text is returned as MESSAGES in both modes and still reaches the
+user normally in live mode. Errors include a bounded BACKTRACE and retain
+output printed before failure. Unprintable objects appear as
 `#<...>` and cannot be reconstructed by reading their printed representation.
 Batch Eval settles through its callback; the Bash polling controls above do
 not apply to it.

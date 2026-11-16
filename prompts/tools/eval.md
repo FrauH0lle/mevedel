@@ -25,8 +25,9 @@ Evaluate one Elisp form and return its value and printed output.
   or loaded packages. Require libraries needed by the check.
 - Evaluation uses the session working directory. Values print with `%S`, with
   shared and circular structure shown once as `#N=`/`#N#`; `print`,
-  `prin1`, and `princ` output is returned as STDOUT. `message` is not captured.
-  Errors can include output produced before failure. Large results have a bounded
+  `prin1`, and `princ` output is returned as STDOUT; `message` text is returned as
+  MESSAGES without hiding live messages from the user. Errors include a bounded
+  BACKTRACE and output produced before failure. Large results have a bounded
   preview and retrieval address.
 - In Edits, batch Eval runs automatically with required confinement and no
   network by default; live Eval goes to the selected permission reviewer.

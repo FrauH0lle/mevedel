@@ -53,6 +53,9 @@
                                   (expand-file-name "value" directory))))
                 "profile execution complete")))
            (operation (if (equal tool-name "Bash") script expression))
+           (success-output (if (equal tool-name "Bash")
+                               "profile execution complete"
+                             "Result:\n\"profile execution complete\""))
            (args (if (equal tool-name "Bash")
                      (list :command script :description "Probe Bash authority profile")
                    (list :expression expression :mode "batch")))
@@ -158,7 +161,7 @@
                 (press "s")
                 (await-result)
                 (should (string-match-p "sandbox: bubblewrap" result))
-                (should (string-match-p "profile execution complete" result))
+                (should (string-search success-output result))
                 (with-temp-buffer
                   (insert-file-contents (file-name-concat cache "run-1" "value"))
                   (should (equal "protected input contents" (buffer-string))))
@@ -180,8 +183,8 @@
                 (should-not (mevedel-session-permission-queue session))
                 (should (string-match-p "sandbox: bubblewrap" result))
                 (if narrow-p
-                    (should-not (string-match-p "profile execution complete" result))
-                  (should (string-match-p "profile execution complete" result))
+                    (should-not (string-search success-output result))
+                  (should (string-search success-output result))
                   (with-temp-buffer
                     (insert-file-contents (file-name-concat cache "run-2" "value"))
                     (should (equal "protected input contents" (buffer-string)))))
@@ -206,7 +209,7 @@
                        (list :expression (concat "(progn " expression ")") :mode "batch")))
                 (await-result)
                 (should (string-match-p "sandbox: bubblewrap" result))
-                (should-not (string-match-p "profile execution complete" result))
+                (should-not (string-search success-output result))
                 (should-not (file-exists-p (file-name-concat cache "run-3" "value")))
                 (with-current-buffer view
                   (should (equal draft (mevedel-view--input-text)))))))

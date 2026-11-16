@@ -12,6 +12,7 @@
 (eval-when-compile
   (require 'mevedel-tool-registry))
 
+(require 'backtrace)
 (require 'cl-lib)
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-runtime)
@@ -25,6 +26,7 @@
 (require 'mevedel-turn)
 (require 'mevedel-utilities)
 (require 'mevedel-workspace)
+(require 'seq)
 (require 'subr-x)
 (require 'xml)
 
@@ -940,31 +942,58 @@ CALLBACK receives the envelope.  ARGS has :command; KIND may be `monitor'."
 ;;
 ;;; Eval
 
-(defun mevedel-tool-exec--eval-format-result
-    (result output result-format)
-  "Format Eval RESULT and captured OUTPUT for RESULT-FORMAT.
-Shared and circular structure prints once with #N= labels: live objects
-such as requests share so much structure that plain printing grows without
-bound and exhausted memory."
-  (let ((print-circle t))
-    (if (equal result-format "injection")
-        (concat
-         (format "%S" result)
-         (and (not (string-empty-p (or output "")))
-              (format "\n\nSTDOUT:\n%s" output)))
-      (concat
-       (format "Result:\n%S" result)
-       (and (not (string-empty-p (or output "")))
-            (format "\n\nSTDOUT:\n%s" output))))))
+(eval-and-compile
+  (defconst mevedel-tool-exec--eval-backtrace-frames 30
+    "Maximum number of frames returned by Eval.")
 
-(defun mevedel-tool-exec--eval-format-error (err output)
-  "Format Eval error ERR and captured OUTPUT."
-  (let ((print-circle t))
-    (concat
-     (format "Error: Eval failed with error %S: %S"
-             (car err) (cdr err))
-     (and (not (string-empty-p (or output "")))
-          (format "\n\nSTDOUT:\n%s" output)))))
+  (defconst mevedel-tool-exec--eval-backtrace-chars 8000
+    "Maximum number of characters in an Eval backtrace, including its marker.")
+
+  (defconst mevedel-tool-exec--eval-backtrace-marker "\n[Backtrace truncated]"
+    "Visible marker for an Eval backtrace limited by frames or characters."))
+
+(defmacro mevedel-tool-exec--eval-capture-backtrace ()
+  "Capture a bounded signal-time backtrace in live or generated batch code."
+  `(ignore-errors
+     (let ((frames (backtrace-get-frames))
+           (print-circle t) (print-level 8) (print-length 20))
+       ;; Skip capture machinery when a standard signaling frame is present.
+       (setq frames
+             (or (memq (seq-find
+                        (lambda (frame)
+                          (memq (backtrace-frame-fun frame) '(error signal)))
+                        frames)
+                       frames)
+                 frames))
+       (let* ((text (backtrace-to-string
+                     (seq-take frames ,mevedel-tool-exec--eval-backtrace-frames)))
+              (truncated (or (> (length frames)
+                                ,mevedel-tool-exec--eval-backtrace-frames)
+                             (> (length text)
+                                ,mevedel-tool-exec--eval-backtrace-chars))))
+         (if truncated
+             (concat (substring text 0 (min (length text)
+                                           ,(- mevedel-tool-exec--eval-backtrace-chars
+                                               (length mevedel-tool-exec--eval-backtrace-marker))))
+                     ,mevedel-tool-exec--eval-backtrace-marker)
+           text)))))
+
+(defun mevedel-tool-exec--eval-format-result
+    (value output result-format &optional messages backtrace err)
+  "Format printed VALUE and OUTPUT for RESULT-FORMAT.
+Include nonempty MESSAGES and, on printed error ERR, BACKTRACE.
+VALUE is already printed with shared and circular structure labels,
+so child values need not be read."
+  (concat
+   (cond (err (concat "Error: Eval failed with error " err))
+         ((equal result-format "injection") value)
+         (t (concat "Result:\n" value)))
+   (mapconcat
+    (lambda (section)
+      (unless (string-empty-p (or (cdr section) ""))
+        (format "\n\n%s:\n%s" (car section) (cdr section))))
+    `(("STDOUT" . ,output) ("MESSAGES" . ,messages)
+      ("BACKTRACE" . ,(and err backtrace))) "")))
 
 (defun mevedel-tool-exec--eval-live (callback expression result-format preserve-ui)
   "Evaluate EXPRESSION in the live Emacs process.
@@ -972,28 +1001,32 @@ CALLBACK receives the result envelope.  RESULT-FORMAT controls
 the model-facing shape.  PRESERVE-UI restores the selected frame's
 window configuration after evaluation."
   (let ((standard-output (generate-new-buffer " *mevedel-eval-elisp*"))
-        (result nil) (output nil) response)
+        result err backtrace messages response)
     (unwind-protect
-        (condition-case err
-            (let ((default-directory
-                   (mevedel-tool-exec-permission-default-directory)))
-              (setq result
-                    (if preserve-ui
-                        (mevedel-view-call-preserving-window-configuration
-                         (lambda () (eval (read expression) t)))
-                      (eval (read expression) t)))
-              (when (> (buffer-size standard-output) 0)
-                (setq output (with-current-buffer standard-output
-                               (buffer-string))))
-              (setq response
-                    (mevedel-tool-exec--eval-format-result
-                     result output result-format)))
-          ((error user-error)
-           (when (> (buffer-size standard-output) 0)
-             (setq output (with-current-buffer standard-output
-                            (buffer-string))))
-           (setq response
-                 (mevedel-tool-exec--eval-format-error err output))))
+        (progn
+          (condition-case failure
+              (let ((set-message-functions
+                     (cons (lambda (text) (push text messages) nil)
+                           set-message-functions)))
+                (handler-bind
+                    ((error (lambda (_err)
+                              (setq backtrace
+                                    (mevedel-tool-exec--eval-capture-backtrace)))))
+                  (let ((default-directory
+                         (mevedel-tool-exec-permission-default-directory)))
+                    (setq result
+                          (if preserve-ui
+                              (mevedel-view-call-preserving-window-configuration
+                               (lambda () (eval (read expression) t)))
+                            (eval (read expression) t))))))
+            (error (setq err failure)))
+          (let ((print-circle t))
+            (setq response
+                  (mevedel-tool-exec--eval-format-result
+                   (format "%S" result)
+                   (with-current-buffer standard-output (buffer-string))
+                   result-format (string-join (nreverse messages) "\n")
+                   backtrace (and err (format "%S: %S" (car err) (cdr err)))))))
       (kill-buffer standard-output))
     (unless (equal result-format "injection")
       (setq response
@@ -1003,57 +1036,42 @@ window configuration after evaluation."
     (funcall callback (list :result response))))
 
 (defun mevedel-tool-exec--eval-batch-script
-    (expression result-file workdir load-path-value result-format)
+    (expression result-file workdir load-path-value)
   "Return batch Eval source for EXPRESSION writing RESULT-FILE.
-WORKDIR, LOAD-PATH-VALUE, and RESULT-FORMAT configure the child Emacs."
+WORKDIR and LOAD-PATH-VALUE configure the child Emacs."
   (concat
    ";;; -*- lexical-binding: t -*-\n"
    (prin1-to-string
-    `(let ((load-path ',load-path-value)
-           (default-directory ,workdir)
-           (expression ,expression)
-           (result-file ,result-file)
-           (result-format ',result-format)
-           (stdout-buffer (generate-new-buffer " *mevedel-eval-batch-stdout*"))
-           (print-circle t)
-           result output)
-       (unwind-protect
-           (let ((standard-output stdout-buffer))
-             (condition-case err
-                 (progn
-                   (setq result (eval (read expression) t))
-                   (setq output
-                         (with-current-buffer stdout-buffer
-                           (buffer-string)))
-                   (with-temp-file result-file
-                     (prin1 (list :status 'ok
-                                  :text
-                                  (if (equal result-format "injection")
-                                      (concat
-                                       (format "%S" result)
-                                       (and (> (length (or output "")) 0)
-                                            (format "\n\nSTDOUT:\n%s" output)))
-                                    (concat
-                                     (format "Result:\n%S" result)
-                                     (and (> (length (or output "")) 0)
-                                          (format "\n\nSTDOUT:\n%s" output)))))
-                            (current-buffer))))
-               ((error user-error)
-                (setq output
-                      (and (buffer-live-p stdout-buffer)
-                           (with-current-buffer stdout-buffer
-                             (buffer-string))))
-                (with-temp-file result-file
-                  (prin1 (list :status 'error
-                               :text
-                               (concat
-                                (format "Error: Eval failed with error %S: %S"
-                                        (car err) (cdr err))
-                                (and (> (length (or output "")) 0)
-                                     (format "\n\nSTDOUT:\n%s" output))))
-                         (current-buffer))))))
-         (when (buffer-live-p stdout-buffer)
-           (kill-buffer stdout-buffer)))))))
+    `(progn
+       (require 'backtrace)
+       (let ((load-path ',load-path-value)
+             (default-directory ,workdir)
+             (expression ,expression)
+             (result-file ,result-file)
+             (stdout-buffer (generate-new-buffer " *mevedel-eval-batch-stdout*"))
+             (print-circle t)
+             result failure backtrace)
+         (unwind-protect
+             (let ((standard-output stdout-buffer))
+               (condition-case err
+                   (handler-bind
+                       ((error (lambda (_err)
+                                 (setq backtrace
+                                       ,(macroexpand
+                                         '(mevedel-tool-exec--eval-capture-backtrace))))))
+                     (setq result (eval (read expression) t)))
+                 (error (setq failure err)))
+               (let ((output (with-current-buffer stdout-buffer (buffer-string))))
+                 (with-temp-file result-file
+                   (prin1 (list :status (if failure 'error 'ok)
+                                :value (format "%S" result) :output output
+                                :error (and failure
+                                            (format "%S: %S" (car failure)
+                                                    (cdr failure)))
+                                :backtrace (and failure backtrace))
+                          (current-buffer)))))
+           (when (buffer-live-p stdout-buffer)
+             (kill-buffer stdout-buffer))))))))
 
 (defun mevedel-tool-exec--eval-read-batch-result (result-file)
   "Read the batch Eval result plist from RESULT-FILE."
@@ -1075,7 +1093,7 @@ SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
          (script-file (make-temp-file "mevedel-eval-batch-" nil ".el"))
          (result-file (make-temp-file "mevedel-eval-result-" nil ".el"))
          (script (mevedel-tool-exec--eval-batch-script
-                  expression result-file workdir load-path result-format))
+                  expression result-file workdir load-path))
          cleaned
          (cleanup
           (lambda ()
@@ -1107,10 +1125,11 @@ SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
                      :result
                      (mevedel-tool-exec--sandbox-disclosure
                       (cond
-                       ((eq (plist-get payload :status) 'ok)
-                        (or (plist-get payload :text) ""))
-                       ((eq (plist-get payload :status) 'error)
-                        (or (plist-get payload :text) "Error: Eval failed"))
+                       ((memq (plist-get payload :status) '(ok error))
+                        (mevedel-tool-exec--eval-format-result
+                         (plist-get payload :value) (plist-get payload :output)
+                         result-format diagnostics (plist-get payload :backtrace)
+                         (plist-get payload :error)))
                        ((plist-get child-result :error)
                         (format "Failed to start Eval batch process: %s"
                                 (plist-get child-result :error)))
