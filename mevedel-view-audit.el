@@ -496,9 +496,12 @@ the same completion renders nothing, so this is the only line."
     (concat
      "  "
      (propertize "● " 'font-lock-face (if failed 'error 'mevedel-view-tool-metadata))
-     (format "%s \"%s\" %s%s%s  "
-             (if monitor "Monitor" "Background command")
-             (truncate-string-to-width command 64 nil nil "…")
+     (format "%s %s%s%s  "
+             (if (eq (plist-get facts :kind) 'eval)
+                 "Background Eval"
+               (format "%s \"%s\""
+                       (if monitor "Monitor" "Background command")
+                       (truncate-string-to-width command 64 nil nil "…")))
              (downcase status)
              (cond
               (monitor

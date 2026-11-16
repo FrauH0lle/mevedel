@@ -5396,6 +5396,10 @@ whether a record is a terminal event."
               (format "Monitor \"%s\" %s%s" (or description "monitor") verb
                       (if count (format " · %s event%s" count
                                         (if (equal count "1") "" "s")) ""))))
+           ((and (equal type "EXECUTION")
+                 (equal (mevedel-view--mail-attribute open-tag "kind") "eval"))
+            (format "Background Eval %s%s" verb
+                    (if exit (format " (exit code %s)" exit) "")))
            ((equal type "EXECUTION")
             (let* ((prefix "Background command \"")
                    (suffix (format "\" %s%s" verb

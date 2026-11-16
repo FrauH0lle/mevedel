@@ -157,17 +157,18 @@ before repeating an operation.
 
 ## Yielding, polling, and input
 
-Bash waits for `yield_time_ms`, then returns an `execution_id` if still running.
+Bash and fresh Eval wait for `yield_time_ms` (default 10000, range 250–30000),
+then return an `execution_id` if still running. Live Eval rejects this argument.
 Completion of a yielded root-owned command automatically wakes an idle root;
 polling just to keep the task moving is unnecessary. Continue other work or end
 the turn and handle the delivered result. Use WriteStdin with empty `chars`
 when intermediate unread output is needed; a quiet interval does not establish
-completion. Only Bash has no automatic command timeout; a native `timeout` command can enforce
-a deadline. Shell backgrounding (`&`) bypasses this managed lifetime and should
+completion. Bash and fresh Eval have no automatic execution timeout; a native
+`timeout` command can enforce a Bash deadline. Shell backgrounding (`&`) bypasses this managed lifetime and should
 be replaced with a small yield interval.
 
 WriteStdin, ListExecutions, and StopExecution all support Monitor IDs as well
-as yielded Bash IDs. They are scoped to the calling agent in the current
+as yielded Bash and fresh Eval IDs. They are scoped to the calling agent in the current
 session; monitors belong to root. ListExecutions lists only live caller-owned
 executions, not completed ones or other agents' commands. A known settled ID
 can still be observed while its execution record is retained.
@@ -179,6 +180,9 @@ completed execution stops that execution's unread notifications from waking
 the model; they are still delivered at the next turn. Pipe-mode stdin is closed.
 Bash's `tty=true` provides a PTY whose stdin stays writable for prompts, REPLs,
 and tools requiring a terminal. Monitor has no PTY and rejects ordinary input.
+Fresh Eval has no PTY and rejects all non-empty input, including Ctrl-C;
+use StopExecution to kill its child. Its final observation includes the value,
+STDOUT, MESSAGES and any BACKTRACE, in the same format as inline completion.
 A single Ctrl-C character requests a process-group interrupt in either PTY or
 pipe mode (unavailable on Windows). The command may ignore it; it neither
 guarantees a stop nor suppresses a terminal wake. Use StopExecution to stop the
@@ -228,7 +232,7 @@ event is ordinary active work and does hold the inhibitor.
 
 ## Transcript presentation
 
-The initiating Bash or Monitor row owns the command, current state, and output.
+The initiating Bash, Monitor, or fresh Eval row owns the current state and output.
 Bash's compact header shows the command, status, and elapsed time; Monitor uses
 the Watching presentation above. Expanded details contain the
 execution ID, working directory, output counts, routine exit facts, the full
@@ -299,7 +303,8 @@ Only a command that actually yielded receives a completion breadcrumb. Whether
 completion was polled or delivered independently, the original command row
 shows one linked line, such as `● Background command "Run tests" completed
 (exit code 0)  [Show result]`, `… failed (exit code 1)`, `… stopped`, or
-`● Monitor "ticker" timed out · 3 events`. A stop is neutral, not a failure,
+`● Monitor "ticker" timed out · 3 events`, or `● Background Eval completed`.
+A stop is neutral, not a failure,
 though the model-facing outcome fact stays `failure`. The owner's own mailbox
 delivery of that completion adds no second line; a parent receiving a child's
 forwarded completion shows it as a notice. One classifier,
@@ -357,8 +362,9 @@ and share lexical bindings. `print`, `prin1`, and `princ` contribute STDOUT;
 user normally in live mode. Errors include a bounded BACKTRACE and retain
 output printed before failure. Unprintable objects appear as
 `#<...>` and cannot be reconstructed by reading their printed representation.
-Fresh Eval settles through its callback; the Bash polling controls above do
-not apply to it.
+Fresh Eval uses the managed yielding and polling controls above. Its script and
+result files are removed on completion, failure, stop, or owner/session teardown;
+the final result remains available through the retained execution record.
 
 ## Shell composition and outcomes
 

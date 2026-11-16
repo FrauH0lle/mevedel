@@ -346,6 +346,8 @@ row redraws a second.")
   omitted-output-bytes
   origin
   outcome-function
+  result-function
+  terminal-result
   output-chars
   output-head
   output-limit-p
@@ -1360,7 +1362,9 @@ execution's progress cost."
           :pipeline-failed-stages (plist-get pipeline-facts :pipeline-failed-stages)
           :pipeline-classification (plist-get pipeline-facts :pipeline-classification)
           :outcome (and finished
-                        (or (and (eq termination 'exited)
+                        (or (plist-get (mevedel-execution--record-terminal-result record)
+                                       :outcome)
+                            (and (eq termination 'exited)
                                  (or (plist-get pipeline-facts :pipeline-failed-stages)
                                      (equal exit-code (car (last pipeline-codes))))
                                  (plist-get pipeline-facts :pipeline-outcome))
@@ -1622,14 +1626,22 @@ settles a yielded execution.  The live spool always remains local."
   "Return an observation of RECORD and unread RANGE.
 CLAIMED non-nil marks it as the final model delivery.
 PROJECT-UNCONSUMED includes RANGE's omission in facts before commitment."
-  (let ((facts (mevedel-execution--facts record)))
+  (let ((facts (mevedel-execution--facts record))
+        (result (plist-get (mevedel-execution--record-terminal-result record) :output)))
     (when project-unconsumed
       (setq facts
             (plist-put
              facts :omitted-output-bytes
              (+ (or (plist-get facts :omitted-output-bytes) 0)
                 (plist-get range :omitted)))))
-    (list :output (plist-get range :output)
+    (list :result (if (and result (mevedel-execution--record-yielded-p record))
+                      (plist-get
+                       (mevedel--head-tail-preview-parts
+                        result result (length result)
+                        mevedel-execution-inline-output-limit)
+                       :text)
+                    result)
+          :output (plist-get range :output)
           :facts facts
           :compound-profile-misses
           (mevedel-execution--copy-value
@@ -1661,9 +1673,13 @@ PROJECT-UNCONSUMED includes RANGE's omission in facts before commitment."
           (when (eq (mevedel-execution--record-kind record) 'monitor)
             (mevedel-execution--record-monitor-omitted record))
           :whole-output-truncated-p
-          (> (or (mevedel-execution--record-output-chars record) 0)
+          (> (if-let* ((result (plist-get (mevedel-execution--record-terminal-result record)
+                                         :output)))
+                 (length result)
+               (or (mevedel-execution--record-output-chars record) 0))
              mevedel-execution-inline-output-limit)
-          :whole-output (mevedel-execution--whole-preview record))))
+          :whole-output (or (plist-get observation :result)
+                            (mevedel-execution--whole-preview record)))))
     (plist-put event :facts (plist-get observation :facts))))
 
 (defun mevedel-execution--observation (record &optional claim-final)
@@ -1841,6 +1857,17 @@ returning: their callers expect the outcome settled."
         (mevedel-execution--monitor-line record t))
       (setf (mevedel-execution--record-finished-p record) t
             (mevedel-execution--record-delivery-pending-p record) t)
+      (when-let* ((function (mevedel-execution--record-result-function record)))
+        (unwind-protect
+            (progn
+              (mevedel-execution--collect-stderr record)
+              (setf (mevedel-execution--record-terminal-result record)
+                    (condition-case err
+                        (funcall function (mevedel-execution--sandbox-launch-result record))
+                      (error (list :output (format "Execution result failed: %s" err)
+                                   :outcome 'failure)))))
+          (setf (mevedel-execution--record-result-function record) nil)
+          (mevedel-execution--teardown-record record)))
       (mevedel-execution--settle-mutation record)
       (let* ((facts (mevedel-execution--record-sandbox-facts record))
              (refused-p (plist-get facts :refused))
@@ -2178,11 +2205,12 @@ process-filter appends use the published path."
               command workdir
               writable-roots temporary-root
               additional-permissions sandbox-permissions artifact-directory
-              outcome-function read-only-p tool-args tool-use-id tty
+              outcome-function result-function teardown-function
+              read-only-p tool-args tool-use-id tty
               pipeline-marker pipeline-facts-function
               permission-approvals (kind 'bash) description (timeout-ms 300000)
               (yield-time-ms 10000))
-  "Start managed Bash COMMAND and call CALLBACK at terminal or yield.
+  "Start managed COMMAND and call CALLBACK at terminal or yield.
 
 SESSION, canonical OWNER, and OWNER-CONTEXT fix the control boundary.
 OWNER-CONTEXT is the durable mailbox object captured at spawn.
@@ -2191,6 +2219,8 @@ match the one-shot interface; TEMPORARY-ROOT is the writable temporary
 directory that protected-path discovery skips.  ARTIFACT-DIRECTORY owns the
 spool after yield.
 OUTCOME-FUNCTION derives canonical outcome from exit code and termination.
+RESULT-FUNCTION receives terminal child facts and returns :output and :outcome.
+Its result is frozen before TEARDOWN-FUNCTION releases caller-owned resources.
 PIPELINE-MARKER identifies a private final-pipeline status frame;
 PIPELINE-FACTS-FUNCTION derives final pipeline facts from its exit codes.
 READ-ONLY-P selects the overlapping reader lane; all other calls are exclusive.
@@ -2201,7 +2231,8 @@ not execution authority.
 TTY non-nil explicitly allocates a terminal and retains writable stdin.
 YIELD-TIME-MS may be nil only for trusted internal callers that must wait for
 terminal settlement.  KIND `monitor' yields immediately, frames stdout lines,
-and uses DESCRIPTION and TIMEOUT-MS for its root-owned event lifetime."
+and uses DESCRIPTION and TIMEOUT-MS for its root-owned event lifetime.
+KIND `eval' uses the exclusive lane, without pipeline framing or input."
   (unless session
     (signal 'mevedel-execution-error
             (list "Managed Bash requires an active session")))
@@ -2213,6 +2244,9 @@ and uses DESCRIPTION and TIMEOUT-MS for its root-owned event lifetime."
       (error "Monitor requires a non-empty description"))
     (unless (and (integerp timeout-ms) (<= 1000 timeout-ms 3600000))
       (error "Monitor timeout_ms must be between 1000 and 3600000")))
+  (when (eq kind 'eval)
+    (when tty (error "Fresh Eval does not support TTY execution"))
+    (setq read-only-p nil pipeline-marker nil pipeline-facts-function nil))
   (when (and tty (eq system-type 'windows-nt))
     (signal 'mevedel-execution-input-error
             (list "PTY execution is unavailable on Windows")))
@@ -2275,6 +2309,8 @@ and uses DESCRIPTION and TIMEOUT-MS for its root-owned event lifetime."
               :tool-args tool-args
               :tool-use-id tool-use-id)
              :outcome-function outcome-function
+             :result-function result-function
+             :teardown-function teardown-function
              :pipeline-marker pipeline-marker
              :pipeline-facts-function pipeline-facts-function
              :permission-approvals
@@ -2411,6 +2447,9 @@ after WAIT-MS while the process remains live."
     (unless (or (null chars) (stringp chars))
       (signal 'mevedel-execution-input-error
               (list "Execution input must be a string")))
+    (when (and input-p (eq (mevedel-execution--record-kind record) 'eval))
+      (signal 'mevedel-execution-input-error
+              (list "Fresh Eval accepts only empty polling input; use StopExecution to stop it")))
     (when (and input-p (mevedel-execution--record-observer record))
       (mevedel-execution--flush-observer record))
     (when (mevedel-execution--record-observer record)
@@ -2633,6 +2672,12 @@ A monitor waiting for events is live but not working."
      mevedel-execution--sessions)
     nil))
 
+(defun mevedel-execution--teardown-record (record)
+  "Release RECORD's caller-owned resources exactly once."
+  (when-let* ((function (mevedel-execution--record-teardown-function record)))
+    (setf (mevedel-execution--record-teardown-function record) nil)
+    (ignore-errors (funcall function))))
+
 (defun mevedel-execution--finalize-discarded-record
     (record managed-live-p)
   "Finish and remove discarded RECORD.
@@ -2646,10 +2691,7 @@ MANAGED-LIVE-P records whether RECORD was user-visible before teardown."
         (mevedel-sandbox-cleanup preparation))))
   (mevedel-execution--release-scheduler record)
   (mevedel-execution--cleanup-record record)
-  (when-let* ((function
-               (mevedel-execution--record-teardown-function record)))
-    (setf (mevedel-execution--record-teardown-function record) nil)
-    (ignore-errors (funcall function))))
+  (mevedel-execution--teardown-record record))
 
 (defun mevedel-execution--discard-record (record reason)
   "Kill and forget RECORD because of lifecycle REASON.

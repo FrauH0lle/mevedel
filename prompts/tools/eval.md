@@ -23,6 +23,10 @@ Evaluate one Elisp form and return its value and printed output.
 - `mode="fresh"` runs a child `emacs --batch -Q` with the current `load-path` and
   session working directory. It does not inherit live buffers, variable values,
   or loaded packages. Require libraries needed by the check.
+- Fresh mode accepts `yield_time_ms` (default 10000, range 250–30000). If still
+  running, it returns an `execution_id` for WriteStdin polling, ListExecutions,
+  and StopExecution; root completion wakes an idle turn. Non-empty input is
+  refused. Live mode rejects `yield_time_ms` and only the user's `C-g` can stop it.
 - Evaluation uses the session working directory. Values print with `%S`, with
   shared and circular structure shown once as `#N=`/`#N#`; `print`,
   `prin1`, and `princ` output is returned as STDOUT; `message` text is returned as
