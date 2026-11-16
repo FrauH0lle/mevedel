@@ -182,10 +182,10 @@ sample boundaries; see [Agents](agents.md) for their sample accounting.
   [Proposal guidance](plan-mode.md#proposal-guidance). A new sticky Plan episode
   rearms the template; feedback does not.
 - **Mode constraints:** one advisory on initial delivery and each effective
-  permission-mode change, including request overrides and returning to Ask.
-  Unchanged modes never repeat it. Full Access, default protected paths,
-  unconstrained live Eval, remaining hard denies/Plan/integrity checks, and
-  deliberate destructive calls are disclosed together. There are no separate
+  permission-mode or reviewer wording change, including request overrides and
+  returning to Ask. Unchanged advisories never repeat. Full Access, default
+  protected paths, unconstrained live Eval, remaining hard denies/Plan/integrity
+  checks, and deliberate destructive calls are disclosed together. There are no separate
   full-auto entry/exit reminders.
 - **Fork provenance:** the sparse (interval 20) `fork-provenance`
   reminder regenerates a fork's provenance from durable session slots

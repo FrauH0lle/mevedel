@@ -14,6 +14,7 @@
 (require 'mevedel-workspace)
 (require 'mevedel-workspace-identity)
 (require 'mevedel-permissions)
+(require 'mevedel-permission-review)
 (require 'mevedel-session-persistence)
 (require 'mevedel-session-publication)
 (require 'mevedel-file-state)
@@ -317,14 +318,14 @@ this collapses both shapes to the delivered text."
              :type 'a :trigger trigger :content content :interval 7
              :recipe '(pending-events)))
          (_  (setf (mevedel-reminder-last-fired r) 42
-                    (mevedel-reminder-permission-mode-observation r) 'full-auto))
+                    (mevedel-reminder-mode-constraints-observation r) "delivered body"))
          (clone (mevedel-reminder-clone r)))
     (should (eq 'a (mevedel-reminder-type clone)))
     (should (eq trigger (mevedel-reminder-trigger clone)))
     (should (eq content (mevedel-reminder-content clone)))
     (should (equal 7 (mevedel-reminder-interval clone)))
     (should (null (mevedel-reminder-last-fired clone)))
-    (should-not (mevedel-reminder-permission-mode-observation clone))
+    (should-not (mevedel-reminder-mode-constraints-observation clone))
     (should (equal '(pending-events)
                    (mevedel-reminder-recipe clone)))
     (should-not (eq r clone))
@@ -414,11 +415,14 @@ this collapses both shapes to the delivered text."
   ,test
   (test)
   :doc "serializes trusted recipes and rejects closure-only templates"
-  (let ((recipes
-         (mevedel-reminders-serialize-agent-templates
-          (list (mevedel-reminders-make-mode-constraints)
-                (mevedel-reminders-make-pending-events)))))
-    (should (equal '((mode-constraints) (pending-events)) recipes)))
+  (let* ((mode (mevedel-reminders-make-mode-constraints))
+         (_ (setf (mevedel-reminder-mode-constraints-observation mode) "delivered body"))
+         (recipes
+          (mevedel-reminders-serialize-agent-templates
+           (list mode (mevedel-reminders-make-pending-events)))))
+    (should (equal '((mode-constraints) (pending-events)) recipes))
+    (should-not (mevedel-reminder-mode-constraints-observation
+                 (car (mevedel-reminders-restore-agent-templates recipes)))))
   (should-error
    (mevedel-reminders-serialize-agent-templates
     (list (mevedel-reminder-create
@@ -1168,12 +1172,16 @@ this collapses both shapes to the delivered text."
     (should (string-match-p "weird-mode"
                             (funcall (mevedel-reminder-content r) session))))
 
-  :doc "effective mode changes reach provider payload before throttling allows repeats"
+  :doc "mode and reviewer changes reach provider payload only once delivered"
   (dolist (host '("example.test" "api.openai.com"))
-    (dolist (scenario '((ask full-auto nil) (full-auto nil ask)))
+    (dolist (scenario '((ask (full-auto user) (nil user))
+                        (full-auto (nil auto) (ask auto))
+                        (ask (nil user) (nil auto) (nil user))
+                        (edits (nil user) (nil auto) (nil user))))
       (with-temp-buffer
         (let* ((session (mevedel-session--create
                          :permission-mode (car scenario)))
+               (mevedel-permission-reviewer 'user)
                (reminder (mevedel-reminders-make-mode-constraints))
                (backend (gptel-make-openai
                          "scoped-reminder" :host host :key "test" :models '(test)))
@@ -1181,18 +1189,20 @@ this collapses both shapes to the delivered text."
                (payload-key (if (gptel-openai-responses-p backend) :input :messages))
                previous)
           (setq-local mevedel--session session)
-          (dolist (override (cdr scenario))
+          (dolist (state (cdr scenario))
+            (setq mevedel-permission-reviewer (cadr state))
             (setq-local mevedel--current-request
                         (mevedel-request--create
-                         :session session :permission-mode-override override))
-            (let* ((mode (or override (car scenario)))
+                         :session session :permission-mode-override (car state)))
+            (let* ((mode (or (car state) (car scenario)))
+                   (expected (funcall (mevedel-reminder-content reminder) session))
                    (batch (mevedel-reminders--collect-from
                            (list reminder) 0 session))
                    (data (list payload-key (vector (list :role "user" :content "task"))))
                    (fsm (gptel-make-fsm
                          :info (list :buffer (current-buffer) :backend backend
                                      :data data :position (copy-marker (point-max))))))
-              (should (eq previous (mevedel-reminder-permission-mode-observation reminder)))
+              (should (equal previous (mevedel-reminder-mode-constraints-observation reminder)))
               (should (eq mode (mevedel-reminders--session-mode session)))
               (should (cl-find 'mode-constraints (plist-get batch :entries)
                                :key (lambda (entry) (plist-get entry :type))))
@@ -1204,15 +1214,40 @@ this collapses both shapes to the delivered text."
               (mevedel-reminders--handle-inject fsm)
               (let* ((messages (plist-get data payload-key))
                      (body (plist-get (aref messages (1- (length messages))) :content)))
-                (ert-info ((format "Host %S scenario %S override %S" host scenario override))
+                (ert-info ((format "Host %S scenario %S state %S" host scenario state))
                   (should (= 2 (length messages)))
                   (should (equal "task" (plist-get (aref messages 0) :content)))
-                  (should (string-search (format "Permission mode: `%s'." mode) body))))
-              (should (eq mode (mevedel-reminder-permission-mode-observation reminder)))
+                  (should (string-search expected body))))
+              (should (equal expected (mevedel-reminder-mode-constraints-observation reminder)))
               (should (eq (car scenario) (mevedel-session-permission-mode session)))
-              (setq previous mode)))
+              (should-not (plist-get (mevedel-reminders--collect-from (list reminder) 0 session)
+                                     :entries))
+              (setq previous expected)))
           (should-not (plist-get (mevedel-reminders--collect-from (list reminder) 0 session)
                                  :entries))))))
+
+  :doc "Ask and Edits describe automatic review without changing user or Full Access text"
+  (let* ((session (mevedel-session--create))
+         (r (mevedel-reminders-make-mode-constraints))
+         (mevedel-permission-reviewer 'auto))
+    (dolist (mode '(ask edits))
+      (setf (mevedel-session-permission-mode session) mode)
+      (let ((body (funcall (mevedel-reminder-content r) session)))
+        (dolist (text '("automatic reviewer first"
+                        "typically approves task-relevant observational live Eval and clearly scoped requests without involving the user"
+                        "mutations, unknown effects and unclear scope go to the user"))
+          (should (string-search text body)))
+        (should-not (string-search "require approval" body))))
+    (dolist (case '((edits . "Permission mode: `edits'. Native edits and confined Bash/batch Eval are automatic. Ordinary native reads include OS-readable paths; configured credential masks remain. Live Eval and additional authority require approval.")
+                    (full-auto . "Permission mode: `full-auto'. Full Access under the target OS account disables confinement and permission prompts, including default protected paths. Native tools and live Eval are automatic. Live Eval runs inside Emacs without confinement. Explicit hard denies, Plan restrictions and integrity checks remain. Keep destructive tool calls deliberate.")))
+      (setf (mevedel-session-permission-mode session) (car case))
+      (when (eq (car case) 'full-auto)
+        (test-mevedel-reminders--collect-and-commit (list r) 0 session))
+      (dolist (reviewer (if (eq (car case) 'full-auto) '(auto user) '(user)))
+        (setq mevedel-permission-reviewer reviewer)
+        (should (equal (cdr case) (funcall (mevedel-reminder-content r) session)))
+        (when (eq (car case) 'full-auto)
+          (should-not (mevedel-reminders--should-fire-p r 0 session))))))
 
   :doc "each mode advisory fires once until the effective mode changes"
   (let* ((session (mevedel-session--create :permission-mode 'ask))

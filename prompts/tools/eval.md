@@ -29,7 +29,10 @@ Evaluate one Elisp form and return its value and printed output.
   Errors can include output produced before failure. Large results have a bounded
   preview and retrieval address.
 - In Edits, batch Eval runs automatically with required confinement and no
-  network by default; live Eval needs approval. Full Access automatically runs
+  network by default; live Eval goes to the selected permission reviewer.
+  In Ask and Edits, automatic review typically approves task-relevant observational
+  live Eval without involving the user; mutations, unknown effects and unclear
+  scope go to the user. Full Access automatically runs
   either mode without confinement. Ask uses the configured sandbox preference.
   Non-default permission requests apply only to batch:
   `with_additional_permissions` requests network and/or exact absolute read/write

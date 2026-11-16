@@ -371,9 +371,14 @@ The three canonical modes are `ask`, `edits`, and `full-auto`:
 
 | Mode | Native tools | Bash and Eval | Confinement |
 | --- | --- | --- | --- |
-| `ask` | Root/resource checks and patch review | Recognized inspection automatic; uncertain execution asks | Configured sandbox preference |
-| `edits` | Native edits automatic within roots; ordinary reads span OS-readable paths, retaining credential masks | Arbitrary Bash and batch Eval automatic; live Eval and additional authority require approval | Required; an unavailable backend refuses execution |
+| `ask` | Root/resource checks and patch review | Recognized inspection automatic; uncertain execution goes to the selected reviewer | Configured sandbox preference |
+| `edits` | Native edits automatic within roots; ordinary reads span OS-readable paths, retaining credential masks | Arbitrary Bash and batch Eval automatic; live Eval and additional authority go to the selected reviewer | Required; an unavailable backend refuses execution |
 | `full-auto` | Full Access | Automatic, including live Eval and explicit escalation | Off; filesystem and network unrestricted under the target OS account |
+
+In Ask and Edits, `mevedel-permission-reviewer` selects the user or automatic
+review first. Automatic review typically approves task-relevant observational
+live Eval and clearly scoped requests without involving the user; mutations,
+unknown effects and unclear scope go to the user.
 
 Full Access bypasses ordinary ask rules, default protections, resource boundaries,
 hook asks and automatic review. Explicit hard denies, Plan restrictions,

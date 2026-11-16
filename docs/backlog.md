@@ -135,12 +135,6 @@ Eval therefore adds roughly 5–6% to mevedel's first request; later requests
 read it from the prompt cache. Remove its specialist listing entry when it
 becomes native.
 
-Change the permission reminder at the same time. The `ask` and `edits` texts
-(`mevedel-reminders.el:867-868`) say live Eval requires approval and do not
-reflect `mevedel-permission-reviewer`. With `auto`, observational live Eval is
-usually approved by review ([reviewer](guardian-prompts.md)), so the model
-avoids a tool that would rarely interrupt the user.
-
 ### Rename batch Eval to fresh, and yield
 
 Rename the `batch` mode to `fresh` everywhere (`:eval-mode`, cards, execution
@@ -178,14 +172,15 @@ far:
 - Default confinement only, fixed at start. A call needing network or extra
   paths uses fresh Eval, or restarts the sandbox with the new profile and says
   so.
-- Run where mevedel's Emacs runs, which covers a remote mevedel host. In a
-  TRAMP session, reach files through TRAMP; a sandbox on the remote host can
-  follow later. Today batch Eval is refused in remote sessions
-  (`mevedel-tool-exec-permission.el`, "Batch Eval is unavailable for remote
-  sessions"); decide whether sandbox Eval keeps that refusal or runs locally
-  against TRAMP paths. Remote-execution tests use the `/mevedelmock:` TRAMP
-  method (`test/test-mevedel-execution-remote.el`); a remote-host sandbox would
-  also need a target with Emacs installed, such as a container.
+- Run where mevedel's Emacs runs, which covers a remote mevedel host. In
+  sessions with a remote execution target, refuse sandbox Eval as batch Eval
+  is refused today (`mevedel-tool-exec-permission.el`, "Batch Eval is
+  unavailable for remote sessions"); live Eval and Bash on the target remain.
+  Running the sandbox locally against TRAMP paths, or on the remote host, can
+  follow if Elisp development over TRAMP needs it. Remote-execution tests use
+  the `/mevedelmock:` TRAMP method (`test/test-mevedel-execution-remote.el`);
+  a remote-host sandbox would also need a target with Emacs installed, such as
+  a container.
 - Calls are asynchronous and yield like fresh Eval.
 - Write an ADR before implementation.
 
