@@ -1265,6 +1265,10 @@
                                            (plist-get descriptor :current-p)))
                                    (mevedel-session-artifacts-transcript-segments
                                     session live))))
+            ;; The Markdown fontification buffer is a reusable cache created on
+            ;; first use when grammars are available; create it before the
+            ;; snapshot so the leak checks below count only audit buffers.
+            (mevedel-view--markdown-fontify-target)
             (let ((before (buffer-list)))
               (let* ((control
                       (mevedel-view--rendering-header-line
