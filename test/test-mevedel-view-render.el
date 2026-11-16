@@ -6045,7 +6045,36 @@
         (should (= 4 (length children)))
         (should-not (cl-some (lambda (child)
                                (eq (plist-get child :kind) 'reasoning))
-                             children))))))
+                             children)))))
+  :doc "an agent view's own completion mail neither splits nor shortens the run"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (setq-local mevedel-view--agent-path "/root/worker"))
+    (cl-flet ((reads (from to)
+                (cl-loop for i from from below to
+                         do (mevedel-view-test--insert-data
+                             data-buf
+                             (format "\n(:name \"Read\" :args (:file_path \"/tmp/f%d\"))\n\nbody\n" i)
+                             (cons 'tool (format "call_%d" i))))))
+      (reads 0 3)
+      (mevedel-view-test--insert-data
+       data-buf
+       (concat "<agent-message type=\"EXECUTION\" sender=\"/root/worker\" "
+               "recipient=\"/root/worker\" execution_id=\"exec-1\" "
+               "description=\"own\" outcome=\"success\" exit_code=\"0\">\n"
+               "out\n</agent-message>\n")
+       nil)
+      (reads 3 6)
+      (let* ((range (with-current-buffer data-buf
+                      (cons (point-min) (point-max))))
+             (rendering
+              (with-current-buffer view-buf
+                (mevedel-view--tool-group-rendering-from-source
+                 data-buf (car range) (cdr range)))))
+        (should (= 6 (length (plist-get rendering :child-calls))))
+        (should (equal "6 calls: read 6 files"
+                       (substring-no-properties
+                        (plist-get rendering :header))))))))
 
 (mevedel-deftest mevedel-view--tool-group-rendering ()
   ,test

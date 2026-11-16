@@ -6950,15 +6950,23 @@ bound tool-use id is the id its result carries in the transcript."
 run, so re-segmenting a folded run also returns the segment that begins
 where the run ended.  That row was never part of the group: keeping it
 summarizes the following response, mailbox, or prompt as one more
-delivery."
-  (let* ((entries
+delivery.
+
+Entries are classified in the calling view buffer, as the live render
+does: view-local state such as `mevedel-view--agent-path' decides whether
+a delivery is this transcript's own completion mail, which neither joins
+nor splits a run.  Classified from the data buffer, an agent view's own
+completion mail became a boundary, so a toggle rebuilt only the first
+part of the group and dropped the rest."
+  (let* ((view-buf (current-buffer))
+         (entries
           (with-current-buffer data-buf
             (save-restriction
               (widen)
-              (mevedel-view--tool-activity-entries
-               (cl-remove-if (lambda (seg) (>= (cadr seg) end))
-                             (mevedel-transcript-segments start end))
-               data-buf))))
+              (let ((segments (cl-remove-if (lambda (seg) (>= (cadr seg) end))
+                                            (mevedel-transcript-segments start end))))
+                (with-current-buffer view-buf
+                  (mevedel-view--tool-activity-entries segments data-buf))))))
          (group (seq-find
                  (lambda (item) (plist-get item :group))
                  (mevedel-activity-group-partition
