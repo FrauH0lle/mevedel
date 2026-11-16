@@ -41,6 +41,158 @@ Claude Code caps background commands at 10 minutes by default and 2 hours at
 most. Expiry would reuse the existing TERM/KILL process-group teardown and
 report a timeout outcome.
 
+## Proactive sessions
+
+Source: the 2026-11-16 review of Anthropic's "Building always-on agents"
+(https://claude.com/resources/articles/building-always-on-agents). It breaks
+always-on agents into five primitives: event inbox, timers, memory, permissions
+and outbox. Mevedel already covers the inbox (the agent mailbox, Monitor and
+Bash wake-ups, one turn per session), memory (curated memory, journal,
+`/remember`) and permissions (automatic review, absence timeout, browser
+answers, `mevedel-permission-notify-function`). The entries below fill the
+gaps. They apply to local sessions as well as a remote host used through the
+browser viewer.
+
+Reference point (checked 2026-11-16,
+https://code.claude.com/docs/en/scheduled-tasks): Claude Code's `CronCreate` /
+`CronList` / `CronDelete` and `ScheduleWakeup` fire only between turns while
+the session is idle. Tasks are stored per session and restored on resume.
+Recurring tasks expire after seven days, one-shot tasks whose time passed are
+dropped, missed recurring runs are not caught up, and background commands and
+monitors are not restarted.
+
+### Scheduled wake-ups
+
+No tool lets the agent wake itself later. Add one-shot follow-ups ("check CI
+in 20 minutes") and recurring schedules that deliver a timer record to the
+owning session's mailbox, waking an idle root like a `MONITOR` record does.
+
+- Persist timers with the session, not in a live Emacs timer only. Use wall
+  time, so a timer due during a suspend fires once on wake (as the
+  [absence timeout](permissions.md#absence-timeout) does), and fires once,
+  not once per missed interval.
+- A due timer waits for the current turn and coalesces with other mail.
+  Bound the timer count per session, expire recurring timers, and list and
+  cancel them from the background-work panel and a tool.
+- Decide how timers interact with the paused-on-resume Goal rule
+  ([goals](goals.md)) before implementation: a restored timer must not
+  dispatch Goal work the rule withholds. Read that rule's history first.
+- Keep the sleep inhibitor rule for waiting Monitors: a pending timer alone
+  does not keep the machine awake.
+
+### Wake sources across restarts
+
+Monitors live only in the current Emacs runtime; resume and fork never restart
+them ([Monitor](tools.md#monitor)). After a restart the agent is not told that
+an event source it relied on is gone, so events are lost silently. At minimum,
+tell the agent on the next turn which monitors were lost. Consider an opt-in
+re-arm for monitors the agent marks as restartable, under the same restored-Goal
+constraint as timers. A polling Monitor (for example `gh run watch`) then also
+covers outside events such as CI without opening an inbound port.
+
+### Notifications beyond permission prompts
+
+`mevedel-permission-notify-function` covers prompts only. Unattended work that
+ends (a timer run, a Goal turn, a Monitor-triggered turn) has no way to reach
+a user who is not watching. Consider a general notification hook or model tool
+with a quiet-by-default policy: notify only when a turn the user did not start
+has something for them, never repeat the same notice, and leave the volume to
+configuration. The relay never sees the room key, so notification text must
+not carry conversation content in clear text; send "session X needs you" with
+a link, or encrypt the payload for the device.
+
+Not planned: inbound webhooks (a polling Monitor serves them) and the article's
+deferred tool calls that end a run and resume when the user answers. A pending
+card blocks only its own session, and browser answers plus the absence timeout
+already cover being away.
+
+## Eval integration
+
+Source: the 2026-11-16 discussion of why models choose Bash and Python
+scripts over Eval. Emacs state is fully inspectable, but live Eval looks like
+a human interruption, risks the user's editor and has thin error feedback.
+Batch Eval rebuilds every fixture on each call, so for multi-step work it is
+no better than a Python script. Planned modes: `live` (the user's Emacs),
+`sandbox` (persistent and isolated) and `fresh` (a new clean process per call).
+
+### Eval as a native tool
+
+Promote Eval from a ToolCall specialist to a native tool beside Bash.
+Measured cost (2026-11-16, Opus 5.5, `claude -p` with no tools against a
+548-token baseline system prompt):
+
+- `prompts/tools/eval.md` description: 1,081 input tokens; for comparison
+  `prompts/tools/bash.md` is 881. The argument schema adds to this and was
+  not measured separately.
+- mevedel's first root request through ACP, including its first-message
+  context reminders (about 28,600 characters): about 23,700 input tokens in
+  two root sessions.
+- Native Claude Code's first request in four projects with short first
+  messages: 39,354 to 46,128 input tokens, including those projects' own
+  instructions and memory.
+
+Eval therefore adds roughly 5–6% to mevedel's first request; later requests
+read it from the prompt cache. Remove its specialist listing entry when it
+becomes native.
+
+Change the permission reminder at the same time. The `ask` and `edits` texts
+(`mevedel-reminders.el:867-868`) say live Eval requires approval and do not
+reflect `mevedel-permission-reviewer`. With `auto`, observational live Eval is
+usually approved by review ([reviewer](guardian-prompts.md)), so the model
+avoids a tool that would rarely interrupt the user.
+
+### Rename batch Eval to fresh, and yield
+
+Rename the `batch` mode to `fresh` everywhere (`:eval-mode`, cards, execution
+profiles, prompts, docs, tests), with no alias, per NO BACKWARDS COMPATIBILITY.
+Fresh and sandbox Eval currently block the turn until they finish and have no
+deadline; give them Bash's `yield_time_ms`, `execution_id`, WriteStdin and
+StopExecution handling and completion wake-ups. Live Eval stays synchronous: it
+runs on Emacs's main thread.
+
+### Eval feedback and live limits
+
+- Capture `message` output from every mode. In live mode, still show it to
+  the user; do not hide the echo area to capture it.
+- Return a bounded backtrace with errors.
+- Document that live Eval cannot be interrupted reliably: `with-timeout` fires
+  only where timers can run, so a tight loop needs the user's `C-g`. Bound
+  recursion and output, and have the tool guidance steer long or uncertain
+  work to the sandbox.
+
+### Persistent sandbox Eval
+
+A long-lived child Emacs that keeps state between calls, so code can be loaded
+once and probed step by step (load the working tree, build a fixture buffer,
+redefine one function, retry) without touching the user's Emacs. Decisions so
+far:
+
+- One sandbox per agent: the root and each retained agent that uses it. Start
+  on first use, stop after idling, restart after a crash, and offer an
+  explicit reset. Show it in the background-work panel with a summary of
+  loaded features, since stale definitions are its main risk.
+- Start from `-Q` with the current `load-path`; load features on demand. Do
+  not load the user's init, which loads mevedel itself and could start
+  collaboration rooms, sleep inhibitors or servers. An opt-in init profile can
+  follow later.
+- Default confinement only, fixed at start. A call needing network or extra
+  paths uses fresh Eval, or restarts the sandbox with the new profile and says
+  so.
+- Run where mevedel's Emacs runs, which covers a remote mevedel host. In a
+  TRAMP session, reach files through TRAMP; a sandbox on the remote host can
+  follow later. Today batch Eval is refused in remote sessions
+  (`mevedel-tool-exec-permission.el`, "Batch Eval is unavailable for remote
+  sessions"); decide whether sandbox Eval keeps that refusal or runs locally
+  against TRAMP paths. Remote-execution tests use the `/mevedelmock:` TRAMP
+  method (`test/test-mevedel-execution-remote.el`); a remote-host sandbox would
+  also need a target with Emacs installed, such as a container.
+- Calls are asynchronous and yield like fresh Eval.
+- Write an ADR before implementation.
+
+Fresh Eval stays the clean-room check: a reset sandbox can keep loaded
+features, advice, timers and hooks, so only a fresh process proves that code
+loads and runs from scratch.
+
 ## View
 
 ### Cursor jumps after switching back to a busy view

@@ -1672,6 +1672,9 @@ cleanup, process-group handling, and optional Bubblewrap confinement; live Eval
 does not use that child seam. Batch mode isolates interactive Emacs state and,
 when the platform sandbox is active, applies the same filesystem, protected
 path, process, and network boundaries as Bash.
+Batch Eval is refused in sessions with a remote execution target, because it
+would launch the local Emacs binary and script against remote paths; use live
+Eval, or Bash on the target, there.
 
 Bash and batch-Eval results record the boundary that applied to their
 invocation. The settled owning tool row retains a compact durable warning for
