@@ -1,6 +1,6 @@
 ---
-name: "Delegation roles and implementation-model preference"
-description: "Keep design with the coordinator when appropriate; delegate implementation using the user's model and effort preferences."
+name: "Delegation roles and model selection"
+description: "Keep design with the coordinator when appropriate; delegate implementation and choose models per task from what is configured."
 type: user
 ---
 
@@ -14,18 +14,10 @@ The user prefers the main assistant to act as orchestrator, reviewer, and coordi
 
 For comparable design-and-implementation work, keep substantive design ownership with the coordinator and hand implementation to suitable workers, rather than assuming design must also be delegated. This clarifies the preferred division of labor; it does not prohibit specialist design input or override an explicit request to delegate design.
 
-## Implementation-model preference
+## Model selection
 
-**User correction, 2026-11-07** (`segment-0001.chat.org`, turn 39): for delegated implementation, use Codex **gpt-6.1-sol** at effort **“high or more”**; reserve **gpt-6-astra** for **“hard” parts**.
+On 2026-11-16 the user withdrew the standing preference (from 2026-11-07) to use Codex gpt-6.1-sol for delegated implementation, because the subscription behind it is not permanent. There is no fixed implementation model. Configured gptel backends can be used through an exact `BACKEND:MODEL` in Agent even when the tool's tier list shows only one backend; check what is configured rather than assuming a remembered model is available.
 
-This corrected the assistant's plan to continue implementation with a gpt-6-astra agent. Apply it to implementation work, not automatically to pair partners, reviewers, or every other delegated role. “Hard” was not given a precise threshold.
+On 2026-10-30, the user replaced an earlier fixed-model fallback with coordinator-selected models informed by the current preset and task needs, because the fallback caused one model to be chosen too consistently.
 
-The November 14 reference to “gpt 6.1 workers” supports this division of labor but does not explicitly replace the earlier model variant or effort preference.
-
-## Other delegated roles and current configuration
-
-On 2026-10-30, the user replaced an earlier fixed-model fallback with coordinator-selected models informed by the current preset and task needs, because the fallback caused one model to be chosen too consistently. The November 7 correction supplies a more specific preference for implementation; it does not establish a fixed model for every role.
-
-Respect explicit selections in the current user request and applicable preset constraints. Check current availability rather than assuming a remembered model is selectable. If the implementation preference cannot be met under the current configuration, surface that mismatch rather than silently claiming to have followed it.
-
-For discretionary selections outside the implementation preference, choose model and effort for the delegated task. Coordinate and review delegated implementation when delegation is appropriate.
+Respect explicit selections in the current user request and applicable preset constraints; otherwise choose model and effort per delegated task. Coordinate and review delegated implementation when delegation is appropriate.
