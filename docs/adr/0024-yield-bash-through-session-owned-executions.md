@@ -100,7 +100,7 @@ draft.
 ## Rationale and consequences
 
 One owner absorbs process groups, output bounds, cancellation, and cleanup for
-Bash, batch Eval, and one-shot helpers. A shell-native background process would
+Bash, fresh Eval, and one-shot helpers. A shell-native background process would
 escape that lifecycle, so background operators are refused. Request-owned
 foreground work stops on abort; yielded work survives until completion, stop,
 owner/session teardown, or Emacs exit. Resumed sessions mark stale rows lost

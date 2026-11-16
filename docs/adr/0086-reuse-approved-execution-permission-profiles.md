@@ -4,7 +4,7 @@ Status: accepted
 
 ## Current decision
 
-Bash and batch Eval resolve command authority and child-confinement authority
+Bash and fresh Eval resolve command authority and child-confinement authority
 in one interaction. The card presents the operation plus every requested
 additive capability. Session and workspace approval initially select the
 complete profile; the user may narrow command, network, or path
@@ -78,7 +78,7 @@ network approvals and does not rewrite durable workspace/global configuration.
 
 Before automatic review and human admission, the queue defaults existing directory
 writes and reads beneath inaccessible masks to recursive scope for confined Bash
-and batch Eval. The reviewer judges that prepared scope, sees the original
+and fresh Eval. The reviewer judges that prepared scope, sees the original
 resources beside it, and a fallback card displays the same selection for both
 execution and remembering. Ordinary approval therefore accepts an enforceable
 grant without a separate scope-selection step. Only the requested directory is

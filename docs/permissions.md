@@ -30,7 +30,7 @@ flowchart TD
 ```
 
 The diagram shows authority composition; the ordered resolver below supplies the
-exact precedence. Bash and batch Eval also resolve their child-confinement
+exact precedence. Bash and fresh Eval also resolve their child-confinement
 capabilities before execution. An approval applies only within the requested and
 approved scope; it cannot override an absolute denial or workflow ceiling.
 
@@ -55,7 +55,7 @@ Single decision function `mevedel-check-permission`. Decision chain:
 7. A protected or outside-root path without that authority → ask
 8. Permission-mode fallback when no earlier policy decides; in Edits, ordinary
    native reads cover the OS-readable filesystem except inaccessible protected
-   paths, and Bash/batch Eval run with required confinement
+   paths, and Bash/fresh Eval run with required confinement
 
 The permission mode itself never denies: modes decide between automatic
 allowance and a prompt, and every hard denial is a step-2 or step-3 policy.
@@ -211,7 +211,7 @@ ignores ask rules and default protected paths; explicit denies remain absolute.
 
 `:sandbox-permissions` is an execution-level qualifier, not a request to raise
 authority. A rule carrying `require-escalated` is considered only after Bash or
-batch Eval has explicitly requested that level. Ordinary command allows cannot
+fresh Eval has explicitly requested that level. Ordinary command allows cannot
 authorize full escalation in Ask or Edits. Only direct user-authored session, persistent, and
 defcustom rules may allow it; delegated invocation/request rules cannot. A
 pattern scopes authority to the matching Bash command or Eval expression, and
@@ -219,7 +219,7 @@ omitting the pattern deliberately authorizes every expression for that tool at
 that execution level. Qualified and ordinary explicit denies remain final.
 
 `:network` and `:file-system` form an execution permission profile on a
-matching Bash or batch-Eval allow rule. The profile records the additive child
+matching Bash or fresh-Eval allow rule. The profile records the additive child
 authority approved with that operation; it is not a workload classifier.
 Single-segment Bash approvals may use the recognized safe command pattern.
 Compound commands keep generalized operation rules for their segments and
@@ -372,7 +372,7 @@ The three canonical modes are `ask`, `edits`, and `full-auto`:
 | Mode | Native tools | Bash and Eval | Confinement |
 | --- | --- | --- | --- |
 | `ask` | Root/resource checks and patch review | Recognized inspection automatic; uncertain execution goes to the selected reviewer | Configured sandbox preference |
-| `edits` | Native edits automatic within roots; ordinary reads span OS-readable paths, retaining credential masks | Arbitrary Bash and batch Eval automatic; live Eval and additional authority go to the selected reviewer | Required; an unavailable backend refuses execution |
+| `edits` | Native edits automatic within roots; ordinary reads span OS-readable paths, retaining credential masks | Arbitrary Bash and fresh Eval automatic; live Eval and additional authority go to the selected reviewer | Required; an unavailable backend refuses execution |
 | `full-auto` | Full Access | Automatic, including live Eval and explicit escalation | Off; filesystem and network unrestricted under the target OS account |
 
 In Ask and Edits, `mevedel-permission-reviewer` selects the user or automatic
@@ -395,7 +395,7 @@ Configuration, interactive commands, and persisted sessions accept only these
 canonical values.
 
 The prompt offers allow/deny choices for the invocation, session, or persistent
-workspace scope. When one Bash or batch-Eval call needs both operation and
+workspace scope. When one Bash or fresh-Eval call needs both operation and
 additive authority, one card presents the complete request. Session and
 workspace approval default to remembering the complete selected profile;
 command and network toggles can narrow it before approval. For each path,
@@ -548,7 +548,7 @@ revocable. Global entries are authored explicitly: prompt-based remembering
 continues to write only session or workspace authority.
 
 Permission entries select an enforceable scope before automatic review and
-before displaying approval controls. For confined Bash and batch Eval, existing
+before displaying approval controls. For confined Bash and fresh Eval, existing
 directory writes and reads beneath inaccessible masks default to the requested
 directory's recursive scope. Files, missing paths, already-readable directory
 reads, native operations, live Eval, and unconfined execution retain their
@@ -849,7 +849,7 @@ promoting the override to a session default.
 Each queued card gets a `:permission-id` at admission, separate from the owning
 `:request-id` and nested tool-call identifiers. Its captured
 `:permission-mode-base` and `:permission-mode-effective` remain unchanged when
-the user changes modes while the card is pending. Eval's live/batch choice is
+the user changes modes while the card is pending. Eval's live/fresh choice is
 recorded separately as `:eval-mode`. The visible card shows the admission mode
 and the cause supplied by the policy owner: mode-based operation judgment,
 resource boundary, protected resource, explicit ask rule, hook, missing
@@ -970,7 +970,7 @@ invocation-only; users may still author broader rules directly.
 
 ### Child confinement
 
-Bash, batch Eval, and native external tool helpers share the guarded child
+Bash, fresh Eval, and native external tool helpers share the guarded child
 launcher and use one effective policy: required in Edits, off in Full Access,
 and the session's configured `mevedel-sandbox-mode` in Ask. On Linux, the backend resolves
 `bwrap` with `executable-find` and caches a real probe of the core mount, user,
@@ -1042,7 +1042,7 @@ are also replaced by empty tmpfs mounts: an X server accepts input injection
 and the ICE session manager controls the desktop session.
 
 Masking hides paths, but the temporary directory must stay shared, because
-commands, native tools and batch Eval exchange files through it, and other
+commands, native tools and fresh Eval exchange files through it, and other
 programs put sockets there and under `/run`. A local confined command
 therefore starts through `scripts/mevedel-landlock.py`, which applies a
 Landlock ruleset before the command and its descendants run. It restricts
@@ -1212,7 +1212,7 @@ Failed confined results identify the discovered shared metadata location for
 objects and refs; this is repository-layout information, not a diagnosis
 inferred from stderr or an automatic grant. A new explicit invocation can
 request the missing scope.
-Before Bash or batch Eval starts, one shared resolver merges capabilities
+Before Bash or fresh Eval starts, one shared resolver merges capabilities
 explicitly requested by that invocation with every matching direct
 session/workspace/global profile. A non-empty effective profile promotes
 `use_default` to additive confinement; `require_escalated` is never changed.
@@ -1240,7 +1240,7 @@ filesystem lists, are treated as omitted rather than as an authority request.
 Non-empty additions still require `with_additional_permissions` and a
 justification.
 
-`require_escalated` is a separate complete bypass for Bash and batch Eval. It
+`require_escalated` is a separate complete bypass for Bash and fresh Eval. It
 requires a justification and cannot be combined with additive permissions. It
 prompts in Ask and Edits unless a matching
 direct user-authored `:sandbox-permissions require-escalated` rule already
@@ -1255,7 +1255,7 @@ cannot grant this authority, and non-interactive trusted skill expansion cannot
 request it or create reusable escalation rules. An ordinary sub-agent may still
 place the same user-visible request in the shared permission queue.
 
-Literal stable Bash commands, including dangerous commands, and literal batch
+Literal stable Bash commands, including dangerous commands, and literal fresh
 Eval expressions may be remembered exactly. Dynamic, glob-bearing, or otherwise
 ambiguous Bash remains invocation-only; experts may still author an exact,
 scoped, or deliberately broad qualified rule directly. Reusable deny remains
@@ -1287,13 +1287,13 @@ for a symlink after authorization, because they open paths by name; direct
 execution already grants the user's host authority.
 A pre-marker failure retains its launcher error, diagnostics, or exit code.
 The next independent invocation reprobes the backend, so a transient launch
-failure does not disable confinement permanently. Bash and batch-Eval results append their active
+failure does not disable confinement permanently. Bash and fresh-Eval results append their active
 sandbox facts for the model and audit trail. Native helper facts remain
 internal and in tests rather than being added to successful tool content.
 Trusted skill substitutions keep those facts out of the substituted literal.
 The first direct fallback in each live session emits one user-visible warning
 and adds one model-visible note to the affected tool result. Later fallbacks do
-not repeat the warning, but completed Bash and batch-Eval results retain their
+not repeat the warning, but completed Bash and fresh-Eval results retain their
 actual invocation facts for the transcript and audit trail. Additive filesystem
 facts include read and write grant counts. Mevedel does not add a persistent
 sandbox status-line item.
@@ -1357,14 +1357,14 @@ introspection reads follow ordinary policy.
 
 Eval asks through the same session permission queue's Eval-specific
 entry type when approval is required. Edits automatically permits confined
-batch Eval, while live Eval remains an exception. Full Access permits both. Like Bash,
+fresh Eval, while live Eval remains an exception. Full Access permits both. Like Bash,
 an `ask` fires `PermissionRequest` before queue admission without changing the
 specialized card. The expression shown in the prompt is subject to
 `mevedel-eval-expression-display-limit`.  The prompt also shows the
 requested execution mode and, for live Eval, whether UI preservation is
 enabled. An optional `justification` on any Eval call appears on the card and
 in reviewer evidence as the model's quoted reason. It never authorizes anything
-and remains mandatory only for non-default batch permission requests.
+and remains mandatory only for non-default fresh permission requests.
 
 The full-auto reminder explicitly states that live Eval runs inside Emacs
 without confinement, alongside the tool and permission-card disclosures.
@@ -1374,9 +1374,9 @@ inside the current Emacs process so the expression can inspect live
 buffers, variables, windows, timers, advice, and package state.  Live
 Eval restores the selected frame's window configuration by default;
 callers can pass `preserve_ui: false` only when intentional UI
-manipulation is desired.  `batch` starts a child `emacs --batch -Q`
+manipulation is desired.  `fresh` starts a child `emacs --batch -Q`
 process with the current `load-path` and the session working directory.
-Batch Eval protects the interactive Emacs session from UI/global-state
+Fresh Eval protects the interactive Emacs session from UI/global-state
 mutation and uses the same effective child confinement as Bash. Edits refuses
 unavailable confinement; Ask may use its configured fallback, and Full Access
 runs directly as the same OS user with unrestricted filesystem/network disclosure.

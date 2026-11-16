@@ -79,7 +79,7 @@
                (require 'mevedel-permission-queue)
                (let* ((session (mevedel-session--create :name "cold-prompt"))
                       (entry (list :kind 'eval :expression "(+ 1 2)"
-                                   :session session :mode "batch"))
+                                   :session session :mode "fresh"))
                       body)
                  (setf (mevedel-session-permission-queue session) (list entry))
                  (cl-letf
@@ -90,7 +90,7 @@
                          (setq body (plist-get descriptor :body))
                          (make-overlay (point-min) (point-min)))))
                    (mevedel-permission-queue--render-entry entry))
-                 (unless (and (string-match-p "Mode: batch" body)
+                 (unless (and (string-match-p "Mode: fresh" body)
                               (string-search "(+ 1 2)" body)
                               (featurep 'mevedel-permission-prompt)
                               (not (featurep 'mevedel-tool-exec-permission)))

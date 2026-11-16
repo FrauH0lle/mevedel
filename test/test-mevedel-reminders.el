@@ -1238,7 +1238,7 @@ this collapses both shapes to the delivered text."
                         "mutations, unknown effects and unclear scope go to the user"))
           (should (string-search text body)))
         (should-not (string-search "require approval" body))))
-    (dolist (case '((edits . "Permission mode: `edits'. Native edits and confined Bash/batch Eval are automatic. Ordinary native reads include OS-readable paths; configured credential masks remain. Live Eval and additional authority require approval.")
+    (dolist (case '((edits . "Permission mode: `edits'. Native edits and confined Bash/fresh Eval are automatic. Ordinary native reads include OS-readable paths; configured credential masks remain. Live Eval and additional authority require approval.")
                     (full-auto . "Permission mode: `full-auto'. Full Access under the target OS account disables confinement and permission prompts, including default protected paths. Native tools and live Eval are automatic. Live Eval runs inside Emacs without confinement. Explicit hard denies, Plan restrictions and integrity checks remain. Keep destructive tool calls deliberate.")))
       (setf (mevedel-session-permission-mode session) (car case))
       (when (eq (car case) 'full-auto)

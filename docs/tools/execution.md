@@ -1,9 +1,9 @@
 # Bash, Monitor, and Eval execution
 
 The tool descriptions give ordinary Bash, Monitor, and Eval contracts. This manual
-covers exact grants, event monitoring, batch evaluation, and command control; it
+covers exact grants, event monitoring, fresh evaluation, and command control; it
 grants no authority. The `sandbox_permissions` and `additional_permissions`
-fields below apply to Bash, Monitor, and batch Eval, not live Eval. A live Eval may still
+fields below apply to Bash, Monitor, and fresh Eval, not live Eval. A live Eval may still
 carry an optional `justification`, shown to whoever approves it.
 
 ## Additive permission requests
@@ -327,7 +327,7 @@ delivery, execution ownership, or process lifecycle.
 ## Eval process and state
 
 Live Eval runs on the host Emacs's main thread and can only be stopped by the
-user's `C-g`; long or uncertain work belongs in batch mode.
+user's `C-g`; long or uncertain work belongs in fresh mode.
 Restoring the window configuration does not undo variable assignments,
 buffer edits, files written, timers, or other side
 effects. Use it only for effects within the authorized task. With UI preservation
@@ -336,17 +336,17 @@ the frame layout is restored. A redraw during evaluation therefore does not let
 the saved window configuration move a background-work reader into an earlier
 Assistant block or the composer.
 
-Batch Eval starts a separate `emacs --batch -Q`. Its load path and working
+Fresh Eval starts a separate `emacs --batch -Q`. Its load path and working
 directory are supplied, but it does not copy loaded packages or live values.
 Load the code whose behavior you need to check in the expression itself:
 
 ```text
 Eval(expression="(and (require 'cl-lib) (cl-every #'numberp '(1 2 3)))",
-     mode="batch")
+     mode="fresh")
 ```
 
-For a batch check requiring protected files or network, use the additive
-permission fields above with `mode="batch"` and the Elisp `expression` in
+For a fresh check requiring protected files or network, use the additive
+permission fields above with `mode="fresh"` and the Elisp `expression` in
 place of a Bash `command`. Full escalation removes child confinement; it
 does not copy live Emacs state into the child. A failed expression can already
 have changed state before the error, so inspect relevant effects before retrying.
@@ -357,7 +357,7 @@ and share lexical bindings. `print`, `prin1`, and `princ` contribute STDOUT;
 user normally in live mode. Errors include a bounded BACKTRACE and retain
 output printed before failure. Unprintable objects appear as
 `#<...>` and cannot be reconstructed by reading their printed representation.
-Batch Eval settles through its callback; the Bash polling controls above do
+Fresh Eval settles through its callback; the Bash polling controls above do
 not apply to it.
 
 ## Shell composition and outcomes

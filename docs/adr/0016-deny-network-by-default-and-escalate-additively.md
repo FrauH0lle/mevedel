@@ -1,6 +1,6 @@
 # Deny network by default and escalate additively
 
-The default confined Bash and batch Eval profile denies outbound network
+The default confined Bash and fresh Eval profile denies outbound network
 access.  Mevedel returns the original failure and confinement facts to the
 model, whose system guidance directs it to make a new, justified tool call when
 network access is still required.  Approval grants network only for that

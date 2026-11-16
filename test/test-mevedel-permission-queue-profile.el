@@ -58,7 +58,7 @@
                              "Result:\n\"profile execution complete\""))
            (args (if (equal tool-name "Bash")
                      (list :command script :description "Probe Bash authority profile")
-                   (list :expression expression :mode "batch")))
+                   (list :expression expression :mode "fresh")))
            (data (generate-new-buffer " *test-pq-profile-data*"))
            (view (generate-new-buffer " *test-pq-profile-view*"))
            (workspace (mevedel-workspace-get-or-create 'project root root "profile"))
@@ -136,7 +136,7 @@
                 (when (equal tool-name "Eval")
                   (let ((event (mevedel-permission-queue--log-props
                                 (car (mevedel-session-permission-queue session)))))
-                    (should (equal "batch" (plist-get event :eval-mode)))
+                    (should (equal "fresh" (plist-get event :eval-mode)))
                     (should (eq 'edits (plist-get event :permission-mode-effective)))))
                 (let ((choices (list (format "Write %s (exact)" cache)
                                      (format "Write %s (recursive)" cache))))
@@ -175,7 +175,7 @@
                 (with-current-buffer data
                   (let* ((request
                           (mevedel-tool-exec-permission-effective-sandbox-request
-                           args tool-name operation (and (equal tool-name "Eval") 'batch)))
+                           args tool-name operation (and (equal tool-name "Eval") 'fresh)))
                          (profile (plist-get request :additional-permissions)))
                     (should (eq (not narrow-p) (plist-get profile :network)))))
                 (run tool-name args)
@@ -206,7 +206,7 @@
                      (if (equal tool-name "Bash")
                          (list :command (concat "sh " (shell-quote-argument script))
                                :description "Probe Bash authority profile")
-                       (list :expression (concat "(progn " expression ")") :mode "batch")))
+                       (list :expression (concat "(progn " expression ")") :mode "fresh")))
                 (await-result)
                 (should (string-match-p "sandbox: bubblewrap" result))
                 (should-not (string-search success-output result))
@@ -224,9 +224,9 @@
   "Bash" nil
   :doc "Bash capability narrowing affects later calls, not the approved invocation"
   "Bash" t
-  :doc "batch Eval remembers already granted input alongside selected cache tree"
+  :doc "fresh Eval remembers already granted input alongside selected cache tree"
   "Eval" nil
-  :doc "batch Eval capability narrowing affects later calls, not the approved invocation"
+  :doc "fresh Eval capability narrowing affects later calls, not the approved invocation"
   "Eval" t)
 
 (mevedel-deftest mevedel-permission-queue--queued-execution-authority

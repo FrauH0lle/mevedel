@@ -81,7 +81,7 @@
          (missing (file-name-concat root "missing"))
          (session (mevedel-session--create
                    :permission-mode 'edits :sandbox-mode 'required))
-         (entry (list :kind 'sandbox :tool-name "Bash" :session session :mode "batch"))
+         (entry (list :kind 'sandbox :tool-name "Bash" :session session :mode "fresh"))
          (mevedel-protected-paths nil))
     (unwind-protect
         (progn
@@ -629,7 +629,7 @@
       (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                  #'ignore))
         (mevedel-permission-request
-         (list :kind 'eval :mode "batch" :origin "/root"
+         (list :kind 'eval :mode "fresh" :origin "/root"
                :permission-mode-effective 'edits :permission-via 'mode
                :resource-originals '((:path "/private/request" :access read))
                :resource-selection-cell '(((:path "/private/tree" :access read :recursive t)))
@@ -643,7 +643,7 @@
           (should (equal (plist-get admitted :permission-id)
                          (plist-get terminal :permission-id)))
           (should (eq 'edits (plist-get terminal :permission-mode-effective)))
-          (should (equal "batch" (plist-get terminal :eval-mode)))
+          (should (equal "fresh" (plist-get terminal :eval-mode)))
           (should (eq (if (consp outcome) 'deny outcome)
                       (plist-get terminal :outcome)))
           (when (eq outcome 'allow-session)
@@ -1141,7 +1141,7 @@
                           :missing-additional-permissions (:file-system (,grant))) ask)
                  ("matching Eval authority can clear covered resources"
                   (("Eval" :pattern "(+ 1 2)" :action allow))
-                  (:kind eval :expression "(+ 1 2)" :mode "batch"
+                  (:kind eval :expression "(+ 1 2)" :mode "fresh"
                    :requested-additional-permissions (:file-system (,grant))) allow)
                  ("captured request deny remains authoritative"
                   ,allow (:kind bash :command "make test"
@@ -1205,7 +1205,7 @@
            (entry (list :kind kind :session session :origin "/root/worker"
                         :tool-name "Read" :specifier-value "/tmp/input"
                         :command "git status" :command-class 'read-only
-                        :expression "(+ 1 2)" :mode "batch"
+                        :expression "(+ 1 2)" :mode "fresh"
                         :detail "cat /tmp/input" :justification "Read input"
                         :callback (lambda (outcome) (push outcome outcomes))))
            (sibling (list :kind 'generic :session session :tool-name "Read"
@@ -1225,7 +1225,7 @@
                     (pcase kind
                       ('generic "Path: /tmp/input")
                       ('bash "Command: git status")
-                      ('eval "Mode: batch")
+                      ('eval "Mode: fresh")
                       ('sandbox "Model's reason: Read input")))
                    (car card)))
           (with-temp-buffer
@@ -1443,7 +1443,7 @@
               (mevedel-permission-request
                (list :kind 'eval
                      :expression "(message \"hi\")"
-                     :mode "batch"
+                     :mode "fresh"
                      :origin "/root/verifier"
                      :callback #'ignore)
                session)))
@@ -1452,7 +1452,7 @@
                                     (buffer-string)))
             (should (string-match-p "from /root/verifier"
                                     (buffer-string)))
-            (should (string-match-p "Mode: batch"
+            (should (string-match-p "Mode: fresh"
                                     (buffer-string)))))
       (when (buffer-live-p agent-data) (kill-buffer agent-data))
       (when (buffer-live-p parent-view) (kill-buffer parent-view))
@@ -1498,7 +1498,7 @@
                 (mevedel-permission-request
                  (list :kind 'eval
                        :expression (format "(+ %d 1)" i)
-                       :mode "batch"
+                       :mode "fresh"
                        :origin
                        "/root/verifier"
                        :callback (lambda (outcome)
@@ -1534,7 +1534,7 @@
                                (match-beginning 0)
                                'mevedel-view-zone-id))))
                 (should (string-search "from /root/verifier" text))
-                (should (string-search "Mode: batch" text))))))
+                (should (string-search "Mode: fresh" text))))))
       (when (buffer-live-p agent-data) (kill-buffer agent-data))
       (when (buffer-live-p parent-view) (kill-buffer parent-view))
       (when (buffer-live-p parent-data) (kill-buffer parent-data))))

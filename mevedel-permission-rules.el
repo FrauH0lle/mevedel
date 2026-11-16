@@ -131,7 +131,7 @@ Ask and Edits require authority for inaccessible paths.  Full Access removes
 these default protections; explicit hard denies remain.
 `read-only' keeps matched content visible but immutable;
 `inaccessible' hides it.  This alist is also compiled into the Bubblewrap
-  profile for Bash and batch Eval."
+  profile for Bash and fresh Eval."
   :type '(alist :key-type string
                 :value-type
                 (choice (const inaccessible) (const read-only)))

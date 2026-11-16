@@ -428,15 +428,15 @@ target filesystem, Bash and Eval use their production paths in BUFFER."
                                        :mode "live"))
                               ("Eval" (:expression
                                        "(with-temp-buffer (insert-file-contents \"cwd-marker.txt\") (buffer-string))"
-                                       :mode "batch"))))
+                                       :mode "fresh"))))
                 (let ((result (test-mevedel-execution-remote--run-tool
                                session (car spec) (cadr spec) agent-buffer)))
                   (if (and (file-remote-p root)
-                           (equal (plist-get (cadr spec) :mode) "batch"))
+                           (equal (plist-get (cadr spec) :mode) "fresh"))
                       (should
                        (equal
                         (concat "Error: Permission denied: "
-                                "Batch Eval is unavailable for remote sessions; "
+                                "Fresh Eval is unavailable for remote sessions; "
                                 "use Live Eval or Bash on the execution target")
                         result))
                     (should (string-search "child-marker" result))

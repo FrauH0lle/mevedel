@@ -79,12 +79,21 @@
       (should-not prompts)
       (should (eq 'deny result)))))
 
+(mevedel-deftest mevedel-tool-exec-permission-eval-mode ()
+  ,test
+  (test)
+  :doc "accepts fresh and rejects the former mode name without an alias"
+  (should (eq 'fresh (mevedel-tool-exec-permission-eval-mode '(:mode "fresh"))))
+  (let ((err (should-error
+              (mevedel-tool-exec-permission-eval-mode '(:mode "batch")))))
+    (should (string-match-p "Unknown Eval mode: batch" (error-message-string err)))))
+
 (mevedel-deftest mevedel-tool-exec-permission-check-eval-async-modes ()
   ,test
   (test)
-  :doc "edits automates batch Eval but live Eval still requests authority"
+  :doc "edits automates fresh Eval but live Eval still requests authority"
   (let ((mevedel-permission-rules nil))
-    (dolist (eval-mode '("batch" "live"))
+    (dolist (eval-mode '("fresh" "live"))
       (let (result prompts)
         (mevedel-tool-exec-permission-check-eval-async
          nil
@@ -94,7 +103,7 @@
                      :permission-request
                      (lambda (&rest _) (setq prompts t))))
          (lambda (value) (setq result value)))
-        (if (equal eval-mode "batch")
+        (if (equal eval-mode "fresh")
             (progn (should-not prompts) (should (eq 'allow result)))
           (should prompts)
           (should-not result))))))

@@ -79,7 +79,7 @@
 (mevedel-deftest mevedel-tool-exec-permission--sandbox-request/directory ()
   ,test
   (test)
-  :doc "Bash and batch Eval normalize capabilities at captured cwd before live cwd"
+  :doc "Bash and fresh Eval normalize capabilities at captured cwd before live cwd"
   (let* ((root (file-name-as-directory (make-temp-file "mevedel-exec-session-" t)))
          (child (file-name-concat root "child/"))
          (captured (file-name-concat root "captured/"))
@@ -109,7 +109,7 @@
                          `(:sandbox_permissions "with_additional_permissions"
                            :additional_permissions (:file_system (:read [,child]))
                            :justification "Inspect the selected directory")
-                         tool 'batch context)))
+                         tool 'fresh context)))
                   (should (equal directory (pop seen)))
                   (should (equal (list (list :path child :access 'read))
                                  (plist-get (plist-get request :additional-permissions)

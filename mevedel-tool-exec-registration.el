@@ -164,20 +164,20 @@
    :prompt-file "prompts/tools/eval.md"
    :handler #'mevedel-tool-exec--eval
    :args ((expression string :required "A single elisp sexp to evaluate with default-directory set to the session working directory.")
-          (mode string :optional "Execution mode: live (default) evaluates in the current Emacs; batch evaluates in a child emacs --batch process."
-                :enum ["live" "batch"])
+          (mode string :optional "Execution mode: live (default) evaluates in the current Emacs; fresh evaluates in a child emacs --batch process."
+                :enum ["live" "fresh"])
           (preserve_ui boolean :optional "In live mode, restore the current window configuration after evaluation. Defaults to true.")
           (sandbox_permissions string :optional
-                               "Batch child-execution authority: use_default, with_additional_permissions, or require_escalated for a complete confinement bypass."
+                               "Fresh child-execution authority: use_default, with_additional_permissions, or require_escalated for a complete confinement bypass."
                                :enum ["use_default"
                                       "with_additional_permissions"
                                       "require_escalated"])
           (additional_permissions object :optional
-                                  "Capabilities requested in addition to default batch confinement."
+                                  "Capabilities requested in addition to default fresh confinement."
                                   :properties
                                   (:network
                                    (:type boolean
-                                          :description "Allow network access for this batch invocation.")
+                                          :description "Allow network access for this fresh invocation.")
                                    :file_system
                                    (:type object
                                           :description "Exact filesystem paths to reopen inside confinement."
@@ -191,7 +191,7 @@
                                                   :items (:type string)
                                                   :description "Absolute paths requiring write access.")))))
           (justification string :optional
-                         "Concise user-facing reason shown if approval is needed; required for non-default batch permission requests."))
+                         "Concise user-facing reason shown if approval is needed; required for non-default fresh permission requests."))
    :async-p t
    :max-result-size 30000
    :groups (eval)

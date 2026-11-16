@@ -1536,7 +1536,7 @@ the execution boundary owns the session's single unavailable warning"
          (filesystem
           (plist-get (plist-get additional :properties) :file_system)))
     (should (equal "string" (plist-get mode :type)))
-    (should (equal ["live" "batch"] (plist-get mode :enum)))
+    (should (equal ["live" "fresh"] (plist-get mode :enum)))
     (should (plist-get mode :optional))
     (should (equal "boolean" (plist-get preserve-ui :type)))
     (should (plist-get preserve-ui :optional))
@@ -1569,9 +1569,9 @@ the execution boundary owns the session's single unavailable warning"
   (should-error
    (mevedel-tool-exec--eval #'ignore (list))
    :type 'error)
-  :doc "passes approved network authority only to batch Eval"
+  :doc "passes approved network authority only to fresh Eval"
   (let (captured)
-    (cl-letf (((symbol-function 'mevedel-tool-exec--eval-batch)
+    (cl-letf (((symbol-function 'mevedel-tool-exec--eval-fresh)
                (lambda (_callback expression result-format additional
                                   &optional sandbox-permissions)
                  (setq captured (list expression result-format additional
@@ -1579,14 +1579,14 @@ the execution boundary owns the session's single unavailable warning"
       (mevedel-tool-exec--eval
        #'ignore
        '(:expression "(+ 1 2)"
-                     :mode "batch"
+                     :mode "fresh"
                      :sandbox_permissions "with_additional_permissions"
                      :additional_permissions (:network t)
                      :justification "Fetch package metadata?")))
     (should (equal '("(+ 1 2)" nil (:network t) nil) captured)))
-  :doc "passes approved full escalation only to batch Eval"
+  :doc "passes approved full escalation only to fresh Eval"
   (let (captured)
-    (cl-letf (((symbol-function 'mevedel-tool-exec--eval-batch)
+    (cl-letf (((symbol-function 'mevedel-tool-exec--eval-fresh)
                (lambda (_callback expression _result-format additional
                                   &optional sandbox-permissions)
                  (setq captured (list expression additional
@@ -1594,9 +1594,9 @@ the execution boundary owns the session's single unavailable warning"
       (mevedel-tool-exec--eval
        #'ignore
        '(:expression "(+ 1 2)"
-                     :mode "batch"
+                     :mode "fresh"
                      :sandbox_permissions "require_escalated"
-                     :justification "Run batch Eval without confinement?")))
+                     :justification "Run fresh Eval without confinement?")))
     (should (equal '("(+ 1 2)" nil require-escalated) captured)))
   :doc "evaluates simple expression"
   (let (result)
@@ -1646,7 +1646,7 @@ the execution boundary owns the session's single unavailable warning"
           (with-timeout (30 (error "Live message fixture timed out"))
             (while (process-live-p child) (accept-process-output child 0.05)))
           (should (zerop (process-exit-status child)))
-          (let* ((data (mevedel-tool-exec--eval-read-batch-result result-file))
+          (let* ((data (mevedel-tool-exec--eval-read-fresh-result result-file))
                  (result (plist-get (car data) :result)))
             (should (string-search "Result:\n42" result))
             (should (string-search "MESSAGES:\nlive hello\nlive again" result))
@@ -1654,17 +1654,17 @@ the execution boundary owns the session's single unavailable warning"
             (should (string-search "live hello\nlive again" (caddr data)))))
       (when (process-live-p child) (delete-process child))
       (delete-file result-file)))
-  :doc "returns batch messages on success"
+  :doc "returns fresh messages on success"
   (let (result)
     (mevedel-tool-exec--eval
      (lambda (value) (setq result (plist-get value :result)))
-     '(:expression "(progn (message \"batch hello\") 42)" :mode "batch"))
-    (with-timeout (30 (error "Batch messages timed out"))
+     '(:expression "(progn (message \"fresh hello\") 42)" :mode "fresh"))
+    (with-timeout (30 (error "Fresh messages timed out"))
       (while (null result) (accept-process-output nil 0.05)))
     (should (string-search "Result:\n42" result))
-    (should (string-search "MESSAGES:\nbatch hello" result)))
+    (should (string-search "MESSAGES:\nfresh hello" result)))
   :doc "keeps injection results compact in both modes"
-  (dolist (mode '("live" "batch"))
+  (dolist (mode '("live" "fresh"))
     (let (result)
       (mevedel-tool-exec--eval
        (lambda (value) (setq result (plist-get value :result)))
@@ -1677,7 +1677,7 @@ the execution boundary owns the session's single unavailable warning"
       (should-not (string-search "BACKTRACE:" result))
       (should-not (string-search "MESSAGES:" result))))
   :doc "returns pre-error output and a bounded failing frame in both modes"
-  (dolist (mode '("live" "batch"))
+  (dolist (mode '("live" "fresh"))
     (let (result)
       (mevedel-tool-exec--eval
        (lambda (value) (setq result (plist-get value :result)))
@@ -1693,7 +1693,7 @@ the execution boundary owns the session's single unavailable warning"
         (should (string-search "error(\"failing frame\")" trace))
         (should (<= (length trace) mevedel-tool-exec--eval-backtrace-chars)))))
   :doc "visibly truncates deep and overlong backtraces in both modes"
-  (dolist (mode '("live" "batch"))
+  (dolist (mode '("live" "fresh"))
     (dolist (expression
              '("(funcall (letrec ((recur (lambda (n) (if (zerop n) (error \"deep\") (funcall recur (1- n)))))) recur) 50)"
                "(error \"%s\" (make-string 10000 ?x))"))
@@ -1710,12 +1710,12 @@ the execution boundary owns the session's single unavailable warning"
           (should (<= (length (split-string trace "\n" t))
                       (1+ mevedel-tool-exec--eval-backtrace-frames)))
           (should (string-suffix-p mevedel-tool-exec--eval-backtrace-marker trace))))))
-  :doc "returns batch errors with unreadable error data"
+  :doc "returns fresh errors with unreadable error data"
   (let (result)
     (mevedel-tool-exec--eval
      (lambda (value) (setq result (plist-get value :result)))
      '(:expression "(signal 'wrong-type-argument (list 'numberp (current-buffer)))"
-       :mode "batch"))
+       :mode "fresh"))
     (with-timeout (30 (error "Unreadable error timed out"))
       (while (null result) (accept-process-output nil 0.05)))
     (should (string-prefix-p "Error: Eval failed with error wrong-type-argument" result))
@@ -1731,8 +1731,8 @@ the execution boundary owns the session's single unavailable warning"
            :mode "live"))
     (should (string-search (make-string 100 ?t) result))
     (should-not (string-search "Output truncated" result)))
-  :doc "prints shared structure once in live and batch results"
-  (dolist (mode '("live" "batch"))
+  :doc "prints shared structure once in live and fresh results"
+  (dolist (mode '("live" "fresh"))
     (let (result)
       (mevedel-tool-exec--eval
        (lambda (r)
@@ -1813,7 +1813,7 @@ the execution boundary owns the session's single unavailable warning"
           (should (string-match-p "Result:" result))
           (should (= 1 (length (window-list)))))
       (set-window-configuration original)))
-  :doc "evaluates simple expressions in batch mode"
+  :doc "evaluates simple expressions in fresh mode"
   (let ((original-start
          (symbol-function 'mevedel-execution-start-one-shot))
         (child-starts 0)
@@ -1834,17 +1834,17 @@ the execution boundary owns the session's single unavailable warning"
       (mevedel-tool-exec--eval
        (lambda (r)
          (setq result (mevedel-tool-exec-test--handler-result r)))
-       (list :expression "(+ 4 5)" :mode "batch"))
+       (list :expression "(+ 4 5)" :mode "fresh"))
       (while (null result)
         (accept-process-output nil 0.1)))
     (should (= 1 child-starts))
     (should (string-match-p "Result:\n9" result))
     (should-not (string-match-p "without child-process confinement" result)))
-  :doc "failed confined batch mode includes explicit retry guidance"
+  :doc "failed confined fresh mode includes explicit retry guidance"
   (let (result)
-    (cl-letf (((symbol-function 'mevedel-tool-exec--eval-read-batch-result)
+    (cl-letf (((symbol-function 'mevedel-tool-exec--eval-read-fresh-result)
                (lambda (_file)
-                 '(:status error :error "error: (\"Batch failure\")")))
+                 '(:status error :error "error: (\"Fresh failure\")")))
               ((symbol-function 'mevedel-execution-start-one-shot)
                (lambda (callback &rest _args)
                  (funcall
@@ -1856,12 +1856,12 @@ the execution boundary owns the session's single unavailable warning"
       (mevedel-tool-exec--eval
        (lambda (envelope)
          (setq result (mevedel-tool-exec-test--handler-result envelope)))
-       (list :expression "(error \"batch failure\")" :mode "batch")))
+       (list :expression "(error \"fresh failure\")" :mode "fresh")))
     (should
      (string-search
       "retry with `with_additional_permissions`"
       result)))
-  :doc "pipeline settles both batch launch failure forms as errors"
+  :doc "pipeline settles both fresh launch failure forms as errors"
   (progn
     (let* ((workspace (mevedel-workspace--create :root default-directory))
            (mevedel--session
@@ -1872,7 +1872,7 @@ the execution boundary owns the session's single unavailable warning"
                      :handler #'mevedel-tool-exec--eval
                      :args '((expression string :required "Expression")
                              (mode string :optional "Mode"
-                                   :enum ["live" "batch"]))
+                                   :enum ["live" "fresh"]))
                      :async-p t
                      :read-only-p t))
               events result)
@@ -1889,9 +1889,9 @@ the execution boundary owns the session's single unavailable warning"
                        (funcall callback nil))))
             (mevedel-pipeline-run-tool
              tool (lambda (value) (setq result value))
-             '(:expression "(+ 1 2)" :mode "batch")))
+             '(:expression "(+ 1 2)" :mode "fresh")))
           (should
-           (string-match-p "Failed to start Eval batch process" result))
+           (string-match-p "Failed to start Eval fresh process" result))
           (should
            (equal '(PreToolUse PostToolUseFailure) (nreverse events)))))))
   :doc "live mode does not use the child-process seam"
@@ -1906,7 +1906,7 @@ the execution boundary owns the session's single unavailable warning"
        (list :expression "(+ 2 3)" :mode "live")))
     (should (= 0 child-starts))
     (should (string-match-p "Result:\n5" result)))
-  :doc "batch mode removes its temporary script and result files"
+  :doc "fresh mode removes its temporary script and result files"
   (let* ((temp-dir (make-temp-file "mevedel-eval-cleanup-" t))
          (temporary-file-directory (file-name-as-directory temp-dir))
          result)
@@ -1915,7 +1915,7 @@ the execution boundary owns the session's single unavailable warning"
           (mevedel-tool-exec--eval
            (lambda (r)
              (setq result (mevedel-tool-exec-test--handler-result r)))
-           (list :expression "(error \"cleanup\")" :mode "batch"))
+           (list :expression "(error \"cleanup\")" :mode "fresh"))
           (with-timeout (5 (error "Timed out"))
             (while (null result)
               (accept-process-output nil 0.1)))
@@ -1923,50 +1923,50 @@ the execution boundary owns the session's single unavailable warning"
           (should-not
            (directory-files temp-dir nil directory-files-no-dot-files-regexp)))
       (delete-directory temp-dir t)))
-  :doc "captures printed output in batch mode"
+  :doc "captures printed output in fresh mode"
   (let (result)
     (mevedel-tool-exec--eval
      (lambda (r)
        (setq result (mevedel-tool-exec-test--handler-result r)))
-     (list :expression "(princ \"batch hello\")" :mode "batch"))
+     (list :expression "(princ \"fresh hello\")" :mode "fresh"))
     (while (null result)
       (accept-process-output nil 0.1))
-    (should (string-match-p "STDOUT:\nbatch hello" result)))
-  :doc "batch mode does not mutate parent variables"
+    (should (string-match-p "STDOUT:\nfresh hello" result)))
+  :doc "fresh mode does not mutate parent variables"
   (let (result)
-    (makunbound 'mevedel-test-batch-parent-mutation)
+    (makunbound 'mevedel-test-fresh-parent-mutation)
     (mevedel-tool-exec--eval
      (lambda (r)
        (setq result (mevedel-tool-exec-test--handler-result r)))
-     (list :expression "(setq mevedel-test-batch-parent-mutation 99)"
-           :mode "batch"))
+     (list :expression "(setq mevedel-test-fresh-parent-mutation 99)"
+           :mode "fresh"))
     (while (null result)
       (accept-process-output nil 0.1))
     (should (string-match-p "Result:\n99" result))
-    (should-not (boundp 'mevedel-test-batch-parent-mutation)))
-  :doc "batch mode does not expose bootstrap locals"
+    (should-not (boundp 'mevedel-test-fresh-parent-mutation)))
+  :doc "fresh mode does not expose bootstrap locals"
   (let (result)
     (mevedel-tool-exec--eval
      (lambda (r)
        (setq result (mevedel-tool-exec-test--handler-result r)))
      (list :expression
            "(list (boundp 'result-file) (boundp 'stdout-buffer) (boundp 'max-output-bytes))"
-           :mode "batch"))
+           :mode "fresh"))
     (while (null result)
       (accept-process-output nil 0.1))
     (should (string-match-p "Result:\n(nil nil nil)" result)))
-  :doc "batch mode bootstrap locals cannot be corrupted by evaluated code"
+  :doc "fresh mode bootstrap locals cannot be corrupted by evaluated code"
   (let (result)
     (mevedel-tool-exec--eval
      (lambda (r)
        (setq result (mevedel-tool-exec-test--handler-result r)))
      (list :expression "(progn (setq result-file nil) 42)"
-           :mode "batch"))
+           :mode "fresh"))
     (while (null result)
       (accept-process-output nil 0.1))
     (should (string-match-p "Result:\n42" result)))
-  :doc "batch mode uses the session working directory"
-  (let* ((root (make-temp-file "mevedel-eval-batch-cwd-" t))
+  :doc "fresh mode uses the session working directory"
+  (let* ((root (make-temp-file "mevedel-eval-fresh-cwd-" t))
          (module-dir (file-name-concat root "packages" "api"))
          (workspace (mevedel-workspace-get-or-create
                      'file root root "test"))
@@ -1979,7 +1979,7 @@ the execution boundary owns the session's single unavailable warning"
           (mevedel-tool-exec--eval
            (lambda (r)
              (setq result (mevedel-tool-exec-test--handler-result r)))
-           (list :expression "default-directory" :mode "batch"))
+           (list :expression "default-directory" :mode "fresh"))
           (while (null result)
             (accept-process-output nil 0.1))
           (should (string-match-p
@@ -1989,8 +1989,8 @@ the execution boundary owns the session's single unavailable warning"
                    result)))
       (delete-directory root t)
       (mevedel-workspace-clear-registry)))
-  :doc "batch mode belongs to its agent and cleans temporary files on teardown"
-  (let* ((root (make-temp-file "mevedel-eval-batch-owner-" t))
+  :doc "fresh mode belongs to its agent and cleans temporary files on teardown"
+  (let* ((root (make-temp-file "mevedel-eval-fresh-owner-" t))
          (temporary-file-directory (file-name-as-directory root))
          (workspace (mevedel-workspace-get-or-create
                      'test root root "eval-owner"))
@@ -2005,8 +2005,8 @@ the execution boundary owns the session's single unavailable warning"
         (progn
           (mevedel-tool-exec--eval
            (lambda (result) (setq callback-result result))
-           (list :expression "(progn (sleep-for 30) 1)" :mode "batch"))
-          (with-timeout (2 (error "Batch Eval did not start"))
+           (list :expression "(progn (sleep-for 30) 1)" :mode "fresh"))
+          (with-timeout (2 (error "Fresh Eval did not start"))
             (while
                 (progn
                   (setq record
@@ -2026,14 +2026,14 @@ the execution boundary owns the session's single unavailable warning"
       (mevedel-execution-teardown-session session)
       (delete-directory root t)
       (mevedel-workspace-clear-registry)))
-  :doc "preserves large batch error output for shared pipeline persistence"
+  :doc "preserves large fresh error output for shared pipeline persistence"
   (let (result)
     (mevedel-tool-exec--eval
      (lambda (r)
        (setq result (mevedel-tool-exec-test--handler-result r)))
      (list :expression
            "(progn (princ (make-string 550000 ?h)) (princ (make-string 50000 ?t)) (error \"boom\"))"
-           :mode "batch"))
+           :mode "fresh"))
     (while (null result)
       (accept-process-output nil 0.1))
     (should (string-prefix-p "Error:" result))

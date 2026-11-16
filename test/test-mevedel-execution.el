@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Tests the bounded one-shot process boundary used by Bash, batch Eval, and
+;; Tests the bounded one-shot process boundary used by Bash, fresh Eval, and
 ;; native external helpers.
 
 ;;; Code:

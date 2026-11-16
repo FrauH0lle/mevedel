@@ -111,9 +111,10 @@ already cover being away.
 Source: the 2026-11-16 discussion of why models choose Bash and Python
 scripts over Eval. Emacs state is fully inspectable, but live Eval looks like
 a human interruption, risks the user's editor and has thin error feedback.
-Batch Eval rebuilds every fixture on each call, so for multi-step work it is
-no better than a Python script. Planned modes: `live` (the user's Emacs),
-`sandbox` (persistent and isolated) and `fresh` (a new clean process per call).
+Fresh Eval rebuilds every fixture on each call, so for multi-step work it is
+no better than a Python script. Current modes are `live` (the user's Emacs)
+and `fresh` (a new clean process per call); `sandbox` (persistent and isolated)
+is planned.
 
 ### Eval as a native tool
 
@@ -135,12 +136,11 @@ Eval therefore adds roughly 5–6% to mevedel's first request; later requests
 read it from the prompt cache. Remove its specialist listing entry when it
 becomes native.
 
-### Rename batch Eval to fresh, and yield
+### Yield fresh Eval
 
-Rename the `batch` mode to `fresh` everywhere (`:eval-mode`, cards, execution
-profiles, prompts, docs, tests), with no alias, per NO BACKWARDS COMPATIBILITY.
-Fresh and sandbox Eval currently block the turn until they finish and have no
-deadline; give them Bash's `yield_time_ms`, `execution_id`, WriteStdin and
+The mode is now `fresh`, with no alias. Fresh Eval currently blocks the turn
+until it finishes and has no deadline; give it and the planned sandbox Eval
+Bash's `yield_time_ms`, `execution_id`, WriteStdin and
 StopExecution handling and completion wake-ups. Live Eval stays synchronous: it
 runs on Emacs's main thread.
 
@@ -173,8 +173,8 @@ far:
   paths uses fresh Eval, or restarts the sandbox with the new profile and says
   so.
 - Run where mevedel's Emacs runs, which covers a remote mevedel host. In
-  sessions with a remote execution target, refuse sandbox Eval as batch Eval
-  is refused today (`mevedel-tool-exec-permission.el`, "Batch Eval is
+  sessions with a remote execution target, refuse sandbox Eval as fresh Eval
+  is refused today (`mevedel-tool-exec-permission.el`, "Fresh Eval is
   unavailable for remote sessions"); live Eval and Bash on the target remain.
   Running the sandbox locally against TRAMP paths, or on the remote host, can
   follow if Elisp development over TRAMP needs it. Remote-execution tests use

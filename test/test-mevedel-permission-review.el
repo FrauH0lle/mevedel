@@ -703,7 +703,7 @@
             (fallbacks 0)
             timeout-callback)
         (setq outcomes nil provider-callback nil evidence nil cancelled 0)
-        (setq entry (plist-put entry :mode "batch"))
+        (setq entry (plist-put entry :mode "fresh"))
         (cl-labels ((yield-preparation ()
                      (if timeout-p
                          (funcall timeout-callback)
@@ -855,7 +855,7 @@
 
   :doc "an exact directory write defers without invoking the model or widening scope"
   (let ((fallbacks 0))
-    (setq entry (plist-put entry :mode "batch"))
+    (setq entry (plist-put entry :mode "fresh"))
     (setq entry (plist-put entry :requested-additional-permissions
                            (list :file-system (list (list :path root :access 'write)))))
     (mevedel-permission-review-start entry (lambda () (cl-incf fallbacks)))
@@ -871,7 +871,7 @@
          (file-grant (list :path file :access 'write))
          (cell (list (list original file-grant))))
     (with-temp-file file (insert "contents"))
-    (setq entry (plist-put entry :mode "batch"))
+    (setq entry (plist-put entry :mode "fresh"))
     (setq entry (plist-put entry :requested-additional-permissions
                            (list :file-system (list original file-grant))))
     (setq entry (plist-put entry :resource-originals
@@ -879,6 +879,7 @@
     (setq entry (plist-put entry :resource-selection-cell cell))
     (mevedel-permission-request entry session)
     (should provider-callback)
+    (should (equal "fresh" (plist-get (plist-get evidence :operation) :mode)))
     (let ((selected (car (plist-get evidence :selected-resources))))
       (should (equal root (plist-get selected :path)))
       (should (eq 'write (plist-get selected :access)))
@@ -901,7 +902,7 @@
   (let* ((original (list :path root :access 'write))
          (cell (list (list original)))
          (cards 0))
-    (setq entry (plist-put entry :mode "batch"))
+    (setq entry (plist-put entry :mode "fresh"))
     (setq entry (plist-put entry :requested-additional-permissions
                            (list :file-system (list original))))
     (setq entry (plist-put entry :resource-originals (list (copy-sequence original))))
@@ -1186,7 +1187,7 @@
 
   :doc "hook-tightened execution reviews use tool authority rather than card kind"
   (dolist (case '(("Eval" (:expression "(+ 1 2)" :mode "live"))
-                  ("Eval" (:expression "(+ 1 2)" :mode "batch"))
+                  ("Eval" (:expression "(+ 1 2)" :mode "fresh"))
                   ("Bash" (:command "make test"))))
     (with-temp-buffer
       (org-mode)

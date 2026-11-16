@@ -457,7 +457,7 @@ TARGET and DIRECTORY bind target-native filesystem paths."
 (defun mevedel-tool-exec-permission--sandbox-request
     (args tool &optional eval-mode permission-context)
   "Return the validated child-execution request from ARGS.
-TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval.
+TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from fresh Eval.
 PERMISSION-CONTEXT supplies the session execution target."
   (let* ((session (or (plist-get permission-context :session)
                       (and (boundp 'mevedel--session) mevedel--session)))
@@ -499,9 +499,9 @@ PERMISSION-CONTEXT supplies the session execution target."
                     (not (string-empty-p (string-trim justification))))
          (mevedel-tool-exec-permission--policy-error
           "Additional permissions require a justification"))
-       (when (and (eq tool 'eval) (not (eq eval-mode 'batch)))
+       (when (and (eq tool 'eval) (not (eq eval-mode 'fresh)))
          (mevedel-tool-exec-permission--policy-error
-          "Additional permissions are available only to batch Eval"))
+          "Additional permissions are available only to fresh Eval"))
        (list :level 'additive
              :additional-permissions
              (or normalized-additional
@@ -516,9 +516,9 @@ PERMISSION-CONTEXT supplies the session execution target."
        (when normalized-additional
          (mevedel-tool-exec-permission--policy-error
           "Full sandbox escalation cannot include additional permissions"))
-       (when (and (eq tool 'eval) (not (eq eval-mode 'batch)))
+       (when (and (eq tool 'eval) (not (eq eval-mode 'fresh)))
          (mevedel-tool-exec-permission--policy-error
-          "Full sandbox escalation is available only to batch Eval"))
+          "Full sandbox escalation is available only to fresh Eval"))
        (list :level 'escalated
              :sandbox-permissions 'require-escalated
              :additional-permissions nil
@@ -684,7 +684,7 @@ These facts never contribute authority.  Complex syntax is left unexplained."
 (defun mevedel-tool-exec-permission-effective-sandbox-request
     (args tool-name operation &optional eval-mode permission-context)
   "Resolve ARGS into TOOL-NAME's effective child authority for OPERATION.
-EVAL-MODE distinguishes live from batch Eval.  PERMISSION-CONTEXT supplies
+EVAL-MODE distinguishes live from fresh Eval.  PERMISSION-CONTEXT supplies
 remembered direct user authority."
   (let ((request
          (mevedel-tool-exec-permission--sandbox-request
@@ -695,7 +695,7 @@ remembered direct user authority."
     (if (eq (plist-get request :level) 'escalated)
         request
       (let* ((remembered
-              (and (or (equal tool-name "Bash") (eq eval-mode 'batch))
+              (and (or (equal tool-name "Bash") (eq eval-mode 'fresh))
                    (mevedel-tool-exec-permission--remembered-additional-profile
                     tool-name operation permission-context)))
              (authority
@@ -1166,7 +1166,7 @@ once with the applied prompt result."
           (and (stringp mode) (string-empty-p mode))
           (equal mode "live"))
       'live)
-     ((equal mode "batch") 'batch)
+     ((equal mode "fresh") 'fresh)
      (t (mevedel-tool-exec-permission--policy-error "Unknown Eval mode: %s" mode)))))
 
 (defun mevedel-tool-exec-permission-eval-preserve-ui-p (args)
@@ -1178,7 +1178,7 @@ once with the applied prompt result."
   "Return Eval decision metadata for EXPRESSION under PERMISSION-CONTEXT.
 
 Live Eval asks unless a rule settles it or the mode is `full-auto'.
-Batch Eval runs automatically in Edits under required confinement.
+Fresh Eval runs automatically in Edits under required confinement.
 Deny rules remain final; Full Access bypasses ask rules.
 The metadata
 identifies rule or mode authority."
@@ -1192,7 +1192,7 @@ identifies rule or mode authority."
      ((eq mode 'full-auto) (mevedel-permission--decision 'allow 'mode))
      (action (mevedel-permission--decision action 'rule))
      ((and (eq mode 'edits)
-           (eq (plist-get permission-context :eval-mode) 'batch))
+           (eq (plist-get permission-context :eval-mode) 'fresh))
       (mevedel-permission--decision 'allow 'mode))
      (t (mevedel-permission--decision 'ask 'mode)))))
 
@@ -1458,7 +1458,7 @@ describe the complete authority needed at settlement."
            (list :sandbox-permissions (plist-get entry :sandbox-permissions)
                  :eval-mode (and (equal tool-name "Eval")
                                  (if (equal (plist-get entry :mode) "live")
-                                     'live 'batch))
+                                     'live 'fresh))
                  :additional-permissions
                  (if-let* ((selected (car (plist-get entry :resource-selection-cell))))
                      (plist-put (copy-sequence
@@ -1670,7 +1670,7 @@ CONT follows the async permission slot contract."
             (target (and session
                          (mevedel-session-execution-target session))))
        (cond
-        ((and (eq mode 'batch)
+        ((and (eq mode 'fresh)
               target
               (mevedel-execution-target-remote-p target))
          (funcall
@@ -1678,7 +1678,7 @@ CONT follows the async permission slot contract."
           (mevedel-tool-exec-permission--permission-decision-result
            metadata-p
            (cons 'deny
-                 "Batch Eval is unavailable for remote sessions; use Live Eval or Bash on the execution target")
+                 "Fresh Eval is unavailable for remote sessions; use Live Eval or Bash on the execution target")
            'eval-policy)))
         (t
          (let ((request

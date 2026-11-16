@@ -953,7 +953,7 @@ CALLBACK receives the envelope.  ARGS has :command; KIND may be `monitor'."
     "Visible marker for an Eval backtrace limited by frames or characters."))
 
 (defmacro mevedel-tool-exec--eval-capture-backtrace ()
-  "Capture a bounded signal-time backtrace in live or generated batch code."
+  "Capture a bounded signal-time backtrace in live or generated fresh code."
   `(ignore-errors
      (let ((frames (backtrace-get-frames))
            (print-circle t) (print-level 8) (print-length 20))
@@ -1035,9 +1035,9 @@ window configuration after evaluation."
              "\n\nExecution: Live Eval ran inside Emacs without child-process confinement.")))
     (funcall callback (list :result response))))
 
-(defun mevedel-tool-exec--eval-batch-script
+(defun mevedel-tool-exec--eval-fresh-script
     (expression result-file workdir load-path-value)
-  "Return batch Eval source for EXPRESSION writing RESULT-FILE.
+  "Return fresh Eval source for EXPRESSION writing RESULT-FILE.
 WORKDIR and LOAD-PATH-VALUE configure the child Emacs."
   (concat
    ";;; -*- lexical-binding: t -*-\n"
@@ -1048,7 +1048,7 @@ WORKDIR and LOAD-PATH-VALUE configure the child Emacs."
              (default-directory ,workdir)
              (expression ,expression)
              (result-file ,result-file)
-             (stdout-buffer (generate-new-buffer " *mevedel-eval-batch-stdout*"))
+             (stdout-buffer (generate-new-buffer " *mevedel-eval-fresh-stdout*"))
              (print-circle t)
              result failure backtrace)
          (unwind-protect
@@ -1073,15 +1073,15 @@ WORKDIR and LOAD-PATH-VALUE configure the child Emacs."
            (when (buffer-live-p stdout-buffer)
              (kill-buffer stdout-buffer))))))))
 
-(defun mevedel-tool-exec--eval-read-batch-result (result-file)
-  "Read the batch Eval result plist from RESULT-FILE."
+(defun mevedel-tool-exec--eval-read-fresh-result (result-file)
+  "Read the fresh Eval result plist from RESULT-FILE."
   (when (file-exists-p result-file)
     (with-temp-buffer
       (insert-file-contents result-file)
       (let ((read-eval nil))
         (read (current-buffer))))))
 
-(defun mevedel-tool-exec--eval-batch
+(defun mevedel-tool-exec--eval-fresh
     (callback expression result-format additional-permissions
               &optional sandbox-permissions)
   "Evaluate EXPRESSION in a child process and call CALLBACK.
@@ -1090,9 +1090,9 @@ SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
   (let* ((workdir (mevedel-tool-exec-permission-default-directory))
          (session (mevedel-queue--current-session))
          (owner (mevedel-current-origin))
-         (script-file (make-temp-file "mevedel-eval-batch-" nil ".el"))
-         (result-file (make-temp-file "mevedel-eval-result-" nil ".el"))
-         (script (mevedel-tool-exec--eval-batch-script
+         (script-file (make-temp-file "mevedel-eval-fresh-" nil ".el"))
+         (result-file (make-temp-file "mevedel-eval-fresh-result-" nil ".el"))
+         (script (mevedel-tool-exec--eval-fresh-script
                   expression result-file workdir load-path))
          cleaned
          (cleanup
@@ -1111,7 +1111,7 @@ SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
                     (diagnostics (plist-get child-result :output))
                     (payload
                      (condition-case nil
-                         (mevedel-tool-exec--eval-read-batch-result
+                         (mevedel-tool-exec--eval-read-fresh-result
                           result-file)
                        (error nil)))
                     (success-p
@@ -1131,11 +1131,11 @@ SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
                          result-format diagnostics (plist-get payload :backtrace)
                          (plist-get payload :error)))
                        ((plist-get child-result :error)
-                        (format "Failed to start Eval batch process: %s"
+                        (format "Failed to start Eval fresh process: %s"
                                 (plist-get child-result :error)))
                        (t
                         (format
-                         "Error: Eval batch process failed with exit code %d%s"
+                         "Error: Eval fresh process failed with exit code %d%s"
                          exit-code
                          (if (string-empty-p (or diagnostics ""))
                              ""
@@ -1144,7 +1144,7 @@ SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
                       (not success-p))
                      :status (if success-p 'success 'error)))
                  (funcall cleanup))))
-           :name "mevedel-eval-batch"
+           :name "mevedel-eval-fresh"
            :command
            (list (expand-file-name invocation-name invocation-directory)
                  "-Q" "--batch" "-l" script-file)
@@ -1160,7 +1160,7 @@ SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
        (funcall cleanup)
        (funcall callback
                 (list :result
-                      (format "Failed to start Eval batch process: %s" err)
+                      (format "Failed to start Eval fresh process: %s" err)
                       :status 'error))
        nil))))
 
@@ -1183,8 +1183,8 @@ CALLBACK receives the result envelope.  ARGS is a plist with :expression."
          (mevedel-tool-exec--eval-live
           callback expression result-format
           (mevedel-tool-exec-permission-eval-preserve-ui-p args)))
-        ('batch
-         (mevedel-tool-exec--eval-batch
+        ('fresh
+         (mevedel-tool-exec--eval-fresh
           callback expression result-format
           (plist-get request :additional-permissions)
           (plist-get request :sandbox-permissions)))))))

@@ -9,7 +9,7 @@ vocabulary removes translation and search ambiguity. Mevedel accepts no aliases
 or legacy persisted values. New sessions inherit the global `ask` default
 unless the user deliberately selects another mode.
 
-Edits now includes automatic Bash and batch Eval under required confinement,
+Edits now includes automatic Bash and fresh Eval under required confinement,
 alongside native edits. `full-auto` means Full Access under the target OS account,
 without confinement or permission prompts. Ask remains conservative. These names
 are retained; the UI discloses their authority explicitly.

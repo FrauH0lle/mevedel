@@ -78,7 +78,7 @@ addresses such as `work://` retain their own roots.
 A directory selection is **not a permission grant**. Permission modes, rules,
 resource grants, protected paths, Plan ceilings, and sandbox writable roots stay
 owned by the shared session. Native operations on an external linked checkout
-still need ordinary resource authority. Confined Bash and local batch Eval
+still need ordinary resource authority. Confined Bash and local fresh Eval
 require their cwd to lie within an existing configured writable root; additive
 path grants alone do not satisfy that existing cwd boundary. Selecting a
 checkout never adds a writable root. Unconfined execution remains subject to its
@@ -792,7 +792,7 @@ Eval, protected resources, or full execution escalation. An ordinary sub-agent
 may request additive or full authority only through the same user-visible queue;
 there is no separate model-visible access-request tool. The main view's
 agent row retains durable warnings for materially non-default child access.
-Additional read-only mounts stay silent. Each Bash or batch-Eval result records
+Additional read-only mounts stay silent. Each Bash or fresh-Eval result records
 the boundary used by that call, and the agent transcript identifies the
 affected tool.
 

@@ -1,6 +1,6 @@
 # Reuse Codex execution escalation vocabulary
 
-Bash and batch Eval expose `sandbox_permissions` with `use_default`,
+Bash and fresh Eval expose `sandbox_permissions` with `use_default`,
 `with_additional_permissions`, and `require_escalated`, plus an
 `additional_permissions` network/filesystem profile and a required
 justification for non-default requests.  Additive requests retain confinement

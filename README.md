@@ -72,7 +72,7 @@ Key features:
 - [ripgrep](https://github.com/BurntSushi/ripgrep) for search tools and `@file`
   directory listings
 - [Bubblewrap](https://github.com/containers/bubblewrap) on Linux for Bash and
-  batch Eval child confinement
+  fresh Eval child confinement
 - Python 3 for safely opening and writing authorized file-tool paths
 - Optional: a kernel with Landlock ABI 9 or newer, to keep
   confined commands away from host Unix sockets without an exact exception
@@ -919,7 +919,7 @@ the agent), and `ToolSearch` (retrieve a specialist's full contract)
 
 **Execution:** `Bash` (with permission system, see below), `Eval` (Emacs Lisp
 evaluation: live Eval asks unless explicitly allowed in `ask` and `edits`;
-batch Eval runs automatically under required confinement in `edits`;
+fresh Eval runs automatically under required confinement in `edits`;
 `full-auto` bypasses ordinary asks in either mode. Live Eval optionally preserves UI state.)
 
 **Web:** `WebSearch`, `WebFetch` (native EWW/SHR retrieval, including
@@ -1094,7 +1094,7 @@ these defaults while retaining explicit hard denies.
 - `ask` — allow recognized inspection and prompt for edits and uncertain Bash
   or Eval execution.
 - `edits` — automatically apply native edits inside allowed roots and run Bash
-  and batch Eval with required confinement. Ordinary native reads include all
+  and fresh Eval with required confinement. Ordinary native reads include all
   OS-readable paths except configured credential masks. Live Eval and additional
   authority require approval. Missing confinement refuses execution.
 - `full-auto` — **Full Access** under the target's OS account: unrestricted
@@ -1140,7 +1140,7 @@ contribute the `dangerous` class (e.g., `rm`, `sudo`, `dd`, `chmod`, `curl`).
 
 **Child confinement** (`mevedel-sandbox-mode`): Edits requires Bubblewrap;
 Full Access disables confinement. Ask uses this configured preference without
-changing it when the permission mode changes. Bash and batch Eval use
+changing it when the permission mode changes. Bash and fresh Eval use
 Bubblewrap on Linux when available. Mevedel finds `bwrap` through the current
 executable path and probes the real namespace profile before first use. Each
 probe attempt is time-bounded and retains at most 64 KiB of diagnostics. If the
@@ -1175,7 +1175,7 @@ Full Access bypasses review. See [the reviewer contract](docs/guardian-prompts.m
 Persistent rules accepted via the prompt's "always" choices are saved to
 `.mevedel/permissions.el` per workspace.
 
-Add `:network t` to a Bash or batch-Eval rule to authorize network access
+Add `:network t` to a Bash or fresh-Eval rule to authorize network access
 together with the matching operation. An unqualified operation rule leaves
 network isolated. Authority prompts grant every requested capability to the
 current invocation, while their Command, Network, and path checkboxes

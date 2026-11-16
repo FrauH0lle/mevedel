@@ -8,7 +8,7 @@ cannot raise confinement authority. A matching direct execution profile supplies
 its own filesystem/network scope, while an ordinary command allow supplies none.
 Explicit hard denies and Plan restrictions remain effective in every mode.
 
-Edits authorizes arbitrary Bash and batch Eval under required real confinement.
+Edits authorizes arbitrary Bash and fresh Eval under required real confinement.
 Unknown commands, pipes, redirects and substitutions alone do not require a
 permission card. Native edits remain within authorized roots; ordinary native
 reads span OS-readable paths except configured inaccessible credential paths.

@@ -3,13 +3,13 @@ Evaluate one Elisp form and return its value and printed output.
 ### When to use `Eval`
 
 - Inspect live Emacs state or evaluate an Elisp hypothesis.
-- Use batch mode for a check that can run in a separate Emacs process.
+- Use fresh mode for a check that can run in a separate Emacs process.
 
 ### When NOT to use `Eval`
 
 - Applying source edits: ApplyPatch provides a reviewable patch.
 - Running untrusted code. Live Eval has unrestricted access to the Emacs process;
-  batch confinement does not make the expression trustworthy.
+  fresh confinement does not make the expression trustworthy.
 
 ### How to use `Eval`
 
@@ -20,7 +20,7 @@ Evaluate one Elisp form and return its value and printed output.
   It runs without child-process confinement. `preserve_ui=true` restores the
   selected frame's window configuration, not other side effects; set it false
   for intentional window manipulation.
-- `mode="batch"` runs a child `emacs --batch -Q` with the current `load-path` and
+- `mode="fresh"` runs a child `emacs --batch -Q` with the current `load-path` and
   session working directory. It does not inherit live buffers, variable values,
   or loaded packages. Require libraries needed by the check.
 - Evaluation uses the session working directory. Values print with `%S`, with
@@ -29,29 +29,29 @@ Evaluate one Elisp form and return its value and printed output.
   MESSAGES without hiding live messages from the user. Errors include a bounded
   BACKTRACE and output produced before failure. Large results have a bounded
   preview and retrieval address.
-- In Edits, batch Eval runs automatically with required confinement and no
+- In Edits, fresh Eval runs automatically with required confinement and no
   network by default; live Eval goes to the selected permission reviewer.
   In Ask and Edits, automatic review typically approves task-relevant observational
   live Eval without involving the user; mutations, unknown effects and unclear
   scope go to the user. Full Access automatically runs
   either mode without confinement. Ask uses the configured sandbox preference.
-  Non-default permission requests apply only to batch:
+  Non-default permission requests apply only to fresh:
   `with_additional_permissions` requests network and/or exact absolute read/write
   paths; `require_escalated` requests unrestricted child execution. Put the reason
   in `justification` on the new tool call. A live evaluation that may need
   approval can also carry a short `justification`; it is shown to the approver
   and is optional there. Expression authorization is separate; approval is not
   an automatic retry. Results disclose unavailable confinement.
-- For exact grant semantics, failure recovery, and batch evaluation details,
+- For exact grant semantics, failure recovery, and fresh evaluation details,
   read `mevedel://tools/execution.md` before using those features.
 
 ### Examples of good usage
 
 <example>
 - Check a library operation without relying on the live Emacs's loaded packages:
-Eval(mode="batch", expression="(progn (require 'cl-lib) (let ((values (cl-remove-if-not #'numberp '(1 skip 2)))) (princ values) (apply #'+ values)))")
+Eval(mode="fresh", expression="(progn (require 'cl-lib) (let ((values (cl-remove-if-not #'numberp '(1 skip 2)))) (princ values) (apply #'+ values)))")
 The returned value is 3; STDOUT contains (1 2). The library is required inside
-the single evaluated form because batch mode does not inherit live loaded state.
+the single evaluated form because fresh mode does not inherit live loaded state.
 </example>
 
 ### Examples of bad usage
