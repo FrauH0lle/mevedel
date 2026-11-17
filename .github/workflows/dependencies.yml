@@ -51,6 +51,7 @@ jobs:
           test/collaboration-markdown.browser.mjs
           test/collaboration-activity.browser.mjs
           test/collaboration-viewer-requests.browser.mjs
+          test/collaboration-viewer-selectors.browser.mjs
           test/collaboration-viewer-files.browser.mjs
           test/collaboration-viewer-agents.browser.mjs
           test/collaboration-discussions.browser.mjs

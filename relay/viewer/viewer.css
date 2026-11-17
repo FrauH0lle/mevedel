@@ -980,8 +980,8 @@ div.request-summary::after, .request-summary > summary::after {
 /* On wide screens, session navigation has its own column. The same
    disclosure stays in the dock on phones and at increased browser zoom. */
 @media (min-width: 80rem) {
-  body:has(#session-box:not([hidden])) { padding-right: 20rem; }
-  body:has(#session-box:not([hidden])) > .topbar { width: calc(100% + 20rem); }
+  body[data-session-menu] { padding-right: 20rem; }
+  body[data-session-menu] > .topbar { width: calc(100% + 20rem); }
   #session-box {
     position: fixed; top: 6.5rem; right: 1.5rem; width: 17.5rem;
     max-height: calc(100dvh - 8rem); border-radius: var(--panel-radius);

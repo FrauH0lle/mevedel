@@ -72,6 +72,8 @@
 
     function cover() {
       document.body.toggleAttribute('data-panel-open', !!covering());
+      document.body.toggleAttribute('data-editor-docked',
+        !!document.getElementById('editing-panel')?.classList.contains('docked'));
     }
 
     // The head on screen: an open full-screen panel's, else the room's.
@@ -144,6 +146,19 @@
     // Opening or closing a panel changes which head is on screen.
     panels.forEach(panel => observer?.observe(
       panel, {attributes: true, attributeFilter: ['hidden', 'class']}));
+    if (observer) {
+      // Observe only layout boundaries, not mutations inside streamed records.
+      const session = document.getElementById('session-box');
+      const transcript = document.getElementById('transcript');
+      const layout = () => {
+        document.body.toggleAttribute('data-session-menu', !!session && !session.hidden);
+        document.body.toggleAttribute('data-transcript-empty', !!transcript?.matches(':empty'));
+      };
+      const layoutObserver = new MutationObserver(layout);
+      if (session) layoutObserver.observe(session, {attributes: true, attributeFilter: ['hidden']});
+      if (transcript) layoutObserver.observe(transcript, {childList: true});
+      layout();
+    }
     window.addEventListener('resize', schedule);
     document.addEventListener('pointerdown', event => {
       for (const {more} of heads.values()) {

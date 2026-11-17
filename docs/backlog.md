@@ -81,8 +81,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   trigger one large catch-up render. Consider rendering deferred views at a
   low rate (every few seconds or when idle), bounded so background views never
   cost visible CPU; measure catch-up time and background CPU before and after.
-- Browser viewer: the remaining 13 `body:has(...)` rules cost about 0.7 ms per
-  streamed update on long pages.
 
 ## Execution
 
