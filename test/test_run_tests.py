@@ -409,10 +409,12 @@ else:
                 self.assertEqual(select('docs/other.md'), ['test/test-docs.el'])
                 # Unreferenced documentation and deleted tests select nothing, with a note.
                 selected, notes = affected_tests.select(
-                    root, ['README.md', 'test/test-gone.el'])
+                    root, ['README.md', 'test/test-gone.el', 'test/viewer.browser.mjs'])
                 self.assertEqual(selected, [])
                 self.assertEqual(notes, ['README.md: documentation; smoke set only',
-                                         'test/test-gone.el: deleted test file; nothing to run'])
+                                         'test/test-gone.el: deleted test file; nothing to run',
+                                         'test/viewer.browser.mjs: Node/browser test; '
+                                         'run by its own runner'])
                 # Full-suite fallbacks: support, broad libraries, unmapped code.
                 for changed in ('test/helpers.el', 'Eask', 'test/run_tests.py', 'core.el',
                                 'orphan.el', 'gone.el', 'scripts/tool.py'):
