@@ -13,6 +13,7 @@
           "mevedel-session-test-support"))
 (require 'mevedel-tool-exec-permission)
 (require 'mevedel-agent-control)
+(require 'mevedel-execution)
 
 
 (defun test-mevedel-fork--publish (session buffer &rest entries)
@@ -1153,6 +1154,7 @@
   (let ((fixture (test-mevedel-session-persistence--make-fork-ready))
         child-buffer
         lifecycle-sources
+        stopped
         source-state)
     (unwind-protect
         (let* ((session (plist-get fixture :session))
@@ -1183,7 +1185,12 @@
           (setq source-state
                 (mevedel-session-codec-serialize session))
           (cl-letf
-              (((symbol-function 'mevedel--run-session-start-hooks)
+              (((symbol-function 'mevedel-execution-stop-services)
+                (lambda (owner)
+                  (should (eq owner session))
+                  (should (equal '("fork") lifecycle-sources))
+                  (setq stopped t)))
+               ((symbol-function 'mevedel--run-session-start-hooks)
                 (lambda (source)
                   (push source lifecycle-sources)))
                ((symbol-function 'mevedel-model-apply-session-policy)
@@ -1192,6 +1199,7 @@
                   (mevedel-session-fork-create
                    (plist-get fixture :buffer)
                    '(:fork-point-id "fixture-fork") (quote conversation))))
+          (should stopped)
           (should (buffer-live-p child-buffer))
           (should (equal '("fork") lifecycle-sources))
           (should (buffer-local-value 'mevedel--session child-buffer))

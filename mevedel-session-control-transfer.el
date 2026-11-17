@@ -30,10 +30,12 @@
 ;; `mevedel-execution'
 (declare-function mevedel-execution-session-live-p
                   "mevedel-execution" (session))
+(declare-function mevedel-execution-stop-services "mevedel-execution" (session))
 (declare-function mevedel-execution-teardown-session "mevedel-execution" (session))
 (declare-function mevedel-execution-unsettled-mutation-p
                   "mevedel-execution" (session))
 (autoload 'mevedel-execution-session-live-p "mevedel-execution")
+(autoload 'mevedel-execution-stop-services "mevedel-execution")
 (autoload 'mevedel-execution-teardown-session "mevedel-execution")
 (autoload 'mevedel-execution-unsettled-mutation-p "mevedel-execution")
 
@@ -520,6 +522,7 @@ interrupt that publication cleanup could discard."
       (let ((buffer (mevedel-session-control-transfer-root-buffer session)))
         (when (buffer-live-p buffer)
           (mevedel-session-artifacts-save session buffer t)
+          (mevedel-execution-stop-services session)
           (mevedel-session-transfer-release session)
           (mevedel-session-persistence-apply-read-only-mode
            buffer

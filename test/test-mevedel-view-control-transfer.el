@@ -11,6 +11,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-execution)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-codec)
 (require 'mevedel-session-control-transfer)
@@ -265,6 +266,7 @@
         (blocker "a live execution")
         (saved 0)
         (released 0)
+        (stopped 0)
         reason)
     (setf (mevedel-session-save-path session) "/session/")
     (cl-letf (((symbol-function
@@ -272,6 +274,12 @@
                (lambda (&rest _) blocker))
               ((symbol-function 'mevedel-session-artifacts-save)
                (lambda (&rest _) (cl-incf saved)))
+              ((symbol-function 'mevedel-execution-stop-services)
+               (lambda (owner)
+                 (should (eq owner session))
+                 (should (= 1 saved))
+                 (should (= 0 released))
+                 (cl-incf stopped)))
               ((symbol-function 'mevedel-session-durability-lease-release)
                (lambda (&rest _) (cl-incf released)))
               ((symbol-function
@@ -279,10 +287,12 @@
                (lambda (_buffer &optional text) (setq reason text))))
       (test-mevedel-view-control-transfer--with-pair session nil
         (should-error (mevedel-release-control) :type 'user-error)
+        (should (= 0 stopped))
         (setq blocker nil)
         (mevedel-test--with-captured-messages nil
                                               (mevedel-release-control)))
       (should (= 1 saved))
+      (should (= 1 stopped))
       (should (= 1 released))
       (should (stringp reason))
       (should-not (string-match-p "another host" reason))

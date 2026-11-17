@@ -18,6 +18,14 @@
 (autoload 'mevedel-agent-persistence-transcript-path-p
   "mevedel-agent-persistence")
 
+;; `mevedel-engine'
+(declare-function mevedel-engine-assert-local-history "mevedel-engine" (session operation &optional backend root-only))
+(autoload 'mevedel-engine-assert-local-history "mevedel-engine")
+
+;; `mevedel-execution'
+(declare-function mevedel-execution-stop-services "mevedel-execution" (session))
+(autoload 'mevedel-execution-stop-services "mevedel-execution")
+
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-native-path "mevedel-execution-target" (target path))
 (autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
@@ -1001,7 +1009,8 @@ separately by `mevedel-session-fork-provenance-body'."
 TYPE is `conversation' or `worktree'.  Both share admission, staging,
 publication, and cleanup.  Only a worktree fork creates a checkout and
 restores captured files; a conversation fork shares the source directory.
-Return the child data buffer without mutating the source session or lock."
+Return the child data buffer, stopping the source's transient services.
+The source's durable state and lock remain unchanged."
   (mevedel--with-gc-busy
     (unless (memq type '(conversation worktree))
       (error "Unknown session fork type: %S" type))
@@ -1094,9 +1103,12 @@ Return the child data buffer without mutating the source session or lock."
                   (mevedel-session-enqueue-pending-reminder
                    child (mevedel-session-fork--worktree-restore-report-body
                           child report)))
-                (mevedel-session-fork--publish-fork
-                 child buffer staging-buffer parent-save-path staging-path
-                 new-save-path picked-segment picked-cum-turn additional-roots))
+                (prog1
+                    (mevedel-session-fork--publish-fork
+                     child buffer staging-buffer parent-save-path staging-path
+                     new-save-path picked-segment picked-cum-turn additional-roots)
+                  ;; Arming or a failed fork must not discard source definitions.
+                  (mevedel-execution-stop-services session)))
             (when (file-directory-p staging-path)
               (ignore-errors (delete-directory staging-path t)))
             (when (buffer-live-p staging-buffer)

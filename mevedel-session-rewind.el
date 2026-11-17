@@ -39,7 +39,9 @@
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-session-live-p "mevedel-execution" (session))
+(declare-function mevedel-execution-stop-services "mevedel-execution" (session))
 (autoload 'mevedel-execution-session-live-p "mevedel-execution")
+(autoload 'mevedel-execution-stop-services "mevedel-execution")
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create "mevedel-execution-target" (workspace-root))
@@ -50,8 +52,10 @@
 ;; `mevedel-persistence'
 (declare-function mevedel-instruction-store-rewind-begin "mevedel-persistence" (session surviving-turn prune-from))
 (declare-function mevedel-instruction-store-rewind-end "mevedel-persistence" (session committed))
+(declare-function mevedel-instruction-store-sync "mevedel-persistence" (workspace))
 (autoload 'mevedel-instruction-store-rewind-begin "mevedel-persistence")
 (autoload 'mevedel-instruction-store-rewind-end "mevedel-persistence")
+(autoload 'mevedel-instruction-store-sync "mevedel-persistence")
 (defvar mevedel-instruction-store--inhibit)
 
 ;; `mevedel-session-artifacts'
@@ -1539,6 +1543,8 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                         (mevedel-session-rewind--sorted-file-plan rechecked))
                      (error
                       "Captured files changed after Rewind confirmation")))
+                 ;; Discard definitions before changing their source history.
+                 (mevedel-execution-stop-services session)
                  (setq project-restore-started t)
                  (setq restore-result (mevedel-session-rewind-execute-restore session plan))
                    (when (plist-get restore-result :failed)
@@ -1993,6 +1999,8 @@ and the file plan the caller confirmed."
                  (setq file-backups
                        (mevedel-session-rewind--backup-restore-files
                         plan file-backup-dir))
+                 ;; Redo replaces history just as Rewind does.
+                 (mevedel-execution-stop-services session)
                  (when plan
                    (setq file-restore-started t)
                    (setq restore-result (mevedel-session-rewind-execute-restore candidate plan))

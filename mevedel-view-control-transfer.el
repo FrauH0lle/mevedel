@@ -8,6 +8,10 @@
 
 ;;; Code:
 
+;; `mevedel-execution'
+(declare-function mevedel-execution-stop-services "mevedel-execution" (session))
+(autoload 'mevedel-execution-stop-services "mevedel-execution")
+
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt-framed-body
                   "mevedel-interaction-prompt" (content face))
@@ -398,6 +402,7 @@ the same reason a granted transfer waits for it."
                 (mevedel-session-control-transfer-drain-blocker session)))
       (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Cannot release control while %s is outstanding" blocker))
     (mevedel-session-artifacts-save session data t)
+    (mevedel-execution-stop-services session)
     (mevedel-session-durability-lease-release
      (mevedel-session-save-path session) session)
     (mevedel-session-persistence-apply-read-only-mode
