@@ -1564,7 +1564,7 @@
           if (sent) {
             if (composerInput.value === text) {
               composerInput.value = '';
-              window.mevedelComposer.collapse(composerInput);
+              window.mevedelComposer.setExpanded(composerInput, false);
             }
             tray.remove(submittedFiles);
             shareToProject(submittedFiles);
@@ -1588,7 +1588,7 @@
         }
         if (composerInput.value === text) {
           composerInput.value = '';
-          window.mevedelComposer.collapse(composerInput);
+          window.mevedelComposer.setExpanded(composerInput, false);
         }
         tray.remove(submittedFiles);
         shareToProject(submittedFiles);

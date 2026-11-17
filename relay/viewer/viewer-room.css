@@ -215,7 +215,9 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
 .decision-feedback { border-top:1px solid var(--line); }
 .decision-feedback > summary { padding:10px 18px; font-size:13px; color:var(--muted); cursor:pointer; }
 .decision-feedback[open] > summary { color:var(--ink); }
-.decision-feedback .request-feedback { font-size:14px; padding:8px 10px; }
+.decision-feedback .expandable-input { flex:1 1 100%; min-width:0; }
+.decision-feedback .request-feedback { font-size:14px; padding:8px 2.25rem 8px 10px; field-sizing:content; min-height:3rem; max-height:30dvh; }
+.requests.input-expanded { max-height:none; overflow:visible; }
 @media (min-width:1100px) {
   /* The sidebar keeps to the window's right edge and the conversation takes
      the rest, up to a column wide enough for code, tables and tool rows. */

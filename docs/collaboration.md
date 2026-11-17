@@ -388,8 +388,9 @@ bounded width. The message and name fields have visible labels;
 keyboard users can skip the header directly to the transcript.
 
 Every multiline message box has an **Expand** icon inside its upper-right corner:
-the room composer, a new session's first prompt, and discussion inputs on HTML
-artifacts, whiteboards and documents. It toggles a tall editing area, up to 75%
+the room composer, a new session's first prompt, Plan/decision feedback, and
+discussion inputs on HTML artifacts, whiteboards and documents. It toggles a tall
+editing area, up to 75%
 of the viewport, limited by the room header, discussion controls and visible
 space above a phone keyboard. **Collapse** restores the compact size without
 changing the draft; sending returns the box to compact mode.
@@ -434,6 +435,10 @@ or **⌘+Enter** to send. This applies to the room composer and new discussions
 and replies on HTML artifacts, whiteboards and documents. The sending shortcut
 also submits the feedback field on a pending interaction. The sending button's
 tooltip shows the platform's shortcut.
+
+Plan/decision feedback accepts multiple lines: **Enter** adds a newline and the
+same sending shortcut submits the comment. Ask's custom-answer fields remain
+single-line, with **Enter** keeping its answer/advance behavior.
 
 A guest's own chip leads the header's actions on every page. It opens a form
 for the name others see; the composer's **as …** beside Attach opens the same

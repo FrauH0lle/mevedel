@@ -256,7 +256,7 @@
       notices.push({reqId, name: name || 'New session', status: 'waiting'});
       nameInput.value = '';
       promptInput.value = '';
-      window.mevedelComposer.collapse(promptInput);
+      window.mevedelComposer.setExpanded(promptInput, false);
       render();
     }
 

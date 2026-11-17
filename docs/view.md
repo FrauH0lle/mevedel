@@ -1855,7 +1855,7 @@ and, when its bearer link permits it, submits typed input and interaction
 answers. See [Browser collaboration](collaboration.md) for sharing, link tiers,
 remote controls, notifications, and connection recovery.
 
-In the browser, multiline room, first-prompt and discussion inputs offer an
+In the browser, multiline room, first-prompt, Plan feedback and discussion inputs offer an
 upper-right **Expand / Collapse** toggle. Tall mode preserves the draft and
 returns to compact mode after sending. Transcript prompts and assistant
 responses also have a **Copy** message action: hover or focus reveals it on

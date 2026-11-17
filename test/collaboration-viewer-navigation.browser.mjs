@@ -439,6 +439,52 @@ test('multiline inputs expand reversibly and message actions copy source with a 
   } finally { await browser.close(); }
 });
 
+test('Plan feedback supports multiline expansion, refresh continuity and shortcut sending', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const viewport of [{width: 1440, height: 900}, {width: 375, height: 667}]) {
+      const page = await open(browser, {viewport, records: [
+        {id: 'plan', kind: 'assistant', text: 'The implementation plan is ready for review.'},
+      ]});
+      await page.goto(sessionRoom.link);
+      await page.locator('#transcript [data-record-id="plan"]').waitFor();
+      await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+      const frame = {t: 'ui-request', reqId: 99, body: 'Review the implementation plan.', allowFeedback: true};
+      await page.push[sessionRoom.id](frame);
+      await page.getByText('Suggest a change', {exact: true}).click();
+      const input = page.getByRole('textbox', {name: 'Feedback', exact: true});
+      assert.equal(await input.evaluate(node => node.tagName), 'TEXTAREA');
+      await input.fill('Keep the existing API.');
+      await input.press('Enter');
+      await input.pressSequentially('Add the regression first.');
+      const text = 'Keep the existing API.\nAdd the regression first.';
+      assert.equal(await input.inputValue(), text);
+      const collapsed = (await input.boundingBox()).height;
+      const toggle = page.locator('.decision-feedback .input-expand');
+      await toggle.click();
+      await page.waitForTimeout(250);
+      assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
+      assert.ok((await input.boundingBox()).height > collapsed + 30);
+      await input.evaluate(node => node.setSelectionRange(5, 12));
+      await page.push[sessionRoom.id]({...frame, body: 'Updated plan, same feedback request.'});
+      await page.waitForFunction(() => document.querySelector('.request-body').textContent.startsWith('Updated'));
+      assert.equal(await input.inputValue(), text);
+      assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
+      assert.deepEqual(await input.evaluate(node => [document.activeElement === node, node.selectionStart, node.selectionEnd]), [true, 5, 12]);
+      await capture(page, `plan-feedback-expanded-${viewport.width}x${viewport.height}-light`);
+      await input.press('Control+Enter');
+      await page.waitForFunction(() => document.querySelector('.decision-feedback .input-expand').getAttribute('aria-pressed') === 'false');
+      assert.equal(page.received.filter(({frame}) => frame.t === 'ui-response').at(-1).frame.feedback, text);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await toggle.click();
+      await page.push[sessionRoom.id]({t: 'ui-request-end', reqId: 99});
+      await page.waitForFunction(() => !document.querySelector('.decision-feedback'));
+      assert.equal(await page.locator('.dock').evaluate(node => node.classList.contains('input-expanded')), false);
+      await page.context().close();
+    }
+  } finally { await browser.close(); }
+});
+
 test('live arrow floats over the transcript without reserving a bar', async () => {
   const browser = await chromium.launch();
   try {

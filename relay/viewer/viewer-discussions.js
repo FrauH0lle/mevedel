@@ -445,7 +445,7 @@
         if (opened === false) return;
         if (key() === at && input.value === text) {
           input.value = '';
-          window.mevedelComposer.collapse(input);
+          window.mevedelComposer.setExpanded(input, false);
         }
         if (at === NEW && key() === NEW && typeof opened === 'string') {
           if (find(opened)) show({kind: 'thread', id: opened, keep: true});

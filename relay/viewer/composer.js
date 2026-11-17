@@ -23,15 +23,18 @@
   // Safari's keyboard resizes the visual viewport, not necessarily dvh.
   window.visualViewport?.addEventListener('resize', viewport);
 
-  function collapse(input) {
+  function setExpanded(input, expanded) {
     const box = input.parentElement;
     if (!box?.classList.contains('expandable-input')) return;
-    box.classList.remove('expanded');
-    input.closest('.dock')?.classList.remove('input-expanded');
+    box.classList.toggle('expanded', expanded);
+    for (const container of [input.closest('.dock'), input.closest('.requests')]) {
+      container?.classList.toggle('input-expanded', Boolean(container.querySelector('.expandable-input.expanded')));
+    }
     const toggle = box.lastElementChild;
-    toggle.setAttribute('aria-label', 'Expand');
-    toggle.setAttribute('aria-pressed', 'false');
-    toggle.title = 'Expand';
+    toggle.setAttribute('aria-label', expanded ? 'Collapse' : 'Expand');
+    toggle.setAttribute('aria-pressed', String(expanded));
+    toggle.title = expanded ? 'Collapse' : 'Expand';
+    if (expanded) viewport();
   }
 
   function expandable(input) {
@@ -45,15 +48,9 @@
     toggle.setAttribute('aria-controls', input.id);
     toggle.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="expand-icon" d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7"/><path class="collapse-icon" d="M20 4l-7 7m0-6v6h6M4 20l7-7m-6 0h6v6"/></svg>';
     box.append(input, toggle);
-    collapse(input);
+    setExpanded(input, false);
     toggle.addEventListener('click', () => {
-      const expanded = toggle.getAttribute('aria-pressed') !== 'true';
-      box.classList.toggle('expanded', expanded);
-      input.closest('.dock')?.classList.toggle('input-expanded', expanded);
-      viewport();
-      toggle.setAttribute('aria-label', expanded ? 'Collapse' : 'Expand');
-      toggle.setAttribute('aria-pressed', String(expanded));
-      toggle.title = expanded ? 'Collapse' : 'Expand';
+      setExpanded(input, toggle.getAttribute('aria-pressed') !== 'true');
       input.focus({preventScroll: true});
     });
   }
@@ -73,5 +70,5 @@
     });
   }
 
-  window.mevedelComposer = Object.freeze({bind, expandable, collapse});
+  window.mevedelComposer = Object.freeze({bind, expandable, setExpanded});
 })();
