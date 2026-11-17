@@ -319,6 +319,8 @@ test('multiline inputs expand reversibly and message actions copy source with a 
         const collapsed = (await input.boundingBox()).height;
         assert.equal(await toggle.getAttribute('aria-label'), 'Expand');
         assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
+        assert.equal(await toggle.evaluate(node => getComputedStyle(node).backgroundColor), 'rgba(0, 0, 0, 0)',
+          'the composer toggle must not paint over the textarea focus ring');
         const toggleBox = await toggle.boundingBox();
         if (viewport.width > 640) {
           const label = await page.locator('.composer-label').boundingBox();

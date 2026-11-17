@@ -133,7 +133,7 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
 .composer-field { position:relative; display:flex; flex-direction:column; gap:8px; }
 .composer-label { padding-right:32px; font-weight:500; color:var(--ink); font-size:12px; }
 .composer-field > .expandable-input { position:static; }
-.composer-field > .expandable-input > .input-expand { top:-7px; right:-10px; }
+.composer-field > .expandable-input > .input-expand { top:-7px; right:-10px; background:transparent; }
 .composer textarea { font-size:15px; line-height:1.6; }
 .composer-row { gap:6px; }
 .composer-row > .btn { min-height:34px; padding:7px 11px; font-size:12px; font-weight:500; }
