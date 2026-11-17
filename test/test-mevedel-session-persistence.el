@@ -22,8 +22,12 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
 (require 'mevedel-resource)
+(require 'mevedel-agent-control)
+(require 'mevedel-agent-persistence)
+(require 'mevedel-chat)
 (require 'mevedel-tool-exec-permission)
 (require 'mevedel-journal-pins)
+(require 'mevedel-session-artifacts)
 (require 'mevedel-session-durability)
 (require 'mevedel-session-persistence)
 (require 'mevedel-session-publication)
@@ -1240,6 +1244,47 @@
 (mevedel-deftest mevedel-session-persistence-restore (:quiet t)
   ,test
   (test)
+  :doc "restores a lost monitor as non-waking terminal mail, durable across another resume"
+  (let* ((root (make-temp-file "mevedel-restore-monitor-" t))
+         (workspace (test-mevedel-session-persistence--make-workspace root))
+         (session (mevedel-session-create "main" workspace))
+         (buffer (generate-new-buffer " *restore-monitor*"))
+         restored)
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (org-mode)
+            (insert "Watch CI\n"
+                    (test-mevedel-session-persistence--execution-tool-block
+                     "monitor-tool"
+                     '(:kind monitor :execution-id "exec-monitor" :description "CI watch"
+                       :state running :status success :live-execution-p t))
+                    (test-mevedel-session-persistence--execution-tool-block
+                     "bash-tool"
+                     '(:kind bash :execution-id "exec-bash"
+                       :state running :status success :live-execution-p t)))
+            (mevedel-session-artifacts-stabilize-gptel-bounds)
+            (mevedel-session-artifacts-save session buffer))
+          (test-mevedel-session-persistence--release-and-kill buffer session)
+          (dotimes (_ 2)
+            (setq restored (mevedel-session-persistence-restore
+                            (mevedel-session-save-path session) nil nil workspace))
+            (with-current-buffer restored
+              (let ((mail (mevedel-agent-control-context-mailbox mevedel--session)))
+                (should (= 1 (length mail)))
+                (should (eq 'MONITOR_TERMINAL (plist-get (car mail) :type)))
+                (should (equal "exec-monitor" (plist-get (car mail) :execution-id)))
+                (should (equal "CI watch" (plist-get (car mail) :description)))
+                (should (string-search "CI watch" (mevedel-tools--message-delivery-block (car mail))))
+                (should-not (mevedel-agent-control-wake-pending-p mevedel--session))))
+            (test-mevedel-session-persistence--release-and-kill
+             restored (buffer-local-value 'mevedel--session restored))))
+      (test-mevedel-session-persistence--release-and-kill buffer session)
+      (when (buffer-live-p restored)
+        (test-mevedel-session-persistence--release-and-kill
+         restored (buffer-local-value 'mevedel--session restored)))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
   :doc "repair publication keeps authored previews around mailbox deliveries"
   (let* ((tempdir (make-temp-file "mevedel-preview-restore-" t))
          (workspace (test-mevedel-session-persistence--make-workspace tempdir)))
@@ -5100,7 +5145,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                      (push 'transcript events)))
                   ((symbol-function
                     'mevedel-tool-render-data-reconcile-lost-executions)
-                   (lambda (_buffer) 0))
+                   (lambda (_buffer &rest _) 0))
                   ((symbol-function
                     'mevedel-session-artifacts-check-target-incarnation)
                    (lambda (checked-session checked-buffer)

@@ -1155,6 +1155,28 @@ together or not at all, so a retry cannot duplicate a partial batch."
     (when acknowledge (funcall acknowledge t nil))
     t))
 
+(defun mevedel-agent-control-restore-lost-monitors (session monitors)
+  "Add non-waking terminal mail for lost MONITORS to restored SESSION.
+MONITORS contains repaired execution facts.  The restore checkpoint publishes
+this mail together with its transcript repairs, not as a separate write."
+  (let ((seen (make-hash-table :test #'equal)))
+    (dolist (record (mevedel-session-messages session))
+      (when (eq (plist-get record :type) 'MONITOR_TERMINAL)
+        (puthash (plist-get record :execution-id) t seen)))
+    (dolist (facts monitors)
+      (let ((id (plist-get facts :execution-id)))
+        (when (and (stringp id) (not (gethash id seen)))
+          (puthash id t seen)
+          (let ((record (list :type 'MONITOR_TERMINAL :sender "/root"
+                              :recipient "/root" :execution-id id
+                              :description (or (plist-get facts :description) "Monitor")
+                              :payload (concat "This monitor was lost when the session was restored. "
+                                               "It is not running; start it again explicitly if needed.")
+                              :timestamp (current-time)
+                              :meta '(:termination lost :outcome failure))))
+            (mevedel-agent-control--identify-record record)
+            (push record (mevedel-session-messages session))))))))
+
 (defun mevedel-agent-control-wake-pending-p (session)
   "Return non-nil while SESSION's root mailbox holds an unread waking record.
 Reading the mailbox consumes the record, so a result the model already saw

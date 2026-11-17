@@ -35,8 +35,10 @@
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-active-turn-p "mevedel-agent-control" (session))
 (declare-function mevedel-agent-control-reoffer-mail "mevedel-agent-control" (session))
+(declare-function mevedel-agent-control-restore-lost-monitors "mevedel-agent-control" (session monitors))
 (autoload 'mevedel-agent-control-active-turn-p "mevedel-agent-control")
 (autoload 'mevedel-agent-control-reoffer-mail "mevedel-agent-control")
+(autoload 'mevedel-agent-control-restore-lost-monitors "mevedel-agent-control")
 
 ;; `mevedel-agent-conversation'
 (declare-function mevedel-agent-conversation-prepare-save
@@ -366,7 +368,7 @@
                   "mevedel-tool-render-data" (data beg end))
 (declare-function mevedel-tool-render-data-reconcile-lost-executions
                   "mevedel-tool-render-data"
-                  (buffer &optional successor-execution-ids))
+                  (buffer &optional successor-execution-ids lost-monitor))
 (declare-function mevedel-tool-render-data-without-owner
                   "mevedel-tool-render-data" (data))
 (defvar mevedel-tool-render-data-close)
@@ -573,11 +575,12 @@ rollback.  A failed backup is reported and does not block the repair."
               (file-name-nondirectory path) (error-message-string err))))))
 
 (defun mevedel-session-persistence--reconcile-lost-execution-file
-    (path text &optional successor-execution-ids artifact-callback)
+    (path text &optional successor-execution-ids artifact-callback lost-monitor)
   "Mark stale running execution rows in transcript PATH with TEXT as lost.
 
 When ARTIFACT-CALLBACK is non-nil, pass it the repaired replacement instead
-of writing PATH directly."
+of writing PATH directly.  SUCCESSOR-EXECUTION-IDS and LOST-MONITOR are
+passed to `mevedel-tool-render-data-reconcile-lost-executions'."
   (when text
     (with-temp-buffer
       (insert text)
@@ -585,7 +588,7 @@ of writing PATH directly."
       (mevedel-transcript-restore-properties)
       (let ((count
               (mevedel-tool-render-data-reconcile-lost-executions
-              (current-buffer) successor-execution-ids)))
+              (current-buffer) successor-execution-ids lost-monitor)))
         (when (> count 0)
           (mevedel-session-persistence--back-up-segment path text)
           (mevedel-session-artifacts-stabilize-gptel-bounds)
@@ -600,10 +603,10 @@ of writing PATH directly."
         count))))
 
 (defun mevedel-session-persistence-reconcile-lost-execution-segments
-    (session &optional exclude-path artifact-callback)
+    (session &optional exclude-path artifact-callback lost-monitor)
   "Repair stale execution rows in SESSION segments except EXCLUDE-PATH.
 
-ARTIFACT-CALLBACK has the meaning described by
+ARTIFACT-CALLBACK and LOST-MONITOR have the meanings described by
 `mevedel-session-persistence--reconcile-lost-execution-file'."
   (let ((save-path (mevedel-session-save-path session))
         (successor-ids
@@ -623,7 +626,7 @@ ARTIFACT-CALLBACK has the meaning described by
              do (cl-incf
                  count
                  (or (mevedel-session-persistence--reconcile-lost-execution-file
-                      path text successor-ids artifact-callback)
+                      path text successor-ids artifact-callback lost-monitor)
                      0))
              and do
              (dolist (id (mevedel-session-persistence--execution-successor-ids text))
@@ -1466,13 +1469,14 @@ not search unrelated buffers or infer roles from view-local variables."
 
 (defun mevedel-session-persistence--hydrate-restored-buffer
     (buf session workspace segment-path acquired additional-roots
-         lifecycle-source &optional artifact-callback checkpoint-callback)
+         lifecycle-source &optional artifact-callback checkpoint-callback lost-monitors)
   "Hydrate fresh restore buffer BUF and return its durable repair count.
 SESSION and WORKSPACE are planted before mevedel restores persisted state.
 SEGMENT-PATH is reconciled when ACQUIRED owns the session lock.  Additional
 workspace roots and LIFECYCLE-SOURCE restore the saved session environment.
 ARTIFACT-CALLBACK collects remote transcript replacements for one batch.
-CHECKPOINT-CALLBACK receives the candidate frozen with repaired root bytes."
+CHECKPOINT-CALLBACK receives the candidate frozen with repaired root bytes.
+LOST-MONITORS contains the lost facts already repaired in older segments."
   (let ((ptc-insertions 0)
         (ptc-consumptions 0)
         checkpoint-captured)
@@ -1497,7 +1501,10 @@ CHECKPOINT-CALLBACK receives the candidate frozen with repaired root bytes."
                 ptc-consumptions consumed))
         (let ((transcript-repairs
                (+ ptc-insertions
-                  (mevedel-tool-render-data-reconcile-lost-executions buf))))
+                  (mevedel-tool-render-data-reconcile-lost-executions
+                   buf nil (lambda (facts) (push facts lost-monitors))))))
+          (when lost-monitors
+            (mevedel-agent-control-restore-lost-monitors session lost-monitors))
           (when (or (> transcript-repairs 0) (> ptc-consumptions 0))
             ;; PTC insertions and lost-execution repairs both change transcript
             ;; length; the repair publication needs current offsets.  Rewrite
@@ -1748,7 +1755,7 @@ mentions-shown reset to empty hash tables on load."
                      (segment-path
                       (mevedel-session-artifacts-segment-path
                        session-dir segment-n))
-                     repair-checkpoint
+                     repair-checkpoint lost-monitors
                      (agent-repairs 0))
                 (setq
                  buf
@@ -1766,7 +1773,8 @@ mentions-shown reset to empty hash tables on load."
                               segment-path))
                 (when (and acquired (not live))
                   (mevedel-session-persistence-reconcile-lost-execution-segments
-                   session segment-path repair-callback))
+                   session segment-path repair-callback
+                   (lambda (facts) (push facts lost-monitors))))
                 (with-current-buffer buf
                   (mevedel-session-set-root-buffer session buf)
                   (unless (equal (buffer-name) buf-name)
@@ -1786,7 +1794,8 @@ mentions-shown reset to empty hash tables on load."
                         (mevedel-session-persistence--hydrate-restored-buffer
                          buf session workspace segment-path acquired
                          additional-roots lifecycle-source repair-callback
-                         (lambda (candidate) (setq repair-checkpoint candidate)))))
+                         (lambda (candidate) (setq repair-checkpoint candidate))
+                         lost-monitors)))
                 (mevedel-session-persistence--finish-restored-buffer
                  buf session live
                  (and acquired

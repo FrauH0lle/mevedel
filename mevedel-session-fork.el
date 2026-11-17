@@ -87,7 +87,7 @@
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--execution-successor-ids "mevedel-session-persistence" (text))
-(declare-function mevedel-session-persistence--reconcile-lost-execution-file "mevedel-session-persistence" (path text &optional successor-execution-ids artifact-callback))
+(declare-function mevedel-session-persistence--reconcile-lost-execution-file "mevedel-session-persistence" (path text &optional successor-execution-ids artifact-callback lost-monitor))
 (declare-function mevedel-session-persistence-allocate-session-id "mevedel-session-persistence" (sessions-dir))
 (declare-function mevedel-session-persistence-find-live-buffer "mevedel-session-persistence" (session-id buf-name))
 (declare-function mevedel-session-persistence-lock-acquire "mevedel-session-persistence" (session-dir buffer-name &optional session))

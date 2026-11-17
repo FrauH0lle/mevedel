@@ -1655,8 +1655,9 @@ or permission interaction still does.
 
 Monitors exist only in the current Emacs runtime. Session teardown, clear, or
 close stops them; resume and fork never restart them. Transcript facts remain,
-with prior live executions shown as lost. Saved event mail survives reload but
-loses its wake mark, so it is read on the next turn rather than starting a new
+with prior live executions shown as lost. Resume adds a terminal mailbox
+notice identifying each lost monitor by execution ID and description. These
+notices and saved event mail are read on the next turn; neither starts a
 request after restart.
 
 ## Eval execution scope

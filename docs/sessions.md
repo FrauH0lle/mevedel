@@ -2522,12 +2522,14 @@ machine remains transient, but the sidecar stores the envelope and bounded
 child audit. Resume converts a surviving checkpoint to an interrupted
 ToolCall row, never resumes the script, and commits the repaired segment
 together with clearing the checkpoint. Resume also atomically reconciles
-running Bash rows across the restored segment and its archived predecessors
+running execution rows across the restored segment and its archived predecessors
 before rendering the view. The scan proceeds newest to oldest: a later
 `execution-archive` or `execution-completion` record marks an older copy as
 archived/superseded. Structured execution rows in later segments provide the
 same successor evidence, including rows retained in a compacted tail; a row
-with no successor becomes `lost`. Reconciliation can change transcript length;
+with no successor becomes `lost`. For each lost Monitor, resume publishes a
+non-waking root mailbox notice with the same repair, for the next model turn.
+Reconciliation can change transcript length;
 both fork staging and restored-buffer hydration reserialize `GPTEL_BOUNDS`
 before saving or publishing repaired text, even when no ToolCall checkpoint
 inserted anything. This keeps later tool and hidden-audit spans aligned after
