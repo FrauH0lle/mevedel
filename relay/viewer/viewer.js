@@ -10,6 +10,7 @@
   const dock = document.querySelector('.dock');
   const composer = document.getElementById('composer');
   const composerInput = document.getElementById('composer-input');
+  document.addEventListener('click', window.mevedelTranscriptRenderer.messageAction);
   const queueState = document.getElementById('queue-state');
   const stopButton = document.getElementById('stop-button');
   const filterNav = document.getElementById('filter');
@@ -48,6 +49,7 @@
     staging: null,
     filter: 'main',
     connected: false,
+    turnCount: null,
     unseen: new Set(),
     busy: null,
     roster: [],
@@ -137,6 +139,7 @@
     if (className !== 'connected') {
       sessions.disconnected();
       state.connected = false;
+      state.turnCount = null;
       pendingBackgroundSource = null;
       if (backgroundSourceTimer) clearTimeout(backgroundSourceTimer);
       recoveryFrame = null;
@@ -948,6 +951,11 @@
       const fork = event.target && typeof event.target.closest === 'function'
         ? event.target.closest('.forkbtn[data-fork-point]') : null;
       if (fork) sessions.fork(fork.dataset.forkPoint);
+      const history = event.target && typeof event.target.closest === 'function'
+        ? event.target.closest('.message-action[data-history-id]') : null;
+      if (history) sessions.historyAction(
+        history.dataset.messageAction, history.dataset.historyId, history,
+        history.dataset.historyTurn === undefined ? null : Number(history.dataset.historyTurn));
     });
   }
 
@@ -1421,6 +1429,7 @@
       removeRequest(frame.reqId);
       notifiedRequests.delete(frame.reqId);
     } else if (frame.t === 'status') {
+      state.turnCount = Number.isInteger(frame.turnCount) ? frame.turnCount : null;
       if (state.busy === true && frame.busy !== true) {
         notifications.maybeNotify(
           frame.outcome === 'error' ? 'Turn failed' : ['aborted', 'lost'].includes(frame.outcome) ? 'Turn interrupted' : 'Turn finished',
@@ -1484,6 +1493,8 @@
       files.changed(frame);
     } else if (frame.t === 'session-models') {
       sessions.showModels(frame.models, frame.efforts);
+    } else if (frame.t === 'history-action') {
+      sessions.historyResult({reqId: frame.reqId, ok: frame.ok === true, message: frame.message});
     } else if (frame.t === 'new-session') {
       sessions.showResult({
         reqId: frame.reqId, ok: frame.ok === true, message: frame.message,
@@ -1561,7 +1572,10 @@
           const sent = await discussItem(filter.slice('item:'.length), text.trim(),
                                          tray.frame(submittedFiles));
           if (sent) {
-            if (composerInput.value === text) composerInput.value = '';
+            if (composerInput.value === text) {
+              composerInput.value = '';
+              window.mevedelComposer.setExpanded(composerInput, false);
+            }
             tray.remove(submittedFiles);
             shareToProject(submittedFiles);
           }
@@ -1582,7 +1596,10 @@
           flashNotice('Connection lost; prompt kept.');
           return;
         }
-        if (composerInput.value === text) composerInput.value = '';
+        if (composerInput.value === text) {
+          composerInput.value = '';
+          window.mevedelComposer.setExpanded(composerInput, false);
+        }
         tray.remove(submittedFiles);
         shareToProject(submittedFiles);
         // One tap, one invocation: disarm so the next send is a prompt.

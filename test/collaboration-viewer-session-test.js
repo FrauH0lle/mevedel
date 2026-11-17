@@ -11,7 +11,7 @@ const ids = ['new-session-button', 'new-session', 'new-session-form',
              'new-session-model', 'new-session-model-label',
              'new-session-effort', 'new-session-effort-label',
              'new-session-lede', 'invites', 'invite-button', 'invite',
-             'invite-tiers', 'rooms', 'rooms-list'];
+             'invite-tiers', 'rooms', 'rooms-list', 'rewind-confirm', 'rewind-confirm-note'];
 
 // Values made inside the viewer's context, compared as plain data.
 const plain = value => JSON.parse(JSON.stringify(value));
@@ -45,6 +45,7 @@ function build(tierBytes, seed, models = [], roomId = 'here') {
   };
   const copied = [];
   const window = {
+    mevedelComposer: {expandable() {}, setExpanded() {}},
     location: {origin: 'https://relay.example', pathname: '/'},
     localStorage: {
       getItem: key => (store.has(key) ? store.get(key) : null),
@@ -57,12 +58,15 @@ function build(tierBytes, seed, models = [], roomId = 'here') {
   load('relay/viewer/viewer-session.js', context);
   const sent = [];
   const modelRequests = [];
+  const notices = [];
+  const state = {mode: 'ask', owner: tierBytes === 64, connected: true, turnCount: 2, models};
   const controller = window.mevedelSessionView.create({
-    state: {mode: 'ask', owner: tierBytes === 64, models},
+    state,
     send: frame => (frame.t === 'session-models' ? modelRequests : sent).push(frame),
     el: (tag, className, text) => element(document, tag, className, text),
     encode: base64urlEncode,
     decode: base64urlDecode,
+    notice: text => notices.push(text),
   });
   controller.useCredentials({
     roomId,
@@ -71,7 +75,7 @@ function build(tierBytes, seed, models = [], roomId = 'here') {
     ownerToken: tierBytes >= 64 ? new Uint8Array(16).fill(1) : null,
   });
   controller.setWorkspace('ws');
-  return {controller, nodes, sent, modelRequests, copied, document};
+  return {controller, nodes, sent, modelRequests, copied, document, state, window, notices};
 }
 
 // Opening refreshes the host's offered catalog; an in-flight pick survives.
@@ -464,4 +468,56 @@ console.log('viewer session controller passed');
   nodes['new-session-name'].value = 'plain';
   nodes['new-session'].close('create');
   assert.equal('effort' in sent[1], false);
+}
+
+// History actions stay owner-only and connected, and Rewind confirms its scope.
+for (const tier of [32, 48, 64]) {
+  const {controller, sent, state, nodes} = build(tier);
+  const button = new Element('button');
+  controller.historyAction('rewind', 'fp-1', button, 1);
+  assert.equal(sent.length, 0);
+  assert.equal(nodes['rewind-confirm'].open, tier === 64);
+  if (tier === 64) assert.match(nodes['rewind-confirm-note'].textContent,
+                               /Remove 1 later turn\? Files stay unchanged/);
+  nodes['rewind-confirm'].close('cancel');
+  state.connected = false;
+  controller.historyAction('retry-turn', 'failed-request', button);
+  assert.equal(sent.length, 0);
+  state.connected = true;
+  controller.historyAction('retry-turn', 'failed-request', button);
+  assert.equal(sent.length, tier === 64 ? 1 : 0);
+  assert.equal(nodes['rewind-confirm'].open, false, 'Retry needs no extra confirmation');
+}
+
+// Each reply settles its own action. Refusals explain why, and a disconnect
+// releases controls even when the host never sent a reply.
+{
+  const {controller, sent, nodes, notices, state} = build(64);
+  const button = new Element('button');
+  controller.historyAction('rewind', 'fp-1', button, 1);
+  state.turnCount = 3;
+  nodes['rewind-confirm'].close('rewind');
+  assert.equal(sent.length, 0, 'changed history requires a fresh confirmation');
+  assert.deepEqual(notices.splice(0), ['The conversation changed; review Rewind again.']);
+  state.turnCount = 2;
+  controller.historyAction('rewind', 'fp-1', button, 1);
+  nodes['rewind-confirm'].close('rewind');
+  assert.deepEqual(plain(sent), [{t: 'rewind', reqId: 1, forkPoint: 'fp-1', turnCount: 2}]);
+  assert.equal(button.disabled, true);
+  assert.equal(button.attributes['aria-busy'], 'true');
+  controller.historyAction('rewind', 'fp-1', button);
+  assert.equal(sent.length, 1, 'a pending button cannot submit twice');
+  controller.historyResult({reqId: 99, ok: false, message: 'unrelated'});
+  assert.deepEqual(notices, []);
+  controller.historyResult({reqId: 1, ok: false, message: 'The history changed.'});
+  assert.equal(button.disabled, false);
+  assert.equal('aria-busy' in button.attributes, false);
+  assert.deepEqual(notices, ['The history changed.']);
+  controller.historyAction('retry-turn', 'failed-request', button);
+  assert.deepEqual(plain(sent[1]), {t: 'retry-turn', reqId: 2, failureId: 'failed-request'});
+  controller.disconnected();
+  assert.equal(button.disabled, false);
+  assert.equal('aria-busy' in button.attributes, false);
+  controller.historyResult({reqId: 2, ok: false, message: 'late reply'});
+  assert.deepEqual(notices, ['The history changed.']);
 }

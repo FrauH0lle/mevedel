@@ -151,7 +151,7 @@
                                :info (list :buffer (current-buffer) :backend backend
                                            :data '(:prepared "unchanged")
                                            :callback #'ignore)))
-                         (expected (and admitted (> limit 0)
+                         (expected (and admitted
                                         (not (eq constructor
                                                  'mevedel-claude-code--make-backend))))
                          (calls 0))

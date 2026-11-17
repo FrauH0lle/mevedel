@@ -162,12 +162,24 @@ than through the command allowlist:
   `M-x mevedel`.
 
 - `rewind` truncates the shared conversation after a settled assistant response,
-  leaving working files alone. Only owner links offer **Rewind from here** beside
-  Fork, with a short confirmation and a reminder that Emacs Redo can restore the
-  conversation. The frame carries the response's `forkPoint`; the host resolves
+  leaving working files alone. Only owner links offer **Rewind to here** beside
+  Fork, with a short confirmation naming the number of later turns and a reminder
+  that Emacs Redo can restore the conversation. Its count uses the response's
+  stable `forkTurn` and the status frame's `turnCount`, not loaded message counts.
+  The frame carries the response's `forkPoint` and confirmed `turnCount`; the host
+  refuses if the count changed before it receives the action, then resolves
   it and uses the ordinary Rewind transaction without a file plan. Its stable
   source and native-history restrictions still apply. Each session room
   republishes the truncated history, including after an Emacs Rewind or Redo.
+
+- `retry-turn` retries a retained failed turn by its exact request identity.
+  Owner links show **Retry** on the failure message only while the host retains
+  that request's replay data. Native providers resend the same prepared sample
+  without rerunning completed tools; the error disclosure remains in history.
+  For external ACP sessions, **Retry prompt** resends the original prompt into
+  the same native history after reconnecting. Its help says that the agent sees its
+  failed attempt; partial output stays visible to match that history. This is
+  separate from the pending-input queue's Retry action.
 
 - `recovery` exposes selection among the offered models, reasoning efforts and
   registered presets, session rename, native-history recovery, retained-input
@@ -395,6 +407,21 @@ keeps a 44px minimum and a 30% viewport-height cap. Conversation text and the co
 bounded width. The message and name fields have visible labels;
 keyboard users can skip the header directly to the transcript.
 
+Every multiline message box has an **Expand** icon inside its upper-right corner:
+the room composer, a new session's first prompt, Plan/decision feedback, and
+discussion inputs on HTML artifacts, whiteboards and documents. It toggles a tall
+editing area, up to 75%
+of the viewport, limited by the room header, discussion controls and visible
+space above a phone keyboard. **Collapse** restores the compact size without
+changing the draft; sending returns the box to compact mode.
+
+User prompts and assistant responses offer **Copy** beneath the message. The
+action appears on hover or keyboard focus on desktop and remains visible on
+touch devices. It copies the message's original Markdown/plain text, or rendered
+text with line breaks when source text is absent, and briefly confirms **Copied**.
+When the Clipboard API is unavailable, the viewer tries the browser's legacy
+copy command; a refusal shows **Copy failed** instead.
+
 At the bottom of the conversation, the viewer follows new messages and streamed
 responses, including content that grows after rendering. Sending a message keeps
 that following state. Even a small upward scroll pauses following and preserves
@@ -428,6 +455,10 @@ or **⌘+Enter** to send. This applies to the room composer and new discussions
 and replies on HTML artifacts, whiteboards and documents. The sending shortcut
 also submits the feedback field on a pending interaction. The sending button's
 tooltip shows the platform's shortcut.
+
+Plan/decision feedback accepts multiple lines: **Enter** adds a newline and the
+same sending shortcut submits the comment. Ask's custom-answer fields remain
+single-line, with **Enter** keeping its answer/advance behavior.
 
 A guest's own chip leads the header's actions on every page. It opens a form
 for the name others see; the composer's **as …** beside Attach opens the same

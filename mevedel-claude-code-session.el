@@ -120,10 +120,12 @@ This command does not start a model request or resume a paused Goal."
         (mevedel-recovery-save session)))))
 
 ;;;###autoload
-(defun mevedel-claude-code-send (&optional model-input model-policy)
+(defun mevedel-claude-code-send (&optional model-input model-policy prepared-input)
   "Send MODEL-INPUT through the effective Claude subscription MODEL-POLICY.
 When input is omitted, read the latest submitted canonical transcript prompt.
-An omitted policy resolves through the common request model resolver."
+An omitted policy resolves through the common request model resolver.
+PREPARED-INPUT reuses accepted ACP user content, including original image bytes,
+for an explicit retry in the same native conversation, not a history rewind."
   (let* ((mevedel-implementation-policy--admission-preparation
           (mevedel-implementation-policy-capture-preparation))
          (model-policy (or model-policy (mevedel-skills-request-model-policy)))
@@ -151,6 +153,8 @@ An omitted policy resolves through the common request model resolver."
                          (not (plist-get history :id))
                          (mevedel-engine-root-history-p session)
                          (mevedel-claude-code-history-excerpt session))))
+         (transcript-input (buffer-substring-no-properties
+                            (mevedel-transcript-prompt-transform-start) (point-max)))
          (prompt (concat
                   (when shared (mevedel-shared-conversation-prefix session shared t))
                   (mevedel-tool-render-data-strip-non-media
@@ -207,9 +211,17 @@ An omitted policy resolves through the common request model resolver."
           (mevedel-claude-code-context-system request system-prompt selected (plist-get history :id)))
         mcp model effort (plist-get history :id) hook-command))
      (lambda ()
-       (let ((input (mevedel-claude-code-context-prompt
+       (let* ((user-input (or prepared-input
+                              (mevedel-claude-code-context-input request prompt)))
+              (input (mevedel-claude-code-context-prompt
                      request (vconcat (when excerpt (vector `((type . "text") (text . ,excerpt))))
-                                      (mevedel-claude-code-context-input request prompt)) history)))
+                                      user-input) history)))
+         (setf (mevedel-engine-info request)
+               (append (mevedel-engine-info request)
+                       (list :mevedel-retry-prompt (copy-sequence prompt)
+                             :mevedel-retry-transcript-input transcript-input
+                             :mevedel-retry-input (copy-tree user-input t)
+                             :mevedel-retry-model-policy (copy-tree model-policy))))
          (when (mevedel-session-note-conversation session)
            (mevedel-note-conversation-record-input
             session (list :system system-prompt :input input)))

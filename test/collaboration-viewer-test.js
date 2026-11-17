@@ -1174,7 +1174,7 @@ async function main() {
                'appearance-menu', 'palette', 'appearance', 'accents', 'skill-search', 'skills-button', 'activity', 'modeline', 'empty-state',
                'session-box', 'session-summary',
                'tasks-list', 'background-work', 'background-summary', 'background-collapse', 'background-list', 'background-more',
-               'new-session-button', 'new-session', 'new-session-form',
+               'new-session-button', 'new-session', 'new-session-form', 'rewind-confirm', 'rewind-confirm-note',
                'new-session-result', 'new-session-name',
                'new-session-prompt', 'new-session-model',
                'new-session-model-label',
@@ -2400,10 +2400,14 @@ async function main() {
   // tier so the control shows only there; the host rechecks it anyway.
   assert.equal('data-owner-link' in document.body.attributes, true);
   await deliver({t: 'record', record: {id: 'forkable', kind: 'assistant', revision: 0,
-                                       text: 'Settled answer.', forkPoint: 'fp-1'}});
+                                       text: 'Settled answer.', forkPoint: 'fp-1', forkTurn: 1}});
   const forkButton = findByClass(findByRecordId(nodes.transcript, 'forkable'), 'forkbtn');
   assert.ok(forkButton, 'fork control');
   assert.equal(forkButton.dataset.forkPoint, 'fp-1');
+  const actions = findByClass(findByRecordId(nodes.transcript, 'forkable'), 'message-actions');
+  assert.deepEqual(actions.children.map(item => item.children[0].dataset.messageAction),
+                   ['copy', 'fork', 'rewind']);
+  assert.equal(forkButton.parentElement.parentElement, actions, 'one message action row');
   const forkBefore = first.sent.length;
   nodes.transcript.dispatch('click', {target: {closest: selector =>
     (selector.startsWith('.forkbtn') ? forkButton : null)}});
@@ -2417,6 +2421,47 @@ async function main() {
   assert.match(textOf(nodes.invites), /forked-id · open/);
   // A record without a fork point, such as a streaming answer, offers none.
   assert.equal(findByClass(findByRecordId(nodes.transcript, 'assistant'), 'forkbtn'), null);
+
+  // Rewind confirms that it leaves files alone, and its typed reply releases
+  // the initiating button without creating a new room or an invitation.
+  const rewindButton = actions.children[2].children[0];
+  const historyClick = button => nodes.transcript.dispatch('click', {target: {closest: selector =>
+    (selector === '.message-action[data-history-id]' ? button : null)}});
+  const historyBefore = first.sent.length;
+  await deliver({t: 'status', busy: false, turnCount: 2});
+  historyClick(rewindButton);
+  assert.match(nodes['rewind-confirm-note'].textContent, /Remove 1 later turn\? Files stay unchanged/);
+  nodes['rewind-confirm'].close('cancel');
+  assert.equal(first.sent.length, historyBefore, 'cancelled Rewind sends nothing');
+  historyClick(rewindButton);
+  nodes['rewind-confirm'].close('rewind');
+  await waitFor(() => first.sent.length === historyBefore + 1, 'sealed Rewind request');
+  assert.deepEqual(await unseal(key, first.sent[historyBefore]),
+                   {t: 'rewind', reqId: 4, forkPoint: 'fp-1', turnCount: 2});
+  assert.equal(rewindButton.disabled, true);
+  await deliver({t: 'history-action', reqId: 4, ok: false, message: 'The response moved.'});
+  assert.equal(rewindButton.disabled, false);
+  assert.equal(nodes.notice.textContent, 'The response moved.');
+
+  // A failure offers only its exact live replay identity. ACP's label and
+  // tooltip distinguish prompt resend from native prepared-sample replay.
+  await deliver({t: 'record', record: {id: 'failed-turn', kind: 'assistant', revision: 0,
+    status: 'failed', text: 'Assistant request failed.', retryId: 'request-1', retryExternal: true}});
+  const failed = findByRecordId(nodes.transcript, 'failed-turn');
+  const retryButton = findByClass(failed, 'message-actions').children[1].children[0];
+  assert.equal(retryButton.dataset.label, 'Retry prompt');
+  assert.match(retryButton.attributes.title, /agent sees the failed attempt/);
+  const retryBefore = first.sent.length;
+  historyClick(retryButton);
+  await waitFor(() => first.sent.length === retryBefore + 1, 'sealed Retry request');
+  assert.deepEqual(await unseal(key, first.sent[retryBefore]),
+                   {t: 'retry-turn', reqId: 5, failureId: 'request-1'});
+  await deliver({t: 'history-action', reqId: 5, ok: true});
+  assert.equal(retryButton.disabled, false);
+  await deliver({t: 'record', record: {id: 'failed-turn', kind: 'assistant', revision: 1,
+    status: 'failed', text: 'Assistant request failed.'}});
+  assert.equal(findByClass(findByRecordId(nodes.transcript, 'failed-turn'), 'message-actions')
+    .children.length, 1, 'retired failures retain Copy but not Retry');
 
   // Inviting hands on this room's own link, at the holder's tier or any
   // below it -- an owner link can offer all three, and never a fourth.

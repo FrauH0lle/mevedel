@@ -464,10 +464,13 @@ CHECK_BASE=BASE MEVEDEL_AFFECTED_BASE=BASE eask run script check -- --affected
   `mevedel-structs.el`), or a non-documentation file no test file names.
 - Documentation (`docs/`, `.mevedel/`, Markdown, text and images) that no test
   names, and deleted test files, add nothing beyond the smoke set.
+- Node and browser tests (`test/*.js`, `test/*.mjs`) that no ERT file names
+  also add nothing: they run under their own runners (see
+  [relay/AGENTS.md](../relay/AGENTS.md#checks)), not ERT.
 
 The console prints one line per changed file with its selection or fallback
-reason. A change to code therefore never selects zero tests silently: it maps
-to test files or to the full suite. The tier misses breakage that reaches a
+reason. A change to Elisp or other runtime code therefore never selects zero
+tests silently: it maps to test files or to the full suite. The tier misses breakage that reaches a
 test only through an indirect require; the merge-time full suite and CI catch
 it.
 

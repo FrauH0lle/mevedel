@@ -198,7 +198,9 @@ attempt diagnostics with the original provider error, and pauses an affected
 Goal rather than invoking its settled-turn retry policy. An owned permanent
 refusal also pauses the affected Goal instead of gaining new-turn retries.
 Reported usage has a distinct physical-call identity and is charged once; absent usage stays
-unknown. Zero `mevedel-gptel-retry-max-retries` disables the controller.
+unknown. Zero `mevedel-gptel-retry-max-retries` disables automatic resends;
+root requests still discard failed provisional output and retain the prepared
+sample for explicit failed-turn Retry. Retained agents opt out at zero.
 Unadmitted background gptel policies are unchanged. Claude Code/ACP stays
 separate and self-retrying, retaining its built-in retry behavior and the
 credential-lock replay below. The all-backend admission contract does not

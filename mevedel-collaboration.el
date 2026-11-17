@@ -823,6 +823,8 @@ room, and follows a rename, including an automatic title."
     (list :t "status"
           :name (when-let* ((session (plist-get room :session)))
                   (mevedel-session-name session))
+          :turnCount (when-let* ((session (plist-get room :session)))
+                       (or (mevedel-session-turn-count session) 0))
           ;; Host diagnostics reach owners only, in their recovery frame.
           :issues (vconcat
                    (when-let* ((session (plist-get room :session)))

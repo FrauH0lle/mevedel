@@ -22,6 +22,7 @@
     const sheet = document.getElementById('new-session');
     const nameInput = document.getElementById('new-session-name');
     const promptInput = document.getElementById('new-session-prompt');
+    window.mevedelComposer.expandable(promptInput);
     const modelInput = document.getElementById('new-session-model');
     const modelLabel = document.getElementById('new-session-model-label');
     const effortInput = document.getElementById('new-session-effort');
@@ -44,6 +45,8 @@
     const inviteQr = document.getElementById('invite-qr');
     const roomsSheet = document.getElementById('rooms');
     const roomsList = document.getElementById('rooms-list');
+    const rewindSheet = document.getElementById('rewind-confirm');
+    const rewindNote = document.getElementById('rewind-confirm-note');
 
     // Two lists, because they answer different questions. A notice says
     // what just happened -- your request was approved, refused, someone
@@ -53,6 +56,8 @@
     // destroy the link it looked like it was only hiding.
     let notices = [];
     let requestSequence = 0;
+    const historyRequests = new Map();
+    let rewindTarget = null;
     let secret = null;
     let roomId = null;
     let workspace = null;
@@ -255,6 +260,7 @@
       notices.push({reqId, name: name || 'New session', status: 'waiting'});
       nameInput.value = '';
       promptInput.value = '';
+      window.mevedelComposer.setExpanded(promptInput, false);
       render();
     }
 
@@ -265,6 +271,56 @@
       send({t: 'fork', reqId, forkPoint});
       notices.push({reqId, name: 'Fork', status: 'waiting'});
       render();
+    }
+
+    function historyAction(action, identity, button, turn) {
+      if (!state.owner || !state.connected || !['rewind', 'retry-turn'].includes(action)
+          || typeof identity !== 'string' || !identity || button.disabled) return;
+      if (action === 'rewind') {
+        if (!Number.isInteger(state.turnCount) || !Number.isInteger(turn)
+            || turn < 0 || turn > state.turnCount) {
+          notice('The turn count is unavailable; wait for the host and try again.');
+          return;
+        }
+        const count = state.turnCount - turn;
+        rewindTarget = {identity, button, turnCount: state.turnCount};
+        rewindNote.textContent = `Remove ${count} later ${count === 1 ? 'turn' : 'turns'}? `
+          + 'Files stay unchanged; undo with Redo in Emacs.';
+        rewindSheet.returnValue = '';
+        rewindSheet.showModal();
+        return;
+      }
+      submitHistoryAction(action, identity, button);
+    }
+
+    function submitHistoryAction(action, identity, button, turnCount) {
+      if (!state.owner || !state.connected || button.disabled) return;
+      const reqId = ++requestSequence;
+      const target = action === 'rewind' ? {forkPoint: identity, turnCount} : {failureId: identity};
+      historyRequests.set(reqId, button);
+      button.disabled = true;
+      button.setAttribute('aria-busy', 'true');
+      send({t: action, reqId, ...target});
+    }
+
+    rewindSheet.addEventListener('close', () => {
+      const target = rewindTarget;
+      rewindTarget = null;
+      if (rewindSheet.returnValue !== 'rewind' || !target) return;
+      if (target.turnCount !== state.turnCount) {
+        notice('The conversation changed; review Rewind again.');
+        return;
+      }
+      submitHistoryAction('rewind', target.identity, target.button, target.turnCount);
+    });
+
+    function historyResult({reqId, ok, message}) {
+      const button = historyRequests.get(reqId);
+      if (!button) return;
+      historyRequests.delete(reqId);
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+      if (!ok) notice(message || 'The history action was refused.');
     }
 
     function showResult({reqId, ok, message, link, name}) {
@@ -310,6 +366,12 @@
     }
 
     function disconnected() {
+      if (rewindSheet.open) rewindSheet.close('cancel');
+      for (const button of historyRequests.values()) {
+        button.disabled = false;
+        button.removeAttribute('aria-busy');
+      }
+      historyRequests.clear();
       for (const notice of notices) {
         if (notice.status === 'waiting') Object.assign(notice, {
           status: 'interrupted',
@@ -522,7 +584,8 @@
     if (inviteButton) inviteButton.addEventListener('click', openInvite);
 
     return Object.freeze({setVisible, setInviteVisible,
-                          showResult, showModels, offerRoom, fork, useCredentials, setWorkspace, disconnected,
+                          showResult, showModels, offerRoom, fork, historyAction, historyResult,
+                          useCredentials, setWorkspace, disconnected,
                           rememberCurrent, rememberLobby, lobbyLink, rooms,
                           hasRooms: () => elsewhere().length > 0, openRooms,
                           openNewSession: open});

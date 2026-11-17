@@ -2967,6 +2967,8 @@ files**, or Cancel. Conversation only leaves working files and unsaved buffers
 untouched, and its scope choice is the confirmation. Conversation and files
 retains the file-impact confirmation described below. This explicit choice
 also makes conversation-only Rewind undoable without modifying files.
+Redo always asks the scope, including for heads with no captured files: its
+head-picker metadata does not carry the captured-file index.
 
 Redo returns the transcript, sidecar state, retained
 agent transcripts, and persisted tool results, and it restores captured

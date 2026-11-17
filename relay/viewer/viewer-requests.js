@@ -7,6 +7,7 @@
       const card = [...requests.children].find(c => c.dataset.reqId === String(reqId));
       if (card) {
         if (card.dispose) card.dispose();
+        if (card.feedbackEl) window.mevedelComposer.setExpanded(card.feedbackEl, false);
         card.remove();
       }
     }
@@ -239,6 +240,7 @@
       if (existing && existing.frameKey === key) return;
       const scrolled = existing && existing.bodyEl ? existing.bodyEl.scrollTop : 0;
       const previousFeedback = existing && existing.feedbackEl;
+      const feedbackExpanded = previousFeedback?.parentElement.classList.contains('expanded');
       const feedbackFocused = previousFeedback && document.activeElement === previousFeedback;
       const previousInput = existing && existing.optionInputEl;
       const inputFocused = previousInput && document.activeElement === previousInput;
@@ -293,8 +295,9 @@
         card.append(controls);
         if (frame.allowFeedback === true) {
           const row = el('div', 'request-controls');
-          const feedback = el('input', 'request-feedback');
-          feedback.type = 'text';
+          const feedback = el('textarea', 'request-feedback');
+          feedback.id = `request-feedback-${frame.reqId}`;
+          feedback.rows = 2;
           feedback.autocomplete = 'off';
           feedback.placeholder = 'Feedback…';
           feedback.setAttribute('aria-label', 'Feedback');
@@ -303,11 +306,14 @@
           const button = el('button', 'btn quiet', 'Send feedback');
           button.type = 'button';
           button.title = 'Answer with a comment instead of choosing an option';
-          button.addEventListener('click', () => {
-            if (feedback.value.trim()) send({t: 'ui-response', reqId: frame.reqId, feedback: feedback.value});
+          button.addEventListener('click', async () => {
+            if (feedback.value.trim()
+                && await send({t: 'ui-response', reqId: frame.reqId, feedback: feedback.value}) !== false) {
+              window.mevedelComposer.setExpanded(feedback, false);
+            }
           });
-          window.mevedelComposer.bind(feedback, button);
           row.append(feedback, button);
+          window.mevedelComposer.bind(feedback, button);
           const disclosure = el('details', 'decision-feedback');
           if (existing && existing.feedbackDisclosure) disclosure.open = existing.feedbackDisclosure.open;
           card.feedbackDisclosure = disclosure;
@@ -317,8 +323,10 @@
       }
       if (existing) {
         if (existing.dispose) existing.dispose();
+        if (feedbackExpanded) window.mevedelComposer.setExpanded(previousFeedback, false);
         existing.replaceWith(card);
       } else requests.append(card);
+      if (feedbackExpanded && card.feedbackEl) window.mevedelComposer.setExpanded(card.feedbackEl, true);
       if (card.restoreQuestionFocus) card.restoreQuestionFocus();
       if (scrolled && card.bodyEl) card.bodyEl.scrollTop = scrolled;
       if (feedbackFocused && card.feedbackEl) {

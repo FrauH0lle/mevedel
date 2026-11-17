@@ -50,6 +50,12 @@
 (declare-function mevedel-note-frame-refresh
                   "mevedel-note-frame" ())
 
+;; `mevedel-gptel-retry'
+(declare-function mevedel-gptel-retry-available-p "mevedel-gptel-retry" (buffer &optional failure-id))
+(declare-function mevedel-gptel-retry-failed-turn "mevedel-gptel-retry" (buffer failure-id))
+(autoload 'mevedel-gptel-retry-available-p "mevedel-gptel-retry")
+(autoload 'mevedel-gptel-retry-failed-turn "mevedel-gptel-retry")
+
 ;; `mevedel-plan'
 (declare-function mevedel-plan-extract-proposed "mevedel-plan" (text))
 (declare-function mevedel-plan-strip-proposed "mevedel-plan" (text))
@@ -82,7 +88,7 @@
 
 ;; `mevedel-session-rewind'
 (declare-function mevedel-session-rewind-rewind
-                  "mevedel-session-rewind" (buffer target &optional boundary))
+                  "mevedel-session-rewind" (buffer target &optional boundary scope))
 (autoload 'mevedel-session-rewind-rewind "mevedel-session-rewind")
 
 ;; `mevedel-structs'
@@ -2111,6 +2117,20 @@ Execution outcome remains independent of lifecycle and disclosure state."
         (when-let* ((agent-path (plist-get rendering :agent-path)))
           (setq line (mevedel-view--buttonize-agent-header-label
                       line agent-path)))
+        (when-let* ((id (plist-get rendering :failure-id))
+                    (data (plist-get rendering :failure-buffer))
+                    ((mevedel-gptel-retry-available-p data id)))
+          (setq line
+                (concat line "  "
+                        (propertize
+                         "[Retry]" 'font-lock-face 'link 'mouse-face 'highlight
+                         'help-echo (if (plist-get rendering :external-history)
+                                        "Retry (resends the prompt; the agent sees the failed attempt)"
+                                      "Replay the prepared request without repeating completed tools")
+                         'mevedel-view-zone-activate
+                         (lambda ()
+                           (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope data)
+                             (mevedel-gptel-retry-failed-turn data id)))))))
         (when-let* ((id (plist-get rendering :execution-control-id)))
           (setq line
                 (concat line "  "
@@ -3115,10 +3135,15 @@ DATA-BUF supplies live execution metadata; COLLAPSED-ONLY requests summaries."
                                 (plist-get attempt :message)))
                              retry-errors "\n")))
                       ""
-                      "Retry the request manually."))
+                      (if (plist-get request-data :external-history)
+                          "Retry resends the original prompt into the same native session; the agent sees the failed attempt and its partial output stays visible."
+                        "Retry replays the prepared request while it remains retained and the transcript is unchanged.")))
           "\n")
          :body-mode 'text-mode
          :vtype 'request-failure
+         :failure-id (plist-get request-data :request-id)
+         :failure-buffer data-buf
+         :external-history (plist-get request-data :external-history)
          :status 'error
          :initially-collapsed-p nil))
     (mevedel-view--render-tool-call (plist-get prepared :call) data-buf collapsed-only)))
@@ -7665,7 +7690,7 @@ returns to just before it."
   (interactive)
   (when (mevedel-session-rewind-rewind
          mevedel--data-buffer (mevedel-view--settled-response-at-point)
-         'after)
+         'after 'choose)
     (mevedel-view-return-to-latest-segment)
     t))
 

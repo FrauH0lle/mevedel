@@ -92,6 +92,10 @@
                   (&optional session buffer prompt-submission delay))
 (autoload 'mevedel-goal-schedule-continuation "mevedel-goal")
 
+;; `mevedel-gptel-retry'
+(declare-function mevedel-gptel-retry-refresh-availability "mevedel-gptel-retry" (buffer))
+(autoload 'mevedel-gptel-retry-refresh-availability "mevedel-gptel-retry")
+
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-copy-text
                   "mevedel-mention-bindings" (text))
@@ -317,6 +321,7 @@ names the running turn; read and cleared when that turn settles.")
 (defun mevedel-pending-inputs-follow-up-changed (session)
   "Persist SESSION's changed follow-up queue soon and notify observers."
   (mevedel-recovery-save session)
+  (mevedel-gptel-retry-refresh-availability (mevedel-session-root-buffer session))
   (when (fboundp 'mevedel-collaboration-notify-queue-changed)
     (mevedel-collaboration-notify-queue-changed session)))
 
@@ -334,7 +339,9 @@ Persist and notify guests once, and only when a queue changed."
           (mevedel-session-set-pending-inputs session category entries))))
     (cond
      (follow-up-changed (mevedel-pending-inputs-follow-up-changed session))
-     (changed (mevedel-recovery-save session)))))
+     (changed
+      (mevedel-recovery-save session)
+      (mevedel-gptel-retry-refresh-availability (mevedel-session-root-buffer session))))))
 
 (defun mevedel-view--next-follow-up (session)
   "Return SESSION's first queued follow-up."

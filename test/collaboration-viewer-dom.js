@@ -29,6 +29,7 @@ class Element {
     this.append(...children);
   }
   setAttribute(name, value) { this.attributes[name] = value; }
+  removeAttribute(name) { delete this.attributes[name]; }
   addEventListener(type, callback) {
     (this.listeners[type] ||= []).push(callback);
   }

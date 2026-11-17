@@ -40,6 +40,11 @@
 (declare-function mevedel-session-durability-lease-owned-p
                   "mevedel-session-durability" (session))
 
+;; `mevedel-gptel-retry'
+(declare-function mevedel-gptel-retry-available-p
+                  "mevedel-gptel-retry" (buffer &optional failure-id))
+(autoload 'mevedel-gptel-retry-available-p "mevedel-gptel-retry")
+
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-read
                   "mevedel-session-publication" (session-dir &optional head names))
@@ -305,7 +310,8 @@ an artifact only by its record id, never by a filesystem path."
                        :presentation :shared
                        :verb
                        :execution :description :number :firstSegment :lastSegment
-                       :sender :mailType :outcome :activity :toolUseId :forkPoint))
+                       :sender :mailType :outcome :activity :toolUseId :forkPoint :forkTurn
+                       :retryId :retryExternal))
       (when (plist-member record key)
         (push (cons (substring (symbol-name key) 1)
                     (plist-get record key))
@@ -873,7 +879,9 @@ Both lists are in source order, so one pass pairs them."
             (setq owner (cdar response-starts)))
           (setq response-starts (cdr response-starts)))
         (when (and owner (stringp id))
-          (plist-put owner :forkPoint id))
+          (plist-put owner :forkPoint id)
+          (when (integerp (plist-get point :cum-turn))
+            (plist-put owner :forkTurn (plist-get point :cum-turn))))
         (setq floor start)))))
 
 (defun mevedel-collaboration--execution-ids-in-buffer (buffer ids)
@@ -1143,10 +1151,11 @@ mailboxes are not guest completion records."
                                   (plist-get facts :exit-code))))))
 
 (defun mevedel-collaboration--request-summary (text)
-  "Return the projected (FAILURE LINE DETAILS) of request-summary TEXT, or nil.
+  "Return (FAILURE LINE DETAILS REQUEST-ID EXTERNAL) from summary TEXT, or nil.
 FAILURE is the failed-request notice, LINE the host's closing line without
 text properties, and DETAILS its timing tooltip; each may be nil.  Nothing
-else from the saved summary, such as raw error data, is carried."
+else from the saved summary, such as raw error data, is carried.
+REQUEST-ID and EXTERNAL identify an explicitly retryable failure."
   (when-let* ((summary (mevedel-view--request-summary-render-data-from-text text))
               (value (list (and (eq (plist-get summary :outcome) 'error)
                                 (concat "Assistant request failed. "
@@ -1155,7 +1164,9 @@ else from the saved summary, such as raw error data, is carried."
                            (when-let* ((line (mevedel-view--request-summary-line
                                               summary)))
                              (substring-no-properties line))
-                           (mevedel-view--request-summary-details summary)))
+                           (mevedel-view--request-summary-details summary)
+                           (plist-get summary :request-id)
+                           (and (plist-get summary :external-history) t)))
               ((or (car value) (cadr value))))
     value))
 
@@ -1164,20 +1175,21 @@ else from the saved summary, such as raw error data, is carried."
 A failure keeps its failure-text key so its record identity does not depend
 on the timing footer that follows it."
   (cond ((car value) (list "failure" (car value)))
-        (value (list "request-summary" (cdr value)))))
+        (value (list "request-summary" (list (nth 1 value) (nth 2 value))))))
 
 (defun mevedel-collaboration--request-summary-records (value occurrence)
   "Return the failure and closing-line records for VALUE at OCCURRENCE.
 The closing line of a failure derives its identity from the failure record,
 which is already unique, so it stays stable with it."
-  (pcase-let* ((`(,failure ,line ,details) value)
+  (pcase-let* ((`(,failure ,line ,details ,request-id ,external) value)
                (failed (and failure
                             (mevedel-collaboration--record
                              (mevedel-collaboration--stable-record-id
                               "failure" failure occurrence)
                              "assistant" :revision 0 :status "failed"
                              :text (mevedel-collaboration--truncate-bytes
-                                    failure 2000)))))
+                                    failure 2000)
+                             :failure-id request-id :retryExternal external))))
     (delq nil
           (list failed
                 (and line
@@ -1769,10 +1781,16 @@ canonical transcript record appears.  A pending record's identity is copied
 onto that canonical record, so a viewer updates one card from running through
 completion instead of seeing a duplicate tool card."
   (let* ((canonical (mevedel-collaboration--room-canonical-records room))
+         (retry-id (mevedel-gptel-retry-available-p
+                    (plist-get room :data-buffer)))
          (pending (plist-get room :pending-tools))
          (canonical-tools (mevedel-collaboration--tool-records canonical))
          (claimed nil)
          (remaining nil))
+    (when retry-id
+      (dolist (record canonical)
+        (when (equal retry-id (plist-get record :failure-id))
+          (plist-put record :retryId retry-id))))
     (dolist (entry pending)
       (when (plist-get entry :pipeline-dirty)
         (with-current-buffer (plist-get room :data-buffer)

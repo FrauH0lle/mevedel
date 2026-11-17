@@ -1855,6 +1855,13 @@ and, when its bearer link permits it, submits typed input and interaction
 answers. See [Browser collaboration](collaboration.md) for sharing, link tiers,
 remote controls, notifications, and connection recovery.
 
+In the browser, multiline room, first-prompt, Plan feedback and discussion inputs offer an
+upper-right **Expand / Collapse** toggle. Tall mode preserves the draft and
+returns to compact mode after sending. Transcript prompts and assistant
+responses also have a **Copy** message action: hover or focus reveals it on
+desktop; touch devices keep it visible. Copy prefers the original source text,
+including Markdown, rather than interface labels or rendered formatting.
+
 ## Artifact store
 
 Artifacts live in the workspace artifact store,
@@ -2099,6 +2106,25 @@ shows bounded sanitized diagnostics in chronological attempt order (attempt,
 HTTP status, type, code, message), and labels exhaustion in both the header and
 body, including the number of failed attempts. Legacy failures without these
 fields keep their ordinary rendering. See [bounded sample recovery](architecture.md#bounded-native-gptel-sample-recovery).
+The failure header offers **Retry** for the latest retained native request.
+It replays the same prepared provider payload with a fresh admission in the
+same conversation turn, without resending a user prompt, repeating preparation,
+or rerunning completed tools.
+The complete original error disclosure remains as historical evidence.
+Retry expires on canonical transcript edits, another turn, or an Emacs restart;
+it does not reconstruct requests from saved transcript text. Disabling automatic
+retries still retains this explicit retry.
+While any steering or follow-up entries remain in the pending-input queue,
+resolve that queued input first. Retry stays unavailable without consuming or
+rebinding the entries, avoiding duplicate delivery.
+For external Claude ACP conversations, Retry instead reconnects to the same
+native session and resends the original submitted input, including retained
+image bytes. Its tooltip says **Retry (resends the prompt; the agent sees the
+failed attempt)**. Partial output stays visible because it remains in native
+history. This is not a rewind or exact sample replay, and the agent may decide
+to run tools again. It is unavailable without the retained input and the same
+native session identity; edited, foreign or missing native history still uses
+the existing explicit recovery workflow.
 `mevedel-view-render-live-update` retains completed
 semantic units in the view and reparses only the mutable source-backed tail.
 Standalone reasoning disclosures and grouped tool activity runs are separate
