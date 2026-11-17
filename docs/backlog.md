@@ -41,6 +41,20 @@ Claude Code caps background commands at 10 minutes by default and 2 hours at
 most. Expiry would reuse the existing TERM/KILL process-group teardown and
 report a timeout outcome.
 
+### Journal worker cancellation through a launcher script
+
+When `invocation-name` names a shell launcher rather than the Emacs binary,
+journal workers cannot be cancelled. Fedora's `emacs-desktop` launcher leaves
+a zombie `readlink` child in its process group, and the journal stopper
+(`mevedel-journal-worker.el`, near the "not a group leader" check) refuses to
+signal it. Reproduced 2026-11-17 by `mevedel-cockpit-surfaces-open-quit-windows/test@8`:
+it fails through the launcher and passes when invocation points at the real
+Emacs executable (`/proc/self/exe`). Decide whether workers should launch the
+resolved Emacs executable or whether the stopper's group-leader check should
+tolerate a launcher, and keep the stopper's protection against signalling
+unrelated processes. Fresh Eval launches the same `invocation-name`; its
+managed process-group stop was not checked against this launcher.
+
 ## Proactive sessions
 
 Source: the 2026-11-16 review of Anthropic's "Building always-on agents"
@@ -381,3 +395,17 @@ code, and remove an item once explained, fixed or no longer worth pursuing.
 - `mevedel-window-child-frame-return/test` failed once on parent-layout
   equality (109/110 on 2026-10-31; retry and base 110/110). Graphical,
   unreproduced; rerun on the private-KWin runner if it recurs.
+- `mevedel-agent-control-mail-batch/producer/test` stalled twice past 240 s in
+  parallel affected-tier runs (2026-11-16), but passed alone, in an isolated
+  24-test prefix replay on changed and pristine trees, and in 120 instrumented
+  stress runs. Confirmed mechanism for the missing deadline: installed TRAMP
+  2.8.2.31.1 discards an enclosing `with-timeout` timer during a direct TRAMP
+  file operation (here `mevedel-execution-process--append-spool`), while
+  `mevedel-transport-with-exclusive-connection` preserves it. The test wait
+  helper now also checks elapsed time. Why the producer predicate stayed false
+  is unexplained; production `with-timeout` uses around direct TRAMP
+  operations may share the lost-deadline mechanism.
+- `mevedel-execution-start-bash/remote/test@10` timed out once in a loaded
+  affected-tier run (2026-11-16) with `group-id nil` while waiting for the
+  fixture's zombie, before StopExecution. It passed in focused runs and in
+  three repeated runs each on the changed and pristine trees (113/113).
