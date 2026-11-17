@@ -25,6 +25,7 @@
        '("skills/clean-work" "skills/clean-work/SKILL.md")
        '("skills/frontend" "skills/frontend/SKILL.md")
        '("skills/learn" "skills/learn/SKILL.md")
+       '("skills/pair" "skills/pair/SKILL.md")
        '("skills/review" "skills/review/SKILL.md")
        '("collaboration" "collaboration/*")
        '("shared-editing" "shared-editing/host.bundle.mjs" "shared-editing/THIRD-PARTY-NOTICES.txt" "shared-editing/resvg.wasm" "shared-editing/font.ttf" "shared-editing/Excalifont.ttf" "shared-editing/Nunito.ttf" "shared-editing/ComicShanns.ttf" "shared-editing/builtin.excalidrawlib" "shared-editing/FONT-LICENSE")

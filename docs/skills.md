@@ -159,6 +159,9 @@ Bundled skills currently include:
   and desktop.
 - `clean-work` — user-only housekeeping for confirmed obsolete shared working
   material, using normal ApplyPatch permissions and review.
+- `pair` — user-only pairing workflow: prompts for a partner model and
+  effort, then starts a general-purpose partner agent that works as an equal
+  on the given instructions.
 - `learn` — user-invocable durable write-back helper. Repository-derived
   contributor facts go to the nearest applicable `AGENTS.md`; reusable user,
   feedback, enduring project, and reference knowledge follows the memory save
