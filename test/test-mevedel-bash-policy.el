@@ -182,9 +182,8 @@
                            (insert-file-contents (file-name-concat root "output"))
                            (buffer-string))
                          "one\ntwo\n"))
-          (setenv "POSIXLY_CORRECT" "1")
           (with-temp-buffer
-            (should (equal (process-file "uniq" nil t nil "input" "-c") 0))
+            (should (equal (process-file "uniq" nil t nil "--" "input" "-c") 0))
             (should (equal (buffer-string) "")))
           (should (equal (with-temp-buffer
                            (insert-file-contents (file-name-concat root "-c"))

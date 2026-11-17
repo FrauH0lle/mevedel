@@ -732,6 +732,20 @@ record can never hide an older live one.  STRICT rejects trailing bytes as
    paths records)
   (mevedel-session-durability--head-of-records records))
 
+(defun mevedel-session-durability--resolve-lease-head (directory paths records)
+  "Resolve DIRECTORY's head from RECORDS read at the observed PATHS.
+If no head survives, refresh a changed name set once: a successor may have
+pruned every listed generation.  Unchanged unreadable records stay nil."
+  (let ((head (mevedel-session-durability--head-of-records records)))
+    (when (and (null head) paths)
+      (let ((fresh-paths (mevedel-session-durability--generation-paths directory)))
+        (unless (equal fresh-paths paths)
+          (setq head (mevedel-session-durability--head-of-records
+                      (mevedel-session-durability--read-records fresh-paths)))
+          (when (and fresh-paths (null head))
+            (error "Portable session lease changed during discovery")))))
+    head))
+
 (defun mevedel-session-durability--lease-head (directory &optional names)
   "Return DIRECTORY's latest non-aborted lease record.
 
@@ -741,9 +755,9 @@ generation whose record cannot be read is skipped rather than reported
 as \"no lease\": a vanished or unreadable newest record must never hide
 an older live one, because the generation compare-and-set is what keeps
 two writers apart."
-  (mevedel-session-durability--head-of-records
-   (mevedel-session-durability--read-records
-    (mevedel-session-durability--generation-paths directory names))))
+  (let ((paths (mevedel-session-durability--generation-paths directory names)))
+    (mevedel-session-durability--resolve-lease-head
+     directory paths (mevedel-session-durability--read-records paths))))
 
 (defun mevedel-session-durability--ensure-lease-directory (directory)
   "Ensure that lease generation DIRECTORY exists."
@@ -2556,9 +2570,11 @@ synchronous reading it would fall back to is not available here."
                    directory plan results)))))))
 
 (defun mevedel-session-durability--lease-head-async
-    (directory names job context continue)
+    (directory names job context continue &optional previous-paths)
   "Pass CONTINUE DIRECTORY's latest non-aborted lease record, or nil.
-NAMES is an observed listing, as for `mevedel-session-durability--lease-head'."
+NAMES is an observed listing, as for `mevedel-session-durability--lease-head'.
+JOB and CONTEXT belong to `mevedel-session-durability--async-program'.
+PREVIOUS-PATHS marks the one refresh after those paths yielded no head."
   (if (null names)
       (mevedel-session-durability--async-program
        directory
@@ -2573,10 +2589,10 @@ NAMES is an observed listing, as for `mevedel-session-durability--lease-head'."
               (if (eq 'absent (plist-get listing :status))
                   'none
                 (or (mevedel-session-control-fs-program-value listing) 'none))
-              job context continue)))))
+              job context continue previous-paths)))))
     (let ((paths (mevedel-session-durability--generation-paths
                   directory names)))
-      (if (null paths)
+      (if (or (null paths) (equal paths previous-paths))
           (funcall continue nil)
         (mevedel-session-durability--async-program
          directory (mevedel-session-durability--read-operations paths)
@@ -2584,10 +2600,15 @@ NAMES is an observed listing, as for `mevedel-session-durability--lease-head'."
          (lambda (results error)
            (if error
                (funcall (car job) nil error)
-             (funcall continue
-                      (mevedel-session-durability--head-of-records
-                       (mevedel-session-durability--parse-records
-                        results))))))))))
+             (let ((head (mevedel-session-durability--head-of-records
+                          (mevedel-session-durability--parse-records results))))
+               (cond
+                (head (funcall continue head))
+                (previous-paths
+                 (error "Portable session lease changed during discovery"))
+                (t
+                 (mevedel-session-durability--lease-head-async
+                  directory nil job context continue paths)))))))))))
 
 (defconst mevedel-session-durability--lease-declines
   '((directory . "Portable session has no save directory")

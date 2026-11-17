@@ -222,17 +222,18 @@ WITHOUT-MODE is non-nil."
      `(progn
         (with-current-buffer (find-file-noselect ,file)
           (mevedel-note-create "Remember this workspace"))
-        (let* ((reads 0)
+        (let* ((reads nil)
                (reader (symbol-function 'insert-file-contents))
                (find-file-hook
                 (list (lambda ()
                         (cl-letf (((symbol-function 'insert-file-contents)
                                    (lambda (&rest args)
-                                     (setq reads (1+ reads))
+                                     (push (car args) reads)
                                      (apply reader args))))
                           (mevedel-notes-file-visit))))))
           (find-file-noselect ,(file-name-concat root "plain.el"))
-          (unless (zerop reads) (error "Visit reread the store %s times" reads))))))
+          (when reads (error "Visit read files: %S" (nreverse reads)))
+          (when (featurep 'mevedel) (error "Unnoted visit loaded mevedel"))))))
   :doc "a registered parent workspace never hides a nested project's notes"
   (let* ((child (file-name-concat root "child"))
          (child-file (file-name-concat child "source.el")))

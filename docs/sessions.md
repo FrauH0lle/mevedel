@@ -826,7 +826,7 @@ require copying or discarding native history. Read-only following remains availa
 For adapter crashes, diagnostic logs default to `~/.mevedel/claude-agent-logs`
 on the Emacs host, controlled by `mevedel-claude-code-agent-log-directory`;
 an inherited `CLAUDE_AGENT_LOGS` value takes precedence. See
-[Claude subscription setup](../README.md#claude-promax-subscriptions) for configuration.
+[Claude subscription setup](https://github.com/FrauH0lle/mevedel/blob/master/README.md#claude-promax-subscriptions) for configuration.
 
 The gptel HTTP request-controls menu is unavailable for a selected external
 provider, including direct `gptel-menu`, prefixed send and mevedel's bridge menu.
@@ -1166,6 +1166,10 @@ Capturing a manifest canonicalizes its session root once and qualifies each
 validated relative artifact name beneath it. It does not repeatedly canonicalize
 the shared directories for every artifact. Actual reads still prove physical
 containment on the target and verify the required artifact digests.
+Scalar, batched and asynchronous lease readers refresh once when a nonempty
+listing yields no head and a fresh generation-name set differs. Unchanged
+unreadable records are not reread. If the changed, nonempty set still yields
+no head, the reader reports instability rather than inferring absent ownership.
 Portable lease expiry and transfer deadlines use the target filesystem clock at
 whole-second resolution, so clients with skewed wall clocks cannot change one
 another's authority and lease durations are configured in whole seconds.  A

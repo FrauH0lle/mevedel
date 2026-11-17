@@ -87,49 +87,59 @@
       (delete-directory root t)))
 
   :doc "elects exactly one owner across independent Emacs processes"
-  (let* ((root (make-temp-file "mevedel-journal-race-" t))
-         (directory (file-name-concat root "scope"))
-         (barrier (file-name-concat root "start"))
-         processes buffers)
-    (unwind-protect
-        (progn
-          (dotimes (_ 2)
-            (let* ((buffer (generate-new-buffer " *journal-claim-contender*"))
-                   (process
-                    (make-process
-                     :name "journal-claim-contender" :buffer buffer :sentinel #'ignore
-                     :command
-                     (list (expand-file-name invocation-name invocation-directory)
-                           "-Q" "--batch" "-L" default-directory
-                           "-l" "mevedel-journal-claim" "--eval"
-                           (format
-                            "(let ((deadline (+ (float-time) 10))) (while (and (not (file-exists-p %S)) (< (float-time) deadline)) (sleep-for 0.01)) (unless (file-exists-p %S) (error \"Barrier unavailable\")) (prin1 (mevedel-journal-claim-acquire %S 120)))"
-                            barrier barrier directory)))))
-              (push process processes)
-              (push buffer buffers)))
-          (write-region "go" nil barrier nil 'silent)
-          (let ((deadline (+ (float-time) 15)))
-            (while (and (cl-some #'process-live-p processes) (< (float-time) deadline))
-              (accept-process-output nil 0.01)))
-          (dolist (process processes)
-            (ert-info ((format "Contender %S: status %S, exit %S\nCommand: %S\nOutput:\n%s"
-                               (process-name process) (process-status process)
-                               (process-exit-status process) (process-command process)
-                               (with-current-buffer (process-buffer process)
-                                 (buffer-string))))
-              (should-not (process-live-p process))
-              (should (= 0 (process-exit-status process)))))
-          (let ((results (mapcar (lambda (buffer)
-                                   (with-current-buffer buffer
-                                     (car (read-from-string (buffer-string)))))
-                                 buffers)))
-            (should (= 1 (length (delq nil results))))
-            (should (equal (car (delq nil results))
-                           (mevedel-journal-claim-current directory)))))
-      (dolist (process processes)
-        (when (process-live-p process) (delete-process process)))
-      (mapc #'kill-buffer buffers)
-      (delete-directory root t))))
+  (dolist (defer-output '(nil t))
+    (let* ((root (make-temp-file "mevedel-journal-race-" t))
+           (directory (file-name-concat root "scope"))
+           (barrier (file-name-concat root "start"))
+           processes buffers)
+      (unwind-protect
+          (progn
+            (dotimes (_ 2)
+              (let* ((buffer (generate-new-buffer " *journal-claim-contender*"))
+                     (process
+                      (make-process
+                       :name "journal-claim-contender" :buffer buffer :sentinel #'ignore
+                       :command
+                       (list (expand-file-name invocation-name invocation-directory)
+                             "-Q" "--batch" "-L" default-directory
+                             "-l" "mevedel-journal-claim" "--eval"
+                             (format
+                              "(let ((deadline (+ (float-time) 10))) (while (and (not (file-exists-p %S)) (< (float-time) deadline)) (sleep-for 0.01)) (unless (file-exists-p %S) (error \"Barrier unavailable\")) (prin1 (mevedel-journal-claim-acquire %S 120)))"
+                              barrier barrier directory)))))
+                (push process processes)
+                (push buffer buffers)))
+            (write-region "go" nil barrier nil 'silent)
+            (let ((deadline (+ (float-time) 15)))
+              (when defer-output
+                ;; Observe real exits without dispatching their buffered output.
+                (while (and (cl-some #'process-live-p processes) (< (float-time) deadline)))
+                (dolist (buffer buffers)
+                  (should (zerop (buffer-size buffer)))))
+              (while (and (cl-some #'process-live-p processes) (< (float-time) deadline))
+                (accept-process-output nil 0.01))
+              ;; Exit status can arrive before the connection's final output.
+              (dolist (process processes)
+                (while (and (< (float-time) deadline)
+                            (accept-process-output process 0.01)))))
+            (dolist (process processes)
+              (ert-info ((format "Contender %S: status %S, exit %S\nCommand: %S\nOutput:\n%s"
+                                 (process-name process) (process-status process)
+                                 (process-exit-status process) (process-command process)
+                                 (with-current-buffer (process-buffer process)
+                                   (buffer-string))))
+                (should-not (process-live-p process))
+                (should (= 0 (process-exit-status process)))))
+            (let ((results (mapcar (lambda (buffer)
+                                     (with-current-buffer buffer
+                                       (car (read-from-string (buffer-string)))))
+                                   buffers)))
+              (should (= 1 (length (delq nil results))))
+              (should (equal (car (delq nil results))
+                             (mevedel-journal-claim-current directory)))))
+        (dolist (process processes)
+          (when (process-live-p process) (delete-process process)))
+        (mapc #'kill-buffer buffers)
+        (delete-directory root t)))))
 
 (mevedel-deftest mevedel-journal-claim-settle ()
   ,test

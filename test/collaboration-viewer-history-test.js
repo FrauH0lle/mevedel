@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 class Node {
   constructor(tag, className = '', textContent = '') {
-    Object.assign(this, {tag, className, textContent, children: [], listeners: {}});
+    Object.assign(this, {tag, className, textContent, children: [], listeners: {}, dataset: {}});
   }
   append(...nodes) { for (const node of nodes) { node.remove(); node.parent = this; this.children.push(node); } }
   replaceChildren(...nodes) { this.children.forEach(node => { node.parent = null; }); this.children = []; this.append(...nodes); }
@@ -14,7 +14,7 @@ class Node {
   addEventListener(type, fn) { this.listeners[type] = fn; }
 }
 const root = new Node('section');
-const window = {mevedelTranscriptRenderer: {markContinuations() {}, groupActivity() {}}};
+const window = {mevedelTranscriptRenderer: {markContinuations() {}, groupActivity() {}, fitActivityFailures() {}}};
 vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-history.js', 'utf8'), {
   window, document: {getElementById: () => root},
 });
@@ -34,6 +34,8 @@ assert.equal(root.children.length, 2, 'group compactions within clear-separated 
 assert.match(root.children[0].children[0].textContent, /Earlier work/);
 assert.match(root.children[1].children[0].textContent, /Current work/);
 assert.match(root.children[1].children.at(-1).textContent, /Live conversation/);
+assert.equal(root.children[0].dataset.live, undefined);
+assert.equal(root.children[1].dataset.live, 'true');
 assert.equal(sent.length, 0, 'chat headings do not fetch transcripts');
 const segment = root.children[0].children[1];
 segment.open = true;

@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -89,26 +90,30 @@ class CheckTests(unittest.TestCase):
                 self.assertEqual(log.read_text().splitlines(), expected)
 
     def test_hook_dispatch_and_exit_status(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            subprocess.run(['git', 'init', '-q', tmp], check=True)
-            fake = directory / 'npx'
-            fake.write_text('#!/bin/sh\n'
-                            '[ -z "${GIT_INDEX_FILE+x}" ] || exit 99\n'
-                            'printf "%s\\n%s\\n" "$PWD" "$*" '
-                            '> "$COMMAND_LOG"\nexit 23\n')
-            fake.chmod(0o755)
-            nested = directory / 'nested'
-            nested.mkdir()
-            log = directory / 'commands'
-            result = subprocess.run(
-                [str(ROOT / '.githooks/pre-commit')], cwd=nested,
-                env={**os.environ, 'PATH': f'{directory}:{os.environ["PATH"]}',
-                     'COMMAND_LOG': str(log),
-                     'GIT_INDEX_FILE': str(directory / 'commit-index')})
-            self.assertEqual(result.returncode, 23)
-            self.assertEqual(log.read_text().splitlines(),
-                             [tmp, '@emacs-eask/cli run script check -- --affected'])
+        for command, arguments in (
+            ('npx', '@emacs-eask/cli run script check -- --affected'),
+            ('eask', 'run script check -- --affected'),
+        ):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as tmp:
+                directory = Path(tmp)
+                subprocess.run(['git', 'init', '-q', tmp], check=True)
+                (directory / 'git').symlink_to(shutil.which('git'))
+                fake = directory / command
+                fake.write_text('#!/bin/sh\n'
+                                '[ -z "${GIT_INDEX_FILE+x}" ] || exit 99\n'
+                                'printf "%s\\n%s\\n" "$PWD" "$*" '
+                                '> "$COMMAND_LOG"\nexit 23\n')
+                fake.chmod(0o755)
+                nested = directory / 'nested'
+                nested.mkdir()
+                log = directory / 'commands'
+                result = subprocess.run(
+                    [str(ROOT / '.githooks/pre-commit')], cwd=nested,
+                    env={**os.environ, 'PATH': str(directory),
+                         'COMMAND_LOG': str(log),
+                         'GIT_INDEX_FILE': str(directory / 'commit-index')})
+                self.assertEqual(result.returncode, 23)
+                self.assertEqual(log.read_text().splitlines(), [tmp, arguments])
 
     def test_check_forwards_affected_environment_and_explicit_arguments(self):
         with tempfile.TemporaryDirectory() as tmp:
