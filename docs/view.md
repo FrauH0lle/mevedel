@@ -2067,8 +2067,9 @@ Current fragment namespaces:
 
 - `status`: `tasks`, live `executions`, and `agents` status-zone blocks.
   Task and aggregate-agent disclosure state is backed by fragment collapse
-  state. Task panels toggle with `TAB` or `RET`; mouse clicks only place
-  point. Expanded task and agent panels start their rows immediately below
+  state. Task panels toggle with `TAB`, `RET`, or a left click on their
+  highlighted header; task-row clicks only place point or select text.
+  Expanded task and agent panels start their rows immediately below
   the separator, without an intervening blank line. Long task titles are
   truncated in the compact rows; the truncation marker is not a disclosure
   control. Every task row and status note is cut to one screen row of the
