@@ -79,10 +79,18 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
    and filter; viewer-pinned-prompt.js places it. It reserves no height. Its
    label and visibility are attributes: text or [hidden] changes would
    invalidate the body:has(...) rules. */
-.pinned-prompt { --pinned-prompt-h:34px; position:fixed; z-index:9; height:var(--pinned-prompt-h); margin:0; padding:0 24px 0 20px; border:0; border-left:2px solid var(--guest); border-bottom:1px solid var(--line); background:color-mix(in srgb,var(--surface-2) 34%,var(--ground)); color:var(--ink); font:400 13px/var(--pinned-prompt-h) var(--font-ui); text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
+.pinned-prompt,.pinned-backdrop { --pinned-prompt-h:36px; }
+.pinned-backdrop { position:fixed; z-index:8; height:calc(var(--pinned-prompt-h) + 20px); background:linear-gradient(to bottom,var(--ground) calc(100% - 12px),transparent); pointer-events:none; visibility:hidden; }
+.pinned-prompt[data-shown] + .pinned-backdrop { visibility:visible; }
+.pinned-prompt { --speaker:var(--accent); position:fixed; z-index:9; display:flex; align-items:center; gap:10px; height:var(--pinned-prompt-h); margin:0; padding:0 12px; border:1px solid var(--rule-strong); border-radius:8px; box-shadow:var(--shadow); background:color-mix(in srgb,var(--surface) 92%,transparent); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); color:var(--ink); font:400 13px/1.4 var(--font-ui); text-align:left; white-space:nowrap; overflow:hidden; cursor:pointer; }
+.pinned-prompt[data-role="guest"] { --speaker:var(--guest); }
 .pinned-prompt:not([data-shown]) { visibility:hidden; }
-.pinned-prompt::before { content:attr(data-label); }
-.pinned-prompt:hover { color:var(--accent); }
+.pinned-prompt::before { content:attr(data-label); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.pinned-speaker { order:-1; flex:none; max-width:25%; padding-left:9px; border-left:3px solid var(--speaker); color:var(--muted); font-size:11px; overflow:hidden; text-overflow:ellipsis; }
+.pinned-speaker::before { content:attr(data-speaker); }
+.pinned-prompt::after { content:'↑'; flex:none; color:var(--muted); font-size:16px; }
+.pinned-prompt:hover { border-color:var(--accent); }
+.pinned-prompt:hover::after { color:var(--accent); }
 .pinned-prompt:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
 .ledger { width:100%; max-width:var(--column); padding:34px 24px 24px; gap:26px; }
 .history { width:100%; max-width:var(--column); margin:24px auto 0; padding:0 24px; }

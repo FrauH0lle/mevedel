@@ -1,4 +1,4 @@
-/* viewer-pinned-prompt.js -- the room's pinned prompt row.
+/* viewer-pinned-prompt.js -- pinned prompt rows for rooms and agent panels.
  *
  * Once the prompt of the exchange at the top of the transcript has
  * scrolled under the sticky header, a one-line preview of it overlays the
@@ -16,18 +16,20 @@
  */
 'use strict';
 window.mevedelPinnedPrompt = Object.freeze({
-  create({pin, transcript, history}) {
+  create({pin, transcript, history, scroll, edge, column}) {
     const LIMIT = 512;
-    let target = null, label = '', rowHeight = 0, refreshing = false;
+    let target = null, label = '', name = '', role = '', rowHeight = 0, refreshing = false;
     // The row's last written placement: rewriting an unchanged value still
     // invalidates layout, which the next read would then recompute.
     let placed = '';
     const shown = node => node.getClientRects().length > 0;
     const top = node => node.getBoundingClientRect().top;
+    const speaker = pin.querySelector('.pinned-speaker');
+    const backdrop = pin.nextElementSibling;
 
-    function edge() {
+    function edgeBottom() {
       let bottom = 0;
-      for (const node of [document.querySelector('body > .topbar'), document.getElementById('filter')]) {
+      for (const node of [].concat(edge)) {
         if (node && shown(node)) bottom = Math.max(bottom, node.getBoundingClientRect().bottom);
       }
       return bottom;
@@ -36,8 +38,15 @@ window.mevedelPinnedPrompt = Object.freeze({
     // The prompt's own text: shared-content snapshots and edit notes stay out.
     function text(turn) {
       const prompt = turn.querySelector('.prompt');
+      // Preserve rendered word boundaries without innerText's layout read.
+      const blocks = /^(BR|P|DIV|LI|UL|OL|DL|DT|DD|BLOCKQUOTE|PRE|H[1-6]|TABLE|TR|TD|TH|HR)$/;
+      function words(node) {
+        if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+        const content = [...node.childNodes].map(words).join('');
+        return blocks.test(node.nodeName) ? ` ${content} ` : content;
+      }
       const parts = [...(prompt?.children || [])]
-        .filter(node => !node.matches('details, small')).map(node => node.textContent);
+        .filter(node => !node.matches('details, small')).map(words);
       const flat = parts.join(' ').replace(/\s+/g, ' ').trim();
       return flat.length > LIMIT ? `${flat.slice(0, LIMIT - 1)}…` : flat;
     }
@@ -55,19 +64,19 @@ window.mevedelPinnedPrompt = Object.freeze({
     }
 
     // The prompt governing the content at TOP, or null when its header is
-    // still visible. A prompt starting within the row's height counts as
-    // visible, so the row never covers a prompt header.
+    // still visible. Include the gap and fade, so the overlay never covers
+    // a prompt header.
     function governing(edgeTop) {
-      const ledgers = [...history.querySelectorAll('.history-ledger'), transcript];
+      const ledgers = [...(history?.querySelectorAll('.history-ledger') || []), transcript];
       const ledger = ledgers.find(node => {
         if (!shown(node)) return false;
         const box = node.getBoundingClientRect();
-        return box.top < edgeTop && box.bottom > edgeTop;
+        return box.top <= edgeTop && box.bottom > edgeTop;
       });
       if (!ledger) return null;
       // The row's height comes from CSS: a hidden row measures zero.
       rowHeight ||= parseFloat(getComputedStyle(pin).getPropertyValue('--pinned-prompt-h')) || 0;
-      const probe = edgeTop + rowHeight;
+      const probe = edgeTop + rowHeight + 20;
       const list = prompts(ledger);
       // Prompts run down the page, so a binary search reads O(log n) positions.
       let low = 0, high = list.length;
@@ -81,7 +90,7 @@ window.mevedelPinnedPrompt = Object.freeze({
       // Continuation after compaction: a live prompt on screen takes
       // precedence; otherwise the live chat's latest segment supplies it.
       if (ledger !== transcript || (list[0] && top(list[0]) < window.innerHeight)) return null;
-      const segment = [...history.querySelectorAll('.history-chat[data-live] .history-segment')].pop();
+      const segment = [...(history?.querySelectorAll('.history-chat[data-live] .history-segment') || [])].pop();
       const archived = segment?.querySelector('.history-ledger');
       return archived ? prompts(archived).pop() || null : null;
     }
@@ -89,25 +98,41 @@ window.mevedelPinnedPrompt = Object.freeze({
     // Scroll events and resize observations already arrive once per frame.
     // Every layout read precedes the writes, so an update never forces layout.
     function update() {
-      const edgeTop = edge();
+      const edgeTop = edgeBottom();
+      if (!shown(transcript)) { pin.removeAttribute('data-shown'); return; }
       const turn = governing(edgeTop);
       // A rebuilt record is a new element, so an unchanged target keeps its label.
-      if (turn && turn !== target) label = text(turn);
+      if (turn && turn !== target) {
+        label = text(turn);
+        name = turn.querySelector('.who .name')?.textContent || 'Host';
+        role = turn.dataset.role;
+      }
       target = label ? turn : null;
       if (!target) { if (pin.hasAttribute('data-shown')) pin.removeAttribute('data-shown'); return; }
-      const column = transcript.getBoundingClientRect();
-      const place = `${edgeTop} ${column.left} ${column.width}`;
+      const aligned = column === transcript ? turn.querySelector('.content')
+        : shown(column) ? column : transcript;
+      const box = aligned.getBoundingClientRect();
+      const style = aligned === transcript ? getComputedStyle(transcript) : null;
+      const left = box.left + (style ? parseFloat(style.paddingLeft) : 0);
+      const width = box.width - (style ? parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) : 0);
+      const place = `${edgeTop} ${left} ${width}`;
       if (place !== placed) {
         placed = place;
-        pin.style.top = `${edgeTop}px`;
-        pin.style.left = `${column.left}px`;
-        pin.style.width = `${column.width}px`;
+        pin.style.top = `${edgeTop + 8}px`;
+        pin.style.left = `${left}px`;
+        pin.style.width = `${width}px`;
+        backdrop.style.top = `${edgeTop}px`;
+        backdrop.style.left = `${left}px`;
+        backdrop.style.width = `${width}px`;
       }
+      if (pin.dataset.role !== role) pin.dataset.role = role;
+      if (speaker.dataset.speaker !== name) speaker.dataset.speaker = name;
       if (pin.dataset.label !== label) {
         pin.dataset.label = label;
         pin.title = label;
-        pin.setAttribute('aria-label', `Show the prompt: ${label}`);
       }
+      const accessible = `Show ${name}'s prompt: ${label}`;
+      if (pin.getAttribute('aria-label') !== accessible) pin.setAttribute('aria-label', accessible);
       if (!pin.hasAttribute('data-shown')) pin.setAttribute('data-shown', '');
     }
 
@@ -126,16 +151,17 @@ window.mevedelPinnedPrompt = Object.freeze({
       for (let node = turn.parentElement; node; node = node.parentElement) {
         if (node.tagName === 'DETAILS') node.open = true;
       }
-      window.scrollBy({top: turn.getBoundingClientRect().top - edge() - 8, behavior: 'smooth'});
+      scroll.scrollBy({top: turn.getBoundingClientRect().top - edgeBottom() - 8, behavior: 'smooth'});
       turn.classList.remove('turn-revealed');
       void turn.offsetWidth;
       turn.classList.add('turn-revealed');
       setTimeout(() => turn.classList.remove('turn-revealed'), 2400);
     });
-    window.addEventListener('scroll', update, {passive: true});
+    scroll.addEventListener('scroll', update, {passive: true});
     // Observing the body also covers viewport resizes and header changes.
     const layout = new ResizeObserver(update);
-    [document.body, transcript, history].forEach(node => layout.observe(node));
+    new Set([document.body, transcript, history, column, ...[].concat(edge)])
+      .forEach(node => { if (node) layout.observe(node); });
     return Object.freeze({refresh});
   },
 });

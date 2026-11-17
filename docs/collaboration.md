@@ -401,8 +401,12 @@ the sticky header, a one-line preview of it is pinned there, the browser
 analogue of the view's [pinned prompt](view.md#status-strip-and-cockpit-routing).
 It is derived from the rendered prompt turns, follows the exchange at the top
 rather than the latest prompt, refreshes after every transcript, filter or
-archive update, and truncates with an ellipsis to the
-conversation column. A prompt header within the row's height counts as visible,
+archive update, and truncates with an ellipsis to the composer's width.
+The floating card sits a small gap below the header, with a speaker-coloured mark,
+name and upward jump hint. Line breaks and block boundaries become spaces.
+A ground-coloured backdrop fades below the card, keeping partially scrolled
+text out of its header gap without intercepting clicks outside the card.
+A prompt header within the card, gap or fade counts as visible,
 so the row never covers one. The row overlays the transcript instead of
 reserving height, which a phone such as an iPhone mini cannot spare, so it never
 moves the transcript. A scroll reads only a binary search's worth of prompt
@@ -413,7 +417,10 @@ header. An open archived segment uses only its own prompts. Live content before
 the first live prompt continues the last prompt of the latest archived segment
 of the same chat once that segment has been loaded, unless a live prompt is on
 screen; a chat started by `/clear` carries nothing over. Revealing a source
-leaves room for the row.
+leaves room for the row. Agent panels use the same overlay below their own header,
+pinning the task or follow-up prompt governing the top of their independently
+scrolling transcript and aligning with its content column; clicking it scrolls
+that panel, not the room behind it.
 
 Room and discussion message boxes use **Enter** for a newline and **Ctrl+Enter**
 or **⌘+Enter** to send. This applies to the room composer and new discussions

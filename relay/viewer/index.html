@@ -57,7 +57,8 @@
     </header>
     <nav id="filter" class="filter" aria-label="Transcript filter" hidden></nav>
     <button id="pinned-prompt" class="pinned-prompt" type="button"
-            aria-label="Show the prompt of this exchange"></button>
+            aria-label="Show the prompt of this exchange"><span class="pinned-speaker" aria-hidden="true"></span></button>
+    <div class="pinned-backdrop" aria-hidden="true"></div>
     <section id="terminal-state" class="terminal-state" role="status" aria-atomic="true" hidden>
       <h2 id="terminal-title"></h2>
       <p id="terminal-message"></p>
@@ -116,6 +117,9 @@
       </header>
       <div id="agent-transcript" class="ledger agent-ledger"
            aria-live="polite"></div>
+      <button id="agent-pinned-prompt" class="pinned-prompt" type="button"
+              aria-label="Show the prompt of this exchange"><span class="pinned-speaker" aria-hidden="true"></span></button>
+      <div class="pinned-backdrop" aria-hidden="true"></div>
     </section>
     <section id="artifact-panel" class="viewer-panel" hidden
              role="dialog" aria-label="Session artifact">

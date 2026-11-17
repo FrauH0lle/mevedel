@@ -54,6 +54,7 @@ class Element {
   }
   contains(node) { return node === this || this.children.some(child => typeof child !== 'string' && child.contains(node)); }
   get parentElement() { return this.parent; }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   querySelectorAll(selector) {
     const result = [];
     for (const child of this.children) if (typeof child !== 'string') {
@@ -984,13 +985,14 @@ function testCompactionRendering() {
 }
 
 function testThinkingRendering() {
-  const nodes = Object.fromEntries(['history', 'agent-panel', 'agent-transcript'].map(
+  const nodes = Object.fromEntries(['history', 'agent-panel', 'agent-transcript', 'agent-pinned-prompt'].map(
     id => [id, new Element('div')]));
   const window = {getSelection: () => null};
   const document = {createElement: tag => new Element(tag), getElementById: id => nodes[id]};
-  const context = {window, document, setInterval() {}, clearInterval() {}};
+  const context = {window, document, setInterval() {}, clearInterval() {},
+    ResizeObserver: class { observe() {} }};
   installMarkdown(context, Element);
-  for (const file of ['renderer', 'viewer-agent', 'viewer-history']) {
+  for (const file of ['renderer', 'viewer-pinned-prompt', 'viewer-agent', 'viewer-history']) {
     vm.runInNewContext(fs.readFileSync(`relay/viewer/${file}.js`, 'utf8'), context);
   }
   const renderer = window.mevedelTranscriptRenderer;
@@ -1164,7 +1166,7 @@ async function main() {
                'send-button', 'stop-button', 'filter', 'requests',
                'session-label', 'queue-state', 'attachments',
                'attach-button', 'image-input', 'notify-button',
-               'composer-scope', 'own-queue', 'agent-panel',
+               'composer-scope', 'own-queue', 'agent-panel', 'agent-pinned-prompt',
                'agent-title', 'agent-meta', 'agent-close',
                'agent-transcript', 'commands-box', 'commands-summary',
                'skill-chips', 'artifacts-box', 'artifacts-summary',

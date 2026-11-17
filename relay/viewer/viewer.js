@@ -293,7 +293,9 @@
   }
   const tasks = window.mevedelTaskView.create({el, summarize: summarizeSession});
   const pinnedPrompt = window.mevedelPinnedPrompt.create({pin: document.getElementById('pinned-prompt'),
-    transcript, history: document.getElementById('history')});
+    transcript, history: document.getElementById('history'), scroll: window,
+    edge: [document.querySelector('body > .topbar'), document.getElementById('filter')],
+    column: document.getElementById('composer')});
   const goal = window.mevedelGoalView.create({el, onChange: renderModeline});
   const editing = window.mevedelEditingView.create({state, send, el, href: destinationURL, flash: flashNotice, summarize: summarizeSession,
     onVisibility: () => presence.report(),

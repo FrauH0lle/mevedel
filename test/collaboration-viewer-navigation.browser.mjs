@@ -65,7 +65,7 @@ const ARCHIVED_AGENT_ARTIFACT_TEXT = 'Archived agent artifact from segment 3.';
 const FILE_TEXT = 'The project file reached the new tab.';
 
 // What the stand-in host answers in each room.
-function host(lobbyRunning, records, sharedItem, coldAgent, archives) {
+function host(lobbyRunning, records, sharedItem, coldAgent, archives, agentRecords) {
   const store = {t: 'store-artifacts', artifacts: [
     {id: 'page', title: 'Page', kind: 'html', artifact: 'page/index.html',
      versions: 1, modified: 1, size: PAGE_HTML.length, attached: true},
@@ -116,7 +116,7 @@ function host(lobbyRunning, records, sharedItem, coldAgent, archives) {
       // A different tab or a reconnect must acquire its own authorization.
       guest.agentArtifacts = new Set([artifactId]);
       reply({t: 'agent', reqId: frame.reqId, final: true,
-             records: [{id: 'agent-answer', kind: 'assistant', text: 'The retained agent transcript.'},
+             records: agentRecords || [{id: 'agent-answer', kind: 'assistant', text: 'The retained agent transcript.'},
                        {id: artifactId, kind: 'tool', artifact: 'agent-notes.md', title: 'Agent notes'}]});
     } else if (frame.t === 'editing' && sharedItem) {
       // These small read-only fixture requests fit a single editing frame.
@@ -170,10 +170,10 @@ function host(lobbyRunning, records, sharedItem, coldAgent, archives) {
 }
 
 async function open(browser, {lobbyRunning = true, records = [], sharedItem = null, coldAgent = false,
-                              archives = null, viewport = {width: 1200, height: 800}} = {}) {
+                              archives = null, agentRecords = null, viewport = {width: 1200, height: 800}} = {}) {
   const context = await browser.newContext({viewport});
   const page = await context.newPage();
-  const answers = host(lobbyRunning, records, sharedItem, coldAgent, archives);
+  const answers = host(lobbyRunning, records, sharedItem, coldAgent, archives, agentRecords);
   const keys = {};
   for (const room of [lobbyRoom, sessionRoom, forkRoom]) {
     keys[room.id] = await crypto.subtle.importKey(
@@ -387,10 +387,10 @@ function pinGeometry(page) {
     const style = getComputedStyle(pin);
     return {top: box.top, bottom: box.bottom, left: box.left, right: box.right,
             height: box.height, fontSize: parseFloat(style.fontSize),
-            clipped: pin.scrollWidth > pin.clientWidth,
+            ellipsis: getComputedStyle(pin, '::before').textOverflow === 'ellipsis',
             headerBottom: document.querySelector('body > .topbar').getBoundingClientRect().bottom,
             dockTop: document.querySelector('.dock').getBoundingClientRect().top,
-            column: document.getElementById('transcript').getBoundingClientRect(),
+            column: document.getElementById('composer').getBoundingClientRect(),
             overflow: document.documentElement.scrollWidth > innerWidth,
             scrollY, scrollHeight: document.documentElement.scrollHeight};
   });
@@ -412,13 +412,13 @@ test('pinned prompt follows the exchange at the top without moving the transcrip
       await capture(page, `pinned-prompt-${size}`);
       const shown = await pinGeometry(page);
       assert.equal(shown.scrollY, scrolled, `${size}: showing the row must not scroll`);
-      assert.ok(Math.abs(shown.top - shown.headerBottom) <= 1, `${size}: ${JSON.stringify(shown)}`);
+      assert.ok(Math.abs(shown.top - shown.headerBottom - 8) <= 1, `${size}: ${JSON.stringify(shown)}`);
       assert.ok(shown.height <= 40 && shown.bottom < shown.dockTop, `${size}: one row above the dock`);
-      assert.ok(shown.left >= shown.column.left - 1 && shown.right <= shown.column.right + 1,
-                `${size}: the row keeps to the conversation column`);
+      assert.ok(Math.abs(shown.left - shown.column.left) <= 1 && Math.abs(shown.right - shown.column.right) <= 1,
+                `${size}: the row aligns with both composer edges`);
       assert.ok(shown.fontSize >= 12, `${size}: readable text`);
       assert.equal(shown.overflow, false, `${size}: no horizontal overflow`);
-      if (viewport.width < 500) assert.equal(shown.clipped, true, `${size}: long prompts truncate`);
+      assert.equal(shown.ellipsis, true, `${size}: long prompts truncate`);
       // An overlay, not a reserved row: hiding it moves nothing.
       const hiddenHeight = await page.evaluate(() => {
         const pin = document.getElementById('pinned-prompt');
@@ -466,6 +466,128 @@ test('pinned prompt follows the exchange at the top without moving the transcrip
       await page.evaluate(() => window.scrollTo(0, 0));
       await pinned(page, null);
       await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
+test('pinned cards preserve words and speaker identity in rooms and agent panels', async () => {
+  const browser = await chromium.launch();
+  const prompt = 'Review the migration: removed\ncountry must remain separate, while coun**try** stays joined.\n\n'
+    + '- Keep existing records\n- Preserve the audit trail\n\n'
+    + 'Explain the validation, rollout and rollback steps before changing the storage format. '.repeat(8);
+  const prefix = 'Review the migration: removed country must remain separate, while country stays joined. '
+    + 'Keep existing records Preserve the audit trail Explain the validation';
+  const review = [
+    '## Migration review',
+    'The schema change is small, but the rollout must preserve the audit trail and keep existing clients readable.',
+    '### Validate before writing',
+    '- Check a restored production-shaped snapshot, not the live database.\n'
+      + '- Compare record counts and stable identifiers before and after migration.\n'
+      + '- Keep the original country field until every reader uses the replacement.',
+    'The important boundary is between an absent value and a value deliberately removed by the user. '
+      + 'The migration should preserve that distinction rather than replacing both with an empty string.',
+    '```sql\nBEGIN;\nALTER TABLE audit_records ADD COLUMN country_code TEXT;\n'
+      + 'UPDATE audit_records\nSET country_code = country\nWHERE country IS NOT NULL;\n'
+      + '-- Verify counts before committing the transaction.\nCOMMIT;\n```',
+    '### Roll out in two steps',
+    'Deploy readers that accept the new field first. Keep writes reversible while the old and new versions coexist.',
+    '| Stage | Evidence |\n| --- | --- |\n| Dry run | Counts and identifiers match |\n'
+      + '| Canary | Audit entries remain readable |\n| Rollout | No legacy readers remain |',
+    '### Keep rollback explicit',
+    'Retain the source column and the migration report until the canary has completed. '
+      + 'A rollback should switch readers back without reconstructing deleted data.',
+    '### Verification',
+    'Exercise records with missing values, removed values, non-ASCII names and older audit entries. '
+      + 'The final check reads the migrated records through the application, not just through SQL.',
+  ].join('\n\n');
+  const records = [
+    {id: 'task', kind: 'user', text: prompt},
+    {id: 'work', kind: 'assistant', text: review},
+    {id: 'followup', kind: 'user', guest: 'Mara', text: prompt},
+    {id: 'result', kind: 'assistant', text: review},
+  ];
+  try {
+    for (const viewport of [{width: 1440, height: 900}, {width: 375, height: 667}]) {
+      for (const theme of ['light', 'dark']) {
+        const page = await open(browser, {viewport, records, agentRecords: records});
+        const errors = [];
+        page.on('pageerror', error => errors.push(error.message));
+        await page.emulateMedia({colorScheme: theme});
+        await page.goto(sessionRoom.link);
+        await page.locator('#transcript [data-record-id="result"]').waitFor();
+        const watchPins = () => page.evaluate(() => {
+          window.pinMutations = [];
+          document.querySelectorAll('.pinned-prompt').forEach(pin => {
+            new MutationObserver(changes => window.pinMutations.push(...changes.map(change =>
+              [change.type, change.attributeName]))).observe(pin,
+                {subtree: true, attributes: true, childList: true, characterData: true});
+          });
+        });
+        const checkMutations = async () => assert.deepEqual(await page.evaluate(() =>
+          window.pinMutations.filter(([type, name]) => type !== 'attributes' || name === 'hidden')), []);
+        await watchPins();
+        await scrollRecord(page, 'work', -180);
+        await pinned(page, prefix);
+        await page.waitForFunction(() => document.getElementById('pinned-prompt').dataset.role === 'you');
+        assert.equal(await page.locator('#pinned-prompt').getAttribute('data-role'), 'you');
+        assert.equal(await page.locator('#pinned-prompt .pinned-speaker').getAttribute('data-speaker'), 'Host');
+        const geometry = await pinGeometry(page);
+        assert.ok(Math.abs(geometry.left - geometry.column.left) <= 1);
+        assert.ok(Math.abs(geometry.right - geometry.column.right) <= 1);
+        await capture(page, `pinned-room-${viewport.width}x${viewport.height}-${theme}`);
+        await checkMutations();
+
+        await page.goto(`${sessionRoom.link}?agent=${encodeURIComponent('/root/reviewer')}`);
+        await page.locator('#agent-transcript [data-record-id="result"]').waitFor();
+        await watchPins();
+        // Agent scrolling must leave the underlying room at its reading position.
+        const roomY = await page.evaluate(() => scrollY);
+        async function agentScroll(id) {
+          await page.evaluate(id => {
+            const transcript = document.getElementById('agent-transcript');
+            const edge = document.querySelector('#agent-panel > .topbar').getBoundingClientRect().bottom;
+            const turn = transcript.querySelector(`[data-record-id="${id}"]`);
+            transcript.scrollBy(0, turn.getBoundingClientRect().top - edge + 180);
+          }, id);
+          await page.waitForFunction(([prefix, role]) => {
+            const pin = document.getElementById('agent-pinned-prompt');
+            return pin.hasAttribute('data-shown') && pin.dataset.label.startsWith(prefix) && pin.dataset.role === role;
+          }, [prefix, id === 'work' ? 'you' : 'guest']);
+        }
+        await agentScroll('work');
+        assert.equal(await page.locator('#agent-pinned-prompt').getAttribute('data-role'), 'you');
+        await agentScroll('result');
+        const pin = page.locator('#agent-pinned-prompt');
+        assert.equal(await pin.getAttribute('data-role'), 'guest');
+        assert.equal(await pin.locator('.pinned-speaker').getAttribute('data-speaker'), 'Mara');
+        assert.match(await pin.getAttribute('aria-label'), /Mara's prompt: Review the migration/);
+        const box = await pin.boundingBox();
+        const header = await page.locator('#agent-panel > .topbar').boundingBox();
+        const content = await page.locator('#agent-transcript [data-record-id="followup"] > .content').boundingBox();
+        assert.ok(Math.abs(box.y - header.y - header.height - 8) <= 1);
+        assert.ok(Math.abs(box.x - content.x) <= 1 && Math.abs(box.width - content.width) <= 1);
+        assert.ok(box.x >= 0 && box.x + box.width <= viewport.width);
+        const band = await pin.evaluate(pin => {
+          const band = pin.nextElementSibling;
+          const rect = band.getBoundingClientRect();
+          return {top: rect.top, bottom: rect.bottom, events: getComputedStyle(band).pointerEvents};
+        });
+        assert.equal(band.events, 'none');
+        assert.ok(Math.abs(band.top - header.y - header.height) <= 1);
+        assert.ok(Math.abs(band.bottom - box.y - box.height - 12) <= 1);
+        assert.equal(await page.evaluate(() => scrollY), roomY);
+        await capture(page, `pinned-agent-${viewport.width}x${viewport.height}-${theme}`);
+        await pin.click();
+        await page.waitForFunction(() => {
+          const edge = document.querySelector('#agent-panel > .topbar').getBoundingClientRect().bottom;
+          const top = document.querySelector('#agent-transcript [data-record-id="followup"]').getBoundingClientRect().top;
+          return top >= edge && top <= edge + 24;
+        });
+        assert.equal(await page.evaluate(() => scrollY), roomY);
+        await checkMutations();
+        assert.deepEqual(errors, []);
+        await page.close();
+      }
     }
   } finally { await browser.close(); }
 });
