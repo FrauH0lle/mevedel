@@ -96,12 +96,7 @@
     async function sendNow(text, target) {
       if (ended || !target || target.readyState !== WebSocket.OPEN
           || !binding || binding.socket !== target) return false;
-      binding.seq += 1;
-      // TEXT is the frame object serialized at send time; append the binding.
-      const sealed = await sealFrame(
-        `${text.slice(0, -1)}${text === '{}' ? '' : ','}"challenge":`
-        + `${JSON.stringify(binding.challenge)},"seq":${binding.seq},`
-        + `"nonce":${JSON.stringify(binding.nonce)}}`);
+      const sealed = await sealFrame(text);
       if (ended || socket !== target || target.readyState !== WebSocket.OPEN) {
         return false;
       }
@@ -115,8 +110,12 @@
       // and never let a slow socket accumulate pointer samples.
       if (frame.t === 'editing-presence' &&
           (sending || !target || target.bufferedAmount > 65536)) return Promise.resolve(false);
+      if (ended || !target || target.readyState !== WebSocket.OPEN || binding?.socket !== target) {
+        return Promise.resolve(false);
+      }
+      const text = JSON.stringify({ ...frame, challenge: binding.challenge,
+        seq: ++binding.seq, nonce: binding.nonce });
       sending++;
-      const text = JSON.stringify(frame);
       const work = outbound.then(() => sendNow(text, target))
         .finally(() => { sending--; });
       outbound = work.catch(() => {});

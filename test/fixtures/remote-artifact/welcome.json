@@ -10,7 +10,7 @@
       "from": "origin",
       "frame": {
         "t": "welcome",
-        "proto": 4,
+        "proto": 5,
         "room": "artifact",
         "id": "$ID",
         "kind": "whiteboard",

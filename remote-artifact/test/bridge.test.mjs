@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { bridge } from '../src/bridge.mjs';
-import { UNAVAILABLE } from '../src/room.mjs';
 import { startFakeRoom } from './fake-room.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -89,7 +88,7 @@ test('failures answer with their message and the link is never written', async (
   t.after(() => session.close());
   const b = startBridge(t);
   b.send({ id: 1, link: absent.link('edit'), guestId: 'g', name: 'n', body: { action: 'read' } });
-  assert.deepEqual(await b.next(), { id: 1, error: UNAVAILABLE });
+  assert.deepEqual(await b.next(), { id: 1, error: 'Origin unavailable (revoked, deleted, or offline)' });
   b.send({ id: 2, link: session.link('edit'), guestId: 'g', name: 'n' });
   assert.match((await b.next()).error, /not an artifact link/);
   b.send({ id: 3, link: 'not a link', guestId: 'g', name: 'n' });

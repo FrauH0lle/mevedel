@@ -75,6 +75,7 @@ IDs, while exact before/after snapshots stay on the host for reversion."
 
 (defun mevedel-collaboration-editing--send (room peer req-id value &optional raw)
   "Send bounded VALUE chunks to PEER in ROOM for REQ-ID.
+For a broadcast event to peer zero, REQ-ID is nil.
 VALUE is projected for a browser editor, without content, picture and
 contribution snapshots, unless RAW is non-nil."
   (let* ((encoded (base64-encode-string
@@ -90,8 +91,8 @@ contribution snapshots, unless RAW is non-nil."
       (let ((end (min length (+ offset 65536))))
         (mevedel-collaboration--transport-send
          (plist-get room :transport) peer
-         (list :t "editing" :reqId req-id :offset offset :total length
-               :data (substring encoded offset end)))
+         (append (if req-id (list :t "editing" :reqId req-id) (list :t "editing-event"))
+                 (list :offset offset :total length :data (substring encoded offset end))))
         (setq offset end)))))
 
 (defun mevedel-collaboration-editing--changed (workspace state result)
@@ -113,7 +114,7 @@ deleted it; a guest viewing it is no longer in it."
                          (plist-put guest :editing-item nil))))
                    guests)
           (mevedel-collaboration-editing--send
-           room 0 "event"
+           room 0 nil
            (if (plist-get state :deleted)
                (list :event "deleted" :id id
                      :actor (string-remove-prefix "Guest: " (or (plist-get state :actor) "")))

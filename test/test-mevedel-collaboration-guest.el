@@ -68,7 +68,7 @@
 (defun test-mevedel-collaboration-guest--chunk-frame-bytes (chunk)
   "Return the encoded size of the snapshot frame carrying CHUNK."
   (string-bytes
-   (mevedel-collaboration--records-frame (list :t "snapshot-chunk") chunk nil)))
+   (json-encode (mevedel-collaboration--records-frame (list :t "snapshot-chunk") chunk nil))))
 
 (mevedel-deftest mevedel-collaboration--snapshot-chunks ()
   ,test
@@ -369,9 +369,13 @@
               ((symbol-function 'mevedel-sleep-update)
                (lambda () (cl-incf sleep-updates))))
       (should-not (mevedel-collaboration--admit-hello
-                   room 1 '(:proto 0 :name "old")))
+                   room 1 '(:proto 4 :name "old")))
       (should (= 0 sleep-updates))
       (should (equal "error" (plist-get (cdar sent) :t)))
+      (should (equal "protocol-mismatch" (plist-get (cdar sent) :code)))
+      (should (= 5 (plist-get (cdar sent) :proto)))
+      (should (string-match-p "Reload the viewer.*update mevedel"
+                              (plist-get (cdar sent) :message)))
       (should (= 0 (hash-table-count guests)))
       (let ((guest (mevedel-collaboration--admit-hello
                     room 2
@@ -1835,7 +1839,9 @@ for it carries the most the transport adds.  Frames come back decoded."
                           ;; A real struct: compiled callers inline its accessors.
                           :ws (websocket-inner-create :url "ws://relay" :conn 'conn)))
          sent)
-    (puthash 1 (list "c" 1 nil (make-string mevedel-collaboration--max-guest-nonce-chars ?n))
+    (puthash 1 (mevedel-collaboration--make-binding
+                :challenge "c" :last-seq 1
+                :nonce (make-string mevedel-collaboration--max-guest-nonce-chars ?n))
              peers)
     (cl-letf (((symbol-function 'websocket-openp) (lambda (_ws) t))
               ((symbol-function 'process-send-string)
@@ -1892,7 +1898,7 @@ for it carries the most the transport adds.  Frames come back decoded."
               (frame (mevedel-collaboration--records-frame
                       (list :t "snapshot-chunk") (car chunks) nil)))
          (should (= 1 (length (car chunks))))
-         (should (= (string-bytes frame) mevedel-collaboration--max-frame-json-bytes))
+         (should (= (string-bytes (json-encode frame)) mevedel-collaboration--max-frame-json-bytes))
          (should (mevedel-collaboration--transport-send transport 1 frame))
          (should (= 1 (length (plist-get (car (funcall frames)) :records)))))))))
 

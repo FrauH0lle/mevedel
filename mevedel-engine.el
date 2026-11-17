@@ -13,7 +13,12 @@
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-require-path "mevedel-agents" (invocation))
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x) t)
 (defvar mevedel--agent-invocation)
+
+;; `gptel-openai-oauth'
+(declare-function gptel-openai-oauth-p "ext:gptel-openai-oauth" (cl-x) t)
 
 ;; `mevedel-auth'
 (declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
@@ -28,6 +33,31 @@
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript--skip-leading-summary-block "mevedel-transcript" (pos))
 (autoload 'mevedel-transcript--skip-leading-summary-block "mevedel-transcript")
+
+(defun mevedel-engine--codex-cache-key (fsm)
+  "Set the Codex cache key in FSM's prompt buffer before serialization.
+Normal sends and compaction reach this boundary after applying their
+effective backend and request parameters.  Use the source session id,
+with a separate key for each agent's distinct conversation prefix."
+  (let* ((info (gptel-fsm-info fsm))
+         (source (plist-get info :buffer))
+         (prompt (plist-get info :data)))
+    (when (and (buffer-live-p source) (buffer-live-p prompt))
+      (with-current-buffer prompt
+        (when (and (fboundp 'gptel-openai-oauth-p)
+                   (gptel-openai-oauth-p gptel-backend))
+          (when-let* ((session (buffer-local-value 'mevedel--session source))
+                      (id (mevedel-session-session-id session))
+                      ((stringp id)))
+            (let ((inv (buffer-local-value 'mevedel--agent-invocation source)))
+              (setq-local gptel--request-params
+                          (plist-put (copy-sequence gptel--request-params)
+                                     :prompt_cache_key
+                                     (if (and inv (mevedel-agent-invocation-p inv))
+                                         (format "%s:%s" id (mevedel-agent-invocation-agent-id inv))
+                                       id))))))))))
+
+(advice-add 'gptel--realize-query :before #'mevedel-engine--codex-cache-key)
 
 (cl-defgeneric mevedel-engine-info (owner)
   "Return the workflow context plist for turn OWNER.

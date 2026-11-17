@@ -90,7 +90,7 @@ export class Guest {
           // Hello waits for the first challenge; later ones are ignored.
           if (!this.challenge && typeof frame.challenge === 'string') {
             this.challenge = frame.challenge;
-            this.send({ t: 'hello', proto: 4, name: `bot-${this.index}`, guestId: `bot-${this.index}-${process.pid}`,
+            this.send({ t: 'hello', proto: 5, name: `bot-${this.index}`, guestId: `bot-${this.index}-${process.pid}`,
                         writeToken: Buffer.from(this.creds.write).toString('base64url') });
           }
           return;
@@ -142,16 +142,18 @@ export class Guest {
   }
   /* Editing replies and events arrive as chunked base64 JSON. */
   editingFrame(frame, at) {
-    if (frame.t !== 'editing') return;
-    let t = this.transfers.get(frame.reqId);
-    if (frame.offset === 0) this.transfers.set(frame.reqId, (t = { parts: [], offset: 0 }));
+    const event = frame.t === 'editing-event';
+    if (!event && frame.t !== 'editing') return;
+    const transferId = event ? 'event' : frame.reqId;
+    let t = this.transfers.get(transferId);
+    if (frame.offset === 0) this.transfers.set(transferId, (t = { parts: [], offset: 0 }));
     if (!t) return;
     t.parts.push(frame.data);
     t.offset += frame.data.length;
     if (t.offset !== frame.total) return;
-    this.transfers.delete(frame.reqId);
+    this.transfers.delete(transferId);
     const value = JSON.parse(Buffer.from(t.parts.join(''), 'base64').toString('utf8'));
-    if (frame.reqId === 'event') this.onEvent?.(value, at);
+    if (event) this.onEvent?.(value, at);
     else {
       const p = this.pending.get(frame.reqId);
       this.pending.delete(frame.reqId);

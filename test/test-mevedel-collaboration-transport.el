@@ -373,7 +373,7 @@
 (defun test-mevedel-collaboration-transport--peers (peer)
   "Return a peer table binding PEER's connection to challenge \"c\"."
   (let ((peers (make-hash-table :test #'eql)))
-    (puthash peer (list "c" 0 nil nil) peers)
+    (puthash peer (mevedel-collaboration--make-binding :challenge "c") peers)
     peers))
 
 (mevedel-deftest mevedel-collaboration--transport-refusal
@@ -386,7 +386,7 @@
     (should (eq t (mevedel-collaboration--transport-refusal
                    transport 2 '(:t "abort" :challenge "c" :seq 2))))
     ;; An older client is told the protocol, once.
-    (should (equal "protocol mismatch: host speaks 4"
+    (should (equal (plist-get (mevedel-collaboration--protocol-error) :message)
                    (plist-get (mevedel-collaboration--transport-refusal
                                transport 1 '(:t "hello" :proto 3))
                               :message)))
@@ -434,11 +434,11 @@
     (should (eq t (mevedel-collaboration--transport-refusal
                    transport 1 (list :t "hello" :challenge "c" :seq 2
                                      :nonce (make-string 65 ?n)))))
-    (should-not (nth 3 (gethash 1 (plist-get transport :peers))))
+    (should-not (mevedel-collaboration--binding-nonce (gethash 1 (plist-get transport :peers))))
     ;; A later valid frame is accepted and adopts its nonce ...
     (should-not (mevedel-collaboration--transport-refusal
                  transport 1 '(:t "hello" :challenge "c" :seq 3 :nonce "socket-a")))
-    (should (equal "socket-a" (nth 3 (gethash 1 (plist-get transport :peers)))))
+    (should (equal "socket-a" (mevedel-collaboration--binding-nonce (gethash 1 (plist-get transport :peers)))))
     ;; ... which then holds every frame to it.
     (should (eq t (mevedel-collaboration--transport-refusal
                    transport 1 '(:t "prompt" :challenge "c" :seq 4))))))
@@ -453,8 +453,8 @@
                          "{\"records\":[]}"))
       (should-error (mevedel-collaboration--transport-send transport 0 frame)))
     (dolist (frame (list '(:t "record" :record nil)
-                         '(:t "editing" :reqId "event" :offset 0 :total 4 :data "e30=")
-                         "{\"t\":\"history-index\",\"records\":[]}"))
+                         '(:t "editing-event" :offset 0 :total 4 :data "e30=")
+                         '(:records [] :t "history-index")))
       (should-not (mevedel-collaboration--transport-send transport 0 frame)))
     ;; A frame for one peer may be of any type.
     (should-not (mevedel-collaboration--transport-send
@@ -507,7 +507,7 @@
                       :payload (mevedel-collaboration--envelope-pack
                                 peer (mevedel-collaboration--seal
                                       key (json-encode
-                                           (list :t type :proto 4
+                                           (list :t type :proto 5
                                                  :challenge challenge
                                                  :seq seq :nonce "guest-nonce")))))))
               (unwind-protect
@@ -533,11 +533,11 @@
                     ;; arrive sealed and unseal to the sent frame; one for
                     ;; this peer alone carries back its nonce, encoded or not.
                     (should (mevedel-collaboration--transport-send
-                             transport 1 (list :t "welcome" :proto 4)))
+                             transport 1 (list :t "welcome" :proto 5)))
                     (should (mevedel-collaboration--transport-send
                              transport 0 (list :t "record")))
                     (should (mevedel-collaboration--transport-send
-                             transport 1 "{\"t\":\"chunk\"}"))
+                             transport 1 '(:t "chunk")))
                     (should (mevedel-relay-test--pump
                              (lambda () (= 3 (length guest-frames)))))
                     (let ((decoded (mapcar #'decode (nreverse guest-frames))))
@@ -740,9 +740,8 @@
       (should (mevedel-collaboration--transport-send
                transport 1 (list :t "record" :text "small")))
       (should (= 1 (length sent)))
-      ;; Already encoded frames travel as they are.
       (should (mevedel-collaboration--transport-send
-               transport 1 "{\"t\":\"record\"}"))
+               transport 1 '(:t "record")))
       (should (equal "{\"t\":\"record\"}"
                      (mevedel-collaboration--unseal
                       (make-string 32 ?k)
@@ -764,15 +763,13 @@
       ;; adds the longest nonce a guest may have, encoded or not.
       (let* ((nonce (make-string mevedel-collaboration--max-guest-nonce-chars ?n))
              (peers (make-hash-table :test #'eql))
-             (head "{\"t\":\"record\",\"text\":\"")
-             (full (concat head
-                           (make-string (- mevedel-collaboration--max-frame-json-bytes
-                                           (length head) 2)
-                                        ?x)
-                           "\"}")))
-        (puthash 1 (list "c" 1 nil nonce) peers)
+             (full (list :t "record" :text
+                         (make-string (- mevedel-collaboration--max-frame-json-bytes
+                                         (string-bytes (json-encode '(:t "record" :text ""))))
+                                      ?x))))
+        (puthash 1 (mevedel-collaboration--make-binding :challenge "c" :last-seq 1 :nonce nonce) peers)
         (plist-put transport :peers peers)
-        (should (= (string-bytes full) mevedel-collaboration--max-frame-json-bytes))
+        (should (= (string-bytes (json-encode full)) mevedel-collaboration--max-frame-json-bytes))
         (should (mevedel-collaboration--transport-send transport 1 full))
         (should (= 2 (length sent)))))))
 

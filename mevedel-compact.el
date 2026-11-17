@@ -38,8 +38,6 @@
 (declare-function gptel--handle-wait "ext:gptel-request" (fsm))
 (declare-function gptel--realize-query "ext:gptel-request" (fsm))
 ;; `mevedel-auth'
-(declare-function mevedel-auth-codex-cache-key-apply "mevedel-auth" (source))
-(autoload 'mevedel-auth-codex-cache-key-apply "mevedel-auth")
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (defvar gptel--request-params)
 (defvar gptel-backend)
@@ -359,9 +357,7 @@ set already stored on FSM's info plist."
                   (setq-local gptel-model model))
                 (when (plist-member info :tools)
                   (setq-local gptel-tools tools)
-                  (setq-local gptel-use-tools (and tools t)))
-                ;; This realization bypasses the request transforms.
-                (mevedel-auth-codex-cache-key-apply chat-buffer))
+                  (setq-local gptel-use-tools (and tools t))))
               (plist-put info :data prompt-buffer)
               (plist-put info :dry-run t)
               (gptel--realize-query fsm))

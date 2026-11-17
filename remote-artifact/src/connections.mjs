@@ -5,7 +5,7 @@
 // the pool, close() only releases: the connection stays open until IDLE-MS pass
 // with no call using it, so an open client does not keep the origin awake.
 import { displayName } from './identity.mjs';
-import { UNAVAILABLE, openRoom } from './room.mjs';
+import { openRoom } from './room.mjs';
 
 export const IDLE_MS = 5 * 60 * 1000;
 
@@ -41,7 +41,7 @@ export function connectionPool({ open = openEntry, idleMs = IDLE_MS, key = (entr
     const link = key(entry);
     let slot = slots.get(link);
     if (slot?.room?.closed) {
-      if (slot.room.ended && slot.room.ended !== UNAVAILABLE) goodbyes.set(link, slot.room.ended);
+      if (slot.room.ended?.code === 'origin-goodbye') goodbyes.set(link, slot.room.ended);
       drop(link, slot);
       slot = undefined;
     }
@@ -54,7 +54,7 @@ export function connectionPool({ open = openEntry, idleMs = IDLE_MS, key = (entr
         goodbyes.delete(link);
         return (made.room = room);
       }, (error) => {
-        throw goodbyes.has(link) && error.message === UNAVAILABLE ? new Error(goodbyes.get(link)) : error;
+        throw goodbyes.has(link) && error.code === 'origin-unavailable' ? goodbyes.get(link) : error;
       });
       slots.set(link, made);
       made.opening.catch(() => { if (slots.get(link) === made) slots.delete(link); });

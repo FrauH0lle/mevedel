@@ -26,7 +26,7 @@ async function openWatched(entry, emit) {
   const room = await openRoom(entry.link, { name: entry.name, guestId: entry.guestId });
   const events = new EditingAssembler();
   room.onFrame = (frame) => {
-    if (frame.t !== 'editing' || frame.reqId !== 'event') return;
+    if (frame.t !== 'editing-event') return;
     const event = events.add(frame);
     if (event !== undefined && entry.ref !== undefined) emit({ ref: entry.ref, event });
   };

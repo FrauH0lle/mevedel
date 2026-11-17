@@ -889,7 +889,7 @@ A consumer's hello is admitted by the room key and write token like any
 room's. The room answers with its own welcome only:
 
 ```json
-{"t": "welcome", "proto": 4, "room": "artifact", "id": "ID",
+{"t": "welcome", "proto": 5, "room": "artifact", "id": "ID",
  "kind": "whiteboard", "title": "TITLE", "readOnly": false}
 ```
 
@@ -1016,7 +1016,7 @@ artifact fetches, store listings and actions, and recovery, are dropped
 unanswered. Frames run with `inhibit-interaction`, as in the lobby.
 
 Every committed change of a whiteboard or document, whoever made it, reaches
-its room's consumers as `{t: "editing", reqId: "event", body: {event:
+its room's consumers as `{t: "editing-event", body: {event:
 "changed", id, kind, title, revision}}`. A change of an HTML artifact's files,
 through a link or at the origin, reaches them the same way without a
 `revision`: on each store change notification, an HTML room with connected

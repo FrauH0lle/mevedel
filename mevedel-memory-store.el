@@ -92,12 +92,12 @@ OBSERVATION may supply PATH's pinned read from this operation's bounded batch."
     (error "Invalid memory evidence identity"))
   (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "evidence-pins" digest (concat id ".pin")))
 
-(defun mevedel-memory-store-read (workspace id &optional observation evidence retired)
+(defun mevedel-memory-store-read (workspace id &optional observation)
   "Read WORKSPACE's immutable prepared pass ID, including its private scope.
 This internal storage interface grants no right to display original memory
 bodies; inspection must use the original authority checks on the returned scope.
-OBSERVATION and EVIDENCE may supply this operation's prepared and claim reads,
-and RETIRED the retirement probe from OBSERVATION's program, made before it."
+OBSERVATION may supply the :prepared and :claim reads and the earlier
+:retired probe from the same batched operation."
   (let* ((root (mevedel-workspace-root workspace))
          (path (file-name-concat (mevedel-memory-store--directory workspace id) "prepared.el"))
          ;; One program probes retirement, then reads the record.  It is no
@@ -108,9 +108,11 @@ and RETIRED the retirement probe from OBSERVATION's program, made before it."
                                   :path (mevedel-journal-cleanup--retired-path root id))
                             (list :op 'read :optional t :path path :coding 'utf-8-unix
                                   :max-bytes (1+ mevedel-memory-store--max-bytes))))))
-         (record (if (mevedel-journal-cleanup-pass-retired-p root id (if observation retired (car observed)))
+         (record (if (mevedel-journal-cleanup-pass-retired-p
+                      root id (if observation (plist-get observation :retired) (car observed)))
                      (error "Memory pass has expired")
-                   (mevedel-memory-store--read-lisp path (or observation (cadr observed)))))
+                   (mevedel-memory-store--read-lisp
+                    path (if observation (plist-get observation :prepared) (cadr observed)))))
          (data (car record)) (text (cdr record))
          (claim (and (proper-list-p data) (plist-get data :claim)))
          (entries (plist-get data :entries)))
@@ -134,7 +136,8 @@ and RETIRED the retirement probe from OBSERVATION's program, made before it."
                                   (<= (string-bytes (plist-get entry :body)) mevedel-context-summary--digest-max-bytes))) entries))
       (error "Invalid prepared memory pass"))
     (let ((token (append (list :directory (mevedel-memory-store--claim-directory workspace)) claim)))
-      (unless (equal claim (mevedel-journal-claim--read (mevedel-journal-claim--path token nil) nil evidence))
+      (unless (equal claim (mevedel-journal-claim--read
+                            (mevedel-journal-claim--path token nil) nil (plist-get observation :claim)))
         (error "Prepared pass does not match its ownership record"))
       (plist-put data :claim token))
     (append data (list :hash (secure-hash 'sha256 text)))))
@@ -266,7 +269,9 @@ BATCH requests bounded pinned reads for this pass alone."
                      (mevedel-session-control-fs-run-program
                       (list (list :op 'read :path (mevedel-journal-claim--path claim nil))
                             (list :op 'read :path (mevedel-journal-claim--path claim t) :optional t)))))
-         (prepared (mevedel-memory-store-read workspace id (car reads) (car evidence) retired))
+         (prepared (mevedel-memory-store-read
+                    workspace id (when batch (list :prepared (car reads) :claim (car evidence)
+                                                   :retired retired))))
          (outcome (mevedel-journal-claim-outcome (plist-get prepared :claim) (cadr evidence))))
     (when (eq (plist-get outcome :status) 'completed)
       (let* ((record (mevedel-memory-store--read-lisp
