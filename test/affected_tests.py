@@ -6,7 +6,8 @@ features directly, the test files it owns by name (`test-STEM.el' and
 itself when it is a test file.  Transitive requires are not followed: through
 the package entry point they reach most of the suite for a typical module.
 Another file selects the test files that name its path, its quoted file name
-or one of its directories.
+or one of its directories.  Node and browser tests under `test/' run under
+their own runners, so when no ERT file names one it selects nothing.
 
 The full suite (None) replaces the selection when a change touches the runner
 or shared test support, a library directly reaches more than a quarter of the
@@ -24,6 +25,7 @@ FULL_SUITE = frozenset({'Eask', 'scripts/check.sh', 'test/affected_tests.py',
 SMOKE = ('test/test-mevedel-agent-exec.el', 'test/test-mevedel-persistence.el',
          'test/test-mevedel-structs.el')
 DOCUMENTATION = ('.md', '.org', '.txt', '.png', '.jpg', '.svg', '.gif')
+NODE_TESTS = ('.js', '.mjs')
 BROAD_SHARE = 0.25
 REQUIRE = re.compile(r"\(require\s+'([^\s()]+)")
 PROVIDE = re.compile(r"^\(provide\s+'([^\s()]+)", re.M)
@@ -45,6 +47,11 @@ def changed_files(root, rev):
 def documentation_p(path):
     """Return non-nil when PATH is prose or an image rather than code."""
     return path.endswith(DOCUMENTATION) or path.startswith(('docs/', '.mevedel/'))
+
+
+def node_test_p(path):
+    """Return non-nil when PATH is a Node or browser test file, not ERT."""
+    return path.startswith('test/') and path.count('/') == 1 and path.endswith(NODE_TESTS)
 
 
 def select(root, changed):
@@ -88,6 +95,9 @@ def select(root, changed):
             reason = 'no test file names it or its directory'
             if not matches and documentation_p(path):
                 notes.append(f'{path}: documentation; smoke set only')
+                continue
+            if not matches and node_test_p(path):
+                notes.append(f'{path}: Node/browser test; run by its own runner')
                 continue
         if not matches:
             notes.append(f'{path}: full suite ({reason})')
