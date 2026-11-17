@@ -110,7 +110,7 @@
 ;; `mevedel-session-rewind'
 (declare-function mevedel-session-rewind-rewind
                   "mevedel-session-rewind"
-                  (buffer target &optional boundary scope confirm-function))
+                  (buffer target &optional boundary scope confirm-function complete))
 (autoload 'mevedel-session-rewind-rewind "mevedel-session-rewind")
 
 ;; `mevedel-structs'
@@ -564,7 +564,14 @@ The browser confirms before sending; host validation never opens a prompt."
     (let ((buffer (mevedel-collaboration--room-data-buffer room))
           (request-id (plist-get frame :reqId)))
       (when (mevedel-collaboration--request-id-p request-id)
-        (condition-case err
+        (cl-labels ((reply (_result &optional diagnosis)
+                      (ignore-errors
+                        (mevedel-collaboration--transport-send
+                         (plist-get room :transport) peer
+                         (append (list :t "history-action" :reqId request-id
+                                       :ok (if diagnosis :json-false t))
+                                 (when diagnosis (list :message diagnosis)))))))
+         (condition-case err
             (progn
               (unless (and buffer (plist-get room :session))
                 (user-error "This room has no session"))
@@ -581,21 +588,16 @@ The browser confirms before sending; host validation never opens a prompt."
                      (user-error "Choose a settled assistant response to rewind"))
                    (mevedel-session-rewind-rewind
                     buffer (list :fork-point-id point-id) 'after 'conversation
-                    (lambda (_impact) t))))
+                    (lambda (_impact) t) #'reply)))
                 ("retry-turn"
                  (let ((failure-id (mevedel-collaboration--guest-text
                                     (plist-get frame :failureId))))
                    (unless failure-id (user-error "Choose a failed turn to retry"))
-                   (mevedel-gptel-retry-failed-turn buffer failure-id)))
-                (_ (user-error "Unknown history action")))
-              (mevedel-collaboration--transport-send
-               (plist-get room :transport) peer
-               (list :t "history-action" :reqId request-id :ok t)))
+                   (mevedel-gptel-retry-failed-turn buffer failure-id)
+                   (reply t)))
+                (_ (user-error "Unknown history action"))))
           (error
-           (mevedel-collaboration--transport-send
-            (plist-get room :transport) peer
-            (list :t "history-action" :reqId request-id :ok :json-false
-                  :message (error-message-string err)))))))))
+           (reply nil (error-message-string err)))))))))
 
 (provide 'mevedel-collaboration-owner)
 ;;; mevedel-collaboration-owner.el ends here

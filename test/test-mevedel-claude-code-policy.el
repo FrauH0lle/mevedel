@@ -78,7 +78,7 @@
                      (mevedel-view-send)))
                  (should (equal "API fixture"
                                 (gptel-backend-name (plist-get (gptel-fsm-info sent) :backend))))
-                 (should-not (assoc "root" (mevedel-session-external-conversations session))))))
+                 (should-not (plist-get (cdr (assoc "root" (mevedel-session-external-conversations session))) :id)))))
           (when (buffer-live-p view) (kill-buffer view)))))))
 
 (mevedel-deftest mevedel-view-send/claude-unavailable-policy (:quiet t)

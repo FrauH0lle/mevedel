@@ -479,6 +479,8 @@ A root request is the user's retry: blocking recovery issues refuse it, and
 it clears the previous attempt's informational issues and a failure pause no
 failed input still justifies.  A retained agent's admission leaves the root's
 recovery state alone."
+  (when (memq session (bound-and-true-p mevedel-claude-code-fork--sessions))
+    (user-error "Wait for native history preparation before starting a turn"))
   (unless mevedel--agent-invocation
     (mevedel-recovery-assert-ready session))
   (let ((entry-request mevedel--current-request))
@@ -518,6 +520,8 @@ recovery state alone."
       (mevedel-session-set-pending-input-failure-paused session nil)))
   ;; Readiness and recovery checks can yield.  Recheck immediately before
   ;; capture, keeping ordinary policy inspection independent of admission.
+  (when (memq session (bound-and-true-p mevedel-claude-code-fork--sessions))
+    (user-error "Wait for native history preparation before starting a turn"))
   (when mevedel-implementation-policy--admission-preparation
     (mevedel-implementation-policy-assert-preparation
      mevedel-implementation-policy--admission-preparation))

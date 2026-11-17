@@ -2117,14 +2117,17 @@ retries still retains this explicit retry.
 While any steering or follow-up entries remain in the pending-input queue,
 resolve that queued input first. Retry stays unavailable without consuming or
 rebinding the entries, avoiding duplicate delivery.
-For external Claude ACP conversations, Retry instead reconnects to the same
-native session and resends the original submitted input, including retained
-image bytes. Its tooltip says **Retry (resends the prompt; the agent sees the
-failed attempt)**. Partial output stays visible because it remains in native
-history. This is not a rewind or exact sample replay, and the agent may decide
-to run tools again. It is unavailable without the retained input and the same
-native session identity; edited, foreign or missing native history still uses
-the existing explicit recovery workflow.
+For external Claude ACP conversations, Retry forks native history at the last
+answer before the failed prompt and resends the original submitted input,
+including retained image bytes. A first failed prompt starts fresh. Failed
+prose and reasoning are removed; tool records and the error disclosure remain.
+Its tooltip warns that file effects are not undone. This replays the whole
+prompt, not one sample, so receipt-backed current-state reconciliation guidance
+precedes further tools. It is unavailable without the retained input and an
+unchanged native identity. Older histories without answer coordinates reuse the
+same native session, with an explicit notice that partial native context may
+remain. Unavailable native history refuses with a named reason rather than
+guessing from transcript text.
 `mevedel-view-render-live-update` retains completed
 semantic units in the view and reparses only the mutable source-backed tail.
 Standalone reasoning disclosures and grouped tool activity runs are separate

@@ -768,8 +768,8 @@
         if (Number.isInteger(record.forkTurn)) rewind.dataset.historyTurn = String(record.forkTurn);
       }
       if (record.kind === 'assistant' && typeof record.retryId === 'string' && record.retryId) {
-        action('retry-turn', record.retryExternal ? 'Retry prompt' : 'Retry',
-          record.retryExternal ? 'Resends the prompt; the agent sees the failed attempt'
+        action('retry-turn', 'Retry',
+          record.retryExternal ? 'Retry from before the failed prompt (older sessions reuse native history); file effects are not undone'
             : 'Retry the failed request without repeating completed tools')
           .dataset.historyId = record.retryId;
       }

@@ -110,7 +110,7 @@
         (should-not (string-search "ARCHIVE ONLY" data))
         (should-not (string-search ":signature" data))
         (should-not (string-search ":type \"thinking\"" data)))
-      (should-not (assoc "root" (mevedel-session-external-conversations session)))
+      (should-not (plist-get (cdr (assoc "root" (mevedel-session-external-conversations session))) :id))
       (should (equal (secure-hash 'sha256 "REFRESHED PATH GUIDANCE")
                      (cdr (assoc (list "/root" instructions)
                                  (mevedel-session-workspace-instruction-hashes session)))))

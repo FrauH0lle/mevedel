@@ -34,6 +34,7 @@
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-repair-diagnostics)
 (require 'mevedel-session-persistence)
+(require 'mevedel-session-rewind)
 (require 'mevedel-tool-ui)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-task)
@@ -531,11 +532,12 @@
         (search-forward "Assistant")
         (cl-letf
             (((symbol-function 'mevedel-session-rewind-rewind)
-              (lambda (buffer target &optional boundary scope)
+              (lambda (buffer target &optional boundary scope _confirm complete)
                 (setq called-buffer buffer
                       called-target target
                       called-boundary boundary
                       called-scope scope)
+                (funcall complete t nil)
                 t))
              ((symbol-function 'mevedel-view-return-to-latest-segment)
               (lambda (&optional _event)
@@ -547,7 +549,24 @@
       (should (eq 'choose called-scope))
       (should returned-latest)
       (should (equal "rewind-point-1"
-                     (plist-get called-target :fork-point-id))))))
+                     (plist-get called-target :fork-point-id)))))
+  :doc "waits for native completion before returning to the live segment"
+  (with-temp-buffer
+    (setq-local mevedel--session (mevedel-session--create :name "native"))
+    (setq-local mevedel--data-buffer (current-buffer))
+    (let (pending returned-latest)
+      (cl-letf (((symbol-function 'mevedel-view--settled-response-at-point)
+                 (lambda () '(:fork-point-id "native")))
+                ((symbol-function 'mevedel-session-rewind-rewind)
+                 (lambda (_buffer _target _boundary _scope _confirm complete)
+                   (setq pending complete)
+                   :pending))
+                ((symbol-function 'mevedel-view-return-to-latest-segment)
+                 (lambda (&optional _event) (setq returned-latest t))))
+        (should (eq :pending (mevedel-view-rewind-at-point)))
+        (should-not returned-latest)
+        (funcall pending t nil)
+        (should returned-latest)))))
 
 (mevedel-deftest mevedel-view--conversation-variant-button ()
   ,test

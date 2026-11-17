@@ -8,8 +8,8 @@
 ;; prepared payload.  Only admitted mevedel requests and retained agent turns,
 ;; which their runtime owns without a root request, participate; ACP and
 ;; background requests retain their own recovery policies.
-;; Explicit root retry uses this replay, or resends retained ACP input into
-;; its unchanged native history with the failed attempt still visible.
+;; Explicit root retry uses this replay, or forks ACP history at the answer
+;; before the failed prompt and replays that input without undoing tool effects.
 
 ;;; Code:
 
@@ -21,6 +21,7 @@
 (require 'gptel)
 (require 'mevedel-agents)
 (require 'mevedel-engine)
+(require 'mevedel-reminders)
 (require 'mevedel-structs)
 (require 'mevedel-turn)
 (require 'mevedel-transport)
@@ -38,19 +39,21 @@
 (declare-function mevedel-agent-conversation-record-activity
                   "mevedel-agent-conversation" (invocation item &optional suppress-rerender))
 
-;; `mevedel-chat'
-(declare-function mevedel--insert-local-user-turn
-                  "mevedel-chat" (prompt &optional display-text kind hook-context no-spinner))
-(autoload 'mevedel--insert-local-user-turn "mevedel-chat")
-
 ;; `mevedel-claude-code-history'
 (declare-function mevedel-claude-code-history-unresumable-p "mevedel-claude-code-history" (record))
 (autoload 'mevedel-claude-code-history-unresumable-p "mevedel-claude-code-history")
+
+;; `mevedel-claude-code-fork'
+(declare-function mevedel-claude-code-fork-histories
+                  "mevedel-claude-code-fork" (histories complete &optional session))
+(autoload 'mevedel-claude-code-fork-histories "mevedel-claude-code-fork")
 
 ;; `mevedel-claude-code-session'
 (declare-function mevedel-claude-code-send
                   "mevedel-claude-code-session" (&optional model-input model-policy prepared-input))
 (autoload 'mevedel-claude-code-send "mevedel-claude-code-session")
+(declare-function mevedel-claude-code-reset-root-delivery "mevedel-claude-code-session" (session))
+(autoload 'mevedel-claude-code-reset-root-delivery "mevedel-claude-code-session")
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-capture-request "mevedel-goal" (fsm))
@@ -63,6 +66,8 @@
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-content-start "mevedel-session-artifacts" (buffer))
 (autoload 'mevedel-session-artifacts-content-start "mevedel-session-artifacts")
+(declare-function mevedel-session-artifacts-save "mevedel-session-artifacts" (session &optional buffer require-commit))
+(autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
 
 ;; `mevedel-view'
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
@@ -125,6 +130,8 @@ a fresh allowance.  Claude Code and background requests are unaffected."
         (setq mevedel-gptel-retry--failure
               (list :original fsm :request fsm :external-history t
                     :history-id (plist-get (plist-get info :mevedel-claude-history) :id)
+                    :before-history (copy-tree (plist-get info :mevedel-native-before-history))
+                    :output-start (marker-position (plist-get info :position))
                     :prompt (plist-get info :mevedel-retry-prompt)
                     :transcript-input (plist-get info :mevedel-retry-transcript-input)
                     :input (plist-get info :mevedel-retry-input)
@@ -188,11 +195,107 @@ Replay is live-process only, and expires on transcript edits or another turn."
               (with-current-buffer mevedel--view-buffer
                 (mevedel-view-render-refresh-latest-turn buffer)))))))))
 
+(defun mevedel-gptel-retry--discard-external-output (start)
+  "Remove failed prose and reasoning after START, retaining tools and errors."
+  (let ((position (point-max)) (inhibit-read-only t) (inhibit-modification-hooks t))
+    (while (> position start)
+      (let* ((begin (previous-single-property-change position 'gptel nil start))
+             (type (get-text-property (1- position) 'gptel)))
+        (when (memq (if (consp type) (car type) type) '(response reasoning))
+          (delete-region begin position))
+        (setq position begin)))))
+
+(defun mevedel-gptel-retry--external (buffer failure request failure-id)
+  "Prepare FAILURE's native boundary, then replay it under admitted REQUEST.
+BUFFER owns the callback; FAILURE-ID preserves the same logical turn."
+  (let* ((session mevedel--session)
+         (previous (copy-tree (mevedel-session-external-conversations session)))
+         (before (copy-tree (plist-get failure :before-history)))
+         (legacy (and (plist-get before :id)
+                      (not (plist-get (car (last (plist-get before :boundaries))) :message-id))))
+         (hashes (mevedel-session-workspace-instruction-hashes session))
+         (mentions (mevedel-session-mentions-shown session))
+         (reminders (mevedel-session-reminders session))
+         (pending (mevedel-session-pending-reminders session))
+         (plan (cl-find 'plan-reference reminders :key #'mevedel-reminder-type))
+         (fired (and plan (mevedel-reminder-last-fired plan)))
+         installed committed)
+    (let ((complete
+     (lambda (histories diagnosis cleanup)
+       (condition-case err
+           (progn
+             (when diagnosis (error "%s" diagnosis))
+             (unless (buffer-live-p buffer) (error "Retry buffer closed during native preparation"))
+             (with-current-buffer buffer
+               (unless (and (eq request mevedel--current-request)
+                            (not (mevedel-request-cancelled-p request))
+                            (equal previous (mevedel-session-external-conversations session))
+                            (equal (plist-get failure :turn) (mevedel-session-turn-count session))
+                            (not (mevedel-session-pending-input-p session))
+                            (mevedel-gptel-retry--same-source-p failure))
+                 (user-error "The failed turn changed during native Retry preparation"))
+               (let ((history (or (cdar histories) (list :engine 'claude-code :state 'unstarted))))
+                 (when (plist-get history :id) (setq history (plist-put history :state 'uncertain)))
+                 (setf (alist-get "root" (mevedel-session-external-conversations session) nil nil #'equal)
+                       history)
+                 (setq installed history))
+               ;; The replacement identity must never be published with receipts
+               ;; from the failed branch, including across an editor crash.
+               (mevedel-claude-code-reset-root-delivery session)
+               (mevedel-session-enqueue-pending-reminder
+                session (concat mevedel-reminders-reconciliation-body
+                                (if legacy
+                                    " This Retry reuses the same native session because its older history has no recorded answer boundary; partial native output may remain."
+                                  " This is a Retry from before a failed prompt.")
+                                " Its tool effects remain; never replay a prior tool call merely because its result is missing."))
+               (mevedel-session-ensure-reminder session (mevedel-reminders-make-pending-events))
+               (let ((head (plist-get (mevedel-session-publication session) :head)))
+                 (condition-case publish-error
+                     (progn
+                       (unless (mevedel-session-artifacts-save session buffer t)
+                         (error "Native Retry identity did not publish"))
+                       (setq committed t))
+                   (error
+                    (setq committed (not (equal head (plist-get (mevedel-session-publication session) :head))))
+                    (signal (car publish-error) (cdr publish-error)))))
+               (mevedel-gptel-retry--discard-external-output (plist-get failure :output-start))
+               (setf (mevedel-engine-info request)
+                     (plist-put (mevedel-engine-info request) :mevedel-retry-of failure-id))
+               (goto-char (point-max))
+               (mevedel-claude-code-send (plist-get failure :prompt)
+                                        (plist-get failure :model-policy)
+                                        (copy-tree (plist-get failure :input) t))))
+         ((error quit)
+          (unless committed (funcall cleanup))
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer
+              (when (and (not committed) installed
+                         (eq installed (alist-get "root" (mevedel-session-external-conversations session) nil nil #'equal)))
+                (setf (alist-get "root" (mevedel-session-external-conversations session) nil nil #'equal)
+                      (copy-tree (cdr (assoc "root" previous)))
+                      (mevedel-session-workspace-instruction-hashes session) hashes
+                      (mevedel-session-mentions-shown session) mentions
+                      (mevedel-session-reminders session) reminders
+                      (mevedel-session-pending-reminders session) pending)
+                (when plan (setf (mevedel-reminder-last-fired plan) fired)))
+              (when (and (not committed) (eq request mevedel--current-request))
+                (setq mevedel-gptel-retry--failure failure))
+              (when (eq request mevedel--current-request) (mevedel-request-end))
+              (when (buffer-live-p mevedel--view-buffer) (mevedel-view-rerender mevedel--view-buffer))))
+          (mevedel-diagnostic-message (mevedel-diagnostic-scope session)
+                                      "Retry failed: %s" (error-message-string err)))))))
+      (if legacy
+          (progn
+            (message "Retry reuses the retained native session; no recorded answer boundary is available")
+            (funcall complete (list (cons "root" before)) nil #'ignore))
+        (mevedel-claude-code-fork-histories
+         (when before (list (cons "root" before))) complete session)))))
+
 (defun mevedel-gptel-retry-failed-turn (buffer failure-id)
   "Retry BUFFER's failed request identified by FAILURE-ID.
 Native requests replay their prepared sample without completed tools or failed
-output.  External requests resend the original input into the same native
-history: the agent sees the failed attempt.  Keep historical error disclosures.
+output.  External requests fork at the answer before the failed prompt and
+replay that prompt.  File effects, tool records and error disclosures remain.
 Admission rechecks ownership and recovery before consuming the retry."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
@@ -224,12 +327,11 @@ Admission rechecks ownership and recovery before consuming the retry."
                      (setq request admitted)
                      (when (mevedel-session-pending-input-p mevedel--session)
                        (user-error "Resolve queued input first before retrying the failed turn"))
-                     (unless (plist-get failure :external-history)
-                       (setf (mevedel-request-turn request) (mevedel-request-turn old-request)
+                     (setf (mevedel-request-turn request) (mevedel-request-turn old-request)
                              (mevedel-request-file-snapshots request)
                              (copy-hash-table (mevedel-request-file-snapshots old-request))
                              (mevedel-request-untracked-effects request)
-                             (copy-tree (mevedel-request-untracked-effects old-request)))))))
+                             (copy-tree (mevedel-request-untracked-effects old-request))))))
             (unless (and (eq request mevedel--current-request)
                          (eq failure mevedel-gptel-retry--failure)
                          (equal (plist-get failure :turn) (mevedel-session-turn-count mevedel--session))
@@ -244,11 +346,7 @@ Admission rechecks ownership and recovery before consuming the retry."
                   (mevedel-request-hook-rules request) (mevedel-request-hook-rules old-request)
                   (mevedel-request-one-shot-mutations-p request) (mevedel-request-one-shot-mutations-p old-request))
             (if (plist-get failure :external-history)
-                (progn
-                  (mevedel--insert-local-user-turn (plist-get failure :transcript-input))
-                  (mevedel-claude-code-send (plist-get failure :prompt)
-                                          (plist-get failure :model-policy)
-                                          (copy-tree (plist-get failure :input) t)))
+                (mevedel-gptel-retry--external buffer failure request failure-id)
             (setf (gptel-fsm-info fsm) info
                   (gptel-fsm-state fsm) 'MRESEND)
             (plist-put state :fsm fsm)

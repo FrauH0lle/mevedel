@@ -1916,12 +1916,14 @@ them are set, so the committing save keeps them."
                 ((symbol-function 'read-multiple-choice)
                  (lambda (&rest _) '(?f "conversation and files")))
                 ((symbol-function 'mevedel-session-rewind-restore-head)
-                 (lambda (seen-session seen-buffer head confirm conversation-only)
+                 (lambda (seen-session seen-buffer head confirm conversation-only complete)
                    (should-not conversation-only)
                    (setq restored (list seen-session seen-buffer head))
                    (funcall confirm
                             '(:restored-turns 1 :file-plan nil
-                              :external-overwrites 0))))
+                              :external-overwrites 0))
+                   (funcall complete t nil)
+                   t))
                 ((symbol-function 'mevedel--run-session-start-hooks)
                  (lambda (source) (setq hook-source source)))
                 ((symbol-function 'message) #'ignore))

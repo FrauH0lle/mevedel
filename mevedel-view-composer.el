@@ -3362,6 +3362,10 @@ asynchronous preparation ran is left alone instead of cleared."
              (when preparation
                (with-current-buffer data-buffer
                  (mevedel-implementation-policy-assert-preparation preparation)))
+             (when (memq session (bound-and-true-p mevedel-claude-code-fork--sessions))
+               (mevedel-diagnostic-user-error
+                (mevedel-diagnostic-scope data-buffer)
+                "Wait for native history preparation before starting a turn"))
              (when (mevedel-turn-busy-p mevedel--data-buffer)
                (mevedel-diagnostic-user-error (mevedel-diagnostic-scope data-buffer) "The session became busy before dispatch"))))
           (dropped-file-grants

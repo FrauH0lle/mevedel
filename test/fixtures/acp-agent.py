@@ -22,9 +22,11 @@ def ask(method, params):
 
 def chunk(text, session=None):
     session = session or session_id
+    update = {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}
+    if response_message_id:
+        update["messageId"] = response_message_id
     print(json.dumps({"jsonrpc": "2.0", "method": "session/update", "params": {
-        "sessionId": session, "update": {"sessionUpdate": "agent_message_chunk",
-                                         "content": {"type": "text", "text": text}}}}), flush=True)
+        "sessionId": session, "update": update}}), flush=True)
 
 
 def announce(tool_id):
@@ -65,6 +67,7 @@ prompt_response = {"stopReason": "end_turn"}
 cancel_response = {"stopReason": "cancelled"}
 sdk_while_waiting = []
 response_text = None
+response_message_id = None
 echo_all_text = False
 tool_batches = []
 hook_acknowledgement = True
@@ -160,6 +163,7 @@ for line in sys.stdin:
                 cancel_response = params.get("_meta", {}).get("cancelResponse", {"stopReason": "cancelled"})
                 sdk_while_waiting = params.get("_meta", {}).get("sdkWhileWaiting", [])
                 response_text = params.get("_meta", {}).get("responseText")
+                response_message_id = params.get("_meta", {}).get("responseMessageId")
                 echo_all_text = params.get("_meta", {}).get("echoAllText", False)
                 tool_batches = params.get("_meta", {}).get("toolBatches", [])
                 sdk_before_batches = params.get("_meta", {}).get("sdkBeforeBatches", [])
@@ -231,7 +235,7 @@ for line in sys.stdin:
                     print(json.dumps({"jsonrpc": "2.0", "id": request_id,
                                       "error": {"code": -32000, "message": "Fixture prompt failed"}}), flush=True)
                     continue
-                if not tool_batches and not compaction_events:
+                if not tool_batches and not compaction_events and response_text is None:
                     chunk("History: " + " | ".join(history))
                     reply(request_id, {"stopReason": "end_turn"})
                     continue

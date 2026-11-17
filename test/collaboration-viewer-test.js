@@ -2444,13 +2444,13 @@ async function main() {
   assert.equal(nodes.notice.textContent, 'The response moved.');
 
   // A failure offers only its exact live replay identity. ACP's label and
-  // tooltip distinguish prompt resend from native prepared-sample replay.
+  // tooltip distinguish native-history replay from prepared-sample replay.
   await deliver({t: 'record', record: {id: 'failed-turn', kind: 'assistant', revision: 0,
     status: 'failed', text: 'Assistant request failed.', retryId: 'request-1', retryExternal: true}});
   const failed = findByRecordId(nodes.transcript, 'failed-turn');
   const retryButton = findByClass(failed, 'message-actions').children[1].children[0];
-  assert.equal(retryButton.dataset.label, 'Retry prompt');
-  assert.match(retryButton.attributes.title, /agent sees the failed attempt/);
+  assert.equal(retryButton.dataset.label, 'Retry');
+  assert.match(retryButton.attributes.title, /before the failed prompt \(older sessions reuse native history\); file effects are not undone/);
   const retryBefore = first.sent.length;
   historyClick(retryButton);
   await waitFor(() => first.sent.length === retryBefore + 1, 'sealed Retry request');

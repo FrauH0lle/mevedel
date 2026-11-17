@@ -169,17 +169,26 @@ than through the command allowlist:
   The frame carries the response's `forkPoint` and confirmed `turnCount`; the host
   refuses if the count changed before it receives the action, then resolves
   it and uses the ordinary Rewind transaction without a file plan. Its stable
-  source and native-history restrictions still apply. Each session room
+  source safeguards still apply. Native Claude histories prepare independent
+  forks at recorded answer boundaries before publishing the replacement head;
+  local sends refuse until that preparation finishes, preserving their drafts;
+  browser and guest prompts remain queued and resume when preparation releases
+  its hold. Each session room
   republishes the truncated history, including after an Emacs Rewind or Redo.
 
 - `retry-turn` retries a retained failed turn by its exact request identity.
   Owner links show **Retry** on the failure message only while the host retains
   that request's replay data. Native providers resend the same prepared sample
   without rerunning completed tools; the error disclosure remains in history.
-  For external ACP sessions, **Retry prompt** resends the original prompt into
-  the same native history after reconnecting. Its help says that the agent sees its
-  failed attempt; partial output stays visible to match that history. This is
-  separate from the pending-input queue's Retry action.
+  For external ACP sessions, **Retry** forks native history at the last answer
+  before the failed prompt, then replays that whole prompt with its retained
+  image bytes. A first failed prompt starts a fresh native history. Older native
+  histories without recorded boundaries retry into the same native session,
+  explicitly labelled as such; their native partial context may remain. Failed prose
+  and reasoning disappear; tool records and the error disclosure remain. Its
+  help warns that file effects are not undone. The replacement receives
+  current-state reconciliation guidance before more tools. This is separate
+  from the pending-input queue's Retry action.
 
 - `recovery` exposes selection among the offered models, reasoning efforts and
   registered presets, session rename, native-history recovery, retained-input

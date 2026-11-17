@@ -115,11 +115,19 @@ Continuation must reconcile divergence instead of resuming hidden history."
            (scope (if child (mevedel-agent-invocation-require-path child) "root"))
            (record (alist-get scope (mevedel-session-external-conversations mevedel--session)
                               nil nil #'equal)))
-      (when (plist-get record :id)
+      (when (or (plist-get record :id)
+                (cl-some (lambda (entry) (plist-get entry :id))
+                         (plist-get record :boundaries)))
         (save-match-data
           (save-restriction
             (widen)
-            (let* ((boundary (plist-get record :input-boundary))
+            (let* ((boundary
+                    (or (plist-get record :input-boundary)
+                        (plist-get
+                         (car (last (cl-remove-if-not
+                                     (lambda (entry) (plist-get entry :id))
+                                     (plist-get record :boundaries))))
+                         :input-boundary)))
                    (content-start (mevedel-session-artifacts-content-start (current-buffer)))
                    (submitted-end
                     (when boundary
@@ -139,7 +147,14 @@ Continuation must reconcile divergence instead of resuming hidden history."
                       (setq found t)
                     (setq position (previous-single-property-change
                                     position 'gptel nil (point-min))))))
-              (when found (plist-put record :state 'diverged)))))))))
+              (when found
+                (if (plist-get record :id)
+                    (plist-put record :state 'diverged)
+                  ;; A detached excerpt cannot vouch for old native coordinates.
+                  (plist-put record :boundaries
+                             (cl-remove-if-not
+                              (lambda (entry) (plist-get entry :detached))
+                              (plist-get record :boundaries))))))))))))
 
 (cl-defgeneric mevedel-engine-request-text
     (backend prompt system callback &optional stream context ready)

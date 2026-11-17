@@ -88,7 +88,7 @@
 
 ;; `mevedel-session-rewind'
 (declare-function mevedel-session-rewind-rewind
-                  "mevedel-session-rewind" (buffer target &optional boundary scope))
+                  "mevedel-session-rewind" (buffer target &optional boundary scope confirm-function complete))
 (autoload 'mevedel-session-rewind-rewind "mevedel-session-rewind")
 
 ;; `mevedel-structs'
@@ -213,6 +213,7 @@
 (declare-function mevedel-diagnostic-message "mevedel-utilities" (scope format &rest args))
 (declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
 (declare-function mevedel-diagnostic-user-error "mevedel-utilities" (scope format &rest args))
+(declare-function mevedel-diagnostic-warning "mevedel-utilities" (scope type message &optional level buffer-name))
 (defvar mevedel--hook-audit-close)
 (defvar mevedel--hook-audit-open)
 (defvar mevedel-transcript-audit--decode-cache)
@@ -221,6 +222,7 @@
 (autoload 'mevedel-diagnostic-message "mevedel-utilities")
 (autoload 'mevedel-diagnostic-scope "mevedel-utilities")
 (autoload 'mevedel-diagnostic-user-error "mevedel-utilities")
+(autoload 'mevedel-diagnostic-warning "mevedel-utilities")
 
 
 ;; `mevedel-view'
@@ -2125,7 +2127,7 @@ Execution outcome remains independent of lifecycle and disclosure state."
                         (propertize
                          "[Retry]" 'font-lock-face 'link 'mouse-face 'highlight
                          'help-echo (if (plist-get rendering :external-history)
-                                        "Retry (resends the prompt; the agent sees the failed attempt)"
+                                        "Retry from before the failed prompt (older sessions reuse native history); file effects are not undone"
                                       "Replay the prepared request without repeating completed tools")
                          'mevedel-view-zone-activate
                          (lambda ()
@@ -3136,7 +3138,7 @@ DATA-BUF supplies live execution metadata; COLLAPSED-ONLY requests summaries."
                              retry-errors "\n")))
                       ""
                       (if (plist-get request-data :external-history)
-                          "Retry resends the original prompt into the same native session; the agent sees the failed attempt and its partial output stays visible."
+                          "Retry forks native history before the failed prompt and replays it. Older sessions without answer coordinates reuse their native history, which may retain partial context. Failed partial output is removed; prior tool effects and the error disclosure remain."
                         "Retry replays the prepared request while it remains retained and the transcript is unchanged.")))
           "\n")
          :body-mode 'text-mode
@@ -7688,11 +7690,19 @@ discarded.  Point names a response you are looking at, so the boundary
 falls after it; `mevedel-rewind' instead picks one of your prompts and
 returns to just before it."
   (interactive)
-  (when (mevedel-session-rewind-rewind
-         mevedel--data-buffer (mevedel-view--settled-response-at-point)
-         'after 'choose)
-    (mevedel-view-return-to-latest-segment)
-    t))
+  (let* ((view (current-buffer))
+         (session mevedel--session)
+         (scope (mevedel-diagnostic-scope session)))
+    (mevedel-session-rewind-rewind
+     mevedel--data-buffer (mevedel-view--settled-response-at-point)
+     'after 'choose nil
+     (lambda (result failure)
+       (if failure
+           (mevedel-diagnostic-warning scope 'mevedel failure)
+         (when (and result (buffer-live-p view)
+                    (eq session (buffer-local-value 'mevedel--session view)))
+           (with-current-buffer view
+             (mevedel-view-return-to-latest-segment))))))))
 
 (defun mevedel-view--rendered-turn-starts ()
   "Return rendered turn starts before the input zone."
