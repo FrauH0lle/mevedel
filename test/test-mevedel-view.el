@@ -348,28 +348,41 @@
   :doc "an unattended view keeps its pending render until focus returns"
   (mevedel-view-test--with-buffers
     (let ((full-count 0)
-          (unattended t))
+          (unattended t)
+          delay scheduled)
       (with-current-buffer view-buf
         (setq-local mevedel-view--pending-render-kind 'full
                     mevedel-view--pending-render-data-buffer data-buf))
       (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-view--unattended-p)
-                     (lambda (&rest _) unattended))
-                    ((symbol-function 'mevedel-view--full-rerender)
-                     (lambda (&rest _) (cl-incf full-count))))
+          (cl-letf* ((real-run-at-time (symbol-function 'run-at-time))
+                     ((symbol-function 'mevedel-view--unattended-p)
+                      (lambda (&rest _) unattended))
+                     ((symbol-function 'run-at-time)
+                      (lambda (seconds _repeat fn &rest args)
+                        (setq delay seconds
+                              scheduled (lambda () (apply fn args)))
+                        (apply real-run-at-time 3600 nil fn args)))
+                     ((symbol-function 'mevedel-view-render-batched-full)
+                      (lambda (&rest _) (cl-incf full-count))))
             (mevedel-view--flush-scheduled-render view-buf)
             (with-current-buffer view-buf
               (should (= 0 full-count))
               (should (eq 'full mevedel-view--pending-render-kind))
               (should (eq data-buf mevedel-view--pending-render-data-buffer))
               (should-not mevedel-view--render-timer))
-            ;; Focus returns: the resume hook re-arms the same render,
-            ;; and the flush then runs it exactly once.
+            ;; Focus returns: work is already coalesced, but cannot run
+            ;; inside the focus/redisplay hook itself.
             (setq unattended nil)
             (mevedel-view--resume-attended-views)
             (with-current-buffer view-buf
+              (should (= 0 full-count))
+              (should (equal 0 delay))
               (should (mevedel--timer-pending-p mevedel-view--render-timer))
-              (mevedel-view--schedule-render 'full data-buf 0))
+              (let ((timer mevedel-view--render-timer))
+                (mevedel-view--resume-render-if-attended view-buf)
+                (should (eq timer mevedel-view--render-timer))
+                (cancel-timer timer))
+              (funcall scheduled))
             (with-current-buffer view-buf
               (should (= 1 full-count))
               (should-not mevedel-view--pending-render-kind)

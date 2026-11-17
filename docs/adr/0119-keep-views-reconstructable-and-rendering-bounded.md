@@ -139,7 +139,10 @@ fallback. One scheduler coalesces redraws;
 unattended views (unfocused, or shown in no window of an interactive editor)
 arm no render timers and defer visual work, retaining changed tool IDs rather
 than forcing a full rebuild on focus return. Incremental projection also drains
-those row updates; full projection subsumes them. A settling or stopped turn
+those row updates; full projection subsumes them. On reveal the pending work
+is already coalesced, so the same scheduler flushes it on the next timer turn
+without another debounce interval or a write inside the reveal hook.
+A settling or stopped turn
 projects only its own range, so it keeps them: clearing them there left an older
 row, such as a background execution's, showing stale progress. Retained-agent metadata
 replacements refresh source-backed handles, with full projection as the fallback
@@ -493,6 +496,17 @@ Observers must not change execution or steal focus; a failed projection warns
 and retains the last good display where possible.
 
 ## Decision history
+
+### November 2026: remove the reveal debounce, not the attention gate
+
+Replaying a long hidden run with 500 prior turns, 3,100 stream chunks, 155
+tool results and three agent rows in isolated graphical Emacs, the median
+time from reveal through redisplay fell from 337 to 218 ms across three
+matched trials per variant. The change removes an extra wait; it does not
+speed up projection itself. In a separate experiment, projecting every
+three seconds while hidden saved only 4 ms at reveal and added 238 ms of
+CPU time per 12-second trial (three trials per variant, 120 chunks). Keep
+the attention gate and do not start background projection timers.
 
 ### October 31, 2026: one activity-group rule for both surfaces
 

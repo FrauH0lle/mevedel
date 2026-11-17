@@ -77,10 +77,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   connection binding uses an untyped positional list and JSON string surgery;
   optional and mixed-type values added by performance fixes; note creation is
   written twice and its owner API uses two prefixes.
-- Unfocused views defer rendering, so selecting a view after a long run can
-  trigger one large catch-up render. Consider rendering deferred views at a
-  low rate (every few seconds or when idle), bounded so background views never
-  cost visible CPU; measure catch-up time and background CPU before and after.
 
 ## Execution
 

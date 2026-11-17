@@ -428,7 +428,8 @@ render, such as a Goal checkpoint's before its continuation turn, still runs;
 view teardown discards them.
 Focus returning to a frame
 (`after-focus-change-function`) or a window redisplaying the buffer
-(`window-buffer-change-functions`) reschedules the pending render.  A view
+(`window-buffer-change-functions`) queues the already-coalesced render for the
+next timer turn without another debounce wait. A view
 shown in no window is unattended too; one on a terminal frame is attended,
 since focus is unknowable there, and so is an undisplayed view in batch Emacs,
 which keeps test behavior unchanged. While unattended, a render request only
