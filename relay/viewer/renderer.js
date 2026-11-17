@@ -720,7 +720,9 @@
     let top = 0, bottom = window.innerHeight;
     if (sheet) {
       const viewport = transcript.getBoundingClientRect();
-      top = Math.max(top, viewport.top);
+      const pin = sheet.querySelector('.pinned-prompt');
+      const row = pin ? parseFloat(getComputedStyle(pin).getPropertyValue('--pinned-prompt-h')) || 0 : 0;
+      top = Math.max(top, viewport.top + (pin ? row + 20 : 0));
       bottom = Math.min(bottom, viewport.bottom);
     } else {
       const header = document.querySelector('body > .topbar')?.getBoundingClientRect();
@@ -728,7 +730,7 @@
       // The pinned prompt can overlay the row under the header once scrolled.
       const pin = document.getElementById('pinned-prompt');
       const row = pin ? parseFloat(getComputedStyle(pin).getPropertyValue('--pinned-prompt-h')) || 0 : 0;
-      top = Math.max(top, (header?.bottom || 0) + row);
+      top = Math.max(top, (header?.bottom || 0) + (pin ? row + 20 : 0));
       if (dock?.height > 0 && dock.bottom > top) bottom = Math.min(bottom, Math.max(top, dock.top));
     }
     const available = Math.max(0, bottom - top);
