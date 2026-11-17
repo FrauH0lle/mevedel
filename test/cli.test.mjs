@@ -101,7 +101,7 @@ test('attach reports an unavailable origin and a protocol mismatch', async (t) =
   const mismatch = await room(t, { mode: 'mismatch' });
   const old = await run(env, 'attach', mismatch.link());
   assert.equal(old.code, 1);
-  assert.match(old.err, /origin speaks protocol 5, this package speaks 4; update one/);
+  assert.match(old.err, /host speaks 4.*update mevedel or the remote-artifact package/);
 });
 
 test('detach forgets an artifact and refuses an unknown name', async (t) => {

@@ -139,11 +139,11 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
   };
   // Fixture frames in their wire form: an editing body becomes its chunks.
   const wire = (frame) => {
-    if (frame.t !== 'editing' || !('body' in frame)) return [frame];
+    if (!['editing', 'editing-event'].includes(frame.t) || !('body' in frame)) return [frame];
     const data = Buffer.from(JSON.stringify(frame.body)).toString('base64');
     const chunks = [];
     for (let offset = 0; offset < data.length; offset += 65536) {
-      chunks.push({ t: 'editing', reqId: frame.reqId, offset, total: data.length,
+      chunks.push({ t: frame.t, reqId: frame.reqId, offset, total: data.length,
         data: data.slice(offset, offset + 65536) });
     }
     return chunks;
@@ -228,8 +228,9 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
 
     const answer = async (frame) => {
       if (frame.t === 'hello') {
-        if (mode === 'mismatch') { await send({ t: 'error', message: 'protocol mismatch: host speaks 5' }); return; }
-        if (mode === 'session') { await send({ t: 'welcome', proto: 4, readOnly: false, recordCount: 0 }); return; }
+        if (mode === 'mismatch') { await send({ t: 'error', message: 'protocol mismatch: host speaks 4' }); return; }
+        if (mode === 'coded-mismatch') { await send({ t: 'error', code: 'protocol-mismatch', proto: 6, message: 'Versions differ' }); return; }
+        if (mode === 'session') { await send({ t: 'welcome', proto: 5, readOnly: false, recordCount: 0 }); return; }
         if (mode === 'lobby') { await send({ t: 'lobby', project: 'proj', sessions: [], omitted: 0 }); return; }
         const [hello] = fixture('hello').frames;
         writable = frame.writeToken === b64url(writeToken);
@@ -287,7 +288,7 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, welcome 
     },
     /* Send every connected consumer a change event BODY, as the origin does. */
     event: async (body) => {
-      for (const send of senders) await send({ t: 'editing', reqId: 'event', body });
+      for (const send of senders) await send({ t: 'editing-event', body });
     },
     /* Send every connected consumer the raw FRAME as a reply to it, bypassing chunking. */
     raw: async (frame) => { for (const send of repliers) await send(frame); },

@@ -164,7 +164,7 @@ export const tools = [
           room.close();
         } catch (error) {
           // The generic error, the goodbyes and an older origin say so; others get the prefix.
-          reach = /^Origin (unavailable|may run)/.test(error.message)
+          reach = ['origin-unavailable', 'origin-goodbye', 'older-origin'].includes(error.code)
             ? `o${error.message.slice(1)}` : `origin unavailable: ${error.message}`;
         }
         origin ||= new URL(found.link).hostname;

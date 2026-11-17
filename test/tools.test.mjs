@@ -153,7 +153,8 @@ test('list_artifacts says why an origin that said goodbye is unavailable', async
   const env = tempEnv(t);
   await attach(env, (await room(t)).link());
   const result = await callTool('list_artifacts', {}, {
-    env, connect: async () => { throw new Error('Origin unavailable: the artifact was deleted at its origin'); },
+    env, connect: async () => { throw Object.assign(new Error('Origin unavailable: the artifact was deleted at its origin'),
+      { code: 'origin-goodbye' }); },
   });
   assert.match(result.content[0].text,
     /^snt-pipeline: .* origin unavailable: the artifact was deleted at its origin$/m);
