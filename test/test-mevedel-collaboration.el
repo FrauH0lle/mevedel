@@ -993,13 +993,18 @@
 
 
 (mevedel-deftest mevedel-collaboration--on-session-event
-  (:doc "re-publishes status on a rename and ignores other session events")
-  (let (published)
+  (:doc "re-publishes replaced history and status on rename")
+  (let (published history)
     (cl-letf (((symbol-function 'mevedel-collaboration-notify-request-changed)
-               (lambda (buffer) (push buffer published))))
+               (lambda (buffer) (push buffer published)))
+              ((symbol-function 'mevedel-collaboration-notify-history-changed)
+               (lambda (buffer) (push buffer history))))
       (mevedel-collaboration--on-session-event 'data 'rename)
+      (mevedel-collaboration--on-session-event 'data 'replace-history)
+      (mevedel-collaboration--on-session-event 'other-room 'replace-history)
       (mevedel-collaboration--on-session-event 'data 'saved)
-      (should (equal '(data) published)))))
+      (should (equal '(data) published))
+      (should (equal '(other-room data data) history)))))
 
 (mevedel-deftest mevedel-collaboration--publish-status
   (:doc "broadcasts busy and name changes once and tells a joining guest directly")

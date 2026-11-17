@@ -102,6 +102,12 @@
                   "mevedel-session-fork" (buffer target type))
 (autoload 'mevedel-session-fork-create "mevedel-session-fork")
 
+;; `mevedel-session-rewind'
+(declare-function mevedel-session-rewind-rewind
+                  "mevedel-session-rewind"
+                  (buffer target &optional boundary scope confirm-function))
+(autoload 'mevedel-session-rewind-rewind "mevedel-session-rewind")
+
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory
@@ -545,6 +551,31 @@ requester asked to keep.  The refusal names it and how to open it."
              room peer ledger request-id
              (or keys (list :name nil :ok :json-false
                             :message "The fork was interrupted"))))))))))
+
+(defun mevedel-collaboration--handle-rewind (room peer frame)
+  "Rewind ROOM's conversation at owner PEER's FRAME fork point.
+The browser confirms before sending; host validation never opens a prompt."
+  (when (mevedel-collaboration--owner room peer)
+    (let ((point-id (mevedel-collaboration--guest-text
+                     (plist-get frame :forkPoint)))
+          (buffer (mevedel-collaboration--room-data-buffer room))
+          (request-id (plist-get frame :reqId)))
+      (when (mevedel-collaboration--request-id-p request-id)
+        (condition-case err
+            (progn
+              (unless (and point-id buffer (plist-get room :session))
+                (user-error "Choose a settled assistant response to rewind"))
+              (mevedel-session-rewind-rewind
+               buffer (list :fork-point-id point-id) 'after 'conversation
+               (lambda (_impact) t))
+              (mevedel-collaboration--transport-send
+               (plist-get room :transport) peer
+               (list :t "history-action" :reqId request-id :ok t)))
+          (error
+           (mevedel-collaboration--transport-send
+            (plist-get room :transport) peer
+            (list :t "history-action" :reqId request-id :ok :json-false
+                  :message (error-message-string err)))))))))
 
 (provide 'mevedel-collaboration-owner)
 ;;; mevedel-collaboration-owner.el ends here
