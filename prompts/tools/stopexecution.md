@@ -1,4 +1,4 @@
-Stop one yielded Bash, fresh Eval, or Monitor execution owned by this agent.
+Stop one yielded Bash, Eval (fresh/sandbox), or Monitor execution owned by this agent.
 
 ### When to use `StopExecution`
 
@@ -12,7 +12,7 @@ Stop one yielded Bash, fresh Eval, or Monitor execution owned by this agent.
 
 ### How to use `StopExecution`
 
-- Use the opaque `execution_id` from Bash, fresh Eval, Monitor, or ListExecutions. Only the
+- Use the opaque `execution_id` from Bash, Eval, Monitor, or ListExecutions. Only the
   caller's yielded executions are addressable; monitors belong to root.
 - Returns the execution's final observation. Stopping ends that execution; it
   cannot be resumed and does not undo completed side effects.
@@ -33,6 +33,6 @@ StopExecution(execution_id="exec-42") after the temporary server is no longer ne
 StopExecution(execution_id="make test")
 <reasoning>
 The argument is an execution ID, not command text. Use the ID returned by Bash,
-fresh Eval, Monitor, or ListExecutions.
+Eval, Monitor, or ListExecutions.
 </reasoning>
 </example>

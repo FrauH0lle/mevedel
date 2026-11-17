@@ -1,4 +1,4 @@
-List live yielded Bash, fresh Eval, and Monitor executions owned by this agent.
+List live yielded Bash, Eval (fresh/sandbox), and Monitor executions owned by this agent.
 
 ### When to use `ListExecutions`
 

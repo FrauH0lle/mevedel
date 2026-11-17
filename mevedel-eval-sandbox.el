@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Session/owner-scoped child Emacsen, with foreground protocol calls and
+;; Session/owner-scoped child Emacsen, with framed protocol calls and
 ;; one-shot idle expiry.  Process authority and lifetime stay in the execution
 ;; facade.  This module does not register a model-facing tool.
 
@@ -21,7 +21,7 @@
 
 (cl-defstruct (mevedel-eval-sandbox--entry
                (:constructor mevedel-eval-sandbox--entry-create))
-  service timer workdir roots callback started-at features lost request-id failure
+  service timer workdir roots callback started-at features lost request-id failure sent
   (serial 0) (partial ""))
 
 (defvar mevedel-eval-sandbox--sessions (make-hash-table :test #'eq :weakness 'key)
@@ -56,12 +56,14 @@ Do not allocate a registry entry."
   (let ((reason (or (mevedel-eval-sandbox--entry-failure entry)
                     (plist-get facts :error)
                     (plist-get facts :termination))))
-    (when (mevedel-eval-sandbox--entry-features entry)
+    (when (or (mevedel-eval-sandbox--entry-features entry)
+              (mevedel-eval-sandbox--entry-sent entry))
       (setf (mevedel-eval-sandbox--entry-lost entry) t))
     (setf (mevedel-eval-sandbox--entry-service entry) nil
           (mevedel-eval-sandbox--entry-partial entry) ""
           (mevedel-eval-sandbox--entry-request-id entry) nil
           (mevedel-eval-sandbox--entry-failure entry) nil
+          (mevedel-eval-sandbox--entry-sent entry) nil
           (mevedel-eval-sandbox--entry-features entry) nil)
     (when-let* ((callback (mevedel-eval-sandbox--entry-callback entry)))
       (setf (mevedel-eval-sandbox--entry-callback entry) nil)
@@ -131,8 +133,10 @@ Do not allocate a registry entry."
                 (mevedel-eval-sandbox--entry-features entry)
                 (plist-get reply :features))
           (mevedel-execution-service-set-active service nil)
-          (mevedel-eval-sandbox--arm-timer entry service)
-          (funcall callback reply))))
+          (funcall callback reply)
+          (when (and (eq service (mevedel-eval-sandbox--entry-service entry))
+                     (not (mevedel-eval-sandbox--entry-callback entry)))
+            (mevedel-eval-sandbox--arm-timer entry service)))))
     (setf (mevedel-eval-sandbox--entry-partial entry) text)))
 
 (defun mevedel-eval-sandbox--server (workdir)
@@ -174,12 +178,13 @@ Do not allocate a registry entry."
     (format "%d:%s" serial (base64-encode-string (buffer-string) t))))
 
 (cl-defun mevedel-eval-sandbox-call
-    (session owner expression callback &key workdir writable-roots temporary-root reset)
+    (session owner expression callback &key workdir writable-roots temporary-root reset call)
   "Evaluate EXPRESSION in SESSION and OWNER's confined child.
 CALLBACK receives a read-safe result plist, including :started and :state-lost.
 WORKDIR and WRITABLE-ROOTS are compared with the live profile on every call;
 a change or RESET replaces the child.  TEMPORARY-ROOT follows the facade.
-Return a cancellation function scoped to this foreground call."
+CALL, when supplied, binds the facade's managed call to the service.
+Return a cancellation function scoped to this protocol call."
   (let* ((entry (mevedel-eval-sandbox--entry session owner))
          (roots (sort (delete-dups (mapcar #'expand-file-name writable-roots)) #'string<))
          (workdir (file-name-as-directory (expand-file-name workdir))))
@@ -196,7 +201,9 @@ Return a cancellation function scoped to this foreground call."
                 (cl-incf (mevedel-eval-sandbox--entry-serial entry))))
            script
            (send (lambda (service)
-                   (setf (mevedel-eval-sandbox--entry-service entry) service)
+                   (setf (mevedel-eval-sandbox--entry-service entry) service
+                         (mevedel-eval-sandbox--entry-sent entry) t)
+                   (when call (mevedel-execution-service-bind-call service call))
                    (mevedel-execution-service-set-active service t)
                    (let ((print-length nil) (print-level nil) (print-escape-newlines t))
                      (mevedel-execution-service-write
@@ -226,6 +233,8 @@ Return a cancellation function scoped to this foreground call."
                                      "-Q" "--batch" "-l" script)
                       :workdir workdir :writable-roots roots :temporary-root temporary-root)))
                 (when (mevedel-execution-service-live-p service)
+                  (when (and call (mevedel-eval-sandbox--entry-callback entry))
+                    (mevedel-execution-service-bind-call service call))
                   (setf (mevedel-eval-sandbox--entry-service entry) service)))))
         (error
          (when script (ignore-errors (delete-file script)))

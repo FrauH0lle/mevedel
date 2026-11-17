@@ -117,9 +117,9 @@
    :prompt-file "prompts/tools/writestdin.md"
    :handler #'mevedel-tool-exec--write-stdin
    :args ((execution_id string :required
-                        "Opaque execution ID returned by Bash, fresh Eval, Monitor, or ListExecutions.")
+                        "Opaque execution ID returned by Bash, Eval (fresh/sandbox), Monitor, or ListExecutions.")
           (chars string :optional
-                 "Input to send. Omit or use an empty string to poll. Fresh Eval rejects non-empty input. Ordinary input requires a Bash PTY; a single Ctrl-C interrupts Bash or Monitor.")
+                 "Input to send. Omit or use an empty string to poll. Eval rejects non-empty input. Ordinary input requires a Bash PTY; a single Ctrl-C interrupts Bash or Monitor.")
           (yield_time_ms integer :optional
                          "Wait before returning: polls default to 5000ms and clamp positive shorter waits to 5000ms (maximum 300000); input defaults to 250ms (250-30000)."
                          :minimum 250 :maximum 300000))
@@ -136,7 +136,7 @@
 
   (mevedel-define-tool
    :name "ListExecutions"
-   :description "List live yielded Bash, fresh Eval, and Monitor executions owned by the caller."
+   :description "List live yielded Bash, Eval (fresh/sandbox), and Monitor executions owned by the caller."
    :prompt-file "prompts/tools/listexecutions.md"
    :handler #'mevedel-tool-exec--list-executions
    :args ()
@@ -145,11 +145,11 @@
 
   (mevedel-define-tool
    :name "StopExecution"
-   :description "Stop one yielded Bash, fresh Eval, or Monitor execution owned by the caller."
+   :description "Stop one yielded Bash, Eval (fresh/sandbox), or Monitor execution owned by the caller."
    :prompt-file "prompts/tools/stopexecution.md"
    :handler #'mevedel-tool-exec--stop-execution
    :args ((execution_id string :required
-                        "Opaque execution ID returned by Bash, fresh Eval, Monitor, or ListExecutions."))
+                        "Opaque execution ID returned by Bash, Eval (fresh/sandbox), Monitor, or ListExecutions."))
    :async-p t
    :max-result-size 30000
    :groups (eval)
@@ -169,7 +169,7 @@
           (reset boolean :optional "Sandbox only: restart before evaluation, discarding earlier definitions.")
           (preserve_ui boolean :optional "In live mode, restore the current window configuration after evaluation. Defaults to true.")
           (yield_time_ms integer :optional
-                         "Fresh mode only: milliseconds to wait before yielding an execution_id. Defaults to 10000."
+                         "Fresh or sandbox mode: milliseconds to wait before yielding an execution_id. Defaults to 10000."
                          :minimum 250 :maximum 30000)
           (sandbox_permissions string :optional
                                "Fresh child-execution authority: use_default, with_additional_permissions, or require_escalated for a complete confinement bypass."

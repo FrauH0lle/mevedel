@@ -1676,9 +1676,10 @@ Fresh and sandbox Eval are refused in sessions with a remote execution target, b
 would launch the local Emacs binary and script against remote paths; use live
 Eval, or Bash on the target, there.
 
-`sandbox` retains definitions in a confined child per session/owner. Calls are
-foreground-only; `reset: true` replaces the child, and busy calls refuse rather
-than queue. Unlike fresh, sandbox requires confinement even in Full Access and
+`sandbox` retains definitions in a confined child per session/owner. Calls yield
+like fresh Eval; `reset: true` replaces the child, and busy calls refuse with the
+running call's `execution_id` rather than queue. Stopping a call kills the child.
+Unlike fresh, sandbox requires confinement even in Full Access and
 accepts no additional authority or remembered grants. See
 [sandbox lifecycle and limits](tools/execution.md#persistent-sandbox-eval).
 

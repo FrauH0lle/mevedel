@@ -1175,9 +1175,6 @@ once with the applied prompt result."
     (when (and (eq (plist-get args :reset) t) (not (equal mode "sandbox")))
       (mevedel-tool-exec-permission--policy-error
        "Reset is available only to sandbox Eval"))
-    (when (and (equal mode "sandbox") (plist-get args :yield_time_ms))
-      (mevedel-tool-exec-permission--policy-error
-       "Background sandbox calls are not available yet"))
     (cond
      ((or (null mode)
           (eq mode :json-false)

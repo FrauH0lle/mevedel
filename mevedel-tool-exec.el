@@ -1134,16 +1134,20 @@ ARGS carries the original tool arguments, including the yield interval."
        nil))))
 
 (defun mevedel-tool-exec--eval-sandbox (callback args)
-  "Run foreground sandbox Eval ARGS, delivering results to CALLBACK.
-Bind cancellation to the owning request."
+  "Run managed sandbox Eval ARGS, delivering observations to CALLBACK."
   (let* ((workdir (mevedel-tool-exec-permission-default-directory))
-         (cancel
+         (session (mevedel-queue--current-session))
+         (owner (mevedel-current-origin)))
+    (mevedel-execution-start-service-call
+     (lambda (observation)
+       (funcall callback (mevedel-tool-exec--observation-envelope observation)))
+     (lambda (call)
           (mevedel-eval-sandbox-call
-           (mevedel-queue--current-session) (mevedel-current-origin)
+           session owner
            (plist-get args :expression)
            (lambda (reply)
-             (funcall callback
-                      (list :result
+             (mevedel-execution-service-call-settle
+              call (list :output
                             (concat
                              (mevedel-tool-exec--eval-format-result
                               (plist-get reply :value) (plist-get reply :output)
@@ -1156,14 +1160,17 @@ Bind cancellation to the owning request."
                              (when (and (plist-get reply :features)
                                         (plist-get reply :state-lost))
                                " Earlier definitions are gone."))
-                            :status (and (plist-get reply :error) 'error)
-                            :render-data '(:eval-mode sandbox))))
+                            :outcome (if (plist-get reply :error) 'failure 'success))))
+           :call call
            :reset (eq (plist-get args :reset) t)
            :workdir workdir :writable-roots (mevedel-tool-exec--sandbox-writable-roots workdir)
-           :temporary-root (mevedel-tool-exec--sandbox-temporary-root workdir))))
-    (when mevedel--current-request
-      (mevedel-request-push-canceller mevedel--current-request cancel))
-    (list :cancel cancel)))
+           :temporary-root (mevedel-tool-exec--sandbox-temporary-root workdir)))
+     :session session :owner owner :data-buffer (current-buffer)
+     :owner-context (or mevedel--agent-invocation session)
+     :request mevedel--current-request :tool-args args
+     :tool-use-id (mevedel-pipeline-active-tool-use-id)
+     :permission-approvals (mevedel-pipeline-active-permission-approvals)
+     :workdir workdir :yield-time-ms (mevedel-tool-exec--bash-yield-time-ms args))))
 
 (defun mevedel-tool-exec--eval (callback args)
   "Evaluate an Elisp expression and return the result.
@@ -1174,7 +1181,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :expression."
     (unless (stringp expression)
       (error "Parameter expression is required"))
     (when (and (eq mode 'live) (plist-get args :yield_time_ms))
-      (error "Parameter yield_time_ms is valid only with mode fresh"))
+      (error "Parameter yield_time_ms is valid only with mode fresh or sandbox"))
     (when (eq (plist-get args :tty) t)
       (error "Eval does not support TTY execution"))
     (let* ((session (mevedel-queue--current-session))

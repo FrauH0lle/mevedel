@@ -1,13 +1,13 @@
-Poll a Bash, fresh Eval, or Monitor execution, or send input to a Bash PTY.
+Poll a Bash, Eval (fresh/sandbox), or Monitor execution, or send input to a Bash PTY.
 
 Start new commands with Bash. Completion and Monitor events arrive automatically;
 poll for evidence, not to keep root work moving. Use StopExecution for a definite
 stop; its stop notice never wakes you.
 
-- Use the `execution_id` returned by Bash, fresh Eval, Monitor, or ListExecutions. Omit
+- Use the `execution_id` returned by Bash, Eval, Monitor, or ListExecutions. Omit
   `chars` or pass an empty string to poll the combined unread stdout/stderr spool.
   Polling Monitor output is separate from its stdout event notifications.
-- Fresh Eval returns its formatted value and diagnostics at completion and
+- Eval returns its formatted value and diagnostics at completion and
   rejects all non-empty input, including Ctrl-C. StopExecution kills its child.
 - Ordinary input requires Bash with `tty=true` at launch; Monitor rejects it.
   A single Ctrl-C character requests an interrupt in either mode (unavailable

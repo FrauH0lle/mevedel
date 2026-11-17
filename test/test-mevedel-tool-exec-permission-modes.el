@@ -87,7 +87,7 @@
   (let ((err (should-error
               (mevedel-tool-exec-permission-eval-mode '(:mode "batch")))))
     (should (string-match-p "Unknown Eval mode: batch" (error-message-string err))))
-  :doc "sandbox validates reset and refuses background calls"
+  :doc "sandbox validates reset and accepts yielding like fresh"
   (progn
     (dolist (reset '(t nil :json-false))
       (should (eq 'sandbox (mevedel-tool-exec-permission-eval-mode
@@ -100,11 +100,9 @@
     (dolist (args '((:mode "live" :reset t) (:mode "fresh" :reset t)))
       (should-error (mevedel-tool-exec-permission-eval-mode args)
                     :type 'mevedel-execution-policy-error))
-    (should (string-match-p
-             "Background sandbox calls are not available yet"
-             (error-message-string
-              (should-error (mevedel-tool-exec-permission-eval-mode
-                             '(:mode "sandbox" :yield_time_ms 1000))))))))
+    (dolist (mode '("fresh" "sandbox"))
+      (should (eq (intern mode) (mevedel-tool-exec-permission-eval-mode
+                                (list :mode mode :yield_time_ms 1000)))))))
 
 (mevedel-deftest mevedel-tool-exec-permission-check-eval-async-modes ()
   ,test

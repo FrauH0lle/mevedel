@@ -157,18 +157,18 @@ before repeating an operation.
 
 ## Yielding, polling, and input
 
-Bash and fresh Eval wait for `yield_time_ms` (default 10000, range 250–30000),
+Bash and fresh/sandbox Eval wait for `yield_time_ms` (default 10000, range 250–30000),
 then return an `execution_id` if still running. Live Eval rejects this argument.
 Completion of a yielded root-owned command automatically wakes an idle root;
 polling just to keep the task moving is unnecessary. Continue other work or end
 the turn and handle the delivered result. Use WriteStdin with empty `chars`
 when intermediate unread output is needed; a quiet interval does not establish
-completion. Bash and fresh Eval have no automatic execution timeout; a native
+completion. Bash and fresh/sandbox Eval have no automatic execution timeout; a native
 `timeout` command can enforce a Bash deadline. Shell backgrounding (`&`) bypasses this managed lifetime and should
 be replaced with a small yield interval.
 
 WriteStdin, ListExecutions, and StopExecution all support Monitor IDs as well
-as yielded Bash and fresh Eval IDs. They are scoped to the calling agent in the current
+as yielded Bash and fresh/sandbox Eval IDs. They are scoped to the calling agent in the current
 session; monitors belong to root. ListExecutions lists only live caller-owned
 executions, not completed ones or other agents' commands. A known settled ID
 can still be observed while its execution record is retained.
@@ -180,7 +180,7 @@ completed execution stops that execution's unread notifications from waking
 the model; they are still delivered at the next turn. Pipe-mode stdin is closed.
 Bash's `tty=true` provides a PTY whose stdin stays writable for prompts, REPLs,
 and tools requiring a terminal. Monitor has no PTY and rejects ordinary input.
-Fresh Eval has no PTY and rejects all non-empty input, including Ctrl-C;
+Fresh and sandbox Eval have no PTY and reject all non-empty input, including Ctrl-C;
 use StopExecution to kill its child. Its final observation includes the value,
 STDOUT, MESSAGES and any BACKTRACE, in the same format as inline completion.
 A single Ctrl-C character requests a process-group interrupt in either PTY or
@@ -372,17 +372,20 @@ the final result remains available through the retained execution record.
 including retained agents. It inherits the current load path, not the user's
 init or live state. Definitions persist between calls; results report
 started/reused and feature count. `reset: true` restarts before evaluation and
-is valid only in this mode. Busy calls are refused, not queued.
+is valid only in this mode. Busy calls are refused, not queued; a yielded call's
+`execution_id` is included, while foreground calls are identified as still
+starting/running.
 
-Calls are currently foreground only: `yield_time_ms` is refused. Aborting the
-owning request kills the child. Idle services hold neither agent results nor
-sleep inhibition and do not block rewind/transfer. The one-shot
+Calls yield and use the managed polling controls above. StopExecution kills the
+child and discards its definitions. Request abort does the same before yield;
+after yield the call survives request abort, like fresh Eval. Idle services hold
+neither agent results nor sleep inhibition and do not block rewind/transfer. The one-shot
 `mevedel-eval-sandbox-idle-timeout` defaults to 600 seconds; nil disables expiry.
 Session close, Emacs exit, rewind, fork and control transfer kill the sandbox.
 Working-directory or writable-root changes restart it on the next call.
 Results report lost definitions after reset, crash, expiry or restart once a
-service had answered a call. Child result sections are truncated with a marker
-before framing; the host retains its hard 1 MiB protocol bound.
+request reached the child, even if it never replied. Child result sections are
+truncated with a marker before framing; the host retains its hard 1 MiB protocol bound.
 
 Sandbox Eval is automatic in Ask and Edits, subject to explicit rules, and
 always requires confinement, even in Full Access: default workspace writable

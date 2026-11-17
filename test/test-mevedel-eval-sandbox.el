@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'mevedel-eval-sandbox)
+(require 'mevedel-execution)
 (require 'mevedel-execution-process)
 (require 'mevedel-sandbox)
 (require 'mevedel-transport)
@@ -192,13 +193,16 @@
                      (mevedel-eval-sandbox--entry session "/root")))))
     (test-mevedel-eval-sandbox--require-backend)
     (should-not (plist-get (test-mevedel-eval-sandbox--call session root "t") :state-lost)))
-  :doc "first-call crashes do not claim that earlier definitions were lost"
+  :doc "a crash loses definitions even before the first reply arrives"
   (progn
     (test-mevedel-eval-sandbox--require-backend)
-    (let ((reply (test-mevedel-eval-sandbox--call session root "(kill-emacs 9)")))
+    (let ((reply (test-mevedel-eval-sandbox--call
+                  session root "(progn (setq before-crash 42) (kill-emacs 9))")))
       (should (plist-get reply :error))
-      (should-not (string-match-p "definitions are gone" (plist-get reply :error))))
-    (should-not (plist-get (test-mevedel-eval-sandbox--call session root "t") :state-lost)))
+      (should (string-match-p "definitions are gone" (plist-get reply :error))))
+    (let ((reply (test-mevedel-eval-sandbox--call session root "(boundp 'before-crash)")))
+      (should (equal "nil" (plist-get reply :value)))
+      (should (plist-get reply :state-lost))))
   :doc "request IDs are fresh and absent from the evaluation environment and reader advice"
   (progn
     (test-mevedel-eval-sandbox--require-backend)
@@ -377,6 +381,44 @@
         (should-not (mevedel-execution-process-launch-attempted-p
                      (mevedel-execution--record-child service)))
 	(should-not (mevedel-execution-service-live-p service))))))
+
+(mevedel-deftest mevedel-execution-start-service-call ()
+  (test-mevedel-eval-sandbox--fixture
+   (lambda (session root) ,test))
+  (test)
+  :doc "preparation stays foreground; abort or user stop prevents launch without invented loss"
+  (dolist (stop '(nil t))
+   (let (prepared call service observation (cancelled 0) (delivered 0))
+    (cl-letf (((symbol-function 'mevedel-sandbox-prepare-start)
+               (lambda (callback &rest _)
+                 (setq prepared callback)
+                 (lambda () (cl-incf cancelled)))))
+      (setq call
+            (mevedel-execution-start-service-call
+             (lambda (value) (setq observation value) (cl-incf delivered))
+             (lambda (handle)
+               (mevedel-eval-sandbox-call
+                session "/root" "t"
+                (lambda (reply) (mevedel-execution-service-call-settle
+                                 handle (list :output (plist-get reply :error) :outcome 'failure)))
+                :call handle :workdir root :writable-roots (list root)))
+             :session session :owner "/root" :workdir root :yield-time-ms 1)
+            service (mevedel-execution--record-service call))
+      (should prepared)
+      (should-not (mevedel-execution--record-yield-timer call))
+      (sleep-for 0.02)
+      (should-not (mevedel-execution--record-yielded-p call))
+      (should (= 0 delivered))
+      (if stop
+          (mevedel-execution-stop-user session (mevedel-execution--record-execution-id call))
+        (mevedel-execution--abort-request-record call))
+      (funcall prepared '(:state confined :command ("cat")))
+      (should (= 1 cancelled delivered))
+      (should (eq (if stop 'stopped 'aborted) (mevedel-execution--record-termination call)))
+      (should-not (string-search "definitions are gone" (plist-get observation :result)))
+      (should-not (mevedel-execution-service-live-p service))
+      (should-not (mevedel-execution-process-launch-attempted-p
+                   (mevedel-execution--record-child service)))))))
 
 (provide 'test-mevedel-eval-sandbox)
 ;;; test-mevedel-eval-sandbox.el ends here

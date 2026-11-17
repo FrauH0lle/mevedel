@@ -24,11 +24,11 @@ Evaluate one Elisp form; return its value and output.
   the form. Fresh Eval is refused for remote execution targets.
 - `mode="sandbox"` reuses a child per session/owner. Earlier definitions
   apply; results report started/reused and feature count. `reset=true` discards
-  them. Calls are foreground only; busy calls and `yield_time_ms` are refused.
-  Abort kills the child. Sandbox is automatic in Ask/Edits/Full Access but always
+  them. Busy calls refuse, including the current call's ID only after yield.
+  Sandbox is automatic in Ask/Edits/Full Access but always
   confined (workspace writes, no network or grants); remote targets or unavailable
   confinement refuse it. Use fresh for per-call authority.
-- Fresh `yield_time_ms` defaults to 10000 (range 250–30000). If still running,
+- Fresh and sandbox `yield_time_ms` defaults to 10000 (range 250–30000). If still running,
   Eval returns an `execution_id`: poll with WriteStdin, list with ListExecutions,
   or kill the child with StopExecution. Non-empty input is refused. Root-owned
   completion wakes an idle root; polling just to keep work moving is unnecessary.
