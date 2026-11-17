@@ -271,7 +271,7 @@
                   "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-submit
                   "mevedel-session-publication"
-                  (session prepare acknowledge &optional mail-ids retain-failure select-staged))
+                  (session prepare acknowledge &optional mail-ids retain-failure select-staged superseded))
 (declare-function mevedel-session-publication-diagnostic-backlog-p
                   "mevedel-session-publication" (session))
 (autoload 'mevedel-session-publication-async-eligible-p "mevedel-session-publication")
@@ -518,7 +518,7 @@ Portable transcripts live in the publication, not at PATH itself."
 
 (defun mevedel-session-persistence--execution-successor-ids (text)
   "Return structured execution ids present in transcript TEXT."
-  (when text
+  (when (and text (string-search ":execution-id" text))
     (with-temp-buffer
       (insert text)
       (delay-mode-hooks (org-mode))
@@ -578,7 +578,8 @@ rollback.  A failed backup is reported and does not block the repair."
 
 When ARTIFACT-CALLBACK is non-nil, pass it the repaired replacement instead
 of writing PATH directly."
-  (when text
+  (when (and text (or (string-search ":execution-id" text)
+                      (string-search ":live-execution-p" text)))
     (with-temp-buffer
       (insert text)
       (delay-mode-hooks (org-mode))

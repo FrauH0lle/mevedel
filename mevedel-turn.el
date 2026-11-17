@@ -207,6 +207,20 @@
 (declare-function mevedel-session-artifacts-save
                   "mevedel-session-artifacts"
                   (session buffer &optional settled force))
+(declare-function mevedel-session-artifacts-prepare-save
+                  "mevedel-session-artifacts"
+                  (session buffer &optional settled force defer-comparison))
+(declare-function mevedel-session-artifacts-call-with-checkpoint
+                  "mevedel-session-artifacts" (session function))
+(declare-function mevedel-session-artifacts-recover-working-directory
+                  "mevedel-session-artifacts" (session))
+(declare-function mevedel-session-artifacts-check-target-incarnation
+                  "mevedel-session-artifacts" (session &optional buffer))
+(autoload 'mevedel-session-publication-async-eligible-p "mevedel-session-publication")
+(autoload 'mevedel-session-publication-submit "mevedel-session-publication")
+(declare-function mevedel-session-publication-submit
+                  "mevedel-session-publication"
+                  (session prepare acknowledge &optional mail-ids retain-failure select-staged superseded))
 (autoload 'mevedel-session-artifacts-assert-mutation-authority
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
@@ -856,35 +870,93 @@ Signal when the request is missing or its reservation is not the next turn."
                  (if retry "Retry reservation for" "Reserved") reserved committed))
         (setf (mevedel-session-turn-count mevedel--session) reserved)))))
 
+(defvar mevedel--turn-resume nil
+  "Continuation for a step returning `mevedel-turn-pending'.
+Call with non-nil argument to cancel, otherwise resume.")
+
 (defun mevedel--turn-save (fsm)
-  "Publish FSM's completed turn and record whether checkpointing may proceed."
-  (setf (mevedel-engine-info fsm) (plist-put (mevedel-engine-info fsm) :mevedel-turn-saved nil))
+  "Publish FSM's completed turn before allowing later settlement steps.
+Warm local saves use the publication queue when a continuation is available."
+  (unless (plist-get (mevedel-engine-info fsm) :mevedel-save-state)
+    (setf (mevedel-engine-info fsm)
+          (plist-put (mevedel-engine-info fsm) :mevedel-turn-saved nil)))
   (when-let* ((chat-buffer (plist-get (mevedel-engine-info fsm) :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
       (when (and mevedel--session
                  (not (bound-and-true-p mevedel-session--read-only-mode)))
-        (let ((ptc-checkpoints (mevedel-session-ptc-checkpoints mevedel--session)))
-          (condition-case err
-              (progn
-                (mevedel-ptc-checkpoint-clear-settled mevedel--session "/root")
-                (unless (mevedel-session-artifacts-save mevedel--session chat-buffer t)
-                  (error "Session auto-save did not publish"))
-                (when (bound-and-true-p mevedel-session--save-failed)
-                  (setq mevedel-session--save-failed nil)
-                  (force-mode-line-update))
-                (setf (mevedel-engine-info fsm)
-                      (plist-put (mevedel-engine-info fsm) :mevedel-turn-saved t)))
-            (error
-             (setf (mevedel-session-ptc-checkpoints mevedel--session) ptc-checkpoints)
-             (mevedel--warn-once (mevedel-diagnostic-scope mevedel--session)
-                                'turn-auto-save "%s (Session auto-save failed)"
-                                (error-message-string err))
-             (setq-local mevedel-session--save-failed t)
-             (force-mode-line-update))))))))
-
-(defvar mevedel--turn-resume nil
-  "Continuation for a deferred turn step returning `mevedel-turn-pending'.")
+        (unless (plist-get (mevedel-engine-info fsm) :mevedel-save-state)
+          (let* ((session mevedel--session)
+                 (resume (and mevedel--turn-resume
+                              (mevedel-session-publication-async-eligible-p session)
+                              mevedel--turn-resume))
+                 prepared retired
+                 (finish
+                  (lambda (success err)
+                    (unwind-protect
+                        (when (and (mevedel--turn-current-p fsm)
+                                   (eq session (buffer-local-value 'mevedel--session chat-buffer)))
+                          (with-current-buffer chat-buffer
+                            (when (and success prepared)
+                              (condition-case cleanup
+                                  (funcall (plist-get prepared :finish))
+                                ((error quit) (setq success nil err cleanup))))
+                            (setq mevedel-session--save-failed (not success))
+                            (setf (mevedel-engine-info fsm)
+                                  (plist-put (mevedel-engine-info fsm) :mevedel-turn-saved success))
+                            (unless success
+                              ;; Other conversations may have checkpointed in the meantime.
+                              (dolist (row retired)
+                                (unless (seq-find
+                                         (lambda (current) (equal (plist-get row :id)
+                                                                 (plist-get current :id)))
+                                         (mevedel-session-ptc-checkpoints session))
+                                  (push row (mevedel-session-ptc-checkpoints session))))
+                              (mevedel--warn-once (mevedel-diagnostic-scope session)
+                                                 'turn-auto-save "%s (Session auto-save failed)"
+                                                 (error-message-string err)))
+                            (force-mode-line-update)))
+                      (when resume
+                        (setf (mevedel-engine-info fsm)
+                              (plist-put (mevedel-engine-info fsm) :mevedel-save-state 'done))
+                        (funcall resume)))))
+                 (retire
+                  (lambda ()
+                    (let ((before (mevedel-session-ptc-checkpoints session)))
+                      (mevedel-ptc-checkpoint-clear-settled session "/root" chat-buffer)
+                      (setq retired (cl-set-difference
+                                     before (mevedel-session-ptc-checkpoints session)
+                                     :test #'eq))))))
+            (condition-case err
+                (if resume
+                    (progn
+                      (setf (mevedel-engine-info fsm)
+                            (plist-put (mevedel-engine-info fsm) :mevedel-save-state 'waiting))
+                      (mevedel-session-publication-submit
+                       session
+                       (lambda ()
+                         (unless (mevedel--turn-current-p fsm)
+                           (error "Turn replaced before session save"))
+                         (with-current-buffer chat-buffer
+                           (mevedel-session-artifacts-recover-working-directory session)
+                           (mevedel-session-artifacts-check-target-incarnation session chat-buffer)
+                           (funcall retire)
+                           (setq prepared
+                                 (mevedel-session-artifacts-call-with-checkpoint
+                                  session (lambda () (mevedel-session-artifacts-prepare-save
+                                                      session chat-buffer t nil t))))
+                           (prog1 (plist-get prepared :artifacts)
+                             (setf (plist-get prepared :artifacts) nil))))
+                       finish nil t
+                       (lambda (batch) (funcall (plist-get prepared :select-staged) batch))
+                       (lambda () (funcall resume t))))
+                  (funcall retire)
+                  (unless (mevedel-session-artifacts-save session chat-buffer t)
+                    (error "Session auto-save did not publish"))
+                  (funcall finish t nil))
+              (error (funcall finish nil err)))))
+        (when (eq 'waiting (plist-get (mevedel-engine-info fsm) :mevedel-save-state))
+          'mevedel-turn-pending)))))
 
 (defun mevedel--turn-checkpoint (fsm)
   "Checkpoint FSM's saved turn, offer maintenance and refresh its view.
@@ -1128,7 +1200,9 @@ A step returning `mevedel-turn-pending' stays at the front and calls
         (unless finished
           (condition-case err
               (let ((deadline (+ (float-time) .005)) waiting
-                    (mevedel--turn-resume (lambda () (unless finished (enqueue .001)))))
+                    (mevedel--turn-resume
+                     (lambda (&optional abort)
+                       (unless finished (if abort (cancel) (enqueue .001))))))
                 (while (and (not finished) (not waiting) steps
                             (mevedel--turn-current-p fsm) (< (float-time) deadline))
                   (if (eq (mevedel--run-turn-steps fsm (list (car steps))) 'mevedel-turn-pending)

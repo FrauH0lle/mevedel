@@ -1439,7 +1439,7 @@ holder identity is recorded by an owner lease acquired before the call."
         (when (file-directory-p local-root)
           (delete-directory local-root t)))))
 
-  :doc "an expired interrupted claim still requires confirmed takeover"
+  :doc "an expired interrupted claim recovers without confirming an inactive holder"
   (let* ((local-root (file-name-as-directory
                       (make-temp-file "mevedel-stale-claim-" t)))
          (session-dir (file-name-as-directory
@@ -1471,15 +1471,17 @@ holder identity is recorded by an owner lease acquired before the call."
            (mevedel-session-durability-lease-acquire
             session-dir "*interrupted*")
            :type 'error)
-          (setq now 20.0)
           (let ((mevedel-session-durability--client-id (make-string 64 ?b)))
             (cl-letf (((symbol-function 'y-or-n-p)
                        (lambda (&rest _)
                          (setq confirmed t)
                          t)))
+              (should-not (mevedel-session-durability-lease-acquire
+                           session-dir "*too-early*"))
+              (setq now 20.0)
               (should (mevedel-session-durability-lease-acquire
                        session-dir "*successor*")))
-            (should confirmed)
+            (should-not confirmed)
             (should (mevedel-session-durability-lease-acquire
                      session-dir "*successor*"))))
       (when (file-directory-p local-root)
@@ -2799,9 +2801,12 @@ holder identity is recorded by an owner lease acquired before the call."
                          (mevedel-session-durability-lease-acquire
                           session-dir "*successor*" successor-session)))))
                   (funcall run-program-function operations lock-directory))))
-            (should-not
-             (mevedel-session-durability-commit-publication-head
-              owner-session ".publications/stale/manifest.el")))
+            (should (equal
+                     (should-error
+                      (mevedel-session-durability-commit-publication-head
+                       owner-session ".publications/stale/manifest.el")
+                      :type 'user-error)
+                     '(user-error "Portable session lease changed before this update committed"))))
           (should triggered)
           (should
            (equal ".publications/old/manifest.el"
@@ -5345,11 +5350,22 @@ holder identity is recorded by an owner lease acquired before the call."
     (make-directory directory)
     (unwind-protect (progn ,test) (delete-directory root t)))
   (test)
-  :doc "absent authority is available without creating control directories"
+  :doc "absent authority is unknown without creating control directories"
   (let ((assessment (mevedel-session-durability-cleanup-assessment directory)))
-    (should (eq 'available (plist-get assessment :state)))
+    (should (eq 'unknown (plist-get assessment :state)))
     (should-not (plist-get assessment :head))
-    (should-not (plist-get assessment :reasons))
+    (should (equal '(invalid-authority) (plist-get assessment :reasons)))
+    (should-not (file-exists-p lease-dir)))
+  :doc "cleanup preserves an old session with neither a PID lock nor a lease"
+  (let ((sidecar (file-name-concat directory "session.meta.el"))
+        (transcript (file-name-concat directory "segment-0001.chat.org"))
+        (old (seconds-to-time 1)))
+    (write-region "(:version 1 :name \"legacy\")\n" nil sidecar nil 'silent)
+    (write-region "A pre-lease conversation\n" nil transcript nil 'silent)
+    (dolist (path (list sidecar transcript directory)) (set-file-times path old))
+    (should-not (mevedel-session-durability-delete-abandoned directory 1000))
+    (should (file-readable-p sidecar))
+    (should (file-readable-p transcript))
     (should-not (file-exists-p lease-dir)))
   :doc "carrier crash scratch is not authority and does not prevent automatic cleanup"
   (dolist (kind '(clean staged shell))
@@ -5422,6 +5438,7 @@ holder identity is recorded by an owner lease acquired before the call."
           (should (eq (nth 5 case) (and (plist-get assessment :recoverable) t)))))))
   :doc "unknown pin and recovery entries remain visible and protected"
   (progn
+    (make-directory lease-dir)
     (make-directory (file-name-concat directory ".journal-pins"))
     (write-region "unsupported pin" nil
                   (file-name-concat directory ".journal-pins" "unknown") nil 'silent)

@@ -17,6 +17,9 @@ PID namespace), user ID, PID and process start ticks.  A client of the same
 user on the same host reclaims an `active` or `claiming` lease at once when
 that process is provably gone or reused; any other or uncertain evidence
 waits for expiry under ordinary acquisition, as does a `publishing` lease.
+An expired `claiming` record that never activated is replaced on ordinary
+acquisition without a prompt; the successor inherits the head and unsettled
+mutation latch. This does not authorize a heartbeat to reclaim a foreign lease.
 An explicit forced takeover can replace an unexpired live or foreign holder
 after a full yes/no confirmation naming the host, buffer, last renewal and
 status. Publishing additionally requires confirmation that the prior client is
@@ -28,9 +31,11 @@ renewals and releases. Already committed state remains authoritative.
 On observing a newer activated foreign generation, the old holder stops its
 request, retained agent turns and live executions, becomes read-only and follows
 committed publications. Unpublished work here is discarded. A superseded async
-publication whose head has advanced under that foreign generation is completed
+publication whose head has advanced under that foreign generation is retired
 without rollback, acknowledgement or retry; its pending local batches are
-dropped. Queued preparations that have not published fail their acknowledgements
+dropped. A local supersession callback releases any deferred turn-settlement
+hold without running the old terminal hooks. Queued preparations that have not
+published fail their acknowledgements
 with a takeover error, and new submissions fail immediately after confirmed
 takeover. A renewal failure or this client's expired lease alone is not evidence
 of takeover and does not discard its queued preparations. Fenced retained-agent
@@ -70,10 +75,13 @@ request and execution admission enforce the chosen confinement requirement.
 
 Retention applies to both workspace categories with the same age cap and
 newest-session floor. A portable session is deleted only through its own lease protocol: an
-abandoned head (absent, released without a transfer reservation, or an expired
+abandoned head (absent in an existing `.lease`, released without a transfer
+reservation, or an expired
 active or claiming record without unsettled mutation) must also have its last
-renewal older than the cap. Unreadable or unsupported generation records are
-unknown authority and keep the session. Known carrier scratch payloads are not
+renewal older than the cap. A missing `.lease` directory and unreadable or
+unsupported generation records are unknown authority and keep the session.
+An unmigrated session with no PID lock is not evidence of a modern, abandoned
+session. Known carrier scratch payloads are not
 generation records; observation and election preserve them, and deletion still
 proves the unfiltered name set. Their names do not prove producer termination.
 Cleanup claims the next generation and
@@ -200,6 +208,18 @@ the confirmed-takeover amendment above adds it. Without that explicit command,
 uncertain holders and `publishing` leases still wait for expiry and the
 applicable confirmation. Existing PID-lock file sessions convert through the
 migration script.
+
+The 2026-11-18 change moved warm local root settlement to the publication
+queue. It favors shorter editor stalls over faster completion. In a matched
+source-loaded, unpinned local replay (five saves per transcript size), the
+median longest interval of a 1 ms heartbeat fell from 58.867 to 9.182 ms with
+2 turns and from 82.973 to 25.237 ms with 200 turns. Median save wall time rose
+from 60.599 to 77.437 ms and from 84.749 to 96.459 ms respectively. These are
+not directly comparable to the earlier compiled measurements. A separate
+matching replay of closed-segment reconciliation (three runs, 31 segments,
+6,000 closed turns and no execution rows) fell from 259.915 to 18.007 ms median:
+it still reads the published text, but avoids property restoration on segments
+without execution markers. This measures reconciliation, not all of resume.
 
 The original migration commands required separate session/artifact invocations,
 new destination directories, and a manual swap. The user requested a single

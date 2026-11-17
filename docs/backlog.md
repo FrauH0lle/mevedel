@@ -37,18 +37,9 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   at 1000 turns ≈21 → 0.69 ms). Not rechecked live yet: the pinned-prompt
   header runs (about 13%) and full rerenders (about 14%). Re-profile the live
   editor before further work.
-- Session lease follow-ups (all sessions use the portable lease since
-  2026-11-14; PID lock deleted; forced takeover added, ADR 0100). Open:
-  turn settlement still uses the synchronous writer (about 43-49 ms per turn on
-  the lease; an async settlement through the publication queue looks
-  feasible); the forced takeover has only TRAMP-mocked remote tests, so try it
-  once for real between desktop and laptop; resume now parses every closed
-  segment to repair stale running rows (cost on long histories not measured);
-  the sync lease-update path returns a bare nil where the async path names the
-  decline cause; a foreign `claiming` record that never finishes has no
-  recovery test; an unmigrated, cleanly closed pre-lease session (no `.lock`,
-  no `.lease`) counts as available, so age cleanup can delete it before
-  `scripts/migrate-sessions.el` runs.
+- Verify forced session takeover on the real desktop and laptop over TRAMP
+  using a disposable session, including old-holder cancellation and taking
+  control back ([ADR 0100](adr/0100-portable-project-session-authority.md)).
 - Replace the memory claim/fence protocol with one locked program per decision
   under the existing per-root memory lock directory, using the carrier's
   `begin-files`/`commit-files` transaction (a probe showed it undoes the first

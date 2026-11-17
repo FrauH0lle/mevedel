@@ -1410,6 +1410,11 @@ Only an explicit user takeover command should pass FORCE."
                  (memq (plist-get existing :status) '(claiming active)))
             (mevedel-session-durability--claim-next
              directory existing buffer-name))
+           ;; An expired claim never activated; fence its delayed activation
+           ;; with a successor instead of waiting forever for that client.
+           ((and (not force) (eq 'claiming (plist-get existing :status)))
+            (mevedel-session-durability--claim-next
+             directory existing buffer-name))
            ;; Nobody needs to confirm a takeover from a provably dead holder.
            ((and (memq (plist-get existing :status) '(claiming active))
                  (mevedel-session-durability--holder-dead-p existing))
@@ -1519,6 +1524,8 @@ The returned observations belong to this call only, never a status cache."
                   (mevedel-session-durability--target-time directory)))
           (unless (memq (plist-get listing :status) '(ok absent))
             (error "Unreadable portable lease directory"))
+          (when (eq 'absent (plist-get listing :status))
+            (error "Session has no portable lease; run scripts/migrate-sessions.el"))
           (setq names (plist-get listing :value))
           (mevedel-session-durability--validate-generation-names names)
           (let* ((paths (mevedel-session-durability--generation-paths
@@ -1794,8 +1801,9 @@ directory."
   "Update SESSION's owned lease from ACCEPTED-STATUS to STATUS for SECONDS.
 Replace its preserved head with non-nil PUBLICATION-HEAD.  When
 EXPECTED-PUBLICATION-HEAD-P is non-nil, require the current head to equal
-EXPECTED-PUBLICATION-HEAD."
-  (when-let* ((session-dir (mevedel-session-save-path session)))
+EXPECTED-PUBLICATION-HEAD.  A decline signals a named `user-error', as the
+asynchronous update reports; the latest authority is still bound to SESSION."
+  (if-let* ((session-dir (mevedel-session-save-path session)))
     (let* ((remote-file-name-inhibit-cache t)
            (directory (mevedel-session-durability--lease-path session-dir))
            (bound (mevedel-session-lease session))
@@ -1876,7 +1884,11 @@ EXPECTED-PUBLICATION-HEAD."
         t)
        (t
         (mevedel-session-durability--bind-latest session latest directory now)
-        nil)))))
+        (let ((failure (mevedel-session-durability--lease-decline
+                        (or decline 'changed))))
+          (signal (car failure) (cdr failure))))))
+    (let ((failure (mevedel-session-durability--lease-decline 'directory)))
+      (signal (car failure) (cdr failure)))))
 
 (defun mevedel-session-durability--gate (session token &optional reentrant)
   "Serialize a lease-changing operation on SESSION behind its async publication.
@@ -1962,9 +1974,9 @@ Return non-nil only when the current owned lease generation commits VALUE."
 (defun mevedel-session-durability-commit-publication-head (session head)
   "Commit immutable session-relative HEAD while SESSION is the current owner.
 
-Return non-nil only when SESSION's publishing generation remains the exact
-lease head through the commit.  A commit bound as final by
-`mevedel-session-durability--final-commit' also returns the lease to
+Return non-nil when SESSION's publishing generation remains the exact
+lease head through the commit; otherwise signal the refusal.  A commit bound
+as final by `mevedel-session-durability--final-commit' also returns the lease to
 `active' with its ordinary expiry: nothing follows it in the window, so a
 separate finishing write only repeated the proof the commit just made."
   (unless (mevedel-session-publication-valid-head-p head)
@@ -2037,13 +2049,15 @@ the installed timer uses `mevedel-session-durability-heartbeat' instead."
              mevedel-session-lease-seconds)
             (mevedel-session-durability--reclaim-own-lease session))
       (error
-       (mevedel-session-durability--bind-lease
-        session (mevedel-session-lease session) 'lost)
-       (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
-        'mevedel
-        (format "Portable session lease renewal failed: %s" err)
-        :warning)
-       nil))))
+       (if (mevedel-session-durability--lease-decline-p err)
+           (mevedel-session-durability--reclaim-own-lease session)
+         (mevedel-session-durability--bind-lease
+          session (mevedel-session-lease session) 'lost)
+         (mevedel-diagnostic-warning (mevedel-diagnostic-scope session)
+          'mevedel
+          (format "Portable session lease renewal failed: %s" err)
+          :warning)
+         nil)))))
 
 (defun mevedel-session-durability-lease-owned-p (session)
   "Return non-nil when SESSION has this client's unexpired lease."
@@ -3142,7 +3156,7 @@ not a completed result: process failure itself invalidates that cache."
             job context settle)))))))
 
 (defun mevedel-session-durability--heartbeat-reclaim (shadow callback)
-  "Reclaim only SHADOW's own expired head without blocking; call CALLBACK.
+  "Reclaim SHADOW's own expired head or an expired claim; call CALLBACK.
 CALLBACK receives SUCCESS and ERROR.  Election, predecessor comparison and
 abort follow `mevedel-session-durability--claim-next', using real programs."
   (let* ((directory (mevedel-session-durability--lease-path

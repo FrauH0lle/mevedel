@@ -362,6 +362,13 @@ policy scope and the request, and schedules queued follow-up delivery.
 Error and abort settlement also save before request teardown, preserving partial
 responses and request-local file checkpoints. `mevedel-abort` additionally saves
 from cleanup that runs even if cancellation signals an error or quit.
+Deferred root-turn settlement on a materialized local session uses the same
+publication queue as mid-turn checkpoints. It keeps admission held until
+publication succeeds or fails definitively. A journal checkpoint requires
+success; on failure terminal hooks still run, with
+the save-failed cue and any frozen recovery batch retained. If takeover retires
+an uncertain publication without acknowledgement, it cancels the deferred
+settlement and releases admission without running the old turn's terminal hooks.
 Opening, auto-saving, aborting, or closing a fresh zero-byte conversation does
 not materialize it. Partial first-turn text and already materialized sessions
 remain eligible for saving, including a previously saved session rewound empty.
@@ -548,7 +555,10 @@ disagrees with its workspace category, is rejected rather than guessed; a
 [explicit migration](#explicit-session-migration)).
 
 Resume marks stale running executions in closed segments as lost or archived and
-republishes those segments. Publication cleanup keeps only the newest
+republishes those segments. It still reads the segment text, but skips restoring
+transcript properties when the text contains neither an execution ID field nor a
+live-execution field. A field match is only a reason to parse, not evidence that
+an execution belongs to the segment. Publication cleanup keeps only the newest
 generations, so the replaced text would disappear within a few saves; resume
 first appends it to `segment-repair-backups.el` as one plist per line with
 `:time`, `:segment` and `:content`, rotating into one `.1` archive above 64 MiB.
@@ -1436,6 +1446,11 @@ negotiation; a held one is requested. `mevedel-release-control` is the
 reverse, saving and publishing before the lease goes and leaving the buffer
 read-only and following.
 
+Ordinary acquisition replaces an expired, unactivated `claiming` generation
+without confirmation. An unexpired foreign claim still protects activation;
+the ordinary expired `active` and `publishing` takeover confirmations are
+unchanged. Heartbeats renew or reclaim only their own client's lease.
+
 The read-only interaction's `b` key, including while a request is waiting,
 offers **take over** through `mevedel-view-control-transfer-take-over`. It can
 replace a live, unexpired holder that is frozen or not answering. The full
@@ -1980,8 +1995,8 @@ save-failed cue. Further checkpoints do not blindly retry it: explicit retry
 or abandonment resolves recovery first. Retry installs the frozen candidate
 without repeating the failed acknowledgement. Unlike failed mailbox delivery,
 checkpoint recovery does not discard its frozen bytes. Explicit manual saves,
-settlement and close/exit remain synchronous and drain accepted checkpoints
-before saving or releasing authority. A synchronous agent writer drains before
+cold and remote settlement, and close/exit remain synchronous and drain accepted
+checkpoints before saving or releasing authority. A synchronous agent writer drains before
 entering checkpoint exclusion or capturing its transcript. Pending recovery
 blocks close/exit even when no job remains in flight, until explicit retry or
 abandonment resolves it. Explicit abandonment deletes the discarded staging
@@ -3326,11 +3341,14 @@ scratch directory with the rest of the session. `nil` disables cleanup.
 
 Project and file-workspace cleanup skips a
 session open in this Emacs and otherwise deletes through
-`mevedel-session-durability-delete-abandoned`: the lease head must be absent,
+`mevedel-session-durability-delete-abandoned`: the lease head must be absent in
+an existing `.lease` directory,
 released without a control-transfer reservation, or an expired active or
 claiming record without unsettled mutation, and its last renewal must also be
 older than the cap. Unreadable or unsupported lease generations remain protected:
-a failed record read is not proof of absent authority. The control carrier's two
+a failed record read is not proof of absent authority. A missing `.lease`
+directory is also unknown and protects cleanly closed pre-lease sessions until
+migration. The control carrier's two
 reserved scratch-name families are not lease records. Assessment and election
 leave their bytes untouched and final deletion still proves the raw directory
 listing; a scratch name is not proof that its producer stopped.

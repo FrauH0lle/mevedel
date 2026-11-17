@@ -160,7 +160,7 @@
   ;; every phase.
   session path epoch prepare acknowledge mail-ids batch batches candidate
   expected-lease expected-head context riders phase process error
-  retain-failure checkpoint
+  retain-failure checkpoint on-superseded
   ;; Raw frozen artifacts awaiting staging, the staged batch as first built,
   ;; and the optional selector run once digests are known.
   artifacts original selector
@@ -320,7 +320,7 @@ Cold materialization and remote targets stay synchronous."
        (buffer-live-p (mevedel-session-root-buffer session))))
 
 (defun mevedel-session-publication-submit
-    (session prepare acknowledge &optional mail-ids retain-failure select-staged)
+    (session prepare acknowledge &optional mail-ids retain-failure select-staged superseded)
   "Accept an acknowledged local SESSION publication.
 PREPARE runs with the mutation gate held, after asynchronous admission, and
 returns fresh artifacts as `mevedel-session-publication-publish' takes them,
@@ -346,7 +346,8 @@ that sidecar's exact digest.  Nil is a clean no-op success: nothing is
 reserved or committed.  It is refused while earlier retained batches exist,
 which a no-op would otherwise consume.  Every staged batch belongs to the job
 until acknowledgement.  A superseded uncertain job is retired without an
-acknowledgement; never-launched queued work receives a definitive failure."
+acknowledgement and calls SUPERSEDED, if non-nil, without arguments to release
+local waits.  Never-launched queued work receives a definitive failure."
   (if-let* ((err (mevedel-session-publication--takeover-error session)))
       (funcall acknowledge nil err)
     (when (mevedel-session-publication-stopping-p session)
@@ -358,6 +359,7 @@ acknowledgement; never-launched queued work receives a definitive failure."
                          :epoch (mevedel-session-checkpoint-state session)
                          :prepare prepare :acknowledge acknowledge :mail-ids mail-ids
                          :retain-failure retain-failure :selector select-staged
+                         :on-superseded superseded
                          :expected-lease (copy-sequence (mevedel-session-lease session))
                          :expected-head (plist-get (mevedel-session-publication session) :head)
                          :phase 'admission)))
@@ -490,12 +492,14 @@ ABANDONED explicitly discards recovery instead of retaining a failed checkpoint.
 (defun mevedel-session-publication--job-superseded (job observation)
   "Discard irreversibly fenced JOB using its foreign lease OBSERVATION."
   (let* ((session (mevedel-session-publication--job-session job))
-         (queued (mevedel-session-publication-preparations session)))
+         (queued (mevedel-session-publication-preparations session))
+         (superseded (mevedel-session-publication--job-on-superseded job)))
     ;; The successor may include this mail: neither roll it back nor
     ;; acknowledge it again from the fenced client.
     (mevedel-session-publication-clear-transient session)
     (setf (mevedel-session-publication-preparations session) nil
-          (mevedel-session-publication--job-acknowledge job) #'ignore)
+          (mevedel-session-publication--job-acknowledge job)
+          (if superseded (lambda (&rest _) (funcall superseded)) #'ignore))
     (mevedel-session-durability-bind-observed-lease session observation)
     (mevedel-session-durability-call-outside-transaction
      (lambda ()

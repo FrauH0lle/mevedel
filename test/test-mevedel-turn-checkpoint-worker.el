@@ -12,6 +12,8 @@
 (require 'mevedel-turn)
 (require 'mevedel-agent-control)
 (require 'mevedel-session-persistence)
+(require 'mevedel-session-publication)
+(require 'mevedel-transcript-restore)
 
 (mevedel-deftest mevedel--defer-turn-steps
   (:vars ((mevedel-transport--enabled-p t)))
@@ -73,6 +75,96 @@
           (should-not ended)
           (should (zerop (plist-get (gptel-fsm-info fsm) :mevedel-settlement-holds))))
       (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
+(ert-deftest mevedel-turn-save-acknowledges-after-publication ()
+  (let ((mevedel-transport--enabled-p t))
+    (mevedel-test-journal-capture--with-portable-session
+     (lambda (session buffer)
+       (let ((mevedel-journal-enabled nil))
+         (mevedel-test-journal-capture--turn session buffer "First prompt" "First answer"))
+       (let* ((fsm (gptel-make-fsm :info (list :buffer buffer :mevedel-request-id "save")))
+              (finish (symbol-function 'mevedel-session-publication--job-complete))
+              ack next-head (until (+ (float-time) 15)))
+         (with-current-buffer buffer
+           (goto-char (point-max))
+           (insert (propertize "\nPublished answer\n" 'gptel 'response))
+           (cl-incf (mevedel-session-turn-count session)))
+         (cl-letf (((symbol-function 'mevedel-session-publication--job-complete)
+                    (lambda (&rest args)
+                      (should (= 1 (plist-get (gptel-fsm-info fsm) :mevedel-settlement-holds)))
+                      (should-not (plist-get (gptel-fsm-info fsm) :mevedel-turn-saved))
+                      (setq ack t)
+                      (apply finish args))))
+           (mevedel--defer-turn-steps
+            fsm (list #'mevedel--turn-save
+                      (lambda (_)
+                        (setq next-head (mevedel-session-durability-publication-head
+                                         (mevedel-session-save-path session))))))
+           (while (and (not next-head) (< (float-time) until))
+             (accept-process-output nil .01)))
+         (should ack)
+         (should next-head)
+         (should (plist-get (gptel-fsm-info fsm) :mevedel-turn-saved))
+         (should (zerop (plist-get (gptel-fsm-info fsm) :mevedel-settlement-holds)))
+         (should (string-search
+                  "Published answer"
+                  (mevedel-session-artifacts-read-artifact session "segment-0001.chat.org" t))))))))
+
+(ert-deftest mevedel-turn-superseded-save-releases-settlement ()
+  (let ((mevedel-transport--enabled-p t))
+    (mevedel-test-journal-capture--with-portable-session
+     (lambda (session buffer)
+       (let ((mevedel-journal-enabled nil))
+         (mevedel-test-journal-capture--turn session buffer "First prompt" "First answer"))
+       (let ((fsm (gptel-make-fsm :info (list :buffer buffer :mevedel-request-id "superseded")))
+             retire cancelled ended (until (+ (float-time) 5)))
+         (cl-letf (((symbol-function 'mevedel-session-publication-submit)
+                    (lambda (_owner _prepare _ack _mail-ids _retain _select superseded)
+                      (setq retire superseded)
+                      'pending)))
+           (mevedel--defer-turn-steps
+            fsm (list #'mevedel--turn-save (lambda (_) (setq ended t)))
+            (lambda () (setq cancelled t)))
+           (while (and (not retire) (< (float-time) until))
+             (accept-process-output nil .01)))
+         (should retire)
+         (should (= 1 (plist-get (gptel-fsm-info fsm) :mevedel-settlement-holds)))
+         (funcall retire)
+         (should cancelled)
+         (should-not ended)
+         (should-not (plist-get (gptel-fsm-info fsm) :mevedel-turn-saved))
+         (should (zerop (plist-get (gptel-fsm-info fsm) :mevedel-settlement-holds))))))))
+
+(ert-deftest mevedel-session-reconcile-only-segments-with-execution-fields ()
+  (mevedel-test-journal-capture--with-portable-session
+   (lambda (session buffer)
+     (let ((mevedel-journal-enabled nil))
+       (mevedel-test-journal-capture--turn session buffer "First prompt" "First answer"))
+     (let* ((root (mevedel-session-save-path session))
+            (plain (mevedel-session-artifacts-segment-path root 1))
+            (running (mevedel-session-artifacts-segment-path root 2))
+            (restore (symbol-function 'mevedel-transcript-restore-properties))
+            (parses 0) repaired)
+       (mevedel-session-publication-publish
+        session
+        (list (list :path running :coding 'utf-8-unix
+                    :content
+                    (with-temp-buffer
+                      (org-mode)
+                      (insert (test-mevedel-session-persistence--execution-tool-block
+                               "running" '(:kind bash :state running :live-execution-p t)))
+                      (mevedel-session-artifacts-stabilize-gptel-bounds)
+                      (buffer-string)))
+              (mevedel-session-artifacts--sidecar-publication-artifact session buffer)))
+       (setf (mevedel-session-current-segment session) 2)
+       (should (string-search "First answer" (mevedel-session-persistence--segment-text session plain)))
+       (cl-letf (((symbol-function 'mevedel-transcript-restore-properties)
+                  (lambda (&rest args) (cl-incf parses) (apply restore args))))
+         (should (= 1 (mevedel-session-persistence-reconcile-lost-execution-segments
+                       session nil (lambda (artifact) (setq repaired artifact))))))
+       (should (= parses 1))
+       (should (equal running (plist-get repaired :path)))
+       (should (string-search ":state lost" (plist-get repaired :content)))))))
 
 (mevedel-deftest mevedel--turn-checkpoint
   (:vars ((mevedel-transport--enabled-p t)))
