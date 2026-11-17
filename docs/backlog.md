@@ -10,7 +10,101 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 
 ## Inbox
 
+- Agent harness defects from the 2026-11-14 sweep (handoff with symptoms and
+  code locations: `work://shared/agent-harness-defects-2026-11-14.md`):
+  retained agents cannot be messaged after their working directory is removed;
+  a provider "Malformed JSON in response" ends a worker's turn and stops its
+  executions; `InterruptAgent` leaves the agent's executions running; agent
+  creation failed once with "Agent conversation could not be persisted".
+- NoteWrite anchors only whole lines (`start_line`/`end_line`), while the user
+  can mark a single word or expression. If AI notes on smaller spans turn out
+  to be needed in practice, add optional columns or an in-line anchor text
+  to NoteWrite. Whole lines were kept for now because they re-anchor more
+  robustly after edits.
+- Nested notes (a note inside another note's code) are supported by the
+  geometry, but not yet checked with the new label layout: stacked expanded
+  labels, tint priority, the `M-m` chooser and entry hints when point is in
+  both. Try it in practice and fix what looks wrong; NoteWrite can also
+  create nested whole-line notes.
 - Continue the work on the "always visible prompt" (the composer stays visible while the transcript scrolls). Two prototypes, from 2026-10-26, are in `.scratch/floating-composer/`: a child frame (`mevedel-floating-composer.el`) and a split window (`check-split.el`). Not the pinned prompt header shipped on 2026-10-31.
+- Claude Code adapter exits silently (code 1) when mevedel sends the next
+  prompt 0–330 ms after the previous `end_turn` (five times on 2026-11-07,
+  mostly a queued message handed over by the PostToolBatch hook, while the
+  CLI was winding down). `--trace-exit --trace-uncaught` print nothing, so
+  likely an exit code set before a natural exit. mevedel now sets
+  `CLAUDE_AGENT_LOGS` (`mevedel-claude-code-agent-log-directory`); read
+  `~/.mevedel/claude-agent-logs/agent.log` after the next crash (not
+  rotated; prune it occasionally). First experiment: delay a queued
+  follow-up prompt ~1 s after `end_turn`. Offline review (2026-11-13) found
+  no exit in `agent.log` (it logs none) and no telemetry for the moments, so
+  the race is unproven. Telemetry now records `acp-prompt-send` (continuation,
+  queued handover, ms since `end_turn`) and `acp-process-exit` (exit code or
+  signal, ms since `end_turn` and last send); after the next crash read
+  those before delaying anything. Node fatal reports were skipped: they embed
+  the whole environment and a plain code-1 exit is not a fatal error.
+- Prompt cache follow-ups (2026-11-07). Claude Code is verified live: with
+  gptel-style reminder delivery (ADR 0123), each turn reads the whole
+  conversation from the 1-hour cache, a plain Emacs restart keeps the full
+  cache, and a restart after compaction keeps the system prompt and tools.
+  Codex requests now send `prompt_cache_key` (branch
+  `sweep/2026-11-13/codex-cache-key`), as the Codex CLI does
+  (`codex-rs/core/src/client.rs` `session_derived_cache_key`): the root
+  conversation sends its session id; each spawned sub-agent sends the
+  session id plus its own agent id. Still open: verify live that Codex
+  cache hits improve with it. gptel's Anthropic
+  backend sends no cache markers
+  (`gptel-cache` nil).
+- Directives and references for the model (decided 2026-11-05; context in
+  `work://shared/directive-reference-model-tools.md`). The workspace
+  instruction store is done (ADR 0130; existing workspaces migrate with
+  `scripts/migrate-sessions.el`). Next, as part of a small directive overhaul:
+  read and write tools for the model (reading through a read-only resource
+  family for Read/Grep/Glob, ADR 0104), and a workspace-level history so
+  directives and references get undo/restore independent of message Rewind
+  (which stays per session). Keep Buddy separate for now. The store's TRAMP
+  round-trip cost is not measured on real SSH.
+- Typing lag (live probe 2026-11-07, `work://shared/typing-lag-2026-11-07.md`):
+  the stale-table scan and the stream-update anchor capture were fixed in the
+  2026-11-13 sweep (window change after an edit 2.75 → 0.012 ms; stream update
+  at 1000 turns ≈21 → 0.69 ms). Not rechecked live yet: the pinned-prompt
+  header runs (about 13%) and full rerenders (about 14%). Re-profile the live
+  editor before further work.
+- Session lease follow-ups (all sessions use the portable lease since
+  2026-11-14; PID lock deleted; forced takeover added, ADR 0100). Open:
+  turn settlement still uses the synchronous writer (about 43-49 ms per turn on
+  the lease; an async settlement through the publication queue looks
+  feasible); the forced takeover has only TRAMP-mocked remote tests, so try it
+  once for real between desktop and laptop; resume now parses every closed
+  segment to repair stale running rows (cost on long histories not measured);
+  the sync lease-update path returns a bare nil where the async path names the
+  decline cause; a foreign `claiming` record that never finishes has no
+  recovery test; an unmigrated, cleanly closed pre-lease session (no `.lock`,
+  no `.lease`) counts as available, so age cleanup can delete it before
+  `scripts/migrate-sessions.el` runs.
+- Replace the memory claim/fence protocol with one program per decision
+  under the memory folder lock (sketch 2026-11-14,
+  `work://shared/weekly-sweep/2026-11-13/memory-protocol-sketch.md`; journal
+  publication keeps its claim). Roland approved the four decisions (2026-11-14) listed in
+  `needs-roland.md` item 4 (replace ADR 0117's "matching files never count as
+  applied", remove `recovery-required` and "U Roll back interrupted write", a
+  concurrent apply waits up to 20 s, no migration of decision history). Before
+  it lands: a matched measurement against today's 64 / 88 / 57 programs and
+  fault-injection tests for the crash cases.
+- Memory control-file programs: batching per call site saved 11 → 2
+  programs (63.5 → 37.4 ms) but whole operations did not get faster; more
+  needs a long-lived helper process instead of one program per step (ADR 0101
+  decision history, 2026-11-14).
+- Code-quality leftovers from the 2026-11-14 review pass 2: Codex
+  `prompt_cache_key` is placed per request at three sites; collaboration
+  connection binding uses an untyped positional list and JSON string surgery;
+  optional and mixed-type values added by performance fixes; note creation is
+  written twice and its owner API uses two prefixes.
+- Unfocused views defer rendering, so selecting a view after a long run can
+  trigger one large catch-up render. Consider rendering deferred views at a
+  low rate (every few seconds or when idle), bounded so background views never
+  cost visible CPU; measure catch-up time and background CPU before and after.
+- Browser viewer: the remaining 13 `body:has(...)` rules cost about 0.7 ms per
+  streamed update on long pages; agent sheets don't pin a prompt yet.
 
 ## Execution
 
@@ -26,6 +120,35 @@ Investigate retained conversations/transcripts, the long-wait path
 (`WaitAgent` and the MCP connection), and many concurrent full test suites
 (the user's suspicion). Reproduce a similar orchestration load with
 `memory-report` or periodic RSS sampling to locate the growth.
+The 2026-11-13 sweep found no mechanism offline (details in
+`work://shared/weekly-sweep/2026-11-13/oom-growth-investigation.md`) and added
+`memory-sample` telemetry; after the next occurrence, read those samples first.
+During that sweep's own orchestration, sampled RSS stayed near 930 MB.
+
+### Cargo command duration and editor stalls
+
+Reported command, run from the SNT-webapp root:
+
+```bash
+cd backend && cargo fmt && cargo clippy --locked --offline --all-targets -- -D warnings 2>&1 | grep -v 'hard linking' | grep -E -A10 '^(error|warning)' | head -30; echo "clippy ${PIPESTATUS[0]}"; cargo test --locked --offline 2>&1 | grep -E "FAILED|test result|panicked" | head -3
+```
+
+Open after investigation on 2026-11-04. The original unrestricted run took
+294.1 seconds, but printed `clippy 0` within 0.6 seconds; the long phase was
+the test pipeline. Its session recorded 99 delayed editor heartbeats, with a
+5.635-second maximum and little editor CPU time. Slow synchronous session-control
+file programs overlapped those stalls; an expensive progress redraw is not
+established. A copied backend/cache replay reproduced a five-minute executable
+build without running tests; the tests afterward took 0.36 seconds. A controlled
+750-ms child delay blocked the synchronous control-file API's heartbeat for about
+755 ms, while the existing async carrier kept gaps near 10 ms. Natural sampled
+control calls during the rebuild stayed fast, so incident attribution remains
+open. Timer-only lease renewal now uses a single-flight asynchronous heartbeat,
+serialized with mutation/publication and protected against stale callbacks;
+own-expiry reclaim remains asynchronous too. This removes that synchronous timer
+wait, not the unexplained Cargo build duration or every source of editor lag.
+The original filters hide build/lock messages and do not preserve the test
+command's exit code. Use raw output for further reproductions.
 
 ### Harness-enforced Bash timeouts
 
@@ -54,6 +177,23 @@ resolved Emacs executable or whether the stopper's group-leader check should
 tolerate a launcher, and keep the stopper's protection against signalling
 unrelated processes. Fresh Eval launches the same `invocation-name`; its
 managed process-group stop was not checked against this launcher.
+
+### Intermittent session publication refusals
+
+On 2026-11-06 an execution completion and two autosaves were refused with
+`Portable session publication admission failed`. Later committed bytes include
+the warning report and subsequent conversation; persistent data loss is not
+established. A real isolated regression shows the old warning can also mean
+an ancillary fixed-file write failed after successful lease reservation, with
+rollback leaving healthy ownership. Diagnostics now distinguish that operation,
+status and code from an unexplained phase refusal, without changing admission,
+rollback or retry behavior. This does not identify the live incident's cause.
+Since 2026-11-07 warm admission declines and reserve-phase lease-update
+declines name their observed cause (recovery marker, newer generation, another
+client's lease, ...).
+Capture the actual rejected phase and target observation; do not infer another
+owner or bypass authority from the generic warning. Shared causation with cursor
+jumps remains unproved.
 
 ## Proactive sessions
 
@@ -146,17 +286,13 @@ row, so one misplacement drifts with status updates, including while hidden.
 Capture the reveal-time projection with the bounded call recorder before
 changing preservation policy.
 
-### Pinned prompt on the remaining surfaces
-
-The main view and agent transcript views pin the governing prompt on its own
-header row below the status strip
-([view contract](view.md#status-strip-and-cockpit-routing)). Note frames retain
-that row below their condensed tab line. The browser still loses the prompt
-once it scrolls away:
-
-- The browser viewer (`relay/viewer/`) has no pinned prompt. A sticky element
-  above the transcript, fed from the rendered prompt headers, is the analogue;
-  check it on the narrow-phone viewer.
+The user also reports permission-prompt arrival moving the caret one line below
+the prompt. Arrival-time RET targeting was removed when explicit `C-c C-j`
+visiting was introduced; no surviving automatic arrival jump is confirmed.
+Local real-permission fixtures preserve empty/multiline composer offsets after
+graphical redisplay and event-loop return, but do not assert screen-row stability
+or establish live equivalence. Capture the complete interaction materializer and
+subsequent redisplay, distinguishing arrival from explicit visiting. Still open.
 
 ## Whiteboard
 
@@ -229,41 +365,6 @@ Defer until a concrete integration needs that coverage.
   individually when a caller needs a boundary existing events cannot express;
   define the event's scope and control effects before implementation.
 
-## Plugins
-
-### Opt-in update notifications
-
-Managed plugins are shallow GitHub clones (`mevedel-plugins-install`); they
-change only through `/plugin update NAME` (`git pull --ff-only`) or the
-cockpit's update action. Nothing tells the user an update exists. Automatic
-updates stay out of scope: they change executable code, and hooks, without
-consent.
-
-Shallow clones never refresh their remote refs, so any check needs the
-network. The current git seam (`mevedel-plugins--process-git`) is a
-synchronous `process-file` that would block Emacs, and the plugin modules
-have no async process, timer or place to surface results. Design:
-
-- `mevedel-plugins-update-check-interval`: nil (default, no checks) or a
-  number of days. No network call at load or startup: the first check runs
-  on an idle timer after the registry is first used in a session, and the
-  last check time persists in global plugin state, so restarts within the
-  interval do not check again.
-- The check runs `git ls-remote origin HEAD` asynchronously (`make-process`,
-  one plugin at a time) for each managed root and compares the result with
-  local `HEAD`. Results are cached per plugin.
-- Surfacing follows NO SURPRISES in CODING_STANDARDS.md: one echo-area message
-  per newly seen upstream commit ("updates available for N plugins; /plugin
-  to review"), never repeated for the same commit; cockpit rows show
-  "update available" from the cache. Offline or failed checks stay silent
-  apart from a "check failed" row note.
-- A cockpit "Check for updates" action runs the same async check on demand,
-  regardless of the interval setting.
-- Scope: `mevedel-plugin-lifecycle.el` (async check), `mevedel-plugin-registry.el`
-  (setting, cached state), `mevedel-plugin-ui.el` (row note, action),
-  docs/skills.md; tests through an async git-executor seam, including the
-  "no network at load" guarantee.
-
 ## Browser session history actions
 
 Owner links can create a Conversation Fork from a settled assistant response
@@ -302,18 +403,16 @@ code, and remove an item once explained, fixed or no longer worth pursuing.
 
 ### View and transcript
 
-- Stale-zone scan cost (2026-10-18): `mevedel-view-zone--delete-stale-text`
-  scans the whole buffer on every changed reconcile, including each per-second
-  rail update. A synthetic transcript showed cost growing with size; no real
-  long session was profiled. Profile one before narrowing the scan, and keep
-  stale-text recovery across undo, reinsertion and lost local state.
 - Skill hint (2026-10-18): the hint refreshes only when the view's text
   changes, so a skill-list change waits for the next edit or render. Refreshing
   on skill changes would add per-command or push machinery; accept or close.
-- Ask overhaul timing failures (2026-10-18): full-suite timing failures in
-  `journal-recall-expiry` and
-  `acp-turn-start/tool-hooks` did not reproduce under 8 contention copies on
-  one CPU (2026-10-31); only the original ordered conditions remain to try.
+- A `.git/info` leak report in `acp-turn-start/tool-hooks` (2026-11-02 replay)
+  did not reproduce in a worktree or a real-`.git` clone; suspect
+  `mevedel-workspace-ensure-generated-state-ignored` resolving to the real
+  repo root in a main-checkout run.
+- `mevedel-preset--guard-preparation/test@6` failed once on 2026-11-06
+  (should-error did not signal); 0/38 reproductions on 2026-11-07. The test
+  now prints the FSM's rejection and error state on failure.
 - Browser completion notices and image-button acceptance limits (2026-10-18):
   renderer/host protocol checks did not include browser visual acceptance of the
   final completion notices. Image-button graphical checks verified activation
@@ -351,6 +450,7 @@ code, and remove an item once explained, fixed or no longer worth pursuing.
   replacement; preserve incremental rendering rather than rerender every event.
   Under ADR 0119's rule, only a tool starts a run, so the Eval is a sibling of
   the Finished card only when a tool precedes the card in that run.
+
 ### Tests and transport
 
 - End-to-end GPT-6 latency after the 2026-10-14 tool-call lag fixes remained
@@ -378,3 +478,9 @@ code, and remove an item once explained, fixed or no longer worth pursuing.
   affected-tier run (2026-11-16) with `group-id nil` while waiting for the
   fixture's zombie, before StopExecution. It passed in focused runs and in
   three repeated runs each on the changed and pristine trees (113/113).
+- `mevedel-present-wayland/thread/test` skips on a suspected stock-pgtk
+  deadlock (thread waits in `gtk_main_iteration`, main thread in
+  `thread-join`). 2026-11-14 full run under load: 1 skip after the old 20 s
+  fixture timeout (20.08 s); isolated runs: 0 skips in 7, 3.79 to 3.87 s each.
+  The timeout is now 10 s. Root cause unconfirmed; the skip masks a real hang,
+  so capture a backtrace of the hung Emacs if it recurs.
