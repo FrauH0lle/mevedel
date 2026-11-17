@@ -198,17 +198,25 @@ async function open(browser, {lobbyRunning = true, records = [], sharedItem = nu
     const connection = page.joined.length;
     const guest = {agentArtifacts: new Set(), agentFetches: 0};
     page.joined.push(id);
-    page.push[id] = async frame => socket.send(await seal(keys[id], frame));
+    // Crypto completion order is not wire order; match the real transport's queues.
+    let inbound = Promise.resolve(), outbound = Promise.resolve();
+    const reply = frame => {
+      outbound = outbound.then(async () => socket.send(await seal(keys[id], frame)));
+      return outbound;
+    };
+    page.push[id] = reply;
     // Bind the connection as the host does; unbound frames are dropped.
     let last = 0;
-    page.push[id]({t: 'challenge', challenge: 'c'});
-    socket.onMessage(async message => {
+    reply({t: 'challenge', challenge: 'c'});
+    socket.onMessage(message => {
       if (typeof message === 'string') return;
-      const {challenge, seq, nonce: _nonce, ...frame} = await unseal(keys[id], message);
-      if (challenge !== 'c' || !(seq > last)) return;
-      last = seq;
-      page.received.push({room: id, connection, frame});
-      answers[id]?.(frame, async reply => socket.send(await seal(keys[id], reply)), guest);
+      inbound = inbound.then(async () => {
+        const {challenge, seq, nonce: _nonce, ...frame} = await unseal(keys[id], message);
+        if (challenge !== 'c' || !(seq > last)) return;
+        last = seq;
+        page.received.push({room: id, connection, frame});
+        answers[id]?.(frame, reply, guest);
+      });
     });
   });
   await context.route('http://localhost:8765/**', async route => {
