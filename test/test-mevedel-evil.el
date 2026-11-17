@@ -24,6 +24,8 @@
 (require 'mevedel-note-frame)
 (require 'mevedel-collaboration-share)
 (require 'mevedel-subscription-usage)
+(require 'mevedel-notes-list)
+(require 'mevedel-window)
 (require 'mevedel-artifacts-list)
 (require 'mevedel-background-list)
 (require 'mevedel-memory-list)
@@ -609,7 +611,23 @@ independently of the product's primitive change hooks."
                   ((symbol-function 'mevedel-report-quit)
                    (lambda () (interactive) (push 'quit calls))))
           (mevedel-evil-test--keys "g r RET q")
-          (should (equal (nreverse calls) '(refresh activate quit))))))))
+          (should (equal (nreverse calls) '(refresh activate quit)))))))
+  :doc "notes list uses gr, ?, x and q in normal state"
+  (mevedel-evil-test--buffer
+    (mevedel-notes-list-mode)
+    (evil-normal-state)
+    (should (commandp #'mevedel-window-quit))
+    (let (calls)
+      (cl-letf (((symbol-function 'mevedel-notes-list-refresh)
+                 (lambda () (interactive) (push 'refresh calls)))
+                ((symbol-function 'describe-mode)
+                 (lambda (&rest _) (interactive) (push 'help calls)))
+                ((symbol-function 'mevedel-notes-list-done)
+                 (lambda () (interactive) (push 'done calls)))
+                ((symbol-function 'mevedel-window-quit)
+                 (lambda (&rest _) (interactive) (push 'quit calls))))
+        (mevedel-evil-test--keys "g r ? x q")
+        (should (equal (nreverse calls) '(refresh help done quit)))))))
 
 (mevedel-deftest mevedel-evil--replacement
   (:before-each (mevedel-evil-test--setup)

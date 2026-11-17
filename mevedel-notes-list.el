@@ -40,6 +40,7 @@
     (define-key map (kbd "a") #'mevedel-notes-list-apply)
     (define-key map (kbd "T") #'mevedel-notes-list-take)
     (define-key map (kbd "g") #'mevedel-notes-list-refresh)
+    (define-key map (kbd "?") #'describe-mode)
     (define-key map (kbd "q") #'mevedel-window-quit)
     map)
   "Single-letter actions on the notes list, never on source text.")
@@ -48,7 +49,8 @@
   "Workspace notes grouped by the attention they need.
 Use v or RET to visit, s to send, a to apply, T to take/drop, e to edit,
 t for tags, d to delete, x for done, r to restore, TAB to fold, g to refresh
-and q to return to the invoking window."
+\(gr in Evil normal state), ? for this help and q to return to the invoking
+window."
   (setq tabulated-list-format
         [("#" 5 nil) ("Where" 26 nil) ("By" 14 nil)
          ("Text" 40 nil) ("State" 24 nil) ("Tags" 0 nil)])

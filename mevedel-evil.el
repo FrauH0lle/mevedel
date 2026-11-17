@@ -54,6 +54,7 @@
     (mevedel-journal-jobs mevedel-journal-jobs-mode-map)
     (mevedel-note-frame mevedel-note-frame-mode-map)
     (mevedel-subscription-usage mevedel-subscription-usage-mode-map)
+    (mevedel-notes-list mevedel-notes-list-mode-map)
     (mevedel-collaboration-share mevedel-collaboration--share-map)
     (mevedel-view mevedel-view-mode-map mevedel-view--display-map)
     (mevedel-view-agent mevedel-view--agent-parent-map
@@ -284,7 +285,7 @@ is harmless.  No evil-collection dependency is needed."
     (setq mevedel-evil--installed t)
     (evil-set-initial-state 'mevedel-surface-mode 'insert)
     (dolist (mode (append mevedel-evil--cockpit-modes
-                          '(mevedel-view-mode mevedel-report-mode
+                          '(mevedel-view-mode mevedel-report-mode mevedel-notes-list-mode
                             mevedel-worktree-setup-mode)))
       (evil-set-initial-state mode 'normal))
     (dolist (entry mevedel-evil--map-features)

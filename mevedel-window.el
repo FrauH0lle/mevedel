@@ -92,6 +92,7 @@ BUFFER defaults to the current buffer.  Restore its invoking frame exactly
 only if the other windows are unchanged, preserving their point and scroll
 positions.  Otherwise rely on native `quit-window' restoration alone.
 Dead original buffers cannot be restored; Emacs chooses their replacement."
+  (interactive)
   (let* ((buffer (or buffer (current-buffer)))
          (configuration (buffer-local-value 'mevedel-window--configuration buffer))
          (origin (buffer-local-value 'mevedel-window--origin-window buffer))
