@@ -10,23 +10,12 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 
 ## Inbox
 
-- Agent harness defects from the 2026-11-14 sweep (handoff with symptoms and
-  code locations: `work://shared/agent-harness-defects-2026-11-14.md`):
-  retained agents cannot be messaged after their working directory is removed;
-  a provider "Malformed JSON in response" ends a worker's turn and stops its
-  executions; `InterruptAgent` leaves the agent's executions running; agent
-  creation failed once with "Agent conversation could not be persisted".
-- NoteWrite anchors only whole lines (`start_line`/`end_line`), while the user
-  can mark a single word or expression. If AI notes on smaller spans turn out
-  to be needed in practice, add optional columns or an in-line anchor text
-  to NoteWrite. Whole lines were kept for now because they re-anchor more
-  robustly after edits.
 - Nested notes (a note inside another note's code) are supported by the
   geometry, but not yet checked with the new label layout: stacked expanded
   labels, tint priority, the `M-m` chooser and entry hints when point is in
   both. Try it in practice and fix what looks wrong; NoteWrite can also
   create nested whole-line notes.
-- Continue the work on the "always visible prompt" (the composer stays visible while the transcript scrolls). Two prototypes, from 2026-10-26, are in `.scratch/floating-composer/`: a child frame (`mevedel-floating-composer.el`) and a split window (`check-split.el`). Not the pinned prompt header shipped on 2026-10-31.
+- Continue the work on the "always visible prompt" (the composer stays visible while the transcript scrolls). Two prototypes, from 2026-10-26, are in `.scratch/floating-composer/` (restored from session snapshots on 2026-11-17): a child frame (`mevedel-floating-composer.el`, checked by `check.el`, `check-typing.el` and `run-check.sh`) and a split window (`check-split.el`). Not the pinned prompt header shipped on 2026-10-31.
 - Claude Code adapter exits silently (code 1) when mevedel sends the next
   prompt 0–330 ms after the previous `end_turn` (five times on 2026-11-07,
   mostly a queued message handed over by the PostToolBatch hook, while the
@@ -42,28 +31,7 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   signal, ms since `end_turn` and last send); after the next crash read
   those before delaying anything. Node fatal reports were skipped: they embed
   the whole environment and a plain code-1 exit is not a fatal error.
-- Prompt cache follow-ups (2026-11-07). Claude Code is verified live: with
-  gptel-style reminder delivery (ADR 0123), each turn reads the whole
-  conversation from the 1-hour cache, a plain Emacs restart keeps the full
-  cache, and a restart after compaction keeps the system prompt and tools.
-  Codex requests now send `prompt_cache_key` (branch
-  `sweep/2026-11-13/codex-cache-key`), as the Codex CLI does
-  (`codex-rs/core/src/client.rs` `session_derived_cache_key`): the root
-  conversation sends its session id; each spawned sub-agent sends the
-  session id plus its own agent id. Still open: verify live that Codex
-  cache hits improve with it. gptel's Anthropic
-  backend sends no cache markers
-  (`gptel-cache` nil).
-- Directives and references for the model (decided 2026-11-05; context in
-  `work://shared/directive-reference-model-tools.md`). The workspace
-  instruction store is done (ADR 0130; existing workspaces migrate with
-  `scripts/migrate-sessions.el`). Next, as part of a small directive overhaul:
-  read and write tools for the model (reading through a read-only resource
-  family for Read/Grep/Glob, ADR 0104), and a workspace-level history so
-  directives and references get undo/restore independent of message Rewind
-  (which stays per session). Keep Buddy separate for now. The store's TRAMP
-  round-trip cost is not measured on real SSH.
-- Typing lag (live probe 2026-11-07, `work://shared/typing-lag-2026-11-07.md`):
+- Typing lag (live probe 2026-11-07):
   the stale-table scan and the stream-update anchor capture were fixed in the
   2026-11-13 sweep (window change after an edit 2.75 → 0.012 ms; stream update
   at 1000 turns ≈21 → 0.69 ms). Not rechecked live yet: the pinned-prompt
@@ -114,7 +82,7 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   low rate (every few seconds or when idle), bounded so background views never
   cost visible CPU; measure catch-up time and background CPU before and after.
 - Browser viewer: the remaining 13 `body:has(...)` rules cost about 0.7 ms per
-  streamed update on long pages; agent sheets don't pin a prompt yet.
+  streamed update on long pages.
 
 ## Execution
 
@@ -165,20 +133,6 @@ wait, not the unexplained Cargo build duration or every source of editor lag.
 The original filters hide build/lock messages and do not preserve the test
 command's exit code. Use raw output for further reproductions.
 
-### Harness-enforced Bash timeouts
-
-Managed Bash commands run until they exit or are stopped. `145c66a` removed
-`mevedel-bash-timeout` (120 s default) and the model-facing `timeout_seconds`,
-so only a native `timeout` the model writes itself bounds a command. A
-forgotten command keeps running and holds the
-[system sleep inhibitor](sessions.md#system-sleep). When Bash completion wake-ups
-and the [Monitor tool](tools.md#monitor) were added (2026-10), the user decided
-against restoring a Bash deadline for now; only Monitor expires (`timeout_ms`).
-Revisit if forgotten commands become a problem in practice. Reference point:
-Claude Code caps background commands at 10 minutes by default and 2 hours at
-most. Expiry would reuse the existing TERM/KILL process-group teardown and
-report a timeout outcome.
-
 ### Journal worker cancellation through a launcher script
 
 When `invocation-name` names a shell launcher rather than the Emacs binary,
@@ -192,23 +146,6 @@ resolved Emacs executable or whether the stopper's group-leader check should
 tolerate a launcher, and keep the stopper's protection against signalling
 unrelated processes. Fresh Eval launches the same `invocation-name`; its
 managed process-group stop was not checked against this launcher.
-
-### Intermittent session publication refusals
-
-On 2026-11-06 an execution completion and two autosaves were refused with
-`Portable session publication admission failed`. Later committed bytes include
-the warning report and subsequent conversation; persistent data loss is not
-established. A real isolated regression shows the old warning can also mean
-an ancillary fixed-file write failed after successful lease reservation, with
-rollback leaving healthy ownership. Diagnostics now distinguish that operation,
-status and code from an unexplained phase refusal, without changing admission,
-rollback or retry behavior. This does not identify the live incident's cause.
-Since 2026-11-07 warm admission declines and reserve-phase lease-update
-declines name their observed cause (recovery marker, newer generation, another
-client's lease, ...).
-Capture the actual rejected phase and target observation; do not infer another
-owner or bypass authority from the generic warning. Shared causation with cursor
-jumps remains unproved.
 
 ## Proactive sessions
 
@@ -275,17 +212,6 @@ deferred tool calls that end a run and resume when the user answers. A pending
 card blocks only its own session, and browser answers plus the absence timeout
 already cover being away.
 
-## Eval integration
-
-### Sandbox Eval extensions
-
-[ADR 0133](adr/0133-add-persistent-sandbox-eval.md) leaves two extensions
-for when a concrete need appears: an opt-in init profile for the sandbox, and
-sandbox Eval for remote execution targets (locally against TRAMP paths, or on
-the remote host) if Elisp development over TRAMP needs it. Remote-host tests
-need an Emacs-equipped target such as a container; current remote tests use
-the `/mevedelmock:` method.
-
 ## View
 
 ### Cursor jumps after switching back to a busy view
@@ -308,54 +234,6 @@ Local real-permission fixtures preserve empty/multiline composer offsets after
 graphical redisplay and event-loop return, but do not assert screen-row stability
 or establish live equivalence. Capture the complete interaction materializer and
 subsequent redisplay, distinguishing arrival from explicit visiting. Still open.
-
-## Whiteboard
-
-### Excalidraw parity left out of the element model
-
-[ADR 0121](adr/0121-store-whiteboards-as-excalidraw-elements.md) stores and
-draws Excalidraw elements but cherry-picks interaction. Not yet implemented:
-segment dragging for elbow arrows, object and grid snapping, a frame tool and
-moving children with their frame, sticky-note font auto-fit with its lifted
-corner and date footer, the constant-width laser-pointer stroke, and embedding
-the scene in PNG/SVG downloads. Add each when a board needs it; Excalidraw's
-behavior is compiled in excali-mode's `docs/excalidraw-spec.md`
-(https://github.com/yibie/excali-mode).
-
-## Review
-
-### Automatic turn advisor
-
-Consider an opt-in second-model review of successful root turns, with bounded
-feedback delivered to the next request. Reuse the Stop hook, reviewer runtime,
-and reminder delivery. Keep findings distinct from Buddy's advisory notes, and
-specify evidence scope, deduplication, cooldown, cancellation, and cost before
-implementation. Pursue when recurring review failures justify the extra model
-call; keep it advisory, without restarting completed turns. Implement this
-bounded feature before considering generic prompt or agent hook handlers.
-There is no automatic root-turn reviewer/instruction-injection path today.
-The original request came from the 2026-08-20 watchdog/advisor discussion.
-
-### Buddy comment trigger
-
-Follow-up to `/buddy`: a comment containing `BUDDY!` in a buffer with
-`mevedel-buddy-mode` runs guidance at once on its enclosing defun, using the
-comment text as the question. No existing watcher fits as is. Buddy's change
-recording sees the edit, but the trigger needs its own rules before it can use
-the idle timer:
-
-- Fire when the edit settles, not on the `!` keystroke, so the question after
-  the marker is complete.
-- Skip `mevedel-buddy-min-interval` and preempt an automatic review, as
-  `mevedel-buddy-guide` does.
-- Fire once per comment. A comment left in the buffer must not fire again on
-  later edits elsewhere. Key it in memory by marker or text hash.
-- Send the enclosing defun (`beginning-of-defun`), or the whole buffer when
-  there is none.
-
-Detection checks only the changed lines in `mevedel-buddy--after-change`; it
-never polls or rescans buffers. Buddy does not remove the comment after the
-guidance runs: the user deletes it.
 
 ## Hook extensions
 
@@ -380,105 +258,13 @@ Defer until a concrete integration needs that coverage.
   individually when a caller needs a boundary existing events cannot express;
   define the event's scope and control effects before implementation.
 
-## Browser session history actions
+## Flaky tests
 
-Owner links can create a Conversation Fork from a settled assistant response
-(`fork` frame, docs/collaboration.md). Rewind, edit and Worktree Fork remain
-Emacs-only. Each needs an owner-only typed frame that resolves the same stable
-`forkPoint` the projection already publishes, and runs the existing Emacs
-transaction. A browser frame runs under `inhibit-interaction`, so any native
-minibuffer or overlay confirmation would refuse it. Each action therefore
-needs a browser-side confirmation of its own.
-
-- **Rewind:** `mevedel-session-rewind` confirms in Emacs. It names both sides
-  of the boundary, capture gaps, the files to restore, external changes it
-  would overwrite, and the live state it would clear. A browser rewind needs
-  a host-built impact card (a `ui-request` like plan approval, bounded, with
-  an "open in Emacs" fallback when the impact does not fit) and an owner
-  confirmation. Every room in the session must then republish its records
-  after the truncation. Redo follows the same shape.
-- **Edit:** resubmitting an edited earlier prompt is Rewind before that
-  prompt plus a new prompt, so it should follow Rewind and reuse its card.
-- **Worktree Fork:** needs Git preflight, branch naming (the Worktree plan
-  acceptance already validates a browser branch name) and the retained-artifact
-  error path.
-- **Fork with a first prompt:** the browser fork publishes an empty child and
-  the owner writes in its room. Sending the prompt with the fork, as the `f`
-  composer flow does, could reuse the `new-session` first-prompt path.
-- **Non-owner request flow:** a full-control guest could ask, like
-  `new-session`, with the owner or host approving.
-
-## Unexplained failures and unverified leads
-
-Recovered on 2026-10-28 from working notes that memory consolidation deleted
-or proposed deleting. These are historical observations, unverified leads and
-unfinished verification, not newly reproduced defects; no resolution or other
-active record was found in the review. Verify current behavior before changing
-code, and remove an item once explained, fixed or no longer worth pursuing.
-
-### View and transcript
-
-- Skill hint (2026-10-18): the hint refreshes only when the view's text
-  changes, so a skill-list change waits for the next edit or render. Refreshing
-  on skill changes would add per-command or push machinery; accept or close.
-- A `.git/info` leak report in `acp-turn-start/tool-hooks` (2026-11-02 replay)
-  did not reproduce in a worktree or a real-`.git` clone; suspect
-  `mevedel-workspace-ensure-generated-state-ignored` resolving to the real
-  repo root in a main-checkout run.
-- `mevedel-preset--guard-preparation/test@6` failed once on 2026-11-06
-  (should-error did not signal); 0/38 reproductions on 2026-11-07. The test
-  now prints the FSM's rejection and error state on failure.
-- Browser completion notices and image-button acceptance limits (2026-10-18):
-  renderer/host protocol checks did not include browser visual acceptance of the
-  final completion notices. Image-button graphical checks verified activation
-  and normal-state decoration suppression, not hover-theme or higher-priority
-  overlay styling. Locate subsequent evidence or exercise those specific states
-  before extending the historical acceptance claims; preserve image activation,
-  committed-artifact resolution and notice ownership/wording.
-- Remaining layout checks (2026-10-17): minibuffer-active and graphical
-  variable-height or wrapped tall drafts have no check; run them on the
-  private-KWin runner, preserving draft position and interactive row identity.
-- Task-panel mouse disclosure (2026-10-16 suggestion): panels currently toggle
-  with TAB/RET while mouse clicks place point. Consider a clickable header only,
-  preserving selection on task rows. This is an optional consistency improvement,
-  not an implemented feature or a request for per-task detail inspectors.
-- Pending-input local preview acceptance limits (2026-10-16): the implementation
-  handoff reported rendered-consumer tests, but no separate read-only-authority,
-  deferred-render, or live graphical interaction checks. This is historical
-  verification scope, not a reproduced defect or proof current coverage is absent.
-  Before claiming those scenarios verified, locate subsequent coverage or run a
-  bounded check that preserves drafts, selection, viewport, delivery and queue
-  management's explicit pause semantics.
-- Automatic Read collapse (2026-10-14): an opened Read row later appeared
-  collapsed in a live session; replays did not reproduce it. A bounded fold
-  trace was prepared; the next step is a consented live reproduction. The prior
-  live trial used an unattended scratch view, which deferred rendering: its
-  sampler never opened a row while busy, so the final no-anomaly render did not
-  test mid-turn row survival. Use an attended view, actually open the row during
-  the active turn, and attribute trace events to the relevant buffer and time.
-- Mailbox hierarchy (2026-10-14): a following Eval should be a sibling of the
-  Finished card inside the same expanded activity. Later live inspection and
-  incremental/canonical replays found it nested correctly, but did not reproduce
-  the screenshot-time transition. The later collapsed-card display-boundary fix
-  does not establish that transition's cause. Replay retained source/view-tail
-  anchors and groupability across ToolCall metadata publication or targeted
-  replacement; preserve incremental rendering rather than rerender every event.
-  Under ADR 0119's rule, only a tool starts a run, so the Eval is a sibling of
-  the Finished card only when a tool precedes the card in that run.
-
-### Tests and transport
-
-- End-to-end GPT-6 latency after the 2026-10-14 tool-call lag fixes remained
-  unmeasured in the final checkpoint, with no follow-up measurement found;
-  the component fixes were verified individually.
 - Resource-installation search can exceed its 20 s production deadline under
   heavy host load (2026-10-31). The search covers two fixture files (median
   0.16 s isolated, 0.63 s maximum contended), but tracing caught synchronized
   5-7 s event-loop stalls; the stall source is unidentified. The test watchdog
   now sits above the production deadline.
-- `mevedel-window-child-frame-return/test` failed once on parent-layout
-  equality (109/110 on 2026-10-31; retry and base 110/110). Graphical,
-  unreproduced; rerun on the private-KWin runner if it recurs.
 - `mevedel-agent-control-mail-batch/producer/test` stalled twice past 240 s in
   parallel affected-tier runs (2026-11-16), but passed alone, in an isolated
   24-test prefix replay on changed and pristine trees, and in 120 instrumented
