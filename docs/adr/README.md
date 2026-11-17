@@ -200,3 +200,7 @@ to the decision bearing that ID.
   supersedes ADRs 0087–0091's live directive workflow, complements
   ADR 0108's Buddy ownership and narrows ADR 0130's record scope. Original
   records and the ADR 0088 history destination remain available above.
+
+- [ADR 0133: Add a persistent sandbox Eval mode](0133-add-persistent-sandbox-eval.md)
+  extends ADR 0024's Eval execution scope with a confined, per-owner child
+  Emacs that keeps state between calls.

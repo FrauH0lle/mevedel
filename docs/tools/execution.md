@@ -394,6 +394,11 @@ remote execution targets and missing confinement are refused; use fresh Eval
 for per-call authority. Plan denies every Eval mode. Review evidence describes
 the persistent definitions, age, feature count and fixed confinement.
 
+The background-work panel and `/ps` show idle sandboxes with owner, age and
+last reported feature count; Stop discards their definitions. A busy sandbox
+uses its ordinary Eval row with a sandbox annotation, not a second row.
+Idle rows need no periodic redraw timer; the one-shot expiry still applies.
+
 ## Shell composition and outcomes
 
 Quote paths/arguments for the shell. Double quotes preserve spaces but still

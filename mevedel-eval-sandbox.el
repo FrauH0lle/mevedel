@@ -21,19 +21,30 @@
 
 (cl-defstruct (mevedel-eval-sandbox--entry
                (:constructor mevedel-eval-sandbox--entry-create))
-  service timer workdir roots callback started-at features lost request-id failure sent
+  registry service timer workdir roots callback started-at features lost request-id failure sent
   (serial 0) (partial ""))
 
 (defvar mevedel-eval-sandbox--sessions (make-hash-table :test #'eq :weakness 'key)
-  "Session to owner registry; dead entries remember lost definitions.")
+  "Session to (live count . owner table); dead entries remember lost definitions.")
 
 (defun mevedel-eval-sandbox--entry (session owner)
   "Return the lazily allocated sandbox entry for SESSION and OWNER."
-  (let ((owners (or (gethash session mevedel-eval-sandbox--sessions)
-                    (puthash session (make-hash-table :test #'equal)
-                             mevedel-eval-sandbox--sessions))))
-    (or (gethash owner owners)
-        (puthash owner (mevedel-eval-sandbox--entry-create) owners))))
+  (let ((registry (or (gethash session mevedel-eval-sandbox--sessions)
+                      (puthash session (cons 0 (make-hash-table :test #'equal))
+                               mevedel-eval-sandbox--sessions))))
+    (or (gethash owner (cdr registry))
+        (puthash owner (mevedel-eval-sandbox--entry-create :registry registry)
+                 (cdr registry)))))
+
+(defun mevedel-eval-sandbox-any-live-p (session)
+  "Whether SESSION has a service, without enumeration or allocation."
+  (> (or (car (gethash session mevedel-eval-sandbox--sessions)) 0) 0))
+
+(defun mevedel-eval-sandbox--set-service (entry service)
+  "Attach SERVICE to ENTRY, counting it once across preparation and readiness."
+  (unless (mevedel-eval-sandbox--entry-service entry)
+    (cl-incf (car (mevedel-eval-sandbox--entry-registry entry))))
+  (setf (mevedel-eval-sandbox--entry-service entry) service))
 
 (defun mevedel-eval-sandbox--cancel-timer (entry)
   "Cancel ENTRY's idle deadline, if any."
@@ -44,15 +55,47 @@
 (defun mevedel-eval-sandbox-status (session owner)
   "Return live sandbox age and feature count for SESSION and OWNER.
 Do not allocate a registry entry."
-  (let* ((owners (gethash session mevedel-eval-sandbox--sessions))
+  (let* ((owners (cdr (gethash session mevedel-eval-sandbox--sessions)))
          (entry (and owners (gethash owner owners)))
          (live (and entry (mevedel-eval-sandbox--entry-service entry))))
     (list :age-seconds (and live (- (float-time) (mevedel-eval-sandbox--entry-started-at entry)))
           :features (and live (mevedel-eval-sandbox--entry-features entry)))))
 
+(defun mevedel-eval-sandbox-list-idle (session calls)
+  "Return detached idle sandbox rows for SESSION's user interfaces.
+CALLS are current execution snapshots; suppress their owners even during
+call admission/settlement.  Do not allocate entries or expose service handles."
+  (let (rows)
+    (when-let* ((owners (cdr (gethash session mevedel-eval-sandbox--sessions))))
+      (maphash
+       (lambda (owner entry)
+         (when (and (mevedel-execution-service-live-p
+                     (mevedel-eval-sandbox--entry-service entry))
+                    (not (mevedel-eval-sandbox--entry-callback entry))
+                    (not (cl-find-if (lambda (call)
+                                      (and (eq (plist-get call :eval-mode) 'sandbox)
+                                           (equal owner (plist-get call :owner)))) calls)))
+           (push (list :kind 'sandbox :id (list 'sandbox (copy-sequence owner))
+                       :owner (copy-sequence owner) :state 'idle
+                       :started-at (mevedel-eval-sandbox--entry-started-at entry)
+                       :features (mevedel-eval-sandbox--entry-features entry)) rows)))
+       owners))
+    rows))
+
+(defun mevedel-eval-sandbox-stop-user (session snapshot)
+  "Stop SESSION's idle sandbox identified by SNAPSHOT, unless replaced."
+  (let* ((owners (cdr (gethash session mevedel-eval-sandbox--sessions)))
+         (entry (and owners (gethash (plist-get snapshot :owner) owners))))
+    (when (and entry (not (mevedel-eval-sandbox--entry-callback entry))
+               (equal (plist-get snapshot :started-at)
+                      (mevedel-eval-sandbox--entry-started-at entry)))
+      (mevedel-execution-service-stop (mevedel-eval-sandbox--entry-service entry)))))
+
 (defun mevedel-eval-sandbox--closed (entry facts)
   "Clear ENTRY after service death, settling its call with terminal FACTS."
   (mevedel-eval-sandbox--cancel-timer entry)
+  (when (mevedel-eval-sandbox--entry-service entry)
+    (cl-decf (car (mevedel-eval-sandbox--entry-registry entry))))
   (let ((reason (or (mevedel-eval-sandbox--entry-failure entry)
                     (plist-get facts :error)
                     (plist-get facts :termination))))
@@ -201,8 +244,8 @@ Return a cancellation function scoped to this protocol call."
                 (cl-incf (mevedel-eval-sandbox--entry-serial entry))))
            script
            (send (lambda (service)
-                   (setf (mevedel-eval-sandbox--entry-service entry) service
-                         (mevedel-eval-sandbox--entry-sent entry) t)
+                   (mevedel-eval-sandbox--set-service entry service)
+                   (setf (mevedel-eval-sandbox--entry-sent entry) t)
                    (when call (mevedel-execution-service-bind-call service call))
                    (mevedel-execution-service-set-active service t)
                    (let ((print-length nil) (print-level nil) (print-escape-newlines t))
@@ -235,7 +278,11 @@ Return a cancellation function scoped to this protocol call."
                 (when (mevedel-execution-service-live-p service)
                   (when (and call (mevedel-eval-sandbox--entry-callback entry))
                     (mevedel-execution-service-bind-call service call))
-                  (setf (mevedel-eval-sandbox--entry-service entry) service)))))
+                  (unless (mevedel-eval-sandbox--entry-service entry)
+                    (mevedel-eval-sandbox--set-service entry service)
+                    ;; Admission notified before we could count the service.
+                    ;; Publish the preparing call now, without waiting for READY.
+                    (mevedel-execution-service-set-active service t))))))
         (error
          (when script (ignore-errors (delete-file script)))
          (if (mevedel-eval-sandbox--entry-service entry)

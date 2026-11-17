@@ -122,45 +122,14 @@ already cover being away.
 
 ## Eval integration
 
-Source: the 2026-11-16 discussion of why models choose Bash and Python
-scripts over Eval. Eval is now native, returns messages and backtraces, and
-supports yielding fresh checks. Current modes are `live` (the user's Emacs)
-and `fresh` (a new clean process per call). Fresh Eval still rebuilds every
-fixture on each call; `sandbox` (persistent and isolated) is planned.
+### Sandbox Eval extensions
 
-### Persistent sandbox Eval
-
-A long-lived child Emacs that keeps state between calls, so code can be loaded
-once and probed step by step (load the working tree, build a fixture buffer,
-redefine one function, retry) without touching the user's Emacs. Decisions so
-far:
-
-- One sandbox per agent: the root and each retained agent that uses it. Start
-  on first use, stop after idling, restart after a crash, and offer an
-  explicit reset. Show it in the background-work panel with a summary of
-  loaded features, since stale definitions are its main risk.
-- Start from `-Q` with the current `load-path`; load features on demand. Do
-  not load the user's init, which loads mevedel itself and could start
-  collaboration rooms, sleep inhibitors or servers. An opt-in init profile can
-  follow later.
-- Default confinement only, fixed at start. A call needing network or extra
-  paths uses fresh Eval, or restarts the sandbox with the new profile and says
-  so.
-- Run where mevedel's Emacs runs, which covers a remote mevedel host. In
-  sessions with a remote execution target, refuse sandbox Eval as fresh Eval
-  is refused today (`mevedel-tool-exec-permission.el`, "Fresh Eval is
-  unavailable for remote sessions"); live Eval and Bash on the target remain.
-  Running the sandbox locally against TRAMP paths, or on the remote host, can
-  follow if Elisp development over TRAMP needs it. Remote-execution tests use
-  the `/mevedelmock:` TRAMP method (`test/test-mevedel-execution-remote.el`);
-  a remote-host sandbox would also need a target with Emacs installed, such as
-  a container.
-- Calls are asynchronous and yield like fresh Eval.
-- Write an ADR before implementation.
-
-Fresh Eval stays the clean-room check: a reset sandbox can keep loaded
-features, advice, timers and hooks, so only a fresh process proves that code
-loads and runs from scratch.
+[ADR 0133](adr/0133-add-persistent-sandbox-eval.md) leaves two extensions
+for when a concrete need appears: an opt-in init profile for the sandbox, and
+sandbox Eval for remote execution targets (locally against TRAMP paths, or on
+the remote host) if Elisp development over TRAMP needs it. Remote-host tests
+need an Emacs-equipped target such as a container; current remote tests use
+the `/mevedelmock:` method.
 
 ## View
 

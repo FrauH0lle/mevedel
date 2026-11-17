@@ -77,7 +77,13 @@
       (should (equal "nil" (plist-get reply :value)))
       (should (plist-get reply :started))
       (should (plist-get reply :state-lost)))
-    (should-not (plist-get (test-mevedel-eval-sandbox--call session root "t") :state-lost)))
+    (should-not (plist-get (test-mevedel-eval-sandbox--call session root "t") :state-lost))
+    (let ((rows (mevedel-eval-sandbox-list-idle session nil)))
+      (should (= 2 (length rows)))
+      (mevedel-eval-sandbox-stop-user session (car rows))
+      (should (mevedel-eval-sandbox-any-live-p session))
+      (mevedel-eval-sandbox-stop-user session (cadr rows))
+      (should-not (mevedel-eval-sandbox-any-live-p session))))
   :doc "idle is inert; owner finalization keeps idle services but stops active calls"
   (progn
     (test-mevedel-eval-sandbox--require-backend)
@@ -120,6 +126,7 @@
 	  (should-not (plist-get reply :started)))
 	(test-mevedel-execution--wait
 	 (lambda () (not (mevedel-execution-service-live-p service))))
+	(should-not (mevedel-eval-sandbox-any-live-p session))
 	(should-not (mevedel-eval-sandbox--entry-timer entry))
 	(should (plist-get (test-mevedel-eval-sandbox--call session root "t") :state-lost)))))
   :doc "directory and writable-root changes restart; mode changes do not"

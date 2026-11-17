@@ -1693,8 +1693,13 @@ parent prompt and is available only from the live root chat or Plan composer;
 historical, agent, and side scopes cannot create one.
 
 The status zone shows one **background work** panel for everything that runs
-beside the conversation: active agents, yielded Bash commands, and Monitors.
-A finished item stays in place for ten seconds
+beside the conversation: active agents, yielded Bash/Eval calls, and Monitors.
+Persistent sandboxes also appear here and in `/ps`: an idle row shows owner,
+age and last reported feature count, with Stop to discard the child. A busy
+sandbox uses one annotated Eval execution row instead of a separate service row.
+Idle sandbox rows do not arm periodic redraw timers or count as active work.
+Sandbox call and idle rows replace one another directly, without a finished row.
+Other finished items stay in place for ten seconds
 (`mevedel-view-execution-grace-seconds`) as an inert `✓ Completed` (or
 `✓ Finished` for an agent) line, so a glance shows what just ended; its
 transcript notice remains the durable record. The glyph and state label use
