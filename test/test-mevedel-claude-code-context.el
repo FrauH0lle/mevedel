@@ -756,6 +756,44 @@
 (mevedel-deftest mevedel-claude-code-context-prompt (:quiet t)
   ,test
   (test)
+  :doc "a retained child's wake mail follows its prompt and waits for exact ACP receipt"
+  (mevedel-engine-test--with-claude-session
+    (let* ((history '(:id "retained-child" :state ready))
+           (configuration (mevedel-agent-configuration--create
+                           :agent (mevedel-agent--create
+                                   :name "default" :description "Mail test" :frozen-p t)
+                           :request-locals (mevedel-agent-exec-request-snapshot
+                                            (list :backend gptel-backend :model gptel-model))))
+           (owner (mevedel-agent-invocation--create
+                   :path "/root/work" :parent-session session :buffer buffer
+                   :agent (mevedel-agent-configuration-agent configuration)
+                   :agent-id "wake-agent" :frozen-configuration configuration
+                   :runtime-context (list :buffer buffer :mevedel-claude-history history)))
+           (record (mevedel-agent-record--create
+                    :id "wake-agent" :role "default" :configuration configuration
+                    :conversation-location "agents/wake.chat.org"
+                    :path "/root/work" :parent-path "/root"
+                    :activity 'running :invocation owner))
+           (wake mevedel-agent-control--wake-prompt))
+      (setf (mevedel-session-agent-registry session) (list (cons "/root/work" record)))
+      (mevedel-agent-control-send-message session "/root/work" "ACP-FIRST-MAIL")
+      (mevedel-agent-control-send-message session "/root/work" "ACP-SECOND-MAIL")
+      (let* ((content (mevedel-claude-code-context-prompt
+                       owner (vector `((type . "text") (text . ,wake))) history))
+             (text (mapconcat (lambda (part) (alist-get 'text part)) content "\n")))
+        (should (< (string-search wake text) (string-search "ACP-FIRST-MAIL" text)))
+        (should (< (string-search "ACP-FIRST-MAIL" text)
+                   (string-search "ACP-SECOND-MAIL" text)))
+        (should (= 2 (length (mevedel-agent-record-mailbox record))))
+        (should (eq history (plist-get (mevedel-engine-info owner) :mevedel-claude-history)))
+        (let ((receipt `((method . "_claude/sdkMessage")
+                         (params (message (type . "user")
+                                          (message (role . "user") (content . ,content)))))))
+          (mevedel-claude-code-context-observe owner receipt)
+          (mevedel-claude-code-context-observe owner receipt))
+        (should-not (mevedel-agent-record-mailbox record))
+        (should (= 2 (length (mevedel-transcript-audit-buffer-spans 'mailbox-receipt)))))))
+
   :doc "acknowledged unchanged path instructions are not re-sent"
   (mevedel-engine-test--with-session
     (let* ((dir (file-name-concat root "sub"))

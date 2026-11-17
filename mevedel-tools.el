@@ -872,16 +872,12 @@ model-visible communication in conversation history."
            (info (gptel-fsm-info fsm))
            (messages (mevedel-tools--mailbox-new-messages
                       ctx (plist-get info :buffer)))
-           (data (plist-get info :data))
-           (prepend-p
-            (and agent-p
-                 (zerop (or (mevedel-agent-invocation-turn-count ctx) 0)))))
+           (data (plist-get info :data)))
       (when (and messages data)
         (when agent-p
           (mevedel--split-open-reasoning-before-user-input info))
         (cl-loop
          for message in messages
-         for index from 0
          for block = (mevedel-tools--message-delivery-block message)
          for sender = (or (plist-get message :sender) "unknown")
          do
@@ -902,8 +898,7 @@ model-visible communication in conversation history."
              (error "Mailbox transcript insertion failed")))
          (gptel--inject-prompt
           (plist-get info :backend) data
-          (list :role "user" :content block)
-          (and prepend-p index))))
+          (list :role "user" :content block))))
       (when (and messages data)
         (mevedel-agent-control-acknowledge-mail ctx messages)))))
 
