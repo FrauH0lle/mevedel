@@ -109,50 +109,10 @@ already cover being away.
 ## Eval integration
 
 Source: the 2026-11-16 discussion of why models choose Bash and Python
-scripts over Eval. Emacs state is fully inspectable, but live Eval looks like
-a human interruption, risks the user's editor and has thin error feedback.
-Fresh Eval rebuilds every fixture on each call, so for multi-step work it is
-no better than a Python script. Current modes are `live` (the user's Emacs)
-and `fresh` (a new clean process per call); `sandbox` (persistent and isolated)
-is planned.
-
-### Eval as a native tool
-
-Promote Eval from a ToolCall specialist to a native tool beside Bash.
-Measured cost (2026-11-16, Opus 5.5, `claude -p` with no tools against a
-548-token baseline system prompt):
-
-- `prompts/tools/eval.md` description: 1,081 input tokens; for comparison
-  `prompts/tools/bash.md` is 881. The argument schema adds to this and was
-  not measured separately.
-- mevedel's first root request through ACP, including its first-message
-  context reminders (about 28,600 characters): about 23,700 input tokens in
-  two root sessions.
-- Native Claude Code's first request in four projects with short first
-  messages: 39,354 to 46,128 input tokens, including those projects' own
-  instructions and memory.
-
-Eval therefore adds roughly 5–6% to mevedel's first request; later requests
-read it from the prompt cache. Remove its specialist listing entry when it
-becomes native.
-
-### Yield fresh Eval
-
-The mode is now `fresh`, with no alias. Fresh Eval currently blocks the turn
-until it finishes and has no deadline; give it and the planned sandbox Eval
-Bash's `yield_time_ms`, `execution_id`, WriteStdin and
-StopExecution handling and completion wake-ups. Live Eval stays synchronous: it
-runs on Emacs's main thread.
-
-### Eval feedback and live limits
-
-- Capture `message` output from every mode. In live mode, still show it to
-  the user; do not hide the echo area to capture it.
-- Return a bounded backtrace with errors.
-- Document that live Eval cannot be interrupted reliably: `with-timeout` fires
-  only where timers can run, so a tight loop needs the user's `C-g`. Bound
-  recursion and output, and have the tool guidance steer long or uncertain
-  work to the sandbox.
+scripts over Eval. Eval is now native, returns messages and backtraces, and
+supports yielding fresh checks. Current modes are `live` (the user's Emacs)
+and `fresh` (a new clean process per call). Fresh Eval still rebuilds every
+fixture on each call; `sandbox` (persistent and isolated) is planned.
 
 ### Persistent sandbox Eval
 

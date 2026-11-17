@@ -1,69 +1,60 @@
-Evaluate one Elisp form and return its value and printed output.
+Evaluate one Elisp form; return its value and output.
 
 ### When to use `Eval`
 
-- Inspect live Emacs state or evaluate an Elisp hypothesis.
-- Use fresh mode for a check that can run in a separate Emacs process.
+- Use live mode for the user's running Emacs state.
+- Use fresh mode for clean checks and anything long or uncertain.
 
 ### When NOT to use `Eval`
 
-- Applying source edits: ApplyPatch provides a reviewable patch.
-- Running untrusted code. Live Eval has unrestricted access to the Emacs process;
-  fresh confinement does not make the expression trustworthy.
+- Source edits: use ApplyPatch.
+- Untrusted code: live Eval is unrestricted; confinement does not make code safe.
 
 ### How to use `Eval`
 
-- Only the first form in `expression` is read and evaluated. A compound form such
-  as `let` or `progn` can contain related operations; separate top-level forms
-  after it are ignored.
-- `mode="live"` (default) sees live buffers, variables, advice, and package state.
-  It runs without child-process confinement. `preserve_ui=true` restores the
-  selected frame's window configuration, not other side effects; set it false
-  for intentional window manipulation.
-- `mode="fresh"` runs a child `emacs --batch -Q` with the current `load-path` and
-  session working directory. It does not inherit live buffers, variable values,
-  or loaded packages. Require libraries needed by the check.
-- Fresh mode accepts `yield_time_ms` (default 10000, range 250–30000). If still
-  running, it returns an `execution_id` for WriteStdin polling, ListExecutions,
-  and StopExecution; root completion wakes an idle turn. Non-empty input is
-  refused. Live mode rejects `yield_time_ms` and only the user's `C-g` can stop it.
-- Evaluation uses the session working directory. Values print with `%S`, with
-  shared and circular structure shown once as `#N=`/`#N#`; `print`,
-  `prin1`, and `princ` output is returned as STDOUT; `message` text is returned as
-  MESSAGES without hiding live messages from the user. Errors include a bounded
-  BACKTRACE and output produced before failure. Large results have a bounded
-  preview and retrieval address.
-- In Edits, fresh Eval runs automatically with required confinement and no
-  network by default; live Eval goes to the selected permission reviewer.
-  In Ask and Edits, automatic review typically approves task-relevant observational
-  live Eval without involving the user; mutations, unknown effects and unclear
-  scope go to the user. Full Access automatically runs
-  either mode without confinement. Ask uses the configured sandbox preference.
-  Non-default permission requests apply only to fresh:
-  `with_additional_permissions` requests network and/or exact absolute read/write
-  paths; `require_escalated` requests unrestricted child execution. Put the reason
-  in `justification` on the new tool call. A live evaluation that may need
-  approval can also carry a short `justification`; it is shown to the approver
-  and is optional there. Expression authorization is separate; approval is not
-  an automatic retry. Results disclose unavailable confinement.
-- For exact grant semantics, failure recovery, and fresh evaluation details,
-  read `mevedel://tools/execution.md` before using those features.
+- Supply one top-level form in `expression`; later forms are ignored. Use `let`
+  or `progn` for related operations. Both modes use the session working directory.
+- `mode="live"` (default) runs on Emacs's main thread without confinement. Only
+  the user's `C-g` can interrupt it. `preserve_ui=true` (default) restores the
+  selected frame's window configuration, not other side effects; use false only
+  for intentional window changes.
+- `mode="fresh"` starts a clean `emacs -Q --batch` child with the current
+  `load-path`, not live state or loaded packages. Require needed libraries in
+  the form. Fresh Eval is refused for remote execution targets.
+- Fresh `yield_time_ms` defaults to 10000 (range 250–30000). If still running,
+  Eval returns an `execution_id`: poll with WriteStdin, list with ListExecutions,
+  or kill the child with StopExecution. Non-empty input is refused. Root-owned
+  completion wakes an idle root; polling just to keep work moving is unnecessary.
+  No automatic timeout. Live rejects `yield_time_ms`.
+- `Result:` prints the value with `%S`; `STDOUT:` holds `print`/`prin1`/`princ`
+  output; `MESSAGES:` holds `message` text, still visible to the user in live
+  mode. Errors retain prior output and include a bounded `BACKTRACE:`. Large
+  results have a bounded preview and retrieval address.
+- In Ask/Edits, live Eval goes to the selected permission reviewer. Automatic
+  review typically approves task-relevant observational calls without involving
+  the user; mutations, unknown effects, and unclear scope go to the user.
+  Optional `justification` explains a live call to its approver.
+- In Edits, fresh Eval is automatic with required confinement and no network
+  by default. Ask uses the configured sandbox preference and expression policy.
+  Full Access runs either mode automatically without confinement; explicit denies
+  and Plan limits remain.
+- Fresh-only authority fields: `sandbox_permissions="with_additional_permissions"`
+  and `additional_permissions` request network or exact absolute read/write paths;
+  `require_escalated` requests a full confinement bypass. Include `justification`.
+  For grant shapes, escalation prerequisites, and recovery, read
+  `mevedel://tools/execution.md`; if unavailable, do not guess. Unavailable
+  confinement is disclosed; approval is not a retry.
 
 ### Examples of good usage
 
 <example>
-- Check a library operation without relying on the live Emacs's loaded packages:
-Eval(mode="fresh", expression="(progn (require 'cl-lib) (let ((values (cl-remove-if-not #'numberp '(1 skip 2)))) (princ values) (apply #'+ values)))")
-The returned value is 3; STDOUT contains (1 2). The library is required inside
-the single evaluated form because fresh mode does not inherit live loaded state.
+Eval(mode="fresh", expression="(progn (require 'cl-lib) (message \"checking\") (princ \"sum\") (cl-reduce #'+ '(1 2)))")
+Returns value `3`, STDOUT `sum`, and MESSAGES `checking`.
 </example>
 
 ### Examples of bad usage
 
 <example>
-Eval(expression="(+ 1 2) (* 3 4)") expecting both forms to run
-<reasoning>
-Only the first form is evaluated. Use one compound form when the operations
-belong together, or separate calls when the second depends on inspecting the first.
-</reasoning>
+Eval(expression="(+ 1 2) (* 3 4)")
+Only `(+ 1 2)` runs; use one compound form if both operations belong together.
 </example>

@@ -347,7 +347,7 @@
   ,test
   (test)
 
-  :doc "keeps only the seven core tools native in implementation presets"
+  :doc "keeps Eval beside Bash in the implementation preset's native roster"
   (let ((mevedel-preset--registry nil)
         (gptel--known-presets nil))
     (mevedel-tools-register)
@@ -358,7 +358,7 @@
               (mevedel-tool-resolve (plist-get metadata :tool-specs)))
              (active
               (mapcar #'mevedel-tool-name (plist-get resolved :active))))
-        (should (equal '("ApplyPatch" "Bash" "Glob" "Grep" "Monitor" "Read"
+        (should (equal '("ApplyPatch" "Bash" "Eval" "Glob" "Grep" "Monitor" "Read"
                          "ToolCall" "ToolSearch" "WriteStdin")
                        (sort active #'string<))))))
 
@@ -378,8 +378,8 @@
                       "SharedCreate" "SharedEdit"))
         (should (member name deferred))
         (should-not (member name active)))
-      ;; Execution follow-up tools are native, not looked up through search.
-      (dolist (name '("WriteStdin" "Monitor"))
+      ;; Eval and execution follow-up tools do not need specialist discovery.
+      (dolist (name '("Eval" "WriteStdin" "Monitor"))
         (should (member name active))
         (should-not (member name deferred)))
       (should (member "ToolSearch" active))))
@@ -797,7 +797,7 @@
                            "- (Agent :task_name string :message string"
                            "- (SendMessage [:target string] :message string [:working_directory string])"))
             (should (string-search shape listing)))
-          (dolist (native '("(WriteStdin" "(Monitor" "(Bash" "(ToolCall"))
+          (dolist (native '("(Eval" "(WriteStdin" "(Monitor" "(Bash" "(ToolCall"))
             (should-not (string-search native listing))))
         (should-not (string-search "Useful search keys"
                                    (gptel-tool-description search)))
