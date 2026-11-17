@@ -9,7 +9,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {mkdir, readFile} from 'node:fs/promises';
 import {createRequire} from 'node:module';
 import {resolve} from 'node:path';
 
@@ -256,8 +256,8 @@ test('Ask focuses one question with inspectable samples and stable phone geometr
       assert.equal(await page.getByRole('button', {name: 'main', exact: true}).isVisible(), true);
       assert.equal(await height(), before, 'advancing to a short question holds height');
       await page.getByRole('textbox', {name: 'Custom answer 2'}).fill('topic/browser');
-      await page.getByRole('textbox', {name: 'Custom answer 2'}).press('Enter');
-      assert.equal(await page.locator('.question-panel:not([inert])').count(), 0);
+      await page.getByRole('textbox', {name: 'Custom answer 2'}).press('Control+Enter');
+      assert.deepEqual(await page.evaluate(() => requestSent.at(-1).answers), ['Small', 'topic/browser']);
       assert.equal(await height(), before, 'reviewing answers holds height');
       await page.getByRole('button', {name: 'Previous question', exact: true}).click();
       assert.equal(await page.getByRole('button', {name: 'main', exact: true}).isVisible(), true);
@@ -266,6 +266,84 @@ test('Ask focuses one question with inspectable samples and stable phone geometr
       await page.getByRole('button', {name: 'Submit answers', exact: true}).click();
       assert.deepEqual(await page.evaluate(() => requestSent.at(-1)),
         {t: 'ui-response', reqId: 3, answers: ['Small', 'topic/browser']});
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
+test('Ask custom answers expand, preserve multiline drafts on refresh and use the sending shortcut', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const viewport of [{width: 1440, height: 900}, {width: 375, height: 667}]) {
+      const page = await room(browser);
+      await page.setViewportSize(viewport);
+      await requestRenderer(page);
+      await page.evaluate(() => {
+        document.documentElement.dataset.theme = 'light';
+        window.askFrame = {reqId: 10, questions: [
+          {question: 'What should we implement?', options: [{label: 'Suggested approach'}]},
+          {question: 'How should we verify it?', options: [{label: 'Browser tests'}]},
+        ]};
+        requestView.render(askFrame);
+      });
+      const custom = page.getByRole('textbox', {name: 'Custom answer 1'});
+      assert.equal(await custom.evaluate(node => node.tagName), 'TEXTAREA');
+      await custom.fill('Keep the existing API.');
+      await custom.press('Enter');
+      await custom.pressSequentially('Add regression coverage.');
+      const text = 'Keep the existing API.\nAdd regression coverage.';
+      assert.equal(await custom.inputValue(), text);
+      assert.equal(await page.evaluate(() => requestSent.length), 0);
+      const collapsed = (await custom.boundingBox()).height;
+      const normalHeight = await page.locator('.questionnaire').evaluate(node => node.getBoundingClientRect().height);
+      if (process.env.MEVEDEL_CAPTURE_SCREENSHOTS) {
+        await mkdir(process.env.MEVEDEL_CAPTURE_SCREENSHOTS, {recursive: true});
+        await page.screenshot({path: resolve(process.env.MEVEDEL_CAPTURE_SCREENSHOTS,
+          `ask-custom-collapsed-${viewport.width}x${viewport.height}-light.png`)});
+      }
+      const toggle = page.locator('.question-panel:not([inert]) .input-expand');
+      await toggle.click();
+      assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
+      assert.ok((await custom.boundingBox()).height > collapsed + 30);
+      assert.ok((await custom.boundingBox()).height > viewport.height * .5);
+      await custom.evaluate(node => node.setSelectionRange(3, 8));
+      await page.evaluate(() => requestView.render({...askFrame, notice: 'The host updated this request.'}));
+      assert.equal(await custom.inputValue(), text);
+      assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
+      assert.deepEqual(await custom.evaluate(node => [document.activeElement === node,
+        node.selectionStart, node.selectionEnd]), [true, 3, 8]);
+      const box = await custom.boundingBox();
+      const header = await page.locator('body > .topbar').boundingBox();
+      assert.ok(box.y >= header.y + header.height, 'expanded answer stays below the header');
+      const submit = await page.getByRole('button', {name: 'Submit answers', exact: true}).boundingBox();
+      assert.ok(submit.y + submit.height <= viewport.height, 'Submit stays in the viewport');
+      if (process.env.MEVEDEL_CAPTURE_SCREENSHOTS) {
+        await mkdir(process.env.MEVEDEL_CAPTURE_SCREENSHOTS, {recursive: true});
+        await page.screenshot({path: resolve(process.env.MEVEDEL_CAPTURE_SCREENSHOTS,
+          `ask-custom-expanded-${viewport.width}x${viewport.height}-light.png`)});
+      }
+      if (viewport.width < 640) {
+        await page.evaluate(() => {
+          Object.defineProperty(visualViewport, 'height', {configurable: true, value: 420});
+          visualViewport.dispatchEvent(new Event('resize'));
+        });
+        const keyboardSubmit = await page.getByRole('button', {name: 'Submit answers', exact: true}).boundingBox();
+        assert.ok(keyboardSubmit.y + keyboardSubmit.height <= 420, 'Submit stays above the keyboard');
+        assert.ok((await custom.boundingBox()).y >= header.y + header.height, 'answer stays below the header with a keyboard');
+        await page.evaluate(() => { delete visualViewport.height; visualViewport.dispatchEvent(new Event('resize')); });
+      }
+      await custom.press('Meta+Enter');
+      assert.equal(await page.getByRole('textbox', {name: 'Custom answer 2'}).isVisible(), true);
+      assert.equal(await page.locator('#request-10-answer-0 + .input-expand').getAttribute('aria-pressed'), 'false');
+      assert.equal(await page.locator('.questionnaire').evaluate(node => node.getBoundingClientRect().height), normalHeight);
+      assert.equal(await page.locator('#composer').isVisible(), true);
+      assert.equal(await page.evaluate(() => requestSent.length), 0);
+      const second = page.getByRole('textbox', {name: 'Custom answer 2'});
+      await second.fill('Run browser tests.\nReview both sizes.');
+      await second.press('Control+Enter');
+      assert.deepEqual(await page.evaluate(() => requestSent.at(-1).answers),
+        [text, 'Run browser tests.\nReview both sizes.']);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       await page.close();
     }
@@ -383,14 +461,15 @@ test('custom option commits survive further editing and whitespace stays unanswe
     ]}));
     const custom = page.getByRole('textbox', {name: 'Custom answer 1'});
     await custom.fill(' A ');
-    await custom.press('Enter');
+    await custom.press('Control+Enter');
+    await page.getByRole('button', {name: 'Previous question', exact: true}).click();
     assert.equal(await custom.inputValue(), '');
     await custom.fill('Other');
     assert.equal(await page.getByRole('button', {name: 'A', exact: true}).getAttribute('aria-pressed'), 'true');
     await page.getByRole('button', {name: 'Next question', exact: true}).click();
     const single = page.getByRole('textbox', {name: 'Custom answer 2'});
     await single.fill('   ');
-    await single.press('Enter');
+    await single.press('Control+Enter');
     assert.equal(await single.isVisible(), true, 'blank answer remains the unanswered question');
     await page.getByRole('button', {name: 'Submit answers', exact: true}).click();
     assert.deepEqual(await page.evaluate(() => requestSent.at(-1).answers), [['A', 'Other'], '']);

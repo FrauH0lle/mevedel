@@ -242,10 +242,12 @@
       <form id="composer" class="composer" autocomplete="off" hidden>
         <p id="queue-state" class="queue-state" role="status" hidden></p>
         <p id="composer-scope" class="composer-scope" hidden></p>
-        <label class="composer-label" for="composer-input">Message the room</label>
-        <textarea id="composer-input" class="composer-input" rows="1"
-                  placeholder="Queue a follow-up for the session…"
-                  aria-label="Prompt"></textarea>
+        <div class="composer-field">
+          <label class="composer-label" for="composer-input">Message the room</label>
+          <textarea id="composer-input" class="composer-input" rows="1"
+                    placeholder="Queue a follow-up for the session…"
+                    aria-label="Prompt"></textarea>
+        </div>
         <div id="attachments" class="attachments"></div>
         <div class="composer-row">
           <button id="composer-identity" class="composer-identity" type="button"></button>

@@ -27,9 +27,11 @@
     const box = input.parentElement;
     if (!box?.classList.contains('expandable-input')) return;
     box.classList.toggle('expanded', expanded);
-    for (const container of [input.closest('.dock'), input.closest('.requests')]) {
+    for (const container of [input.closest('.dock'), input.closest('.requests'), input.closest('.questionnaire')]) {
       container?.classList.toggle('input-expanded', Boolean(container.querySelector('.expandable-input.expanded')));
     }
+    const requests = input.closest('.requests');
+    requests?.classList.toggle('question-expanded', Boolean(requests.querySelector('.questionnaire.input-expanded')));
     const toggle = box.lastElementChild;
     toggle.setAttribute('aria-label', expanded ? 'Collapse' : 'Expand');
     toggle.setAttribute('aria-pressed', String(expanded));

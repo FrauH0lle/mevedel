@@ -130,7 +130,10 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
 .assistant-working { width:100%; max-width:calc(var(--column) - 48px); margin:0; padding:4px 2px 7px; font-size:15px; font-weight:500; color:var(--ink); }
 .assistant-working::before { width:16px; height:16px; margin-right:10px; color:var(--accent); vertical-align:-3px; }
 .composer { padding:14px 18px 12px; border-color:var(--rule-strong); border-radius:4px; box-shadow:none; gap:8px; }
-.composer-label { font-weight:500; color:var(--ink); font-size:12px; }
+.composer-field { position:relative; display:flex; flex-direction:column; gap:8px; }
+.composer-label { padding-right:32px; font-weight:500; color:var(--ink); font-size:12px; }
+.composer-field > .expandable-input { position:static; }
+.composer-field > .expandable-input > .input-expand { top:-7px; right:-10px; }
 .composer textarea { font-size:15px; line-height:1.6; }
 .composer-row { gap:6px; }
 .composer-row > .btn { min-height:34px; padding:7px 11px; font-size:12px; font-weight:500; }
@@ -218,6 +221,12 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
 .decision-feedback .expandable-input { flex:1 1 100%; min-width:0; }
 .decision-feedback .request-feedback { font-size:14px; padding:8px 2.25rem 8px 10px; field-sizing:content; min-height:3rem; max-height:30dvh; }
 .requests.input-expanded { max-height:none; overflow:visible; }
+.questionnaire.input-expanded { height:auto!important; }
+.questionnaire.input-expanded .question-heading,
+.questionnaire.input-expanded .question-option,
+.questionnaire.input-expanded .question-samples { display:none; }
+.requests.question-expanded ~ .composer { display:none; }
+.question-panel .request-feedback { min-height:3rem; max-height:30dvh; }
 @media (min-width:1100px) {
   /* The sidebar keeps to the window's right edge and the conversation takes
      the rest, up to a column wide enough for code, tables and tool rows. */
@@ -297,6 +306,8 @@ body:has(#editing-panel.docked) .room-button { display:grid; }
   #session-box[open] .dock-disclosure-body { max-height:none; overflow:visible; }
   /* The composer starts at one line and grows with its message. */
   .composer-label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+  .composer-field > .expandable-input { position:relative; }
+  .composer-field > .expandable-input > .input-expand { top:0; right:0; }
   .composer textarea { min-height:44px; max-height:30dvh; }
   .composer-row > .btn { font-size:11px; padding:6px 9px; }
   .sheet-form { padding:20px; }

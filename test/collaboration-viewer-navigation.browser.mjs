@@ -319,6 +319,25 @@ test('multiline inputs expand reversibly and message actions copy source with a 
         const collapsed = (await input.boundingBox()).height;
         assert.equal(await toggle.getAttribute('aria-label'), 'Expand');
         assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
+        const toggleBox = await toggle.boundingBox();
+        if (viewport.width > 640) {
+          const label = await page.locator('.composer-label').boundingBox();
+          assert.ok(label.width > 1, 'the composer label stays visible');
+          assert.ok(Math.abs(toggleBox.y + toggleBox.height / 2 - label.y - label.height / 2) < 3,
+            'the toggle aligns with the visible label, not the placeholder');
+          await page.evaluate(() => {
+            const scope = document.getElementById('composer-scope');
+            scope.textContent = 'Selected context'; scope.hidden = false;
+          });
+          const scopedLabel = await page.locator('.composer-label').boundingBox();
+          const scopedToggle = await toggle.boundingBox();
+          assert.ok(Math.abs(scopedToggle.y + scopedToggle.height / 2 - scopedLabel.y - scopedLabel.height / 2) < 3,
+            'context above the input does not separate the toggle from its label');
+          await page.evaluate(() => {
+            const scope = document.getElementById('composer-scope');
+            scope.textContent = ''; scope.hidden = true;
+          });
+        } else assert.ok(Math.abs(toggleBox.y - (await input.boundingBox()).y) < 1);
         await capture(page, `composer-collapsed-${suffix}`);
         await toggle.click();
         assert.equal(await toggle.getAttribute('aria-label'), 'Collapse');
@@ -358,6 +377,7 @@ test('multiline inputs expand reversibly and message actions copy source with a 
         const prompt = page.locator('#new-session-prompt');
         const promptToggle = page.locator('#new-session .input-expand');
         await prompt.fill('A separate task');
+        assert.ok(Math.abs((await promptToggle.boundingBox()).y - (await prompt.boundingBox()).y) < 1);
         await promptToggle.click();
         assert.equal(await promptToggle.getAttribute('aria-pressed'), 'true');
         assert.ok((await prompt.boundingBox()).height > viewport.height * .65);
@@ -424,6 +444,7 @@ test('multiline inputs expand reversibly and message actions copy source with a 
         const discussionInput = page.locator('#artifact-side .ds-input');
         const discussionToggle = page.locator('#artifact-side .input-expand');
         await discussionInput.fill('Please keep this discussion draft while expanding.');
+        assert.ok(Math.abs((await discussionToggle.boundingBox()).y - (await discussionInput.boundingBox()).y) < 1);
         await discussionToggle.click();
         assert.equal(await discussionToggle.getAttribute('aria-pressed'), 'true');
         assert.ok((await discussionInput.boundingBox()).height > viewport.height * .5);
@@ -461,6 +482,7 @@ test('Plan feedback supports multiline expansion, refresh continuity and shortcu
       assert.equal(await input.inputValue(), text);
       const collapsed = (await input.boundingBox()).height;
       const toggle = page.locator('.decision-feedback .input-expand');
+      assert.ok(Math.abs((await toggle.boundingBox()).y - (await input.boundingBox()).y) < 1);
       await toggle.click();
       await page.waitForTimeout(250);
       assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
