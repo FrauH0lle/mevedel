@@ -316,6 +316,9 @@ Text and properties before and after REGION must be identical afterwards:
 REGION promises that THUNK replaces only that text."
   (if (not region)
       (funcall original thunk region)
+    ;; Geometry can trigger composer jit-lock.  Compare already-fontified text
+    ;; so ordinary redisplay faces do not look like an out-of-region write.
+    (mevedel-view--fontify-composer (point-min) (point-max))
     (let* ((start (copy-marker (car region)))
            (end (copy-marker (cdr region) t))
            (before (buffer-substring (point-min) start))

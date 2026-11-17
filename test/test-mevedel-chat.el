@@ -1133,6 +1133,10 @@
 			(session (mevedel-session-create "main" workspace root))
 			(mevedel-session-start-hook nil)
 			(mevedel-hook-rules nil)
+			(mevedel--load-provenance
+			 '(:loaded-at "2026-01-01T00:00:00Z"
+			   :mevedel-commit "fixture-revision" :mevedel-version "fixture"
+			   :gptel-commit nil :gptel-version nil))
 			events)
 		   (require 'mevedel-telemetry)
 		   (unwind-protect
@@ -1146,16 +1150,11 @@
 			 (should (= 1 (length events)))
 			 (let ((props (car events)))
 			   (should (equal "resume" (plist-get props :boundary)))
-			   (should (stringp (plist-get props :loaded-at)))
-			   ;; Tests load mevedel from its Git checkout.
-			   (should (string-match-p "\\`[0-9a-f]\\{40\\}\\'"
-						   (plist-get props :mevedel-commit)))
-			   (should (stringp (plist-get props :mevedel-version)))
-			   ;; gptel comes from a package.el install, which names its
-			   ;; commit and version in its descriptor.
-			   (should (string-match-p "\\`[0-9a-f]\\{7,64\\}\\'"
-						   (plist-get props :gptel-commit)))
-			   (should (stringp (plist-get props :gptel-version)))))
+			   ;; Forward the loaded snapshot, including absent metadata.
+			   (should (equal props
+					  (append (list :boundary "resume"
+							:emacs-version emacs-version)
+						  mevedel--load-provenance)))))
 		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-start-hooks-wait

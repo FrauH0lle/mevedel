@@ -1444,7 +1444,7 @@ a disabled transport cleans immediately instead of dropping work"
                    (list "sh" "-c"
                          (concat "find /run/user -type s 2>/dev/null; "
                                  "if DBUS_SESSION_BUS_ADDRESS=unix:path=$1 timeout 10 "
-                                 "systemd-run --user --quiet --wait true >/dev/null 2>&1; "
+                                 "systemd-run --user --quiet --wait /bin/true >/dev/null 2>&1; "
                                  "then echo systemd-run-reached; fi")
                          "probe" bus)
                    root (list root) (plist-get availability :executable)

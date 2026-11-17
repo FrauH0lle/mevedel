@@ -69,9 +69,14 @@ Both use portable lease authority."
 
 (defun test-mevedel-execution--wait (predicate &optional timeout)
   "Wait until PREDICATE returns non-nil, bounded by TIMEOUT seconds."
-  (with-timeout ((or timeout 5) (error "Timed out"))
-    (while (not (funcall predicate))
-      (accept-process-output nil 0.02))))
+  (let* ((timeout (or timeout 5))
+         (deadline (+ (float-time) timeout)))
+    (with-timeout (timeout (error "Timed out"))
+      (while (not (funcall predicate))
+        ;; Direct TRAMP operations can discard the suspended timeout timer.
+        (when (>= (float-time) deadline)
+          (error "Timed out"))
+        (accept-process-output nil 0.02)))))
 
 (defun test-mevedel-execution--timeout-after-ready (path thunk)
   "Call THUNK, arming child timeouts only after PATH contains a ready marker.

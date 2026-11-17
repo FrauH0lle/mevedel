@@ -343,6 +343,9 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
   (test)
   :doc "whole-response Markdown work yields before publication and releases its job"
   (mevedel-batch-test--with-history
+    ;; Fixture rendering may already have populated the real Markdown cache.
+    (clrhash mevedel-view--response-fontify-cache)
+    (setq mevedel-view--response-cache-entries 0)
     (let ((before (buffer-substring-no-properties (point-min) (point-max)))
           (started 0) (steps 0) (cancelled 0))
       (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
@@ -404,6 +407,9 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
   :doc "sync and batch probe grammars once and a new projection sees installation"
   (dolist (batched '(nil t))
     (mevedel-batch-test--with-history
+      ;; Each availability scenario starts cold, regardless of host grammars.
+      (clrhash mevedel-view--response-fontify-cache)
+      (setq mevedel-view--response-cache-entries 0)
       (let ((available nil) (probes 0) (starts 0)
             (start (symbol-function 'mevedel-view--markdown-fontify-job-start)))
         (cl-letf (((symbol-function 'treesit-language-available-p)

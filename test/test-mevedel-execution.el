@@ -52,6 +52,35 @@
               (mevedel-execution--diagnostic-scope
                (mevedel-execution--record-create)))))
 
+(mevedel-deftest test-mevedel-execution--wait ()
+  ,test
+  (test)
+  :doc "returns when the predicate becomes ready"
+  (let ((calls 0))
+    (test-mevedel-execution--wait (lambda () (= (cl-incf calls) 2)))
+    (should (= calls 2)))
+  :doc "elapsed deadline survives loss of the with-timeout timer"
+  (let ((clock 1000.0) (calls 0) cancelled)
+    (cl-letf (((symbol-function 'float-time) (lambda (&optional _) clock))
+              ((symbol-function 'accept-process-output)
+               (lambda (&rest _) (setq clock (+ clock 0.02)))))
+      (should
+       (equal '(error "Timed out")
+              (should-error
+               (test-mevedel-execution--wait
+                (lambda ()
+                  (cl-incf calls)
+                  (when (> calls 4) (error "Deadline guard did not run"))
+                  ;; Model TRAMP losing suspended timeout timers, without
+                  ;; disturbing unrelated event-loop timers in this process.
+                  (dolist (timer with-timeout-timers)
+                    (push timer cancelled)
+                    (cancel-timer timer))
+                  nil)
+                0.05))))
+      (should cancelled)
+      (should (= calls 4)))))
+
 (mevedel-deftest test-mevedel-execution--timeout-after-ready
   (:doc "waits for a nonempty marker only for timeout delivery, preserving its budget")
   (let* ((root (make-temp-file "mevedel-timeout-ready-" t))
