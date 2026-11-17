@@ -71,18 +71,18 @@
   (test)
   :doc "labels default to collapsed"
   (should (eq 'collapsed (default-value 'mevedel-note-labels)))
-  :doc "notes start tinted without labels; toggles stay stable across point motion"
+  :doc "collapsed labels remain visible; toggles stay stable across point motion"
   (mevedel-notes-test--with-source
     (let* ((mevedel-note-labels 'collapsed)
            (first (mevedel-note-create "First")))
       (goto-char (point-min))
       (let ((second (mevedel-note-create "Second")))
-        (should-not (mevedel-notes-test--labels))
+        (should (= 2 (length (mevedel-notes-test--labels))))
         (should (eq 'mevedel-note-you (overlay-get first 'face)))
         (cl-letf (((symbol-function 'read-key) (lambda (&rest _) ?e)))
           (mevedel-note-menu first))
-        (should (= 1 (length (mevedel-notes-test--labels))))
-        (should (string-search "First" (car (mevedel-notes-test--labels))))
+        (should (eq 'expanded (overlay-get first 'mevedel-note-labels)))
+        (should (string-search "First" (string-join (mevedel-notes-test--labels))))
         (call-interactively #'mevedel-notes-toggle-labels)
         (should (= 2 (length (mevedel-notes-test--labels))))
         (goto-char (overlay-start first))
@@ -92,18 +92,18 @@
         (should (= 2 (length (mevedel-notes-test--labels))))
         (cl-letf (((symbol-function 'read-key) (lambda (&rest _) ?e)))
           (mevedel-note-menu second))
-        (should (= 1 (length (mevedel-notes-test--labels))))
+        (should (eq 'collapsed (overlay-get second 'mevedel-note-labels)))
         (call-interactively #'mevedel-notes-toggle-labels)
         (should (= 2 (length (mevedel-notes-test--labels))))
         (call-interactively #'mevedel-notes-toggle-labels)
-        (should-not (mevedel-notes-test--labels))
+        (should (eq 'collapsed (overlay-get first 'mevedel-note-labels)))
         (mevedel-note-edit "Changed" first)
-        (should-not (mevedel-notes-test--labels))
+        (should (string-search "Changed" (string-join (mevedel-notes-test--labels))))
         (call-interactively #'mevedel-notes-toggle-labels)
         (mevedel-instruction-store-flush t)
         (mevedel--clear-instruction-state workspace)
         (mevedel-instruction-store-observe workspace)
-        (should-not (mevedel-notes-test--labels)))))
+        (should (= 2 (length (mevedel-notes-test--labels)))))))
   :doc "buffer toggles include notes outside the narrowing and preserve point and restriction"
   (mevedel-notes-test--with-source
     (let* ((mevedel-note-labels 'collapsed)
@@ -141,7 +141,7 @@
         (should (= 8 (overlay-start note)))
         (should (= 22 (overlay-end note)))
         (should (= 21 (overlay-end (overlay-get note 'mevedel-label-overlay))))
-        (should (equal (list note) (overlays-at 21)))
+        (should (memq note (overlays-at 21)))
         (should (eq 'mevedel-note-you (overlay-get note 'face))))))
   :doc "partial-line regions ending at eol tint only the marked text"
   (mevedel-notes-test--with-source
@@ -422,9 +422,9 @@
         (goto-char (1+ (overlay-start child)))
         (cl-letf (((symbol-function 'completing-read)
                    (lambda (_prompt candidates &rest _)
-                     (should (equal '("Note 1 · You  Child" "Note 2 · You  Parent")
+                     (should (equal '("Note 1 · You  Child Second line" "Note 2 · You  Parent")
                                     (sort (copy-sequence candidates) #'string-lessp)))
-                     "Note 1 · You  Child"))
+                     "Note 1 · You  Child Second line"))
                   ((symbol-function 'read-key) (lambda (&rest _) ?w)))
           (call-interactively (key-binding (kbd "M-m"))))
         (should (equal "Child\nSecond line" (current-kill 0))))))
@@ -548,7 +548,7 @@
           (mevedel-note-menu note)))
       (should (equal text (current-kill 0)))
       (should (string-match-p "copied" messages))
-      (should-not (mevedel-notes-test--labels))
+      (should (string-search "First Second" (car (mevedel-notes-test--labels))))
       (should (equal "before\nselected code\nafter\n" (buffer-string)))))
   :doc "tags can be edited from the inline menu without editing source"
   (mevedel-notes-test--with-source
@@ -1335,6 +1335,54 @@
         (should (eq 'unsent (plist-get closed :open-state)))
         (should (equal '((:session-id "o" :turn 3))
                        (overlay-get live 'mevedel-note-applied-changes)))))))
+
+(mevedel-deftest mevedel-notes--label-string
+  (:quiet t)
+  ,test
+  (test)
+  :doc "collapsed labels fit indentation and window, keep identity and never change authored text"
+  (mevedel-notes-test--with-source
+    (insert "    ")
+    (let* ((mevedel-note-labels 'collapsed)
+           (fill-column 25)
+           (text (concat "First\nSecond " (make-string 100 ?x)))
+           (note (mevedel-note-create text)))
+      (dolist (width '(38 120))
+        (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) width)))
+          (mevedel-notes--refit-labels (selected-window))
+          (let* ((label (overlay-get (overlay-get note 'mevedel-label-overlay) 'after-string))
+                 (lines (split-string label "\n" t)))
+            (should (= 1 (length lines)))
+            (should (string-prefix-p "    ▍ Note 1 · You  First Second " (car lines)))
+            (should (string-suffix-p "…" label))
+            (should (= (string-width (car lines)) (min 86 width))))))
+      (should (equal text (overlay-get note 'mevedel-note-text))))))
+
+(mevedel-deftest mevedel-notes--at-point
+  (:quiet t)
+  ,test
+  (test)
+  :doc "nested source tints prioritize the inner note and commands choose either identity"
+  (mevedel-notes-test--with-source
+    (let* ((child (mevedel-note-create "Child"))
+           (parent (mevedel-note-make source (point-min) (overlay-end child)
+                                           :text "Parent" :author 'agent)))
+      (should (> (overlay-get child 'priority) (overlay-get parent 'priority)))
+      (should (eq 'mevedel-note-you (get-char-property (overlay-start child) 'face)))
+      (should (= (overlay-end (overlay-get child 'mevedel-label-overlay))
+                 (overlay-end (overlay-get parent 'mevedel-label-overlay))))
+      (dolist (note (list parent child))
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (_prompt choices &rest _)
+                     (should (= 2 (length choices)))
+                     (cl-find-if (lambda (choice)
+                                   (string-prefix-p
+                                    (format "Note %s ·" (overlay-get note 'mevedel-id)) choice))
+                                 choices))))
+          (should (eq note (mevedel-notes--at-point)))))
+      (let (messages)
+        (mevedel-test--with-captured-messages messages (mevedel-notes--entry-hint))
+        (should (string-match-p "Note 1 · You.*Child.*Note 2 · AI.*Parent.*choose note" messages))))))
 
 (provide 'test-mevedel-notes)
 ;;; test-mevedel-notes.el ends here

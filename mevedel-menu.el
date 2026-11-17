@@ -403,7 +403,8 @@ Use a disposable bottom side window, never an existing editing window."
                                  (add-hook
                                   'kill-buffer-hook
                                   (lambda ()
-                                    (mevedel-window-restore configuration origin t))
+                                    (save-current-buffer
+                                      (mevedel-window-restore configuration origin t)))
                                   nil t)))))
                        (window-parameters . ((no-other-window . t)))))))
 

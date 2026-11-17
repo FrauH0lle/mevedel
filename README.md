@@ -246,9 +246,10 @@ A note is a marked code range with optional text, created by you or the agent
 (or as a Buddy remark). Use `M-x mevedel-note-create` in a visited source file
 to mark the active region, or the current line when no region is active. The
 text is optional: submitting an empty answer keeps a code-only note. A label
-is collapsed by default (`mevedel-note-labels` is `collapsed`): the code stays
-tinted, but no label is shown. Expanded labels sit below the complete source
-line at the code's indentation: `▍ Note N · You  note text` (or `AI` / `Buddy`).
+is collapsed by default (`mevedel-note-labels` is `collapsed`): a single line
+shows `▍ Note N · You  note text` (or `AI` / `Buddy`), cut with `…` at 80
+columns or the space left after indentation and bar, whichever is smaller.
+Expanded labels sit below the complete source line at the code's indentation.
 The bar and header use the author's label face; the full note text uses the
 normal face, filled to `fill-column` bounded by the window width. Each
 continuation line starts with the bar; Buddy remarks use `┆` instead.
@@ -257,7 +258,9 @@ marked text. Expanded label rows remain untinted. Only states needing
 attention appear after the header, dimmed: `change ready`, `change stale`,
 `working…`, `Buddy watches`, `looks done`, or `paused` for a paused take.
 Labels show neither sent/unsent status nor menu instructions.
-Set `mevedel-note-labels` to `expanded` to show labels initially instead.
+Set `mevedel-note-labels` to `expanded` to show the full wrapped text initially.
+Nested labels stack below their source lines; the inner note's tint wins on
+overlapping code. Both identities appear in the entry hint.
 Notes follow source edits. A note is unsent, sent, taken or closed (done,
 deleted or dismissed). Its context reaches a prompt only when you send or
 mention it.
@@ -265,7 +268,7 @@ mention it.
 Inside a note, `M-m` (or `mevedel-ov-dispatch-key`) opens an inline **Actions** row.
 Overlapping notes offer their number, author and first text line even when
 their labels are collapsed.
-Its keys are `s` send/reopen, `t` take/drop, `i` edit, `g` tags, `x` done,
+Its keys are `s` send/reopen, `p` preview prompt, `t` take/drop, `i` edit, `g` tags, `x` done,
 `k` delete/dismiss, `b` keep a Buddy remark, `w` copy text, `S` settings and
 `e` expand/collapse. `a` apply and `m` merge appear only for a prepared change;
 `r` revert appears only for applied changes. Plain letters still insert source
@@ -277,7 +280,9 @@ to each live overlay and is not persisted. Moving point never changes style.
 `mevedel-note-menu` are available through `M-x` too. Deleting a note never edits
 its source code. Creating or editing a note does not send anything to a model.
 
-Choose **send** in that menu, or use `M-x mevedel-note-send`, to open the note's
+Choose **preview** to inspect the exact prompt that sending would build, without
+starting a conversation or contacting a model. Choose **send** in that menu,
+or use `M-x mevedel-note-send`, to open the note's
 own conversation beside the code. Graphical Emacs uses an anchored child frame;
 terminal Emacs uses a side window. Type below the prompt and press `C-c C-c`
 to reply. The transcript above is read-only. `C-c C-v` shows retained provider
@@ -291,7 +296,8 @@ they do not write source or keep the AI's turn open. `C-c C-a` applies the waiti
 change as one source undo step. `C-u C-c C-a` opens the existing detailed patch
 review; confirming a partial selection drops the unselected rest. A newer
 proposal replaces the waiting one, while earlier proposals remain in the
-conversation. Applying does not mark the note done.
+conversation. Applying closes every note included in that conversation as done;
+notes excluded because they have their own conversation stay open.
 
 An overlapping source edit makes apply refuse and shows **change stale**.
 Continue in the ordinary composer to request a revised change, or use
@@ -311,6 +317,10 @@ away from a note. A successful revert reopens a done note; deleting a note never
 reverts its code changes.
 
 `M-x mevedel-note-send-batch` sends several loaded notes into one conversation.
+Sending a note includes all descendants, at every depth, without duplicating
+their code. Sending a child does not include its parent. A descendant with its
+own conversation is named but excluded together with its subtree. Batch send
+deduplicates notes already included as descendants.
 Notes already sharing a conversation reopen it together; notes belonging to
 different conversations must be sent separately. Each conversation is a normal
 saved session with its own history and Rewind. There is no separate Discuss or

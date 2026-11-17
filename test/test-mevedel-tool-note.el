@@ -227,7 +227,7 @@
                                (overlay-get (overlay-get note 'mevedel-label-overlay) 'after-string)))
         (mevedel-note-apply-change note)
         (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))
-        (should (string-search "unsent"
+        (should (string-search "State: closed"
                                (mevedel-tool-note-test--read data-buf (concat "notes://" id ".md")))))))
   :doc "creation refuses to steal a source buffer from a different workspace"
   (mevedel-tool-note-test--workspace
@@ -329,7 +329,11 @@
         (should (= 8 (overlay-start note)))
         (should (= 17 (overlay-end note)))
         (should (= 17 (overlay-end (overlay-get note 'mevedel-label-overlay))))
-        (should (eq 'mevedel-note-agent (get-char-property 17 'face)))
+        (should (eq 'default (get-char-property 17 'face)))
+        (should (eq 'mevedel-note-agent
+                    (get-text-property 0 'face
+                                       (overlay-get (overlay-get note 'mevedel-label-overlay)
+                                                    'after-string))))
         (should-not (cl-some (lambda (overlay) (overlay-get overlay 'face))
                              (overlays-at 18))))))
   :doc "newline tint follows edits and undo in both label modes and is removed on close"
@@ -347,18 +351,16 @@
           (undo-boundary)
           (should (= 15 (overlay-end note)))
           (should (= 15 (overlay-end (overlay-get note 'mevedel-label-overlay))))
-          (should (equal (if (eq display 'expanded)
-                             'default
-                           'mevedel-note-agent)
-                         (get-char-property 15 'face)))
+          (should (eq 'default (get-char-property 15 'face)))
+          (should (eq 'mevedel-note-agent
+                      (get-text-property 0 'face
+                                         (overlay-get (overlay-get note 'mevedel-label-overlay)
+                                                      'after-string))))
           (undo-only 1)
           (should (equal "before\nold\nafter\n" (buffer-string)))
           (should (= 11 (overlay-end note)))
           (should (= 11 (overlay-end (overlay-get note 'mevedel-label-overlay))))
-          (should (equal (if (eq display 'expanded)
-                             'default
-                           'mevedel-note-agent)
-                         (get-char-property 11 'face))))
+          (should (eq 'default (get-char-property 11 'face))))
         (mevedel-note-done note)
         (should-not (overlays-in (point-min) (point-max))))))
   :doc "a final line without a newline gains and loses the extra tint with source undo"

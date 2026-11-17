@@ -72,9 +72,11 @@
 
 ;; `mevedel-notes'
 (declare-function mevedel-note-menu "mevedel-notes" (&optional note))
+(declare-function mevedel-notes--at-point "mevedel-notes" ())
 (declare-function mevedel-notes--author-name "mevedel-notes" (author))
 (declare-function mevedel-notes--render "mevedel-notes" (note))
 (autoload 'mevedel-note-menu "mevedel-notes" nil t)
+(autoload 'mevedel-notes--at-point "mevedel-notes")
 (autoload 'mevedel-notes--author-name "mevedel-notes")
 (autoload 'mevedel-notes--render "mevedel-notes")
 
@@ -179,28 +181,8 @@
 ;; Overlay actions adapted from `gptel-rewrite'
 
 (defun mevedel--ov-actions-getov ()
-  "Return an instruction overlay at point for action dispatch.
-
-If multiple instruction overlays exist at point, prompt the user to
-select one via `completing-read'.  If only one overlay exists, return it
-directly.  Return nil if no overlays exist at point."
-  (let* ((ovs (mevedel--instructions-at (point)))
-         (ov-strings (cl-loop for ov in ovs
-                              collect (truncate-string-to-width
-                                       (format "Note %s · %s  %s"
-                                               (overlay-get ov 'mevedel-id)
-                                               (mevedel-notes--author-name
-                                                (overlay-get ov 'mevedel-note-author))
-                                               (car (split-string
-                                                     (or (overlay-get ov 'mevedel-note-text) "")
-                                                     "\n")))
-                                       80 nil nil "…")))
-         (ov-map (cl-mapcar #'cons ov-strings ovs))
-         selection)
-    (if (length> ovs 1)
-        (setq selection (completing-read "Choose instruction overlay: " ov-strings))
-      (setq selection (car ov-strings)))
-    (alist-get selection ov-map nil nil #'equal)))
+  "Return the note chosen at point for action dispatch."
+  (mevedel-notes--at-point))
 
 ;; Declare overlay action functions
 (eval-and-compile

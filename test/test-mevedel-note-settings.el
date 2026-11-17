@@ -81,6 +81,29 @@
   (:quiet t)
   ,test
   (test)
+  :doc "closing settings preserves the source note and every later kill hook's buffer"
+  (mevedel-note-settings-test--with-source
+    (let* ((note (mevedel-note-create "Keep this visible"))
+           (label (overlay-get note 'mevedel-label-overlay))
+           (text (overlay-get label 'after-string))
+           (position (point))
+           killed-buffer
+           (observer (lambda () (setq killed-buffer (current-buffer)))))
+      (unwind-protect
+          (progn
+            (add-hook 'kill-buffer-hook observer 95)
+            (mevedel-note-settings note)
+            (let ((popup (get-buffer transient--buffer-name)))
+              (should (buffer-live-p popup))
+              (execute-kbd-macro (kbd "q"))
+              (should-not (buffer-live-p popup))
+              (should (eq popup killed-buffer))))
+        (remove-hook 'kill-buffer-hook observer))
+      (should (eq source (overlay-buffer note)))
+      (should (eq source (overlay-buffer label)))
+      (should (equal-including-properties text (overlay-get label 'after-string)))
+      (should (= position (point)))
+      (should (equal "before\nselected code\nafter\n" (buffer-string)))))
   :doc "unsent preset choice persists without creating a conversation"
   (mevedel-note-settings-test--with-source
     (let* ((note (mevedel-note-create "Explain"))
