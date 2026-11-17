@@ -106,6 +106,7 @@
     const notice = el('p', 'ds-notice');
     notice.setAttribute('role', 'status');
     root.replaceChildren(list, thread, notice);
+    root.addEventListener('click', window.mevedelTranscriptRenderer.messageAction);
 
     // -- Model ------------------------------------------------------------
 
@@ -442,7 +443,10 @@
       try {
         const opened = await submit(at, {text, toAssistant: ask.checked});
         if (opened === false) return;
-        if (key() === at && input.value === text) input.value = '';
+        if (key() === at && input.value === text) {
+          input.value = '';
+          window.mevedelComposer.collapse(input);
+        }
         if (at === NEW && key() === NEW && typeof opened === 'string') {
           if (find(opened)) show({kind: 'thread', id: opened, keep: true});
           else awaiting = opened;

@@ -387,6 +387,20 @@ keeps a 44px minimum and a 30% viewport-height cap. Conversation text and the co
 bounded width. The message and name fields have visible labels;
 keyboard users can skip the header directly to the transcript.
 
+Every multiline message box has an **Expand** icon inside its upper-right corner:
+the room composer, a new session's first prompt, and discussion inputs on HTML
+artifacts, whiteboards and documents. It toggles a tall editing area, up to 75%
+of the viewport, limited by the room header, discussion controls and visible
+space above a phone keyboard. **Collapse** restores the compact size without
+changing the draft; sending returns the box to compact mode.
+
+User prompts and assistant responses offer **Copy** beneath the message. The
+action appears on hover or keyboard focus on desktop and remains visible on
+touch devices. It copies the message's original Markdown/plain text, or rendered
+text with line breaks when source text is absent, and briefly confirms **Copied**.
+When the Clipboard API is unavailable, the viewer tries the browser's legacy
+copy command; a refusal shows **Copy failed** instead.
+
 At the bottom of the conversation, the viewer follows new messages and streamed
 responses, including content that grows after rendering. Sending a message keeps
 that following state. Even a small upward scroll pauses following and preserves
