@@ -58,7 +58,8 @@ window.mevedelPinnedPrompt = Object.freeze({
     // still visible. A prompt starting within the row's height counts as
     // visible, so the row never covers a prompt header.
     function governing(edgeTop) {
-      const ledgers = [...history.querySelectorAll('.history-ledger'), transcript];
+      // Closed details can retain measurable child boxes; they are not on screen.
+      const ledgers = [...history.querySelectorAll('.history-segment[open] .history-ledger'), transcript];
       const ledger = ledgers.find(node => {
         if (!shown(node)) return false;
         const box = node.getBoundingClientRect();

@@ -576,7 +576,18 @@ function pinned(page, text) {
     const visible = getComputedStyle(pin).visibility === 'visible';
     const rendered = getComputedStyle(pin, '::before').content.replace(/^"|"$/g, '');
     return text === null ? !visible : visible && rendered.startsWith(text);
-  }, text);
+  }, text).catch(async error => {
+    throw new Error(`Expected pin ${JSON.stringify(text)}; observed ${JSON.stringify(await page.evaluate(() => ({
+      label: document.getElementById('pinned-prompt').dataset.label,
+      shown: document.getElementById('pinned-prompt').hasAttribute('data-shown'), scrollY,
+      ledgers: [...document.querySelectorAll('.history-ledger, #transcript')].map(node => ({
+        id: node.id, top: node.getBoundingClientRect().top, bottom: node.getBoundingClientRect().bottom,
+        open: node.closest('details')?.open})),
+      prompts: [...document.querySelectorAll('[data-role="you"], [data-role="guest"]')].map(node => ({
+        id: node.dataset.recordId, top: node.getBoundingClientRect().top,
+        live: Boolean(node.closest('.history-chat[data-live]'))})),
+    })))}`, {cause: error});
+  });
 }
 
 function pinGeometry(page) {
