@@ -441,7 +441,7 @@
                         (:task_name "bad_model" :message "bad"
                          :model "not-a-model")
                         (:task_name "bad_effort" :message "bad"
-                         :effort "")
+                         :effort "bogus")
                         (:task_name "nil_effort" :message "bad"
                          :effort "nil")))
               (should-error (mevedel-tool-ui--agent #'ignore args)
