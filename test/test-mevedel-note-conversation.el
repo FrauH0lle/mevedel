@@ -3,7 +3,8 @@
 ;;; Commentary:
 
 ;; Exercise note commands in real files with the normal session/view pipeline.
-;; Only gptel's network transport is replaced with canned answers.
+;; gptel's network transport is replaced with canned answers; frame attendance
+;; is fixed independently of the desktop's input focus.
 
 ;;; Code:
 
@@ -46,7 +47,7 @@
           "mevedel-instruction-test-support"))
 
 (defmacro mevedel-note-conversation-test--with-source (&rest body)
-  "Run BODY in a real source file, replacing only the model transport."
+  "Run BODY in a real source file with canned transport and attended frames."
   (declare (indent 0))
   `(let* ((root (make-temp-file "mevedel-note-send-" t))
           (file (file-name-concat root "source.el"))
@@ -81,7 +82,9 @@
            (setq workspace (mevedel-workspace-get-or-create 'file root root "notes")
                  source (find-file-noselect file))
            (mevedel-install)
-           (cl-letf (((symbol-function 'gptel-curl-get-response)
+           ;; A compositor may deny focus; these cases test rendering, not suspension.
+           (cl-letf (((symbol-function 'frame-focus-state) (lambda (&optional _) t))
+                     ((symbol-function 'gptel-curl-get-response)
                       (lambda (fsm)
                         (let ((config (gptel-curl--get-config (gptel-fsm-info fsm) "test")))
                           (push (encode-coding-string
@@ -117,14 +120,22 @@
                            unread-command-events)))))
 
 (mevedel-deftest mevedel-note-conversation-test--with-source
-  (:quiet t :doc "cleanup discards only new frame-switch events, preserving other input")
+  (:quiet t)
+  ,test
+  (test)
+  :doc "cleanup discards only new frame-switch events, preserving other input"
   (let* ((existing (list 'switch-frame (selected-frame)))
          (unread-command-events (list existing ?x)))
     (mevedel-note-conversation-test--with-source
       (push ?y unread-command-events)
       (push (list t 'switch-frame (selected-frame)) unread-command-events)
       (push (list 'switch-frame (selected-frame)) unread-command-events))
-    (should (equal (list ?y existing ?x) unread-command-events))))
+    (should (equal (list ?y existing ?x) unread-command-events)))
+  :doc "rendering stays attended without compositor focus and restores the focus query"
+  (cl-letf (((symbol-function 'frame-focus-state) (lambda (&optional _) nil)))
+    (mevedel-note-conversation-test--with-source
+      (should (frame-focus-state)))
+    (should-not (frame-focus-state))))
 
 (defun mevedel-note-conversation-test--answer (fsm text)
   "Deliver canned TEXT through FSM's normal insertion and settlement."

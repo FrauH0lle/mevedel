@@ -21,6 +21,8 @@
 (mevedel-deftest mevedel-graphical-check--options ()
   ,test
   (test)
+  :doc "default whole-child deadline leaves margin for fixture setup and the full suite"
+  (should (= 300 (nth 2 (mevedel-graphical-check--options nil))))
   :doc "accepts explicit output, repeated grammar roots and a positive deadline"
   (let ((directory (make-temp-file "graphical-options-" t)))
     (unwind-protect

@@ -45,7 +45,7 @@
   (let ((output (file-name-concat mevedel-graphical-check--root ".scratch"
                                  "graphical-check"
                                  (format-time-string "%Y%m%d-%H%M%S-%N")))
-        (timeout 120)
+        (timeout 300)
         grammars)
     (when (equal (car arguments) "--") (pop arguments))
     (while arguments

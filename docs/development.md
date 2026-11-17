@@ -539,9 +539,14 @@ checkout being tested, after the worktree bootstrap:
 npx @emacs-eask/cli run script graphical-check
 # Grammars outside the system library path must be supplied explicitly:
 npx @emacs-eask/cli run script graphical-check -- --grammar-dir /path/to/tree-sitter
-# Optional new artifact directory and graphical-child deadline (default 120s):
+# Optional new artifact directory and graphical-child deadline (default 300s):
 npx @emacs-eask/cli run script graphical-check -- --grammar-dir /path/to/tree-sitter --output .scratch/view-check --timeout 90
 ```
+
+The whole-child deadline covers startup, captures, test loading and the full ERT
+roster, not one test. On 2026-11-17, three private-compositor runs of 221 cases
+took 118.1-119.4 seconds including setup (112.5-113.7 seconds in ERT). The 300s
+default leaves about 2.5 times the measured maximum; per-test bounds are unchanged.
 
 The command cleans stale bytecode itself, obtains dependency load paths from
 Eask, then starts a **separate graphical `emacs -Q`**. It never loads checkout
