@@ -4,6 +4,7 @@ Evaluate one Elisp form; return its value and output.
 
 - Use live mode for the user's running Emacs state.
 - Use fresh mode for clean checks and anything long or uncertain.
+- Use sandbox mode for isolated, stateful define/call/redefine work.
 
 ### When NOT to use `Eval`
 
@@ -13,7 +14,7 @@ Evaluate one Elisp form; return its value and output.
 ### How to use `Eval`
 
 - Supply one top-level form in `expression`; later forms are ignored. Use `let`
-  or `progn` for related operations. Both modes use the session working directory.
+  or `progn` for related operations. All modes use the owner's working directory.
 - `mode="live"` (default) runs on Emacs's main thread without confinement. Only
   the user's `C-g` can interrupt it. `preserve_ui=true` (default) restores the
   selected frame's window configuration, not other side effects; use false only
@@ -21,6 +22,12 @@ Evaluate one Elisp form; return its value and output.
 - `mode="fresh"` starts a clean `emacs -Q --batch` child with the current
   `load-path`, not live state or loaded packages. Require needed libraries in
   the form. Fresh Eval is refused for remote execution targets.
+- `mode="sandbox"` reuses a child per session/owner. Earlier definitions
+  apply; results report started/reused and feature count. `reset=true` discards
+  them. Calls are foreground only; busy calls and `yield_time_ms` are refused.
+  Abort kills the child. Sandbox is automatic in Ask/Edits/Full Access but always
+  confined (workspace writes, no network or grants); remote targets or unavailable
+  confinement refuse it. Use fresh for per-call authority.
 - Fresh `yield_time_ms` defaults to 10000 (range 250–30000). If still running,
   Eval returns an `execution_id`: poll with WriteStdin, list with ListExecutions,
   or kill the child with StopExecution. Non-empty input is refused. Root-owned
@@ -29,14 +36,15 @@ Evaluate one Elisp form; return its value and output.
 - `Result:` prints the value with `%S`; `STDOUT:` holds `print`/`prin1`/`princ`
   output; `MESSAGES:` holds `message` text, still visible to the user in live
   mode. Errors retain prior output and include a bounded `BACKTRACE:`. Large
-  results have a bounded preview and retrieval address.
+  results have a bounded preview and retrieval address, except sandbox sections,
+  which truncate in the child with a marker.
 - In Ask/Edits, live Eval goes to the selected permission reviewer. Automatic
   review typically approves task-relevant observational calls without involving
   the user; mutations, unknown effects, and unclear scope go to the user.
   Optional `justification` explains a live call to its approver.
 - In Edits, fresh Eval is automatic with required confinement and no network
   by default. Ask uses the configured sandbox preference and expression policy.
-  Full Access runs either mode automatically without confinement; explicit denies
+  Full Access runs live/fresh automatically without confinement. Explicit denies
   and Plan limits remain.
 - Fresh-only authority fields: `sandbox_permissions="with_additional_permissions"`
   and `additional_permissions` request network or exact absolute read/write paths;

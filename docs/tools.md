@@ -1661,7 +1661,7 @@ request after restart.
 
 ## Eval execution scope
 
-Eval has two execution modes.  `live` is the default and runs inside the
+Eval has three execution modes.  `live` is the default and runs inside the
 current Emacs process so it can inspect live session state.  Live mode
 restores the selected frame's window configuration by default, preventing
 accidental calls like `delete-other-windows` from surprising the user;
@@ -1672,9 +1672,15 @@ cleanup, process-group handling, and optional Bubblewrap confinement; live Eval
 does not use that child seam. Fresh mode isolates interactive Emacs state and,
 when the platform sandbox is active, applies the same filesystem, protected
 path, process, and network boundaries as Bash.
-Fresh Eval is refused in sessions with a remote execution target, because it
+Fresh and sandbox Eval are refused in sessions with a remote execution target, because they
 would launch the local Emacs binary and script against remote paths; use live
 Eval, or Bash on the target, there.
+
+`sandbox` retains definitions in a confined child per session/owner. Calls are
+foreground-only; `reset: true` replaces the child, and busy calls refuse rather
+than queue. Unlike fresh, sandbox requires confinement even in Full Access and
+accepts no additional authority or remembered grants. See
+[sandbox lifecycle and limits](tools/execution.md#persistent-sandbox-eval).
 
 Bash and fresh-Eval results record the boundary that applied to their
 invocation. The settled owning tool row retains a compact durable warning for

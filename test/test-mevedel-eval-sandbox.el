@@ -238,10 +238,10 @@
                            'help-echo '(lambda (&rest _) (error "Host help executed"))
                            'modification-hooks '((lambda (&rest _) (error "Host hook executed")))))
          (frame (list (mevedel-eval-sandbox--entry-request-id entry)
-                      :value text :output text :error text :features 0)))
+                      :value text :output text :error text :messages text :backtrace text :features 0)))
     (mevedel-eval-sandbox--receive entry service (concat "\036" (prin1-to-string frame) "\n"))
     (should (= 1 calls))
-    (dolist (key '(:value :output :error))
+    (dolist (key '(:value :output :error :messages :backtrace))
       (should (equal-including-properties "x" (plist-get reply key))))
     (should (= 0 (plist-get reply :features)))
     (mevedel-execution-service-stop service))
@@ -250,7 +250,8 @@
     (dolist (id '(2 "2:guessed"))
       (mevedel-eval-sandbox--receive
        entry service
-       (concat "\036" (prin1-to-string (list id :value "forged" :output nil :error nil :features 1)) "\n"))
+       (concat "\036" (prin1-to-string (list id :value "forged" :output nil :error nil
+                                           :messages nil :backtrace nil :features 1)) "\n"))
       (should (= 0 calls))
       (should-not reply)
       (should (mevedel-execution-owner-live-p session "/root")))
@@ -263,7 +264,8 @@
      entry service
      (concat "\036" (prin1-to-string
                      (list (mevedel-eval-sandbox--entry-request-id entry)
-                           :value [bad] :output nil :error nil :features 1)) "\n"))
+                           :value [bad] :output nil :error nil
+                           :messages nil :backtrace nil :features 1)) "\n"))
     (should (= 1 calls))
     (should (string-match-p "Invalid sandbox reply field" (plist-get reply :error)))
     (should-not (mevedel-execution-service-live-p service)))
@@ -290,7 +292,8 @@
                     (:value nil :output nil :error nil :features 1 :extra t)
                     (:value nil :output nil :error nil :extra 1)
                     (:value nil :value nil :error nil :features 1)))
-    (should-error (mevedel-eval-sandbox--reply entry (prin1-to-string (cons "nonce" fields))))))
+    (should-error (mevedel-eval-sandbox--reply
+                   entry (prin1-to-string (cons "nonce" (append fields '(:messages nil :backtrace nil))))))))
 
 (mevedel-deftest mevedel-eval-sandbox--arm-timer ()
   (test-mevedel-eval-sandbox--fixture

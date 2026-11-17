@@ -30,6 +30,10 @@
 (defvar gptel-reasoning-effort)
 (defvar gptel-stream)
 
+;; `mevedel-eval-sandbox'
+(declare-function mevedel-eval-sandbox-status "mevedel-eval-sandbox" (session owner))
+(autoload 'mevedel-eval-sandbox-status "mevedel-eval-sandbox")
+
 ;; `mevedel-tool-exec-permission'
 (declare-function mevedel-tool-exec-permission-default-directory "mevedel-tool-exec-permission" ())
 (declare-function mevedel-tool-exec-permission-effective-sandbox-request "mevedel-tool-exec-permission"
@@ -80,6 +84,13 @@ Use this representation for provider input and asynchronous freshness checks."
         (print-escape-nonascii nil)
         (print-escape-multibyte nil))
     (prin1-to-string evidence)))
+
+(defun mevedel-permission-review--fingerprint (evidence)
+  "Serialize EVIDENCE for revalidation, ignoring elapsed sandbox age only."
+  (let ((copy (copy-tree evidence)))
+    (when-let* ((sandbox (plist-get copy :persistent-sandbox)))
+      (plist-put sandbox :age-seconds nil))
+    (mevedel-permission-review--serialize copy)))
 
 (defun mevedel-permission-review--parse (response)
   "Return a bounded approval decision from JSON RESPONSE, or nil."
@@ -300,13 +311,19 @@ The returned value is data for the reviewer, never trusted system policy."
                 (plist-get context :tool-name)))
          (execution-p (member tool '("Bash" "Eval")))
          (args (or (plist-get entry :args)
-                   (list :mode (plist-get entry :mode))))
+                   (list :mode (plist-get entry :mode) :reset (plist-get entry :reset))))
          (eval-mode (and (equal tool "Eval")
                          (mevedel-tool-exec-permission-eval-mode args)))
          (live-p (eq eval-mode 'live))
+         (sandbox-p (eq eval-mode 'sandbox))
+         (owner (or (plist-get entry :origin)
+                    (let ((mevedel--current-request (plist-get context :request))
+                          (mevedel--agent-invocation (plist-get context :invocation)))
+                      (mevedel-current-origin))))
+         (sandbox-status (and sandbox-p (mevedel-eval-sandbox-status session owner)))
          (execution-request
           (when execution-p
-            (if (eq (plist-get entry :kind) 'generic)
+            (if (or sandbox-p (eq (plist-get entry :kind) 'generic))
                 (mevedel-tool-exec-permission-effective-sandbox-request
                  args tool (plist-get context :pattern) eval-mode context)
               (list :additional-permissions
@@ -323,16 +340,28 @@ The returned value is data for the reviewer, never trusted system policy."
                    session (plist-get entry :data-buffer))
      :goal-objective (and goal (mevedel-goal-objective goal))
      :operation
-     (cl-loop for key in '(:kind :tool-name :args :command :expression :detail :mode
+     (cl-loop for key in '(:kind :tool-name :args :command :expression :detail :mode :eval-mode
                            :specifier-key :specifier-value :permission-via :patch-session-only-p
                            :sandbox-permissions :requested-additional-permissions
-                           :justification :origin)
+                           :justification :origin :reset)
               when (plist-member entry key)
               append (list key (plist-get entry key)))
      :selected-resources (car (plist-get entry :resource-selection-cell))
      :original-resources (plist-get entry :resource-originals)
      :scope-preparation (mevedel-permission-review--scope-preparation entry)
      :permission-mode mode
+     :eval-mode eval-mode
+     :persistent-sandbox
+     (and sandbox-p
+          (append
+           (list :notice (cond
+                          ((eq (plist-get args :reset) t)
+                           "Persistent sandbox reset: earlier definitions will be discarded")
+                          ((null (plist-get sandbox-status :age-seconds))
+                           "No live sandbox: starts clean with no earlier definitions")
+                          (t "Persistent sandbox: earlier definitions apply"))
+                 :owner owner)
+           sandbox-status))
      :execution-target (if live-p (list :kind 'live-emacs :host (system-name))
                          (and target (mevedel-execution-target-identity target)))
      :session-target (and target (mevedel-execution-target-identity target))
@@ -352,6 +381,7 @@ The returned value is data for the reviewer, never trusted system policy."
      :confinement
      (cond
       (live-p '(:execution live-emacs :filesystem unrestricted :network unrestricted))
+      (sandbox-p (mevedel-sandbox-pending-facts nil nil 'required directory))
       ((not execution-p) (list :execution 'native :allowed-roots (plist-get context :allowed-roots)
                       :ordinary-reads (if (eq mode 'edits) 'os-readable 'allowed-roots)))
       (t (mevedel-sandbox-pending-facts
@@ -483,7 +513,7 @@ owned here; mutable policy or evidence never inherits an older approval."
                     ((not (eq mevedel-permission-reviewer 'auto)) (deliver 'ask 'disabled))
                     ((policy-denied-p))
                     ((not (equal fingerprint
-                                 (mevedel-permission-review--serialize
+                                 (mevedel-permission-review--fingerprint
                                   (mevedel-permission-review--evidence entry))))
                      (deliver 'ask 'changed))
                     ((null decision) (deliver 'ask 'unavailable))
@@ -497,7 +527,7 @@ owned here; mutable policy or evidence never inherits an older approval."
                            (cond
                             ((policy-denied-p))
                             ((equal fingerprint
-                                    (mevedel-permission-review--serialize
+                                    (mevedel-permission-review--fingerprint
                                      (mevedel-permission-review--evidence entry)))
                              (deliver 'allow-once 'reviewer (plist-get decision :reason)))
                             (t (deliver 'ask 'changed))))
@@ -525,7 +555,7 @@ owned here; mutable policy or evidence never inherits an older approval."
                      ;; Directory inspection may yield; ownership is held.
                      (mevedel-permission-queue-prepare-resources entry)
                      (unless done (mevedel-permission-review--evidence entry)))))
-              (setq fingerprint (mevedel-permission-review--serialize evidence))
+              (setq fingerprint (mevedel-permission-review--fingerprint evidence))
               ;; Evidence and validation may yield during remote I/O.
               (unless done
                 (if (or (plist-get (plist-get evidence :user-intent) :latest-turn-omitted)

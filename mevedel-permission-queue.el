@@ -451,6 +451,8 @@ Return non-nil when this call delivered or consumed the outcome."
     (when-let* ((eval-mode
                  (pcase (plist-get entry :kind)
                    ('eval (plist-get entry :mode))
+                   ('generic (and (equal (plist-get entry :tool-name) "Eval")
+                                  (or (plist-get (plist-get entry :args) :mode) "live")))
                    ('sandbox (and (equal (plist-get entry :tool-name) "Eval") "fresh")))))
       (setq base (plist-put base :eval-mode eval-mode)))
     (when-let* ((selection (car (plist-get entry :resource-selection-cell))))

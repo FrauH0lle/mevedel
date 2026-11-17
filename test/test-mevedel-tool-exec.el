@@ -1540,7 +1540,7 @@ the execution boundary owns the session's single unavailable warning"
          (filesystem
           (plist-get (plist-get additional :properties) :file_system)))
     (should (equal "string" (plist-get mode :type)))
-    (should (equal ["live" "fresh"] (plist-get mode :enum)))
+    (should (equal ["live" "fresh" "sandbox"] (plist-get mode :enum)))
     (should (plist-get mode :optional))
     (let ((yield (seq-find (lambda (arg) (equal "yield_time_ms" (plist-get arg :name))) args)))
       (should (equal "integer" (plist-get yield :type)))
@@ -1567,6 +1567,90 @@ the execution boundary owns the session's single unavailable warning"
           (car (mevedel-tool-repair-validate
                 tool '(:expression "(+ 1 2)" :mode "bogus")))
           :kind)))))
+
+(defun mevedel-tool-exec-test--sandbox-call (expression &rest args)
+  "Run EXPRESSION with sandbox tool ARGS and await its result text."
+  (let (reply)
+    (funcall (mevedel-tool-handler (mevedel-tool-get "Eval"))
+             (lambda (value) (setq reply value))
+             (append (list :mode "sandbox" :expression expression) args))
+    (with-timeout (10 (error "Sandbox Eval timed out"))
+      (while (not reply) (accept-process-output nil 0.02)))
+    (plist-get reply :result)))
+
+(mevedel-deftest mevedel-tool-exec--eval-sandbox
+  (:vars* ((root (make-temp-file "sandbox-tool-" t))
+           (default-directory (file-name-as-directory root))
+           (mevedel--session (mevedel-session--create
+                             :name "sandbox" :working-directory default-directory
+                             :workspace (mevedel-workspace--create :root default-directory)))
+           (mevedel-eval-sandbox--sessions (make-hash-table :test #'eq))
+           (mevedel-eval-sandbox-idle-timeout nil))
+   :before-each (mevedel-tool-exec--register)
+   :after-each (progn (mevedel-execution-teardown-session mevedel--session)
+                      (delete-directory root t)))
+  (progn
+    (unless (plist-get (mevedel-sandbox-probe) :available) (ert-skip "No confinement backend"))
+    ,test)
+  (test)
+  :doc "registered Eval persists definitions, resets and isolates agent owners"
+  (progn
+    (should (string-search "Sandbox started; features:"
+                           (mevedel-tool-exec-test--sandbox-call "(defun sandbox-answer () 42)")))
+    (let ((text (mevedel-tool-exec-test--sandbox-call "(sandbox-answer)")))
+      (should (string-search "Result:\n42" text))
+      (should (string-search "Sandbox reused; features:" text)))
+    (let ((mevedel--current-request
+           (mevedel-request--create :session mevedel--session :origin "/root/agent")))
+      (should (string-search "Result:\nnil"
+                             (mevedel-tool-exec-test--sandbox-call "(fboundp 'sandbox-answer)"))))
+    (let ((text (mevedel-tool-exec-test--sandbox-call "(fboundp 'sandbox-answer)" :reset t)))
+      (should (string-search "Result:\nnil" text))
+      (should (string-search "Earlier definitions are gone" text))))
+  :doc "captures child output, messages and bounded signal-time backtraces"
+  (let ((text (mevedel-tool-exec-test--sandbox-call
+               "(progn (princ \"hello\") (message \"note\") (error \"boom\"))")))
+    (dolist (section '("STDOUT:\nhello" "MESSAGES:\nnote" "BACKTRACE:" "boom"))
+      (should (string-search section text))))
+  :doc "capture locals do not collide with evaluated definitions"
+  (should (string-search "Result:\n42"
+                         (mevedel-tool-exec-test--sandbox-call
+                          "(progn (defvar stdout 42) (defvar messages nil) stdout)")))
+  :doc "large values and output are truncated in the child, not protocol failures"
+  (let ((text (mevedel-tool-exec-test--sandbox-call
+               "(progn (princ (make-string 1100000 ?x)) (make-string 1100000 ?y))")))
+    (should (string-prefix-p "Result:" text))
+    (should (string-search "[Output truncated]" text))
+    (should (< (length text) 33000)))
+  :doc "busy calls refuse and owning request cancellation kills the service"
+  (progn
+    (mevedel-tool-exec-test--sandbox-call "t")
+    (let ((mevedel--current-request
+           (mevedel-request--create :session mevedel--session :origin "/root")) reply)
+      (mevedel-tool-exec--eval (lambda (value) (setq reply value))
+                              '(:mode "sandbox" :expression "(sleep-for 30)"))
+      (should (string-search "busy" (error-message-string
+                                     (should-error (mevedel-tool-exec-test--sandbox-call "t")))))
+      (mevedel-request-cancel mevedel--current-request)
+      (should (string-search "Earlier definitions are gone" (plist-get reply :result)))
+      (should-not (mevedel-execution-session-live-p mevedel--session))
+      (should-not (plist-get (mevedel-eval-sandbox-status mevedel--session "/root") :features))))
+  :doc "backend refusal is a clean Eval error with fresh guidance and no invented loss"
+  (cl-letf (((symbol-function 'mevedel-sandbox-probe)
+             (lambda (&optional _) '(:available nil :reason "No backend"))))
+    (let ((text (mevedel-tool-exec-test--sandbox-call "t")))
+      (should (string-prefix-p "Error: Eval failed" text))
+      (should (string-search "Use fresh Eval" text))
+      (should-not (string-search "Sandbox started" text))
+      (should-not (string-search "Earlier definitions are gone" text))))
+  :doc "failed restart reports definition loss exactly once"
+  (progn
+    (mevedel-tool-exec-test--sandbox-call "t")
+    (cl-letf (((symbol-function 'mevedel-sandbox-probe)
+               (lambda (&optional _) '(:available nil :reason "No backend"))))
+      (let ((text (mevedel-tool-exec-test--sandbox-call "t" :reset t)))
+        (should (string-prefix-p "Error: Eval failed" text))
+        (should (= 2 (length (split-string text "Earlier definitions are gone"))))))))
 
 (mevedel-deftest mevedel-tool-exec--eval
   (:vars* ((eval-directory (make-temp-file "mevedel-eval-test-" t))
@@ -1691,7 +1775,26 @@ the execution boundary owns the session's single unavailable warning"
               ;; Model delivery may append a sandbox disclosure to the preview.
               (should (string-search preview payload))
               (should (< (length payload) (+ mevedel-execution-inline-output-limit 1000)))))))))
-  :doc "fresh stop and session teardown kill the child and remove temporary files"
+  :doc "yielded fresh calls stream messages into a running poll"
+  (let ((mevedel-sandbox-mode 'off)
+        (mevedel-execution-mailbox-delivery-function nil)
+        yielded polled)
+    (mevedel-tool-exec--eval
+     (lambda (result) (setq yielded result))
+     '(:expression "(progn (while (not (file-exists-p \"emit-message\")) (sleep-for 0.02)) (message \"poll progress\") (sleep-for 30))"
+       :mode "fresh" :yield_time_ms 250))
+    (with-timeout (10 (error "Eval did not yield"))
+      (while (null yielded) (accept-process-output nil 0.02)))
+    (with-temp-file "emit-message" (insert "ready"))
+    (mevedel-tool-exec--write-stdin
+     (lambda (result) (setq polled result))
+     (list :execution_id (plist-get (plist-get yielded :render-data) :execution-id)
+           :chars "" :yield_time_ms 5000))
+    (with-timeout (10 (error "Eval poll did not return"))
+      (while (null polled) (accept-process-output nil 0.02)))
+    (should (string-search "poll progress" (plist-get polled :result)))
+    (should (eq 'running (plist-get (plist-get polled :render-data) :state))))
+  :doc "fresh stop retains streamed messages and teardown removes temporary files"
   (dolist (action '(stop teardown))
     (let* ((temporary-file-directory default-directory)
            (mevedel-sandbox-mode 'off)
@@ -1699,12 +1802,15 @@ the execution boundary owns the session's single unavailable warning"
            yielded stopped)
       (mevedel-tool-exec--eval
        (lambda (result) (setq yielded result))
-       '(:expression "(sleep-for 30)" :mode "fresh" :yield_time_ms 250))
+       '(:expression "(progn (message \"stop progress\") (sleep-for 30))" :mode "fresh" :yield_time_ms 250))
       (with-timeout (10 (error "Eval did not yield"))
         (while (null yielded) (accept-process-output nil 0.02)))
       (let* ((id (plist-get (plist-get yielded :render-data) :execution-id))
              (record (mevedel-execution--owned-yielded-record mevedel--session "/root" id))
              (child (mevedel-execution--record-child record)))
+        (with-timeout (10 (error "Fresh message did not reach the spool"))
+          (while (not (string-search "stop progress" (mevedel-execution--read-output record)))
+            (accept-process-output nil 0.02)))
         (should (= 2 (length (directory-files default-directory nil "\\`mevedel-eval-fresh-"))))
         (if (eq action 'stop)
             (progn
@@ -1713,6 +1819,7 @@ the execution boundary owns the session's single unavailable warning"
               (with-timeout (10 (error "Eval did not stop"))
                 (while (null stopped) (accept-process-output nil 0.02)))
               (should (string-prefix-p "Eval stopped" (plist-get stopped :result)))
+              (should (string-search "stop progress" (plist-get stopped :result)))
               (should (eq 'stopped (plist-get (plist-get stopped :render-data) :termination)))
               (should (equal '(stopped . "stopped")
                              (mevedel-tool-exec-completion 'stopped 'failure))))
@@ -2104,15 +2211,29 @@ the execution boundary owns the session's single unavailable warning"
            (directory-files (file-name-concat temp-dir ".mevedel-pending-executions")
                             nil directory-files-no-dot-files-regexp)))
       (delete-directory temp-dir t)))
-  :doc "captures printed output in fresh mode"
+  :doc "fresh capture preserves definitions and captures output and messages"
   (let (result)
     (mevedel-tool-exec--eval
      (lambda (r)
        (setq result (mevedel-tool-exec-test--handler-result r)))
-     (list :expression "(princ \"fresh hello\")" :mode "fresh"))
+     (list :expression "(progn (defvar stdout 42) (defvar messages nil) (message \"note\") (princ \"fresh hello\") stdout)" :mode "fresh"))
     (while (null result)
       (accept-process-output nil 0.1))
-    (should (string-match-p "STDOUT:\nfresh hello" result)))
+    (should (string-match-p "STDOUT:\nfresh hello" result))
+    (should (string-match-p "MESSAGES:\nnote" result))
+    (should (string-match-p "Result:\n42" result)))
+  :doc "fresh final messages are bounded even without a result file"
+  (dolist (tail '("42" "(kill-emacs 42)"))
+    (let ((mevedel-sandbox-mode 'off) result)
+      (mevedel-tool-exec--eval
+       (lambda (reply) (setq result (plist-get reply :result)))
+       (list :mode "fresh" :expression
+             (format "(progn (message \"lost diagnostic %%s\" (make-string 50000 ?x)) %s)" tail)))
+      (with-timeout (10 (error "Fresh message result timed out"))
+        (while (null result) (accept-process-output nil 0.02)))
+      (should (string-search "lost diagnostic" result))
+      (should (string-search "[Output truncated]" result))
+      (should (< (length result) 17000))))
   :doc "fresh mode does not mutate parent variables"
   (let (result)
     (makunbound 'mevedel-test-fresh-parent-mutation)

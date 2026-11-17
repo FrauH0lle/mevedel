@@ -375,6 +375,13 @@ The three canonical modes are `ask`, `edits`, and `full-auto`:
 | `edits` | Native edits automatic within roots; ordinary reads span OS-readable paths, retaining credential masks | Arbitrary Bash and fresh Eval automatic; live Eval and additional authority go to the selected reviewer | Required; an unavailable backend refuses execution |
 | `full-auto` | Full Access | Automatic, including live Eval and explicit escalation | Off; filesystem and network unrestricted under the target OS account |
 
+Persistent sandbox Eval is the exception to mode-dependent child confinement:
+it is automatic in Ask/Edits/Full Access, subject to explicit rules, but always
+requires the default confined workspace profile with no network. It accepts no
+additional authority or remembered grants. Missing confinement or a remote
+target refuses the call; Plan denies all Eval modes. Review evidence includes
+the persistent definitions, sandbox age, feature count and fixed confinement.
+
 In Ask and Edits, `mevedel-permission-reviewer` selects the user or automatic
 review first. Automatic review typically approves task-relevant observational
 live Eval and clearly scoped requests without involving the user; mutations,

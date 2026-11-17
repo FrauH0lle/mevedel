@@ -326,6 +326,8 @@ Fall back to direct queue admission for callers outside the tool pipeline."
 (defun mevedel-tool-exec-permission--log-permission-decision
     (tool-name outcome via permission-context &rest props)
   "Persist TOOL-NAME OUTCOME via VIA from PERMISSION-CONTEXT and PROPS."
+  (when-let* ((eval-mode (plist-get permission-context :eval-mode)))
+    (setq props (plist-put props :eval-mode eval-mode)))
   (when-let* ((session
                (or (plist-get permission-context :session)
                    (mevedel-queue--current-session))))
@@ -351,7 +353,7 @@ Fall back to direct queue admission for callers outside the tool pipeline."
           (when-let* ((access (plist-get props :resource-access))
                       ((memq access '(read write))))
             (setq safe (plist-put safe :resource-access access)))
-          (dolist (key '(:sandbox-permissions :bucket :command-class))
+          (dolist (key '(:sandbox-permissions :bucket :command-class :eval-mode))
             (when-let* ((value (plist-get props key))
                         ((symbolp value)))
               (setq safe (plist-put safe key value))))
@@ -457,8 +459,15 @@ TARGET and DIRECTORY bind target-native filesystem paths."
 (defun mevedel-tool-exec-permission--sandbox-request
     (args tool &optional eval-mode permission-context)
   "Return the validated child-execution request from ARGS.
-TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from fresh Eval.
+TOOL is `bash' or `eval'.  EVAL-MODE selects live, fresh or sandbox Eval.
 PERMISSION-CONTEXT supplies the session execution target."
+  ;; Refuse before normalization can inspect filesystem or target state.
+  (when (and (eq tool 'eval) (eq eval-mode 'sandbox)
+             (or (plist-get args :additional_permissions)
+                 (member (plist-get args :sandbox_permissions)
+                         '("with_additional_permissions" "require_escalated"))))
+    (mevedel-tool-exec-permission--policy-error
+     "Sandbox Eval cannot request additional permissions or escalation; use fresh Eval"))
   (let* ((session (or (plist-get permission-context :session)
                       (and (boundp 'mevedel--session) mevedel--session)))
          (directory
@@ -684,7 +693,7 @@ These facts never contribute authority.  Complex syntax is left unexplained."
 (defun mevedel-tool-exec-permission-effective-sandbox-request
     (args tool-name operation &optional eval-mode permission-context)
   "Resolve ARGS into TOOL-NAME's effective child authority for OPERATION.
-EVAL-MODE distinguishes live from fresh Eval.  PERMISSION-CONTEXT supplies
+EVAL-MODE selects live, fresh or sandbox Eval.  PERMISSION-CONTEXT supplies
 remembered direct user authority."
   (let ((request
          (mevedel-tool-exec-permission--sandbox-request
@@ -692,7 +701,8 @@ remembered direct user authority."
           permission-context)))
     (when eval-mode
       (setq request (plist-put request :eval-mode eval-mode)))
-    (if (eq (plist-get request :level) 'escalated)
+    (if (or (eq eval-mode 'sandbox)
+            (eq (plist-get request :level) 'escalated))
         request
       (let* ((remembered
               (and (or (equal tool-name "Bash") (eq eval-mode 'fresh))
@@ -1158,8 +1168,16 @@ once with the applied prompt result."
 ;;; Eval permission adapter
 
 (defun mevedel-tool-exec-permission-eval-mode (args)
-  "Return the requested Eval execution mode from ARGS."
+  "Return the Eval mode from ARGS, validating mode-specific arguments."
   (let ((mode (plist-get args :mode)))
+    (unless (memq (plist-get args :reset) '(nil t :json-false))
+      (mevedel-tool-exec-permission--policy-error "Reset must be true or false"))
+    (when (and (eq (plist-get args :reset) t) (not (equal mode "sandbox")))
+      (mevedel-tool-exec-permission--policy-error
+       "Reset is available only to sandbox Eval"))
+    (when (and (equal mode "sandbox") (plist-get args :yield_time_ms))
+      (mevedel-tool-exec-permission--policy-error
+       "Background sandbox calls are not available yet"))
     (cond
      ((or (null mode)
           (eq mode :json-false)
@@ -1167,6 +1185,7 @@ once with the applied prompt result."
           (equal mode "live"))
       'live)
      ((equal mode "fresh") 'fresh)
+     ((equal mode "sandbox") 'sandbox)
      (t (mevedel-tool-exec-permission--policy-error "Unknown Eval mode: %s" mode)))))
 
 (defun mevedel-tool-exec-permission-eval-preserve-ui-p (args)
@@ -1179,6 +1198,7 @@ once with the applied prompt result."
 
 Live Eval asks unless a rule settles it or the mode is `full-auto'.
 Fresh Eval runs automatically in Edits under required confinement.
+Sandbox Eval runs automatically in Ask and Edits, always confined.
 Deny rules remain final; Full Access bypasses ask rules.
 The metadata
 identifies rule or mode authority."
@@ -1191,6 +1211,8 @@ identifies rule or mode authority."
      ((eq action 'deny) (mevedel-permission--decision 'deny 'rule))
      ((eq mode 'full-auto) (mevedel-permission--decision 'allow 'mode))
      (action (mevedel-permission--decision action 'rule))
+     ((eq (plist-get permission-context :eval-mode) 'sandbox)
+      (mevedel-permission--decision 'allow 'mode))
      ((and (eq mode 'edits)
            (eq (plist-get permission-context :eval-mode) 'fresh))
       (mevedel-permission--decision 'allow 'mode))
@@ -1246,6 +1268,8 @@ Feedback: TEXT\"."
            :permission-via via
            :expression expression
            :mode (symbol-name mode)
+           :eval-mode mode
+           :reset (plist-get input :reset)
            :preserve-ui (mevedel-tool-exec-permission-eval-preserve-ui-p input)
            :reusable-operation-p t
            :remember-authority-cell (list '(:operation t))
@@ -1457,8 +1481,9 @@ describe the complete authority needed at settlement."
               context)
            (list :sandbox-permissions (plist-get entry :sandbox-permissions)
                  :eval-mode (and (equal tool-name "Eval")
-                                 (if (equal (plist-get entry :mode) "live")
-                                     'live 'fresh))
+                                 (mevedel-tool-exec-permission-eval-mode
+                                  (or (plist-get entry :args)
+                                      (list :mode (plist-get entry :mode)))))
                  :additional-permissions
                  (if-let* ((selected (car (plist-get entry :resource-selection-cell))))
                      (plist-put (copy-sequence
@@ -1495,10 +1520,11 @@ then decides again until the invocation is allowed or denied."
                         request permission-context))
          (operation-via (if bash-p 'bash-classifier 'eval-policy))
          (specifier-props
-          (and bash-p
-               (list :specifier-key :pattern
-                     :specifier-value
-                     (mevedel-bash-policy-decision-specifier-value detail))))
+          (if bash-p
+              (list :specifier-key :pattern
+                    :specifier-value
+                    (mevedel-bash-policy-decision-specifier-value detail))
+            (list :eval-mode (plist-get request :eval-mode))))
          (escalation-props
           (list :sandbox-permissions level
                 :specifier-key (if bash-p :pattern :expression)
@@ -1670,7 +1696,7 @@ CONT follows the async permission slot contract."
             (target (and session
                          (mevedel-session-execution-target session))))
        (cond
-        ((and (eq mode 'fresh)
+        ((and (memq mode '(fresh sandbox))
               target
               (mevedel-execution-target-remote-p target))
          (funcall
@@ -1678,7 +1704,8 @@ CONT follows the async permission slot contract."
           (mevedel-tool-exec-permission--permission-decision-result
            metadata-p
            (cons 'deny
-                 "Fresh Eval is unavailable for remote sessions; use Live Eval or Bash on the execution target")
+                 (format "%s Eval is unavailable for remote sessions; use Live Eval or Bash on the execution target"
+                         (capitalize (symbol-name mode))))
            'eval-policy)))
         (t
          (let ((request

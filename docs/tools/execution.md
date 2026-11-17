@@ -358,13 +358,38 @@ have changed state before the error, so inspect relevant effects before retrying
 
 Only one top-level form is read. Compound forms can sequence related operations
 and share lexical bindings. `print`, `prin1`, and `princ` contribute STDOUT;
-`message` text is returned as MESSAGES in both modes and still reaches the
+`message` text is returned as MESSAGES in every mode and still reaches the
 user normally in live mode. Errors include a bounded BACKTRACE and retain
 output printed before failure. Unprintable objects appear as
 `#<...>` and cannot be reconstructed by reading their printed representation.
 Fresh Eval uses the managed yielding and polling controls above. Its script and
 result files are removed on completion, failure, stop, or owner/session teardown;
 the final result remains available through the retained execution record.
+
+### Persistent sandbox Eval
+
+`mode="sandbox"` keeps one confined `emacs -Q --batch` per session owner,
+including retained agents. It inherits the current load path, not the user's
+init or live state. Definitions persist between calls; results report
+started/reused and feature count. `reset: true` restarts before evaluation and
+is valid only in this mode. Busy calls are refused, not queued.
+
+Calls are currently foreground only: `yield_time_ms` is refused. Aborting the
+owning request kills the child. Idle services hold neither agent results nor
+sleep inhibition and do not block rewind/transfer. The one-shot
+`mevedel-eval-sandbox-idle-timeout` defaults to 600 seconds; nil disables expiry.
+Session close, Emacs exit, rewind, fork and control transfer kill the sandbox.
+Working-directory or writable-root changes restart it on the next call.
+Results report lost definitions after reset, crash, expiry or restart once a
+service had answered a call. Child result sections are truncated with a marker
+before framing; the host retains its hard 1 MiB protocol bound.
+
+Sandbox Eval is automatic in Ask and Edits, subject to explicit rules, and
+always requires confinement, even in Full Access: default workspace writable
+roots, no network, no remembered grants. Additional permissions/escalation,
+remote execution targets and missing confinement are refused; use fresh Eval
+for per-call authority. Plan denies every Eval mode. Review evidence describes
+the persistent definitions, age, feature count and fixed confinement.
 
 ## Shell composition and outcomes
 

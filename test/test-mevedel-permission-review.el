@@ -8,10 +8,15 @@
 ;;; Code:
 
 (require 'mevedel-permission-review)
+(require 'mevedel-permission-prompt)
+(require 'mevedel-permission-queue)
+(require 'mevedel-sandbox)
+(require 'mevedel-session-artifacts)
 (require 'mevedel-pipeline)
 (require 'mevedel-tool-exec-permission)
 (require 'mevedel-tool-patch)
 (require 'mevedel-tool-permission)
+(require 'mevedel-eval-sandbox)
 (require 'gptel-openai)
 (require 'helpers
          (file-name-concat
@@ -168,7 +173,13 @@
                            :patch-session-only-p session-only-p))))
       (should (eq session-only-p (plist-get context :patch-session-only-p)))
       (should (eq (if session-only-p nil 'deny)
-                  (plist-get (plist-get context :early-decision) :outcome))))))
+                  (plist-get (plist-get context :early-decision) :outcome)))))
+  :doc "Plan denies every Eval mode before execution permission"
+  (dolist (mode '("live" "fresh" "sandbox"))
+    (let ((context (mevedel-permission-review--context
+                    (list :kind 'eval :mode mode :args (list :mode mode :expression "t")
+                          :session (mevedel-session--create :plan-mode t :permission-mode 'full-auto)))))
+      (should (eq 'deny (plist-get (plist-get context :early-decision) :outcome))))))
 
 (mevedel-deftest mevedel-permission-review--evidence ()
   ,test
@@ -211,7 +222,47 @@
     (should (eq t (plist-get (plist-get candidate :covers) :network)))
     (should (equal rules (mevedel-session-permission-rules session)))
     (should-not (mevedel-session-resource-grants session))
-    (should (equal before (mevedel-permission-queue--reevaluate entry)))))
+    (should (equal before (mevedel-permission-queue--reevaluate entry))))
+  :doc "sandbox review uses fixed confinement and the captured owner's live status"
+  (dolist (mode '(ask edits full-auto))
+    (let* ((session (mevedel-session--create :permission-mode mode :sandbox-mode 'off
+                                            :working-directory temporary-file-directory))
+           (entry (list :kind 'eval :session session :mode "sandbox" :eval-mode 'sandbox
+                        :origin "/root/worker" :expression "t"))
+           (age 10.0) evidence)
+      (cl-letf (((symbol-function 'mevedel-eval-sandbox-status)
+                 (lambda (actual owner)
+                   (should (eq session actual))
+                   (should (equal "/root/worker" owner))
+                   (list :age-seconds age :features 42))))
+        (setq evidence (mevedel-permission-review--evidence entry))
+        (should (eq 'sandbox (plist-get evidence :eval-mode)))
+        (should-not (string-match-p
+                     "Live Eval" (mevedel-permission--execution-warnings
+                                  '(:kind generic :tool-name "Eval" :args (:mode "sandbox")))))
+        (should (equal "sandbox" (plist-get (mevedel-permission-queue--log-props
+                                             '(:kind generic :tool-name "Eval" :args (:mode "sandbox")))
+                                            :eval-mode)))
+        (should (equal (mevedel-sandbox-pending-facts nil nil 'required temporary-file-directory)
+                       (plist-get evidence :confinement)))
+        (should (string-match-p "earlier definitions apply"
+                                (plist-get (plist-get evidence :persistent-sandbox) :notice)))
+        (should (= 10.0 (plist-get (plist-get evidence :persistent-sandbox) :age-seconds)))
+        (setq age 11.0)
+        (should (equal (mevedel-permission-review--fingerprint evidence)
+                       (mevedel-permission-review--fingerprint
+                        (mevedel-permission-review--evidence entry))))))))
+
+(mevedel-deftest mevedel-permission-review--fingerprint ()
+  ,test
+  (test)
+  :doc "sandbox feature and liveness changes still invalidate evidence"
+  (let* ((evidence '(:persistent-sandbox (:age-seconds 1.0 :features 42)))
+         (before (mevedel-permission-review--fingerprint evidence)))
+    (dolist (status '((:age-seconds 2.0 :features 43) (:age-seconds nil :features nil)))
+      (should-not (equal before (mevedel-permission-review--fingerprint
+                                (list :persistent-sandbox status)))))
+    (should (= 1.0 (plist-get (plist-get evidence :persistent-sandbox) :age-seconds)))))
 
 (mevedel-deftest mevedel-permission-review--rule-basis ()
   ,test
@@ -546,6 +597,43 @@
   (should-not (mevedel-session-permission-rules session))
   (should-not (mevedel-session-resource-grants session))
   (should-not mevedel-permission-review--pending))
+
+  :doc "sandbox review settles after age advances and preserves card metadata"
+  (let ((age 10.0))
+    (setq entry (plist-put entry :mode "sandbox")
+          entry (plist-put entry :eval-mode 'sandbox))
+    (setf (mevedel-session-permission-rules session) '(("Eval" :action ask)))
+    (cl-letf (((symbol-function 'mevedel-eval-sandbox-status)
+               (lambda (_session _owner) (list :age-seconds age :features 42))))
+      (mevedel-permission-request entry session)
+      (should (eq 'sandbox (plist-get (plist-get evidence :operation) :eval-mode)))
+      (should (equal "sandbox" (plist-get (mevedel-permission-queue--log-props entry) :eval-mode)))
+      (should (eq 'ask (mevedel-permission-queue--reevaluate entry)))
+      (setq age 11.0)
+      (funcall provider-callback "{\"decision\":\"allow-once\",\"reason\":\"Requested confined probe\"}")
+      (should (equal '(allow-once) outcomes))
+      (should-not (mevedel-session-permission-queue session))))
+
+  :doc "typed sandbox cards distinguish reset, clean start and live reuse"
+  (progn
+    (setf (mevedel-session-permission-rules session) '(("Eval" :action ask)))
+    (dolist (case '((t 10.0 "earlier definitions will be discarded")
+                    (:json-false nil "starts clean with no earlier definitions")
+                    (:json-false 10.0 "earlier definitions apply")))
+      (setq outcomes nil evidence nil)
+      (cl-letf (((symbol-function 'mevedel-eval-sandbox-status)
+                 (lambda (_session _owner) (list :age-seconds (cadr case) :features 42))))
+        (with-current-buffer buffer
+          (mevedel-tool-exec-permission-check-eval-async
+           nil (list :expression "(+ 1 2)" :mode "sandbox" :reset (car case)
+                     :permission-context (list :tool-name "Eval" :session session
+                                               :request request :buffer buffer))
+           (lambda (outcome) (push outcome outcomes))))
+        (should (equal (car case) (plist-get (plist-get evidence :operation) :reset)))
+        (should (string-match-p (caddr case)
+                                (plist-get (plist-get evidence :persistent-sandbox) :notice)))
+        (funcall provider-callback "{\"decision\":\"allow-once\",\"reason\":\"Requested probe\"}")
+        (should (equal '(allow) outcomes)))))
 
   :doc "callback printer settings do not invalidate unchanged evidence"
   (let* ((expression (copy-sequence "(+ 1 2)"))

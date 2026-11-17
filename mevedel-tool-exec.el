@@ -18,6 +18,8 @@
 (require 'mevedel-agent-runtime)
 (require 'mevedel-bash-analysis)
 (require 'mevedel-bash-policy)
+(require 'mevedel-eval-capture)
+(require 'mevedel-eval-sandbox)
 (require 'mevedel-execution)
 (require 'mevedel-pipeline)
 (require 'mevedel-sandbox)
@@ -948,42 +950,6 @@ CALLBACK receives the envelope.  ARGS has :command; KIND may be `monitor'."
 ;;
 ;;; Eval
 
-(eval-and-compile
-  (defconst mevedel-tool-exec--eval-backtrace-frames 30
-    "Maximum number of frames returned by Eval.")
-
-  (defconst mevedel-tool-exec--eval-backtrace-chars 8000
-    "Maximum number of characters in an Eval backtrace, including its marker.")
-
-  (defconst mevedel-tool-exec--eval-backtrace-marker "\n[Backtrace truncated]"
-    "Visible marker for an Eval backtrace limited by frames or characters."))
-
-(defmacro mevedel-tool-exec--eval-capture-backtrace ()
-  "Capture a bounded signal-time backtrace in live or generated fresh code."
-  `(ignore-errors
-     (let ((frames (backtrace-get-frames))
-           (print-circle t) (print-level 8) (print-length 20))
-       ;; Skip capture machinery when a standard signaling frame is present.
-       (setq frames
-             (or (memq (seq-find
-                        (lambda (frame)
-                          (memq (backtrace-frame-fun frame) '(error signal)))
-                        frames)
-                       frames)
-                 frames))
-       (let* ((text (backtrace-to-string
-                     (seq-take frames ,mevedel-tool-exec--eval-backtrace-frames)))
-              (truncated (or (> (length frames)
-                                ,mevedel-tool-exec--eval-backtrace-frames)
-                             (> (length text)
-                                ,mevedel-tool-exec--eval-backtrace-chars))))
-         (if truncated
-             (concat (substring text 0 (min (length text)
-                                           ,(- mevedel-tool-exec--eval-backtrace-chars
-                                               (length mevedel-tool-exec--eval-backtrace-marker))))
-                     ,mevedel-tool-exec--eval-backtrace-marker)
-           text)))))
-
 (defun mevedel-tool-exec--eval-format-result
     (value output result-format &optional messages backtrace err)
   "Format printed VALUE and OUTPUT for RESULT-FORMAT.
@@ -1045,39 +1011,20 @@ window configuration after evaluation."
     (expression result-file workdir load-path-value)
   "Return fresh Eval source for EXPRESSION writing RESULT-FILE.
 WORKDIR and LOAD-PATH-VALUE configure the child Emacs."
-  (concat
-   ";;; -*- lexical-binding: t -*-\n"
-   (prin1-to-string
-    `(progn
-       (require 'backtrace)
-       (let ((load-path ',load-path-value)
-             (default-directory ,workdir)
-             (expression ,expression)
-             (result-file ,result-file)
-             (stdout-buffer (generate-new-buffer " *mevedel-eval-fresh-stdout*"))
-             (print-circle t)
-             result failure backtrace)
-         (unwind-protect
-             (let ((standard-output stdout-buffer))
-               (condition-case err
-                   (handler-bind
-                       ((error (lambda (_err)
-                                 (setq backtrace
-                                       ,(macroexpand
-                                         '(mevedel-tool-exec--eval-capture-backtrace))))))
-                     (setq result (eval (read expression) t)))
-                 (error (setq failure err)))
-               (let ((output (with-current-buffer stdout-buffer (buffer-string))))
-                 (with-temp-file result-file
-                   (prin1 (list :status (if failure 'error 'ok)
-                                :value (format "%S" result) :output output
-                                :error (and failure
-                                            (format "%S: %S" (car failure)
-                                                    (cdr failure)))
-                                :backtrace (and failure backtrace))
-                          (current-buffer)))))
-           (when (buffer-live-p stdout-buffer)
-             (kill-buffer stdout-buffer))))))))
+  (let ((print-circle t) (print-gensym t) (print-length nil) (print-level nil))
+    (concat
+     ";;; -*- lexical-binding: t -*-\n"
+     (prin1-to-string
+      `(progn
+         (require 'backtrace)
+         (let ((load-path ',load-path-value)
+               (default-directory ,workdir)
+               (expression ,expression)
+               (result-file ,result-file))
+           (let ((payload ,(macroexpand-all '(mevedel-eval-capture (eval (read expression) t) nil t))))
+             (with-temp-file result-file
+               (prin1 (plist-put payload :status (if (plist-get payload :error) 'error 'ok))
+                      (current-buffer))))))))))
 
 (defun mevedel-tool-exec--eval-read-fresh-result (result-file)
   "Read the fresh Eval result plist from RESULT-FILE."
@@ -1127,7 +1074,11 @@ ARGS carries the original tool arguments, including the yield interval."
            :result-function
            (lambda (child-result)
              (let* ((exit-code (plist-get child-result :exit-code))
-                    (diagnostics (plist-get child-result :output))
+                    (diagnostics
+                     (let ((text (or (plist-get child-result :output) "")))
+                       (if (> (length text) 16000)
+                           (concat (substring text 0 16000) "\n[Output truncated]")
+                         text)))
                     (payload
                      (condition-case nil
                          (mevedel-tool-exec--eval-read-fresh-result
@@ -1150,7 +1101,8 @@ ARGS carries the original tool arguments, including the yield interval."
                  ((memq (plist-get payload :status) '(ok error))
                   (mevedel-tool-exec--eval-format-result
                    (plist-get payload :value) (plist-get payload :output)
-                   result-format diagnostics (plist-get payload :backtrace)
+                   result-format diagnostics
+                   (plist-get payload :backtrace)
                    (plist-get payload :error)))
                  ((plist-get child-result :error)
                   (format "Failed to start Eval fresh process: %s"
@@ -1181,6 +1133,38 @@ ARGS carries the original tool arguments, including the yield interval."
                       :status 'error))
        nil))))
 
+(defun mevedel-tool-exec--eval-sandbox (callback args)
+  "Run foreground sandbox Eval ARGS, delivering results to CALLBACK.
+Bind cancellation to the owning request."
+  (let* ((workdir (mevedel-tool-exec-permission-default-directory))
+         (cancel
+          (mevedel-eval-sandbox-call
+           (mevedel-queue--current-session) (mevedel-current-origin)
+           (plist-get args :expression)
+           (lambda (reply)
+             (funcall callback
+                      (list :result
+                            (concat
+                             (mevedel-tool-exec--eval-format-result
+                              (plist-get reply :value) (plist-get reply :output)
+                              (plist-get args :result-format) (plist-get reply :messages)
+                              (plist-get reply :backtrace) (plist-get reply :error))
+                             (when (plist-get reply :features)
+                               (format "\n\nSandbox %s; features: %s."
+                                       (if (plist-get reply :started) "started" "reused")
+                                       (plist-get reply :features)))
+                             (when (and (plist-get reply :features)
+                                        (plist-get reply :state-lost))
+                               " Earlier definitions are gone."))
+                            :status (and (plist-get reply :error) 'error)
+                            :render-data '(:eval-mode sandbox))))
+           :reset (eq (plist-get args :reset) t)
+           :workdir workdir :writable-roots (mevedel-tool-exec--sandbox-writable-roots workdir)
+           :temporary-root (mevedel-tool-exec--sandbox-temporary-root workdir))))
+    (when mevedel--current-request
+      (mevedel-request-push-canceller mevedel--current-request cancel))
+    (list :cancel cancel)))
+
 (defun mevedel-tool-exec--eval (callback args)
   "Evaluate an Elisp expression and return the result.
 CALLBACK receives the result envelope.  ARGS is a plist with :expression."
@@ -1189,7 +1173,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :expression."
         (mode (mevedel-tool-exec-permission-eval-mode args)))
     (unless (stringp expression)
       (error "Parameter expression is required"))
-    (when (and (eq mode 'live) (plist-member args :yield_time_ms))
+    (when (and (eq mode 'live) (plist-get args :yield_time_ms))
       (error "Parameter yield_time_ms is valid only with mode fresh"))
     (when (eq (plist-get args :tty) t)
       (error "Eval does not support TTY execution"))
@@ -1200,6 +1184,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :expression."
              (mevedel-tool-exec-permission-current-context
               "Eval" args session))))
       (pcase mode
+        ('sandbox (mevedel-tool-exec--eval-sandbox callback args))
         ('live
          (mevedel-tool-exec--eval-live
           callback expression result-format

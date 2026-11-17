@@ -164,8 +164,9 @@
    :prompt-file "prompts/tools/eval.md"
    :handler #'mevedel-tool-exec--eval
    :args ((expression string :required "A single elisp sexp to evaluate with default-directory set to the session working directory.")
-          (mode string :optional "Execution mode: live (default) evaluates in the current Emacs; fresh evaluates in a child emacs --batch process."
-                :enum ["live" "fresh"])
+          (mode string :optional "live (default): current Emacs; fresh: clean child; sandbox: persistent confined child."
+                :enum ["live" "fresh" "sandbox"])
+          (reset boolean :optional "Sandbox only: restart before evaluation, discarding earlier definitions.")
           (preserve_ui boolean :optional "In live mode, restore the current window configuration after evaluation. Defaults to true.")
           (yield_time_ms integer :optional
                          "Fresh mode only: milliseconds to wait before yielding an execution_id. Defaults to 10000."

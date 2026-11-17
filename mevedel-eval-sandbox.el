@@ -9,6 +9,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-eval-capture)
 (require 'mevedel-execution)
 (require 'mevedel-transport)
 (require 'subr-x)
@@ -39,6 +40,15 @@
   (when (timerp (mevedel-eval-sandbox--entry-timer entry))
     (cancel-timer (mevedel-eval-sandbox--entry-timer entry)))
   (setf (mevedel-eval-sandbox--entry-timer entry) nil))
+
+(defun mevedel-eval-sandbox-status (session owner)
+  "Return live sandbox age and feature count for SESSION and OWNER.
+Do not allocate a registry entry."
+  (let* ((owners (gethash session mevedel-eval-sandbox--sessions))
+         (entry (and owners (gethash owner owners)))
+         (live (and entry (mevedel-eval-sandbox--entry-service entry))))
+    (list :age-seconds (and live (- (float-time) (mevedel-eval-sandbox--entry-started-at entry)))
+          :features (and live (mevedel-eval-sandbox--entry-features entry)))))
 
 (defun mevedel-eval-sandbox--closed (entry facts)
   "Clear ENTRY after service death, settling its call with terminal FACTS."
@@ -81,13 +91,13 @@
   "Decode LINE for ENTRY into property-free typed fields, ignoring other IDs."
   (let* ((parsed (read-from-string line)) (reply (car parsed)))
     (unless (and (= (cdr parsed) (length line))
-                 (proper-list-p reply) (= (length reply) 9)
+                 (proper-list-p reply) (= (length reply) 13)
                  (mevedel-eval-sandbox--entry-callback entry)
                  (natnump (plist-get (cdr reply) :features)))
       (error "Unexpected sandbox reply"))
     (let ((clean
            (append
-            (cl-loop for key in '(:value :output :error)
+            (cl-loop for key in '(:value :output :error :messages :backtrace)
                      for value = (plist-get (cdr reply) key)
                      unless (and (plist-member (cdr reply) key)
                                  (or (null value) (stringp value)))
@@ -136,6 +146,7 @@
      ";;; -*- lexical-binding: t -*-\n"
      (prin1-to-string
       `(progn
+         (require 'backtrace)
          (setq load-path ',load-path default-directory ,workdir)
          ;; Capture protocol primitives before evaluated code can advise them.
          ;; These lexical bindings are not passed to the evaluated form.
@@ -144,20 +155,14 @@
                (,body (symbol-function 'cadr)) (,emit (symbol-function 'prin1)))
            (while t
              (let* ((,request (funcall ,parse (funcall ,input "")))
-                    (buffer (generate-new-buffer " *sandbox-output*"))
-                    value failure output)
-               (unwind-protect
-                   (let ((standard-output buffer) (inhibit-message t))
-                     (condition-case err
-                         (setq value (eval (funcall ,parse (funcall ,body ,request)) t))
-                       (error (setq failure (error-message-string err))))
-                     (setq output (with-current-buffer buffer (buffer-string))))
-                 (kill-buffer buffer))
+                    (payload ,(macroexpand-all
+                               `(mevedel-eval-capture
+                                 (eval (funcall ,parse (funcall ,body ,request)) t) t))))
                (let ((print-circle t) (print-length nil) (print-level nil)
                      (print-escape-newlines t) (print-escape-control-characters t))
                  (princ "\036")
-                 (funcall ,emit (list (funcall ,head ,request) :value (format "%S" value)
-                                     :output output :error failure :features (length features)))
+                 (funcall ,emit (cons (funcall ,head ,request)
+                                     (append payload (list :features (length features)))))
                  (princ "\n"))))))))))
 
 (defun mevedel-eval-sandbox--request-id (serial)
