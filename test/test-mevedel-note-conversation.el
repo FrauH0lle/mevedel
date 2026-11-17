@@ -519,7 +519,9 @@
 
 (mevedel-deftest mevedel-rewind/note-session
   (:quiet t)
-  ,test
+  (cl-letf (((symbol-function 'read-multiple-choice)
+             (lambda (&rest _) '(?f "conversation and files"))))
+    ,test)
   (test)
   :doc "Rewind reverses only its applied first turn, keeping another session and user edits"
   (mevedel-note-conversation-test--with-source
@@ -1483,6 +1485,8 @@
       (with-current-buffer view
         (cl-letf (((symbol-function 'completing-read)
                    (lambda (_prompt collection &rest _) (car (all-completions "" collection))))
+                  ((symbol-function 'read-multiple-choice)
+                   (lambda (&rest _) '(?f "conversation and files")))
                   ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
           (mevedel-rewind)))
       (should (equal "outside-before\nselected code\noutside-after\n"

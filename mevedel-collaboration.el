@@ -890,6 +890,8 @@ and the title of its current chat; a history save may change its Goal."
     ('rename
      (mevedel-collaboration-notify-request-changed data-buffer)
      (mevedel-collaboration-notify-history-changed data-buffer))
+    ('replace-history
+     (mevedel-collaboration-notify-history-changed data-buffer))
     ('save-history
      (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
        (mevedel-collaboration--publish-goal room)))))

@@ -218,6 +218,8 @@
                                              :key (lambda (entry)
                                                     (plist-get entry :head))
                                              :test #'equal))))
+                                ((symbol-function 'read-multiple-choice)
+                                 (lambda (&rest _) '(?f "conversation and files")))
                                 ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
                                 ((symbol-function 'mevedel--run-session-start-hooks)
                                  #'ignore)

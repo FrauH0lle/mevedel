@@ -161,6 +161,14 @@ than through the command allowlist:
   refusal names its session id and says to open it in Emacs with
   `M-x mevedel`.
 
+- `rewind` truncates the shared conversation after a settled assistant response,
+  leaving working files alone. Only owner links offer **Rewind from here** beside
+  Fork, with a short confirmation and a reminder that Emacs Redo can restore the
+  conversation. The frame carries the response's `forkPoint`; the host resolves
+  it and uses the ordinary Rewind transaction without a file plan. Its stable
+  source and native-history restrictions still apply. Each session room
+  republishes the truncated history, including after an Emacs Rewind or Redo.
+
 - `recovery` exposes selection among the offered models, reasoning efforts and
   registered presets, session rename, native-history recovery, retained-input
   retry, reviewed input requeue/discard,
@@ -1583,7 +1591,7 @@ A session shared while an interaction already waits presents that one too:
 starting a room adopts the session's pending prompts in the order they
 arrived, since each announces itself only once, when it is raised.
 `mevedel-collaboration-remote-interactions` gates that surface. Lease
-transfer, save, rewind, edit, Worktree forks, publication, and execution-target
+transfer, save, file-restoring rewind, edit, Worktree forks, publication, and execution-target
 changes remain host operations. The owner-only `fork` frame above creates
 Conversation Forks only. Owner acceptance of a Worktree plan is the typed,
 host-validated exception, not a general browser Worktree Fork command.

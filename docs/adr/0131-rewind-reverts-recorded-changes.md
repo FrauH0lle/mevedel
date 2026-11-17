@@ -5,12 +5,19 @@ independent conversation sessions in ADR 0091.
 
 ## Decision
 
-Rewind prepares the reverse of each discarded turn's recorded file changes,
+When the user includes files, Rewind prepares the reverse of each discarded turn's recorded file changes,
 newest first, using its existing before/after `file-history` contents. It
 preserves current edits outside those changed line runs, including edits made
 between discarded turns. The transcript boundary, session identity, local
 directory transaction, portable publication commit, rollback and Redo contracts
 remain those of [ADR 0072](0072-make-rewind-in-place-undo.md).
+
+Conversation-only Rewind uses the same transaction with an empty file plan and
+an empty recheck, without preparing or reading working files. Emacs asks the
+scope before file preparation when the discarded snapshot index is nonempty;
+the owner browser action is always conversation-only. Redo offers the same
+explicit scopes, so restoring conversation history need not overwrite later
+file edits. This reuses immutable publications rather than adding an undo store.
 
 Preparation writes nothing. A conflict in any file refuses the whole Rewind,
 listing the file, line range and discarded turn. For an older turn the line

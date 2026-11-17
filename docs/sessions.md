@@ -2823,9 +2823,19 @@ inspection, while `C-n`/`C-p` move through user queries. These navigation action
 neither transcript nor session state; Rewind remains a separate explicit
 operation.
 
+When discarded turns have captured file snapshots, the Emacs entry points first
+offer **Conversation only**, **Conversation and files**, or Cancel. Choosing
+Conversation only is its confirmation: it skips file preparation, conflicts,
+modified-buffer prompts and the file impact card. It leaves working files and
+unsaved visiting buffers untouched. Conversation and files continues through
+the existing file impact and confirmation below. Without captured files, the
+ordinary confirmation remains. Owner browser links offer only conversation
+Rewind, with a short confirmation. Both scopes retain the same native-history,
+active-turn, pending-input and execution safeguards.
+
 Rewind is an in-place logical transaction. It discards historical transcript
 and managed session state after the boundary, reverts the discarded turns'
-recorded file changes newest first, and keeps the same session identity, name,
+recorded file changes newest first when files are included, and keeps the same session identity, name,
 directory, working directory, and lineage. The candidate session state is the
 single place the boundary is decided; the transcript cutoff, instruction
 snapshot pruning, and remote staging pruning all derive their answers from its
@@ -2952,9 +2962,15 @@ of consuming history. Where a session lives and what it talks to -- save path,
 execution target, working directory -- stays live and is never adopted from the
 snapshot.
 
+Before restoration, Redo offers **Conversation only**, **Conversation and
+files**, or Cancel. Conversation only leaves working files and unsaved buffers
+untouched, and its scope choice is the confirmation. Conversation and files
+retains the file-impact confirmation described below. This explicit choice
+also makes conversation-only Rewind undoable without modifying files.
+
 Redo returns the transcript, sidecar state, retained
 agent transcripts, and persisted tool results, and it restores captured
-working-tree files in the same transaction. Captured bytes live in published
+working-tree files in the same transaction when that scope is chosen. Captured bytes live in published
 `file-history` artifacts indexed by the sidecar's per-turn snapshots: a Rewind
 trims that index while republishing the bytes, so the head being restored still
 names its own captured file state. Coverage is Rewind's coverage -- uncaptured

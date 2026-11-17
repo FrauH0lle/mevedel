@@ -23,6 +23,7 @@
 (require 'mevedel-models)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-durability)
+(require 'mevedel-session-rewind)
 (require 'mevedel-structs)
 (require 'websocket)
 (require 'mevedel-session-test-support
@@ -103,6 +104,42 @@ the room.  START replaces the child's room dial."
             (when (buffer-live-p view) (kill-buffer view)))
           (kill-buffer child)))
       (test-mevedel-session-persistence--cleanup-fork-fixture fixture))))
+
+(mevedel-deftest mevedel-collaboration--handle-rewind (:quiet t)
+  ,test
+  (test)
+  :doc "owner-only dispatch resolves fork points and truncates without a host prompt"
+  (test-mevedel-collaboration--fork-harness
+   (lambda (h)
+     (let* ((fixture (plist-get h :fixture))
+            (session (plist-get fixture :session))
+            (send (plist-get h :frame))
+            (sent (plist-get h :sent)))
+       (funcall send 2 '(:t "rewind" :reqId 1 :forkPoint "fixture-fork"))
+       (should-not (funcall sent))
+       (should (= 3 (mevedel-session-turn-count session)))
+       (funcall send 3 '(:t "rewind" :reqId 2 :forkPoint "unknown"))
+       (should (eq :json-false (plist-get (cdar (funcall sent)) :ok)))
+       (should (= 3 (mevedel-session-turn-count session)))
+       (cl-letf (((symbol-function 'yes-or-no-p)
+                  (lambda (&rest _) (ert-fail "Opened a host prompt")))
+                 ((symbol-function 'mevedel-session-rewind--prepare-rewind-files)
+                  (lambda (&rest _) (ert-fail "Read working files"))))
+         (funcall send 3 '(:t "rewind" :reqId 3 :forkPoint "fixture-fork")))
+       (should (eq t (plist-get (cdar (funcall sent)) :ok)))
+       (should (equal "history-action" (plist-get (cdar (funcall sent)) :t)))
+       (should (= 2 (mevedel-session-turn-count session))))))
+  :doc "retained native history refuses even a conversation-only owner rewind"
+  (test-mevedel-collaboration--fork-harness
+   (lambda (h)
+     (let* ((session (plist-get (plist-get h :fixture) :session))
+            (sent (plist-get h :sent)))
+       (setf (mevedel-session-external-conversations session)
+             '(("root" :id "native-history")))
+       (funcall (plist-get h :frame) 3
+                '(:t "rewind" :reqId 1 :forkPoint "fixture-fork"))
+       (should (eq :json-false (plist-get (cdar (funcall sent)) :ok)))
+       (should (= 3 (mevedel-session-turn-count session)))))))
 
 (mevedel-deftest mevedel-collaboration--handle-fork
   (:doc "forks the shared session for owner links only, through guest dispatch")
