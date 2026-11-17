@@ -81,15 +81,25 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   recovery test; an unmigrated, cleanly closed pre-lease session (no `.lock`,
   no `.lease`) counts as available, so age cleanup can delete it before
   `scripts/migrate-sessions.el` runs.
-- Replace the memory claim/fence protocol with one program per decision
-  under the memory folder lock (sketch 2026-11-14,
-  `work://shared/weekly-sweep/2026-11-13/memory-protocol-sketch.md`; journal
-  publication keeps its claim). Roland approved the four decisions (2026-11-14) listed in
-  `needs-roland.md` item 4 (replace ADR 0117's "matching files never count as
-  applied", remove `recovery-required` and "U Roll back interrupted write", a
-  concurrent apply waits up to 20 s, no migration of decision history). Before
-  it lands: a matched measurement against today's 64 / 88 / 57 programs and
-  fault-injection tests for the crash cases.
+- Replace the memory claim/fence protocol with one locked program per decision
+  under the existing per-root memory lock directory, using the carrier's
+  `begin-files`/`commit-files` transaction (a probe showed it undoes the first
+  file when a later write fails; process death was not probed). Decision
+  records become exclusively created slot files (`decisions/PROPOSAL.el`,
+  `.reverse.el`, `.attempt-N.el`). Journal publication keeps its claim: it
+  spans provider requests and needs takeover by a successor. The 2026-11-14
+  design sketch estimates about 1,010 lines in 37 functions removed for
+  150–250 new, and about 25 instead of 64 helper programs per following topic
+  apply (no prototype). The user approved its four decisions (2026-11-14):
+  replace ADR 0117's "matching files never count as applied" with a completion
+  rule (a proposal whose files are each at the before-state or exact
+  after-state is finished on accept and undone on reject); remove
+  `recovery-required` and "U Roll back interrupted write"; a concurrent apply
+  waits up to 20 s for the lock; no migration of decision history. Before it
+  lands: a matched measurement against today's 64 / 88 / 57 programs (stop if
+  the gain falls well short of half), and fault-injection tests for an index
+  failure after the topic write, a kill between renames, the cross-host gap,
+  reject during that gap, and cleanup during apply.
 - Memory control-file programs: batching per call site saved 11 → 2
   programs (63.5 → 37.4 ms) but whole operations did not get faster; more
   needs a long-lived helper process instead of one program per step (ADR 0101
@@ -120,9 +130,14 @@ Investigate retained conversations/transcripts, the long-wait path
 (`WaitAgent` and the MCP connection), and many concurrent full test suites
 (the user's suspicion). Reproduce a similar orchestration load with
 `memory-report` or periodic RSS sampling to locate the growth.
-The 2026-11-13 sweep found no mechanism offline (details in
-`work://shared/weekly-sweep/2026-11-13/oom-growth-investigation.md`) and added
-`memory-sample` telemetry; after the next occurrence, read those samples first.
+The 2026-11-13 sweep found no mechanism offline. The growth was private anon
+memory (shmem 20 kB) at about 30 GB/h, GC time per collection stayed flat, and
+no telemetry byte stream rose with it. Not ruled out: the never-trimmed acp.el
+`acp-client-stderr(...)` buffer, GTK/Pango allocations, huge retained strings
+and an upstream PGTK leak. It added `memory-sample` telemetry; after the next
+occurrence, compare its `:rss-kb` growth with `:buffer-chars-total`,
+`:largest-buffer-chars` and `:image-cache-bytes` first (RSS growing alone
+points to C-side allocations or huge strings).
 During that sweep's own orchestration, sampled RSS stayed near 930 MB.
 
 ### Cargo command duration and editor stalls
