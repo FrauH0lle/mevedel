@@ -753,7 +753,7 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
 (defun mevedel-agent-conversation-project-history (buffer &optional session)
   "Return concise redacted Markdown projected from live BUFFER.
 
-Only canonical user, assistant, and tool transcript segments are projected.
+Canonical user, assistant, tool, and mailbox transcript segments are projected.
 Transcript classification and tool-result projection remain owned by
 `mevedel-transcript'; ignored control text, provider metadata, Org scaffolding,
 and private media paths therefore do not become history content."
@@ -762,7 +762,7 @@ and private media paths therefore do not become history content."
       (let ((segments
              (cl-loop for segment in
                       (mevedel-transcript-segments (point-min) (point-max))
-                      when (memq (car segment) '(user response tool))
+                      when (memq (car segment) '(user response tool mailbox))
                       collect segment)))
         (replace-regexp-in-string
          "; path [^]]+" ""

@@ -23,6 +23,7 @@
 (require 'mevedel-tool-repair)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-tools)
+(require 'mevedel-transcript)
 (require 'mevedel-transport)
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
@@ -62,7 +63,22 @@
       (should (string-search "Useful tool fact." text))
       (should-not (string-search "private reasoning" text))
       (should-not (string-search "private note" text))
-      (should (= 1 scans)))))
+      (should (= 1 scans))))
+
+  :doc "retains mailbox bodies and sender attribution without private control text"
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (insert "Messages arrived.\n\n"
+            "<agent-message type=\"MAIL\" sender=\"/root/peer\" recipient=\"/root/work\">\n"
+            "Follow-up assignment.\n</agent-message>\n"
+            "<agent-result sender=\"/root/work/child\" recipient=\"/root/work\" outcome=\"completed\">\n"
+            "Child result.\n</agent-result>\n")
+    (let ((text (mevedel-agent-conversation-project-history (current-buffer))))
+      (should (string-search "provenance: agent-message" text))
+      (should (string-search "sender=\"/root/peer\"" text))
+      (should (string-search "Follow-up assignment." text))
+      (should (string-search "sender=\"/root/work/child\"" text))
+      (should (string-search "Child result." text)))))
 
 (mevedel-deftest mevedel-agent-conversation--working-directory ()
   ,test

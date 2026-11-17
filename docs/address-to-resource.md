@@ -356,7 +356,9 @@ Authorized execution rechecks the current root buffer after permission.
 transcript classification and source mapping. Live and resumed conversations
 use the same concise Markdown projection, excluding hidden audit encoding,
 provider bookkeeping, and persistence scaffolding. History is observational
-and cannot rewrite the transcript. Both addresses retain the existing tool
+and cannot rewrite the transcript. Delivered mailbox records are included as
+`agent-message` evidence with their sender and recipient, not user instructions.
+Both addresses retain the existing tool
 output truncation and Read offset/limit behavior. They project the current
 conversation representation, without traversing pre-compaction archives.
 Grep accepts either concrete address and searches exactly that Read projection,
